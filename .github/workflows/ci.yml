@@ -123,6 +123,41 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-artifacts
           if-no-files-found: ignore
 
+  # Item 74's live-Evolution caveat (docs/gui-smoke-test.md): the packaged
+  # example-module's merged menu items actually appearing in a real
+  # Evolution session, not just linking cleanly. Its own small script beside
+  # gui-smoke.sh, same discipline the doc asks for: a different assertion,
+  # no shared state. Needs a plain `cmake --install build` with no
+  # --component filter, since example-module's install rule carries no
+  # COMPONENT of its own (src/CMakeLists.txt) and camel-provider alone would
+  # leave the module where Evolution never scans for it.
+  gui-smoke-example-module:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - run: ci/install-deps-gui-smoke.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gui-smoke
+          workspaces: rust
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: sudo cmake --install build
+      - run: ci/gui-smoke-example-module.sh
+        env:
+          JMAP_MOCKD: ${{ github.workspace }}/build/cargo-target/release/jmap-mockd
+          GUI_SMOKE_ARTIFACTS: ${{ runner.temp }}/gui-smoke-example-module-artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-smoke-example-module-artifacts
+          path: ${{ runner.temp }}/gui-smoke-example-module-artifacts
+          if-no-files-found: ignore
+
   # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
   # job above (ctest there already runs rust-test-eds, layout checks
   # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).

@@ -119,3 +119,34 @@ EDS runtime, so this does not touch the shared CI image
 
 Not wired into `.gitlab-ci.yml`, for the same unverified-elsewhere reason
 `docs/functional-tests.md` gives for layer 1.
+
+## Sibling check: the example-module menu caveat
+
+This file deliberately keeps the canary above a single script. A separate
+caveat, that the packaged `example-module`'s merged menu items actually
+appear in a real Evolution session rather than merely linking cleanly
+against both UI eras, gets its own sibling script instead of growing this
+one: `ci/gui-smoke-example-module.sh` plus
+`ci/gui-smoke-example-module-assert.py`.
+
+Same harness (private `Xvfb`/D-Bus/XDG tree against `jmap-mockd`, retry
+once), different assertion: it polls the AT-SPI tree for the mail-message-menu
+merge (`"My Message Action..."`, `src/m-mail-ui.c`) under Evolution's
+`Message` menu, present as soon as the mail shell view exists since GTK
+merges the `EUIManager`/`GtkUIManager` XML into real widgets at shell-view
+construction, with no menu click needed. Only that half of the caveat is
+checked; the sibling mail-folder-popup item merges into a context menu
+built on demand when a folder is right-clicked, which this script does not
+drive, and is left for a follow-up.
+
+Needs everything `ci/gui-smoke.sh` needs, plus `example-module` installed
+where Evolution scans modules: `cmake --install build` with **no**
+`--component` filter, since `example-module`'s install rule
+(`src/CMakeLists.txt`) carries no `COMPONENT` of its own, so a
+camel-provider-only install leaves it uninstalled. Confirmed 2026-10-09
+against this project's EDS 3.52 (Ubuntu 24.04, rootless-podman container
+since this runner has no root to install Evolution/Xvfb natively): the
+assertion passes on a real build, and a negative control (the same run with
+the sought menu-item name swapped for one that cannot exist) fails as
+expected, ruling out a vacuously-passing tree walk. The EDS 3.60.2 leg
+(item 71's podman recipe) is left for a follow-up run.
