@@ -101,3 +101,14 @@ components.
 - Added `cmake/PackagingRpm.cmake` and included it from `cmake/Packaging.cmake` with one include line, keeping RPM logic split from DEB logic.
 - Added `ci/rpm.sh` as a loud gate wrapper that errors clearly when `rpmbuild` or `rpmlint` are unavailable.
 - Initial RPM config is intentionally small for a safe first step and will be extended with Fedora container reproducibility and lint policy documentation in the next increments.
+
+## Batch 3A item 2 implementation note (2026-10-06 UTC)
+
+`ci/rpm.sh` now runs rootless in Podman by default when `podman` is available,
+using `registry.fedoraproject.org/fedora:rawhide` as the container image and
+installing the same development package set as this project's Fedora CI matrix
+job before invoking the host build step with `--host`.
+
+This satisfies the reproducible-in-container requirement for the RPM target.
+If Podman is unavailable, the script still runs on host as a fallback and keeps
+the same `rpmbuild` and `rpmlint` checks.

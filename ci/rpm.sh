@@ -3,6 +3,49 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+build_dir="${repo_root}/build-rpm"
+
+if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
+	image="registry.fedoraproject.org/fedora:rawhide"
+	host_uid="$(id -u)"
+	host_gid="$(id -g)"
+	echo "ci/rpm.sh: running rootless in podman image ${image}"
+	exec podman run --rm --userns=keep-id \
+		-u 0 \
+		-v "${repo_root}:${repo_root}:Z" \
+		-w "${repo_root}" \
+		-e HOST_UID="${host_uid}" \
+		-e HOST_GID="${host_gid}" \
+		"${image}" \
+		bash -lc '
+			set -euo pipefail
+			dnf -y install \
+				cmake \
+				ninja-build \
+				gcc \
+				pkgconf-pkg-config \
+				rust \
+				cargo \
+				rpm-build \
+				rpmlint \
+				evolution-data-server-devel \
+				evolution-devel \
+				evolution-mapi-devel \
+				glib2-devel \
+				gtk4-devel \
+				json-glib-devel \
+				krb5-devel \
+				libadwaita-devel \
+				libsoup3-devel \
+				gettext \
+				python3
+			chown -R "${HOST_UID}:${HOST_GID}" "${PWD}"
+			su -s /bin/bash -c "./ci/rpm.sh --host" "#${HOST_UID}"
+		'
+fi
+
 if ! command -v rpmbuild >/dev/null 2>&1; then
 	echo "ci/rpm.sh: missing required tool: rpmbuild" >&2
 	exit 1
@@ -12,9 +55,6 @@ if ! command -v rpmlint >/dev/null 2>&1; then
 	exit 1
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-build_dir="${repo_root}/build-rpm"
 
 cmake -S "${repo_root}" -B "${build_dir}" -G Ninja
 cmake --build "${build_dir}"
