@@ -51,11 +51,17 @@ TIMEOUT_SECONDS = 90
 POPUP_WAIT_SECONDS = 2
 
 
-def find_app(name):
+def find_app(names):
+    """`names` is an iterable of acceptable AT-SPI application names: the
+    name Evolution registers under differs by environment, "evolution" in
+    the minimal rootless-podman Ubuntu container the EDS 3.52 leg uses, but
+    "org.gnome.Evolution" (its GApplication id) in the full-desktop Fedora
+    3.60.2 container, which has desktop-file-utils/shared-mime-info wired up
+    enough for GApplication's own D-Bus activation naming to take over."""
     desktop = pyatspi.Registry.getDesktop(0)
     for i in range(desktop.childCount):
         app = desktop.getChildAtIndex(i)
-        if app is not None and app.name == name:
+        if app is not None and app.name in names:
             return app
     return None
 
@@ -81,6 +87,15 @@ def find_descendant(node, role=None, name=None, max_depth=20):
         if found is not None:
             return found
     return None
+
+
+def find_button(node, name):
+    """The push-button role name itself differs by AT-SPI stack: "push
+    button" in the minimal rootless-podman Ubuntu container the EDS 3.52 leg
+    uses, plain "button" in the full-desktop Fedora 3.60.2 container's newer
+    at-spi2-core. Role is not filtered at all here (name alone is specific
+    enough for every caller) so neither spelling has to be guessed."""
+    return find_descendant(node, role=None, name=name)
 
 
 def all_descendants(node, role=None, max_depth=20):
@@ -110,16 +125,32 @@ def uncheck(checkbox):
 
 def dismiss_transient_dialogs(evolution):
     """Same one-time dialog ci/gui-smoke-assert.py dismisses; see there for
-    why the checkbox is unchecked before clicking OK."""
+    why the checkbox is unchecked before clicking OK.
+
+    A second, unrelated one-time dialog ("Do you want to make Evolution your
+    default email client?") showed up only in the full-desktop Fedora 3.60.2
+    container this script's EDS 3.60.2 leg runs in, never in the minimal
+    rootless-podman Ubuntu 24.04 container the EDS 3.52 leg uses: a fresh
+    XDG_DATA_HOME has no mimeapps.list recording Evolution as already
+    declined, and only the Fedora container has desktop-file-utils/
+    shared-mime-info installed as part of the full `evolution` package to
+    make that check fire at all. "Do not change settings" leaves the
+    throwaway container's state untouched, same spirit as unchecking the
+    auth dialog's "remember password" box above."""
     auth_dialog = find_descendant(evolution, role="dialog", name="Mail authentication request")
     if auth_dialog is not None:
         checkbox = find_descendant(auth_dialog, role="check box")
         if checkbox is not None:
             uncheck(checkbox)
-        ok_button = find_descendant(auth_dialog, role="push button", name="OK")
+        ok_button = find_button(auth_dialog, "OK")
         if ok_button is not None:
             click(ok_button)
             print("dismissed: Mail authentication request")
+
+    default_client_button = find_button(evolution, "Do not change settings")
+    if default_client_button is not None:
+        click(default_client_button)
+        print("dismissed: Do you want to make Evolution your default email client?")
 
 
 def find_account_cell(evolution):
@@ -165,7 +196,7 @@ def main():
     right_clicked = False
     next_attempt_deadline = 0.0
     while time.monotonic() < deadline:
-        evolution = find_app("evolution")
+        evolution = find_app(("evolution", "org.gnome.Evolution"))
         if evolution is not None:
             dismiss_transient_dialogs(evolution)
 

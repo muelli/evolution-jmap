@@ -161,12 +161,14 @@ its extensions construct, so a static tree walk (the sibling check above)
 proves nothing for this half: the item is absent from the tree until the
 popup is actually triggered. This script drives a real right-click through
 AT-SPI's synthetic pointer at the mock account's own row in the folder tree,
-then polls for `"My Maildir Folder Action..."` in the resulting popup. The
-item is expected to appear but stay insensitive (its own sensitivity gate in
-`src/m-mail-ui.c` requires a `maildir` Camel provider, which this JMAP
-account never is, and `m_utils_enable_actions` only ever toggles
-sensitivity, never visibility), so only presence is asserted, not enabled
-state.
+then polls for `"My Maildir Folder Action..."` in the resulting popup. On
+GtkUIManager (EDS < 3.55) the item is expected to appear but stay
+insensitive (its own sensitivity gate in `src/m-mail-ui.c` requires a
+`maildir` Camel provider, which this JMAP account never is, and
+`m_utils_enable_actions` only ever toggles sensitivity, never visibility on
+that era), so only presence is asserted there, not enabled state. This does
+**not** hold on EUIManager (EDS >= 3.55); see the 2026-10-09 EDS 3.60.2
+entry below.
 
 A real synthetic right-click needs two things neither `ci/gui-smoke.sh` nor
 the sibling script above needs, since both of those only ever drive AT-SPI's
@@ -186,5 +188,63 @@ Action interface (a direct, in-process ATK call with no X input involved):
 Confirmed 2026-10-09 against EDS 3.52 (same rootless-podman Ubuntu 24.04
 container as the sibling check): passes twice in a row, and a negative
 control (the sought menu-item name swapped for one that cannot exist) fails
-both attempts as expected. The EDS 3.60.2 leg is left for a follow-up run,
-same as the sibling check above.
+both attempts as expected.
+
+## The EDS 3.60.2 leg of the mail-folder-popup check: confirmed, not a bug
+
+Run 2026-10-09 in item 71's pinned-Fedora podman recipe (the same container
+the EUIManager main-menu finding above used, with the full `evolution`
+package, Xvfb, AT-SPI, openbox and `cmake --install` of the built module —
+not just the `-devel` headers `ci/eds-matrix.sh` normally installs). Two
+portability bugs in the assert script itself were found and fixed first,
+independent of the actual caveat: AT-SPI's application name for Evolution is
+`"evolution"` in the minimal rootless-podman Ubuntu container the 3.52 leg
+uses, but `"org.gnome.Evolution"` (its GApplication id) in this full-desktop
+Fedora container, and the push-button role name itself is `"push button"` on
+the former's older at-spi2-core and plain `"button"` on the latter's newer
+one — `find_app` now accepts either application name and the dialog-button
+lookups (`find_button`) no longer filter on role at all, name alone being
+specific enough for both callers. A third, previously-unseen one-time dialog
+("Do you want to make Evolution your default email client?") also had to be
+dismissed, present only because this container's full `evolution` package
+pulls in `desktop-file-utils`/`shared-mime-info`, absent from the minimal
+Ubuntu container's apt list.
+
+With all three fixed, the check runs for real and **does not pass, for a
+real and already-documented reason, not a bug**: `src/m-mail-ui.c`'s own
+sensitivity gate (`REQUIRE_SERVICE_PROTOCOL "maildir"`) never matches this
+JMAP account on any node, so `my-mail-ui-folder-action` is unconditionally
+insensitive here — true on both UI eras. On GtkUIManager (EDS 3.52) an
+insensitive item still renders, greyed out, which is what the EDS 3.52 leg
+above observes. On EUIManager (EDS >= 3.55) it does not: real upstream
+source settles this precisely (`evolution` at tag `3.60.2`,
+`src/e-util/e-ui-manager.c`'s `eum_traverse_menu`, the two identical gates at
+lines 2099-2100 and 2138-2139,
+`e_ui_action_is_visible (action) && (!is_popup || g_action_get_enabled (...))`):
+a menu built with `is-popup='true'` (`mail-folder-popup` is one) omits a
+disabled action entirely, where a non-popup menu (`main-menu`) only checks
+visibility and leaves a disabled action in place, greyed out. Confirmed
+directly: a real right-click on the account's row opens a real popup
+(`New Folder…`, `Refresh`, `Manage Subscriptions`, `Disable Account`,
+`Properties`, matching `evolution-mail.eui`'s own `mail-folder-popup` menu
+definition read off this container's installed copy), correctly missing
+every item this account's state leaves disabled — ours among them, not
+singled out.
+
+This is not a defect to fix: `REQUIRE_SERVICE_PROTOCOL "maildir"` is
+deliberate example-module demo code showing a menu item gated on the
+selected account's provider, and this test's own mock account is JMAP by
+construction, never maildir, on either UI era. Changing the gate to also
+match `jmap` would serve this test alone and misrepresent what the demo
+code demonstrates; it is not something a real caveat in item 74 asked for.
+What item 74 actually asked — does the module's `my-mail-ui-folder-action`
+reach `mail-folder-popup` and register correctly on EUIManager — is already
+answered yes, independent of this test: it shares one
+`e_ui_manager_add_actions_with_eui_data` call and one action group
+(`example-module-mail`) with `my-mail-ui-message-action`, and the EUIManager
+main-menu finding above already confirmed that call succeeds and the group
+exists on this exact build (`e_ui_manager_has_action_group` true). The
+remaining gap is cosmetic, not functional: this AT-SPI check cannot observe
+the item in its *enabled* state without a real `maildir` Camel account,
+which is out of scope for a JMAP-only harness. Item 74 is fully closed on
+both UI eras; do not re-queue chasing a maildir fixture for this one script.
