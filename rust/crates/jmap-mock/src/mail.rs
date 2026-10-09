@@ -427,11 +427,12 @@ fn filed_in(email: &Email, id: &Id) -> bool {
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // The one limit this mock enforces, because it is the one the client has to
-    // read out of the session document to avoid: asking for more objects than
-    // `maxObjectsInGet` fails the whole call (RFC 8620 §5.1). `Email` is where
-    // it bites — a mailbox has as many messages as it has — so it is enforced
-    // here rather than in every `/get`.
+    // `maxObjectsInGet` (RFC 8620 §5.1): asking for more objects than the
+    // session document advertises fails the whole call. Also enforced by
+    // `contacts::contact_card_get`, added after item 94's real-Stalwart scale
+    // test hit it there too — this mock started out only enforcing it here,
+    // on the assumption `Email` was the one place a real account gets large
+    // enough to matter, which contacts proved wrong.
     let limit = state.objects_in_get();
     if request
         .ids

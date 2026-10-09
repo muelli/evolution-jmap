@@ -12,6 +12,7 @@ use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
+use jmap_proto::request::Request;
 use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_CORE};
 use serde_json::Value;
 
@@ -119,14 +120,66 @@ impl Client {
     }
 
     /// Fetch contact cards by id.
+    ///
+    /// Sent as several requests when naming every id at once would be more
+    /// than the server's `maxObjectsInGet` (RFC 8620 §2) — found the hard way
+    /// scale-testing item 94 against real Stalwart: an address book of 500
+    /// cards, well within reach for `jmap-book-sync`'s own `list_existing`,
+    /// made the server refuse the whole request with `requestTooLarge` rather
+    /// than answer it. Mirrors [`Client::email_get`]'s own chunking, minus its
+    /// byte-size (`maxSizeRequest`) half: ids and card counts here are modest
+    /// enough that the object-count limit is the one this crate has actually
+    /// hit, and adding an untested second limit was not worth the risk this
+    /// round. A server naming no `maxObjectsInGet` is sent the list whole.
+    ///
+    /// Always makes at least one call, even for an empty `ids`: callers like
+    /// [`Client::contact_state`] ask for no cards at all just to read the
+    /// current state, and that still has to reach the server.
     pub fn contact_get(
         &self,
         account_id: &Id,
         ids: &[Id],
     ) -> Result<GetResponse<ContactCard>, Error> {
-        let request = GetRequest::ids(account_id.clone(), ids.iter().cloned());
-        let arguments = self.single_call(USING, "ContactCard/get", &request)?;
-        Ok(serde_json::from_value(arguments)?)
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(ids.len().max(1));
+
+        let mut combined: Option<GetResponse<ContactCard>> = None;
+        let mut rest = ids;
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+
+            let call_id = self.next_call_id();
+            let request = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS]).call(
+                "ContactCard/get",
+                &GetRequest::ids(account_id.clone(), chunk.iter().cloned()),
+                &call_id,
+            )?;
+            let response = self.api_call(&request)?;
+            let invocation = response
+                .responses_for(&call_id)
+                .next()
+                .ok_or_else(|| Error::Protocol("no ContactCard/get response".to_owned()))?;
+            let arguments = Self::unwrap_invocation(invocation, "ContactCard/get")?;
+            let chunk_response: GetResponse<ContactCard> = serde_json::from_value(arguments)?;
+            match &mut combined {
+                None => combined = Some(chunk_response),
+                Some(combined) => {
+                    combined.list.extend(chunk_response.list);
+                    combined.not_found.extend(chunk_response.not_found);
+                    combined.state = chunk_response.state;
+                }
+            }
+
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(combined.expect("the loop always sets combined on its first iteration"));
+            }
+        }
     }
 
     /// Apply a patch to a contact card (RFC 8620 PatchObject).
