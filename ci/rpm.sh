@@ -8,7 +8,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 build_dir="${repo_root}/build-rpm"
 
 if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
-	image="registry.fedoraproject.org/fedora:rawhide"
+	image="docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898"
 	host_uid="$(id -u)"
 	host_gid="$(id -g)"
 	echo "ci/rpm.sh: running rootless in podman image ${image}"
@@ -21,8 +21,10 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 		"${image}" \
 		bash -lc '
 			set -euo pipefail
+			trap '\''chown -R "${HOST_UID}:${HOST_GID}" "${PWD}"'\'' EXIT
 			dnf -y install \
 				cmake \
+				clang-devel \
 				ninja-build \
 				gcc \
 				pkgconf-pkg-config \
@@ -32,7 +34,6 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 				rpmlint \
 				evolution-data-server-devel \
 				evolution-devel \
-				evolution-mapi-devel \
 				glib2-devel \
 				gtk4-devel \
 				json-glib-devel \
@@ -41,8 +42,7 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 				libsoup3-devel \
 				gettext \
 				python3
-			chown -R "${HOST_UID}:${HOST_GID}" "${PWD}"
-			su -s /bin/bash -c "./ci/rpm.sh --host" "#${HOST_UID}"
+			./ci/rpm.sh --host
 		'
 fi
 
@@ -59,7 +59,7 @@ fi
 cmake -S "${repo_root}" -B "${build_dir}" -G Ninja
 cmake --build "${build_dir}"
 
-cpack --config "${build_dir}/CPackConfig.cmake" -G RPM --verbose
+cpack --config "${build_dir}/CPackConfig.cmake" -G RPM --verbose -B "${build_dir}"
 
 rpm_count="$(find "${build_dir}" -maxdepth 1 -type f -name '*.rpm' | wc -l)"
 if [[ "${rpm_count}" -eq 0 ]]; then

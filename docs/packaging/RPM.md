@@ -105,9 +105,13 @@ components.
 ## Batch 3A item 2 implementation note (2026-10-06 UTC)
 
 `ci/rpm.sh` now runs rootless in Podman by default when `podman` is available,
-using `registry.fedoraproject.org/fedora:rawhide` as the container image and
-installing the same development package set as this project's Fedora CI matrix
-job before invoking the host build step with `--host`.
+using the pinned Fedora image digest
+`docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`
+for reproducibility before invoking the host build step with `--host`.
+
+The dependency bootstrap intentionally omits `evolution-mapi-devel`, because
+this repository does not build against MAPI and rawhide package churn had made
+that package unavailable in prior runs.
 
 This satisfies the reproducible-in-container requirement for the RPM target.
 If Podman is unavailable, the script still runs on host as a fallback and keeps
