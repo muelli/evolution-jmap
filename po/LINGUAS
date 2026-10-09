@@ -16,3 +16,4 @@
 # description up in it, so a `.po` added here starts being used as soon as a
 # catalogue is installed. Until then every lookup falls back to the English
 # msgid, which is gettext's normal behaviour and not a failure.
+de
