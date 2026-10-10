@@ -125,16 +125,31 @@ impl Client {
         Ok(response.ids)
     }
 
-    /// Validate a Sieve script by `id`, `blobId` or raw `content` (RFC 9661
-    /// section 2.6). This mock has no real Sieve parser, so a resolvable
-    /// source always answers `isValid: true`; only argument shape and
-    /// blob/id resolution are actually checked.
+    /// Validate an already-uploaded Sieve script by its `blobId` (RFC 9661
+    /// section 2.6). The RFC takes only `blobId`; content must be uploaded
+    /// first (section 2.2, [`Client::upload_blob`]), there is no raw-content
+    /// shorthand on the wire. Use [`Client::sieve_script_validate_content`]
+    /// to validate raw content directly.
     pub fn sieve_script_validate(
         &self,
-        request: &SieveScriptValidateRequest,
+        account_id: &Id,
+        blob_id: impl Into<Id>,
     ) -> Result<SieveScriptValidateResponse, Error> {
-        let arguments = self.single_call(USING, "SieveScript/validate", request)?;
+        let request = SieveScriptValidateRequest::new(account_id.clone(), blob_id);
+        let arguments = self.single_call(USING, "SieveScript/validate", &request)?;
         Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Validate raw Sieve script content: uploads it as a blob first (RFC
+    /// 9661 §2.6 requires content to already be uploaded before it can be
+    /// validated), then validates the resulting `blobId`.
+    pub fn sieve_script_validate_content(
+        &self,
+        account_id: &Id,
+        content: impl Into<Vec<u8>>,
+    ) -> Result<SieveScriptValidateResponse, Error> {
+        let uploaded = self.upload_blob(account_id, "application/sieve", content.into())?;
+        self.sieve_script_validate(account_id, uploaded.blob_id)
     }
 
     fn sieve_script_set(

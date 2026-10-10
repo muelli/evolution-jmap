@@ -863,14 +863,14 @@ fn rfc9661_sieve_script_and_validation_forward_compatibility() {
     assert_eq!(script.extra["futureExtensionProperty"], "flag-tag");
     assert_eq!(script.extra["vendorAudit"]["passedValidation"], true);
 
+    // Real wire shape (RFC 9661 §2.6): only `accountId` and `error`, the
+    // latter a plain `SetError` — no `isValid` property, confirmed against
+    // real Stalwart 2026-10-10 (`STALWART-RFC-FINDINGS.md`).
     let validate_resp_payload = json!({
         "accountId": "acc_sieve",
-        "isValid": false,
         "error": {
-            "description": "Invalid test command",
-            "lineNumber": 15,
-            "columnNumber": 3,
-            "action": "custom_filter",
+            "type": "invalidSieve",
+            "description": "Invalid test command at line 15, column 3",
             "extraDiagnosticCode": "E_SYNTAX_402"
         },
         "serverWarnings": ["Script exceeds recommended execution step limit"]
@@ -879,12 +879,13 @@ fn rfc9661_sieve_script_and_validation_forward_compatibility() {
     let resp: SieveScriptValidateResponse = serde_json::from_value(validate_resp_payload)
         .expect("deserialize SieveScriptValidateResponse with diagnostics");
     assert_eq!(resp.account_id.as_str(), "acc_sieve");
-    assert!(!resp.is_valid);
+    assert!(!resp.is_valid());
     let err = resp.error.expect("validation error present");
-    assert_eq!(err.description.as_deref(), Some("Invalid test command"));
-    assert_eq!(err.line_number, Some(15));
-    assert_eq!(err.column_number, Some(3));
-    assert_eq!(err.action.as_deref(), Some("custom_filter"));
+    assert_eq!(err.error_type, "invalidSieve");
+    assert_eq!(
+        err.description.as_deref(),
+        Some("Invalid test command at line 15, column 3")
+    );
     assert_eq!(err.extra["extraDiagnosticCode"], "E_SYNTAX_402");
     assert_eq!(
         resp.extra["serverWarnings"][0],
