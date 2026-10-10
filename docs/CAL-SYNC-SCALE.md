@@ -55,8 +55,42 @@ functions in one process, not a regression between them — same kind of
 run-to-run variance `BOOK-SYNC-SCALE.md` batch 2 notes for its own
 back-to-back pair.
 
+## Batch 2: N=1,000 import/listing/edit/delete, 2026-10-10
+
+Real Stalwart, freshly seeded throwaway account with a run-unique local part
+(`agent1k<unix-timestamp>@agent-calsync-1k-<unix-timestamp>.test`), following
+`BOOK-SYNC-SCALE.md` batch 4's account-isolation fix (a reused local part
+silently reassigns a prior session's account; confirmed fresh via
+`stw query Account` before trusting the numbers).
+
+| Measurement | Result |
+|---|---|
+| Import 1,000 events (⅓ recurring w/ an override) | 107.4s total (~107.4ms/event) |
+| Cold listing of 1,000 events | 218.4ms |
+| Edit 20 of 1,000 events | 233.0ms (~11.6ms/event) |
+| `get_changes` after editing 20 events | 11.4ms, 20 changed, correct |
+| Peak RSS | 15.4 MB |
+
+Second test, fresh 1,000-event import then delete 300:
+
+| Measurement | Result |
+|---|---|
+| Import 1,000 events (ahead of the deletion case) | 113.7s (~113.7ms/event) |
+| Delete 300 of 1,000 events | 1.35s (~4.5ms/event) |
+| `get_changes` after deleting 300 | 11.8ms, 300 removed, correct |
+| Peak RSS | 18.7 MB |
+
+Costs track batch 1 roughly linearly; `get_changes` stays cheap regardless
+of calendar size, the same pattern `BOOK-SYNC-SCALE.md` found. No new
+scale-only bug in the product. One transient failure on the delete test's
+first attempt at this size is recorded as a suspected Stalwart server issue,
+not a product bug (a create that received HTTP 429 appears to have been
+committed anyway, so the test's own 429-retry then hit a duplicate-UID
+conflict on the identical retried request). A clean immediate re-run passed
+outright, so this is not chased further here.
+
 ## Batches left
 
-Still open per item 94(b): the 1,000/3,000-event checkpoints, and the
-real-EDS leg (c) shared with `jmap-book-sync` (item 80's live-Stalwart
-calendar factory, first open of a 3,000-event calendar through real EDS).
+Still open per item 94(b): the 3,000-event checkpoint, and the real-EDS leg
+(c) shared with `jmap-book-sync` (item 80's live-Stalwart calendar factory,
+first open of a 3,000-event calendar through real EDS).
