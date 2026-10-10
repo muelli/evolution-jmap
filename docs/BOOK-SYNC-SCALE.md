@@ -170,9 +170,47 @@ variance batch 2 and 4 already documented, not a product regression (cold
 listing and `get_changes`, which do not make per-card calls, show no such
 growth).
 
+## Batch 6: the real-EDS leg (c), `evolution-addressbook-factory`'s first open, 2026-10-10
+
+Every batch above measures `BookSync` calling the real server directly, with
+no EDS in between. This batch asks the question those numbers cannot: how
+long the real, running `evolution-addressbook-factory` takes to do its own
+first open of an already-large book, and how much memory it peaks at, through
+the real meta-backend machinery (cache population, vCard rendering for every
+card) rather than just the wire calls.
+
+New test `rust/crates/jmap-functional/tests/live-stalwart-book-scale.rs`:
+seeds N contacts directly over JMAP with a raw `jmap_client::Client` (so the
+account is already that size *before* EDS ever connects to it), then opens
+the account's book through a real `functional-book-client` for the first
+time and runs its `list` phase, timing the whole open-plus-listing and
+polling `/proc` for `evolution-addressbook-factory`'s own peak `VmHWM` while
+it runs (`Session::run_measuring_peak_rss`, new in `jmap-functional/src/
+lib.rs`: the factory is D-Bus-activated and dies with the private bus
+`Session::run` tears down at the end of each call, so it can only be
+inspected from a background thread polling for the duration, not after the
+fact). This runner's own dev VM has only the EDS *dev* headers, not the
+runtime daemons `-DENABLE_FUNCTIONAL_TESTS=ON` needs
+(`evolution-addressbook-factory`, `dbus-run-session`'s activation targets,
+`gnome-keyring-daemon`), so this ran inside the `ubuntu:24.04` podman recipe
+item 86 already established (bind-mounted checkout, separate cargo target
+directory), with a fresh throwaway Stalwart account per size.
+
+| Book size | Seed time (direct JMAP) | Factory first open + cold listing | Factory peak RSS |
+|---|---|---|---|
+| 1,000 cards | 19.1s | 2.26s | 40.9 MB |
+| 5,000 cards | 273.8s | 3.90s | 52.7 MB |
+
+No scale-only bug found: the factory's own open-plus-listing time and
+memory both grow much slower than the book size (roughly +73% time and
++29% memory for a 5x larger book), nowhere near the quadratic blowup item 94
+watches for. Confirms, through the real daemon rather than just the sync
+layer, that the meta backend's cache population and per-card vCard rendering
+stay cheap at this size.
+
 ## Batches left
 
-Still open per item 94(a): the real-EDS leg (c) (item 80's live-Stalwart
-book factory, first open of a 5,000-card book through real EDS). `jmap-cal-
-sync`'s own 1,000/3,000-event checkpoints are tracked in `CAL-SYNC-SCALE.md`,
-not here.
+`jmap-book-sync`'s own share of item 94, including its half of the real-EDS
+leg (c), is now fully checked off. `jmap-cal-sync`'s own 1,000/3,000-event
+checkpoints and its own real-EDS leg (the `evolution-calendar-factory`
+counterpart of batch 6 above) are tracked in `CAL-SYNC-SCALE.md`, not here.

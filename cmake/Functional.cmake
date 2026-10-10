@@ -396,6 +396,26 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# Item 94(c): the real-EDS leg of the book-sync scale checkpoint, seeding
+	# a real-sized book directly over JMAP before EDS ever opens it, then
+	# measuring evolution-addressbook-factory's own first open. `#[ignore]`d
+	# for the same reason functional-book-live-stalwart is, so this
+	# registration only ever reports "ignored" in the ordinary functional
+	# run. A generous timeout: the seeding step alone can take minutes at the
+	# batch sizes this test is meant to be run at by hand.
+	add_test(
+		NAME functional-book-scale-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-book-scale
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-scale-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 1800
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# Item 83 batch 1: `functional-book-changes`'s own two-connects-one-cache
 	# leg, pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason

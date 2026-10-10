@@ -448,6 +448,18 @@ impl Session {
     /// Every `gnome-keyring-daemon` process whose own `XDG_RUNTIME_DIR`
     /// environment variable is this session's scratch runtime directory.
     fn keyring_daemons(&self) -> Vec<i32> {
+        // Both spellings: `gnome-keyring-daemon` as started by `run`'s own
+        // script, and `/usr/bin/gnome-keyring-daemon` as D-Bus activation
+        // would start it — `contains` below matches either.
+        self.pids_matching(b"gnome-keyring-daemon")
+    }
+
+    /// Every process whose `cmdline` contains `needle` and whose own
+    /// `XDG_RUNTIME_DIR` environment variable is this session's scratch
+    /// runtime directory — so a match can only ever be a daemon *this*
+    /// session's private bus activated, never another session's or the
+    /// developer's.
+    fn pids_matching(&self, needle: &[u8]) -> Vec<i32> {
         let Some(runtime_directory) = self.environment.get(OsStr::new("XDG_RUNTIME_DIR")) else {
             return Vec::new();
         };
@@ -461,12 +473,9 @@ impl Session {
             .flatten()
             .filter_map(|entry| {
                 let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
-                // Both spellings: `gnome-keyring-daemon` as started by the
-                // script above, and `/usr/bin/gnome-keyring-daemon` as D-Bus
-                // activation would start it.
                 let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
                 let environ = fs::read(entry.path().join("environ")).ok()?;
-                (contains(&cmdline, b"gnome-keyring-daemon")
+                (contains(&cmdline, needle)
                     && environ
                         .split(|byte| *byte == 0)
                         .any(|value| value == marker.as_slice()))
@@ -474,12 +483,74 @@ impl Session {
             })
             .collect()
     }
+
+    /// Like [`Self::run`], but also reports the highest `VmHWM` (peak
+    /// resident set size) seen on any process matching `process_name` that
+    /// this session's own private bus activated, while `program` ran.
+    ///
+    /// This is for measuring a D-Bus-activated *factory* process
+    /// (`evolution-addressbook-factory`, `evolution-calendar-factory`), not
+    /// `program` itself: the factory is what actually holds the meta
+    /// backend's cache, and it lives and dies with the private bus `run`
+    /// tears down, so it cannot be inspected from outside this one call's
+    /// window. A background thread polls `/proc` every 20ms for the
+    /// duration, the same `XDG_RUNTIME_DIR`-matching technique
+    /// [`Self::keyring_daemons`] uses to find a daemon this session, and no
+    /// other, started.
+    ///
+    /// `None` if the process never appeared -- e.g. its name was misspelled,
+    /// or the open never actually reached the factory.
+    pub fn run_measuring_peak_rss(
+        &self,
+        program: &Path,
+        arguments: &[&str],
+        process_name: &str,
+    ) -> (Output, Option<u64>) {
+        let peak = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let needle = process_name.as_bytes().to_vec();
+
+        let output = std::thread::scope(|scope| {
+            let peak = &peak;
+            let stop = &stop;
+            let needle = &needle;
+            scope.spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    for pid in self.pids_matching(needle) {
+                        if let Some(kb) = process_peak_rss_kb(pid) {
+                            peak.fetch_max(kb, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            let output = self.run(program, arguments);
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            output
+        });
+
+        let peak = peak.load(std::sync::atomic::Ordering::Relaxed);
+        (output, (peak > 0).then_some(peak))
+    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+/// `VmHWM` (peak resident set size, in kB) of `pid`, read from
+/// `/proc/<pid>/status`. `None` once the process has exited, or on any
+/// platform without `/proc` -- Linux only, which every runner this crate
+/// actually runs on is.
+fn process_peak_rss_kb(pid: i32) -> Option<u64> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("VmHWM:")
+            .and_then(|rest| rest.trim().strip_suffix("kB"))
+            .and_then(|value| value.trim().parse().ok())
+    })
 }
 
 /// A path handed to the test by CTest, which knows where CMake put things
