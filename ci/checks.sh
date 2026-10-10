@@ -105,7 +105,22 @@ echo "== CMake/CTest suite, if EDS dev headers/cmake/ninja are present =="
 # `docs/packaging/third-party-notices` drifting from a `Cargo.lock` bump
 # before that sat red in CI for 31+ hours (2026-09-20).
 if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
-    cmake -S . -B build -G Ninja >/dev/null
+    # -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules's own configure line:
+    # without it CMAKE_INSTALL_PREFIX defaults to /usr/local, which
+    # LANGUAGE_SUPPORT_DIRECTORY (CMakeLists.txt) bakes both into the
+    # translation catalogue's install destination and into the
+    # EVOLUTION_JMAP_LOCALEDIR compiled into the Rust modules. Every other
+    # installed path in this tree either comes from pkg-config directly
+    # (the EDS/Evolution module directories, untouched unless
+    # FORCE_INSTALL_PREFIX is on) or is hardcoded to /usr
+    # (cmake/Packaging.cmake's doc/lintian-override installs), so the
+    # locale catalogue was the one install() whose destination silently
+    # tracked the CMake default instead of where this package actually
+    # ships. Invisible while po/LINGUAS had no languages in it and so
+    # installed no catalogue at all; the first language added
+    # (po/de.po) is what surfaced it, as a real lintian
+    # dir-in-usr-local/file-in-usr-local failure in package-deb-lintian.
+    cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr >/dev/null
     ninja -C build
     # package-deb-lintian is only registered by cmake/Packaging.cmake when
     # `find_program(lintian)` succeeds, so on a machine without lintian the

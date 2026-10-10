@@ -67,8 +67,40 @@ rate-limit artifact of running both tests back to back, not a regression in
 import itself (batch 1's own number, 500 cards with the window to itself,
 stands at ~35.6ms/card).
 
+## Batch 3: PHOTO-blob variant, 2026-10-10
+
+A fresh throwaway account, so this batch's own import never mixes with
+batches 1 or 2's leftovers. New test,
+`a_real_sized_address_book_with_photos_round_trips_through_the_real_server`:
+imports 500 cards, a tenth of them (50) with an inline vCard 3.0
+`PHOTO;ENCODING=b;TYPE=JPEG:` of ~50 KB base64, then checks every photo card
+is in the cold listing and its PHOTO payload round-trips byte-identical.
+
+A PHOTO never goes through JMAP's `Blob/upload` in this codebase: `jmap-vcard`
+inlines it straight into `ContactCard/set`'s JSContact `media` map
+(`BookSync::save_contact`, `jmap-vcard`'s `vcard_to_card`), and no size limit
+is enforced anywhere in `jmap-mock` for this path (`ContactsCapability`'s
+`max_size_attachments_per_card` is advertised but never read).
+
+| Measurement | Result |
+|---|---|
+| Import 500 cards (50 with a ~50 KB PHOTO) | 29.7s total (~59.5ms/card) |
+| Cold listing | 1.0s |
+| Peak RSS | 32.5 MB |
+
+No scale-only bug found: a 2.5 MB-ish PHOTO total across the batch costs more
+than an all-text batch (peak RSS roughly doubled versus batch 1's 17.7 MB)
+but nothing broke or hit a server limit. One test-harness snag, not a product
+bug: the first version of this test compared the server's returned vCard
+text directly against the original base64 string and failed, because
+`jmap-vcard`'s `card_to_vcard` folds any physical line over 75 octets per RFC
+2426 §2.6 (`fold_overlong_lines`), so a ~67 KB base64 payload always comes
+back line-folded even though its octets are unchanged. Fixed by unfolding
+(`vcard.replace("\r\n ", "")`) before comparing; this is a test-design
+correction, not a code change to the product.
+
 ## Batches left
 
-Still open per item 94(a): the 1,000/5,000-card checkpoints, the PHOTO-blob
-variant, `jmap-cal-sync`'s (b), and the real-EDS leg (c) (item 80's live-
-Stalwart book factory, first open of a 5,000-card book through real EDS).
+Still open per item 94(a): the 1,000/5,000-card checkpoints, `jmap-cal-sync`'s
+(b), and the real-EDS leg (c) (item 80's live-Stalwart book factory, first
+open of a 5,000-card book through real EDS).

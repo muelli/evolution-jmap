@@ -300,6 +300,7 @@ dependencies = [
 name = "evolution-jmap-book-sync"
 version = "0.4.1"
 dependencies = [
+ "base64",
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
