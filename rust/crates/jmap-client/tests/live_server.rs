@@ -89,7 +89,7 @@ use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
+    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use jmap_proto::state::UtcDate;
@@ -4986,4 +4986,131 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
     client
         .event_destroy(&account_id, &event_id)
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
+/// `VacationResponse` (RFC 8621 section 8.1) against a real server.
+/// `jmap-ui`'s vacation autoresponder page (`rust/crates/jmap-ui/src/
+/// vacation/`, Evolution's account-editor Out of Office tab) is the only
+/// consumer of `Client::vacation_response_get`/`_update`, and every other
+/// exercise of those two methods was against `jmap-mockd`
+/// (`jmap-client/tests/vacation_response.rs`), which echoes back whatever a
+/// fixture says rather than a real server's own singleton semantics.
+///
+/// Confirms, against real Stalwart: the singleton always exists with id
+/// `"singleton"` even before any `set` (RFC 8621's own "MUST NOT attempt to
+/// create" requirement implies the server itself provisions one), a partial
+/// `update` only touches the properties it names and leaves the rest alone
+/// (RFC 8620 section 5.3's Update semantics, not a whole-object replace),
+/// and an explicit `null` clears a property rather than being ignored.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn vacation_response_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_VACATION_RESPONSE) else {
+        eprintln!("server names no primary account for {CAPABILITY_VACATION_RESPONSE}; skipping");
+        return;
+    };
+
+    // 1. The singleton exists from the start, disabled, with id "singleton".
+    let initial = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert_eq!(
+        initial.id.as_ref().map(|id| id.as_str()),
+        Some("singleton"),
+        "RFC 8621 singleton must be named \"singleton\", got {:?}",
+        initial.id
+    );
+
+    // 2. A full update round-trips every RFC 8621 section 8.1 field.
+    client
+        .vacation_response_update(
+            &account_id,
+            json!({
+                "isEnabled": true,
+                "fromDate": "2026-10-10T00:00:00Z",
+                "toDate": "2026-10-20T00:00:00Z",
+                "subject": "Out of office",
+                "textBody": "I am away.",
+            }),
+        )
+        .expect("VacationResponse/set update failed against the real server");
+    let after_full_update = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert!(after_full_update.is_enabled);
+    assert_eq!(
+        after_full_update.from_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-10T00:00:00Z")
+    );
+    assert_eq!(
+        after_full_update.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z")
+    );
+    assert_eq!(after_full_update.subject.as_deref(), Some("Out of office"));
+    assert_eq!(after_full_update.text_body.as_deref(), Some("I am away."));
+
+    // 3. A partial update naming only `subject` leaves every other property
+    // untouched, confirming the real server implements RFC 8620 section
+    // 5.3's Update (merge), not a whole-object replace.
+    client
+        .vacation_response_update(&account_id, json!({ "subject": "Still away" }))
+        .expect("VacationResponse/set partial update failed against the real server");
+    let after_partial_update = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert_eq!(after_partial_update.subject.as_deref(), Some("Still away"));
+    assert_eq!(
+        after_partial_update.from_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-10T00:00:00Z"),
+        "a partial update naming only subject must not disturb fromDate"
+    );
+    assert_eq!(
+        after_partial_update.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z"),
+        "a partial update naming only subject must not disturb toDate"
+    );
+
+    // 4. An explicit `null` clears a property rather than being ignored.
+    client
+        .vacation_response_update(&account_id, json!({ "fromDate": null }))
+        .expect("VacationResponse/set null-clear failed against the real server");
+    let after_clear = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert!(
+        after_clear.from_date.is_none(),
+        "an explicit null for fromDate must clear it, got {:?}",
+        after_clear.from_date
+    );
+    assert_eq!(
+        after_clear.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z"),
+        "clearing fromDate must not disturb toDate"
+    );
+
+    // Cleanup: the singleton cannot be destroyed (RFC 8621), so leave it
+    // disabled rather than leaking an active autoresponder on the shared
+    // throwaway account.
+    client
+        .vacation_response_update(
+            &account_id,
+            json!({
+                "isEnabled": false,
+                "toDate": null,
+                "subject": null,
+                "textBody": null,
+            }),
+        )
+        .expect("VacationResponse/set cleanup failed against the real server");
+    let after_cleanup = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server (cleanup check)");
+    assert!(
+        !after_cleanup.is_enabled,
+        "cleanup must leave the autoresponder disabled"
+    );
 }
