@@ -67,7 +67,7 @@ use jmap_client::{
     CancelFlag, Client, Credentials, Error, EventSourceItem, EventSourceSubscription, limits,
 };
 use jmap_proto::Id;
-use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
+use jmap_proto::blob::{BlobGetRequest, BlobLookupRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventParseRequest,
     CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
@@ -1779,6 +1779,132 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
         }
         other => panic!("expected a forbidden Method error, got {other:?}"),
     }
+}
+
+/// `Blob/lookup` (RFC 9404 section 4.3) against a real server: `Blob/get`,
+/// `Blob/upload` and `Blob/copy` (above) all have real-server coverage, but
+/// `blob_lookup` was only ever called from `examples/blob-capability-probe.rs`,
+/// a manual probe whose own check only asked whether the call was accepted,
+/// not what it actually reported, and was never run as part of this suite.
+///
+/// Imports a message via [`Client::email_import`], whose returned `blobId`
+/// differs from the blob that was uploaded to produce it (the server
+/// re-stores its own blob — see `email_import`'s own doc comment), so the
+/// *imported* email's blob id, not the one this test uploaded, is the one
+/// `Blob/lookup` should report a match against. Confirms both halves:
+/// before import, the uploaded (as yet unreferenced) blob answers an empty
+/// `matchedIds` rather than being vacuously absent, and after import, the
+/// email's own blob id answers `matchedIds["Email"]` naming the new email.
+///
+/// Also pins a real server deviation rather than assuming this client can
+/// rely on it: RFC 9404 section 4.3.1's own example shows a blob id the
+/// server has never seen must be echoed back in `notFound`
+/// (`"notFound": ["not-a-blob"]`). Real Stalwart drops such an id from both
+/// `list` and `notFound` instead, confirmed over raw HTTP before this test
+/// was written. See `STALWART-RFC-FINDINGS.md` finding 24 in the harness
+/// repo.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the blob-lookup test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_BLOB)
+        .expect("the write-test account needs the blob capability");
+    let inbox_id = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .expect("the write-test account needs an Inbox")
+        .id
+        .expect("the server named the Inbox");
+
+    let subject = format!("agent-livewrite-bloblookup-{}", unique_suffix());
+    let message = format!(
+        "From: agent-livewrite@example.invalid\r\n\
+         To: agent-livewrite@example.invalid\r\n\
+         Subject: {subject}\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         \r\n\
+         blob lookup probe\r\n"
+    );
+
+    let uploaded = client
+        .upload_blob(&account_id, "message/rfc822", message.into_bytes())
+        .expect("blob upload failed against the real server");
+
+    let before = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [uploaded.blob_id.clone()],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    let before_match = before
+        .list
+        .iter()
+        .find(|m| m.id == uploaded.blob_id)
+        .expect("the freshly uploaded blob must appear in Blob/lookup's list");
+    assert!(
+        before_match
+            .matched_ids
+            .get("Email")
+            .is_none_or(|ids| ids.is_empty()),
+        "an unreferenced blob must not already show an Email match"
+    );
+
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(uploaded.blob_id, inbox_id))
+        .expect("Email/import failed against the real server");
+    let email_id = imported.id.clone().expect("the server named the new email");
+    let email_blob_id = imported
+        .blob_id
+        .clone()
+        .expect("the server named the imported email's own blob id");
+
+    let after = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [email_blob_id.clone()],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    let after_match = after
+        .list
+        .iter()
+        .find(|m| m.id == email_blob_id)
+        .expect("the imported email's own blob id must appear in Blob/lookup's list");
+    assert_eq!(
+        after_match.matched_ids.get("Email"),
+        Some(&vec![email_id.clone()]),
+        "Blob/lookup must report the newly imported email against its own blob id"
+    );
+
+    let nonexistent = Id::from("agent-bloblookup-nonexistent-id-0000000000000000000000000");
+    let unknown = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [nonexistent],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    assert!(
+        unknown.list.is_empty() && unknown.not_found.is_empty(),
+        "documenting known real-server deviation finding 24: an unknown blob \
+         id is silently dropped from both list and notFound, instead of \
+         appearing in notFound as RFC 9404 section 4.3.1 requires; if this \
+         ever starts failing, Stalwart may have fixed it, update the finding"
+    );
+
+    client
+        .email_destroy(&account_id, &email_id)
+        .expect("Email/set destroy failed for the blob-lookup test message");
 }
 
 /// RFC 9425 Quota against real, computed numbers: `jmap-client/tests/
