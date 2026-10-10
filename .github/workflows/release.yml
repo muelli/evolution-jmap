@@ -56,7 +56,11 @@ jobs:
 
       - name: Build and package (cacheless)
         run: |
-          cmake -S . -B build -G Ninja
+          # -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules and ci/checks.sh:
+          # without it CMAKE_INSTALL_PREFIX defaults to /usr/local, and the
+          # translation catalogue install()s under /usr/local/share/locale,
+          # which package-deb-lintian below rejects as dir-in-usr-local.
+          cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build
           ctest --test-dir build --output-on-failure -R '^package-deb'
           cmake --build build --target package
