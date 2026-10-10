@@ -67,7 +67,7 @@ use jmap_client::{
     CancelFlag, Client, Credentials, Error, EventSourceItem, EventSourceSubscription, limits,
 };
 use jmap_proto::Id;
-use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
+use jmap_proto::blob::{BlobGetRequest, BlobLookupRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventParseRequest,
     CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
@@ -84,7 +84,7 @@ use jmap_proto::methods::{
     BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, GetResponse,
     SetRequest,
 };
-use jmap_proto::principals::PrincipalQueryFilter;
+use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
@@ -1781,6 +1781,132 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
     }
 }
 
+/// `Blob/lookup` (RFC 9404 section 4.3) against a real server: `Blob/get`,
+/// `Blob/upload` and `Blob/copy` (above) all have real-server coverage, but
+/// `blob_lookup` was only ever called from `examples/blob-capability-probe.rs`,
+/// a manual probe whose own check only asked whether the call was accepted,
+/// not what it actually reported, and was never run as part of this suite.
+///
+/// Imports a message via [`Client::email_import`], whose returned `blobId`
+/// differs from the blob that was uploaded to produce it (the server
+/// re-stores its own blob — see `email_import`'s own doc comment), so the
+/// *imported* email's blob id, not the one this test uploaded, is the one
+/// `Blob/lookup` should report a match against. Confirms both halves:
+/// before import, the uploaded (as yet unreferenced) blob answers an empty
+/// `matchedIds` rather than being vacuously absent, and after import, the
+/// email's own blob id answers `matchedIds["Email"]` naming the new email.
+///
+/// Also pins a real server deviation rather than assuming this client can
+/// rely on it: RFC 9404 section 4.3.1's own example shows a blob id the
+/// server has never seen must be echoed back in `notFound`
+/// (`"notFound": ["not-a-blob"]`). Real Stalwart drops such an id from both
+/// `list` and `notFound` instead, confirmed over raw HTTP before this test
+/// was written. See `STALWART-RFC-FINDINGS.md` finding 24 in the harness
+/// repo.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the blob-lookup test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_BLOB)
+        .expect("the write-test account needs the blob capability");
+    let inbox_id = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .expect("the write-test account needs an Inbox")
+        .id
+        .expect("the server named the Inbox");
+
+    let subject = format!("agent-livewrite-bloblookup-{}", unique_suffix());
+    let message = format!(
+        "From: agent-livewrite@example.invalid\r\n\
+         To: agent-livewrite@example.invalid\r\n\
+         Subject: {subject}\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         \r\n\
+         blob lookup probe\r\n"
+    );
+
+    let uploaded = client
+        .upload_blob(&account_id, "message/rfc822", message.into_bytes())
+        .expect("blob upload failed against the real server");
+
+    let before = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [uploaded.blob_id.clone()],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    let before_match = before
+        .list
+        .iter()
+        .find(|m| m.id == uploaded.blob_id)
+        .expect("the freshly uploaded blob must appear in Blob/lookup's list");
+    assert!(
+        before_match
+            .matched_ids
+            .get("Email")
+            .is_none_or(|ids| ids.is_empty()),
+        "an unreferenced blob must not already show an Email match"
+    );
+
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(uploaded.blob_id, inbox_id))
+        .expect("Email/import failed against the real server");
+    let email_id = imported.id.clone().expect("the server named the new email");
+    let email_blob_id = imported
+        .blob_id
+        .clone()
+        .expect("the server named the imported email's own blob id");
+
+    let after = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [email_blob_id.clone()],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    let after_match = after
+        .list
+        .iter()
+        .find(|m| m.id == email_blob_id)
+        .expect("the imported email's own blob id must appear in Blob/lookup's list");
+    assert_eq!(
+        after_match.matched_ids.get("Email"),
+        Some(&vec![email_id.clone()]),
+        "Blob/lookup must report the newly imported email against its own blob id"
+    );
+
+    let nonexistent = Id::from("agent-bloblookup-nonexistent-id-0000000000000000000000000");
+    let unknown = client
+        .blob_lookup(&BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [nonexistent],
+        ))
+        .expect("Blob/lookup failed against the real server");
+    assert!(
+        unknown.list.is_empty() && unknown.not_found.is_empty(),
+        "documenting known real-server deviation finding 24: an unknown blob \
+         id is silently dropped from both list and notFound, instead of \
+         appearing in notFound as RFC 9404 section 4.3.1 requires; if this \
+         ever starts failing, Stalwart may have fixed it, update the finding"
+    );
+
+    client
+        .email_destroy(&account_id, &email_id)
+        .expect("Email/set destroy failed for the blob-lookup test message");
+}
+
 /// RFC 9425 Quota against real, computed numbers: `jmap-client/tests/
 /// quota.rs` only ever checks that `Client::quotas` deserialises whatever
 /// `jmap-mockd`'s fixture was told to answer, never that a quota's `used`
@@ -2445,6 +2571,182 @@ fn address_book_share_grant_and_revoke_deliver_a_real_share_notification() {
         revoked.new_rights
     );
 
+    owner
+        .address_book_destroy(&owner_account_id, &book_id)
+        .expect("AddressBook/set destroy failed against the real server (cleanup)");
+}
+
+/// `ShareNotification/query` (RFC 9670 section 4) against a real server:
+/// `Client::share_notification_query` has mock-only server-side coverage
+/// (`jmap-mock/src/principals.rs`'s own `share_notification_query`) and
+/// protocol-level filter serialization tests
+/// (`jmap-proto/tests/principals.rs`), but no test anywhere, mock or live,
+/// had ever actually called the method. Shares an address book with the
+/// recipient (same setup as
+/// [`address_book_share_grant_and_revoke_deliver_a_real_share_notification`])
+/// and confirms the real server's query narrows by `objectType` and by a
+/// `before` date window the same way the mock does.
+///
+/// Also pins a real server deviation rather than assuming this client can
+/// rely on it: `objectType` and `before` both narrow correctly, but `after`
+/// does not. A cutoff in the future, which ought to exclude every existing
+/// notification, still returns one created well before it. See
+/// `STALWART-RFC-FINDINGS.md` finding 25 in the harness repo.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn share_notification_query_filters_by_object_type_and_date_window() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ShareNotification/query test"
+        );
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ShareNotification/query test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ShareNotification/query test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let recipient_account_id = recipient
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the recipient account needs the contacts capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-sharequery-{}", unique_suffix());
+    let book = owner
+        .address_book_create(&owner_account_id, &AddressBook::new(name))
+        .expect("AddressBook/set create failed against the real server");
+    let book_id = book
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayRead": true}}}),
+        )
+        .expect("AddressBook/set shareWith failed against the real server");
+
+    // Poll ShareNotification/get (already confirmed live) for the grant to
+    // land, then switch to ShareNotification/query for the actual target of
+    // this test.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut granted_id = None;
+    while granted_id.is_none() && Instant::now() < deadline {
+        let notifications = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the grant");
+        granted_id = notifications
+            .into_iter()
+            .find(|notification| notification.object_id == book_id)
+            .and_then(|notification| notification.id);
+        if granted_id.is_none() {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    let granted_id =
+        granted_id.expect("the grant produced no ShareNotification for this address book");
+
+    let matching_type_ids = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_object_type("AddressBook"),
+        )
+        .expect(
+            "ShareNotification/query with objectType=AddressBook failed against the real server",
+        );
+    assert!(
+        matching_type_ids.contains(&granted_id),
+        "querying objectType=AddressBook did not include the address book's own grant notification"
+    );
+
+    let mismatched_type_ids = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_object_type("Mailbox"),
+        )
+        .expect("ShareNotification/query with objectType=Mailbox failed against the real server");
+    assert!(
+        !mismatched_type_ids.contains(&granted_id),
+        "querying objectType=Mailbox wrongly included an AddressBook grant notification"
+    );
+
+    // `before` narrows correctly: a cutoff before the notification was ever
+    // created excludes it, and a cutoff well after it includes it.
+    let before_cutoff_too_early = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_before(UtcDate::new("2020-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with an early before-date failed against the real server");
+    assert!(
+        !before_cutoff_too_early.contains(&granted_id),
+        "querying before a date earlier than the notification's own creation wrongly included it"
+    );
+
+    let before_cutoff_late_enough = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_before(UtcDate::new("2030-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with a late before-date failed against the real server");
+    assert!(
+        before_cutoff_late_enough.contains(&granted_id),
+        "querying before a date well after the notification's own creation wrongly excluded it"
+    );
+
+    // Known Stalwart deviation (STALWART-RFC-FINDINGS.md finding 25,
+    // harness repo): unlike `before` above, the `after` filter argument is
+    // silently ignored, so a cutoff in the future (which ought to exclude
+    // every existing notification) still returns this one. Pinning the
+    // actual behaviour rather than the RFC-correct one, so a server fix
+    // shows up here as a test failure to update, not a silent pass.
+    let after_cutoff_in_the_future = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_after(UtcDate::new("2030-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with a future after-date failed against the real server");
+    assert!(
+        after_cutoff_in_the_future.contains(&granted_id),
+        "the server appears to have started honouring `after`: a notification created before a \
+         future cutoff is now correctly excluded, update this test and STALWART-RFC-FINDINGS.md \
+         finding 25 to match"
+    );
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("AddressBook/set revoke failed against the real server (cleanup)");
     owner
         .address_book_destroy(&owner_account_id, &book_id)
         .expect("AddressBook/set destroy failed against the real server (cleanup)");
