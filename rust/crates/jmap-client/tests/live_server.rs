@@ -89,7 +89,7 @@ use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
+    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use jmap_proto::state::UtcDate;
@@ -4888,4 +4888,229 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
         }
         other => panic!("expected Error::ResponseTooLarge, got: {other:?}"),
     }
+}
+
+/// Finding 23 (STALWART-RFC-FINDINGS.md): `CalendarEvent/set` accepts the
+/// `participants` property on both create and a whole-value update without
+/// any error, but the server never persists it: a subsequent `CalendarEvent/get`
+/// (even naming `participants` explicitly in `properties`) reports the event
+/// with no `participants` at all, as if none were ever sent.
+///
+/// This matters beyond the wire: `jmap-cal-sync`'s own `push` deliberately
+/// reloads a just-created event from the server rather than trusting the
+/// terse create echo (see `jmap-cal-sync/src/lib.rs`'s comment on
+/// `load_component`), so every attendee a user adds to a new meeting in
+/// Evolution is silently gone again the moment that reload runs.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_set_silently_drops_participants_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let suffix = unique_suffix();
+    let title = format!("agent-participants-drop-{suffix}");
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T09:00:00", "PT1H");
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "attendee-1".to_owned(),
+        serde_json::to_value(
+            Participant::new("Outside Attendee", "nobody@example.net")
+                .with_roles([("attendee".to_owned(), true)].into())
+                .with_participation_status("needs-action"),
+        )
+        .unwrap(),
+    );
+    event.participants = Some(participants);
+
+    // 1. Create succeeds with no error, as if the participants were accepted:
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create failed against the real server");
+    let event_id = created.id.clone().expect("the server named the new event");
+
+    // 2. A fresh CalendarEvent/get, explicitly asking for participants, comes
+    // back with none at all (Finding 23) — not an empty map, the property is
+    // simply absent from the object, exactly as jmap-cal-sync's own
+    // load_component would observe it:
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/get",
+            &GetRequest::ids(account_id.clone(), [event_id.clone()])
+                .properties(["participants", "title"]),
+        )
+        .expect("raw CalendarEvent/get succeeds");
+    let fetched = raw_args
+        .get("list")
+        .and_then(|list| list.as_array())
+        .and_then(|list| list.first())
+        .expect("CalendarEvent/get must return the just-created event");
+    assert_eq!(
+        fetched.get("title").and_then(|v| v.as_str()),
+        Some(title.as_str())
+    );
+    assert!(
+        fetched.get("participants").is_none(),
+        "live Stalwart CalendarEvent/get must omit participants entirely after \
+         create silently dropped them (Finding 23), got: {fetched:?}"
+    );
+
+    // 3. Driving the client's own round-trip path confirms the same loss:
+    let reloaded = client
+        .event_get(&account_id, std::slice::from_ref(&event_id))
+        .expect("CalendarEvent/get failed against the real server");
+    let reloaded_event = reloaded
+        .list
+        .first()
+        .expect("CalendarEvent/get must return the just-created event");
+    assert!(
+        reloaded_event.participants.is_none()
+            || reloaded_event.participants.as_ref().unwrap().is_empty(),
+        "Client::event_get must observe the same participant loss, got: {:?}",
+        reloaded_event.participants
+    );
+
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
+/// `VacationResponse` (RFC 8621 section 8.1) against a real server.
+/// `jmap-ui`'s vacation autoresponder page (`rust/crates/jmap-ui/src/
+/// vacation/`, Evolution's account-editor Out of Office tab) is the only
+/// consumer of `Client::vacation_response_get`/`_update`, and every other
+/// exercise of those two methods was against `jmap-mockd`
+/// (`jmap-client/tests/vacation_response.rs`), which echoes back whatever a
+/// fixture says rather than a real server's own singleton semantics.
+///
+/// Confirms, against real Stalwart: the singleton always exists with id
+/// `"singleton"` even before any `set` (RFC 8621's own "MUST NOT attempt to
+/// create" requirement implies the server itself provisions one), a partial
+/// `update` only touches the properties it names and leaves the rest alone
+/// (RFC 8620 section 5.3's Update semantics, not a whole-object replace),
+/// and an explicit `null` clears a property rather than being ignored.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn vacation_response_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_VACATION_RESPONSE) else {
+        eprintln!("server names no primary account for {CAPABILITY_VACATION_RESPONSE}; skipping");
+        return;
+    };
+
+    // 1. The singleton exists from the start, disabled, with id "singleton".
+    let initial = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert_eq!(
+        initial.id.as_ref().map(|id| id.as_str()),
+        Some("singleton"),
+        "RFC 8621 singleton must be named \"singleton\", got {:?}",
+        initial.id
+    );
+
+    // 2. A full update round-trips every RFC 8621 section 8.1 field.
+    client
+        .vacation_response_update(
+            &account_id,
+            json!({
+                "isEnabled": true,
+                "fromDate": "2026-10-10T00:00:00Z",
+                "toDate": "2026-10-20T00:00:00Z",
+                "subject": "Out of office",
+                "textBody": "I am away.",
+            }),
+        )
+        .expect("VacationResponse/set update failed against the real server");
+    let after_full_update = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert!(after_full_update.is_enabled);
+    assert_eq!(
+        after_full_update.from_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-10T00:00:00Z")
+    );
+    assert_eq!(
+        after_full_update.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z")
+    );
+    assert_eq!(after_full_update.subject.as_deref(), Some("Out of office"));
+    assert_eq!(after_full_update.text_body.as_deref(), Some("I am away."));
+
+    // 3. A partial update naming only `subject` leaves every other property
+    // untouched, confirming the real server implements RFC 8620 section
+    // 5.3's Update (merge), not a whole-object replace.
+    client
+        .vacation_response_update(&account_id, json!({ "subject": "Still away" }))
+        .expect("VacationResponse/set partial update failed against the real server");
+    let after_partial_update = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert_eq!(after_partial_update.subject.as_deref(), Some("Still away"));
+    assert_eq!(
+        after_partial_update.from_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-10T00:00:00Z"),
+        "a partial update naming only subject must not disturb fromDate"
+    );
+    assert_eq!(
+        after_partial_update.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z"),
+        "a partial update naming only subject must not disturb toDate"
+    );
+
+    // 4. An explicit `null` clears a property rather than being ignored.
+    client
+        .vacation_response_update(&account_id, json!({ "fromDate": null }))
+        .expect("VacationResponse/set null-clear failed against the real server");
+    let after_clear = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server");
+    assert!(
+        after_clear.from_date.is_none(),
+        "an explicit null for fromDate must clear it, got {:?}",
+        after_clear.from_date
+    );
+    assert_eq!(
+        after_clear.to_date.as_ref().map(|d| d.as_str()),
+        Some("2026-10-20T00:00:00Z"),
+        "clearing fromDate must not disturb toDate"
+    );
+
+    // Cleanup: the singleton cannot be destroyed (RFC 8621), so leave it
+    // disabled rather than leaking an active autoresponder on the shared
+    // throwaway account.
+    client
+        .vacation_response_update(
+            &account_id,
+            json!({
+                "isEnabled": false,
+                "toDate": null,
+                "subject": null,
+                "textBody": null,
+            }),
+        )
+        .expect("VacationResponse/set cleanup failed against the real server");
+    let after_cleanup = client
+        .vacation_response_get(&account_id)
+        .expect("VacationResponse/get failed against the real server (cleanup check)");
+    assert!(
+        !after_cleanup.is_enabled,
+        "cleanup must leave the autoresponder disabled"
+    );
 }
