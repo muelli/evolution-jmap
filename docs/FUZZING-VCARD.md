@@ -174,6 +174,31 @@ Command note:
   `fuzz/corpus/fuzz_jscontact_to_vcard` under `/tmp` to avoid writing
   generated units into the committed repository corpus.
 
+### 2026-10-10 UTC (target rotation: `fuzz_vcard_roundtrip_fixed_point`, second pass)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Ran the next bounded target slice for Batch 4 rotation:
+  - `cargo +nightly fuzz run fuzz_vcard_roundtrip_fixed_point -- -max_total_time=2700 -verbosity=0 -print_final_stats=1`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `3,650,939`.
+- Average throughput: `1351` exec/s.
+- New units added: `52,763`.
+- Peak resident set size: `636Mb`.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of
+  `fuzz/corpus/fuzz_vcard_roundtrip_fixed_point` under `/tmp` to avoid writing
+  generated units into the committed repository corpus.
+- This invocation used `-verbosity=0`; final stats were emitted, but final
+  `cov`/`ft`/`corp` counters were not printed in the log.
+
 ## Resume commands
 
 ```bash
