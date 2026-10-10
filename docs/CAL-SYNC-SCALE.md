@@ -135,8 +135,46 @@ warm from recent traffic; that is a workaround (a wait, or an unused account,
 avoids tripping the window at all) not a fix, since the suspected bug is
 server-side.
 
+## Batch 4: the real-EDS leg (c), `evolution-calendar-factory`'s first open, 2026-10-10
+
+Every batch above measures `CalSync` calling the real server directly, with
+no EDS in between. This batch asks the question those numbers cannot: how
+long the real, running `evolution-calendar-factory` takes to do its own
+first open of an already-large calendar, and how much memory it peaks at,
+through the real meta-backend machinery rather than just the wire calls.
+The calendar twin of `BOOK-SYNC-SCALE.md` batch 6.
+
+New test `rust/crates/jmap-functional/tests/live-stalwart-calendar-scale.rs`:
+seeds N events directly over JMAP with a raw `jmap_client::Client`
+(`CalendarEvent::simple`, so the account is already that size *before* EDS
+ever connects to it), then opens the calendar through a real
+`functional-cal-changes-client` for the first time (reusing that existing
+binary's own plain connect-and-list unchanged, the calendar analogue of
+`functional-book-client`'s `list` phase), timing the open and polling
+`/proc` for `evolution-calendar-factory`'s own peak `VmHWM` via
+`Session::run_measuring_peak_rss` (already generalized by batch 6 one file
+over). Same `ubuntu:24.04` podman recipe as that batch, for the same reason
+(this runner's dev VM lacks the EDS runtime daemons
+`-DENABLE_FUNCTIONAL_TESTS=ON` needs).
+
+Run once at the item's own 3,000-event checkpoint, against a freshly seeded
+throwaway account with a run-unique local part (confirmed fresh via
+`stw query Account` before trusting the number — the first attempt reused
+the `agent1` local part and silently landed on a prior session's account,
+the same isolation gap batch 2 already documented; re-seeding with a
+run-unique local part fixed it).
+
+| Calendar size | Seed time (direct JMAP) | Factory first open + cold listing | Factory peak RSS |
+|---|---|---|---|
+| 3,000 events | 143.4s | 2.58s | 44.0 MB |
+
+No scale-only bug found: comparable in shape to `BOOK-SYNC-SCALE.md` batch
+6's 5,000-card number (3.90s open, 52.7 MB peak RSS) — well under a second
+per thousand items and tens of megabytes, nowhere near the quadratic blowup
+item 94 watches for. `jmap-cal-sync`'s entire share of item 94 is now fully
+checked off, and so is item 94 as a whole.
+
 ## Batches left
 
-Still open per item 94(b): the real-EDS leg (c) shared with `jmap-book-sync`
-(item 80's live-Stalwart calendar factory, first open of a 3,000-event
-calendar through real EDS).
+None. Item 94 is fully closed for both `jmap-book-sync` and `jmap-cal-sync`,
+including the real-EDS leg (c) for both.
