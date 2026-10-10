@@ -84,7 +84,7 @@ use jmap_proto::methods::{
     BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, GetResponse,
     SetRequest,
 };
-use jmap_proto::principals::PrincipalQueryFilter;
+use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
@@ -2571,6 +2571,182 @@ fn address_book_share_grant_and_revoke_deliver_a_real_share_notification() {
         revoked.new_rights
     );
 
+    owner
+        .address_book_destroy(&owner_account_id, &book_id)
+        .expect("AddressBook/set destroy failed against the real server (cleanup)");
+}
+
+/// `ShareNotification/query` (RFC 9670 section 4) against a real server:
+/// `Client::share_notification_query` has mock-only server-side coverage
+/// (`jmap-mock/src/principals.rs`'s own `share_notification_query`) and
+/// protocol-level filter serialization tests
+/// (`jmap-proto/tests/principals.rs`), but no test anywhere, mock or live,
+/// had ever actually called the method. Shares an address book with the
+/// recipient (same setup as
+/// [`address_book_share_grant_and_revoke_deliver_a_real_share_notification`])
+/// and confirms the real server's query narrows by `objectType` and by a
+/// `before` date window the same way the mock does.
+///
+/// Also pins a real server deviation rather than assuming this client can
+/// rely on it: `objectType` and `before` both narrow correctly, but `after`
+/// does not. A cutoff in the future, which ought to exclude every existing
+/// notification, still returns one created well before it. See
+/// `STALWART-RFC-FINDINGS.md` finding 25 in the harness repo.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn share_notification_query_filters_by_object_type_and_date_window() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ShareNotification/query test"
+        );
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ShareNotification/query test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ShareNotification/query test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let recipient_account_id = recipient
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the recipient account needs the contacts capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-sharequery-{}", unique_suffix());
+    let book = owner
+        .address_book_create(&owner_account_id, &AddressBook::new(name))
+        .expect("AddressBook/set create failed against the real server");
+    let book_id = book
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayRead": true}}}),
+        )
+        .expect("AddressBook/set shareWith failed against the real server");
+
+    // Poll ShareNotification/get (already confirmed live) for the grant to
+    // land, then switch to ShareNotification/query for the actual target of
+    // this test.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut granted_id = None;
+    while granted_id.is_none() && Instant::now() < deadline {
+        let notifications = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the grant");
+        granted_id = notifications
+            .into_iter()
+            .find(|notification| notification.object_id == book_id)
+            .and_then(|notification| notification.id);
+        if granted_id.is_none() {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    let granted_id =
+        granted_id.expect("the grant produced no ShareNotification for this address book");
+
+    let matching_type_ids = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_object_type("AddressBook"),
+        )
+        .expect(
+            "ShareNotification/query with objectType=AddressBook failed against the real server",
+        );
+    assert!(
+        matching_type_ids.contains(&granted_id),
+        "querying objectType=AddressBook did not include the address book's own grant notification"
+    );
+
+    let mismatched_type_ids = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_object_type("Mailbox"),
+        )
+        .expect("ShareNotification/query with objectType=Mailbox failed against the real server");
+    assert!(
+        !mismatched_type_ids.contains(&granted_id),
+        "querying objectType=Mailbox wrongly included an AddressBook grant notification"
+    );
+
+    // `before` narrows correctly: a cutoff before the notification was ever
+    // created excludes it, and a cutoff well after it includes it.
+    let before_cutoff_too_early = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_before(UtcDate::new("2020-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with an early before-date failed against the real server");
+    assert!(
+        !before_cutoff_too_early.contains(&granted_id),
+        "querying before a date earlier than the notification's own creation wrongly included it"
+    );
+
+    let before_cutoff_late_enough = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_before(UtcDate::new("2030-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with a late before-date failed against the real server");
+    assert!(
+        before_cutoff_late_enough.contains(&granted_id),
+        "querying before a date well after the notification's own creation wrongly excluded it"
+    );
+
+    // Known Stalwart deviation (STALWART-RFC-FINDINGS.md finding 25,
+    // harness repo): unlike `before` above, the `after` filter argument is
+    // silently ignored, so a cutoff in the future (which ought to exclude
+    // every existing notification) still returns this one. Pinning the
+    // actual behaviour rather than the RFC-correct one, so a server fix
+    // shows up here as a test failure to update, not a silent pass.
+    let after_cutoff_in_the_future = recipient
+        .share_notification_query(
+            &recipient_account_id,
+            ShareNotificationQueryFilter::new().with_after(UtcDate::new("2030-01-01T00:00:00Z")),
+        )
+        .expect("ShareNotification/query with a future after-date failed against the real server");
+    assert!(
+        after_cutoff_in_the_future.contains(&granted_id),
+        "the server appears to have started honouring `after`: a notification created before a \
+         future cutoff is now correctly excluded, update this test and STALWART-RFC-FINDINGS.md \
+         finding 25 to match"
+    );
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("AddressBook/set revoke failed against the real server (cleanup)");
     owner
         .address_book_destroy(&owner_account_id, &book_id)
         .expect("AddressBook/set destroy failed against the real server (cleanup)");
