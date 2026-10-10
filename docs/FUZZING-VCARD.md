@@ -66,6 +66,29 @@ Observed libFuzzer result summary:
 Command note:
 - The bounded run used a temporary copy of the seed corpus under `/tmp` to avoid writing generated units into the committed repository corpus.
 
+### 2026-10-10 UTC (target rotation: `fuzz_jscontact_to_vcard`)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Ran the second bounded fuzz target slice for Batch 4 rotation:
+  - `cargo +nightly fuzz run fuzz_jscontact_to_vcard -- -max_total_time=2700`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `40,887,929`.
+- Runtime: `2701` seconds.
+- Final coverage counters: `cov: 10998`, `ft: 33559`.
+- Final corpus state during run: `9641` inputs, `4344Kb`.
+- Throughput: `exec/s: 15138`.
+- Peak resident set size: `rss: 716Mb`.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of `fuzz/corpus/fuzz_jscontact_to_vcard` under `/tmp` to avoid writing generated units into the committed repository corpus.
+
 ## Resume commands
 
 ```bash
