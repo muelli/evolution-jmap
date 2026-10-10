@@ -140,9 +140,39 @@ run instead (`agent1k<unix-timestamp>`, `agent1kdel<unix-timestamp>`),
 confirmed fresh (`createdAt` from this run, a new account id), and got the
 clean 1,000-card numbers in the table above.
 
+## Batch 5: N=5,000 checkpoint, 2026-10-10
+
+Two fresh throwaway accounts (one per test, so the import/edit numbers never
+mix with the delete numbers), each seeded with a run-unique local part per
+batch 4's isolation finding, confirmed fresh via `stalwart-cli query Account`
+before trusting the numbers. `JMAP_SCALE_TEST_CARDS=5000`.
+
+| Measurement | Result |
+|---|---|
+| Import 5,000 cards (`save_contact`, sequential) | 588.7s total (~117.7ms/card) |
+| Cold listing of 5,000 cards (`list_existing`) | 500.5ms |
+| Edit 20 of 5,000 cards | 208.1ms |
+| `get_changes` after editing 20 cards | 7.1ms, 20 changed, correct |
+| Peak RSS (import/edit test) | 23.0 MB |
+| Import 5,000 cards (delete test's own import) | 571.8s total (~114.4ms/card) |
+| Delete 300 of 5,000 cards | 2.66s (8.9ms/card) |
+| `get_changes` after deleting 300 | 11.6ms, 300 removed, correct |
+| Peak RSS (delete test) | 22.9 MB |
+
+No scale-only bug found: cold listing stays sub-second and `get_changes`
+stays single-digit-to-low-double-digit milliseconds at 5,000 cards, the same
+pattern every earlier batch showed, not the quadratic blowup item 94 is
+watching for. Import per-card cost (~115ms) is noticeably higher than
+batch 4's 1,000-card numbers (~66-107ms/card), consistent with more of the
+sequential run now landing on `Http.rateLimitAuthenticated`'s 5-second
+`retrying` sleep as the absolute call count grows, the same rate-limit
+variance batch 2 and 4 already documented, not a product regression (cold
+listing and `get_changes`, which do not make per-card calls, show no such
+growth).
+
 ## Batches left
 
-Still open per item 94(a): the 5,000-card checkpoint, and the real-EDS leg
-(c) (item 80's live-Stalwart book factory, first open of a 5,000-card book
-through real EDS). `jmap-cal-sync`'s own 1,000/3,000-event checkpoints are
-tracked in `CAL-SYNC-SCALE.md`, not here.
+Still open per item 94(a): the real-EDS leg (c) (item 80's live-Stalwart
+book factory, first open of a 5,000-card book through real EDS). `jmap-cal-
+sync`'s own 1,000/3,000-event checkpoints are tracked in `CAL-SYNC-SCALE.md`,
+not here.

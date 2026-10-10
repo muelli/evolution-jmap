@@ -89,8 +89,54 @@ committed anyway, so the test's own 429-retry then hit a duplicate-UID
 conflict on the identical retried request). A clean immediate re-run passed
 outright, so this is not chased further here.
 
+## Batch 3: N=3,000 import/listing/edit/delete, 2026-10-10
+
+Real Stalwart, two freshly seeded throwaway accounts with run-unique local
+parts, confirmed fresh via `stalwart-cli query Account` before trusting
+numbers (per batch 2's account-isolation finding).
+
+| Measurement | Result |
+|---|---|
+| Import 3,000 events (⅓ recurring w/ an override) | 333.8s (~111.3ms/event) |
+| Cold listing of 3,000 events | 291.9ms |
+| Edit 20 of 3,000 events | 189.5ms (~9.5ms/event) |
+| `get_changes` after editing 20 events | 7.8ms, 20 changed, correct |
+| Peak RSS | 16.2 MB |
+
+Second test, fresh 3,000-event import then delete 300:
+
+| Measurement | Result |
+|---|---|
+| Import 3,000 events (ahead of the deletion case) | 328.1s (~109.4ms/event) |
+| Delete 300 of 3,000 events | 1.16s (~3.9ms/event) |
+| `get_changes` after deleting 300 | 7.5ms, 300 removed, correct |
+| Peak RSS | 16.1 MB |
+
+Costs still track batch 1 and 2 linearly; `get_changes` and cold listing
+stay sub-second regardless of calendar size, no quadratic blowup, no new
+scale-only bug in the product. `jmap-cal-sync`'s part of item 94(b) is now
+fully checked off.
+
+The delete test's own 3,000-event import failed three times in a row before
+this batch's clean numbers, each time with the same `SetError` the batch 2
+note above already flagged as a suspected Stalwart issue (a retried-after-429
+create failing as a duplicate, implying the 429-rejected attempt had in fact
+been committed): twice reusing the same account the clean import/listing/edit
+test above had just finished on, failing at request index 498 and 498 again;
+once on a brand-new account, still failing, at index 463. All three failures
+landed within a narrow band (463-498 events, i.e. roughly 900-1,000 HTTP
+requests if `save_component` costs two requests each), consistent with
+Stalwart's `Http.rateLimitAuthenticated` (1000 req/60s) window rather than
+pure chance, and notably more reproducible than batch 2's single prior
+occurrence suggested. The run that finally passed used a second brand-new
+account seeded well after the first account's heavy 3,000-event import had
+finished, rather than reusing an account whose rate-limit window was still
+warm from recent traffic; that is a workaround (a wait, or an unused account,
+avoids tripping the window at all) not a fix, since the suspected bug is
+server-side.
+
 ## Batches left
 
-Still open per item 94(b): the 3,000-event checkpoint, and the real-EDS leg
-(c) shared with `jmap-book-sync` (item 80's live-Stalwart calendar factory,
-first open of a 3,000-event calendar through real EDS).
+Still open per item 94(b): the real-EDS leg (c) shared with `jmap-book-sync`
+(item 80's live-Stalwart calendar factory, first open of a 3,000-event
+calendar through real EDS).
