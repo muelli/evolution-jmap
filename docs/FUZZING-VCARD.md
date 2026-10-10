@@ -225,6 +225,32 @@ Command note:
   captured, but final `cov`/`ft`/`corp` counters were not retained in the
   harness transcript.
 
+### 2026-10-10 UTC (target rotation: `fuzz_jscontact_to_vcard`, third pass)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Ran the next bounded target slice for Batch 4 rotation:
+  - `cargo +nightly fuzz run fuzz_jscontact_to_vcard <tmp-corpus> -- -max_total_time=2700 -verbosity=0 -print_final_stats=1`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `42,008,051`.
+- Average throughput: `15552` exec/s.
+- New units added: `90,448`.
+- Slowest unit time: `0` seconds.
+- Peak resident set size: `730Mb`.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of
+  `fuzz/corpus/fuzz_jscontact_to_vcard` under `/tmp` to avoid writing
+  generated units into the committed repository corpus.
+- This invocation used `-verbosity=0 -print_final_stats=1` to keep logs
+  compact while retaining end-of-run execution stats.
+
 ## Resume commands
 
 ```bash
