@@ -11,16 +11,17 @@
 //!
 //! This file covers the first, smallest slice of item 94(a): 500 cards (half
 //! of the item's first checkpoint) and a handful of edits afterward, plus
-//! bulk deletes from an already-large book. One `ContactCard/set` call per
-//! card, no batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000
-//! req/60s) well before 500 calls even at the default throwaway plan —
-//! confirmed empirically (a 429 on call #498, 2.2 seconds in, far faster than
-//! the window the limit is measured over) — so [`retrying`] below absorbs a
-//! 429 with a short sleep rather than this file assuming it never happens the
-//! way item 89's mail equivalent could.
-//! The 5,000-card step, the PHOTO-blob variant, `jmap-cal-sync`'s (b) and the
-//! real-EDS leg (item 80's live-Stalwart book factory) are still open.
-//! Numbers so far are recorded in `docs/BOOK-SYNC-SCALE.md`.
+//! bulk deletes from an already-large book, plus a batch where a tenth of the
+//! cards carry a ~50 KB PHOTO. One `ContactCard/set` call per card, no
+//! batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000 req/60s)
+//! well before 500 calls even at the default throwaway plan — confirmed
+//! empirically (a 429 on call #498, 2.2 seconds in, far faster than the
+//! window the limit is measured over) — so [`retrying`] below absorbs a 429
+//! with a short sleep rather than this file assuming it never happens the way
+//! item 89's mail equivalent could.
+//! The 5,000-card step, `jmap-cal-sync`'s (b) and the real-EDS leg (item 80's
+//! live-Stalwart book factory) are still open. Numbers so far are recorded in
+//! `docs/BOOK-SYNC-SCALE.md`.
 //!
 //! ## Running it
 //!
@@ -117,6 +118,34 @@ fn vcard(run: u128, label: &str, i: usize) -> String {
          UID:pas-id-not-a-server-id\r\n\
          FN:{name}\r\n\
          N:{name};;;;\r\n\
+         END:VCARD\r\n"
+    )
+}
+
+/// A ~50 KB PHOTO payload, base64-encoded, deterministic so repeat runs stay
+/// byte-identical. A JMAP PHOTO never goes through `Blob/upload` in this
+/// codebase: `jmap-vcard` inlines it straight into the JSContact `media` map
+/// (confirmed by reading `BookSync::save_contact` and `vcard_to_card`), so
+/// this is testing the `ContactCard/set` payload size, not a blob transfer.
+fn photo_base64() -> String {
+    use base64::Engine;
+    let bytes: Vec<u8> = (0..50_000u32).map(|i| (i % 256) as u8).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Same shape as [`vcard`], plus an inline PHOTO. vCard 3.0's form
+/// (`jmap-vcard` only round-trips 3.0), matching the format
+/// `tests/live_server_media.rs` already confirmed works against a real
+/// server, just at realistic size instead of a few bytes.
+fn vcard_with_photo(run: u128, label: &str, i: usize, photo: &str) -> String {
+    let name = format!("agent-scale-{run}-{label}-{i}");
+    format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:3.0\r\n\
+         UID:pas-id-not-a-server-id\r\n\
+         FN:{name}\r\n\
+         N:{name};;;;\r\n\
+         PHOTO;ENCODING=b;TYPE=JPEG:{photo}\r\n\
          END:VCARD\r\n"
     )
 }
@@ -299,6 +328,97 @@ fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
         assert!(
             changes.removed.contains(uid),
             "every deleted card should be reported removed by get_changes"
+        );
+    }
+
+    if let Some(kb) = peak_rss_kb() {
+        eprintln!("SCALE: peak RSS so far {kb} kB");
+    }
+}
+
+/// A tenth of the cards carry a ~50 KB PHOTO, the rest are plain. Checks that
+/// a batch with real binary payloads costs more but still works, and that
+/// every PHOTO round-trips byte-identical through the server and back.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_real_sized_address_book_with_photos_round_trips_through_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the scale test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let address_book_id = client
+        .address_books(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+
+    let sync = BookSync::new(client, account_id, address_book_id);
+    let n = batch_size();
+    let run = unique_suffix();
+    let photo = photo_base64();
+
+    let import_start = Instant::now();
+    let mut saved_uids = Vec::with_capacity(n);
+    let mut photo_uids = Vec::new();
+    for i in 0..n {
+        let card = if i % 10 == 0 {
+            vcard_with_photo(run, "photo", i, &photo)
+        } else {
+            vcard(run, "photo", i)
+        };
+        let saved = retrying(|| sync.save_contact(&card, None))
+            .unwrap_or_else(|error| panic!("ContactCard/set create #{i} failed: {error}"));
+        if i % 10 == 0 {
+            photo_uids.push(saved.uid.clone());
+        }
+        saved_uids.push(saved.uid);
+    }
+    let import_elapsed = import_start.elapsed();
+    eprintln!(
+        "SCALE: imported {n} cards ({} with a ~50 KB PHOTO) in {:?} ({:?}/card)",
+        photo_uids.len(),
+        import_elapsed,
+        import_elapsed / n as u32
+    );
+
+    let listing_start = Instant::now();
+    let (_state_after_import, listed) = sync
+        .list_existing()
+        .expect("listing the book failed after the bulk import");
+    let listing_elapsed = listing_start.elapsed();
+    eprintln!(
+        "SCALE: cold listing of {} cards ({} with PHOTO) took {:?}",
+        listed.len(),
+        photo_uids.len(),
+        listing_elapsed
+    );
+    for uid in &saved_uids {
+        assert!(
+            listed.iter().any(|contact| &contact.uid == uid),
+            "every imported card should be in the cold listing"
+        );
+    }
+
+    for uid in &photo_uids {
+        let contact = listed
+            .iter()
+            .find(|contact| &contact.uid == uid)
+            .unwrap_or_else(|| panic!("photo card {uid} missing from the cold listing"));
+        // RFC 2426 §2.6 folds any physical line over 75 octets onto a
+        // continuation line starting "\r\n " (`jmap-vcard`'s
+        // `fold_overlong_lines`), so a ~50 KB PHOTO comes back line-folded
+        // even though the octets are unchanged; unfold before comparing.
+        let unfolded = contact.vcard.replace("\r\n ", "");
+        assert!(
+            unfolded.contains(&photo),
+            "card {uid}'s PHOTO payload should round-trip byte-identical"
         );
     }
 
