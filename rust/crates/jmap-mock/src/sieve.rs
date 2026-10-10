@@ -285,14 +285,13 @@ fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -
     true
 }
 
-/// `SieveScript/validate` (RFC 9661 section 2.6): the request must name
-/// exactly one of `id`, `blobId` or `content` as the script's source. This
-/// mock has no real Sieve parser, the same deliberate limitation
+/// `SieveScript/validate` (RFC 9661 section 2.6): the request names a single
+/// `blobId`, the script content having already been uploaded (section 2.2).
+/// This mock has no real Sieve parser, the same deliberate limitation
 /// `SieveScript/set` already has (it never produces `invalidSieve`), so a
-/// source that resolves is always `isValid: true`; only argument shape and
-/// blob/id resolution are checked, the same `invalidArguments` case
-/// `SieveScript/set`'s `onSuccessActivateScript` already uses for an unknown
-/// reference.
+/// `blobId` that resolves is always valid; only blob resolution is actually
+/// checked, the same `invalidArguments` case `SieveScript/set`'s
+/// `onSuccessActivateScript` already uses for an unknown reference.
 pub fn sieve_script_validate(
     state: &mut ServerState,
     arguments: Value,
@@ -300,31 +299,7 @@ pub fn sieve_script_validate(
     let request: SieveScriptValidateRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
 
-    let sources = [
-        request.id.is_some(),
-        request.blob_id.is_some(),
-        request.content.is_some(),
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count();
-    if sources != 1 {
-        return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
-            .with_description("SieveScript/validate takes exactly one of id, blobId or content"));
-    }
-
-    let blob_id = if let Some(id) = &request.id {
-        let Some(script) = account.sieve_scripts.get(id) else {
-            return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
-                .with_description("id names an unknown SieveScript"));
-        };
-        Some(script.blob_id.clone())
-    } else {
-        request.blob_id.clone()
-    };
-    if let Some(blob_id) = blob_id
-        && !account.blobs.contains_key(&blob_id)
-    {
+    if !account.blobs.contains_key(&request.blob_id) {
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
             .with_description("blobId is not a known blob"));
     }

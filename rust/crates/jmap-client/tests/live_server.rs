@@ -1387,6 +1387,61 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
     );
 }
 
+/// `SieveScript/validate` (RFC 9661 §2.6) against a real server's actual
+/// Sieve parser: nothing before this test ever sent genuinely invalid Sieve
+/// content to a live server (`jmap-client/tests/sieve.rs` only runs against
+/// `jmap-mockd`, which has no parser and always answers valid). This is
+/// also the regression test for a real client bug this probe found
+/// (`STALWART-RFC-FINDINGS.md`, 2026-10-10): the old
+/// `SieveScriptValidateResponse` declared `isValid` as a mandatory wire
+/// field, but RFC 9661 §2.6's response has only `accountId` and `error`; a
+/// real server (confirmed here against Stalwart) never sends `isValid` at
+/// all, so every real validate call used to fail to deserialize.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_script_validate_against_a_real_parser_catches_genuinely_invalid_syntax() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_SIEVE) else {
+        eprintln!("server names no primary account for {CAPABILITY_SIEVE}; skipping");
+        return;
+    };
+
+    let valid = client
+        .sieve_script_validate_content(
+            &account_id,
+            b"require [\"fileinto\"]; if header :contains \"from\" \"foo\" { fileinto \"INBOX\"; }"
+                .to_vec(),
+        )
+        .expect("SieveScript/validate failed to deserialize against the real server");
+    assert!(
+        valid.is_valid(),
+        "a syntactically valid script was rejected: {:?}",
+        valid.error
+    );
+
+    // Unbalanced brace and an undeclared capability: genuinely invalid Sieve,
+    // not something this mock could ever catch.
+    let invalid = client
+        .sieve_script_validate_content(
+            &account_id,
+            b"if header :contains \"from\" \"foo\" { fileinto \"INBOX\" ".to_vec(),
+        )
+        .expect("SieveScript/validate failed to deserialize against the real server");
+    assert!(
+        !invalid.is_valid(),
+        "a genuinely invalid script was reported valid"
+    );
+    assert!(
+        invalid
+            .error
+            .is_some_and(|error| error.description.is_some()),
+        "an invalid-script error should carry a description"
+    );
+}
+
 /// JMAP Push (RFC 8620 §7) against a real server. Opens an `EventSource`
 /// subscription for the write-test account via
 /// [`jmap_client::eventsource::EventSourceSubscription`], creates a mailbox,
