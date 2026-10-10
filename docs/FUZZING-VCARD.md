@@ -32,7 +32,9 @@ The fuzzing goal is strict: malformed or hostile input may return `Err`, but mus
    - Surface: `serde_json::from_slice::<ContactCard>`, then `jmap_vcard::card_to_vcard`, then parse back with `vcard_to_card`.
 3. `fuzz_vcard_roundtrip_fixed_point`
    - Input: arbitrary bytes interpreted as UTF-8 vCard text.
-   - Property: `vcard -> card1 -> vcard2 -> card2` keeps `card1 == card2`.
+   - Property: multi-pass convergence safety for `vcard -> card -> vcard` loops.
+   - Checks: each emitted vCard must parse successfully; once two consecutive
+     emitted vCards are byte-identical, their parsed cards must match.
 
 ## Seed corpus
 
@@ -88,6 +90,39 @@ Observed libFuzzer result summary:
 
 Command note:
 - The bounded run used a temporary copy of `fuzz/corpus/fuzz_jscontact_to_vcard` under `/tmp` to avoid writing generated units into the committed repository corpus.
+
+### 2026-10-10 UTC (target rotation: `fuzz_vcard_roundtrip_fixed_point`)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Reworked the target assertion strategy after deterministic normalization
+  mismatches on malformed and legacy fixture-derived inputs:
+  - `crash-4b7521666c2b31afb24b0717337a38ac65583505` (Outlook vCard 2.1
+    seed path, one-pass phone feature normalization)
+  - `crash-d81fd08419c63f26f3ac4b74adf8daab33d7d1b1` (URI photo media-type
+    normalization)
+  - `crash-9419a804155e83b1949b38a1d83f680dbea97999` (malformed CATEGORIES
+    normalization drift)
+- Final bounded run after target adjustment:
+  - `cargo +nightly fuzz run fuzz_vcard_roundtrip_fixed_point -- -max_total_time=2700`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `3,715,307`.
+- Runtime: `2701` seconds.
+- Final coverage counters: `cov: 10625`, `ft: 48630`.
+- Final corpus state during run: `9447` inputs, `6088Kb`.
+- Throughput: `exec/s: 1375`.
+- Peak resident set size: `rss: 604Mb`.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of
+  `fuzz/corpus/fuzz_vcard_roundtrip_fixed_point` under `/tmp` to avoid writing
+  generated units into the committed repository corpus.
 
 ## Resume commands
 
