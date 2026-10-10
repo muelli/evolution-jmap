@@ -162,6 +162,17 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# Item 63's live-edit reproduction: the same registry, but this client
+	# edits the account's port and commits it with e_source_write_sync
+	# instead of only watching for children, to answer whether
+	# `source_changed`'s "changed" handler gets a broken account's next
+	# populate through. See the client's own header.
+	add_executable(functional-collection-edit-client tests/functional/collection-edit-client.c)
+	target_include_directories(functional-collection-edit-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-collection-edit-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-collection-edit-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-collection-edit-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# The write half of the same surface: "New Address Book"/"Delete", i.e.
 	# `e_source_remote_create_sync`/`e_source_remote_delete_sync` against the
 	# same registry, proving `create_resource_sync`/`delete_resource_sync`
@@ -593,6 +604,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
+	# Item 63's live-edit reproduction: does editing a broken account's host
+	# while it is live get a fresh authenticate through, the way
+	# `source_changed.rs`'s "changed" handler intends?
+	add_test(
+		NAME functional-collection-edit-host
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test collection-edit-host
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection-edit-host PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_EDIT_CLIENT=$<TARGET_FILE:functional-collection-edit-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# Item 80 stage 2 batch 3: the same functional-collection-client binary
