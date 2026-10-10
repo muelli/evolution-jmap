@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-vcard-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.evolution-jmap-vcard]
+path = ".."
+
+[dependencies.evolution-jmap-proto]
+path = "../../jmap-proto"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_vcard_to_jscontact"
+path = "fuzz_targets/fuzz_vcard_to_jscontact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_jscontact_to_vcard"
+path = "fuzz_targets/fuzz_jscontact_to_vcard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_vcard_roundtrip_fixed_point"
+path = "fuzz_targets/fuzz_vcard_roundtrip_fixed_point.rs"
+test = false
+doc = false
+bench = false

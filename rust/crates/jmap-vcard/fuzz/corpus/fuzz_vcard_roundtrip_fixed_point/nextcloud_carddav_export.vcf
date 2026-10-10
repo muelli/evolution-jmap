@@ -1,0 +1,32 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//Nextcloud Contacts v5.5.0//EN
+UID:urn:uuid:f47ac10b-58cc-4372-a567-0e02b2c3d479
+FN:Dr. Camille Sylvie Laurent
+N:Laurent;Camille;Sylvie;Dr.;
+NICKNAME:Cami
+GENDER:F
+PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=
+EMAIL;TYPE=work;PREF=1:camille.laurent@inria.example
+EMAIL;TYPE=home:camille.perso@paris.example
+TEL;TYPE="work,voice";PREF=1:+33 1 23 45 67 89
+TEL;TYPE="home,voice":+33 1 98 76 54 32
+TEL;TYPE="cell,voice":+33 6 12 34 56 78
+TEL;TYPE="work,fax":+33 1 23 45 67 90
+ADR;TYPE=work;PREF=1;LABEL="2 Rue Simone Iff\n75012 Paris\nFrance":;;2 Rue Simone Iff;Paris;Île-de-France;75012;France
+ADR;TYPE=home;LABEL="15 Boulevard Saint-Germain\n75005 Paris\nFrance":;;15 Boulevard Saint-Germain;Paris;Île-de-France;75005;France
+ORG:INRIA Paris;Équipe Gallium;Laboratoire de Recherche
+TITLE:Directrice de Recherche
+ROLE:Responsable Scientifique
+BDAY:19790618
+ANNIVERSARY:20080912
+URL;TYPE=work:https://www.inria.example/equipes/gallium
+URL;TYPE=home:https://camillelaurent.example
+IMPP;PREF=1:matrix:camille:matrix.inria.example
+IMPP:xmpp:camille@jabber.inria.example
+RELATED;TYPE=spouse:Pierre Laurent
+RELATED;TYPE=assistant:Lucie Moreau
+NOTE:Spécialiste en sémantique formelle et compilation vérifiée.\nMembre du comité de programme POPL/PLDI.
+CATEGORIES:Recherche,INRIA,Comité
+REV:20260822T164500Z
+END:VCARD

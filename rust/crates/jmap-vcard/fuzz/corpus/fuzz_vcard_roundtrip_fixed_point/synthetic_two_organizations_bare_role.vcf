@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-two-orgs-bare-role-0001
+FN:Alex Rivera
+N:Rivera;Alex;;;
+ORG:Northwind Traders
+ORG:Contoso Consulting
+ROLE:Advisor
+END:VCARD

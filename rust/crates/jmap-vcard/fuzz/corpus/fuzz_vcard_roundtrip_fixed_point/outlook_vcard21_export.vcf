@@ -1,0 +1,20 @@
+BEGIN:VCARD
+VERSION:2.1
+N;LANGUAGE=de:Müller;Wolfgang;Klaus;Dr.;
+FN:Dr. Wolfgang Klaus Müller
+ORG:Hanseatische Handelsgesellschaft mbH;Vertrieb;Norddeutschland;Exportabteilung
+TITLE:Leiter Regionalvertrieb
+TEL;WORK;VOICE:+49 40 1234567
+TEL;HOME;VOICE:+49 40 7654321
+TEL;CELL;VOICE:+49 171 1234567
+TEL;WORK;FAX:+49 40 1234568
+ADR;WORK;PREF;ENCODING=QUOTED-PRINTABLE:;;Jungfernstieg 14=0D=0AGeb=E4ude B;Hamburg;Hamburg;20354;Deutschland
+LABEL;WORK;PREF;ENCODING=QUOTED-PRINTABLE:Jungfernstieg 14=0D=0AGeb=E4ude B=0D=0A20354 Hamburg=0D=0ADeutschland
+ADR;HOME;ENCODING=QUOTED-PRINTABLE:;;Elbchaussee 88;Hamburg;Hamburg;22763;Deutschland
+EMAIL;PREF;INTERNET:w.mueller@hanseatische.example
+EMAIL;WORK;INTERNET:vertrieb.nord@hanseatische.example
+URL;WORK:https://www.hanseatische.example
+BDAY:19680324
+NOTE;ENCODING=QUOTED-PRINTABLE:Erstkontakt auf der Hannover Messe.=0D=0AWichtiger Gro=DFkunde f=FCr Logistikl=F6sungen.=0D=0ABevorzugt telefonische Kontaktaufnahme.
+REV:20260819T091500Z
+END:VCARD

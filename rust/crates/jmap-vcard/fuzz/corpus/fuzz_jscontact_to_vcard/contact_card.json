@@ -1,0 +1,95 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {"name": "Example GmbH"}
+  },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {"@type": "Title", "name": "Project Lead", "kind": "role"}
+  },
+  "addresses": {
+    "a1": {
+      "@type": "Address",
+      "contexts": {"work": true},
+      "components": [
+        {"kind": "name", "value": "Hauptstraße 1"},
+        {"kind": "locality", "value": "Berlin"},
+        {"kind": "postcode", "value": "10115"},
+        {"kind": "country", "value": "Germany"}
+      ],
+      "full": "Hauptstraße 1\n10115 Berlin\nGermany"
+    }
+  },
+  "notes": {
+    "n1": {"note": "met at FOSDEM"}
+  },
+  "anniversaries": {
+    "y1": {
+      "@type": "Anniversary",
+      "kind": "birth",
+      "date": {"@type": "PartialDate", "year": 1964, "month": 3, "day": 27}
+    },
+    "y2": {
+      "kind": "wedding",
+      "date": {"year": 1996, "month": 8, "day": 3}
+    }
+  },
+  "nicknames": {
+    "k1": {"@type": "Nickname", "name": "Vee"}
+  },
+  "links": {
+    "l1": {"@type": "Link", "uri": "https://vera.example/"},
+    "l2": {"@type": "Link", "kind": "contact", "uri": "https://vera.example/write-to-me"}
+  },
+  "calendars": {
+    "c1": {"@type": "Calendar", "kind": "calendar", "uri": "https://vera.example/cal/vera.ics"},
+    "c2": {"@type": "Calendar", "kind": "freeBusy", "uri": "https://vera.example/fb/vera.ifb"},
+    "c3": {"@type": "Calendar", "uri": "https://vera.example/cal/nameless"}
+  },
+  "media": {
+    "m1": {"@type": "Media", "kind": "photo", "mediaType": "image/jpeg",
+           "uri": "data:image/jpeg;base64,aGVsbG8tcGhvdG8="},
+    "m2": {"@type": "Media", "kind": "logo", "uri": "https://vera.example/logo.png"}
+  },
+  "onlineServices": {
+    "s1": {"@type": "OnlineService", "service": "Jabber", "user": "vera@jabber.example"},
+    "s2": {"@type": "OnlineService", "service": "Mastodon", "uri": "https://social.example/@vera"}
+  },
+  "keywords": {
+    "hiking": true
+  },
+  "relatedTo": {
+    "Jean Paul Oldenburg": {"@type": "Relation", "relation": {"spouse": true, "kin": true}},
+    "Nils Oldenburg": {"@type": "Relation", "relation": {"child": true}},
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"@type": "Relation",
+                                                      "relation": {"spouse": true}}
+  },
+  "preferredLanguages": {
+    "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
+  }
+}
