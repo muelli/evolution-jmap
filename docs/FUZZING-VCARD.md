@@ -357,6 +357,34 @@ Command note:
 - `libFuzzer` still emitted a long recommended dictionary block before the
   final `stat::` lines in this mode.
 
+### 2026-10-10 UTC (target rotation: `fuzz_vcard_to_jscontact`, fifth pass)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Ran the next bounded target slice for Batch 4 rotation:
+  - `cargo +nightly fuzz run fuzz_vcard_to_jscontact <tmp-corpus> -- -max_total_time=2700 -verbosity=0 -print_final_stats=1`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `16,623,969`.
+- Average throughput: `6154` exec/s.
+- New units added: `133,019`.
+- Slowest unit time: `0` seconds.
+- Peak resident set size: `676Mb`.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of
+  `fuzz/corpus/fuzz_vcard_to_jscontact` under `/tmp` to avoid writing
+  generated units into the committed repository corpus.
+- This invocation used `-verbosity=0 -print_final_stats=1` to keep logs
+  compact while retaining end-of-run execution stats.
+- `libFuzzer` still emitted a long recommended dictionary block before the
+  final `stat::` lines in this mode.
+
 ## Resume commands
 
 ```bash
