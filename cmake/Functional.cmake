@@ -452,6 +452,29 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_LIVE_CLIENT=$<TARGET_FILE:functional-cal-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
+	# Item 94(c): the real-EDS leg of the cal-sync scale checkpoint, the
+	# calendar twin of functional-book-scale-live-stalwart above. Seeds a
+	# real-sized calendar directly over JMAP before EDS ever opens it, then
+	# measures evolution-calendar-factory's own first open, reusing
+	# functional-cal-changes-client's existing plain connect-and-list
+	# unchanged. `#[ignore]`d for the same reason
+	# functional-book-scale-live-stalwart is, so this registration only
+	# ever reports "ignored" in the ordinary functional run. A generous
+	# timeout: the seeding step alone can take minutes at the batch sizes
+	# this test is meant to be run at by hand.
+	add_test(
+		NAME functional-cal-scale-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar-scale
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-scale-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 1800
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
 	add_test(
 		NAME functional-cal
 		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
