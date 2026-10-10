@@ -1,0 +1,727 @@
+# German translation for evolution-jmap.
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Terminology choices aligned with Evolution and evolution-data-server:
+# - account: Konto (e.g. JMAP-Konto)
+# - address book: Adressbuch
+# - calendar: Kalender
+# - folder: Ordner
+# - mailbox: Postfach (or Ordner depending on context)
+# - drafts: Entwürfe
+# - sent: Gesendet
+# - inbox: Posteingang
+# - vacation responder / autoresponder: Abwesenheitsnotiz
+# - snooze: Schlummern
+# - send later: Später senden
+# - keyring: Schlüsselbund
+# - access token: Zugriffstoken
+# - authorization / credentials: Legitimation / Anmeldedaten
+# - server: Server
+# - host name: Servername
+# - sender: Absender
+# - recipient: Empfänger
+# - GNOME German conventions: formal "Sie", typographic quotes »…«, ellipsis …
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: evolution-jmap\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-06 04:04+0000\n"
+"PO-Revision-Date: 2026-10-10 00:00+0000\n"
+"Last-Translator: Antigravity <agy@example.com>\n"
+"Language-Team: German <gnome-de@gnome.org>\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. TRANSLATORS: shown when a new recurring appointment could not be
+#. saved. %1$s is the date and time the series ends, as it was
+#. written in the appointment; %2$s is a time zone identifier such
+#. as "Europe/Berlin".
+#: rust/crates/jmap-backend-cal/src/ops.rs:538
+#, c-format
+msgid ""
+""
+"This event repeats until %1$s, and the time zone it is in, %2$s, is not "
+"defined in this calendar entry in a way that instant can be converted out of "
+"— so the event was not created. Stating the recurrence as a repeat count "
+"works instead."
+msgstr ""
+"Dieser Termin wiederholt sich bis %1$s, und die zugehörige Zeitzone"
+"%2$s ist in diesem Kalendereintrag nicht so definiert, dass dieser"
+"Zeitpunkt umgewandelt werden kann, sodass der Termin nicht erstellt"
+"wurde. Die Angabe der Wiederholung als Anzahl von Wiederholungen"
+"funktioniert stattdessen."
+
+#. TRANSLATORS: shown when a new recurring appointment could not be
+#. saved, and the reason is not something the user can be pointed
+#. at more precisely than this.
+#: rust/crates/jmap-backend-cal/src/ops.rs:547
+msgid ""
+""
+"This event repeats in a way that cannot be stored on the server, so it was "
+"not created. Stating the recurrence as a repeat count is the spelling that "
+"always works."
+msgstr ""
+"Dieser Termin wiederholt sich auf eine Weise, die auf dem Server nicht"
+"gespeichert werden kann, sodass er nicht erstellt wurde. Die Angabe der"
+"Wiederholung als Anzahl von Wiederholungen funktioniert immer."
+
+#. TRANSLATORS: names one of an account's two kinds of
+#. server-side collection, inside a sentence describing an
+#. account error.
+#: rust/crates/jmap-backend-core/src/connect.rs:67
+msgid "address book"
+msgstr "Adressbuch"
+
+#. TRANSLATORS: names one of an account's two kinds of
+#. server-side collection, inside a sentence describing an
+#. account error.
+#: rust/crates/jmap-backend-core/src/connect.rs:73
+msgid "calendar"
+msgstr "Kalender"
+
+#. TRANSLATORS: shown when an account configured with a user
+#. name has no password stored for it yet.
+#: rust/crates/jmap-backend-core/src/connect.rs:144
+msgid "the account has no password yet"
+msgstr "das Konto hat noch kein Passwort"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
+#. the identifier this account is configured to use for it,
+#. which the server does not have.
+#: rust/crates/jmap-backend-core/src/connect.rs:154
+#, c-format
+msgid "the account names %1$s \"%2$s\", which the server does not have"
+msgstr "das Konto nennt %1$s »%2$s«, was auf dem Server nicht vorhanden ist"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar".
+#: rust/crates/jmap-backend-core/src/connect.rs:159
+#, c-format
+msgid "the server offers no default %1$s for this account"
+msgstr "der Server bietet kein Standard-%1$s für dieses Konto an"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar".
+#: rust/crates/jmap-backend-core/src/connect.rs:570
+#, c-format
+msgid "the %1$s backend has no account to connect to"
+msgstr "das Backend für %1$s hat kein Konto, mit dem es sich verbinden kann"
+
+#: rust/crates/jmap-backend-core/src/oauth2.rs:706
+#: rust/crates/jmap-backend-core/src/oauth2.rs:833
+#: rust/crates/jmap-ui/src/link.rs:269 rust/crates/jmap-ui/src/link.rs:274
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1071
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1074
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1095
+msgid "no further detail was given"
+msgstr "keine weiteren Details angegeben"
+
+#. TRANSLATORS: %1$s is the message bus's own text naming which service
+#. has no owner, e.g. "The name :1.4 was not provided by any .service
+#. files".
+#: rust/crates/jmap-backend-core/src/oauth2.rs:705
+#, c-format
+msgid ""
+""
+"a service this account's sign-in needs is not running, so no access token "
+"could be fetched: %1$s"
+msgstr ""
+"ein für die Anmeldung dieses Kontos erforderlicher Dienst läuft nicht,"
+"daher konnte kein Zugriffstoken abgerufen werden: %1$s"
+
+#. TRANSLATORS: %1$s is EDS's own message for why the
+#. account's secret store (keyring) could not be reached.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:832
+#, c-format
+msgid "the account's secret store (keyring) could not be reached: %1$s"
+msgstr ""
+"der Passwortspeicher (Schlüsselbund) des Kontos konnte nicht erreicht"
+"werden: %1$s"
+
+#. TRANSLATORS: shown instead of a fresh sign-in window when
+#. the account's stored token cannot be read because the
+#. system keyring is locked, which signing in again cannot
+#. fix.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:864
+msgid ""
+""
+"the login keyring is locked, so this account's OAuth 2.0 token can be "
+"neither read nor stored; unlock the keyring and try again"
+msgstr ""
+"der Anmeldeschlüsselbund ist gesperrt, sodass das OAuth-2.0-Token"
+"dieses Kontos weder gelesen noch gespeichert werden kann; entsperren Sie"
+"den Schlüsselbund und versuchen Sie es erneut"
+
+#. TRANSLATORS: shown instead of a fresh sign-in window when
+#. the system has no keyring service at all, so a token
+#. obtained by signing in could not be saved anywhere.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:892
+msgid ""
+""
+"this system has no keyring service to store an OAuth 2.0 token in, so "
+"signing in again would not keep this account signed in; enable a keyring "
+"service and try again"
+msgstr ""
+"dieses System verfügt über keinen Schlüsselbunddienst zum Speichern"
+"eines OAuth-2.0-Tokens, daher würde ein erneutes Anmelden dieses Konto"
+"nicht angemeldet halten; aktivieren Sie einen Schlüsselbunddienst und"
+"versuchen Sie es erneut"
+
+#. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
+#. access token but did not say why.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:903
+msgid "the account has no OAuth 2.0 access token"
+msgstr "das Konto hat kein OAuth-2.0-Zugriffstoken"
+
+#. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
+#. token that was empty rather than absent.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:934
+msgid "the OAuth 2.0 service returned an empty access token"
+msgstr "der OAuth-2.0-Dienst gab ein leeres Zugriffstoken zurück"
+
+#. TRANSLATORS: shown when an account's Authentication
+#. extension names no host to connect to.
+#: rust/crates/jmap-backend-core/src/source.rs:139
+msgid "the account does not name a JMAP server"
+msgstr "das Konto gibt keinen JMAP-Server an"
+
+#. TRANSLATORS: %1$s is the host name the account named.
+#: rust/crates/jmap-backend-core/src/source.rs:143
+#, c-format
+msgid "\"%1$s\" is not a valid server host name"
+msgstr "»%1$s« ist kein gültiger Servername"
+
+#. TRANSLATORS: %1$s is the host name the account named.
+#: rust/crates/jmap-backend-core/src/source.rs:148
+#, c-format
+msgid ""
+""
+"refusing to contact %1$s without TLS: credentials and contacts would go over "
+"the network in the clear"
+msgstr ""
+"Verbindung zu %1$s ohne TLS verweigert: Anmeldedaten und Kontakte"
+"würden unverschlüsselt über das Netzwerk übertragen"
+
+#. TRANSLATORS: shown when Evolution asks a JMAP account to
+#. create a collection whose kind the request does not state.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:172
+msgid "the new collection is neither an address book nor a calendar"
+msgstr "die neue Sammlung ist weder ein Adressbuch noch ein Kalender"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
+#. the JMAP server behind an account offers no account of that
+#. kind at all, so there is nowhere to create one.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:184
+#, c-format
+msgid "this account's JMAP server has no place to create %1$s in"
+msgstr ""
+"der JMAP-Server dieses Kontos bietet keinen Ort, an dem ein %1$s"
+"erstellt werden kann"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is a
+#. developer-facing description of the setting that could not be
+#. written. Shown when the collection was made on the server and
+#. the local source describing it could not be completed.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:193
+#, c-format
+msgid ""
+""
+"the %1$s was created on the server, but the source for it could not be "
+"written: %2$s"
+msgstr ""
+"%1$s wurde auf dem Server erstellt, aber die zugehörige Datenquelle"
+"konnte nicht geschrieben werden: %2$s"
+
+#. TRANSLATORS: shown when Evolution asks a JMAP account to
+#. delete something that is not one of the address books or
+#. calendars that account created.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:144
+msgid "this is not an address book or a calendar of this JMAP account"
+msgstr "dies ist kein Adressbuch oder Kalender dieses JMAP-Kontos"
+
+#. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
+#. the JMAP server behind an account offers no account of that
+#. kind at all, so the collection cannot be there to delete.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:155
+#, c-format
+msgid "this account's JMAP server has no %1$s to delete"
+msgstr "auf dem JMAP-Server dieses Kontos ist kein %1$s zum Löschen vorhanden"
+
+#. TRANSLATORS: %1$s is a developer-facing reason from Evolution
+#. Data Server. Shown when the collection was deleted on the
+#. server and the local source describing it stayed behind.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:167
+#, c-format
+msgid ""
+""
+"the collection was deleted on the server, but the source for it could not be "
+"removed: %1$s"
+msgstr ""
+"die Sammlung wurde auf dem Server gelöscht, aber die Datenquelle dafür"
+"konnte nicht entfernt werden: %1$s"
+
+#: rust/crates/jmap-config/src/backend.rs:345
+msgid "_Server:"
+msgstr "_Server:"
+
+#: rust/crates/jmap-config/src/backend.rs:346
+msgid "_Port:"
+msgstr "_Port:"
+
+#: rust/crates/jmap-config/src/backend.rs:347
+msgid "_Username:"
+msgstr "_Benutzername:"
+
+#: rust/crates/jmap-config/src/backend.rs:354
+msgid "Use a _secure connection (TLS)"
+msgstr "Eine _sichere Verbindung verwenden (TLS)"
+
+#: rust/crates/jmap-config/src/backend.rs:359
+msgid "A_uthentication:"
+msgstr "_Legitimation:"
+
+#: rust/crates/jmap-config/src/backend.rs:387
+msgid "Password"
+msgstr "Passwort"
+
+#: rust/crates/jmap-config/src/backend.rs:388
+msgid "OAuth 2.0"
+msgstr "OAuth 2.0"
+
+#: rust/crates/jmap-config/src/backend.rs:391
+msgid "API Token"
+msgstr "API-Token"
+
+#. TRANSLATORS: shown on the account setup page when no email address has been typed in yet.
+#: rust/crates/jmap-config/src/complete.rs:173
+msgid "This account has no email address yet."
+msgstr "Dieses Konto hat noch keine E-Mail-Adresse."
+
+#. TRANSLATORS: %1$s is exactly what was typed into the email address field.
+#: rust/crates/jmap-config/src/complete.rs:177
+#, c-format
+msgid "\"%1$s\" is not an email address."
+msgstr "»%1$s« ist keine E-Mail-Adresse."
+
+#. TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method on the manual server-settings page; this account cannot be set up this way. "Look Up Account Details" is the name of the button on the earlier identity page that sets OAuth 2.0 up automatically instead.
+#: rust/crates/jmap-config/src/complete.rs:183
+msgid ""
+""
+"OAuth 2.0 can't be set up manually. Go back and use \"Look Up Account "
+"Details\" instead."
+msgstr ""
+"OAuth 2.0 kann nicht manuell eingerichtet werden. Gehen Sie zurück und"
+"verwenden Sie stattdessen »Kontodetails abrufen«."
+
+#: rust/crates/jmap-config/src/config_lookup.rs:347
+msgid "Look up JMAP account details"
+msgstr "JMAP-Kontendetails abrufen"
+
+#. TRANSLATORS: %1$s is the server this account was discovered
+#. against, shown in the account assistant's list of lookup results.
+#: rust/crates/jmap-config/src/config_lookup.rs:412
+#, c-format
+msgid "JMAP account at %1$s, using OAuth 2.0"
+msgstr "JMAP-Konto auf %1$s mit OAuth 2.0"
+
+#: rust/crates/jmap-config/src/config_lookup.rs:438
+msgid "JMAP account (OAuth 2.0)"
+msgstr "JMAP-Konto (OAuth 2.0)"
+
+#. TRANSLATORS: the name of an account type, in the list of account types
+#. Evolution offers when adding an account. A protocol name — leave it as it is
+#. unless your language writes it in another script.
+#: rust/crates/jmap-config/src/oauth2_service.rs:422
+#: rust/crates/jmap-mail/src/provider.rs:60
+msgid "JMAP"
+msgstr "JMAP"
+
+#. TRANSLATORS: shown when a JMAP server's OAuth 2.0 metadata
+#. does not list the authorization-code grant.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:66
+msgid "this server does not offer the OAuth 2.0 authorization-code grant"
+msgstr ""
+"dieser Server bietet die OAuth-2.0-Autorisierung per Autorisierungscode"
+"nicht an"
+
+#. TRANSLATORS: shown when a JMAP server offers no RFC 7591
+#. dynamic client registration endpoint.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:71
+msgid ""
+""
+"this server offers no OAuth 2.0 client registration; an OAuth 2.0 account "
+"against it needs a client id from elsewhere"
+msgstr ""
+"dieser Server bietet keine OAuth-2.0-Client-Registrierung; ein"
+"OAuth-2.0-Konto dafür benötigt eine Client-ID von anderer Stelle"
+
+#. TRANSLATORS: this client's name, shown on the consent page a real identity provider renders.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:192
+msgid "Evolution"
+msgstr "Evolution"
+
+#. TRANSLATORS: shown when the server did not recognise this
+#. connection as authenticated at all, rather than rejecting a
+#. specific password.
+#: rust/crates/jmap-mail/src/connect.rs:253
+msgid "the server did not accept the account's credentials"
+msgstr "der Server hat die Anmeldedaten des Kontos nicht akzeptiert"
+
+#. TRANSLATORS: shown when Camel asks a JMAP store to do
+#. something that needs a connection it does not currently have.
+#: rust/crates/jmap-mail/src/connect.rs:260
+msgid "not connected to the JMAP server"
+msgstr "nicht mit dem JMAP-Server verbunden"
+
+#. TRANSLATORS: %1$s is the folder path Camel asked for.
+#: rust/crates/jmap-mail/src/connect.rs:264
+#, c-format
+msgid "no such folder: %1$s"
+msgstr "Ordner existiert nicht: %1$s"
+
+#. TRANSLATORS: %1$s is a JMAP mailbox role such as "inbox" or
+#. "trash", not translated: it is a protocol keyword, not prose.
+#: rust/crates/jmap-mail/src/connect.rs:270
+#, c-format
+msgid "no mailbox of this account has the %1$s role"
+msgstr "kein Postfach dieses Kontos hat die Rolle »%1$s«"
+
+#. TRANSLATORS: %1$s is the message id Camel asked for.
+#: rust/crates/jmap-mail/src/connect.rs:275
+#, c-format
+msgid "no such message: %1$s"
+msgstr "Nachricht existiert nicht: %1$s"
+
+#. TRANSLATORS: %1$s is the email address the message was to be
+#. sent from.
+#: rust/crates/jmap-mail/src/connect.rs:281
+#, c-format
+msgid "this account cannot send mail as %1$s"
+msgstr "dieses Konto kann keine E-Mails als %1$s versenden"
+
+#: rust/crates/jmap-mail/src/connect.rs:285
+msgid "this account has no Drafts or Sent folder to send a message from"
+msgstr ""
+"dieses Konto hat keinen Entwurfs- oder Gesendet-Ordner, aus dem eine"
+"Nachricht gesendet werden kann"
+
+#: rust/crates/jmap-mail/src/envelope.rs:101
+msgid "sender"
+msgstr "Absender"
+
+#: rust/crates/jmap-mail/src/envelope.rs:102
+msgid "recipients"
+msgstr "Empfänger"
+
+#. TRANSLATORS: %1$s is "sender" or "recipients", already
+#. translated.
+#: rust/crates/jmap-mail/src/envelope.rs:108
+#, c-format
+msgid "the %1$s are not internet addresses"
+msgstr "bei %1$s handelt es sich nicht um Internetadressen"
+
+#: rust/crates/jmap-mail/src/envelope.rs:112
+msgid "the message has no sender address"
+msgstr "die Nachricht hat keine Absenderadresse"
+
+#: rust/crates/jmap-mail/src/envelope.rs:113
+msgid "the message has no recipients"
+msgstr "die Nachricht hat keine Empfänger"
+
+#. TRANSLATORS: %1$s is the recipient's display name.
+#: rust/crates/jmap-mail/src/envelope.rs:117
+#, c-format
+msgid "no address for the recipient \"%1$s\""
+msgstr "keine Adresse für den Empfänger »%1$s«"
+
+#. TRANSLATORS: %1$s is the recipient's 1-based position in
+#. the list Camel gave, used because this recipient has no
+#. display name to show instead.
+#: rust/crates/jmap-mail/src/envelope.rs:124
+#, c-format
+msgid "no address for recipient %1$s"
+msgstr "keine Adresse für Empfänger %1$s"
+
+#. TRANSLATORS: the one-line description of the "JMAP" account type, shown
+#. beneath its name in the list of account types.
+#: rust/crates/jmap-mail/src/provider.rs:67
+msgid "For reading and storing mail on JMAP servers."
+msgstr "Zum Lesen und Speichern von E-Mail auf JMAP-Servern."
+
+#. TRANSLATORS: the name of an authentication method, in the "Authentication
+#. type" list of a JMAP account's settings. "JMAP" is a protocol name — leave it
+#. as it is unless your language writes it in another script.
+#: rust/crates/jmap-mail/src/sasl.rs:151
+msgid "OAuth2 (JMAP)"
+msgstr "OAuth2 (JMAP)"
+
+#. TRANSLATORS: the description of the "OAuth2 (JMAP)" authentication method.
+#: rust/crates/jmap-mail/src/sasl.rs:163
+msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
+msgstr ""
+"Verwendet ein OAuth-2.0-Zugriffstoken zum Verbinden mit dem"
+"JMAP-Server."
+
+#: rust/crates/jmap-ui/src/link.rs:47
+msgid ""
+""
+"the server rejected the account's credentials — it may need to be signed in "
+"again"
+msgstr ""
+"der Server hat die Anmeldedaten des Kontos abgewiesen; möglicherweise"
+"ist eine erneute Anmeldung erforderlich"
+
+#: rust/crates/jmap-ui/src/link.rs:50
+msgid "the server refused: this account is not allowed to do that"
+msgstr ""
+"der Server hat die Aktion verweigert: Dieses Konto ist dazu nicht"
+"berechtigt"
+
+#. TRANSLATORS: %1$s is the network error the transport reported.
+#: rust/crates/jmap-ui/src/link.rs:54
+#, c-format
+msgid "the server could not be reached: %1$s"
+msgstr "der Server konnte nicht erreicht werden: %1$s"
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/link.rs:63
+#, c-format
+msgid "the server rejected the change: %1$s"
+msgstr "der Server hat die Änderung abgewiesen: %1$s"
+
+#: rust/crates/jmap-ui/src/link.rs:212
+msgid "the session document names no usable mail account"
+msgstr "das Sitzungsdokument nennt kein nutzbares E-Mail-Konto"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:95
+msgid "Checking whether the sending account offers scheduled send…"
+msgstr ""
+"Es wird geprüft, ob das Absendekonto zeitgesteuertes Senden anbietet …"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:96
+msgid "The selected sending account is not a JMAP account"
+msgstr "Das ausgewählte Absendekonto ist kein JMAP-Konto"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:97
+msgid "The account’s server does not offer scheduled send"
+msgstr "Der Server dieses Kontos bietet kein zeitgesteuertes Senden an"
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/send_later/extension.rs:99
+#: rust/crates/jmap-ui/src/snooze/action.rs:78
+#, c-format
+msgid "The account’s server could not be asked: %1$s"
+msgstr "Der Server dieses Kontos konnte nicht angefragt werden: %1$s"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:100
+msgid "The server holds the message and sends it at the chosen time"
+msgstr "Der Server behält die Nachricht und sendet sie zur gewählten Zeit"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:103
+#, c-format
+msgid ""
+""
+"The message could not be scheduled: %1$s (a copy may remain in the server’s "
+"Drafts folder)"
+msgstr ""
+"Die Nachricht konnte nicht zur zeitgesteuerten Zustellung eingeplant"
+"werden: %1$s (eine Kopie verbleibt eventuell im Entwurfsordner des"
+"Servers)"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:105
+msgid "The message names no recipients"
+msgstr "Die Nachricht nennt keine Empfänger"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:106
+msgid "The message has no From address"
+msgstr "Die Nachricht hat keine Absenderadresse"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:107
+msgid "The chosen time is further ahead than the server accepts"
+msgstr "Die gewählte Zeit liegt weiter in der Zukunft, als der Server erlaubt"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:108
+#: rust/crates/jmap-ui/src/snooze/action.rs:82
+msgid "The local calendar could not name the chosen time"
+msgstr "Der lokale Kalender konnte die gewählte Zeit nicht ermitteln"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:109
+msgid "That time has already passed — choose one in the future"
+msgstr ""
+"Dieser Zeitpunkt ist bereits vergangen: Wählen Sie einen Zeitpunkt in"
+"der Zukunft"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:289
+#: rust/crates/jmap-ui/src/send_later/extension.rs:378
+msgid "Send _Later"
+msgstr "_Später senden"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:311
+#: rust/crates/jmap-ui/src/send_later/extension.rs:400
+msgid "_Custom Time…"
+msgstr "_Benutzerdefinierte Zeit …"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:402
+msgid "…"
+msgstr "…"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:866
+msgid "Send Later"
+msgstr "Später senden"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:870
+msgid "_Cancel"
+msgstr "A_bbrechen"
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:875
+msgid "_Send Later"
+msgstr "_Später senden"
+
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:102
+msgid "In One _Hour"
+msgstr "In einer _Stunde"
+
+#. TRANSLATORS: %1$s is a time of day, e.g. "18:00".
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:234
+#, c-format
+msgid "Today, %1$s"
+msgstr "Heute, %1$s"
+
+#. TRANSLATORS: %1$s is a time of day, e.g. "08:00".
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:238
+#, c-format
+msgid "Tomorrow, %1$s"
+msgstr "Morgen, %1$s"
+
+#. TRANSLATORS: %1$s is a weekday name, %2$s a time of day.
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:248
+#, c-format
+msgid "%1$s, %2$s"
+msgstr "%1$s, %2$s"
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:63
+msgid "the server has no Drafts mailbox to stage the message in"
+msgstr ""
+"der Server hat kein Entwurfs-Postfach zur Zwischenspeicherung der"
+"Nachricht"
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:74
+msgid "the account has no sending identity on the server"
+msgstr "das Konto hat keine Absender-Identität auf dem Server"
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:87
+msgid "the server imported the message without naming its id"
+msgstr "der Server hat die Nachricht importiert, ohne deren Kennung zu nennen"
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:129
+#, c-format
+msgid ""
+""
+"the server accepted the submission but named no release time (undoStatus "
+"%1$s)"
+msgstr ""
+"der Server hat den Sendeauftrag angenommen, aber keinen"
+"Freigabezeitpunkt genannt (undoStatus %1$s)"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:74
+msgid "The folder does not belong to a JMAP account"
+msgstr "Der Ordner gehört nicht zu einem JMAP-Konto"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:75
+msgid "Checking whether the account’s server offers snooze…"
+msgstr ""
+"Es wird geprüft, ob der Server dieses Kontos die Schlummerfunktion"
+"anbietet …"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:76
+msgid "The account’s server does not offer snooze"
+msgstr "Der Server dieses Kontos bietet keine Schlummerfunktion an"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:79
+msgid "The server hides the message until then and wakes it in the inbox"
+msgstr ""
+"Der Server blendet die Nachricht bis dahin aus und legt sie dann wieder"
+"im Posteingang ab"
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/snooze/action.rs:81
+#, c-format
+msgid "The message could not be snoozed: %1$s"
+msgstr "Die Nachricht konnte nicht auf Schlummern gesetzt werden: %1$s"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:133
+msgid "For One _Hour"
+msgstr "Für eine _Stunde"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:136
+msgid "Until _Tomorrow Morning"
+msgstr "Bis _morgen früh"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:141
+msgid "Until Next _Monday Morning"
+msgstr "Bis nächsten _Montag früh"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:211
+#: rust/crates/jmap-ui/src/snooze/action.rs:297
+msgid "S_nooze"
+msgstr "_Schlummern"
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:707
+msgid "the server named no id for the snoozed mailbox"
+msgstr "der Server hat keine Kennung für das Schlummer-Postfach genannt"
+
+#: rust/crates/jmap-ui/src/vacation/form.rs:27
+msgid "Dates take the form YYYY-MM-DD; leave one empty for no limit"
+msgstr ""
+"Datumsangaben haben das Format JJJJ-MM-TT; lassen Sie ein Feld leer, um"
+"keine Begrenzung festzulegen"
+
+#: rust/crates/jmap-ui/src/vacation/form.rs:31
+msgid ""
+""
+"The last day is before the first day — swap them, or clear one to leave it "
+"open"
+msgstr ""
+"Der letzte Tag liegt vor dem ersten Tag: Tauschen Sie die beiden oder"
+"leeren Sie ein Feld, um es offen zu lassen"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:64
+msgid "Contacting the mail server…"
+msgstr "E-Mail-Server wird kontaktiert …"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:65
+msgid "This account’s server does not offer a vacation autoresponder."
+msgstr "Der Server dieses Kontos bietet keine Abwesenheitsnotiz an."
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/vacation/page.rs:67
+#, c-format
+msgid "The autoresponder could not be read: %1$s"
+msgstr "Die Abwesenheitsnotiz konnte nicht gelesen werden: %1$s"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:160
+msgid "Vacation Responder"
+msgstr "Abwesenheitsnotiz"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:214
+msgid "Send _automatic replies"
+msgstr "_Automatische Antworten senden"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:231
+msgid "_First day:"
+msgstr "_Erster Tag:"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:233
+msgid "_Last day:"
+msgstr "_Letzter Tag:"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:235
+msgid "_Subject:"
+msgstr "_Betreff:"
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:238
+msgid "_Message:"
+msgstr "_Nachricht:"

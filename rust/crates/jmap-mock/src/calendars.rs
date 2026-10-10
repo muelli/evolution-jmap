@@ -220,6 +220,20 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
 
 pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
+
+    // Same `maxObjectsInGet` enforcement `contact_card_get` documents: scale-
+    // testing item 94's `jmap-cal-sync` slice found `CalendarEvent/get` sent
+    // every id in one call, unenforced here until now.
+    let limit = state.objects_in_get();
+    if request
+        .ids
+        .as_ref()
+        .is_some_and(|ids| ids.len() as u64 > limit)
+    {
+        return Err(MethodError::new(error::method::REQUEST_TOO_LARGE)
+            .with_description(format!("CalendarEvent/get accepts at most {limit} ids")));
+    }
+
     let account = account_mut(state, &request.account_id)?;
     let own_addresses = crate::scheduling::own_addresses(account);
 
