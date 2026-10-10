@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "eds-sys"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bindgen",
  "gio-sys",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "evo-sys"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bindgen",
  "eds-sys",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-book-sync"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "evolution-jmap-client",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-cal-sync"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-ical",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-client"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "evolution-jmap-ical",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-collection-sync"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-ical"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "calcard",
  "evolution-jmap-proto",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-mail-sync"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-mock"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "evolution-jmap-ical",
@@ -393,11 +393,11 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-po-compile"
-version = "0.4.1"
+version = "0.5.0"
 
 [[package]]
 name = "evolution-jmap-proto"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "proptest",
  "serde",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "evolution-jmap-vcard"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "calcard",
@@ -646,7 +646,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jmap-backend-book"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-book-sync",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-book-module"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evo-sys",
  "gobject-sys",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-cal"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-cal-sync",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-cal-module"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evo-sys",
  "gobject-sys",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-collection"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-client",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-collection-module"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evo-sys",
  "gobject-sys",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-backend-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-client",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-config"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "eds-sys",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-config-module"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evo-sys",
  "gobject-sys",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-functional"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-mail"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-client",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "jmap-ui"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eds-sys",
  "evo-sys",

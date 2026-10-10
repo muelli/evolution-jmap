@@ -1,3 +1,36 @@
+evolution-jmap (0.5.0) UNRELEASED; urgency=medium
+
+  * Fixed a brand-new account silently signing in twice on its first
+    connect, caused by its own setup accidentally triggering a second
+    sign-in.
+  * Editing a JMAP account's server address now triggers a fresh sign-in
+    instead of needing Evolution restarted to take effect.
+  * A new account's Sent and Drafts folders are now configured
+    automatically from the server's own folder roles, the same way
+    Inbox, Trash and Junk already were.
+  * Searching a folder's message bodies is now answered by the server, on
+    evolution-data-server 3.58 and newer, instead of silently finding
+    nothing.
+  * An account whose saved sync state the server no longer recognises
+    (for example after the server was restored from backup) now
+    resynchronises automatically instead of getting stuck until its local
+    cache is deleted by hand.
+  * On evolution-data-server 3.62 and newer, the mail cache is written
+    atomically, protecting it against corruption if Evolution is
+    interrupted mid-write.
+  * On evolution-data-server 3.63.1 and newer, OAuth 2.0 account setup
+    uses evolution-data-server's own OAuth2Dynamic support instead of
+    this project's own implementation. There is no migration: an
+    existing account using the old method needs to be set up again after
+    upgrading to such a build.
+  * A round of interoperability fixes against real JMAP servers (tested
+    against Stalwart): folder creation, calendar participants and
+    notifications, and shared-resource ownership now tolerate several
+    real-server quirks that used to produce spurious errors.
+  * Added a German translation.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Sat, 10 Oct 2026 05:39:49 +0000
+
 evolution-jmap (0.4.1) unstable; urgency=medium
 
   * Rebuild of 0.4.0 through the repaired release pipeline; no code changes.
