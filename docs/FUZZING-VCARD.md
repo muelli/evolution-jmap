@@ -199,6 +199,32 @@ Command note:
 - This invocation used `-verbosity=0`; final stats were emitted, but final
   `cov`/`ft`/`corp` counters were not printed in the log.
 
+### 2026-10-10 UTC (target rotation: `fuzz_vcard_to_jscontact`, third pass)
+
+Completed in this session:
+- Passed harness compile check before execution:
+  - `cd rust/crates/jmap-vcard && cargo +nightly fuzz check`
+- Ran the next bounded target slice for Batch 4 rotation:
+  - `cargo +nightly fuzz run fuzz_vcard_to_jscontact <tmp-corpus> -- -max_total_time=2700`
+  - Completed without sanitizer errors or crashes.
+
+Observed libFuzzer result summary:
+- Total executions: `11,972,831`.
+- Runtime: `2701` seconds.
+- Average throughput (derived from completion footer): about `4432` exec/s.
+- Crashes: `0`.
+- Hangs: `0`.
+- OOMs: `0`.
+
+Command note:
+- The bounded run used a temporary copy of
+  `fuzz/corpus/fuzz_vcard_to_jscontact` under `/tmp` to avoid writing
+  generated units into the committed repository corpus.
+- This invocation used default verbosity, which emitted very large progress
+  output. The completion footer (`Done ... runs in 2701 second(s)`) was
+  captured, but final `cov`/`ft`/`corp` counters were not retained in the
+  harness transcript.
+
 ## Resume commands
 
 ```bash
