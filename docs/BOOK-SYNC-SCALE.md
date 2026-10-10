@@ -99,8 +99,50 @@ back line-folded even though its octets are unchanged. Fixed by unfolding
 (`vcard.replace("\r\n ", "")`) before comparing; this is a test-design
 correction, not a code change to the product.
 
+## Batch 4: N=1,000 checkpoint, 2026-10-10
+
+Two fresh throwaway accounts (one per test, so the import/edit numbers never
+mix with the delete numbers), `JMAP_SCALE_TEST_CARDS=1000`.
+
+| Measurement | Result |
+|---|---|
+| Import 1,000 cards (`save_contact`, sequential) | 66.5s total (~66.5ms/card) |
+| Cold listing of 1,000 cards (`list_existing`) | 108.5ms |
+| Edit 20 of 1,000 cards | 161.2ms |
+| `get_changes` after editing 20 cards | 7.4ms, 20 changed, correct |
+| Peak RSS (import/edit test) | 15.6 MB |
+| Import 1,000 cards (delete test's own import) | 106.7s total (~106.7ms/card) |
+| Delete 300 of 1,000 cards | 1.06s (3.5ms/card) |
+| `get_changes` after deleting 300 | 8.2ms, 300 removed, correct |
+| Peak RSS (delete test) | 16.3 MB |
+
+No scale-only bug found: cold listing, edit and bulk-delete costs at 1,000
+cards track batch 1's 500-card numbers closely (sub-linear to linear, not
+quadratic), and `get_changes` stays single-digit-to-low-double-digit
+milliseconds regardless of book size, consistent with every earlier batch.
+The two import numbers differing (66.5ms/card vs 106.7ms/card) is rate-limit
+variance between runs (Stalwart's `Http.rateLimitAuthenticated` window
+absorbing a different number of `retrying` sleeps each time), the same
+effect batch 2's note already recorded, not a regression.
+
+One harness-infrastructure finding, not a product bug, logged in the harness
+repo's NIGHT-LOG: `stw seed`'s `Account` upsert matches on the account's
+local-part `name` alone, not local-part+domain, so re-seeding a different
+domain with a previously-used local-part (several earlier sessions' own
+`agent1@...`) silently reassigns the *same* underlying Stalwart account to
+the new domain, carrying forward all of its previously-seeded data instead
+of creating an isolated fresh one. This batch's first attempt at the
+1,000-card checkpoint used local-part `agent1` and got a 2,700-card cold
+listing instead of 1,000 for exactly this reason (confirmed via
+`stalwart-cli query Account`: same account id, `createdAt` from a prior
+session). Re-seeded both accounts above with a local-part unique to this
+run instead (`agent1k<unix-timestamp>`, `agent1kdel<unix-timestamp>`),
+confirmed fresh (`createdAt` from this run, a new account id), and got the
+clean 1,000-card numbers in the table above.
+
 ## Batches left
 
-Still open per item 94(a): the 1,000/5,000-card checkpoints, `jmap-cal-sync`'s
-(b), and the real-EDS leg (c) (item 80's live-Stalwart book factory, first
-open of a 5,000-card book through real EDS).
+Still open per item 94(a): the 5,000-card checkpoint, and the real-EDS leg
+(c) (item 80's live-Stalwart book factory, first open of a 5,000-card book
+through real EDS). `jmap-cal-sync`'s own 1,000/3,000-event checkpoints are
+tracked in `CAL-SYNC-SCALE.md`, not here.
