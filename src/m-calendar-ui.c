@@ -28,9 +28,7 @@
 #include "m-utils.h"
 #include "m-calendar-ui.h"
 
-/* e_calendar_view_get_selected_events() has returned a GSList, not a GList,
- * since before this module's 3.52 floor (confirmed against this build's own
- * e-calendar-view.h); nothing about the EUIManager migration changes that. */
+/* e_calendar_view_get_selected_events() uses GSList across supported EDS versions. */
 static void
 do_action_calendar_event (EShellView *shell_view)
 {
@@ -106,10 +104,7 @@ calendar_has_selected_event (EShellView *shell_view)
 
 #if JMAP_EVO_EUI_MANAGER
 
-/* This module's own group, not one of Evolution's own (the same choice
- * jmap-ui's snooze/send_later extensions make): action references inside the
- * merged <eui> resolve across the whole manager, not just this group, so
- * nothing about placement depends on the name. */
+/* Use a module-owned group name; EUI action lookup is manager-wide. */
 #define GROUP_NAME "example-module-calendar"
 
 static void
@@ -128,9 +123,7 @@ action_calendar_event_cb (EUIAction *action,
 	do_action_calendar_event (E_SHELL_VIEW (user_data));
 }
 
-/* Index 0 gates on the selection (m_calendar_ui_update_actions_cb); index 1
- * is the event-popup item, unconditionally sensitive, matching the pre-3.55
- * code this ports (event_context_entries was always enabled there too). */
+/* Entry 0 is selection-gated; entry 1 remains always sensitive. */
 static const EUIActionEntry calendar_entries[] = {
 	{ "my-calendar-ui-action",
 	  "document-new",
@@ -166,12 +159,7 @@ void
 m_calendar_ui_init (EUIManager *ui_manager,
 		    EShellView *shell_view)
 {
-	/* 3.52 merged the same pair (an item in the shell's own 'custom-menus'
-	 * placeholder, an item in 'calendar-event-popup's own
-	 * 'event-popup-actions' placeholder) as a GtkUIManager string; the
-	 * ids and nesting here are unchanged, confirmed against this build's
-	 * own evolution-calendars.eui — only the wrapping element and the
-	 * name/id, menu/submenu, menuitem/item spelling differ. */
+	/* Keep the historical IDs and placeholders from evolution-calendars.eui. */
 	const gchar *ui_def =
 		"<eui>"
 		"<menu id='main-menu'>"
@@ -285,7 +273,7 @@ m_calendar_ui_init (GtkUIManager *ui_manager,
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	action_group = e_shell_window_get_action_group (shell_window, "calendar");
 
-	/* Add actions to the action group. */
+	/* Register example actions. */
 	e_action_group_add_actions_localized (
 		action_group, GETTEXT_PACKAGE,
 		calendar_event_context_entries, G_N_ELEMENTS (calendar_event_context_entries), shell_view);
@@ -293,7 +281,7 @@ m_calendar_ui_init (GtkUIManager *ui_manager,
 		action_group, GETTEXT_PACKAGE,
 		calendar_action_menu_entries, G_N_ELEMENTS (calendar_action_menu_entries), shell_view);
 
-	/* Decide whether we want this option to be visible or not */
+	/* Refresh action state on shell updates. */
 	g_signal_connect (
 		shell_view, "update-actions",
 		G_CALLBACK (m_calendar_ui_update_actions_cb),
