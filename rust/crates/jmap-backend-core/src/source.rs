@@ -357,6 +357,11 @@ pub fn connect_target(
     secure: bool,
 ) -> Result<ConnectTarget, SourceError> {
     let host = host.ok_or(SourceError::MissingHost)?;
+    // A fully qualified name (one trailing dot, RFC 1035 §3.1) and its
+    // relative form are the same DNS entry; concatenated unchanged into a
+    // URL it becomes a host the server's own redirect does not recognise as
+    // itself, which drops the bearer token credentials were withheld across.
+    let host = host.trim_end_matches('.');
     let authority = authority(host)?;
     if !secure && !is_loopback(host) {
         return Err(SourceError::InsecureTransport(host.to_owned()));
@@ -614,6 +619,29 @@ mod tests {
         assert_eq!(
             connect_target(Some("::1"), 0, false),
             Ok(ConnectTarget::Origin("http://[::1]".into()))
+        );
+    }
+
+    #[test]
+    fn a_trailing_dot_host_normalizes_to_the_same_domain() {
+        // A fully qualified name (one trailing dot) and its relative form
+        // name the same DNS entry (RFC 1035 §3.1); concatenating the dotted
+        // form unchanged into a URL sends `https://api.fastmail.com./...`,
+        // which Fastmail answers with a redirect to the dotless host that
+        // drops the bearer token (observed live, evo-test, 2026-10-13).
+        assert_eq!(
+            connect_target(Some("api.fastmail.com."), 0, true),
+            Ok(ConnectTarget::Domain("api.fastmail.com".into()))
+        );
+        assert_eq!(
+            connect_target(Some("jmap.example.com."), 8443, true),
+            Ok(ConnectTarget::Origin(
+                "https://jmap.example.com:8443".into()
+            ))
+        );
+        assert_eq!(
+            origin(Some("api.fastmail.com."), 443, true).as_deref(),
+            Ok("https://api.fastmail.com")
         );
     }
 
