@@ -59,16 +59,44 @@
 //! `uri` that stops naming a place at all (removes the entry from being read
 //! back as a virtual location in the first place, not a patched member).
 //!
+//! Also covered: `locations` (`diff_locations`), restricted to the bare
+//! `{"@type": "Location", "name": ...}` shape `read_locations` itself ever
+//! produces — no other member — and to zero or one entry, the only cases
+//! `maps_locations` allows through at all. That shape means every clear goes
+//! through the whole-property branch (the entry holds nothing but the name,
+//! so there is nothing left to keep), so the generator exercises rename
+//! (entry present on both sides, name changes), clear (present then absent),
+//! create (absent then present) and no-op (absent on both, or present with
+//! the same name) by varying an `Option<String>` name independently on each
+//! side, with the key held constant where an entry exists on either side.
+//! Scoped out, left for later: an entry with more than a name (so a clear
+//! would remove only `locations/<key>/name` and keep the rest, the branch
+//! this increment's shape never reaches).
+//!
+//! Also covered: `alerts` (`diff_alerts`), restricted to the exact shape
+//! `read_alert` ever produces for an offset trigger relative to the start —
+//! `{"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": ...},
+//! "action": "display"}`, no `relativeTo`. Unlike the keyed maps above,
+//! `diff_alerts` replaces the whole property (like `keywords`), gated only by
+//! `maps_alerts` on `current`; the edited side needs no such check, since
+//! `read_alert` only ever produces a shape `drawn_alert` accepts. Restricted
+//! to that shape, every alert on both sides maps, so the patch is a literal
+//! round trip with `edited.alerts`, no third "expected" event needed. Scoped
+//! out, left for later: a `relativeTo: "end"` trigger, and an alert `current`
+//! holds that `maps_alerts` refuses (which drops the whole property rather
+//! than carrying the one entry forward, since there is no key to leave
+//! unnamed in a property replaced whole by this path).
+//!
 //! Scoped out, left for later: `start` (its absence cannot be expressed, so
 //! it needs its own generator) and `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
-//! remaining five properties the module doc already calls out as needing
-//! more than the baseline (`locations`, `alerts`, `recurrenceRule`,
-//! `recurrenceOverrides`, `timeZones`) — each needs its own generator and is
-//! left for its own increment.
+//! remaining three properties the module doc already calls out as needing
+//! more than the baseline (`recurrenceRule`, `recurrenceOverrides`,
+//! `timeZones`) — each needs its own generator and is left for its own
+//! increment.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -242,6 +270,40 @@ fn arb_features() -> impl Strategy<Value = Option<Value>> {
     })
 }
 
+/// A bare Location entry: just the name `read_locations` itself ever
+/// produces, nothing a clear would need to reach past to delete.
+fn location_value(name: &str) -> Value {
+    json!({"@type": "Location", "name": name})
+}
+
+/// An offset `drawn_trigger` always draws back unchanged, relative to the
+/// start (no `relativeTo` member).
+fn arb_offset() -> impl Strategy<Value = String> {
+    prop::sample::select(&["-PT15M", "-PT1H", "-P1D", "PT0S", "PT15M"][..]).prop_map(str::to_owned)
+}
+
+/// The exact Alert shape `read_alert` produces for a start-relative offset
+/// trigger: an explicit `@type`, `action` and trigger `@type`, nothing a
+/// `relativeTo: "end"` or any other member would add.
+fn alert_value(offset: &str) -> Value {
+    json!({
+        "@type": "Alert",
+        "trigger": {"@type": "OffsetTrigger", "offset": offset},
+        "action": "display",
+    })
+}
+
+/// An `alerts` map of 0 to 4 keyed reminders, every one an `arb_offset`
+/// wrapped in `alert_value`.
+fn arb_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_map(arb_key(), arb_offset(), 0..4).prop_map(|entries| {
+        entries
+            .into_iter()
+            .map(|(k, o)| (k, alert_value(&o)))
+            .collect()
+    })
+}
+
 /// A VirtualLocation entry: a `uri` (required, held across old/new so the
 /// entry always keeps naming a place) and independently varied `name` and
 /// `features`.
@@ -356,6 +418,36 @@ proptest! {
         old_event.keywords = Some(old);
         let mut new_event = base();
         new_event.keywords = Some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn locations_round_trip(
+        key in arb_key(),
+        old_name in arb_place_name(),
+        new_name in arb_place_name(),
+    ) {
+        let mut old_event = base();
+        old_event.locations = old_name
+            .as_deref()
+            .map(|name| [(key.clone(), location_value(name))].into());
+        let mut new_event = base();
+        new_event.locations = new_name
+            .as_deref()
+            .map(|name| [(key.clone(), location_value(name))].into());
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn alerts_round_trip(old in arb_alerts(), new in arb_alerts()) {
+        let mut old_event = base();
+        old_event.alerts = (!old.is_empty()).then_some(old);
+        let mut new_event = base();
+        new_event.alerts = (!new.is_empty()).then_some(new);
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
