@@ -25,3 +25,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
+proptest = { workspace = true }
