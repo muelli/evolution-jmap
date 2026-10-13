@@ -15,6 +15,9 @@ cd "$(dirname "$0")/.."
 # the directory is trusted.
 git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
 
-cmake -S . -B build -G Ninja
+# -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules and ci/checks.sh:
+# without it CMAKE_INSTALL_PREFIX defaults to /usr/local on older configurations,
+# which causes lintian dir-in-usr-local failures when packaging translation catalogues.
+cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build
 ctest --test-dir build --output-on-failure

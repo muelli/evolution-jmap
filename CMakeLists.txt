@@ -5,6 +5,17 @@ cmake_policy(VERSION 3.10)
 
 project(example-modules C)
 
+# Default CMAKE_INSTALL_PREFIX to /usr on Linux/UNIX instead of /usr/local,
+# matching debian/rules and the Debian package layout. Every other
+# installed file in this project uses a pkg-config directory under /usr
+# or an absolute /usr path; only LANGUAGE_SUPPORT_DIRECTORY tracks
+# CMAKE_INSTALL_PREFIX. Without this, a default configure puts translation
+# catalogues under /usr/local/share/locale, causing lintian dir-in-usr-local
+# failures in package-deb-lintian.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+	set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Default install prefix" FORCE)
+endif()
+
 #
 # Base bits
 #
