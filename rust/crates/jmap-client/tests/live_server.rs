@@ -4617,6 +4617,47 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .expect("cleanup destroy id2 failed");
 }
 
+/// Finding 17 (STALWART-RFC-FINDINGS.md): a `/changes` call carrying an
+/// unrecognized `sinceState` answers `invalidArguments`, not RFC 8620 §5.2's
+/// own `cannotCalculateChanges`. `jmap-client/src/error.rs`'s
+/// `Error::is_unrecognized_changes_state` exists to paper over exactly this
+/// and is unit-tested against a synthetic `MethodError` built to match the
+/// shape finding 17 recorded, but nothing before this test had ever driven a
+/// garbage `sinceState` through the real `Client::changes` against a genuine
+/// Stalwart response to confirm the predicate actually recognizes it.
+///
+/// Read-only: a nonsense `sinceState` queries state, it never changes it, so
+/// this runs against the shared read account rather than the write-test one.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calculate_changes() {
+    let client = connect();
+    let Ok(account_id) = client.primary_account(CAPABILITY_MAIL) else {
+        eprintln!("server names no primary account for {CAPABILITY_MAIL}; skipping");
+        return;
+    };
+
+    let bogus_state = jmap_proto::State::new("this-state-was-never-issued-by-the-server");
+    let error = client
+        .changes(&account_id, "Mailbox", &bogus_state)
+        .expect_err("an unrecognized sinceState must be rejected, not answered");
+
+    assert!(
+        error.is_unrecognized_changes_state(),
+        "finding 17 expects Mailbox/changes with a bogus sinceState to come back as \
+         invalidArguments mentioning state; got {error:?} instead — Stalwart may have \
+         fixed this to answer cannotCalculateChanges, which would need finding 17 \
+         updated and is_cannot_calculate_changes() checked instead, not this assertion \
+         loosened"
+    );
+    assert!(
+        !error.is_cannot_calculate_changes(),
+        "finding 17 is specifically that the server does NOT use the RFC's own error \
+         type for this; if it now does, both predicates agreeing is the bug report, \
+         not a reason to accept it silently"
+    );
+}
+
 /// Finding 12 (STALWART-RFC-FINDINGS.md): Unauthenticated GET to the session
 /// resource on Stalwart v1.0.0 returns HTTP 200 OK with empty `accounts: {}`
 /// and `username: ""` rather than HTTP 401 Unauthorized with a WWW-Authenticate
