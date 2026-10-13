@@ -305,6 +305,7 @@ dependencies = [
  "evolution-jmap-mock",
  "evolution-jmap-proto",
  "evolution-jmap-vcard",
+ "proptest",
  "serde",
  "serde_json",
  "tracing",

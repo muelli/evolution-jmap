@@ -27,3 +27,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 base64 = { workspace = true }
 evolution-jmap-mock = { workspace = true }
+proptest = { workspace = true }
