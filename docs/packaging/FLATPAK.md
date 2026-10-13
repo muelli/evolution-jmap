@@ -106,6 +106,46 @@ installation only.
 This confirms the local extension is mounted and the expected JMAP module
 artifacts are visible to sandboxed Evolution in the extension tree.
 
+### In-sandbox module load checks (Batch 5 step 2 follow-up, 2026-10-13 UTC)
+
+To satisfy the queue requirement to check what sandboxed Evolution actually
+loads, factories and the app entrypoint were executed with loader debug output.
+
+- Source registry check:
+  - `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-source-registry --disable-migration 2>&1' | rg 'module_load|Failed to load module|camel_provider_list'`
+  - Reported `Failed to load module` for
+    `registry-modules/module-jmap-backend.so` because
+    `libedataserver-1.2.so.27` is missing.
+- Address book factory check:
+  - `timeout 40 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-addressbook-factory 2>&1' | rg 'module_load|Failed to load module|camel_provider_list'`
+  - Reported `Failed to load module` for
+    `addressbook-backends/libebookbackendjmap.so` because
+    `libedataserver-1.2.so.27` is missing.
+- Calendar factory check:
+  - `timeout 40 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-calendar-factory 2>&1' | rg 'module_load|Failed to load module|camel_provider_list'`
+  - Reported `Failed to load module` for
+    `calendar-backends/libecalbackendjmap.so` because `libical-glib.so.3` is
+    missing.
+- Evolution shell module check:
+  - `timeout 40 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/bin/evolution --quit 2>&1' | rg 'module_load|Failed to load module|camel_provider_list'`
+  - Reported `Failed to load module` for
+    `evolution/modules/module-jmap-configuration.so` because
+    `libevolution-mail.so.0` is missing.
+
+Dependency inspection inside the sandbox confirms an ABI mismatch:
+
+- `ldd` on extension libraries reports unresolved links to older SONAMEs such
+  as `libedataserver-1.2.so.27`, `libcamel-1.2.so.64`,
+  `libebook-contacts-1.2.so.4`, and `libical-glib.so.3`.
+- The Flatpak runtime currently provides newer SONAMEs such as
+  `libedataserver-1.2.so.28`, `libcamel-1.2.so.68`,
+  `libebook-contacts-1.2.so.5`, and `libical-glib.so.4`.
+
+Conclusion: the local extension payload copied from host package artifacts is
+mounted in the right place, but the modules are not loadable in this runtime.
+For a shippable Flatpak extension, `evolution-jmap` must be built against the
+same Flatpak SDK/runtime ABI instead of reusing host-built package payloads.
+
 ### Notes and limits
 
 - `pkg-config` is not present in the app runtime sandbox, so path verification
