@@ -151,3 +151,69 @@ same Flatpak SDK/runtime ABI instead of reusing host-built package payloads.
 - `pkg-config` is not present in the app runtime sandbox, so path verification
   used direct in-sandbox file listing rather than `pkg-config --variable`.
 - Loading in a real interactive Evolution UI remains unverified in this runner.
+
+## Batch 6 step 1 ABI check (2026-10-13 UTC)
+
+Batch 6 starts with an ABI check of the currently installed extension payload,
+before replacing copied host artifacts with a source build in the Flatpak SDK.
+
+### Command set
+
+- Enumerated all extension modules and ran `ldd -v` for each inside the app
+  sandbox:
+  `timeout 180 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd -v <module>'`
+- Read bundled EDS package versions from runtime pkg-config files:
+  `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'sed -n "s/^Version: //p" /app/lib/pkgconfig/{libedataserver-1.2,libebackend-1.2,libebook-contacts-1.2,libecal-2.0,camel-1.2}.pc'`
+- Listed runtime SONAMEs for key EDS and Evolution libs:
+  `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ls -1 /app/lib/libedataserver-1.2.so* /app/lib/libcamel-1.2.so* /app/lib/libebook-contacts-1.2.so* /app/lib/libical-glib.so*'`
+
+### Bundled EDS version
+
+The app runtime reports `3.62.0` for all checked EDS/Camel pkg-config files:
+
+- `libedataserver-1.2.pc`
+- `libebackend-1.2.pc`
+- `libebook-contacts-1.2.pc`
+- `libecal-2.0.pc`
+- `camel-1.2.pc`
+
+### Unresolved dependencies by module
+
+- `libebookbackendjmap.so`: `libedataserver-1.2.so.27`,
+  `libebook-contacts-1.2.so.4`.
+- `libecalbackendjmap.so`: `libical-glib.so.3`,
+  `libedataserver-1.2.so.27`.
+- `libcameljmap.so`: `libedataserver-1.2.so.27`, `libcamel-1.2.so.64`.
+- `module-jmap-backend.so`: `libedataserver-1.2.so.27`.
+- `module-jmap-configuration.so`: `libevolution-mail.so.0`,
+  `libevolution-mail-composer.so.0`, `libevolution-shell.so.0`,
+  `libevolution-util.so.0`, `libedataserver-1.2.so.27`,
+  `libcamel-1.2.so.64`.
+
+Runtime-provided SONAMEs in `/app/lib` are newer:
+
+- `libedataserver-1.2.so.28`
+- `libcamel-1.2.so.68`
+- `libebook-contacts-1.2.so.5`
+- `libical-glib.so.4.0`
+
+For Evolution shell libs, `/app/lib` does not contain
+`libevolution-{mail,mail-composer,shell,util}.so.0`; the runtime has
+unversioned files under `/app/lib/evolution/` (for example
+`/app/lib/evolution/libevolution-mail.so`).
+
+### Symbol-version evidence from `ldd -v`
+
+For all five extension modules, the module-level version requirements shown by
+`ldd -v` are satisfied for resolved base toolchain symbols:
+
+- `libgcc_s.so.1`: up to `GCC_4.2.0`
+- `libc.so.6`: up to `GLIBC_2.34`
+
+The hard failure remains unresolved SONAME dependencies, not a GLIBC symbol
+version shortfall in the runtime.
+
+Conclusion for Batch 6 step 1: the currently installed extension payload is not
+loadable in `org.gnome.Evolution` runtime branch `50` because it links against
+older EDS and Evolution SONAMEs. Batch 6 step 2 must build the modules against
+the runtime/SDK ABI instead of reusing host-built package artifacts.
