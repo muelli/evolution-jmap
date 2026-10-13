@@ -23,14 +23,25 @@
 //! handles by design via the baseline rather than by checking `current`
 //! directly.
 //!
+//! Also covered: `keywords` (`diff_keywords`), scoped to the case where every
+//! tag on both sides is one `maps_keyword` draws (plain alphanumeric, so
+//! always a non-empty, `\r`-free trimmed string paired with `Value::Bool(true)`).
+//! Restricted to that case, `diff_keywords`'s carry-forward of a tag `current`
+//! holds that the `CATEGORIES` line could not draw never fires, so the patch
+//! is a literal round trip with `edited.keywords` and needs no third
+//! "expected" event. Scoped out, left for later: a tag the server holds that
+//! `maps_keyword` refuses (an empty or whitespace-only name, a non-bool
+//! value, a `\r`), which needs the three-event "expected" shape the book-sync
+//! anniversaries/media/online_services increments used.
+//!
 //! Scoped out, left for later: `start` (its absence cannot be expressed, so
 //! it needs its own generator) and `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
-//! eight properties the module doc already calls out as needing more than
-//! the baseline (`locations`, `virtualLocations`, `links`, `keywords`,
+//! remaining seven properties the module doc already calls out as needing
+//! more than the baseline (`locations`, `virtualLocations`, `links`,
 //! `alerts`, `recurrenceRule`, `recurrenceOverrides`, `timeZones`) — each
 //! needs its own generator and is left for its own increment.
 //!
@@ -38,6 +49,8 @@
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
 //! and line folding are a separate question from the baseline-compare shape
 //! this increment covers.
+
+use std::collections::BTreeMap;
 
 use jmap_cal_sync::patch::diff;
 use jmap_ical::{event_to_ical, ical_to_event};
@@ -110,6 +123,21 @@ fn arb_text() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9]{1,20}"
 }
 
+/// A tag `maps_keyword` always draws: plain alphanumeric, so trimmed,
+/// non-empty and `\r`-free already.
+fn arb_tag() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,10}"
+}
+
+/// A `keywords` set, every member one `arb_tag` builds.
+fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_set(arb_tag(), 0..5).prop_map(|tags| {
+        tags.into_iter()
+            .map(|tag| (tag, Value::Bool(true)))
+            .collect()
+    })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -171,6 +199,17 @@ proptest! {
     fn priority_round_trip(old in 0i64..=9, new in 0i64..=9) {
         let current = stable(base().with_priority(old));
         let edited = stable(base().with_priority(new));
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn keywords_round_trip(old in arb_keywords(), new in arb_keywords()) {
+        let mut old_event = base();
+        old_event.keywords = Some(old);
+        let mut new_event = base();
+        new_event.keywords = Some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
         round_trips(&current, &edited)?;
     }
 }
