@@ -1,0 +1,38 @@
+// Source: RFC 9661 §2.4.1 (Update Script Content Response), September 2024
+[
+  [
+    "Blob/upload",
+    {
+      "oldState": null,
+      "newState": "1603741700.309607123-0128",
+      "created": {
+        "B": {
+          "id": "G969c83e44a6e10871c4568d0b94e1767c83ddeae",
+          "blobId": "G969c83e44a6e10871c4568d0b94e1767c83ddeae",
+          "type": "application/sieve",
+          "size": 29
+        }
+      },
+      "notCreated": null,
+      "accountId": "ken"
+    },
+    "1"
+  ],
+  [
+    "SieveScript/set",
+    {
+      "oldState": "1603741751.227268529-4096",
+      "newState": "1603742603.309607868-4096",
+      "created": null,
+      "updated": {
+        "dd1b164f-8cdc-448c-9f54": null
+      },
+      "destroyed": null,
+      "notCreated": null,
+      "notUpdated": null,
+      "notDestroyed": null,
+      "accountId": "ken"
+    },
+    "2"
+  ]
+]

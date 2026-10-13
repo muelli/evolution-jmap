@@ -1,0 +1,15 @@
+// Source: RFC 9661 §2.3.1 (Fetch Script and Blob Request), September 2024
+[
+  ["SieveScript/get", {
+    "accountId": "ken",
+    "ids": [ "2d647053-dded-418d-917a-63eda3ac8f7b" ]
+  }, "0"],
+  ["Blob/get", {
+    "accountId": "ken",
+    "#ids": {
+      "resultOf": "0",
+      "name": "SieveScript/get",
+      "path": "/list/*/blobId"
+    }
+  }, "1"]
+]

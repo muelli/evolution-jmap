@@ -1,0 +1,20 @@
+// Source: RFC 9425 §5.2 (Requesting Latest Quota Changes Response), June 2023
+[[ "Quota/changes", {
+  "accountId": "u33084183",
+  "oldState": "78540",
+  "newState": "78542",
+  "hasMoreChanges": false,
+  "updatedProperties": ["used"],
+  "created": [],
+  "updated": ["2a06df0d-9865-4e74-a92f-74dcc814270e"],
+  "destroyed": []
+}, "0" ],
+[ "Quota/get", {
+  "accountId": "u33084183",
+  "state": "10826",
+  "list": [{
+    "id": "2a06df0d-9865-4e74-a92f-74dcc814270e",
+    "used": 1246
+  }],
+  "notFound": []
+}, "1" ]]

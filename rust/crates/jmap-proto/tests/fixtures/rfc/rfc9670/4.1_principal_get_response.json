@@ -1,0 +1,27 @@
+// Source: RFC 9670 §4.1 (Figure 3: MethodResponses Property of a JMAP Response), November 2024
+[[ "Principal/get", {
+  "accountId": "u33084183",
+  "state": "7b8eff5zz",
+  "list": [{
+    "id": "P2342fnddd20",
+    "type": "individual",
+    "name": "Joe Bloggs",
+    "description": null,
+    "email": "joe.bloggs@example.com",
+    "timeZone": "Australia/Melbourne",
+    "capabilities": {
+      "urn:com.example:jmap:todo": {
+        "accountId": null,
+        "mayShareWith": true
+      }
+    },
+    "accounts": null
+  }, {
+    "id": "P674pp24095qo49pr",
+    "name": "Board room",
+    "type": "location",
+    "capabilities": {},
+    "accounts": null
+  }],
+  "notFound": []
+}, "0" ]]

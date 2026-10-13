@@ -17,6 +17,10 @@ This document records the extraction, fixture mapping, and protocol conformance 
 | RFC 9553 | Standards Track | May 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9553.txt |
 | RFC 8984 | Standards Track | July 2021, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8984.txt |
 | draft-ietf-jmap-calendars-32 | IETF Internet-Draft | October 2026, draft-ietf-jmap-calendars-32 | https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/ |
+| RFC 9425 | Standards Track | June 2023, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9425.txt |
+| RFC 9670 | Standards Track | November 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9670.txt |
+| RFC 9661 | Standards Track | September 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9661.txt |
+| RFC 9404 | Standards Track | August 2023, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9404.txt |
 
 ## 2. RFC 8620 Core JMAP Examples (July 2019)
 
@@ -324,4 +328,125 @@ draft-ietf-jmap-calendars defines the data model and methods for synchronizing c
 
 2. **Section 6.4 `CalendarAlert` push notifications**:
    Section 6.4 defines the `CalendarAlert` object pushed to clients over the event source stream when an event alarm triggers. Added `CalendarAlert` struct to `calendars.rs` modeling `account_id`, `calendar_event_id`, `uid`, `recurrence_id`, `title`, and `trigger`.
+
+## 8. RFC 9425 JMAP for Quotas Examples (June 2023)
+
+RFC 9425 defines a data model for accessing server quotas via JMAP, enabling clients to inspect data usage and storage limits across mail, calendar, contact, and system resources.
+
+### 8.1 Catalogued Fixtures
+
+4 distinct JSON examples across Section 5 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9425/`:
+
+1. `5.1_get_request.json`: `Quota/get` request querying quota records (§5.1).
+2. `5.1_get_response.json`: `Quota/get` response returning octets and count quotas with `used`, `hardLimit`, and `scope` (§5.1).
+3. `5.2_changes_request.json`: Chained `Quota/changes` and back-referenced `Quota/get` request (§5.2).
+4. `5.2_changes_response.json`: Chained `Quota/changes` and back-referenced `Quota/get` response (§5.2).
+
+### 8.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9425 was audited: 0 errata reported on errata.rfc-editor.org.
+
+### 8.3 Protocol Findings and Model Refinements
+
+1. **RFC 9425 §5.1 Property Filtering**:
+   In `Quota/get`, the `properties` argument allows clients to request a subset of quota fields. When specific properties are omitted by the server in response to filtering, fields such as `name`, `resource_type`, `used`, `hard_limit`, and `scope` must default cleanly. Added `#[serde(default)]` to these fields on `Quota` in `quota.rs`.
+
+## 9. RFC 9670 JMAP Sharing Examples (November 2024)
+
+RFC 9670 specifies a sharing data model for JMAP, defining Principals and ShareNotifications to represent access rights and invitations across accounts.
+
+### 9.1 Catalogued Fixtures
+
+4 distinct JSON examples across Section 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9670/`:
+
+1. `4.1_session_object.json`: Session object advertising `urn:ietf:params:jmap:principals` with principal account capabilities (§4.1).
+2. `4.1_principal_get_request.json`: `Principal/get` request fetching user principals (§4.1).
+3. `4.1_principal_get_response.json`: `Principal/get` response returning principal records with account id, name, and email (§4.1).
+4. `4.1_todolist_set_request.json`: `TodoList/set` request creating a shared list with `shareWith` access rights (§4.1).
+
+### 9.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9670 was audited: 0 errata reported on errata.rfc-editor.org.
+
+### 9.3 Protocol Findings and Model Refinements
+
+All wire representations and principal models in `jmap-proto` fully conform to RFC 9670 specification examples with lossless roundtrip serialization.
+
+## 10. RFC 9661 JMAP for Sieve Scripts Examples (September 2024)
+
+RFC 9661 specifies a data model for managing Sieve mail filtering scripts via JMAP, supporting script upload, validation, activation, and deactivation.
+
+### 10.1 Catalogued Fixtures
+
+16 distinct JSON examples across Sections 1 and 2 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9661/`:
+
+1. `1.2.2_session.json`: Session object advertising `urn:ietf:params:jmap:sieve` capability (§1.2.2).
+2. `2.3.1_get_all_request.json`: `SieveScript/get` request fetching all scripts with `ids: null` (§2.3.1).
+3. `2.3.1_get_all_response.json`: `SieveScript/get` response returning active script (§2.3.1).
+4. `2.3.1_get_and_blob_get_request.json`: Chained `SieveScript/get` and `Blob/get` with `#ids` backreference (§2.3.1).
+5. `2.3.1_get_and_blob_get_response.json`: Chained `SieveScript/get` and `Blob/get` response (§2.3.1).
+6. `2.4.1_upload_response.json`: `Blob/upload` response for script upload (§2.4.1).
+7. `2.4.1_create_activate_request.json`: `SieveScript/set` create and activate request with `name: null` and `onSuccessActivateScript: "#A"` (§2.4.1).
+8. `2.4.1_create_activate_response.json`: `SieveScript/set` response returning created script and updated deactivate on previous script (§2.4.1).
+9. `2.4.1_update_blob_request.json`: `Blob/upload` and `SieveScript/set` update request (§2.4.1).
+10. `2.4.1_update_blob_response.json`: `Blob/upload` and `SieveScript/set` update response (§2.4.1).
+11. `2.4.1_rename_deactivate_request.json`: `SieveScript/set` rename and deactivate request with `onSuccessDeactivateScript: true` (§2.4.1).
+12. `2.4.1_rename_deactivate_response.json`: `SieveScript/set` rename and deactivate response (§2.4.1).
+13. `2.4.1_reactivate_request.json`: `SieveScript/set` request reactivating an existing script (§2.4.1).
+14. `2.4.1_reactivate_response.json`: `SieveScript/set` response confirming activation (§2.4.1).
+15. `2.4.1_deactivate_destroy_request.json`: `SieveScript/set` deactivate and destroy request (§2.4.1).
+16. `2.4.1_deactivate_destroy_response.json`: `SieveScript/set` deactivate and destroy response (§2.4.1).
+
+### 10.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9661 was audited: 0 errata reported on errata.rfc-editor.org.
+
+### 10.3 Protocol Findings and Model Refinements
+
+1. **RFC 9661 §2.1 and §2.4 SieveScript Nullable Name**:
+   RFC 9661 §2.1 types `name: String|null (default: null)`. On script creation, clients may pass `name: null` or omit `name` to allow the server to choose a name. Modeled `name: Option<String>` on `SieveScript` in `sieve.rs`.
+
+2. **Partial Update Deserialization in SetResponse**:
+   In `SetResponse<SieveScript>`, partial update responses (such as deactivating the old script `updated: { id: { isActive: false } }`) omit `blobId`. Added default and skip-empty serialization to `blob_id: Id` on `SieveScript`.
+
+3. **RFC 9661 §2.4 Deactivate Script Extension Argument**:
+   RFC 9661 §2.4 introduces `onSuccessDeactivateScript: Option<bool>` alongside `onSuccessActivateScript` on `SieveScriptSetRequest`. Added field and builder helpers.
+
+4. **RFC 9661 §2.3.1 Backreferences in Blob/get**:
+   RFC 9661 §2.3.1 pipelines `Blob/get` with `#ids` backreference to fetch the script body blob. Added `ids_ref: Option<ResultReference>` and default empty `ids` vector support to `BlobGetRequest` in `blob.rs`.
+
+## 11. RFC 9404 JMAP Blob Management Extension Examples (August 2023)
+
+RFC 9404 specifies methods for uploading, retrieving, and inspecting raw data blobs in JMAP.
+
+### 11.1 Catalogued Fixtures
+
+11 distinct JSON examples across Sections 3 and 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9404/`:
+
+1. `3.1.1_capability.json`: Session object advertising `urn:ietf:params:jmap:blob` capability (§3.1.1).
+2. `4.1.1_upload_request.json`: `Blob/upload` request uploading data as text (§4.1.1).
+3. `4.1.1_upload_response.json`: `Blob/upload` response returning created blob record (§4.1.1).
+4. `4.1.2_upload_request.json`: `Blob/upload` request with base64 data and SHA-256 digest (§4.1.2).
+5. `4.1.2_upload_response.json`: `Blob/upload` response confirming upload (§4.1.2).
+6. `4.2.1_get_request.json`: `Blob/get` request fetching text content (§4.2.1).
+7. `4.2.1_get_response.json`: `Blob/get` response returning data as text and encoding problem indicator (§4.2.1).
+8. `4.2.2_get_request.json`: `Blob/get` request fetching byte range with offset and length (§4.2.2).
+9. `4.2.2_get_response.json`: `Blob/get` response returning sliced text (§4.2.2).
+10. `4.3.1_lookup_request.json`: `Blob/lookup` request (§4.3.1).
+11. `4.3.1_lookup_response.json`: `Blob/lookup` response (§4.3.1).
+
+### 11.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9404 was audited: 0 errata reported on errata.rfc-editor.org.
+
+### 11.3 Protocol Findings and Model Refinements
+
+1. **RFC 9404 §2.1 BlobInfo Encoding Problem and Truncated Indicators**:
+   RFC 9404 §2.1 types `isEncodingProblem: Option<bool>` and `isTruncated: Option<bool>` on `BlobInfo`. Added typed fields to `BlobInfo` in `blob.rs`.
+
+2. **RFC 9404 §2.2 BlobUploadResponse States**:
+   RFC 9404 §2.2 types `oldState: Option<String>` and `newState: Option<String>` on `BlobUploadResponse`. Added typed fields to `BlobUploadResponse` in `blob.rs`.
+
+3. **Single Account Context AccountId Omission**:
+   In RFC 9404 §4 request and response examples, `accountId` is omitted when operating within a single default account context. Added default and skip-empty serialization to `account_id` in `BlobUploadRequest`, `BlobUploadResponse`, `BlobGetRequest`, `BlobGetResponse`, `BlobLookupRequest`, and `BlobLookupResponse`.
 

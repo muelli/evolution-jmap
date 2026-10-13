@@ -1,0 +1,6 @@
+// Source: RFC 9661 §2.3.1 (List All Scripts Request), September 2024
+[
+  ["SieveScript/get", {
+    "accountId": "ken"
+  }, "0"]
+]

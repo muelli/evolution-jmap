@@ -1,0 +1,16 @@
+// Source: RFC 9404 §4.3.1 (Blob/lookup Example Request), August 2023
+[
+  "Blob/lookup",
+  {
+    "typeNames": [
+      "Mailbox",
+      "Thread",
+      "Email"
+    ],
+    "ids": [
+      "Gd2f81008cf07d2425418f7f02a3ca63a8bc82003",
+      "not-a-blob"
+    ]
+  },
+  "R1"
+]

@@ -1,0 +1,88 @@
+// Source: RFC 9404 §4.2.2 (Blob/get Example with Range and Encoding Errors Request), August 2023
+[
+  [
+    "Blob/upload",
+    {
+      "create": {
+        "b1": {
+          "data": [
+            {
+              "data:asBase64": "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wZWQgb3ZlciB0aGUggYEgZG9nLg=="
+            }
+          ]
+        },
+        "b2": {
+          "data": [
+            {
+              "data:asText": "hello world"
+            }
+          ],
+          "type": "text/plain"
+        }
+      }
+    },
+    "S1"
+  ],
+  [
+    "Blob/get",
+    {
+      "ids": [
+        "#b1",
+        "#b2"
+      ]
+    },
+    "G1"
+  ],
+  [
+    "Blob/get",
+    {
+      "ids": [
+        "#b1",
+        "#b2"
+      ],
+      "properties": [
+        "data:asText",
+        "size"
+      ]
+    },
+    "G2"
+  ],
+  [
+    "Blob/get",
+    {
+      "ids": [
+        "#b1",
+        "#b2"
+      ],
+      "properties": [
+        "data:asBase64",
+        "size"
+      ]
+    },
+    "G3"
+  ],
+  [
+    "Blob/get",
+    {
+      "offset": 0,
+      "length": 5,
+      "ids": [
+        "#b1",
+        "#b2"
+      ]
+    },
+    "G4"
+  ],
+  [
+    "Blob/get",
+    {
+      "offset": 20,
+      "length": 100,
+      "ids": [
+        "#b1",
+        "#b2"
+      ]
+    },
+    "G5"
+  ]
+]

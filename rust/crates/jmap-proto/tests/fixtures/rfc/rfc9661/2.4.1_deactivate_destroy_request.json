@@ -1,0 +1,11 @@
+// Source: RFC 9661 §2.4.1 (Deactivate and Destroy Script Request), September 2024
+[
+  ["SieveScript/set", {
+    "accountId": "ken",
+    "onSuccessDeactivateScript": true
+  }, "5"],
+  ["SieveScript/set", {
+    "accountId": "ken",
+    "destroy": [ "dd1b164f-8cdc-448c-9f54" ]
+  }, "6"]
+]

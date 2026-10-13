@@ -1,0 +1,55 @@
+// Source: RFC 9661 §1.2.2 (Sieve Capability Session Object), September 2024
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {},
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:quota": {},
+    "urn:ietf:params:jmap:blob": {},
+    "urn:ietf:params:jmap:sieve": {
+      "implementation": "ACME Email Filtering"
+    },
+    "urn:ietf:params:jmap:vacationresponse": {}
+  },
+  "accounts": {
+    "ken": {
+      "name": "ken@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+      "accountCapabilities": {
+        "urn:ietf:params:jmap:core": {},
+        "urn:ietf:params:jmap:quota": {},
+        "urn:ietf:params:jmap:mail": {},
+        "urn:ietf:params:jmap:blob": {
+          "supportedTypeNames": [
+            "Email",
+            "SieveScript"
+          ]
+        },
+        "urn:ietf:params:jmap:sieve": {
+          "maxSizeScriptName": 512,
+          "maxSizeScript": 65536,
+          "maxNumberScripts": 5,
+          "maxNumberRedirects": null,
+          "sieveExtensions": [
+            "fileinto",
+            "imap4flags",
+            "enotify"
+          ],
+          "notificationMethods": [
+            "mailto"
+          ]
+        }
+      }
+    }
+  },
+  "primaryAccounts": {
+    "urn:ietf:params:jmap:mail": "ken",
+    "urn:ietf:params:jmap:sieve": "ken"
+  },
+  "username": "ken@example.com",
+  "apiUrl": "https://jmap.example.com/api/",
+  "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+  "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/events/",
+  "state": "094392"
+}

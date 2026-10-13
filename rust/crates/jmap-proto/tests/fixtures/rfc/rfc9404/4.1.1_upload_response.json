@@ -1,0 +1,15 @@
+// Source: RFC 9404 §4.1.1 (Blob/upload Simple Example Response), August 2023
+[
+  "Blob/upload",
+  {
+    "accountId": "account1",
+    "created": {
+      "1": {
+        "id": "G4c6751edf9dd6903ff54b792e432fba781271beb",
+        "type": "image/png",
+        "size": 95
+      }
+    }
+  },
+  "R1"
+]

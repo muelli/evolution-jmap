@@ -1,0 +1,132 @@
+// Source: RFC 9404 §4.2.2 (Blob/get Example with Range and Encoding Errors Response), August 2023
+[
+  [
+    "Blob/upload",
+    {
+      "oldState": null,
+      "created": {
+        "b2": {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "size": 11,
+          "type": "application/octet-stream"
+        },
+        "b1": {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "size": 43,
+          "type": "text/plain"
+        }
+      },
+      "updated": null,
+      "destroyed": null,
+      "notCreated": null,
+      "notUpdated": null,
+      "notDestroyed": null,
+      "accountId": "account1"
+    },
+    "S1"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "isEncodingProblem": true,
+          "data:asBase64": "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wZWQgb3ZlciB0aGUggYEgZG9nLg==",
+          "size": 43
+        },
+        {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "data:asText": "hello world",
+          "size": 11
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G1"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "isEncodingProblem": true,
+          "size": 43
+        },
+        {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "data:asText": "hello world",
+          "size": 11
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G2"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "data:asBase64": "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wZWQgb3ZlciB0aGUggYEgZG9nLg==",
+          "size": 43
+        },
+        {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "data:asBase64": "aGVsbG8gd29ybGQ=",
+          "size": 11
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G3"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "data:asText": "The q",
+          "size": 43
+        },
+        {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "data:asText": "hello",
+          "size": 11
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G4"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "G72cfa4804194563685d9a4b695f7ba20e7739576",
+          "isTruncated": true,
+          "isEncodingProblem": true,
+          "data:asBase64": "anVtcGVkIG92ZXIgdGhlIIGBIGRvZy4=",
+          "size": 43
+        },
+        {
+          "id": "G2aae6c35c94fcfb415dbe95f408b9ce91ee846ed",
+          "isTruncated": true,
+          "data:asText": "",
+          "size": 11
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G5"
+  ]
+]
