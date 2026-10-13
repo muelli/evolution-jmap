@@ -15761,7 +15761,7 @@ fn vcard_40_google_contacts_representative_fixture_import_and_roundtrip() {
     assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
 
-    // Anniversaries (BDAY:19800101 and ANNIVERSARY:20100615)
+    // Anniversaries (one birth date and one wedding date)
     let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
     assert_eq!(anniversaries.len(), 2);
     let bday = anniversaries
@@ -21441,9 +21441,8 @@ fn empty_org_name_multiple_organizations_matrix() {
 
 #[test]
 fn eds_360_wedding_anniversary_dual_emission_both_spellings() {
-    // MAINTAINER DECIDED 2026-08-28 (B'):
-    // Emit both X-EVOLUTION-ANNIVERSARY (read by EDS 3.52) and ANNIVERSARY
-    // (read by EDS 3.60+) for a wedding anniversary.
+    // Emit both X-EVOLUTION-ANNIVERSARY and ANNIVERSARY for wedding anniversaries.
+    // EDS 3.52 reads the former and EDS 3.60+ reads the latter.
     let card = one_anniversary(
         "wedding",
         json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
@@ -21620,11 +21619,8 @@ fn eds_360_wedding_anniversary_inbound_either_spelling_or_both_matrix() {
 
 #[test]
 fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
-    // MAINTAINER DECIDED 2026-08-28 (B'):
-    // 1. Chat handles: we only ever emit and read the X-JABBER-style text lines;
-    //    nothing touches E_CONTACT_IM_* field ids. Which internal field EDS files
-    //    that line into (attribute list on 3.52, _HOME_1 slot on 3.60) is EDS's own
-    //    business and never reaches our mapping.
+    // Chat handles: mapping reads and writes the X-JABBER-style lines only.
+    // EDS internal field slot choices do not alter this external wire surface.
     let im_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Test User\r\n",
@@ -21659,9 +21655,9 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
         assert!(emitted.contains(line), "emitted must contain {line}");
     }
 
-    // 2. E_CONTACT_NAME_OR_ORG sort order: EDS only derives it when FILE_AS is absent,
-    //    the derivation feeds Evolution's own list sorting, and we never read the field.
-    //    We write X-EVOLUTION-FILE-AS whenever the card states one, pre-empting derivation.
+    // E_CONTACT_NAME_OR_ORG sort order is EDS-owned derived state.
+    // This mapping writes X-EVOLUTION-FILE-AS when stated and does not read
+    // E_CONTACT_NAME_OR_ORG directly.
     let card_with_file_as = ContactCard {
         name: Some(Name {
             full: Some("Albert Einstein".to_owned()),

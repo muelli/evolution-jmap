@@ -3,12 +3,10 @@
 
 //! What a hostile JMAP server can make of the vCard the backend stores.
 //!
-//! Every string in a `ContactCard` came off the network, including the *keys*
-//! of the `emails` and `phones` maps, which are JSON object names the server
-//! chooses freely and which this mapping round-trips through the `X-JMAP-KEY`
-//! parameter. The rendered vCard is handed straight to
-//! `e_contact_new_from_vcard`, so a string that can end a content line early
-//! is a string that can add a property to the user's address book.
+//! Every `ContactCard` string comes from the server, including map keys.
+//! The mapping writes those keys into `X-JMAP-KEY`, and EDS then parses the
+//! rendered vCard directly. A key that can terminate a content line can inject
+//! additional properties into the stored contact.
 //!
 //! See `docs/AUDIT-FFI.md`, finding F1.
 
@@ -149,7 +147,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 }
 
 // ---------------------------------------------------------------------------
-// Adversarial-input robustness net (Batch 13 Item 5)
+// Adversarial-input robustness net.
 
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};

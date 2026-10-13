@@ -1177,10 +1177,9 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression for empty organisation name normalization (Batch 13 Item 8):
-// An organisation whose name is `Some("")` and has units must normalize to `name: None` on the
-// first parse, emit the leading semicolon to preserve the unit's department slot, and reach
-// immediate fixed-point stability.
+// Regression for empty organisation name normalization:
+// an organisation with `name: Some("")` and units must normalize to `name: None`,
+// preserve the leading unit slot semicolon, and reach an immediate fixed point.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
