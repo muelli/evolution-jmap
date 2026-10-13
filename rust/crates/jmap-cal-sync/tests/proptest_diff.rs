@@ -95,14 +95,29 @@
 //! trip only exercises a change and a no-op, the same shape
 //! `duration_round_trip` uses.
 //!
-//! Scoped out, left for later: `timeZone` (checked twice over: via
-//! `maps_time_zone` as it goes out, then again by `diff_time_zones`
-//! afterwards); `showWithoutTime` (its own base event, with no time zone, a
-//! midnight start and a whole-day duration, since the shared timed base this
-//! file uses can never render as all-day regardless of the flag); and the
-//! remaining three properties the module doc already calls out as needing
-//! more than the baseline (`recurrenceRule`, `recurrenceOverrides`,
-//! `timeZones`), each needing its own generator, left for its own increment.
+//! Also covered: `timeZone` (`diff`'s check against the baseline, gated by
+//! `maps_time_zone`), restricted to plain IANA zone names (`names_time_zone`
+//! true), so `maps_time_zone` always accepts both sides and `diff_time_zones`
+//! never adds a `timeZones` entry for this increment's patch at all — a named
+//! zone needs no definition beside it. `zone_of` takes a `names_time_zone`
+//! value at its word with no embedded `VTIMEZONE` needed, so the round trip
+//! holds independently of tzdata resolution. `timeZone` is never cleared, the
+//! same as `start`, so the round trip only exercises a change and a no-op.
+//! Scoped out, left for later: a custom (solidus-prefixed) identifier, which
+//! needs `diff_time_zones`' own `timeZones` entry to be sendable at all, and a
+//! `TZID` that is neither a name nor sendable, which `maps_time_zone` refuses
+//! and `diff` leaves alone regardless of what `edited` states.
+//!
+//! Scoped out, left for later: `showWithoutTime` (its own base event, with no
+//! time zone, a midnight start and a whole-day duration, since the shared
+//! timed base this file uses can never render as all-day regardless of the
+//! flag); and the remaining two properties the module doc already calls out
+//! as needing more than the baseline (`recurrenceRule`,
+//! `recurrenceOverrides`), each needing its own generator, left for its own
+//! increment. `timeZones` itself is not diffed at all (the module doc: "added
+//! to", never compared or replaced), so it has no round-trip property to
+//! state beyond what the `timeZone` increment above already confirms stays
+//! empty for a named zone.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -197,6 +212,22 @@ fn arb_start() -> impl Strategy<Value = String> {
         .prop_map(|(year, month, day, hour, minute, second)| {
             format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
         })
+}
+
+/// A plain IANA zone name `names_time_zone` always accepts and that
+/// `event_to_ical`/`ical_to_event` round-trips byte-identical, with no
+/// embedded `VTIMEZONE` needed (`zone_of` takes such a value at its word).
+fn arb_time_zone() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(
+        &[
+            "Europe/Berlin",
+            "America/New_York",
+            "Asia/Tokyo",
+            "Etc/UTC",
+            "Pacific/Auckland",
+            "America/Los_Angeles",
+        ][..],
+    )
 }
 
 /// A tag `maps_keyword` always draws: plain alphanumeric, so trimmed,
@@ -385,6 +416,13 @@ proptest! {
     fn start_round_trip(old in arb_start(), new in arb_start()) {
         let current = stable(base().with_start(old));
         let edited = stable(base().with_start(new));
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn time_zone_round_trip(old in arb_time_zone(), new in arb_time_zone()) {
+        let current = stable(base().with_time_zone(old));
+        let edited = stable(base().with_time_zone(new));
         round_trips(&current, &edited)?;
     }
 
