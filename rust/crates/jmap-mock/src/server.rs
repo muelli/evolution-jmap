@@ -360,42 +360,29 @@ impl MockServerBuilder {
         self
     }
 
-    /// Serve the session document via a 307 redirect from
-    /// `/.well-known/jmap` to a second path (`/jmap/session`), instead of
-    /// inline — as Stalwart does, and as this crate's default shape (session
-    /// served directly at the well-known path) does not, which is exactly
-    /// why a redirect-related client bug went uncaught until a real server
-    /// exercised it. The redirect target answers 200 whether or not the
-    /// request carries valid credentials — matching the real server — with
-    /// zero accounts when it does not, rather than a 401; a client that
-    /// drops `Authorization` across the hop still gets a response, just an
-    /// anonymous one with no primary account to resolve.
+    /// Serve the session document through a 307 from `/.well-known/jmap`
+    /// to `/jmap/session`, matching deployments that separate discovery from
+    /// the JSON body endpoint. The redirect target stays 200 with an
+    /// anonymous session body when auth is missing, so clients that lose
+    /// `Authorization` across the hop fail by seeing no primary account.
     pub fn session_via_redirect(mut self) -> Self {
         self.session_via_redirect = true;
         self
     }
 
-    /// State the session document's `apiUrl`, `downloadUrl`, `uploadUrl` and
-    /// `eventSourceUrl` on `origin` rather than the address this server
-    /// actually listens on — reproducing a real deployment (Stalwart among
-    /// them) whose session document names a configured hostname/scheme a
-    /// client cannot necessarily reach, distinct from the address it
-    /// connected through to fetch that very document.
+    /// Put `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl` on an
+    /// advertised `origin` instead of the listener address. This reproduces
+    /// deployments where discovery names a configured host that differs from
+    /// the transport endpoint used to fetch the session.
     pub fn advertise_origin(mut self, origin: impl Into<String>) -> Self {
         self.advertise_origin = Some(origin.into());
         self
     }
 
-    /// Answer every `GET /download/...` with a `302` to the same path on
-    /// `origin`, instead of serving the blob — reproducing a real deployment
-    /// whose blob host redirects the download elsewhere (a real Fastmail
-    /// account's blob download came back as the redirect target's own
-    /// unrelated content, not the message). Distinct from
-    /// [`Self::advertise_origin`], which changes what the *session document*
-    /// names without changing what answers a request — this changes what
-    /// answers the request while the session still calls this server the
-    /// download host, matching the shape of a redirect the client did not
-    /// ask the session about.
+    /// Reply to every `GET /download/...` with a `302` to the same path on
+    /// `origin`, instead of serving the blob bytes. Unlike
+    /// [`Self::advertise_origin`], this keeps session URLs unchanged and only
+    /// changes who answers the download request.
     pub fn download_via_redirect_to(mut self, origin: impl Into<String>) -> Self {
         self.download_via_redirect_to = Some(origin.into());
         self
@@ -411,15 +398,10 @@ impl MockServerBuilder {
         self
     }
 
-    /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as a
-    /// server that reads RFC 8620 §5.3 literally does: the `created` map
-    /// need only contain properties "that were not sent by the client", and
-    /// a client always supplies both when it asks to create a submission, so
-    /// neither is server-set. This project's `jmap-client` assumed both
-    /// would always be echoed back until the live Stalwart deployment
-    /// omitted them and `EmailSubmission`'s deserialization panicked on the
-    /// missing fields. Off by default, matching the mock's own prior
-    /// behaviour and every other test.
+    /// Omit `identityId` and `emailId` from `EmailSubmission/set` created
+    /// responses. RFC 8620 §5.3 only requires properties the server set, so
+    /// client-provided fields can be absent even when creation succeeds.
+    /// Off by default to preserve baseline fixtures.
     pub fn terse_submission_create(mut self) -> Self {
         self.terse_submission_create = true;
         self
