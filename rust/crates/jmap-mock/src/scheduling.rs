@@ -1,13 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! iTIP scheduling messages for `CalendarEvent/set`
-//! (draft-ietf-jmap-calendars-28 §5.9.2).
-//!
-//! Decides recipients and methods, then builds the `VCALENDAR` payload.
-//! Recorded messages are kept in [`AccountState::scheduling_outbox`].
-//! Origin accounts send REQUEST/CANCEL; non-origin accounts send REPLY.
-//! The module applies `hideAttendees` and recurrence exclusion rules.
+//! Builds scheduling outbox messages for `CalendarEvent/set`.
+//! Origin accounts send `REQUEST` and `CANCEL`; non-origin accounts send `REPLY`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -31,7 +26,7 @@ pub(crate) struct EventChange {
     pub after: Option<CalendarEvent>,
 }
 
-/// The calendar addresses that are this account, normalised for comparison.
+/// Normalized calendar addresses that belong to this account.
 pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
     account
         .participant_identities
@@ -41,7 +36,7 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Return whether every recipient is reachable for scheduling.
+/// Return whether every required scheduling recipient has an address.
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // Non-origin updates reply only to the organizer.
@@ -58,7 +53,7 @@ pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<Str
             })
 }
 
-/// Record whatever §5.9.2 asks for, for one applied `/set`.
+/// Record scheduling messages for one applied `/set` request.
 pub(crate) fn record_scheduling_messages(account: &mut AccountState, changes: &[EventChange]) {
     let own = own_addresses(account);
     let mut messages = Vec::new();
@@ -69,8 +64,7 @@ pub(crate) fn record_scheduling_messages(account: &mut AccountState, changes: &[
 }
 
 fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSchedulingMessage> {
-    // §5.1: a draft is not scheduled. The state that matters is the one the
-    // change left behind, so a destroy reads its own `before`.
+    // Draft events do not emit scheduling messages (§5.1).
     let subject = change.after.as_ref().or(change.before.as_ref());
     let Some(subject) = subject else {
         return Vec::new();
@@ -86,9 +80,7 @@ fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSch
     }
 }
 
-/// §10.9.5: the account is the origin when nobody outside it organises the
-/// event, either because no organizer is named at all or because the named
-/// organizer is one of the account's own participant identities.
+/// The account is origin when organizer is absent or one of its own addresses (§10.9.5).
 pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     match event.organizer_calendar_address.as_deref() {
         None => true,
@@ -96,7 +88,7 @@ pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     }
 }
 
-/// §5.9.2.1 and §5.9.2.2: what the event's origin sends.
+/// Messages sent by origin accounts (§5.9.2.1 and §5.9.2.2).
 fn origin_messages(
     change: &EventChange,
     subject: &CalendarEvent,
@@ -118,23 +110,22 @@ fn origin_messages(
     };
 
     match (&change.before, &change.after) {
-        // Created: invite everyone who is not this account, each about the
-        // series or about their one occurrence of it.
+        // Create: invite each external recipient.
         (None, Some(after)) => {
             for (recipient, recurrence_id) in invitation_scopes(after, own) {
                 send(scheduling_method::REQUEST, &recipient, recurrence_id);
             }
         }
-        // Destroyed: withdraw the same way.
+        // Destroy: withdraw each prior invite.
         (Some(before), None) => {
             for (recipient, recurrence_id) in invitation_scopes(before, own) {
                 send(scheduling_method::CANCEL, &recipient, recurrence_id);
             }
         }
         (Some(before), Some(after)) => {
-            // Removed participants receive CANCEL.
+            // Removed participants receive series-level CANCEL.
             let mut withdrawn: BTreeSet<String> = BTreeSet::new();
-            // Track occurrence-level cancellations for REQUEST suppression.
+            // Track override cancellation to suppress duplicate REQUEST.
             let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
@@ -182,8 +173,7 @@ fn origin_messages(
                 }
             }
 
-            // Shared changes re-invite recipients unless this patch only
-            // cancelled recurrence overrides.
+            // Shared changes re-invite recipients, unless only overrides were cancelled.
             let changed = changed_shared_properties(before, after);
             let invited = invitation_scopes(after, own);
             let cancelling_overrides =
@@ -193,7 +183,7 @@ fn origin_messages(
                     send(scheduling_method::REQUEST, &recipient, recurrence_id);
                 }
             } else {
-                // Still send REQUEST for newly added scoped recipients.
+                // Always request newly added scoped recipients.
                 for (recipient, recurrence_id) in
                     invited.difference(&invitation_scopes(before, own))
                 {
@@ -206,14 +196,14 @@ fn origin_messages(
     messages
 }
 
-/// Build REPLY messages for non-origin accounts.
+/// Build REPLY messages for attendee-owned events.
 fn reply_messages(
     change: &EventChange,
     subject: &CalendarEvent,
     own: &BTreeSet<String>,
 ) -> Vec<RecordedSchedulingMessage> {
     let Some(organizer) = subject.organizer_calendar_address.clone() else {
-        // Unreachable: an event with no organizer is this account's own.
+        // Without an organizer this event is origin-owned.
         return Vec::new();
     };
 
@@ -226,9 +216,9 @@ fn reply_messages(
             continue;
         }
         let answer = match (&change.before, &change.after) {
-            // Create/destroy can carry an immediate answer.
+            // Create and destroy can carry an immediate answer.
             (None, Some(_)) | (Some(_), None) => participation_status(participant),
-            // Updates only send status changes.
+            // Updates send only status changes.
             (Some(before), Some(_)) => {
                 let previous = participants(before)
                     .get(&id)
@@ -238,7 +228,7 @@ fn reply_messages(
             }
             (None, None) => None,
         };
-        // `needs-action` is not a reply.
+        // `needs-action` does not emit REPLY.
         if answer.is_none_or(|status| status == participant_participation_status::NEEDS_ACTION) {
             continue;
         }
@@ -254,7 +244,7 @@ fn reply_messages(
         });
     }
 
-    // Send override-scoped replies when the override sets a status.
+    // Send override-scoped replies only when the override pins a status.
     for recurrence_id in overridden_ids(change.before.as_ref(), change.after.as_ref()) {
         for (id, participant) in participants_at(subject, &recurrence_id) {
             let Some(address) = calendar_address(&participant) else {
@@ -294,7 +284,7 @@ fn reply_messages(
     messages
 }
 
-/// Return participant addresses that are not this account.
+/// Return participant addresses that are not owned by this account.
 fn outward_addresses(event: &CalendarEvent, own: &BTreeSet<String>) -> Vec<String> {
     participants(event)
         .values()
@@ -313,7 +303,7 @@ fn participants(event: &CalendarEvent) -> BTreeMap<String, &Value> {
         .collect()
 }
 
-/// Return recurrence ids mentioned in either side of a change.
+/// Return recurrence IDs mentioned in either side of a change.
 fn overridden_ids(
     before: Option<&CalendarEvent>,
     after: Option<&CalendarEvent>,
@@ -326,7 +316,7 @@ fn overridden_ids(
         .collect()
 }
 
-/// Build participants for one occurrence by applying override patches.
+/// Build one occurrence's participants by applying its override patch.
 fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<String, Value> {
     let mut participants = Value::Object(base.clone());
     for (path, new_value) in override_.as_object().into_iter().flatten() {
@@ -371,7 +361,7 @@ fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Va
     }
 }
 
-/// Build the iCalendar payload for a recorded scheduling message.
+/// Build the iCalendar payload for one scheduling message.
 fn build_ical(
     event: &CalendarEvent,
     method: &str,
@@ -392,7 +382,7 @@ fn build_ical(
     }
 }
 
-/// Rewrite overrides so removed recipient instances are marked `excluded`.
+/// Rewrite overrides so missing recipient instances become `excluded`.
 fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     let recipient = normalize_uri(recipient);
     let in_series = participants(event).values().any(|participant| {
@@ -452,7 +442,7 @@ fn holds_role(participant: &Value, role: &str) -> bool {
         .is_some_and(|held| held == &Value::Bool(true))
 }
 
-/// Build the occurrence event by patching series data with its override.
+/// Build an occurrence event by patching series data with its override.
 fn instance_event(event: &CalendarEvent, recurrence_id: &str) -> CalendarEvent {
     let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
@@ -492,7 +482,7 @@ fn pinned_status(
         .map(str::to_owned)
 }
 
-/// Recipients plus scope: series-level or occurrence-level.
+/// Recipients with either series-level or occurrence-level scope.
 fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<(String, Scope)> {
     let series = outward_addresses(event, own);
     let normalized: BTreeSet<String> = series
@@ -511,7 +501,7 @@ fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<
     scopes
 }
 
-/// The addresses, other than this account's own, in one occurrence.
+/// Addresses in one occurrence, excluding this account's own addresses.
 fn instance_addresses(
     event: &CalendarEvent,
     recurrence_id: &str,
@@ -541,9 +531,7 @@ fn participation_status(participant: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// The recurrence ids that gained an exclusion in this change. Adding
-/// `excluded: true` means the instance no longer happens, whichever way it
-/// came to exist, so it is a cancellation either way.
+/// Recurrence IDs that newly gained `excluded: true` in this change.
 fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> {
     let was_excluded = |event: &CalendarEvent, key: &str| {
         event
@@ -563,11 +551,10 @@ fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> 
         .collect()
 }
 
-/// Changed top-level properties excluding per-user fields.
+/// Changed top-level properties, excluding per-user fields.
 fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> BTreeSet<String> {
     let as_object = |event: &CalendarEvent| match serde_json::to_value(event) {
         Ok(Value::Object(map)) => map,
-        // `CalendarEvent` serializes to an object.
         _ => serde_json::Map::new(),
     };
     let before = as_object(before);
@@ -581,8 +568,8 @@ fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> B
         .collect()
 }
 
-/// RFC 3986 syntax normalization used for calendar address comparison.
-/// Keeps scheme-based normalization disabled to preserve mailbox local-part case.
+/// RFC 3986-inspired normalization for calendar-address comparison.
+/// Lowercases URI scheme and normalizes percent encoding, leaving the rest unchanged.
 fn normalize_uri(uri: &str) -> String {
     let (scheme, rest) = match uri.split_once(':') {
         Some((scheme, rest))
@@ -594,7 +581,7 @@ fn normalize_uri(uri: &str) -> String {
         {
             (scheme.to_ascii_lowercase() + ":", rest)
         }
-        // Not a URI with scheme syntax; normalize only percent-encoding.
+        // Not URI-scheme syntax. Normalize percent encoding only.
         _ => (String::new(), uri),
     };
 
