@@ -106,13 +106,30 @@
 //! construction: one component per kind. `full`, `isOrdered`, `sortAs` and
 //! `extra` are held at their default on both sides, the way addresses held
 //! `full`/`contexts`/`pref`.
+//!
+//! `related_to_round_trip` covers `diff_related_to`, the one property keyed
+//! by the related entity's own name rather than by an id, so an edit is a
+//! withdrawal from one key and a claim on another instead of a change to an
+//! entry. `arb_related_to_cards` builds several independent named slots, one
+//! mapped kind (`spouse`) at a time: a bare withdrawal deletes the whole
+//! entry, one that leaves an unmapped relation type (`kin`) or an extra
+//! member strikes only `relation/spouse`, and a claim either creates a whole
+//! new entry, reaches into an existing entry's own `relation/spouse`, or
+//! replaces a relation-less existing entry's whole `relation` field,
+//! depending on what the server already held under that name. Because a
+//! withdrawal on one slot and a claim on another are independent adds and
+//! removes keyed by name, the rename the module doc describes falls out
+//! without any special-casing. Scoped out, left for later: two mapped kinds
+//! changing on the same name at once (`is_gaining_other_kind`), already
+//! covered by `a_new_relation_stating_two_mapped_kinds_at_once_is_written_once`
+//! in `patch.rs`'s own unit tests.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Name,
-    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -982,6 +999,189 @@ fn round_trips_to(
     Ok(())
 }
 
+/// The one mapped relation kind this generator exercises; `diff_related_to`
+/// treats `spouse`/`manager`/`assistant` identically, so covering one is
+/// enough to exercise the withdraw/claim shapes without also constructing
+/// the two-kinds-at-once interaction `patch.rs`'s own unit tests already
+/// cover.
+const RELATION_KIND: &str = "spouse";
+
+fn bare_relation() -> Relation {
+    Relation {
+        relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    }
+}
+
+fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
+    ContactCard {
+        related_to: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// One name's slot in `arb_related_to_cards`, covering every shape
+/// `diff_related_to` distinguishes for a single mapped kind.
+#[derive(Clone, Debug)]
+enum RelatedSlot {
+    /// States the kind on the same name both sides: no patch for this key.
+    Kept,
+    /// Current states the kind, bare: withdrawal deletes the whole entry.
+    RemovedBare,
+    /// Current states the kind alongside an unmapped relation type (`kin`):
+    /// withdrawal strikes only `relation/spouse`, the entry and `kin` stay.
+    RemovedKeepsUnmappedKind,
+    /// Current states the kind alongside an extra member vCard has no field
+    /// for: the same partial withdrawal, through the other guard.
+    RemovedKeepsExtra(String),
+    /// Edited states the kind on a name the server never held at all: a
+    /// whole-entry create.
+    AddedNew,
+    /// Edited states the kind on a name the server already held with an
+    /// unmapped relation type: reaches into that entry's `relation/spouse`.
+    AddedExistingWithRelation,
+    /// Edited states the kind on a name the server already held with only
+    /// extra members and no `relation` field at all: replaces the whole
+    /// (absent) `relation` field.
+    AddedExistingNoRelation(String),
+}
+
+fn arb_related_slot() -> impl Strategy<Value = RelatedSlot> {
+    prop_oneof![
+        Just(RelatedSlot::Kept),
+        Just(RelatedSlot::RemovedBare),
+        Just(RelatedSlot::RemovedKeepsUnmappedKind),
+        "[a-z]{1,8}".prop_map(RelatedSlot::RemovedKeepsExtra),
+        Just(RelatedSlot::AddedNew),
+        Just(RelatedSlot::AddedExistingWithRelation),
+        "[a-z]{1,8}".prop_map(RelatedSlot::AddedExistingNoRelation),
+    ]
+}
+
+/// Builds (current, edited, expected) across several independent named
+/// slots. A withdrawal on one slot and a claim on another model the rename
+/// the module doc describes: keyed by name rather than id, it is just an
+/// independent remove and an independent add.
+fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    proptest::collection::vec(arb_related_slot(), 0..=4)
+        .prop_filter(
+            "at least one slot that changes something, to exercise the withdraw/claim logic",
+            |slots| slots.iter().any(|slot| !matches!(slot, RelatedSlot::Kept)),
+        )
+        .prop_map(|slots| {
+            let mut current = BTreeMap::new();
+            let mut edited = BTreeMap::new();
+            let mut expected = BTreeMap::new();
+            for (i, slot) in slots.into_iter().enumerate() {
+                match slot {
+                    RelatedSlot::Kept => {
+                        let key = format!("same-{i}");
+                        let value = bare_relation();
+                        current.insert(key.clone(), value.clone());
+                        edited.insert(key.clone(), value.clone());
+                        expected.insert(key, value);
+                    }
+                    RelatedSlot::RemovedBare => {
+                        current.insert(format!("gone-{i}"), bare_relation());
+                    }
+                    RelatedSlot::RemovedKeepsUnmappedKind => {
+                        let key = format!("kept-kind-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some(
+                                    [
+                                        (RELATION_KIND.to_owned(), json!(true)),
+                                        ("kin".to_owned(), json!(true)),
+                                    ]
+                                    .into(),
+                                ),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some([("kin".to_owned(), json!(true))].into()),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                    }
+                    RelatedSlot::RemovedKeepsExtra(note) => {
+                        let key = format!("kept-extra-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some(BTreeMap::new()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                    }
+                    RelatedSlot::AddedNew => {
+                        let key = format!("brand-new-{i}");
+                        let value = bare_relation();
+                        edited.insert(key.clone(), value.clone());
+                        expected.insert(key, value);
+                    }
+                    RelatedSlot::AddedExistingWithRelation => {
+                        let key = format!("existing-rel-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some([("kin".to_owned(), json!(true))].into()),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                        edited.insert(key.clone(), bare_relation());
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some(
+                                    [
+                                        ("kin".to_owned(), json!(true)),
+                                        (RELATION_KIND.to_owned(), json!(true)),
+                                    ]
+                                    .into(),
+                                ),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                    }
+                    RelatedSlot::AddedExistingNoRelation(note) => {
+                        let key = format!("existing-norel-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: None,
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                        edited.insert(key.clone(), bare_relation());
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                    }
+                }
+            }
+            (
+                card_with_related_to(current),
+                card_with_related_to(edited),
+                card_with_related_to(expected),
+            )
+        })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -1099,5 +1299,12 @@ proptest! {
         (current, edited) in arb_name_components_pair()
     ) {
         round_trips(&card_with_name(current), &card_with_name(edited))?;
+    }
+
+    #[test]
+    fn related_to_round_trip(
+        (current_card, edited_card, expected_card) in arb_related_to_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
     }
 }
