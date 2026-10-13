@@ -62,6 +62,15 @@ pub fn describe(error: &jmap_client::Error) -> String {
             // TRANSLATORS: %1$s is the reason the mail server gave.
             translate_with(c"the server rejected the change: %1$s", &[&detail])
         }
+        // Not a rejected token: the transport withheld credentials on a
+        // cross-host redirect (RFC 7235) and the destination answered 401
+        // without ever seeing them. Signing in again would not help.
+        jmap_client::Error::RedirectCredentialsWithheld { requested, followed } => translate_with(
+            // TRANSLATORS: %1$s and %2$s are the URLs the server redirected
+            // between; they differ in host.
+            c"the server at %1$s redirected to %2$s, a different host, so its credentials were not sent there — check the account's host setting",
+            &[requested, followed],
+        ),
         other => other.to_string(),
     }
 }
@@ -275,4 +284,39 @@ fn gerror_message(error: *mut GError) -> String {
     // SAFETY: owned, freed once.
     unsafe { g_error_free(error) };
     message
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use jmap_client::Error;
+
+    use super::describe;
+
+    #[test]
+    fn a_401_reads_as_sign_in_again() {
+        let error = Error::Http {
+            status: 401,
+            problem: None,
+        };
+        assert!(describe(&error).contains("signed in again"));
+    }
+
+    #[test]
+    fn redirect_credentials_withheld_names_the_host_change_not_the_401() {
+        let error = Error::RedirectCredentialsWithheld {
+            requested: "https://api.fastmail.com./.well-known/jmap".into(),
+            followed: "https://api.fastmail.com/jmap/session".into(),
+        };
+        let message = describe(&error);
+        assert!(
+            message.contains("api.fastmail.com"),
+            "expected the message to name the hosts involved, got: {message}"
+        );
+        assert!(
+            !message.contains("answered 401") && !message.contains("sign in"),
+            "expected a redirect explanation, not the raw Display text or a \
+             sign-in prompt (signing in again cannot fix a dropped redirect \
+             header), got: {message}"
+        );
+    }
 }
