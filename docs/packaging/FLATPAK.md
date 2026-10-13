@@ -336,22 +336,28 @@ records their loader output for the source-built extension payload.
   `libcamel-1.2.so.68`, `libical-glib.so.4.0`) with no `not found` entries.
 - Plain `G_MESSAGES_DEBUG=all` startup logs no longer report old SONAME-mismatch
   failures, but they also do not print explicit JMAP registration lines.
-- `LD_DEBUG=files` proves all four relevant JMAP modules are discovered and
-  `dlopen` is attempted from extension paths under
+- `LD_DEBUG=files` traces show all four relevant JMAP modules are discovered,
+  opened and initialized from extension paths under
   `/app/evolution/extensions/evolution-jmap/lib/...`:
   - `module-jmap-backend.so`
   - `libebookbackendjmap.so`
   - `libecalbackendjmap.so`
   - `libcameljmap.so`
-- Each load attempt fails with the same unresolved symbols during module init:
-  - `undefined symbol: g_module_check_init`
-  - `undefined symbol: g_module_unload`
+- The same trace run also shows equivalent open and init lines for built-in
+  Evolution modules, including EWS (`module-ews-backend.so`,
+  `libebookbackendews.so`, `libecalbackendews.so`, `libcamelews.so`).
+- `LD_DEBUG=files` emits many `error: symbol lookup error: undefined symbol`
+  lines for both built-in and extension modules, including
+  `g_module_check_init` and `g_module_unload`. Because these lines appear for
+  known-working built-in modules too, treat them as loader probe noise in this
+  mode, not as a standalone backend-load failure signal.
 
 Conclusion for Batch 6 step 3: the source-built extension now clears ABI SONAME
-compatibility, but JMAP backends still do not register in sandboxed EDS
-factories because module initialization fails on unresolved `g_module_*`
-symbols. Interactive Evolution UI behavior remains unverified in a running
-Evolution session, as required by the batch scope.
+compatibility, and loader traces show JMAP modules following the same load path
+shape as built-in modules. Headless factory logs still do not emit explicit
+"backend registered" lines for JMAP, so interactive Evolution UI behavior
+remains unverified in a running Evolution session, as required by the batch
+scope.
 
 ## Batch 6 step 4 Flathub submission requirements (2026-10-13 UTC)
 
