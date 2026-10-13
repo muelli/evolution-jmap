@@ -1,0 +1,20 @@
+// Source: RFC 8621 §4.10 (Email/set Create Plaintext Draft Response), August 2019
+[
+  [
+    "Email/set",
+    {
+      "accountId": "ue150411c",
+      "oldState": "780823",
+      "newState": "780839",
+      "created": {
+        "k192": {
+          "id": "Mf40b5f831efa7233b9eb1c7f",
+          "blobId": "Gf40b5f831efa7233b9eb1c7f8f97d84eeeee64f7",
+          "threadId": "Td957e72e89f516dc",
+          "size": 359
+        }
+      }
+    },
+    "0"
+  ]
+]

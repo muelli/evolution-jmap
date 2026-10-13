@@ -758,6 +758,86 @@ impl EmailImportResponse {
     }
 }
 
+/// `Email/get` arguments (RFC 8621 §4.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailGetRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<Id>>,
+    #[serde(rename = "#ids", default, skip_serializing_if = "Option::is_none")]
+    pub ids_ref: Option<crate::request::ResultReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_text_body_values: bool,
+    #[serde(
+        rename = "fetchHTMLBodyValues",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub fetch_html_body_values: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_all_body_values: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_value_bytes: Option<u64>,
+}
+
+impl EmailGetRequest {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_account_id(mut self, account_id: impl Into<Id>) -> Self {
+        self.account_id = Some(account_id.into());
+        self
+    }
+
+    pub fn with_ids(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.ids = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_properties(
+        mut self,
+        properties: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_body_properties(
+        mut self,
+        body_properties: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.body_properties = Some(body_properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn fetch_text_body_values(mut self) -> Self {
+        self.fetch_text_body_values = true;
+        self
+    }
+
+    pub fn fetch_html_body_values(mut self) -> Self {
+        self.fetch_html_body_values = true;
+        self
+    }
+
+    pub fn fetch_all_body_values(mut self) -> Self {
+        self.fetch_all_body_values = true;
+        self
+    }
+
+    pub fn with_max_body_value_bytes(mut self, max: u64) -> Self {
+        self.max_body_value_bytes = Some(max);
+        self
+    }
+}
+
 /// `Email/parse` arguments (RFC 8621 §4.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,0 +1,27 @@
+// Source: RFC 8621 §3.1.1 (Thread/get Response), August 2019
+[
+  [
+    "Thread/get",
+    {
+      "accountId": "acme",
+      "state": "f6a7e214",
+      "list": [
+        {
+          "id": "f123u4",
+          "emailIds": [
+            "eaa623",
+            "f782cbb"
+          ]
+        },
+        {
+          "id": "f41u44",
+          "emailIds": [
+            "82cf7bb"
+          ]
+        }
+      ],
+      "notFound": []
+    },
+    "#1"
+  ]
+]

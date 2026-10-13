@@ -1,0 +1,15 @@
+// Source: RFC 8621 §4.10 (Email/set Update Request - Mark Unread), August 2019
+[
+  [
+    "Email/set",
+    {
+      "accountId": "ue150411c",
+      "update": {
+        "Ma783e5cdf5f2deffbc97930a": {
+          "keywords/": null
+        }
+      }
+    },
+    "0"
+  ]
+]

@@ -1,0 +1,93 @@
+// Source: RFC 8621 §4.10 (Initial Mailbox Sync Pipeline Response), August 2019
+[
+  [
+    "Email/query",
+    {
+      "accountId": "ue150411c",
+      "queryState": "09aa9a075588-780599:0",
+      "canCalculateChanges": true,
+      "position": 0,
+      "total": 115,
+      "ids": [
+        "Ma783e5cdf5f2deffbc97930a",
+        "M9bd17497e2a99cb345fc1d0a"
+      ]
+    },
+    "0"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "ue150411c",
+      "state": "780599",
+      "list": [
+        {
+          "id": "Ma783e5cdf5f2deffbc97930a",
+          "threadId": "T36703c2cfe9bd5ed"
+        },
+        {
+          "id": "M9bd17497e2a99cb345fc1d0a",
+          "threadId": "T0a22ad76e9c097a1"
+        }
+      ],
+      "notFound": []
+    },
+    "1"
+  ],
+  [
+    "Thread/get",
+    {
+      "accountId": "ue150411c",
+      "state": "22a8728b",
+      "list": [
+        {
+          "id": "T36703c2cfe9bd5ed",
+          "emailIds": [
+            "Ma783e5cdf5f2deffbc97930a"
+          ]
+        },
+        {
+          "id": "T0a22ad76e9c097a1",
+          "emailIds": [
+            "M3b568670a63e5d100f518fa5",
+            "M9bd17497e2a99cb345fc1d0a"
+          ]
+        }
+      ],
+      "notFound": []
+    },
+    "2"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "ue150411c",
+      "state": "780599",
+      "list": [
+        {
+          "id": "Ma783e5cdf5f2deffbc97930a",
+          "threadId": "T36703c2cfe9bd5ed",
+          "mailboxIds": {
+            "fb666a55": true
+          },
+          "keywords": {
+            "": true
+          },
+          "hasAttachment": true,
+          "from": [
+            {
+              "email": "jdoe@example.com",
+              "name": "Jane Doe"
+            }
+          ],
+          "subject": "The Big Reveal",
+          "receivedAt": "2018-06-27T00:20:35Z",
+          "size": 175047,
+          "preview": "As you may be aware, we are required to prepare a presentation where we wow a panel of 5 random members of the public, on or before 30 June each year.  We have drafted..."
+        }
+      ],
+      "notFound": []
+    },
+    "3"
+  ]
+]

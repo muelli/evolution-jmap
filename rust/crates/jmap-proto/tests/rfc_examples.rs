@@ -11,8 +11,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jmap_proto::error::RequestError;
+use jmap_proto::id::Id;
+use jmap_proto::mail::{
+    Email, EmailAddress, EmailAddressGroup, EmailGetRequest, EmailSubmission,
+    EmailSubmissionSetRequest, Identity, Mailbox, SearchSnippetGetRequest,
+    SearchSnippetGetResponse, Thread,
+};
 use jmap_proto::methods::{
-    ChangesRequest, ChangesResponse, CopyRequest, CopyResponse, GetRequest, SetRequest, SetResponse,
+    ChangesRequest, ChangesResponse, CopyRequest, CopyResponse, GetRequest, GetResponse,
+    SetRequest, SetResponse,
 };
 use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
 use jmap_proto::request::{Invocation, Request, ResultReference};
@@ -652,4 +659,625 @@ fn rfc8620_sec_7_2_3_push_set_update_expires_response() {
     assert_eq!(responses[0].name, "PushSubscription/set");
     let updated = &responses[0].arguments["updated"]["P43dcfa4-1dd4-41ef-9156-2c89b3b19c60"];
     assert_eq!(updated["expires"], "2018-07-15T02:22:50Z");
+}
+
+// ===========================================================================
+// RFC 8621 Mail Specifications (August 2019)
+// ===========================================================================
+
+#[test]
+fn rfc8621_sec_2_6_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_get_request.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Mailbox/get");
+    let get_req: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(get_req.account_id.as_str(), "u33084183");
+    assert!(get_req.ids.is_none());
+}
+
+#[test]
+fn rfc8621_sec_2_6_get_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_get_response.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Mailbox/get");
+    let res: GetResponse<Mailbox> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Mailbox>");
+    assert_eq!(res.account_id.as_str(), "u33084183");
+    assert_eq!(res.state.as_str(), "78540");
+    assert_eq!(res.list.len(), 2);
+
+    let inbox = &res.list[0];
+    assert_eq!(inbox.id, Some(Id::from("MB23cfa8094c0f41e6")));
+    assert_eq!(inbox.name, "Inbox");
+    assert_eq!(inbox.role.as_deref(), Some("inbox"));
+    assert_eq!(inbox.sort_order, Some(10));
+    assert_eq!(inbox.total_emails, Some(16307));
+    assert_eq!(inbox.unread_emails, Some(13905));
+    assert_eq!(inbox.total_threads, Some(5833));
+    assert_eq!(inbox.unread_threads, Some(5128));
+    assert!(inbox.is_subscribed.unwrap());
+    assert_eq!(inbox.my_rights.as_ref().unwrap().may_read_items, Some(true));
+
+    assert_eq!(res.list[1].name, "Important mail");
+}
+
+#[test]
+fn rfc8621_sec_2_6_changes_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_changes_request.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].name, "Mailbox/changes");
+    assert_eq!(calls[1].name, "Mailbox/get");
+    assert_eq!(calls[2].name, "Mailbox/get");
+
+    let changes: ChangesRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into ChangesRequest");
+    assert_eq!(changes.account_id.as_str(), "u33084183");
+    assert_eq!(changes.since_state.as_str(), "78540");
+}
+
+#[test]
+fn rfc8621_sec_2_6_changes_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_changes_response.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0].name, "Mailbox/changes");
+    assert_eq!(responses[1].name, "Mailbox/get");
+    assert_eq!(responses[2].name, "Mailbox/get");
+
+    let changes: ChangesResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into ChangesResponse");
+    assert_eq!(changes.old_state.as_str(), "78541");
+    assert_eq!(changes.new_state.as_str(), "78542");
+    assert!(!changes.has_more_changes);
+    assert_eq!(changes.updated, vec![Id::from("MB23cfa8094c0f41e6")]);
+
+    let get_res: GetResponse<Mailbox> = serde_json::from_value(responses[2].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Mailbox>");
+    assert_eq!(get_res.list.len(), 1);
+    assert_eq!(get_res.list[0].total_emails, Some(16307));
+    assert_eq!(get_res.list[0].unread_emails, Some(13903));
+}
+
+#[test]
+fn rfc8621_sec_2_6_set_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_set_request.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Mailbox/set");
+    let set: SetRequest<Mailbox> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SetRequest<Mailbox>");
+    assert_eq!(set.account_id.as_str(), "u33084183");
+    assert_eq!(set.if_in_state.unwrap().as_str(), "78542");
+    assert!(
+        set.update
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::from("MB674cc24095db49ce"))
+    );
+    assert_eq!(set.destroy, Some(vec![Id::from("MB23cfa8094c0f41e6")]));
+}
+
+#[test]
+fn rfc8621_sec_2_6_set_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/2.6_set_response.json");
+    assert!(note.contains("RFC 8621 §2.6"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Mailbox/set");
+    let res: SetResponse<Mailbox> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Mailbox>");
+    assert_eq!(res.old_state.as_ref().unwrap().as_str(), "78542");
+    assert_eq!(res.new_state.as_ref().unwrap().as_str(), "78549");
+    assert!(
+        res.updated
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::from("MB674cc24095db49ce"))
+    );
+    assert_eq!(
+        res.not_destroyed.as_ref().unwrap()[&Id::from("MB23cfa8094c0f41e6")].error_type,
+        "forbidden"
+    );
+}
+
+#[test]
+fn rfc8621_sec_3_1_1_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/3.1.1_get_request.json");
+    assert!(note.contains("RFC 8621 §3.1.1"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Thread/get");
+    let get_req: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(get_req.account_id.as_str(), "acme");
+    assert_eq!(
+        get_req.ids,
+        Some(vec![Id::from("f123u4"), Id::from("f41u44")])
+    );
+}
+
+#[test]
+fn rfc8621_sec_3_1_1_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/3.1.1_get_response.json");
+    assert!(note.contains("RFC 8621 §3.1.1"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Thread/get");
+    let res: GetResponse<Thread> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Thread>");
+    assert_eq!(res.account_id.as_str(), "acme");
+    assert_eq!(res.state.as_str(), "f6a7e214");
+    assert_eq!(res.list.len(), 2);
+    assert_eq!(res.list[0].id, Some(Id::from("f123u4")));
+    assert_eq!(
+        res.list[0].email_ids,
+        vec![Id::from("eaa623"), Id::from("f782cbb")]
+    );
+    assert_eq!(res.list[1].id, Some(Id::from("f41u44")));
+    assert_eq!(res.list[1].email_ids, vec![Id::from("82cf7bb")]);
+}
+
+#[test]
+fn rfc8621_sec_4_1_2_3_addresses() {
+    let (note, addrs, _) = load_rfc_fixture::<Vec<EmailAddress>>("rfc8621/4.1.2.3_addresses.json");
+    assert!(note.contains("RFC 8621 §4.1.2.3"));
+    assert_roundtrip(&addrs);
+
+    assert_eq!(addrs.len(), 3);
+    assert_eq!(addrs[0].name.as_deref(), Some("James Smythe"));
+    assert_eq!(addrs[0].email, "james@example.com");
+    assert!(addrs[1].name.is_none());
+    assert_eq!(addrs[1].email, "jane@example.com");
+    assert_eq!(addrs[2].name.as_deref(), Some("John Smith"));
+    assert_eq!(addrs[2].email, "john@example.com");
+}
+
+#[test]
+fn rfc8621_sec_4_1_2_4_grouped_addresses() {
+    let (note, groups, _) =
+        load_rfc_fixture::<Vec<EmailAddressGroup>>("rfc8621/4.1.2.4_grouped_addresses.json");
+    assert!(note.contains("RFC 8621 §4.1.2.4"));
+    assert_roundtrip(&groups);
+
+    assert_eq!(groups.len(), 2);
+    assert!(groups[0].name.is_none());
+    assert_eq!(groups[0].addresses.len(), 1);
+    assert_eq!(groups[0].addresses[0].email, "james@example.com");
+    assert_eq!(groups[1].name.as_deref(), Some("Friends"));
+    assert_eq!(groups[1].addresses.len(), 2);
+    assert_eq!(groups[1].addresses[0].email, "jane@example.com");
+    assert_eq!(groups[1].addresses[1].email, "john@example.com");
+}
+
+#[test]
+fn rfc8621_sec_4_2_1_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.2.1_get_request.json");
+    assert!(note.contains("RFC 8621 §4.2.1"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Email/get");
+    let req: EmailGetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into EmailGetRequest");
+    assert_eq!(
+        req.ids,
+        Some(vec![Id::from("f123u456"), Id::from("f123u457")])
+    );
+    assert!(req.fetch_html_body_values);
+    assert_eq!(req.max_body_value_bytes, Some(256));
+    assert_eq!(
+        req.body_properties,
+        Some(vec![
+            "partId".to_string(),
+            "blobId".to_string(),
+            "size".to_string(),
+            "type".to_string()
+        ])
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_2_1_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.2.1_get_response.json");
+    assert!(note.contains("RFC 8621 §4.2.1"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Email/get");
+    let res: GetResponse<Email> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Email>");
+    assert_eq!(res.account_id.as_str(), "abc");
+    assert_eq!(res.state.as_str(), "41234123231");
+    assert_eq!(res.list.len(), 1);
+
+    let em = &res.list[0];
+    assert_eq!(em.id, Some(Id::from("f123u457")));
+    assert_eq!(em.thread_id, Some(Id::from("ef1314a")));
+    assert_eq!(em.subject.as_deref(), Some("Dinner on Thursday?"));
+    assert_eq!(em.html_body.as_ref().unwrap().len(), 2);
+    assert_eq!(
+        em.html_body.as_ref().unwrap()[0].part_id.as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        em.body_values.as_ref().unwrap()["1"].value,
+        "<html><body><p>Hello ..."
+    );
+    assert!(em.body_values.as_ref().unwrap()["1"].is_truncated);
+    assert_eq!(res.not_found, vec![Id::from("f123u456")]);
+}
+
+#[test]
+fn rfc8621_sec_4_10_initial_sync_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_initial_sync_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].name, "Email/query");
+    assert_eq!(calls[1].name, "Email/get");
+    assert_eq!(calls[2].name, "Thread/get");
+    assert_eq!(calls[3].name, "Email/get");
+}
+
+#[test]
+fn rfc8621_sec_4_10_initial_sync_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_initial_sync_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 4);
+    assert_eq!(responses[0].name, "Email/query");
+    assert_eq!(responses[1].name, "Email/get");
+    assert_eq!(responses[2].name, "Thread/get");
+    assert_eq!(responses[3].name, "Email/get");
+
+    let em_get: GetResponse<Email> = serde_json::from_value(responses[3].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Email>");
+    assert_eq!(em_get.list.len(), 1);
+    assert_eq!(em_get.list[0].subject.as_deref(), Some("The Big Reveal"));
+    assert!(em_get.list[0].has_attachment.unwrap());
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_update_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_update_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Email/set");
+    let set: SetRequest<Email> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SetRequest<Email>");
+    assert_eq!(set.account_id.as_str(), "ue150411c");
+    assert!(
+        set.update
+            .unwrap()
+            .contains_key(&Id::from("Ma783e5cdf5f2deffbc97930a"))
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_update_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_update_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Email/set");
+    let res: SetResponse<Email> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Email>");
+    assert_eq!(res.old_state.as_ref().unwrap().as_str(), "780605");
+    assert_eq!(res.new_state.as_ref().unwrap().as_str(), "780606");
+    assert!(
+        res.updated
+            .unwrap()
+            .contains_key(&Id::from("Ma783e5cdf5f2deffbc97930a"))
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_resync_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_resync_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "Email/changes");
+    assert_eq!(calls[1].name, "Email/queryChanges");
+}
+
+#[test]
+fn rfc8621_sec_4_10_resync_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_resync_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "Email/changes");
+    assert_eq!(responses[1].name, "Email/queryChanges");
+
+    let changes: ChangesResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into ChangesResponse");
+    assert_eq!(changes.created, vec![Id::from("Me8de6c9f6de198239b982ea2")]);
+    assert_eq!(changes.updated, vec![Id::from("Ma783e5cdf5f2deffbc97930a")]);
+    assert_eq!(
+        changes.destroyed,
+        vec![Id::from("M9bd17497e2a99cb345fc1d0a")]
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_create_text_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_create_text_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Email/set");
+    let set: SetRequest<Email> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SetRequest<Email>");
+    let draft = &set.create.unwrap()["k192"];
+    assert_eq!(draft.subject.as_deref(), Some("World domination"));
+    assert_eq!(
+        draft
+            .body_structure
+            .as_ref()
+            .unwrap()
+            .content_type
+            .as_deref(),
+        Some("text/plain")
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_create_text_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_create_text_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Email/set");
+    let res: SetResponse<Email> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Email>");
+    let created = &res.created.unwrap()["k192"];
+    assert_eq!(
+        created.id.as_ref().map(|id| id.as_str()),
+        Some("Mf40b5f831efa7233b9eb1c7f")
+    );
+    assert_eq!(created.size, Some(359));
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_create_html_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_create_html_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Email/set");
+    let set: SetRequest<Email> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SetRequest<Email>");
+    let draft = &set.create.unwrap()["k1546"];
+    assert_eq!(draft.subject.as_deref(), Some("World domination"));
+    let bs = draft.body_structure.as_ref().unwrap();
+    assert_eq!(bs.content_type.as_deref(), Some("multipart/alternative"));
+    assert_eq!(bs.sub_parts.as_ref().unwrap().len(), 2);
+    assert_eq!(
+        set.destroy,
+        Some(vec![Id::from("Mf40b5f831efa7233b9eb1c7f")])
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_set_create_html_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_set_create_html_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Email/set");
+    let res: SetResponse<Email> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Email>");
+    assert_eq!(
+        res.destroyed,
+        Some(vec![Id::from("Mf40b5f831efa7233b9eb1c7f")])
+    );
+}
+
+#[test]
+fn rfc8621_sec_4_10_copy_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_copy_request.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Email/copy");
+    let copy: CopyRequest<Email> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into CopyRequest<Email>");
+    assert_eq!(copy.from_account_id.as_str(), "ue150411c");
+    assert_eq!(copy.account_id.as_str(), "u6c6c41ac");
+    assert!(copy.on_success_destroy_original);
+}
+
+#[test]
+fn rfc8621_sec_4_10_copy_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/4.10_copy_response.json");
+    assert!(note.contains("RFC 8621 §4.10"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "Email/copy");
+    assert_eq!(responses[1].name, "Email/set");
+
+    let copy_res: CopyResponse<Email> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into CopyResponse<Email>");
+    assert_eq!(
+        copy_res.old_state.as_ref().unwrap().as_str(),
+        "7ee7e9263a6d"
+    );
+    assert_eq!(copy_res.new_state.as_str(), "5a0d2447ed26");
+
+    let set_res: SetResponse<Email> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Email>");
+    assert_eq!(
+        set_res.destroyed,
+        Some(vec![Id::from("Md45b47b4877521042cec0938")])
+    );
+}
+
+#[test]
+fn rfc8621_sec_5_2_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/5.2_get_request.json");
+    assert!(note.contains("RFC 8621 §5.2"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "SearchSnippet/get");
+    let req: SearchSnippetGetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SearchSnippetGetRequest");
+    assert_eq!(req.account_id.as_str(), "ue150411c");
+    assert_eq!(req.email_ids.len(), 3);
+}
+
+#[test]
+fn rfc8621_sec_5_2_get_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc8621/5.2_get_response.json");
+    assert!(note.contains("RFC 8621 §5.2"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "SearchSnippet/get");
+    let res: SearchSnippetGetResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SearchSnippetGetResponse");
+    assert_eq!(res.account_id.as_str(), "ue150411c");
+    assert_eq!(res.list.len(), 3);
+    assert!(
+        res.list[1]
+            .subject
+            .as_ref()
+            .unwrap()
+            .contains("The <mark>Foo</mark>sball")
+    );
+}
+
+#[test]
+fn rfc8621_sec_6_4_get_request() {
+    let (note, inv, _) = load_rfc_fixture::<Invocation>("rfc8621/6.4_get_request.json");
+    assert!(note.contains("RFC 8621 §6.4"));
+    assert_roundtrip(&inv);
+
+    assert_eq!(inv.name, "Identity/get");
+    let req: GetRequest =
+        serde_json::from_value(inv.arguments).expect("arguments must deserialize into GetRequest");
+    assert_eq!(req.account_id.as_str(), "acme");
+}
+
+#[test]
+fn rfc8621_sec_6_4_get_response() {
+    let (note, inv, _) = load_rfc_fixture::<Invocation>("rfc8621/6.4_get_response.json");
+    assert!(note.contains("RFC 8621 §6.4"));
+    assert_roundtrip(&inv);
+
+    assert_eq!(inv.name, "Identity/get");
+    let res: GetResponse<Identity> = serde_json::from_value(inv.arguments)
+        .expect("arguments must deserialize into GetResponse<Identity>");
+    assert_eq!(res.account_id.as_str(), "acme");
+    assert_eq!(res.list.len(), 2);
+    assert_eq!(res.list[0].name, "Joe Bloggs");
+    assert_eq!(res.list[0].email, "joe@example.com");
+}
+
+#[test]
+fn rfc8621_sec_7_5_1_set_create_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/7.5.1_set_create_request.json");
+    assert!(note.contains("RFC 8621 §7.5.1"));
+    assert_roundtrip(&calls);
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "EmailSubmission/set");
+    let req: EmailSubmissionSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into EmailSubmissionSetRequest");
+    assert_eq!(req.set.account_id.as_str(), "ue411d190");
+    assert!(req.set.create.as_ref().unwrap().contains_key("k1490"));
+    assert!(req.on_success_update_email.is_some());
+}
+
+#[test]
+fn rfc8621_sec_7_5_1_set_created_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/7.5.1_set_created_response.json");
+    assert!(note.contains("RFC 8621 §7.5.1"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "EmailSubmission/set");
+    assert_eq!(responses[1].name, "Email/set");
+
+    let sub_res: SetResponse<EmailSubmission> =
+        serde_json::from_value(responses[0].arguments.clone())
+            .expect("arguments must deserialize into SetResponse<EmailSubmission>");
+    assert_eq!(
+        sub_res.created.unwrap()["k1490"]
+            .id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("ES-3bab7f9a-623e-4acf-99a5-2e67facb02a0")
+    );
+
+    let em_res: SetResponse<Email> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Email>");
+    assert!(
+        em_res
+            .updated
+            .unwrap()
+            .contains_key(&Id::from("M7f6ed5bcfd7e2604d1753f6c"))
+    );
+}
+
+#[test]
+fn rfc8621_sec_7_5_1_set_error_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc8621/7.5.1_set_error_response.json");
+    assert!(note.contains("RFC 8621 §7.5.1"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "EmailSubmission/set");
+    let res: SetResponse<EmailSubmission> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<EmailSubmission>");
+    let err = &res.not_created.unwrap()["k1490"];
+    assert_eq!(err.error_type, "forbiddenToSend");
+    assert!(err.description.as_ref().unwrap().contains("Verzeihung"));
 }

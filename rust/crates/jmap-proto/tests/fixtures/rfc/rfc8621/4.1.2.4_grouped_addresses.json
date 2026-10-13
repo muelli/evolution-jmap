@@ -1,0 +1,25 @@
+// Source: RFC 8621 §4.1.2.4 (Header Field GroupedAddresses Form - EmailAddressGroup[]), August 2019
+[
+  {
+    "name": null,
+    "addresses": [
+      {
+        "name": "James Smythe",
+        "email": "james@example.com"
+      }
+    ]
+  },
+  {
+    "name": "Friends",
+    "addresses": [
+      {
+        "name": null,
+        "email": "jane@example.com"
+      },
+      {
+        "name": "John Smith",
+        "email": "john@example.com"
+      }
+    ]
+  }
+]

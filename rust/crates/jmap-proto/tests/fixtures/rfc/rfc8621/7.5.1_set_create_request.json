@@ -1,0 +1,35 @@
+// Source: RFC 8621 §7.5.1 (EmailSubmission/set Create Request with onSuccessUpdateEmail), August 2019
+[
+  [
+    "EmailSubmission/set",
+    {
+      "accountId": "ue411d190",
+      "create": {
+        "k1490": {
+          "identityId": "I64588216",
+          "emailId": "M7f6ed5bcfd7e2604d1753f6c",
+          "envelope": {
+            "mailFrom": {
+              "email": "john@example.com",
+              "parameters": null
+            },
+            "rcptTo": [
+              {
+                "email": "jane@example.com",
+                "parameters": null
+              }
+            ]
+          }
+        }
+      },
+      "onSuccessUpdateEmail": {
+        "#k1490": {
+          "mailboxIds/7cb4e8ee-df87-4757-b9c4-2ea1ca41b38e": null,
+          "mailboxIds/73dbcb4b-bffc-48bd-8c2a-a2e91ca672f6": true,
+          "keywords/": null
+        }
+      }
+    },
+    "0"
+  ]
+]

@@ -1,0 +1,31 @@
+// Source: RFC 8621 §4.2.1 (Email/get Request), August 2019
+[
+  [
+    "Email/get",
+    {
+      "ids": [
+        "f123u456",
+        "f123u457"
+      ],
+      "properties": [
+        "threadId",
+        "mailboxIds",
+        "from",
+        "subject",
+        "receivedAt",
+        "header:List-POST:asURLs",
+        "htmlBody",
+        "bodyValues"
+      ],
+      "bodyProperties": [
+        "partId",
+        "blobId",
+        "size",
+        "type"
+      ],
+      "fetchHTMLBodyValues": true,
+      "maxBodyValueBytes": 256
+    },
+    "#1"
+  ]
+]
