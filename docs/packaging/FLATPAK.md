@@ -299,3 +299,43 @@ Conclusion for Batch 6 step 3: on this extension payload, the JMAP backends do
 not register in the sandboxed EDS factories because the module dependencies do
 not match runtime SONAMEs. Interactive Evolution UI behavior remains unverified
 in a running Evolution session, as required by the batch scope.
+
+## Batch 6 step 4 Flathub submission requirements (2026-10-13 UTC)
+
+This section lists what is still required before this extension could be
+proposed as a Flathub contribution. It does not submit anything.
+
+### 1. Vendored Rust sources and offline cargo build
+
+- The source-build manifest currently reaches CMake configure but fails in cargo
+  with `Could not resolve host: index.crates.io`.
+- Flathub packaging therefore needs vendored crates committed in-tree and a
+  cargo offline configuration wired into
+  `org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`.
+- Acceptance check for this item: `flatpak-builder --user --install` completes
+  without any network access during cargo dependency resolution.
+
+### 2. Extension point naming and runtime matching
+
+- `org.gnome.Evolution` declares the extension point
+  `org.gnome.Evolution.Extension` with target directory
+  `evolution/extensions` and `merge-dirs: lib;share`.
+- The extension id must stay under that namespace,
+  `org.gnome.Evolution.Extension.<suffix>`, and runtime branch must match the
+  app branch (`stable` here).
+- The current id `org.gnome.Evolution.Extension.evolution-jmap` and branch
+  `stable` follow that rule. Keep this invariant in any submitted manifest.
+
+### 3. Licensing metadata and review artifacts
+
+- Keep SPDX headers in every new manifest and script file, consistent with this
+  repository's GPL-3.0-or-later policy.
+- Keep `LICENSES/GPL-3.0-or-later.txt` available in the extension payload, as
+  the existing CPack packaging rules already do.
+- Provide a concise review bundle with: exact source commit, manifest file,
+  vendoring instructions, and the factory-load proof from Batch 6 step 3 that
+  demonstrates successful backend registration after ABI-matched rebuild.
+
+Current status at the end of Batch 6 step 4: naming and branch constraints are
+documented; submission remains pending on offline vendoring and ABI-matched
+source builds that pass the factory-load probe.
