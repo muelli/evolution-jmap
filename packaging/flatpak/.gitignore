@@ -4,5 +4,6 @@
 # Local payload and builder state for step-2 extension verification.
 payload/
 .build/
+.build-source*/
 .flatpak-builder/
 repo/

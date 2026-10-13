@@ -217,3 +217,48 @@ Conclusion for Batch 6 step 1: the currently installed extension payload is not
 loadable in `org.gnome.Evolution` runtime branch `50` because it links against
 older EDS and Evolution SONAMEs. Batch 6 step 2 must build the modules against
 the runtime/SDK ABI instead of reusing host-built package artifacts.
+
+## Batch 6 step 2 source-build probe (2026-10-13 UTC)
+
+This increment adds a source-build manifest draft and runs it in the local
+Flatpak builder to verify what still blocks a full step-2 build.
+
+### Added draft manifest
+
+- File:
+  `packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`
+- Uses `org.freedesktop.Sdk.Extension.rust-stable` and prepends its bin path
+  so CMake can call cargo from the SDK extension.
+- Configures CMake with:
+  `-DCMAKE_INSTALL_PREFIX=${FLATPAK_DEST} -DFORCE_INSTALL_PREFIX=ON`
+  so install destinations derived from pkg-config are rewritten into the
+  extension payload tree.
+- Installs only the five JMAP components (`book-backend`, `cal-backend`,
+  `camel-provider`, `collection-backend`, `config-module`).
+
+### Runtime and SDK evidence
+
+- Header probe in app runtime sandbox:
+  `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'find /app/include -maxdepth 2 -type d | head -n 40'`
+  showed `evolution-data-server` and `evolution` headers under `/app/include`.
+- SDK-only pkg-config probe:
+  `timeout 120 flatpak run --user --command=sh org.gnome.Sdk//50 -c 'pkg-config --modversion libedataserver-1.2 ...'`
+  failed, confirming EDS and Evolution pkg-config files are supplied by the app
+  runtime side, not by bare `org.gnome.Sdk` alone.
+- Source-build configure inside `flatpak-builder` succeeded and resolved all
+  required modules at `3.62.0` (`evolution-shell-3.0`, `evolution-mail-3.0`,
+  `libedata-book-1.2`, `camel-1.2`, `libebackend-1.2`).
+
+### Current blocker for step 2
+
+- Build command:
+  `timeout 5400 flatpak-builder --user --install --force-clean --state-dir .flatpak-builder .build-source-test packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`
+- C/CMake phase passes, but Rust build fails in sandbox when cargo tries to hit
+  crates.io:
+  `Could not resolve host: index.crates.io`.
+
+Conclusion for this probe: the source-build wiring is valid through CMake
+configure, and the expected EDS and Evolution headers are visible from the app
+runtime. The remaining step-2 blocker is Rust dependency vendoring for offline
+Flatpak builds. The next step is to add vendored crate sources plus cargo
+offline configuration to this manifest.

@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+id: org.gnome.Evolution.Extension.evolution-jmap
+runtime: org.gnome.Evolution
+runtime-version: stable
+sdk: org.gnome.Sdk//50
+branch: stable
+build-extension: true
+separate-locales: false
+appstream-compose: false
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  prepend-pkg-config-path: /app/lib/pkgconfig:/app/share/pkgconfig
+  env:
+    CARGO_HOME: /run/build/evolution-jmap/cargo-home
+    CARGO_TARGET_DIR: /run/build/evolution-jmap/target
+    RUST_BACKTRACE: "1"
+modules:
+  - name: evolution-jmap
+    buildsystem: simple
+    build-commands:
+      - cmake -S . -B _flatpak-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=${FLATPAK_DEST} -DFORCE_INSTALL_PREFIX=ON
+      - cmake --build _flatpak-build -j${FLATPAK_BUILDER_N_JOBS}
+      - cmake --install _flatpak-build --component book-backend
+      - cmake --install _flatpak-build --component cal-backend
+      - cmake --install _flatpak-build --component camel-provider
+      - cmake --install _flatpak-build --component collection-backend
+      - cmake --install _flatpak-build --component config-module
+    sources:
+      - type: dir
+        path: ../..
