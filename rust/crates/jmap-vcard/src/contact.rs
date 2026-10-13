@@ -2684,9 +2684,8 @@ fn name_fields(name: &Name) -> Option<Vec<String>> {
         if component.value.is_empty() {
             continue;
         }
-        // Two components of the same kind (a double-barrelled given name)
-        // share one vCard field, and are told apart again on the way back by
-        // `restore_name_components`.
+        // Same-kind components share one vCard field and are split again by
+        // `restore_name_components` on readback.
         if !fields[index].is_empty() {
             fields[index].push(' ');
         }
@@ -2720,10 +2719,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
     let fields = find("N").map(entry_components).unwrap_or_default();
 
-    // Each component is read as the bare kind and value the `N` field states.
-    // What a name component carries besides that — RFC 9553 §2.2.1's `phonetic`
-    // spelling — has no field and no parameter here, so it is left to the save
-    // to put back on the component it belongs to.
+    // Each component reads only the kind and value that `N` states.
+    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here, so the save
+    // path is responsible for restoring it on the right component.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -2742,9 +2740,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         extra.insert("fileAs".to_string(), Value::String(file_as));
     }
 
-    // No FN, no usable N, and no fileAs: the vCard simply does not name anybody. Note
-    // that a missing N is never guessed at by splitting FN — a wrong guess
-    // would be written back to the server on the next save.
+    // No FN, no usable N, and no fileAs means the card does not name anyone.
+    // We do not split FN to guess N fields, because a wrong guess would be
+    // written back on the next save.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
@@ -2814,8 +2812,8 @@ fn value_text(value: &VCardValue) -> Option<String> {
         VCardValue::Component(items) => Some(items.join(",")),
         VCardValue::PartialDateTime(date) => {
             let day = date.day.or_else(|| {
-                // Workaround for calcard parse_vcard_date_and_or_time bug where the
-                // second hyphen causes idx to jump to tz_hour.
+                // calcard can parse the second `-` into `tz_hour`; clamp that
+                // fallback to day-range values.
                 date.tz_hour.filter(|d| (1..=31).contains(d))
             });
             if let (Some(y), Some(m), Some(d)) = (date.year, date.month, day) {
