@@ -4,7 +4,7 @@
 //! What stops a call that is already under way, and how the caller says so.
 //!
 //! A [`Client`] is built once and used for every operation an account performs,
-//! but cancellation is not a property of an account — it is a property of the
+//! but cancellation is not a property of an account; it is a property of the
 //! *operation*, and it arrives from a caller who has no client to hand. Camel
 //! and EDS both spell it the same way: a `GCancellable` passed into one sync
 //! vfunc, meaning "stop the thing this call is doing". A flag handed to
@@ -13,7 +13,7 @@
 //!
 //! So a client observes two things, and these tests pin which one wins:
 //! the flag installed for the length of one operation on the thread running it
-//! ([`CancelScope`]), and — when no operation installed one — the flag the
+//! ([`CancelScope`]), and, when no operation installed one, the flag the
 //! client was built with.
 //!
 //! [`ClientBuilder::cancel_flag`]: jmap_client::ClientBuilder::cancel_flag
@@ -71,7 +71,7 @@ fn the_scope_lasts_exactly_as_long_as_the_operation_holding_it() {
     );
 }
 
-/// A live flag is not a cancelled one — installing a scope is not itself a
+/// A live flag is not a cancelled one: installing a scope is not itself a
 /// refusal.
 #[test]
 fn a_scope_that_was_never_cancelled_stops_nothing() {
@@ -86,7 +86,7 @@ fn a_scope_that_was_never_cancelled_stops_nothing() {
 }
 
 /// The precedence, and the reason for it: a client-wide flag that has latched
-/// — cancelled once, and with no way to unset it — would otherwise veto every
+/// cancelled once, and with no way to unset it, would otherwise veto every
 /// operation the account ever performs again, including the ones the user is
 /// waiting on now. The operation's own cancellable is the more specific
 /// statement and wins.
@@ -115,7 +115,7 @@ fn an_operation_that_was_not_cancelled_runs_under_a_client_flag_that_latched() {
 }
 
 /// The client-wide flag is still observed where nothing more specific was
-/// said — the address book and calendar backends hand one to their client and
+/// said: the address book and calendar backends hand one to their client and
 /// install no scope yet.
 #[test]
 fn a_client_with_no_scope_observes_the_flag_it_was_built_with() {
@@ -137,7 +137,7 @@ fn a_client_with_no_scope_observes_the_flag_it_was_built_with() {
     ));
 }
 
-/// Vfuncs nest — a folder operation calls into its store — so an inner scope
+/// Vfuncs nest (a folder operation calls into its store), so an inner scope
 /// must give the outer one back rather than leave the thread observing
 /// nothing.
 #[test]

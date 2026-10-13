@@ -383,7 +383,7 @@ fn submission_query_filters_by_identity_ids_thread_ids_and_time_range() {
         assert_eq!(thread_matches, vec![first_id.clone()]);
     }
 
-    // 3. Filter by time range (sendAt is 2026-01-01T00:10:00Z for the held submission):
+    // 3. Filter by time range (sendAt is ten minutes later for the held submission):
     let in_window = client
         .email_submission_query(
             &account_id,

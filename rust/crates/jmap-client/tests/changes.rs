@@ -12,7 +12,7 @@ use jmap_proto::{Id, State};
 use serde_json::json;
 
 /// `ChangeSet::is_empty` is a caller-facing shortcut over its three sets, not
-/// exercised elsewhere in this crate — every other test reads the sets
+/// exercised elsewhere in this crate: every other test reads the sets
 /// directly (`full.created`, `middle.updated`, ...).
 #[test]
 fn change_set_is_empty_iff_all_three_sets_are() {
@@ -126,7 +126,7 @@ struct Scenario {
 }
 
 /// Play the same edits against a server that answers `/changes` in pages of
-/// `page_size` — or, with `None`, one that never pages — and collect
+/// `page_size` (or, with `None`, one that never pages) and collect
 /// everything that changed.
 fn edit_history(page_size: Option<u64>) -> Scenario {
     let mut builder = MockServer::builder();
@@ -254,7 +254,7 @@ fn following_every_page_answers_what_one_page_would_have() {
 
 /// `edit_history`'s scenario never updates a card that existed *before* the
 /// window without also creating or destroying it inside the window, so it
-/// never reaches `ChangeSet::classify`'s "updated only" arm — every id it
+/// never reaches `ChangeSet::classify`'s "updated only" arm: every id it
 /// folds is either created-then-updated (classified created) or destroyed.
 /// This is the one case that arm exists for.
 #[test]

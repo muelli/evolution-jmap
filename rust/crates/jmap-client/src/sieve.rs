@@ -113,7 +113,7 @@ impl Client {
     }
 
     /// Resolve Sieve script ids matching `filter` (`SieveScript/query`, RFC
-    /// 9661 §2.5) — e.g. by name, or to find the one currently active script.
+    /// 9661 §2.5), e.g. by name, or to find the one currently active script.
     pub fn sieve_script_query(
         &self,
         account_id: &Id,

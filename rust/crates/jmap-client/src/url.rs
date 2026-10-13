@@ -7,7 +7,7 @@
 //! with named variables, and require that "the client MUST URI-encode" each
 //! value it puts in one. That obligation is not decoration. Every value
 //! substituted here arrives from somewhere else: `accountId` and `blobId` come
-//! off the wire — from the session document and from `Email/get` — and
+//! off the wire, from the session document and from `Email/get`, and
 //! [`jmap_proto::Id`] is a newtype over `String` with no grammar check, so a
 //! `#` truncates the URL at a fragment, a `?` opens a query string and a `/`
 //! invents a path segment. `name` is a caller's label, which for this crate is
@@ -47,8 +47,8 @@ pub(crate) fn encode_template_value(value: &str) -> String {
 /// Backs [`crate::ClientBuilder::rebase_urls_to_origin`]: a real deployment's
 /// session document is authoritative about the *path* its endpoints live at,
 /// but a client that reached the session through a different scheme/host
-/// than the document names — a reverse proxy, NAT boundary, or a configured
-/// public hostname the client cannot route to — needs the option to keep
+/// than the document names (a reverse proxy, NAT boundary, or a configured
+/// public hostname the client cannot route to) needs the option to keep
 /// talking to the origin that worked rather than the one the server states.
 pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     let path_and_beyond = match url.find("://") {
@@ -64,7 +64,7 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
 }
 
-/// The scheme+authority prefix of `url` — everything before its first `/`
+/// The scheme+authority prefix of `url`: everything before its first `/`
 /// after `://`, or the whole string if it has none.
 ///
 /// Used to decide whether a response came from the URL it was asked for or
@@ -74,7 +74,7 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
 /// and port are the same origin even if their paths differ, and differ in
 /// this string if either does. Byte comparison rather than RFC 6454's own
 /// normalisation (case-folding the host, dropping a default port) is
-/// deliberate — both sides being compared are strings this crate itself
+/// deliberate: both sides being compared are strings this crate itself
 /// built or a transport reported back from a URL it built, not
 /// attacker-chosen text to normalise defensively against.
 pub(crate) fn origin_of(url: &str) -> &str {
@@ -191,7 +191,7 @@ mod tests {
     proptest! {
         // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
         // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's
-        // session document (see `Client::connect`'s `rebase_origin` calls) —
+        // session document (see `Client::connect`'s `rebase_origin` calls):
         // a malicious or merely buggy server controls both arguments
         // entirely. Arbitrary Unicode, not just ASCII attack strings: a
         // multi-byte character straddling where `rebase_origin` slices for
@@ -204,7 +204,7 @@ mod tests {
 
         // `url` stands in for `HttpResponse::final_url`, which a transport
         // builds from whatever a server's `Location` header names across
-        // however many redirects it followed — as untrusted as `rebase_origin`'s
+        // however many redirects it followed, as untrusted as `rebase_origin`'s
         // own arguments above.
         #[test]
         fn origin_of_never_panics_on_hostile_input(url in ".*") {

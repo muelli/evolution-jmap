@@ -301,11 +301,11 @@ fn event_query_time_range() {
     assert_eq!(ids.len(), 2);
 }
 
-/// Track E Phase C step 2: a `shareWith` grant on a `Calendar` restricts and
+/// A `shareWith` grant on a `Calendar` restricts and
 /// grants cross-account visibility the same way it already does for
 /// `AddressBook` and `Mailbox` (`jmap-client/tests/contacts.rs`,
 /// `jmap-client/tests/mail_folders.rs`), matching the live Stalwart probe's
-/// findings (Track E Phase C step 1, recorded in the work queue).
+/// findings recorded for calendar sharing.
 #[test]
 fn calendar_shared_with_a_principal_is_visible_only_to_them() {
     let bob = Id::new("P-bob");

@@ -3,7 +3,7 @@
 
 //! Pinned mock-level regression tests verifying that `jmap-client` tolerates
 //! real-world spec deviations emitted by live Stalwart deployments
-//! (STALWART-RFC-FINDINGS.md, Batch 25).
+//! (STALWART-RFC-FINDINGS.md).
 
 use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials, Error};
@@ -16,7 +16,7 @@ use jmap_proto::methods::GetResponse;
 use jmap_proto::session;
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// unauthenticated GET to the session resource (Finding 12).
+/// unauthenticated GET to the session resource.
 const STALWART_UNAUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:calendars:parse":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:contacts:parse":{},"urn:ietf:params:jmap:filenode":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:principals:availability":{},"urn:ietf:params:jmap:submission":{},"urn:ietf:params:jmap:vacationresponse":{},"urn:ietf:params:jmap:sieve":{"implementation":"Stalwart v1.0.0"},"urn:ietf:params:jmap:blob":{},"urn:ietf:params:jmap:quota":{},"urn:ietf:params:jmap:emailpush":{},"urn:ietf:params:jmap:webpush-vapid":{"applicationServerKey":"BBfUuHEbvaeQ4FgVQ-ndazP3KL_-znnUXe2JUxO4kQgYGDKqdr6AbNQxmkWonaZMsXlibHLz9N8ocHKnus4wO24"},"urn:ietf:params:jmap:websocket":{"url":"wss://mail.example.internal/jmap/ws","supportsPush":true}},"accounts":{},"primaryAccounts":{},"username":"","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}","state":"0"}"#;
 
 struct MockSessionTransport {
@@ -97,7 +97,7 @@ fn authenticated_session_reports_not_anonymous() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// Mailbox/set create with whitespace-padded name (Finding 16).
+/// Mailbox/set create with whitespace-padded name.
 /// Stalwart stores the trimmed name ("Padded Name"), but omits the name property
 /// from the created map, returning only the identifier.
 const STALWART_MAILBOX_SET_CREATED_OMITTING_NAME: &str = r#"{"methodResponses":[["Mailbox/set",{"accountId":"d333333","oldState":"sn2","newState":"soa","created":{"new":{"id":"m"}}},"c0"]],"sessionState":"aa288e37"}"#;
@@ -147,7 +147,7 @@ fn finding_16_mailbox_set_create_omitted_trimmed_name_tolerated() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// CalendarEventNotification/set destroy with an unformatted ID (Finding 20).
+/// CalendarEventNotification/set destroy with an unformatted ID.
 /// Stalwart silently drops the unformatted ID from both destroyed and notDestroyed.
 const STALWART_NOTIFICATION_SET_DESTROY_DROPPING_ID: &str = r#"{"methodResponses":[["CalendarEventNotification/set",{"accountId":"d333333"},"c0"]],"sessionState":"aa288e37"}"#;
 
@@ -194,7 +194,7 @@ fn finding_20_calendar_event_notification_destroy_dropped_id_tolerated_as_not_fo
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// ParticipantIdentity/get (Finding 19).
+/// ParticipantIdentity/get.
 /// Stalwart returns accountId, list, and notFound, but omits the mandatory state property
 /// required by RFC 8620 Section 5.1 and draft-ietf-jmap-calendars Section 3.1.
 const STALWART_PARTICIPANT_IDENTITY_GET_OMITTING_STATE: &str = r#"{"methodResponses":[["ParticipantIdentity/get",{"accountId":"d333333","list":[],"notFound":[]},"c0"]],"sessionState":"aa288e37"}"#;
@@ -280,7 +280,7 @@ fn finding_19_participant_identity_get_with_list_omits_state_tolerated() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) for session with
-/// currentUserPrincipalId set to the account identifier (Finding 18).
+/// currentUserPrincipalId set to the account identifier.
 const STALWART_AUTHENTICATED_SESSION_WITH_PRINCIPALS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:principals":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:principals":{"currentUserPrincipalId":"d333333"}}}},"primaryAccounts":{"urn:ietf:params:jmap:principals":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
 
 struct MockCurrentUserPrincipalTransport;
@@ -305,7 +305,7 @@ impl Transport for MockCurrentUserPrincipalTransport {
                         let ids = args["ids"].as_array();
                         if let Some(ids) = ids {
                             if ids.len() == 1 && ids[0].as_str() == Some("d333333") {
-                                // Finding 18: Stalwart returns notFound when querying currentUserPrincipalId:
+                                // Stalwart returns notFound when querying currentUserPrincipalId:
                                 format!(
                                     r#"{{"methodResponses":[["Principal/get",{{"accountId":"d333333","state":"n","list":[],"notFound":["d333333"]}},"{tag}"]],"sessionState":"aa288e37"}}"#
                                 )
@@ -419,7 +419,7 @@ fn finding_18_principal_get_tolerates_account_id_as_principal_id() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// CalendarEvent/set create when timeZones property is supplied (Finding 13).
+/// CalendarEvent/set create when timeZones property is supplied.
 /// Stalwart rejects the call with invalidProperties: ["timeZones"].
 const STALWART_CALENDAR_EVENT_SET_TIMEZONES_REJECTED: &str = r#"{"methodResponses":[["CalendarEvent/set",{"accountId":"d333333","oldState":"spq","newState":"spq","notCreated":{"new":{"type":"invalidProperties","description":"Invalid property.","properties":["timeZones"]}}},"c0"]],"sessionState":"aa288e37"}"#;
 
@@ -558,7 +558,7 @@ fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
 /// CalendarEvent/parse for a blob containing two distinct top-level VEVENTs
 /// (different UIDs): Stalwart returns one array element per event under the
-/// single blob id, confirmed live 2026-10-06 against `stalwart-runner`.
+/// single blob id, confirmed live against `stalwart-runner`.
 const STALWART_CALENDAR_EVENT_PARSE_RESPONSE_TWO_EVENTS: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":[{"@type":"Event","uid":"probe-multi-1","title":"First Event","start":"2026-10-05T12:00:00","updated":"2026-10-05T00:00:00Z"},{"@type":"Event","uid":"probe-multi-2","title":"Second Event","start":"2026-10-06T12:00:00","updated":"2026-10-05T00:00:00Z"}]}},"c0"]],"sessionState":"aa288e37"}"#;
 
 /// A blob holding more than one top-level event cannot be represented by
@@ -598,12 +598,12 @@ fn finding_13_calendar_event_parse_reports_multi_event_blob_as_not_parsable() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// ContactCard/set create when onlineServices has no uri (Finding 14).
+/// ContactCard/set create when onlineServices has no uri.
 /// Stalwart accepts the creation and returns the allocated id.
 const STALWART_CONTACT_CARD_SET_CREATED: &str = r#"{"methodResponses":[["ContactCard/set",{"accountId":"d333333","oldState":"snu","newState":"sqeaq","created":{"new":{"id":"y"}}},"c0"]],"sessionState":"9f961f52"}"#;
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// ContactCard/get for a card created with onlineServices lacking uri (Finding 14).
+/// ContactCard/get for a card created with onlineServices lacking uri.
 /// Stalwart discards onlineServices on storage, omitting it from the retrieved card.
 const STALWART_CONTACT_CARD_GET_DISCARDING_ONLINE_SERVICES: &str = r#"{"methodResponses":[["ContactCard/get",{"accountId":"d333333","state":"sqeaq","list":[{"name":{"full":"Alice Probe"},"@type":"Card","version":"1.0","id":"y","addressBookIds":{"b":true}}],"notFound":[]},"c0"]],"sessionState":"9f961f52"}"#;
 
@@ -682,7 +682,7 @@ fn finding_14_contact_card_get_tolerates_stalwart_discarded_online_services() {
         card.name.as_ref().and_then(|n| n.full.as_deref()),
         Some("Alice Probe")
     );
-    // Finding 14: Stalwart silently discarded onlineServices on storage:
+    // Stalwart silently discarded onlineServices on storage:
     assert!(card.online_services.is_none());
 }
 
@@ -712,7 +712,7 @@ fn finding_14_contact_card_get_tolerates_online_service_without_uri() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
-/// ContactCard/parse for an uploaded vCard containing EMAIL;TYPE=home,internet:... (Finding 15).
+/// ContactCard/parse for an uploaded vCard containing EMAIL;TYPE=home,internet:...
 /// Stalwart promotes TYPE=internet to an unrecognized context ("internet": true).
 const STALWART_CONTACT_CARD_PARSE_RESPONSE_WITH_INTERNET_CONTEXT: &str = r#"{"methodResponses":[["ContactCard/parse",{"accountId":"d333333","parsed":{"blob1":{"emails":{"k1":{"address":"user@example.com","contexts":{"private":true,"internet":true}}},"@type":"Card","version":"1.0","vCard":{"properties":[["version",{},"unknown","4.0"]]},"name":{"full":"Probe Card"}}}},"c0"]],"sessionState":"9f961f52"}"#;
 
@@ -772,7 +772,7 @@ fn finding_15_contact_card_parse_tolerates_internet_context() {
     let email = emails.get("k1").expect("k1 email must be present");
     assert_eq!(email.address, "user@example.com");
 
-    // Finding 15: Stalwart promotes TYPE=internet to an unrecognized context key:
+    // Stalwart promotes TYPE=internet to an unrecognized context key:
     let contexts = email.contexts.as_ref().expect("contexts must be present");
     assert_eq!(
         contexts.get("private"),

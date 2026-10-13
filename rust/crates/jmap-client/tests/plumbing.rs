@@ -26,7 +26,7 @@ fn session_discovery_capabilities() {
 
     let s = client.session();
     assert!(s.capabilities.contains_key(session::CAPABILITY_CORE));
-    // Core describes the server, not a data type — every other capability
+    // Core describes the server, not a data type: every other capability
     // must also name a primary account.
     for capability in [
         session::CAPABILITY_MAIL,
@@ -91,7 +91,7 @@ fn auth_bearer_ok() {
 /// A long-lived backend connection whose cached bearer token has expired
 /// must be able to install a freshly
 /// refreshed one and retry, without tearing the connection down and
-/// re-fetching the session — that full reconnect is what
+/// re-fetching the session; that full reconnect is what
 /// [`Client::connect`] does, and repeating it hourly for every open
 /// calendar/address-book/mail connection is the cost this API exists to
 /// avoid.
@@ -100,7 +100,7 @@ fn set_credentials_lets_a_stale_bearer_be_replaced_without_reconnecting() {
     let server = MockServer::builder().bearer_token("fresh-token").start();
 
     // The mock only accepts "fresh-token", so connecting requires it up
-    // front — standing in for a connection that was opened with a token
+    // front, standing in for a connection that was opened with a token
     // that has since expired, without needing the mock to accept two
     // tokens at once.
     let client = Client::connect(server.origin(), Credentials::bearer("fresh-token")).unwrap();
@@ -122,7 +122,7 @@ fn set_credentials_lets_a_stale_bearer_be_replaced_without_reconnecting() {
 /// The real "stale bearer, then fresh" sequence needs the *server*, not
 /// just the client, to switch which token
 /// it accepts mid-test. Until now `MockServer` only ever accepted whichever
-/// token(s) were configured before `start()` — which is why the test above
+/// token(s) were configured before `start()`, which is why the test above
 /// stands in for staleness by mutating the client's own (invalid) token
 /// instead of a genuinely revoked one.
 #[test]
@@ -133,7 +133,7 @@ fn mock_switching_its_bearer_token_401s_the_old_one_and_accepts_the_new() {
 
     server.set_bearer_token("token-b");
 
-    // Same client, still carrying the old token — this fails because the
+    // Same client, still carrying the old token: this fails because the
     // server's own accepted credential moved on, not because the client was
     // told to send something it knew was wrong.
     match client_a.echo(json!({"n": 1})) {

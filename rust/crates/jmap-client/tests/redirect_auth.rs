@@ -9,17 +9,17 @@
 //! was fetched anonymously and answered with an empty account list.
 //!
 //! Deliberately exercises the real `UreqTransport` (the crate's default),
-//! not a fake in-memory one — the bug is in how that transport follows a
+//! not a fake in-memory one: the bug is in how that transport follows a
 //! redirect, which only a real HTTP round trip through `ureq` reproduces.
 //!
-//! The second half of this file is the download-path counterpart (CURRENT
-//! PRIORITY item 9): a real Fastmail account's blob download came back as
-//! ~105 KB of `www.fastmail.com`'s own marketing homepage, not the message —
+//! The second half of this file is the download-path counterpart:
+//! a real Fastmail account's blob download came back as
+//! ~105 KB of `www.fastmail.com`'s own marketing homepage, not the message:
 //! consistent with a *cross*-host redirect on the download hop, which
 //! `UreqTransport`'s `SameHost` policy already denies `Authorization`
 //! (correctly: it is genuinely a different, unnamed host), but which the
 //! client used to hand back as if it were the blob regardless. Unlike the
-//! session redirect above, this one is deliberately cross-host — a second
+//! session redirect above, this one is deliberately cross-host: a second
 //! listener on a different loopback address (127.0.0.2, not 127.0.0.1) so
 //! `ureq`'s own host comparison, and this test, see two different hosts the
 //! way a real cross-domain redirect is, with no real network or DNS
@@ -51,14 +51,14 @@ fn primary_account_resolves_through_a_same_host_session_redirect() {
     );
 }
 
-/// The body an unrelated public page answers with — standing in for
+/// The body an unrelated public page answers with, standing in for
 /// Fastmail's own marketing homepage, the real content a live download
 /// redirect came back with (see this file's module doc).
 const FOREIGN_PAGE: &[u8] = b"<html>this is not your blob</html>";
 
 /// A bare HTTP responder for the redirect target the download hop should
 /// never be trusted through: it answers every request 200 with
-/// [`FOREIGN_PAGE`], regardless of what the request carries — an
+/// [`FOREIGN_PAGE`], regardless of what the request carries: an
 /// unauthenticated bounce is exactly what a redirect target that never saw
 /// `Authorization` (stripped by `SameHost`, since it is a different host) is
 /// expected to answer with, not a 401 a JMAP-oblivious host has no reason to
@@ -164,7 +164,7 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
 /// A rebase that actually changes `downloadUrl`'s origin (the advertised
 /// origin differs from the one the client connected through) followed by a
 /// cross-origin-redirect refusal must name
-/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error — otherwise a poisoned
+/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error; otherwise a poisoned
 /// account's rebase looks like an ordinary client bug, which is exactly what
 /// cost a full debugging session before the env var was found by hand.
 #[test]

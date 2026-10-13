@@ -145,12 +145,11 @@ impl ClientBuilder {
     /// deployment reachable at the address it names never needs this. It
     /// exists for a server whose session document names a scheme/host the
     /// client cannot route to even though the document itself came from a
-    /// reachable address — a reverse proxy, a NAT boundary, or (the case that
-    /// motivated this) a configured public hostname advertised over `https`
-    /// when only a plain-`http` listener on a different address is actually
-    /// reachable. Turning this on trusts that the origin already reached is
-    /// the same deployment the session names; it is not a substitute for
-    /// verifying that out of band.
+    /// reachable address (a reverse proxy, a NAT boundary, or a configured
+    /// public hostname advertised over `https` when only a plain-`http`
+    /// listener on a different address is actually reachable). Turning this
+    /// on trusts that the origin already reached is the same deployment the
+    /// session names; it is not a substitute for verifying that out of band.
     pub fn rebase_urls_to_origin(mut self, rebase: bool) -> Self {
         self.rebase_urls_to_origin = rebase;
         self
@@ -208,7 +207,7 @@ impl ClientBuilder {
     /// Fetch the session object for an email domain, trying a `_jmap._tcp`
     /// SRV target via [`resolver`](Self::resolver) first (RFC 8620 §2.2) and
     /// falling back to `https://<domain>/.well-known/jmap` when the resolver
-    /// finds no record — [`NoSrvResolver`]'s permanent answer, and so what
+    /// finds no record: [`NoSrvResolver`]'s permanent answer, and so what
     /// happens when [`resolver`](Self::resolver) is never called.
     pub fn connect_domain(self, domain: &str, credentials: Credentials) -> Result<Client, Error> {
         let origin = match self.resolver.lookup_srv(domain) {
@@ -233,7 +232,7 @@ pub struct Client {
     session: Option<Session>,
     next_call_id: AtomicU64,
     rebase_origin: Option<String>,
-    /// Set once `refresh_session` actually rewrites `downloadUrl`'s origin —
+    /// Set once `refresh_session` actually rewrites `downloadUrl`'s origin,
     /// distinct from `rebase_origin.is_some()`, which is true whenever the
     /// opt-in is on even if the advertised and connected origins already
     /// happen to match. See [`Error::CrossOriginRedirect`].
@@ -262,8 +261,8 @@ impl Client {
     /// Connect with default transport and timeout.
     ///
     /// Honours `JMAP_LIVE_SERVER_REBASE_URLS` as an opt-in escape hatch for
-    /// reaching a deployment through an address it does not advertise — a
-    /// `socat`/localhost forward or a reverse proxy — by rebasing the session's
+    /// reaching a deployment through an address it does not advertise (a
+    /// `socat`/localhost forward or a reverse proxy) by rebasing the session's
     /// URLs onto the origin actually connected through (see
     /// [`ClientBuilder::rebase_urls_to_origin`]). Off by default (RFC-strict:
     /// follow `apiUrl` as given); set the variable to `1`/`true` to enable it.
@@ -310,7 +309,7 @@ impl Client {
     }
 
     /// The note explaining a `downloadUrl` rewrite, if the rebase opt-in
-    /// actually changed its origin — see [`Error::CrossOriginRedirect`].
+    /// actually changed its origin; see [`Error::CrossOriginRedirect`].
     pub(crate) fn rebase_note(&self) -> Option<&str> {
         self.rebase_note.as_deref()
     }
@@ -325,7 +324,7 @@ impl Client {
     /// `Error::Http {
     /// status: 401, .. }` from an OAuth 2.0 attempt should refresh the token
     /// through EDS/Camel's own credential store, call this, and retry the
-    /// operation once — never reconnect just to change a header.
+    /// operation once: never reconnect just to change a header.
     pub fn set_credentials(&self, credentials: Credentials) {
         *self
             .authorization
@@ -340,7 +339,7 @@ impl Client {
     /// own request path: [`crate::eventsource`] reads a long-lived stream on
     /// its own socket, so it needs the same header rather than the same
     /// transport. It takes a copy, so a later [`set_credentials`] does not
-    /// reach a subscription already running — see that module on why a push
+    /// reach a subscription already running; see that module on why a push
     /// connection outliving its access token is a degradation and not a
     /// correctness problem.
     ///
@@ -355,18 +354,17 @@ impl Client {
     /// Whether the session document returned by the server is anonymous
     /// (empty username and no accessible accounts).
     ///
-    /// Stalwart v1.0.0 (RFC Finding 12) answers unauthenticated requests to
-    /// the session resource with HTTP 200 OK and an anonymous empty-accounts
-    /// session rather than HTTP 401 Unauthorized with a WWW-Authenticate
-    /// challenge (RFC 8620 Section 2 and Section 8.1). Callers can check this
-    /// predicate to determine whether authentication is required to access
-    /// accounts.
+    /// Stalwart v1.0.0 answers unauthenticated requests to the session
+    /// resource with HTTP 200 OK and an anonymous empty-accounts session
+    /// rather than HTTP 401 Unauthorized with a WWW-Authenticate challenge
+    /// (RFC 8620 Section 2 and Section 8.1). Callers can check this predicate
+    /// to determine whether authentication is required to access accounts.
     pub fn is_anonymous(&self) -> bool {
         let session = self.session();
         session.username.is_empty() && session.accounts.is_empty()
     }
 
-    /// The account id serving a capability URN — `primaryAccounts` where the
+    /// The account id serving a capability URN: `primaryAccounts` where the
     /// server states one, else the sole personal account offering it (see
     /// [`jmap_proto::session::Session::resolve_primary_account`]).
     pub fn primary_account(&self, capability: &str) -> Result<jmap_proto::Id, Error> {
@@ -404,7 +402,7 @@ impl Client {
         // and its answer pass through, so an operator chasing a server
         // rejection can read the exact exchange out of journald
         // (`EVOLUTION_JMAP_LOG=trace`) instead of guessing what was sent.
-        // Bodies carry user content — TRACE is opt-in and journald is local —
+        // Bodies carry user content: TRACE is opt-in and journald is local,
         // and never credentials: `Authorization` is a header, not a body.
         tracing::trace!(body = %String::from_utf8_lossy(&body), "JMAP request body");
         let response = self.execute(HttpMethod::Post, &api_url, Some(&body))?;
@@ -449,7 +447,7 @@ impl Client {
     /// method calls (RFC 8620 §2's `maxCallsInRequest`).
     ///
     /// Asked before a chain is built, because over the limit the server refuses
-    /// the *request* — `urn:ietf:params:jmap:error:limit`, RFC 8620 §3.2 — and
+    /// the *request* (`urn:ietf:params:jmap:error:limit`, RFC 8620 §3.2) and
     /// not merely the call that went over it. A client that chains two calls to
     /// save a round trip and gets neither answered has spent the round trip it
     /// was saving and has no data.
@@ -489,8 +487,8 @@ impl Client {
     /// The operation's own scope if the thread running it installed one (see
     /// [`CancelScope`]), and otherwise the flag this client was built with.
     ///
-    /// The order is the point. A client-wide flag can only ever be set once —
-    /// there is no way to unset one — so a client whose flag was cancelled at
+    /// The order is the point. A client-wide flag can only ever be set once (there
+    /// is no way to unset one), so a client whose flag was cancelled at
     /// connect time would refuse every operation the account ever performed
     /// afterwards, including the one the user is waiting on. An operation that
     /// says what its own cancellation is has said something more specific, and
@@ -513,7 +511,7 @@ impl Client {
     }
 
     /// As [`Self::execute`], for a request whose body is not JSON. The
-    /// *response* still is — an upload answers with a blob descriptor — so the
+    /// *response* still is: an upload answers with a blob descriptor, so the
     /// ceiling is the same one.
     pub(crate) fn execute_with_content_type(
         &self,
@@ -544,7 +542,7 @@ impl Client {
     /// `accept` is a caller's choice rather than a constant for the same
     /// reason: every JMAP API call answers with JSON, but a blob download
     /// does not, and RFC 8620 §6.2 gives it no reason to declare
-    /// `application/json` acceptable — a server doing content negotiation on
+    /// `application/json` acceptable: a server doing content negotiation on
     /// that header could legitimately refuse or redirect a download that
     /// claims to accept only JSON for a response that never is.
     pub(crate) fn execute_within(
@@ -662,7 +660,7 @@ mod tests {
 
     /// Records every event this crate emits (level + fields), so a test can
     /// assert a call attached structured fields rather than only a free-text
-    /// message — the same minimal harness `jmap-backend-core::trampoline`'s
+    /// message, using the same minimal harness `jmap-backend-core::trampoline`'s
     /// own tests use, duplicated here because this crate depends on
     /// `tracing`, not `tracing-subscriber`.
     struct CapturingSubscriber {

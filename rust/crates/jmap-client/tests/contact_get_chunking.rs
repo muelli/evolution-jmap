@@ -4,7 +4,7 @@
 //! `ContactCard/get` naming more ids than `maxObjectsInGet` (RFC 8620 §2)
 //! must split across requests, mirroring `Client::email_get`'s own chunking
 //! (`jmap-client/tests/call_limits.rs`). Found the hard way scale-testing
-//! item 94 against real Stalwart: `contact_get` sent every id in one call
+//! scale testing against real Stalwart: `contact_get` sent every id in one call
 //! and a 500-card address book, well within reach for `jmap-book-sync`'s own
 //! `list_existing`, came back `requestTooLarge` instead of a listing.
 
@@ -29,7 +29,7 @@ fn server_with_book() -> (MockServer, Id, Id) {
 }
 
 /// A server enforcing `maxObjectsInGet` would refuse a `ContactCard/get`
-/// naming every id at once with `requestTooLarge` — proven here by driving
+/// naming every id at once with `requestTooLarge`, proven here by driving
 /// the raw request past `contact_get`, the same way
 /// `a_server_enforcing_max_objects_in_get_refuses_a_call_exceeding_it`
 /// proves it for `Email/get`. `contact_get` itself must never let a caller
