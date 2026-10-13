@@ -14,9 +14,8 @@
 use jmap_mock::{EmailSeed, MockServer};
 use serde_json::json;
 
-/// The fixed `client_id` `--oauth2`'s registration endpoint hands back —
-/// this binary has no accounts to distinguish clients by, so one constant is
-/// as good as a generated one and is easier to grep for in a log.
+/// Fixed `client_id` returned by `--oauth2` registration.
+/// This binary serves one account, so one stable value is enough.
 const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 
 fn main() {
@@ -54,13 +53,9 @@ fn main() {
         }
     }
 
-    // Off by default, matching every other opt-in behaviour here: a mock
-    // that always advertised OAuth 2.0 would leave a manual test with no way
-    // to check the "this deployment offers none" path. RFC 8414's document
-    // and RFC 7591 registration are both real network round trips a client
-    // can drive end to end against this one process — see
-    // `jmap_config::oauth2_setup::discover_and_register`, which this mirrors
-    // for a standalone run rather than an in-process `MockServer`.
+    // Off by default so manual tests can still cover a deployment with no
+    // OAuth 2.0 metadata endpoint. With the flag, this mirrors
+    // `jmap_config::oauth2_setup::discover_and_register` in one process.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
