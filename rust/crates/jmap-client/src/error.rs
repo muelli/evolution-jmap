@@ -78,6 +78,15 @@ pub enum Error {
         followed: String,
         rebase_note: Option<String>,
     },
+    /// A request was redirected to a different origin than requested, credentials
+    /// were withheld by the transport to prevent leaking them to an untrusted
+    /// origin (RFC 7235), and the target server answered HTTP 401 Unauthorized.
+    ///
+    /// Distinct from [`Error::Http`] with status 401: a 401 on a redirected request
+    /// where credentials were deliberately withheld is a connection or redirection
+    /// failure, not a rejected token or stale credentials, so callers must not
+    /// escalate to interactive user consent.
+    RedirectCredentialsWithheld { requested: String, followed: String },
 }
 
 impl Error {
@@ -100,6 +109,12 @@ impl Error {
     /// The single source of truth that backend callers delegate to.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Http { status: 401, .. })
+    }
+
+    /// Whether the request was redirected to a different origin, credentials
+    /// were withheld by the transport, and the target server answered HTTP 401.
+    pub fn is_redirect_credentials_withheld(&self) -> bool {
+        matches!(self, Self::RedirectCredentialsWithheld { .. })
     }
 
     /// Whether a `/changes` call's `sinceState` was rejected as
@@ -197,6 +212,14 @@ impl std::fmt::Display for Error {
                 }
                 Ok(())
             }
+            Error::RedirectCredentialsWithheld {
+                requested,
+                followed,
+            } => write!(
+                f,
+                "request redirected from {requested} to a different origin \
+                 ({followed}); credentials were withheld and the server answered 401"
+            ),
         }
     }
 }

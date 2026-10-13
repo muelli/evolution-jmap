@@ -288,12 +288,12 @@ impl Client {
         let mut session: Session = serde_json::from_slice(&response.body)?;
         if let Some(origin) = &self.rebase_origin {
             let advertised_download_origin =
-                crate::url::origin_of(&session.download_url).to_owned();
+                crate::url::origin_of(&session.download_url).into_owned();
             session.api_url = crate::url::rebase_origin(&session.api_url, origin);
             session.download_url = crate::url::rebase_origin(&session.download_url, origin);
             session.upload_url = crate::url::rebase_origin(&session.upload_url, origin);
             session.event_source_url = crate::url::rebase_origin(&session.event_source_url, origin);
-            self.rebase_note = if advertised_download_origin == *origin {
+            self.rebase_note = if crate::url::same_origin(&advertised_download_origin, origin) {
                 None
             } else {
                 let note = format!(
@@ -586,6 +586,18 @@ impl Client {
                 TransportError::Failed(message) => Error::Transport(message),
                 TransportError::ResponseTooLarge { limit } => Error::ResponseTooLarge { limit },
             })?;
+
+        if response.status == 401
+            && headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            && !crate::url::same_origin(url, &response.final_url)
+        {
+            return Err(Error::RedirectCredentialsWithheld {
+                requested: crate::url::origin_of(url).into_owned(),
+                followed: crate::url::origin_of(&response.final_url).into_owned(),
+            });
+        }
 
         if !(200..300).contains(&response.status) {
             let problem: Option<RequestError> = serde_json::from_slice(&response.body).ok();
