@@ -20195,7 +20195,7 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         assert_eq!(media["m1"].media_type, None);
     }
 
-    // 4. Malformed/non-base64 data URIs and non-photo kinds get no line and states_media is false
+    // Invalid data URIs and non-photo kinds are not stateable and emit no PHOTO line.
     let unmapped_or_corrupt_media = [
         photo_of_kind(Some("logo"), "https://example.com/logo.png", None),
         photo_of_kind(Some("sound"), "https://example.com/sound.ogg", None),
@@ -20218,15 +20218,14 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         assert!(!vcard.contains("PHOTO"), "must emit no PHOTO line: {vcard}");
     }
 
-    // 5. Replaced photo lifecycle in Evolution editor (URI -> inlined, inlined -> URI, inlined -> inlined)
-    // Starting with inlined JPEG
+    // Start with an inlined JPEG and cover the editor replacement path for PHOTO values.
     let orig_card = one_photo(
         &format!("data:image/jpeg;base64,{PAYLOAD}"),
         Some("image/jpeg"),
     );
     let orig_vcard = card_to_vcard(&orig_card);
 
-    // Editor replaces inlined JPEG with URI photo (dropping X-JMAP-KEY on re-render)
+    // Rewriting inline data to a URI drops X-JMAP-KEY.
     let edited_uri_vcard = orig_vcard.replace(
         &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PAYLOAD}"),
         "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
@@ -20241,7 +20240,7 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         &media["m1"]
     ));
 
-    // Editor replaces URI with new inlined PNG
+    // Rewriting the URI PHOTO back to inlined PNG updates type and URI.
     let edited_png_vcard = edited_uri_vcard.replace(
         "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
         "PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==",
@@ -20255,16 +20254,16 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
     );
     assert_eq!(media_png["m1"].media_type.as_deref(), Some("image/png"));
 
-    // 6. Cleared photo (user removes photo in editor)
+    // Clearing PHOTO still ignores unrelated LOGO on import.
     let cleared_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nN:Oldenburg;Vera;;;\r\nLOGO;VALUE=uri:https://example.com/logo.png\r\nEND:VCARD\r\n";
     let cleared_card = vcard_to_card(cleared_vcard).expect("parse cleared vcard");
-    // Only photo lines are parsed into media; LOGO is ignored inbound so media is None
+    // Only PHOTO is mapped into media.
     assert_eq!(cleared_card.media, None);
 }
 
 #[test]
 fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
-    // 1. Direct HTTP/HTTPS/file URIs without VALUE=uri parameter
+    // Direct URIs parse without VALUE=uri.
     let bare_uri_lines = [
         (
             "PHOTO:https://example.com/avatar.jpg",
@@ -20299,7 +20298,7 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
         assert_eq!(media.media_type, None);
     }
 
-    // 2. Direct RFC 2397 data URIs (vCard 4.0 / modern CardDAV) without double base64 encoding
+    // Direct RFC 2397 data URIs parse as-is.
     let direct_data_uris = [
         (
             "PHOTO:data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
