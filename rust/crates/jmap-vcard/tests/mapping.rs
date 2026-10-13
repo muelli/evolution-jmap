@@ -20352,18 +20352,10 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
 
 #[test]
 fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
-    // Comprehensive test matrix for JSContact PartialDate variations across
-    // birth, wedding, and death anniversaries:
-    // 1. Bare year: {"year": 1984} -> anniversary_date is None, states_anniversary is false, no wire line emitted
-    // 2. Year-month: {"year": 1984, "month": 5} -> None, false, no wire line emitted
-    // 3. Month-day (year-less): {"month": 5, "day": 20} -> None, false, no wire line emitted
-    // 4. Day only: {"day": 20} -> None, false, no wire line emitted
-    // 5. Bare year < 1000: {"year": 800} -> None, false, no wire line emitted
-    // 6. Full date < 1000: {"year": 800, "month": 6, "day": 21} -> None, false, no wire line emitted (protects against EDS clamp to 1000)
-    // 7. Full date >= 1000: {"year": 1984, "month": 5, "day": 20} -> Some("1984-05-20"), true, emits BDAY / X-EVOLUTION-ANNIVERSARY
-    // 8. Deathday: kind "death" with any date -> states_anniversary is false, no wire line emitted
+    // Only complete dates with year >= 1000 are anniversary-significant.
+    // Bare year, partial dates, ancient years, and deathday never emit anniversary lines.
 
-    // Birth variations
+    // Birth variants.
     let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
     let bday_year_month = one_anniversary("birth", json!({"year": 1984, "month": 5}));
     let bday_month_day = one_anniversary("birth", json!({"month": 5, "day": 20}));
@@ -20372,17 +20364,17 @@ fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
     let bday_date_ancient = one_anniversary("birth", json!({"year": 800, "month": 6, "day": 21}));
     let bday_full = one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20}));
 
-    // Wedding variations
+    // Wedding variants.
     let wedding_bare_year = one_anniversary("wedding", json!({"year": 2005}));
     let wedding_year_month = one_anniversary("wedding", json!({"year": 2005, "month": 11}));
     let wedding_month_day = one_anniversary("wedding", json!({"month": 11, "day": 15}));
     let wedding_full = one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15}));
 
-    // Death variations
+    // Death variants.
     let death_bare_year = one_anniversary("death", json!({"year": 2020}));
     let death_full = one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15}));
 
-    // Predicate checks
+    // Predicate checks.
     assert!(!states_anniversary(
         &bday_bare_year.anniversaries.as_ref().unwrap()["y1"]
     ));
@@ -21004,7 +20996,7 @@ fn empty_org_name_reads_as_absent_inbound_matrix() {
         assert_eq!(units, expected_units, "units parsed correctly for {vcard}");
     }
 
-    // 3. Inbound vCards with employer name and trailing empty components read name as Some and drop trailing empty units
+    // Employer name survives inbound parse; trailing empty ORG units are dropped.
     let named_org_vcards: [(&str, &str, Vec<&str>); 5] = [
         (
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp\r\nEND:VCARD\r\n",
@@ -21050,7 +21042,7 @@ fn empty_org_name_reads_as_absent_inbound_matrix() {
 
 #[test]
 fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
-    // 1. Organization with name: None and no units states nothing and emits no ORG line
+    // Empty organization payloads are omitted from state and wire output.
     let org_none_no_units = Organization {
         name: None,
         units: None,
@@ -21058,7 +21050,6 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     };
     assert!(!states_organization(&org_none_no_units));
 
-    // 2. Organization with name: Some("") and no units states nothing and emits no ORG line
     let org_empty_name_no_units = Organization {
         name: Some(String::new()),
         units: None,
@@ -21066,7 +21057,6 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     };
     assert!(!states_organization(&org_empty_name_no_units));
 
-    // 3. Organization with name: Some("") and only empty units states nothing and emits no ORG line
     let org_empty_name_empty_units = Organization {
         name: Some(String::new()),
         units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
@@ -21074,7 +21064,7 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     };
     assert!(!states_organization(&org_empty_name_empty_units));
 
-    // 4. ContactCard with empty-named org and no units emits no ORG property
+    // Empty name and no units still emit no ORG line.
     let card_empty_org = ContactCard {
         organizations: Some([("o1".to_owned(), org_empty_name_no_units.clone())].into()),
         ..Default::default()
@@ -21085,7 +21075,7 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
         "must emit no ORG line when org name is empty and no units exist"
     );
 
-    // 5. ContactCard with employer name and no units emits single component (no empty trailing component)
+    // Named organizations without units emit a single ORG component.
     let card_named_org = ContactCard {
         organizations: Some(
             [(
@@ -21103,7 +21093,7 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     let vcard_named_org = card_to_vcard(&card_named_org);
     assert_eq!(line(&vcard_named_org, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
 
-    // 6. ContactCard with employer name and empty units emits employer name without empty unit components
+    // Empty unit components are dropped on write.
     let card_named_org_empty_units = ContactCard {
         organizations: Some(
             [(
@@ -21124,7 +21114,7 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
         "ORG;X-JMAP-KEY=o1:Acme Corp"
     );
 
-    // 7. ContactCard with name: Some("") and valid units emits leading empty component to preserve slot
+    // Empty name with non-empty units keeps the leading empty ORG slot.
     let card_empty_name_valid_units = ContactCard {
         organizations: Some(
             [(
@@ -21148,7 +21138,7 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
 
 #[test]
 fn empty_org_name_normalisation_and_fixpoint_stability() {
-    // Starting with an organisation that explicitly sets name: Some("") and valid units
+    // Start with an explicit empty name and non-empty units.
     let initial_card = ContactCard {
         name: Some(Name {
             full: Some("Alice Smith".to_owned()),
@@ -21168,7 +21158,7 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
         ..Default::default()
     };
 
-    // Pass 1: emit vCard and read back
+    // Pass 1.
     let vcard1 = card_to_vcard(&initial_card);
     assert_eq!(
         line(&vcard1, "ORG"),
@@ -21177,7 +21167,7 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
 
     let card1 = vcard_to_card(&vcard1).expect("pass 1 parse");
     let org1 = &card1.organizations.as_ref().unwrap()["o1"];
-    // Verifying normalization: empty name normalized to None (absent)
+    // Empty organization names normalize to None.
     assert_eq!(
         org1.name, None,
         "empty org name must be normalized to None (absent)"
@@ -21187,15 +21177,15 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
         Some([OrgUnit::new("Engineering"), OrgUnit::new("Platform")].as_slice())
     );
 
-    // Pass 2: re-emit and re-read
+    // Pass 2.
     let vcard2 = card_to_vcard(&card1);
     let card2 = vcard_to_card(&vcard2).expect("pass 2 parse");
 
-    // Pass 3: re-emit and re-read
+    // Pass 3.
     let vcard3 = card_to_vcard(&card2);
     let card3 = vcard_to_card(&vcard3).expect("pass 3 parse");
 
-    // Immediate byte-identical and structural fixed-point convergence
+    // Round-trip reaches immediate fixed point.
     assert_eq!(vcard1, vcard2, "vCard pass 1 == pass 2");
     assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
     assert_eq!(card1, card2, "ContactCard pass 1 == pass 2");
@@ -21250,7 +21240,7 @@ fn empty_org_name_multiple_organizations_matrix() {
     };
 
     let vcard = card_to_vcard(&card);
-    // o4 has no employer name and no units -> omitted
+    // `o4` has neither name nor units, so it is omitted.
     let org_lines: Vec<&str> = vcard.lines().filter(|l| l.starts_with("ORG")).collect();
     assert_eq!(
         org_lines.len(),
