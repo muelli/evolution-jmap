@@ -1,0 +1,229 @@
+> test VALARM - ACKNOWLEDGED
+BEGIN:VEVENT
+BEGIN:VALARM
+ACKNOWLEDGED:20241002T114703Z
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "acknowledged": "2024-10-02T11:47:03Z"
+  }
+}
+
+> test VALARM - DISPLAY
+BEGIN:VEVENT
+BEGIN:VALARM
+ACTION:DISPLAY
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "action": "display"
+  }
+}
+
+> test VALARM - AUDIO
+BEGIN:VEVENT
+BEGIN:VALARM
+ACTION:AUDIO
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "iCalendar": {
+      "name": "valarm",
+      "properties": [
+        [
+          "action",
+          {},
+          "unknown",
+          "AUDIO"
+        ]
+      ]
+    }
+  }
+}
+
+> test VALARM - TRIGGER (duration)
+BEGIN:VEVENT
+BEGIN:VALARM
+TRIGGER;RELATED=END:PT5M
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "trigger": {
+      "@type": "OffsetTrigger",
+      "offset": "PT5M",
+      "relativeTo": "end"
+    }
+  }
+}
+
+> test VALARM - TRIGGER (absolute)
+BEGIN:VEVENT
+BEGIN:VALARM
+TRIGGER;VALUE=DATE-TIME:20250302T010203Z
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "trigger": {
+      "@type": "AbsoluteTrigger",
+      "when": "2025-03-02T01:02:03Z"
+    },
+    "iCalendar": {
+            "convertedProperties": {
+              "trigger": {
+                "parameters": {
+                  "value": "DATE-TIME"
+                }
+              }
+            },
+            "name": "valarm"
+        }
+  }
+}
+
+> test VALARM - RELATED-TO
+BEGIN:VEVENT
+BEGIN:VALARM
+UID:8297C37D-BA2D-4476-91AE-C1EAA364F8E1
+JSID:alert1
+TRIGGER:-PT15M
+DESCRIPTION:Event reminder
+ACTION:DISPLAY
+ACKNOWLEDGED:20210302T151514Z
+END:VALARM
+BEGIN:VALARM
+UID:DE7B5C34-83FF-47FE-BE9E-FF41AE6DD097
+JSID:alert2
+TRIGGER;VALUE=DATE-TIME:20210302T152000Z
+RELATED-TO;RELTYPE=SNOOZE:8297C37D-BA2D-4476-91AE-C1EAA364F8E1
+DESCRIPTION:Event reminder
+ACTION:DISPLAY
+END:VALARM
+> convert
+"alerts": {
+  "alert1": {
+    "@type": "Alert",
+    "iCalendar": {
+      "name": "valarm",
+      "properties": [
+        [
+          "description",
+          {},
+          "unknown",
+          "Event reminder"
+        ],
+        [
+          "uid",
+          {},
+          "unknown",
+          "8297C37D-BA2D-4476-91AE-C1EAA364F8E1"
+        ]
+      ]
+    },
+    "acknowledged": "2021-03-02T15:15:14Z",
+    "action": "display",
+    "trigger": {
+      "@type": "OffsetTrigger",
+      "offset": "-PT15M"
+    }
+  },
+  "alert2": {
+    "@type": "Alert",
+    "iCalendar": {
+      "name": "valarm",
+      "convertedProperties": {
+              "trigger": {
+                "parameters": {
+                  "value": "DATE-TIME"
+                }
+              }
+      },
+      "properties": [
+        [
+          "description",
+          {},
+          "unknown",
+          "Event reminder"
+        ],
+        [
+          "uid",
+          {},
+          "unknown",
+          "DE7B5C34-83FF-47FE-BE9E-FF41AE6DD097"
+        ]
+      ]
+    },
+    "action": "display",
+    "relatedTo": {
+      "alert1": {
+        "relation": {
+          "snooze": true
+        }
+      }
+    },
+    "trigger": {
+      "@type": "AbsoluteTrigger",
+      "when": "2021-03-02T15:20:00Z"
+    }
+  }
+}
+
+> test VALARM - JSPROP
+BEGIN:VEVENT
+BEGIN:VALARM
+JSPROP;JSPTR="example.com:foo":"bar"
+JSID:k1
+> convert
+"@type": "Event",
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "example.com:foo": "bar"
+  }
+}
+
+> test VALARM (RFC example)
+BEGIN:VEVENT
+BEGIN:VALARM
+UID:04DC2968-6468-4B92-BC09-5A17D7D3D4E
+TRIGGER:-PT30M
+ACTION:DISPLAY
+DESCRIPTION:Breakfast meeting
+JSID:k1
+> convert
+"alerts": {
+  "k1": {
+    "@type": "Alert",
+    "iCalendar": {
+      "name": "valarm",
+      "properties": [
+        [
+          "description",
+          {},
+          "unknown",
+          "Breakfast meeting"
+        ],
+        [
+          "uid",
+          {},
+          "unknown",
+          "04DC2968-6468-4B92-BC09-5A17D7D3D4E"
+        ]
+      ]
+    },
+    "trigger": {
+      "@type": "OffsetTrigger",
+      "offset": "-PT30M"
+    },
+    "action": "display"
+  }
+}

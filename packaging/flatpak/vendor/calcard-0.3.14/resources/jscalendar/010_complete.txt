@@ -1,0 +1,875 @@
+> test JSCalendar conversion RFC - VEVENT
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:60BE3D6E-6383-473A-BCF1-3C43EA1FA571
+END:VEVENT
+BEGIN:VEVENT
+UID:DE935D01-3DF7-4201-B61A-D77D05C8B21A
+DTSTART:20060102T030405Z
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Group",
+  "entries": [
+    {
+      "@type": "Event",
+      "uid": "60BE3D6E-6383-473A-BCF1-3C43EA1FA571"
+    },
+    {
+      "@type": "Event",
+      "start": "2006-01-02T03:04:05",
+      "timeZone": "Etc/UTC",
+      "uid": "DE935D01-3DF7-4201-B61A-D77D05C8B21A"
+    }
+  ]
+}
+
+> test JSCalendar conversion RFC - VTODO
+BEGIN:VCALENDAR
+BEGIN:VTODO
+UID:83C80482-806D-41C4-8029-E438F793005D
+DUE:20060102T030405Z
+END:VTODO
+END:VCALENDAR
+> convert
+{
+  "@type": "Group",
+  "entries": [
+    {
+      "@type": "Task",
+      "due": "2006-01-02T03:04:05",
+      "timeZone": "Etc/UTC",
+      "uid": "83C80482-806D-41C4-8029-E438F793005D"
+    }
+  ]
+}
+
+> test JSCalendar - Simple Event
+{
+  "@type": "Event",
+  "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+  "updated": "2020-01-02T18:23:04Z",
+  "title": "Some event",
+  "start": "2020-01-15T13:00:00",
+  "timeZone": "America/New_York",
+  "duration": "PT1H"
+}
+> convert
+BEGIN:VEVENT
+SUMMARY:Some event
+DTSTART;TZID=America/New_York:20200115T130000
+DURATION:PT1H
+UID:a8df6573-0474-496d-8496-033ad45d7fea
+DTSTAMP:20200102T182304Z
+END:VEVENT
+END:VCALENDAR
+
+> test JSCalendar - Simple Task
+{
+  "@type": "Task",
+  "uid": "2a358cee-6489-4f14-a57f-c104db4dc2f2",
+  "updated": "2020-01-09T14:32:01Z",
+  "title": "Do something"
+}
+> convert
+BEGIN:VTODO
+UID:2a358cee-6489-4f14-a57f-c104db4dc2f2
+SUMMARY:Do something
+DTSTAMP:20200109T143201Z
+END:VTODO
+END:VCALENDAR
+
+> test JSCalendar - Simple Group
+{
+  "@type": "Group",
+  "uid": "bf0ac22b-4989-4caf-9ebd-54301b4ee51a",
+  "updated": "2020-01-15T18:00:00Z",
+  "title": "A simple group",
+  "entries": [{
+    "@type": "Task",
+    "uid": "2a358cee-6489-4f14-a57f-c104db4dc2f2",
+    "updated": "2020-01-09T14:32:01Z",
+    "title": "Do something"
+  }, {
+    "@type": "Event",
+    "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+    "updated": "2020-01-02T18:23:04Z",
+    "title": "Some event",
+    "start": "2020-01-15T13:00:00",
+    "timeZone": "America/New_York",
+    "duration": "PT1H"
+  }]
+}
+> convert
+BEGIN:VCALENDAR
+UID:bf0ac22b-4989-4caf-9ebd-54301b4ee51a
+LAST-MODIFIED:20200115T180000Z
+NAME:A simple group
+BEGIN:VTODO
+SUMMARY:Do something
+UID:2a358cee-6489-4f14-a57f-c104db4dc2f2
+DTSTAMP:20200109T143201Z
+END:VTODO
+BEGIN:VEVENT
+SUMMARY:Some event
+DTSTART;TZID=America/New_York:20200115T130000
+DURATION:PT1H
+UID:a8df6573-0474-496d-8496-033ad45d7fea
+DTSTAMP:20200102T182304Z
+END:VEVENT
+END:VCALENDAR
+
+> test JSCalendar - All-Day Event
+"title": "April Fool's Day",
+"showWithoutTime": true,
+"start": "1900-04-01T00:00:00",
+"duration": "P1D",
+"recurrenceRule": {
+"frequency": "yearly"
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:April Fool's Day
+DTSTART;VALUE=DATE:19000401
+DURATION:P1D
+RRULE:FREQ=YEARLY
+END:VEVENT
+END:VCALENDAR
+> convert
+"title": "April Fool's Day",
+"showWithoutTime": true,
+"start": "1900-04-01T00:00:00",
+"duration": "P1D",
+"recurrenceRule": {
+"frequency": "yearly"
+},
+"iCalendar": {
+  "convertedProperties": {
+    "start": {
+      "parameters": {
+        "value": "DATE"
+      }
+    }
+  },
+  "name": "vevent"
+}
+
+> test JSCalendar - Task with a Due Date
+{
+  "@type": "Task",
+  "title": "Buy groceries",
+  "due": "2020-01-19T18:00:00",
+  "timeZone": "Europe/Vienna",
+  "estimatedDuration": "PT1H"
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VTODO
+SUMMARY:Buy groceries
+DUE;TZID=Europe/Vienna:20200119T180000
+ESTIMATED-DURATION:PT1H
+END:VTODO
+END:VCALENDAR
+
+> test JSCalendar - Event with End Time Zone
+{
+  "@type": "Event",  
+  "title": "Flight XY51 to Tokyo",
+  "start": "2020-04-01T09:00:00",
+  "timeZone": "Europe/Berlin",
+  "endTimeZone": "Asia/Tokyo",
+  "duration": "PT10H30M",
+  "mainLocationId": "1",
+  "locations": {
+    "1": {
+      "name": "Frankfurt Airport (FRA)"
+    },
+    "2": {
+      "name": "Narita International Airport (NRT)"
+    }
+  }
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+LOCATION;JSID=1;DERIVED=TRUE:Frankfurt Airport (FRA)
+SUMMARY:Flight XY51 to Tokyo
+DTEND;TZID=Asia/Tokyo:20200402T023000
+DTSTART;TZID=Europe/Berlin:20200401T090000
+BEGIN:VLOCATION
+NAME:Narita International Airport (NRT)
+JSID:2
+END:VLOCATION
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Event",  
+  "title": "Flight XY51 to Tokyo",
+  "start": "2020-04-01T09:00:00",
+  "timeZone": "Europe/Berlin",
+  "endTimeZone": "Asia/Tokyo",
+  "duration": "PT10H30M",
+  "mainLocationId": "1",
+  "locations": {
+    "1": {
+      "@type": "Location",
+      "name": "Frankfurt Airport (FRA)"
+    },
+    "2": {
+      "@type": "Location",
+      "name": "Narita International Airport (NRT)",
+      "iCalendar": {
+            "name": "vlocation"
+        }
+    }
+  },
+  "iCalendar": {
+        "convertedProperties": {
+          "duration": {
+            "name": "dtend"
+          }
+        },
+        "name": "vevent"
+  }
+}
+
+> test JSCalendar - Floating-Time Event (with Recurrence)
+{
+  "@type": "Event",
+  "title": "Yoga",
+  "start": "2020-01-01T07:00:00",
+  "duration": "PT30M",
+  "recurrenceRule": {
+    "frequency": "daily"
+  }
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:Yoga
+DTSTART:20200101T070000
+DURATION:PT30M
+RRULE:FREQ=DAILY
+END:VEVENT
+END:VCALENDAR
+
+> test JSCalendar - Event with Physical and Virtual Location
+{
+  "@type": "Event",
+  "title": "Live from Music Bowl: The Band",
+  "description": "Go see the biggest music event ever!",
+  "locale": "en",
+  "start": "2020-07-04T17:00:00",
+  "timeZone": "America/New_York",
+  "duration": "PT3H",
+  "mainLocationId": "c0503d30-8c50-4372-87b5-7657e8e0fedd",
+  "locations": {
+    "c0503d30-8c50-4372-87b5-7657e8e0fedd": {
+      "name": "The Music Bowl",
+      "description": "Music Bowl, Central Park, New York",
+      "coordinates": "geo:40.7829,-73.9654"
+    },
+    "ee42e41e-1046-4489-9760-c0b85f0dc176": {
+      "name": "BAZ Parking, 9 West 57th Street, New York",
+      "coordinates": "geo:40.7637,-73.9748",
+      "locationTypes": {
+        "parking": true
+      }
+    }
+  },
+  "virtualLocations": {
+    "vloc1": {
+      "name": "Free live Stream from Music Bowl",
+      "uri": "https://stream.example.com/the_band_2020"
+    }
+  }
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+DESCRIPTION:Go see the biggest music event ever!
+LOCATION;JSID=c0503d30-8c50-4372-87b5-7657e8e0fedd;DERIVED=TRUE:The Music Bo
+ wl
+SUMMARY;LANGUAGE=en:Live from Music Bowl: The Band
+DTSTART;TZID=America/New_York:20200704T170000
+DURATION:PT3H
+CONFERENCE;LABEL="Free live Stream from Music Bowl";JSID=vloc1:https://strea
+ m.example.com/the_band_2020
+BEGIN:VLOCATION
+DESCRIPTION:Music Bowl\, Central Park\, New York
+NAME:The Music Bowl
+COORDINATES:geo:40.7829\,-73.9654
+JSID:c0503d30-8c50-4372-87b5-7657e8e0fedd
+END:VLOCATION
+BEGIN:VLOCATION
+NAME:BAZ Parking\, 9 West 57th Street\, New York
+LOCATION-TYPE:parking
+COORDINATES:geo:40.7637\,-73.9748
+JSID:ee42e41e-1046-4489-9760-c0b85f0dc176
+END:VLOCATION
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Event",
+  "title": "Live from Music Bowl: The Band",
+  "description": "Go see the biggest music event ever!",
+  "locale": "en",
+  "start": "2020-07-04T17:00:00",
+  "timeZone": "America/New_York",
+  "duration": "PT3H",
+  "mainLocationId": "c0503d30-8c50-4372-87b5-7657e8e0fedd",
+  "locations": {
+    "c0503d30-8c50-4372-87b5-7657e8e0fedd": {
+      "@type": "Location",  
+      "name": "The Music Bowl",
+      "description": "Music Bowl, Central Park, New York",
+      "coordinates": "geo:40.7829,-73.9654",
+      "iCalendar": {
+            "name": "vlocation"
+      }
+    },
+    "ee42e41e-1046-4489-9760-c0b85f0dc176": {
+      "@type": "Location",  
+      "name": "BAZ Parking, 9 West 57th Street, New York",
+      "coordinates": "geo:40.7637,-73.9748",
+      "locationTypes": {
+        "parking": true
+      },
+      "iCalendar": {
+            "name": "vlocation"
+      }
+    }
+  },
+  "virtualLocations": {
+    "vloc1": {
+      "@type": "VirtualLocation",
+      "name": "Free live Stream from Music Bowl",
+      "uri": "https://stream.example.com/the_band_2020"
+    }
+  }
+}
+
+> test JSCalendar - Recurring Event with Overrides
+{
+  "@type": "Event",
+  "title": "Calculus I",
+  "start": "2020-01-08T09:00:00",
+  "timeZone": "Europe/London",
+  "duration": "PT1H30M",
+  "uid": "ee42e41e-1046-4489-9760-c0b85f0dc176",
+  "locations": {
+    "mlab": {
+      "name": "Math lab room 1",
+      "description": "Math Lab I, Department of Mathematics"
+    }
+  },
+  "recurrenceRule": {
+    "frequency": "weekly",
+    "until": "2020-06-24T09:00:00"
+  },
+  "recurrenceOverrides": {
+    "2020-01-07T14:00:00": {
+      "title": "Introduction to Calculus I (optional)"
+    },
+    "2020-04-01T09:00:00": {
+      "excluded": true
+    },
+    "2020-06-25T09:00:00": {
+      "title": "Calculus I Exam",
+      "start": "2020-06-25T10:00:00",
+      "duration": "PT2H",
+      "locations": {
+        "auditorium": {
+          "name": "Big Auditorium",
+          "description": "Big Auditorium, Other Road"
+        }
+      }
+    }
+  }
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:Introduction to Calculus I (optional)
+RECURRENCE-ID;TZID=Europe/London:20200107T140000
+UID:ee42e41e-1046-4489-9760-c0b85f0dc176
+END:VEVENT
+BEGIN:VEVENT
+SUMMARY:Calculus I Exam
+DTSTART;TZID=Europe/London:20200625T100000
+DURATION:PT2H
+RECURRENCE-ID;TZID=Europe/London:20200625T090000
+UID:ee42e41e-1046-4489-9760-c0b85f0dc176
+BEGIN:VLOCATION
+DESCRIPTION:Big Auditorium\, Other Road
+NAME:Big Auditorium
+JSID:auditorium
+END:VLOCATION
+END:VEVENT
+BEGIN:VEVENT
+SUMMARY:Calculus I
+DTSTART;TZID=Europe/London:20200108T090000
+DURATION:PT1H30M
+UID:ee42e41e-1046-4489-9760-c0b85f0dc176
+EXDATE;TZID=Europe/London:20200401T090000
+RRULE:FREQ=WEEKLY;UNTIL=20200624T080000Z
+BEGIN:VLOCATION
+DESCRIPTION:Math Lab I\, Department of Mathematics
+NAME:Math lab room 1
+JSID:mlab
+END:VLOCATION
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Event",
+  "title": "Calculus I",
+  "start": "2020-01-08T09:00:00",
+  "timeZone": "Europe/London",
+  "duration": "PT1H30M",
+  "uid": "ee42e41e-1046-4489-9760-c0b85f0dc176",
+  "locations": {
+    "mlab": {
+      "@type": "Location",
+      "name": "Math lab room 1",
+      "description": "Math Lab I, Department of Mathematics",
+      "iCalendar": {
+          "name": "vlocation"
+       }
+    }
+  },
+  "recurrenceRule": {
+    "frequency": "weekly",
+    "until": "2020-06-24T09:00:00"
+  },
+  "recurrenceOverrides": {
+    "2020-01-07T14:00:00": {
+      "title": "Introduction to Calculus I (optional)"
+    },
+    "2020-04-01T09:00:00": {
+      "excluded": true
+    },
+    "2020-06-25T09:00:00": {
+      "title": "Calculus I Exam",
+      "start": "2020-06-25T10:00:00",
+      "duration": "PT2H",
+      "locations": {
+        "auditorium": {
+          "@type": "Location",
+          "name": "Big Auditorium",
+          "description": "Big Auditorium, Other Road",
+          "iCalendar": {
+                "name": "vlocation"
+          }
+        }
+      }
+    }
+  }
+}
+
+> test JSCalendar - Recurring Event with Participants
+{
+  "@type": "Event",
+  "title": "FooBar team meeting",
+  "start": "2020-01-08T09:00:00",
+  "timeZone": "Africa/Johannesburg",
+  "duration": "PT1H",
+  "uid": "ee42e41e-1046-4489-9760-c0b85f0dc176",
+  "virtualLocations": {
+    "0": {
+      "name": "ChatMe meeting room",
+      "uri": "https://chatme.example.com?id=1234567&pw=a8a24627b63d"
+    }
+  },
+  "recurrenceRule": {
+    "frequency": "weekly"
+  },
+  "organizerCalendarAddress": "mailto:f245f875-7f63-4a5e-a2c8@schedule.example.com",
+  "participants": {
+    "dG9tQGZvb2Jhci5xlLmNvbQ": {
+      "name": "Tom Tool",
+      "email": "tom@foobar.example.com",
+      "calendarAddress": "mailto:tom@calendar.example.com",
+      "participationStatus": "accepted"
+    },
+    "em9lQGZvb2GFtcGxlLmNvbQ": {
+      "name": "Zoe Zelda",
+      "calendarAddress": "mailto:zoe@foobar.example.com",
+      "participationStatus": "accepted",
+      "roles": {
+        "owner": true,
+        "chair": true
+      }
+    }
+  },
+  "recurrenceOverrides": {
+    "2020-03-04T09:00:00": {
+      "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus": "declined"
+    }
+  }
+}
+> convert
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+ATTENDEE;EMAIL=tom@foobar.example.com;PARTSTAT=DECLINED;CN="Tom Tool";JSID=
+ dG9tQGZvb2Jhci5xlLmNvbQ:mailto:tom@calendar.example.com
+RECURRENCE-ID;TZID=Africa/Johannesburg:20200304T090000
+UID:ee42e41e-1046-4489-9760-c0b85f0dc176
+END:VEVENT
+BEGIN:VEVENT
+SUMMARY:FooBar team meeting
+DTSTART;TZID=Africa/Johannesburg:20200108T090000
+DURATION:PT1H
+ATTENDEE;EMAIL=tom@foobar.example.com;PARTSTAT=ACCEPTED;CN="Tom Tool";JSID=
+ dG9tQGZvb2Jhci5xlLmNvbQ:mailto:tom@calendar.example.com
+ATTENDEE;ROLE=CHAIR,OWNER;PARTSTAT=ACCEPTED;CN="Zoe Zelda";JSID=em9lQGZvb2G
+ FtcGxlLmNvbQ:mailto:zoe@foobar.example.com
+ORGANIZER:mailto:f245f875-7f63-4a5e-a2c8@schedule.example.com
+UID:ee42e41e-1046-4489-9760-c0b85f0dc176
+RRULE:FREQ=WEEKLY
+CONFERENCE;LABEL="ChatMe meeting room";JSID=0:https://chatme.example.com?id=
+ 1234567&pw=a8a24627b63d
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Event",
+  "title": "FooBar team meeting",
+  "start": "2020-01-08T09:00:00",
+  "timeZone": "Africa/Johannesburg",
+  "duration": "PT1H",
+  "uid": "ee42e41e-1046-4489-9760-c0b85f0dc176",
+  "virtualLocations": {
+    "0": {
+      "@type": "VirtualLocation",  
+      "name": "ChatMe meeting room",
+      "uri": "https://chatme.example.com?id=1234567&pw=a8a24627b63d"
+    }
+  },
+  "recurrenceRule": {
+    "frequency": "weekly"
+  },
+  "organizerCalendarAddress": "mailto:f245f875-7f63-4a5e-a2c8@schedule.example.com",
+  "participants": {
+    "dG9tQGZvb2Jhci5xlLmNvbQ": {
+      "@type": "Participant",
+      "name": "Tom Tool",
+      "email": "tom@foobar.example.com",
+      "calendarAddress": "mailto:tom@calendar.example.com",
+      "participationStatus": "accepted"
+    },
+    "em9lQGZvb2GFtcGxlLmNvbQ": {
+      "@type": "Participant",
+      "name": "Zoe Zelda",
+      "calendarAddress": "mailto:zoe@foobar.example.com",
+      "participationStatus": "accepted",
+      "roles": {
+        "owner": true,
+        "chair": true
+      }
+    }
+  },
+  "recurrenceOverrides": {
+    "2020-03-04T09:00:00": {
+      "participants": {
+            "dG9tQGZvb2Jhci5xlLmNvbQ": {
+              "@type": "Participant",
+              "calendarAddress": "mailto:tom@calendar.example.com",
+              "email": "tom@foobar.example.com",
+              "name": "Tom Tool",
+              "participationStatus": "declined"
+            }
+        }
+    }
+  }
+}
+
+> test RRULE and non-IANA timezone
+BEGIN:VCALENDAR
+METHOD:REQUEST
+PRODID:Microsoft Exchange Server 2010
+VERSION:2.0
+BEGIN:VTIMEZONE
+TZID:W. Europe Standard Time
+BEGIN:STANDARD
+DTSTART:16010101T030000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010101T020000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Annonym Us
+ ernames:mailto:Annonym.Usernames@email.com
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Testmeetin
+ g channel:mailto:Testmeeting.channel@email365.onmicrosoft.com
+DESCRIPTION;LANGUAGE=en-US:\n\n\n\n________________________________________
+ ________________________________________\nMicrosoft Teams-Besprechung\n\nN
+ ehmen Sie teil auf Ihrem Computer oder auf der mobilen App\nKlicken Sie hi
+ er\, um an der Besprechung teilzunehmen<https://url>\n\nWeitere Infos<http
+ s://aka.ms/JoinTeamsMeeting> | Besprechungsoptionen<url>\n\n______________
+ __________________________________________________________________\n
+RRULE:FREQ=DAILY;UNTIL=20201126T100000Z;INTERVAL=2
+UID:040000C08200E00074C5B7101A89E00800000000EEB3773267BEA601000000000000000
+ 01000000023B1CC4F9EF21B4BBA06F5F3B4E42720
+SUMMARY: Testmeeting ➡ ignore it!
+DTSTART;TZID=W. Europe Standard Time:20201124T110000
+DTEND;TZID=W. Europe Standard Time:20201124T113000
+CLASS:PUBLIC
+PRIORITY:5
+DTSTAMP:20201119T112915Z
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+SEQUENCE:0
+LOCATION;LANGUAGE=en-US:
+BEGIN:VALARM
+DESCRIPTION:REMINDER
+TRIGGER;RELATED=START:-PT15M
+ACTION:DISPLAY
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Group",
+  "entries": [
+    {
+      "@type": "Event",
+      "alerts": {
+        "k1": {
+          "@type": "Alert",
+          "action": "display",
+          "iCalendar": {
+            "name": "valarm",
+            "properties": [
+              [
+                "description",
+                {},
+                "unknown",
+                "REMINDER"
+              ]
+            ]
+          },
+          "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "-PT15M",
+            "relativeTo": "start"
+          }
+        }
+      },
+      "description": "\n\n\n\n________________________________________________________________________________\nMicrosoft Teams-Besprechung\n\nNehmen Sie teil auf Ihrem Computer oder auf der mobilen App\nKlicken Sie hier, um an der Besprechung teilzunehmen<https://url>\n\nWeitere Infos<https://aka.ms/JoinTeamsMeeting> | Besprechungsoptionen<url>\n\n________________________________________________________________________________\n",
+      "duration": "PT30M",
+      "freeBusyStatus": "busy",
+      "iCalendar": {
+        "convertedProperties": {
+          "description": {
+            "parameters": {
+              "language": "en-US"
+            }
+          },
+          "duration": {
+            "name": "dtend",
+            "parameters": {
+              "tzid": "W. Europe Standard Time"
+            }
+          },
+          "start": {
+            "parameters": {
+              "tzid": "W. Europe Standard Time"
+            }
+          }
+        },
+        "name": "vevent",
+        "properties": [
+          [
+            "location",
+            {
+              "language": "en-US"
+            },
+            "unknown",
+            []
+          ]
+        ]
+      },
+      "method": "request",
+      "participants": {
+        "7bbe065b-023b-52c8-87fa-428ac03879d9": {
+          "@type": "Participant",
+          "calendarAddress": "mailto:Testmeeting.channel@email365.onmicrosoft.com",
+          "expectReply": true,
+          "name": "Testmeeting channel",
+          "participationStatus": "needs-action",
+          "roles": {
+            "required": true
+          }
+        },
+        "c7941c86-7529-52d3-8f69-1ba8f1e9d1af": {
+          "@type": "Participant",
+          "calendarAddress": "mailto:Annonym.Usernames@email.com",
+          "expectReply": true,
+          "name": "Annonym Usernames",
+          "participationStatus": "needs-action",
+          "roles": {
+            "required": true
+          }
+        }
+      },
+      "priority": 5,
+      "privacy": "public",
+      "recurrenceRule": {
+        "frequency": "daily",
+        "interval": 2,
+        "until": "2020-11-26T11:00:00"
+      },
+      "sequence": 0,
+      "start": "2020-11-24T11:00:00",
+      "status": "confirmed",
+      "timeZone": "Europe/Berlin",
+      "title": " Testmeeting ➡ ignore it!",
+      "uid": "040000C08200E00074C5B7101A89E00800000000EEB3773267BEA60100000000000000001000000023B1CC4F9EF21B4BBA06F5F3B4E42720",
+      "updated": "2020-11-19T11:29:15Z"
+    }
+  ],
+  "iCalendar": {
+    "components": [
+      [
+        "vtimezone",
+        [
+          [
+            "tzid",
+            {},
+            "unknown",
+            "W. Europe Standard Time"
+          ]
+        ],
+        [
+          [
+            "standard",
+            [
+              [
+                "dtstart",
+                {},
+                "unknown",
+                "16010101T030000"
+              ],
+              [
+                "tzoffsetfrom",
+                {},
+                "unknown",
+                "+0200"
+              ],
+              [
+                "tzoffsetto",
+                {},
+                "unknown",
+                "+0100"
+              ],
+              [
+                "rrule",
+                {},
+                "unknown",
+                "FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10"
+              ]
+            ],
+            []
+          ],
+          [
+            "daylight",
+            [
+              [
+                "dtstart",
+                {},
+                "unknown",
+                "16010101T020000"
+              ],
+              [
+                "tzoffsetfrom",
+                {},
+                "unknown",
+                "+0100"
+              ],
+              [
+                "tzoffsetto",
+                {},
+                "unknown",
+                "+0200"
+              ],
+              [
+                "rrule",
+                {},
+                "unknown",
+                "FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3"
+              ]
+            ],
+            []
+          ]
+        ]
+      ]
+    ],
+    "name": "vcalendar"
+  },
+  "prodId": "Microsoft Exchange Server 2010"
+}
+> convert
+BEGIN:VCALENDAR
+METHOD:REQUEST
+PRODID:Microsoft Exchange Server 2010
+VERSION:2.0
+BEGIN:VEVENT
+ATTENDEE;RSVP=TRUE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=Testmeetin
+ g channel:mailto:Testmeeting.channel@email365.onmicrosoft.com
+ATTENDEE;RSVP=TRUE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=Annonym Us
+ ernames:mailto:Annonym.Usernames@email.com
+DESCRIPTION;LANGUAGE=en-US:\n\n\n\n________________________________________
+ ________________________________________\nMicrosoft Teams-Besprechung\n\nN
+ ehmen Sie teil auf Ihrem Computer oder auf der mobilen App\nKlicken Sie hi
+ er\, um an der Besprechung teilzunehmen<https://url>\n\nWeitere Infos<http
+ s://aka.ms/JoinTeamsMeeting> | Besprechungsoptionen<url>\n\n______________
+ __________________________________________________________________\n
+RRULE:FREQ=DAILY;UNTIL=20201126T100000Z;INTERVAL=2
+UID:040000C08200E00074C5B7101A89E00800000000EEB3773267BEA601000000000000000
+ 01000000023B1CC4F9EF21B4BBA06F5F3B4E42720
+SUMMARY: Testmeeting ➡ ignore it!
+DTSTART;TZID=W. Europe Standard Time:20201124T110000
+DTEND;TZID=W. Europe Standard Time:20201124T113000
+CLASS:PUBLIC
+PRIORITY:5
+DTSTAMP:20201119T112915Z
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+SEQUENCE:0
+LOCATION;LANGUAGE=en-US:
+BEGIN:VALARM
+DESCRIPTION:REMINDER
+TRIGGER;RELATED=START:-PT15M
+JSID:k1
+ACTION:DISPLAY
+END:VALARM
+END:VEVENT
+BEGIN:VTIMEZONE
+TZID:W. Europe Standard Time
+BEGIN:STANDARD
+DTSTART:16010101T030000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010101T020000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3
+END:DAYLIGHT
+END:VTIMEZONE
+END:VCALENDAR
+

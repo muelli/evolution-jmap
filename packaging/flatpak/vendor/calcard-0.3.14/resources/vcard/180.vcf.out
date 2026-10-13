@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:simple-2
+FN:Baz Qux
+EMAIL;INTERNET:baz.qux@example.com
+END:VCARD
+

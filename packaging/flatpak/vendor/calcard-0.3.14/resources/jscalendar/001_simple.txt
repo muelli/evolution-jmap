@@ -1,0 +1,231 @@
+> test CLASS
+CLASS:PRIVATE
+> convert
+"privacy": "private"
+
+> test CLASS with unknown value
+CLASS:X-RESTRICTED
+> convert
+"privacy": "private",
+"iCalendar": {
+  "name": "vevent",
+  "properties": [
+    [
+      "class",
+      {},
+      "unknown",
+      "X-RESTRICTED"
+    ]
+  ]
+}
+
+> test CLASS with multiple values
+CLASS:CONFIDENTIAL
+CLASS:X-RESTRICTED
+> convert
+"privacy": "secret",
+"iCalendar": {
+  "name": "vevent",
+  "properties": [
+    [
+      "class",
+      {},
+      "unknown",
+      "X-RESTRICTED"
+    ]
+  ]
+}
+> convert
+CLASS:CONFIDENTIAL
+
+> test JSCalendar - privacy with vendor value
+"privacy": "example.com:hidden"
+> convert
+CLASS:PRIVATE
+JSPROP;JSPTR=privacy:"example.com:hidden"
+
+> test JSCalendar - privacy with preserved CLASS of a known value
+"privacy": "secret",
+"iCalendar": {
+  "name": "vevent",
+  "properties": [
+    [
+      "class",
+      {},
+      "unknown",
+      "PRIVATE"
+    ]
+  ]
+}
+> convert
+CLASS:CONFIDENTIAL
+> convert
+"privacy": "secret"
+
+> test COLOR #1
+COLOR:maroon
+> convert
+"color": "maroon"
+
+> test COLOR #2
+COLOR:#ffa07a
+> convert
+"color": "#ffa07a"
+
+> test CREATED
+CREATED:20240329T133000Z
+> convert
+"created": "2024-03-29T13:30:00Z"
+
+> test CREATED #2
+BEGIN:VCALENDAR
+CREATED:20240929T145000Z
+BEGIN:VEVENT
+CREATED:20240329T133000Z
+END:VEVENT
+BEGIN:VTODO
+CREATED:20241029T153400Z
+END:VTODO
+END:VCALENDAR
+> convert
+"@type": "Group",
+  "created": "2024-09-29T14:50:00Z",
+  "entries": [
+    {
+      "@type": "Event",
+      "created": "2024-03-29T13:30:00Z"
+    },
+    {
+      "@type": "Task",
+      "created": "2024-10-29T15:34:00Z"
+    }    
+]
+
+> test DESCRIPTION
+DESCRIPTION:Their pancakes are delicious\; they are fluffy and sweet.
+> convert
+"description": "Their pancakes are delicious; they are fluffy and sweet."
+
+> test STYLED-DESCRIPTION
+STYLED-DESCRIPTION;FMTTYPE=text/html:
+ <!DOCTYPE html><html><body>hello\,<b>world</b></body></html>
+> convert
+"description": "<!DOCTYPE html><html><body>hello,<b>world</b></body></html>",
+"descriptionContentType": "text/html"
+
+> test LAST-MODIFIED
+BEGIN:VCALENDAR
+LAST-MODIFIED:20240914T231257Z
+> convert
+"@type": "Group",
+"updated": "2024-09-14T23:12:57Z"
+
+> test METHOD
+BEGIN:VCALENDAR
+METHOD:REQUEST
+BEGIN:VEVENT
+CLASS:CONFIDENTIAL
+END:VEVENT
+END:VCALENDAR
+> convert
+"@type": "Group",
+  "entries": [
+    {
+      "@type": "Event",
+      "method": "request",
+      "privacy": "secret"
+    }
+]
+
+> test NAME
+BEGIN:VCALENDAR
+NAME;LANGUAGE=de:Feiertage Deutschland 2025
+> convert
+"@type": "Group",
+"title": "Feiertage Deutschland 2025",
+"locale": "de"
+
+> test PERCENT-COMPLETE
+BEGIN:VCALENDAR
+BEGIN:VTODO
+PERCENT-COMPLETE:53
+> convert
+"@type": "Task",
+"percentComplete": 53
+
+> test PRIORITY
+PRIORITY:3
+> convert
+"priority": 3
+
+> test PRODID
+BEGIN:VCALENDAR
+PRODID:-//BAZ//bam//EN
+BEGIN:VEVENT
+> convert
+"@type": "Group",
+"prodId": "-//BAZ//bam//EN",
+  "entries": [
+    {
+      "@type": "Event"
+    }
+  ]
+
+> test SEQUENCE
+SEQUENCE:3
+> convert
+"sequence": 3
+
+> test STATUS
+STATUS:TENTATIVE
+> convert
+"status": "tentative"
+
+> test STATUS -> progress
+BEGIN:VTODO
+STATUS:IN-PROCESS
+> convert
+{
+  "@type": "Task",
+  "progress": "in-process"
+}
+
+> test STATUS:CANCELLED -> progress
+BEGIN:VTODO
+STATUS:CANCELLED
+> convert
+{
+  "@type": "Task",
+  "progress": "cancelled"
+}
+
+> test SOURCE
+BEGIN:VCALENDAR
+SOURCE:https://example.com/holidays.ics
+> convert
+{
+  "@type": "Group",
+  "source": "https://example.com/holidays.ics"
+}
+
+> test SUMMARY
+SUMMARY:Birthday Party
+> convert
+"title": "Birthday Party"
+
+> test SUMMARY with locale
+SUMMARY;LANGUAGE=fr:Fête d'anniversaire
+> convert
+"title": "Fête d'anniversaire",
+"locale": "fr"
+
+> test TRANSP
+TRANSP:TRANSPARENT
+> convert
+"freeBusyStatus": "free"
+
+> test UID
+UID:5ACEA86F-40CF-47EE-9CCA-7C85588A589F
+> convert
+"uid": "5ACEA86F-40CF-47EE-9CCA-7C85588A589F"
+

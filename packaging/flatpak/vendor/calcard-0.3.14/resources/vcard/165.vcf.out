@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:custom-3
+REV:0
+FN:Bobby Brown
+NICKNAME:Bobby Brown
+TEL;TYPE=HOME:+9999999
+EMAIL;TYPE=WORK:bobby@brown.org
+EMAIL;TYPE=HOME,WORK:bobby@brown.com
+END:VCARD
+

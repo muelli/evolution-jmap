@@ -1,0 +1,26 @@
+BEGIN:VCARD
+VERSION:2.1
+PHOTO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgID
+ AwMDBAYEBAQEBAgGBgUGCQgKk/ioorZFjl+6aZRRVAf/2Q==
+X-MS-OL-DESIGN;CHARSET=UTF-8:<card xmlns="http://schemas.microsoft.com/offi
+ ce/outlook/12/electronicbusinesscards" ver="1.0" layout="left" bgcolor="ff
+ ffff"><img xmlns="" align="tleft" area="32" use="photo"/><fld xmlns="" pro
+ p="name" align="left" dir="ltr" style="b" color="000000" size="10"/><fld x
+ mlns="" prop="org" align="left" dir="ltr" color="000000" size="8"/><fld xm
+ lns="" prop="title" align="left" dir="ltr" color="000000" size="8"/><fld x
+ mlns="" prop="telwork" align="left" dir="ltr" color="d48d2a" size="8"><lab
+ el align="right" color="626262">Geschäftlich</label></fld><fld xmlns="" p
+ rop="telcell" align="left" dir="ltr" color="d48d2a" size="8"><label align=
+ "right" color="626262">Mobiltelefon</label></fld><fld xmlns="" prop="telho
+ me" align="left" dir="ltr" color="d48d2a" size="8"><label align="right" co
+ lor="626262">Privat</label></fld><fld xmlns="" prop="email" align="left" d
+ ir="ltr" color="d48d2a" size="8"/><fld xmlns="" prop="addrwork" align="lef
+ t" dir="ltr" color="000000" size="8"/><fld xmlns="" prop="webwork" align="
+ left" dir="ltr" color="000000" size="8"/><fld xmlns="" prop="blank" size="
+ 8"/><fld xmlns="" prop="blank" size="8"/><fld xmlns="" prop="blank" size="
+ 8"/><fld xmlns="" prop="blank" size="8"/><fld xmlns="" prop="blank" size="
+ 8"/><fld xmlns="" prop="blank" size="8"/><fld xmlns="" prop="blank" size="
+ 8"/></card>
+REV:20200918T160601Z
+END:VCARD
+

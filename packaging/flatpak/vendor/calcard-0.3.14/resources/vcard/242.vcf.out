@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:2.1
+N;CHARSET=UTF-8:Doë;John;;;
+FN;CHARSET=UTF-8:John Doë
+ORG:roundcube.net;
+EMAIL;INTERNET;TYPE=WORK:inbox@roundcube.net
+EMAIL;INTERNET;TYPE=HOME,pref:roundcube@gmail.com
+TEL;TYPE=WORK:+123456789
+TEL;TYPE=CELL:+987654321
+ADR;TYPE=WORK:;;The street;Hometown;;5555;Cayman Islands
+NOTE:The notes...
+END:VCARD
+

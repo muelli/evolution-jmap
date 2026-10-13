@@ -1,0 +1,145 @@
+Fixture provenance
+==================
+
+resources/ical/*.ics and resources/vcard/*.vcf are round-trip fixtures collected
+from public sources. The *.ics.out, *.vcf.out and *.json files next to them are
+regenerated on every test run and are not golden files.
+
+biweekly
+  https://github.com/mangstadt/biweekly
+  ical:  366.ics..367.ics 369.ics 371.ics..372.ics 374.ics 376.ics..386.ics
+
+CalDAVTester
+  https://github.com/CalConnect/caldavtester
+  ical:  387.ics..397.ics
+  vcard: 106.vcf..156.vcf 239.vcf..240.vcf
+
+Calendar and Contacts Server
+  https://github.com/apple/ccs-calendarserver
+  ical:  426.ics..469.ics 936.ics..937.ics 948.ics 963.ics 972.ics 976.ics
+         979.ics 983.ics
+  vcard: 157.vcf..158.vcf
+
+Cyrus IMAP
+  https://github.com/cyrusimap/cyrus-imapd
+  ical:  471.ics..504.ics
+
+Evolution Data Server
+  https://gitlab.gnome.org/GNOME/evolution-data-server
+  ical:  505.ics..511.ics
+  vcard: 161.vcf..194.vcf
+
+FolkerKinzel.VCards
+  https://github.com/FolkerKinzel/VCards
+  vcard: 091.vcf..105.vcf 229.vcf..238.vcf
+
+golang-ical
+  https://github.com/arran4/golang-ical
+  ical:  368.ics 370.ics 373.ics 512.ics..517.ics
+
+Home Assistant Core
+  https://github.com/home-assistant/core
+  ical:  470.ics
+
+ical-expander
+  https://github.com/mifi/ical-expander
+  ical:  519.ics..524.ics
+
+ical-generator
+  https://github.com/sebbo2002/ical-generator
+  ical:  525.ics..535.ics
+
+ical.js
+  https://github.com/kewisch/ical.js
+  ical:  536.ics..537.ics
+  vcard: 195.vcf 241.vcf
+
+ical4j
+  https://github.com/ical4j/ical4j
+  ical:  538.ics..552.ics 925.ics 927.ics 932.ics 935.ics 938.ics 940.ics
+         944.ics 950.ics..951.ics 953.ics 955.ics 958.ics 964.ics..965.ics
+         969.ics..970.ics 974.ics 977.ics 980.ics
+
+icalendar (Python)
+  https://github.com/collective/icalendar
+  ical:  306.ics 553.ics..603.ics
+
+icalendar_parser
+  https://github.com/TesteurManiak/icalendar_parser
+  ical:  604.ics..627.ics
+
+iCalKit
+  https://github.com/kiliankoe/iCalKit
+  ical:  518.ics
+
+ics-parser
+  https://github.com/u01jmg3/ics-parser
+  ical:  628.ics..631.ics 985.ics
+
+ics_calendar
+  https://github.com/franc6/ics_calendar
+  ical:  632.ics..642.ics 986.ics
+
+icsdb
+  https://github.com/gadael/icsdb
+  ical:  643.ics..648.ics 987.ics
+
+jeroendesloovere/vcard
+  https://github.com/jeroendesloovere/vcard
+  vcard: 225.vcf..226.vcf
+
+khal
+  https://github.com/pimutils/khal
+  ical:  649.ics..658.ics 660.ics..688.ics
+
+libical
+  https://github.com/libical/libical
+  ical:  375.ics 689.ics..703.ics 926.ics 928.ics..931.ics 933.ics..934.ics
+         939.ics 941.ics..943.ics 945.ics..947.ics 949.ics 952.ics 954.ics
+         956.ics..957.ics 959.ics..962.ics 966.ics..968.ics 971.ics 973.ics
+         975.ics 978.ics 981.ics..982.ics 984.ics 988.ics..996.ics
+  vcard: 196.vcf..197.vcf
+
+Nextcloud Calendar
+  https://github.com/nextcloud/calendar
+  ical:  398.ics..425.ics
+
+Nextcloud Contacts
+  https://github.com/nextcloud/contacts
+  vcard: 159.vcf..160.vcf
+
+Nextcloud Server
+  https://github.com/nextcloud/server
+  ical:  810.ics..834.ics
+  vcard: 207.vcf..210.vcf
+
+node-ical
+  https://github.com/jens-maus/node-ical
+  ical:  659.ics 704.ics..718.ics
+
+Radicale
+  https://github.com/Kozea/Radicale
+  ical:  301.ics..305.ics 307.ics..365.ics
+  vcard: 078.vcf..090.vcf
+
+recurring-ical-events
+  https://github.com/niccokunzmann/python-recurring-ical-events
+  ical:  719.ics..809.ics 997.ics
+
+Roundcube Webmail
+  https://github.com/roundcube/roundcubemail
+  vcard: 198.vcf..206.vcf 242.vcf
+
+sabre/vobject
+  https://github.com/sabre-io/vobject
+  ical:  923.ics
+  vcard: 227.vcf..228.vcf
+
+Tine 2.0
+  https://github.com/tine20/tine20
+  ical:  835.ics..922.ics
+  vcard: 211.vcf..224.vcf 243.vcf
+
+Zimbra zm-mailbox
+  https://github.com/zimbra/zm-mailbox
+  ical:  924.ics

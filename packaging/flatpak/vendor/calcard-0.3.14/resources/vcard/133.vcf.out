@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+N;CHARSET=UTF-8:Śuterry;HiAscii;;;
+FN;CHARSET=UTF-8:HiAscii Śuterry
+EMAIL;TYPE=INTERNET,WORK,pref:hiascii@example.com
+TEL;TYPE=WORK,pref:777-777-7777
+TEL;TYPE=CELL:8888888888
+item1.ADR;TYPE=WORK,pref;CHARSET=UTF-8:;;1 ïlena;Paris;Paris;77777;France
+item1.X-ABADR:us
+UID:44EE78BF-8814-4471-899C-92280CEFB098:ABPerson
+NOTE:Illegal control here -><-
+END:VCARD
+

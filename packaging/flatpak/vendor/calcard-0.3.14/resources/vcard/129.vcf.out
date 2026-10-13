@@ -1,0 +1,19 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Contact;Mulberry;;;
+FN:Mulberry Contact
+NICKNAME:mulberry
+ORG:Apple Inc.;
+EMAIL;TYPE=INTERNET,WORK,pref:mulberry@example.com
+TEL;TYPE=HOME,pref:5109992222
+TEL;TYPE=WORK:4080001212
+TEL;TYPE=WORK,FAX:6508900909
+item1.ADR;TYPE=WORK,pref:;;1234 Infinite Circle;Exampletino\, CA 99999;USA;
+ ;
+item1.X-ABADR:us
+NOTE:This is a contact created in Mulberry.
+item2.URL;TYPE=pref:http://www.example.com/~magic
+item2.X-ABLabel:_$!<HomePage>!$_
+UID:ED7A5AEC-AB19-4CE0-AD6A-2923A3E5C4E1:ABPerson
+END:VCARD
+

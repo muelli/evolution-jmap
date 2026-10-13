@@ -1,0 +1,42 @@
+[package]
+name = "calcard"
+description = "iCalendar/JSCalendar and vCard/JSContact parsing, building and conversion library for Rust"
+version = "0.3.14"
+authors = [ "Stalwart Labs <hello@stalw.art>"]
+license = "Apache-2.0 OR MIT"
+edition = "2024"
+repository = "https://github.com/stalwartlabs/calcard"
+homepage = "https://github.com/stalwartlabs/calcard"
+keywords = ["icalendar", "vcard", "jscalendar", "jscontact", "parser"]
+categories = ["date-and-time", "email", "parser-implementations"]
+readme = "README.md"
+resolver = "2"
+
+[dependencies]
+jmap-tools = { version = "0.1", optional = true }
+ahash = "0.8.11"
+chrono = "0.4.40"
+chrono-tz = "0.10.3"
+hashify = "0.2.7"
+mail-builder = { version = "1.0.0", default-features = false }
+mail-parser = "0.11"
+uuid = { version = "1.26", default-features = false, features = ["v5"], optional = true }
+rkyv = { version = "0.8", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
+[features]
+default = ["jmap"]
+rkyv = ["dep:rkyv"]
+serde = ["dep:serde", "chrono/serde"]
+jmap = ["jmap-tools", "uuid", "serde", "serde_json"]
+wasm = ["hashify/force-32bit"]
+
+[dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+rkyv = { version = "0.8" }
+serde_json = "1.0"
+
+[lib]
+doctest = false

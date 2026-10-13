@@ -1,0 +1,19 @@
+BEGIN:VCARD
+VERSION:3.0
+N:InfoIn;All;;;
+FN:All InfoIn
+ORG:allinfo Company;
+EMAIL;TYPE=INTERNET,WORK,pref:allinfomationin@example.com
+TEL;TYPE=WORK,pref:555-555-5555
+TEL;TYPE=CELL:555-555-5555
+item1.ADR;TYPE=WORK,pref:;;1 Happy Street Apt #2;Mountain Top;CA;99999;USA
+item1.X-ABADR:us
+X-YAHOO;TYPE=WORK,pref:saeko.where@example.com
+X-YAHOO-ID;TYPE=WORK,pref:saeko.where@example.com
+item2.X-ABRELATEDNAMES;TYPE=pref:May Tan
+item2.X-ABLabel:_$!<Friend>!$_
+item3.X-ABRELATEDNAMES:Shane
+item3.X-ABLabel:_$!<Assistant>!$_
+UID:3765A955-1B96-41EA-994D-335192BEDCCD:ABPerson
+END:VCARD
+

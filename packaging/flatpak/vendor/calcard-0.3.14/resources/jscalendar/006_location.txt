@@ -1,0 +1,228 @@
+> test CONFERENCE
+CONFERENCE;FEATURE=AUDIO,VIDEO;
+ LABEL="Web video chat, access code=76543"
+ :https://chat.example.com/audio?id=123456
+> convert
+"virtualLocations": {
+  "67e4a1e9-cffc-5bd4-9602-1a5dfc8e1626": {
+    "@type": "VirtualLocation",
+    "name": "Web video chat, access code=76543",
+    "uri": "https://chat.example.com/audio?id=123456",
+    "features": {
+      "audio": true,
+      "video": true
+    }
+  }
+}
+
+> test COORDINATES in VLOCATION
+BEGIN:VEVENT
+BEGIN:VLOCATION
+COORDINATES:geo:48.198634,16.371648;crs=wgs84;u=40
+> convert
+"locations": {
+  "1b398f9b-6284-582a-9c97-ee3a9688ee44": {
+    "@type": "Location",
+    "coordinates": "geo:48.198634,16.371648;crs=wgs84;u=40"
+  }
+}
+
+> test GEO
+GEO;JSID=loc1:45.5;-93.3
+> convert
+"locations": {
+  "loc1": {
+    "@type": "Location",
+    "coordinates": "geo:45.5,-93.3"
+  }
+},
+"iCalendar": {
+  "name": "vevent",
+  "convertedProperties": {
+    "locations/loc1/coordinates": {
+      "name": "geo"
+    }
+  }
+}
+
+> test LOCATION and GEO
+LOCATION;JSID=loc1:Taj Mahal
+GEO;JSID=loc1:27.175;78.041944
+> convert
+"locations": {
+  "loc1": {
+    "@type": "Location",
+    "name": "Taj Mahal",
+    "coordinates": "geo:27.175,78.041944"
+  }
+},
+"iCalendar": {
+  "name": "vevent",
+  "convertedProperties": {
+    "locations/loc1/coordinates": {
+      "name": "geo"
+    }
+  }
+}
+
+> test GEO in VLOCATION
+BEGIN:VEVENT
+BEGIN:VLOCATION
+NAME:Eiffel Tower
+GEO:48.858222;2.2945
+> convert
+"locations": {
+  "77caf0ef-50a4-54b2-b916-d4f5f1e6e5d5": {
+    "@type": "Location",
+    "name": "Eiffel Tower",
+    "coordinates": "geo:48.858222,2.2945",
+    "iCalendar": {
+      "name": "vlocation",
+      "convertedProperties": {
+        "coordinates": {
+          "name": "geo"
+        }
+      }
+    }
+  }
+}
+
+> test LOCATION
+LOCATION:Conference Room - F123\, Bldg. 002
+> convert
+"locations": {
+  "d8eb19ed-6b88-517b-94c9-01dfd6d20ad8": {
+    "@type": "Location",
+    "name": "Conference Room - F123, Bldg. 002"
+  }
+}
+
+> test LOCATION and multiple VLOCATION
+BEGIN:VEVENT
+LOCATION;DERIVED=TRUE:Fred's Bar
+BEGIN:VLOCATION
+NAME:XYZ Parking
+LOCATION-TYPE:parking
+COORDINATES:geo:40.71427,-74.00597
+END:VLOCATION
+BEGIN:VLOCATION
+NAME:Fred's Bar
+LOCATION-TYPE:bar
+END:VLOCATION
+> convert
+"locations": {
+  "51e1f639-bfe4-5406-9eaf-45a7446ab07e": {
+    "@type": "Location",
+    "name": "XYZ Parking",
+    "locationTypes": {
+      "parking": true
+    },
+    "coordinates": "geo:40.71427,-74.00597",
+    "iCalendar": {
+      "name": "vlocation"
+    }
+  },    
+  "9bbf01f7-3b56-5634-92de-f287ab95964b": {
+    "@type": "Location",
+    "name": "Fred's Bar",
+    "locationTypes": {
+      "bar": true
+    },
+    "iCalendar": {
+      "name": "vlocation"
+    }    
+  }
+},
+"mainLocationId": "9bbf01f7-3b56-5634-92de-f287ab95964b"
+
+> test LOCATION-TYPE
+BEGIN:VEVENT
+BEGIN:VLOCATION
+LOCATION-TYPE:hotel,restaurant
+JSID:0EA3F99A-835E-49CC-970C-8A4707A4C076
+> convert
+"locations": {
+  "0EA3F99A-835E-49CC-970C-8A4707A4C076": {
+    "@type": "Location",
+    "locationTypes": {
+      "hotel": true,
+      "restaurant": true
+    }
+  }
+}
+
+> test NAME in VLOCATION
+BEGIN:VEVENT
+BEGIN:VLOCATION
+NAME:Room B
+END:VLOCATION
+> convert
+"locations": {
+  "591b1fd1-35dc-5a58-a966-9f19a17258b2": {
+    "@type": "Location",
+    "name": "Room B",
+    "iCalendar": {
+      "name": "vlocation"
+    }
+  }
+}
+
+> test VLOCATION conversion
+BEGIN:VEVENT
+BEGIN:VLOCATION
+UID:4954DC22-5BD6-4E98-844D-0302982F54AC
+NAME:The venue
+STRUCTURED-DATA;VALUE=URI:
+ http://dir.example.com/venues/big-hall.vcf
+END:VLOCATION
+> convert
+"locations": {
+  "93cae32f-1384-54ca-980e-b97e667dfdaf": {
+    "@type": "Location",
+    "name": "The venue",
+    "iCalendar": {
+      "name": "vlocation",
+      "properties": [
+        [
+          "uid",
+          {},
+          "unknown",
+          "4954DC22-5BD6-4E98-844D-0302982F54AC"
+        ],
+        [
+          "structured-data",
+          {},
+          "URI",
+          "http://dir.example.com/venues/big-hall.vcf"
+        ]
+      ]
+    }
+  }
+}
+
+> test Coordinates URI
+"locations": {
+  "loc1": {
+    "@type": "Location",
+    "name": "Taj Mahal",
+    "coordinates": "geo:27.175,78.041944;123"
+  }
+}
+> convert
+BEGIN:VEVENT
+BEGIN:VLOCATION
+NAME:Taj Mahal
+COORDINATES:geo:27.175\,78.041944\;123
+JSID:loc1
+END:VLOCATION
+> convert
+"locations": {
+  "loc1": {
+    "@type": "Location",
+    "coordinates": "geo:27.175,78.041944;123",
+    "iCalendar": {
+      "name": "vlocation"
+    },
+    "name": "Taj Mahal"
+  }
+}

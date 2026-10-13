@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:text birthday
+UID:testuid3
+BDAY;VALUE=TEXT:circa 1800
+END:VCARD
+

@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:123.17.vcf
+EMAIL;TYPE=INTERNET,WORK,pref:john.smith@example.com
+FN:John Smith
+N:Smith;John;;;
+ORG:Example Inc.;Bogus Technologies
+PHOTO:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+END:VCARD
+

@@ -1,0 +1,41 @@
+BEGIN:VCALENDAR
+PRODID:-//Trumba Corporation//Trumba Calendar Services 0.11.9005//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+X-WR-CALNAME:Harvard Medical School
+X-WR-TIMEZONE:America/New_York
+METHOD:PUBLISH
+BEGIN:VEVENT
+SUMMARY:See the IRBâ€™s QI Checklist: Clinical QI or QI Research? When
+  toGet IRB Review
+LOCATION:Simches 3.110\, 185 Cambridge Street\, Floor 3\, MGH
+DTSTART:20120709T160000Z
+DTEND:20120709T170000Z
+X-MICROSOFT-CDO-ALLDAYEVENT:FALSE
+URL:https://hub.partners.org/catalog/one-section?section_id=6181737
+X-TRUMBA-CUSTOMFIELD;NAME="Event Type";ID=21;TYPE=number:Harvard Medical Sc
+ hool
+X-TRUMBA-CUSTOMFIELD;NAME=Topics;ID=22995;TYPE=CustomAsset:Administrative\,
+ Anesthesia\,Biochemistry\,Biomedical Science\,Biostatistics\,Cardiology\,C
+ ommunity\,Dermatology\,Education\,Endocrine\,Epidemiology\,Genetics\,Immun
+ ology\,Medicine\,Molecular Biology\,Molecular Genetics\,Neurology\,Nuclear
+  Medicine\,Obstetrics\, Gynecology and Reproductive Biology\,Oncology\,Opt
+ halmology\,Oral Health\,Orthopedic Surgery\,Otology-Laryngology\,Pediatric
+ s\,Physical Medicine & Rehabilitation\,Population Medicine\,Psychiatry\,Pu
+ blic Health\,Radiation Oncology\,Radiology\,Surgery\,Vascular Biology\,Vir
+ ology\,Wellness/Worklife
+X-TRUMBA-CUSTOMFIELD;NAME="Event Types";ID=25242;TYPE=CustomAsset:Seminar
+X-TRUMBA-CUSTOMFIELD;NAME=Department/Office;ID=25489;TYPE=CustomAsset:Conti
+ nuing Education
+X-TRUMBA-CUSTOMFIELD;NAME=Location;ID=22993;TYPE=CustomAsset:Mass. General 
+ Hospital
+X-TRUMBA-CUSTOMFIELD;NAME="RSVP Required";ID=25241;TYPE=CustomAsset:Yes
+DTSTAMP:20120606T163256Z
+DESCRIPTION:See the IRBâ€™s QI Checklist: Clinical QI or QI Research? 
+ When to Get IRB Review\n\nMonday\, July 9th \n12:00pm â€“ 1:00pm\nSim
+ ches
+CATEGORIES:Harvard Medical School
+UID:http://uid.trumba.com/event/100278721
+END:VEVENT
+END:VCALENDAR
+

@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:sorted-3
+N:Bat;First Name
+TEL;TYPE=HOME:+9999999
+EMAIL;TYPE=WORK:bobby@brown.org
+EMAIL;TYPE=HOME,WORK:bobby@brown.com
+END:VCARD
+

@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:2.1
+N;CHARSET=UTF-8:Iksiñski;Piotr
+FN;CHARSET=UTF-8:Piotr Iksiñski
+EMAIL;PREF;INTERNET:piotr.iksinski@somedomain.com
+X-GENDER:Male
+REV:20080716T203548Z
+END:VCARD
+

@@ -1,0 +1,85 @@
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1997-07-01T20:00:00Z",
+      "end": "1997-07-01T20:00:00Z"
+    }
+  ]
+}
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1997-07-01T19:00:00Z",
+      "end": "1997-07-01T19:30:00Z"
+    }
+  ]
+}
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1996-07-01T18:00:00Z",
+      "end": "1997-07-01T19:00:00Z"
+    }
+  ]
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1997-07-01T19:00:00Z",
+      "end": "1997-07-01T21:00:00Z"
+    }
+  ]
+}

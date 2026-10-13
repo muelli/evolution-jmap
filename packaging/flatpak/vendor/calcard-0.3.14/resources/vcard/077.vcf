@@ -1,0 +1,15 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//macOS 15.5//EN
+N:;;;;
+FN:{NAME}
+ORG:{NAME};
+item1.EMAIL;type=INTERNET;type=pref:name@example.com
+item1.X-ABLabel:E-Mail
+item2.URL;type=pref:https://www.example.com
+item2.X-ABLabel:_$!<HomePage>!$_
+PHOTO;ENCODING=b;TYPE=JPEG:iVBORw0KGgoAAAANSUhEUgAAAAsAAAALCAQAAAADpb+tAAAA
+ QklEQVQI122PQQ4AMAjCKv//Mzs4M0zmRYKkamEwWQVoRJogk4PuRoOoMC/EK8nYb+l08WGvSx
+ KlNHO5kxnp/WXrAzsSERN1N6q5AAAAAElFTkSuQmCC
+X-ABShowAs:COMPANY
+END:VCARD

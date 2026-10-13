@@ -1,0 +1,29 @@
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1997-09-03T16:30:00Z",
+      "end": "1997-09-03T19:00:00Z"
+    }
+  ]
+}
+{
+  "errors": [],
+  "events": [
+    {
+      "comp_id": 1,
+      "start": "1997-07-01T21:00:00Z",
+      "end": "1997-07-02T21:00:00Z"
+    }
+  ]
+}
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}

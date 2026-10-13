@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Roberts;Sam;;;
+FN:Roberts Sam
+EMAIL;TYPE=HOME,pref:sroberts@uniserve.com
+TEL;TYPE=HOME:416 535 5341
+ADR;TYPE=HOME,pref:;;376 Westmoreland Ave.;Toronto;ON;M6H 3A6;Canada
+NOTE:CATEGORIES: Amis/Famille
+BDAY;VALUE=DATE:1970-07-14
+END:VCARD
+

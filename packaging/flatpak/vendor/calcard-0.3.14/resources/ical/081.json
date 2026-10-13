@@ -1,0 +1,85 @@
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 2,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 3,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 4,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 5,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 6,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 7,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 8,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 9,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 10,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 11,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 12,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 13,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 14,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 15,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 16,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 17,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 18,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 19,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 20,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}

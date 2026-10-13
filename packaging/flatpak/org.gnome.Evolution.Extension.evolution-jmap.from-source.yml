@@ -11,24 +11,30 @@ separate-locales: false
 appstream-compose: false
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm21
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
   prepend-pkg-config-path: /app/lib/pkgconfig:/app/share/pkgconfig
   env:
     CARGO_HOME: /run/build/evolution-jmap/cargo-home
     CARGO_TARGET_DIR: /run/build/evolution-jmap/target
+    CARGO_NET_OFFLINE: "true"
+    LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
     RUST_BACKTRACE: "1"
 modules:
   - name: evolution-jmap
     buildsystem: simple
     build-commands:
+      - test -d packaging/flatpak/vendor
+      - install -d "${CARGO_HOME}"
+      - install -m 0644 packaging/flatpak/cargo-vendor-config.toml "${CARGO_HOME}/config.toml"
       - cmake -S . -B _flatpak-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=${FLATPAK_DEST} -DFORCE_INSTALL_PREFIX=ON
       - cmake --build _flatpak-build -j${FLATPAK_BUILDER_N_JOBS}
       - cmake --install _flatpak-build --component book-backend
       - cmake --install _flatpak-build --component cal-backend
       - cmake --install _flatpak-build --component camel-provider
       - cmake --install _flatpak-build --component collection-backend
-      - cmake --install _flatpak-build --component config-module
+      - install -D -m 0755 _flatpak-build/cargo-target/release/libjmap_config_module.so ${FLATPAK_DEST}/lib/evolution/modules/module-jmap-configuration.so
     sources:
       - type: dir
         path: ../..

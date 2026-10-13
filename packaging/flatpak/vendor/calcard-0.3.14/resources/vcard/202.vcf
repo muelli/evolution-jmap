@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:test1@domain.tld
+N:;;;;
+EMAIL:test1@domain.tld
+EMAIL:test2@domain.tld
+EMAIL:test3@domain.tld
+END:VCARD

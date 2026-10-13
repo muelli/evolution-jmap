@@ -263,6 +263,43 @@ runtime. The remaining step-2 blocker is Rust dependency vendoring for offline
 Flatpak builds. The next step is to add vendored crate sources plus cargo
 offline configuration to this manifest.
 
+## Batch 6 step 2 offline-vendoring completion (2026-10-13 UTC)
+
+This follow-up increment resolves the crates.io DNS blocker by vendoring Rust
+dependencies in-tree and wiring cargo to offline mode inside the Flatpak build
+sandbox.
+
+### Changes applied
+
+- Added cargo source replacement config:
+  `packaging/flatpak/cargo-vendor-config.toml`.
+- Added vendored crates under `packaging/flatpak/vendor/` from:
+  `timeout 7200 cargo vendor --locked --versioned-dirs ../packaging/flatpak/vendor`.
+- Updated source-build manifest
+  `packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`:
+  - Added `CARGO_NET_OFFLINE=true`.
+  - Added SDK extension `org.freedesktop.Sdk.Extension.llvm21` and
+    `LIBCLANG_PATH=/usr/lib/sdk/llvm21/lib` for bindgen.
+  - Installed cargo config into `${CARGO_HOME}/config.toml` before build.
+  - Kept CMake source build and component installs for four backend components.
+  - Installed the Evolution config module artifact directly from
+    `_flatpak-build/cargo-target/release/libjmap_config_module.so` to
+    `${FLATPAK_DEST}/lib/evolution/modules/module-jmap-configuration.so`.
+
+### Probe results
+
+- First offline run no longer tried to resolve `index.crates.io`; cargo reached
+  crate compilation from vendored sources.
+- Next run failed in bindgen due missing `libclang` in default SDK path;
+  resolved by adding LLVM SDK extension and `LIBCLANG_PATH`.
+- Next run failed when `cmake --install --component config-module` tried to
+  install packaging docs to `/usr/share/doc/evolution-jmap`; worked around in
+  manifest by installing only the module `.so` artifact needed by this
+  extension payload.
+- Final run succeeded end to end:
+  `timeout 5400 flatpak-builder --user --install --force-clean --state-dir packaging/flatpak/.flatpak-builder packaging/flatpak/.build-source-vendor packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`
+  built and installed `runtime/org.gnome.Evolution.Extension.evolution-jmap/x86_64/stable`.
+
 ## Batch 6 step 3 factory-load probe (2026-10-13 UTC)
 
 This increment exercises the EDS factory processes inside the sandbox and
@@ -336,6 +373,7 @@ proposed as a Flathub contribution. It does not submit anything.
   vendoring instructions, and the factory-load proof from Batch 6 step 3 that
   demonstrates successful backend registration after ABI-matched rebuild.
 
-Current status at the end of Batch 6 step 4: naming and branch constraints are
-documented; submission remains pending on offline vendoring and ABI-matched
-source builds that pass the factory-load probe.
+Current status at the end of Batch 6 step 4 plus this step-2 follow-up:
+naming and branch constraints are documented, and an ABI-matched offline source
+build now installs as a local extension runtime. Submission remains pending on
+the factory-load proof from in-sandbox EDS processes after this rebuild.

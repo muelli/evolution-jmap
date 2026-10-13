@@ -1,0 +1,9 @@
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:Example calendar with a ': ' in the summary
+END:VEVENT
+BEGIN:VEVENT
+SUMMARY:Another event with a ': ' in the summary
+END:VEVENT
+END:VCALENDAR
+

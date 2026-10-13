@@ -1,0 +1,25 @@
+{
+  "errors": [
+    {
+      "comp_id": 1,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 2,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 3,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 4,
+      "error": "MissingDtStart"
+    },
+    {
+      "comp_id": 5,
+      "error": "MissingDtStart"
+    }
+  ],
+  "events": []
+}

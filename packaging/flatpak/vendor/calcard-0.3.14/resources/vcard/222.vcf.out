@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:2.1
+FN;CHARSET=UTF-8:Hans Müller
+ORG:Mein Schiff
+ADR;TYPE=WORK;POSTAL;CHARSET=UTF-8:;;;Nürnberg;;90329;Deutschland
+URL;TYPE=WORK:http://www.meinschiff.de
+EMAIL;PREF;INTERNET:hans@schiff.de
+REV:20120412T110335Z
+END:VCARD
+

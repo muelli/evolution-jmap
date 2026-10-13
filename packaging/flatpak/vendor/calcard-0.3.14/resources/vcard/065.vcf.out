@@ -1,0 +1,24 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Stepcase TestUser
+N:TestUser;Stepcase;;;
+EMAIL;TYPE=INTERNET:testuser@stepcase.com
+X-GTALK:gtalk.step
+X-AIM:aim.step
+X-YAHOO:yahoo.step
+X-MSN:msn.step
+X-ICQ:icq.step
+X-JABBER:jabber.step
+TEL;TYPE=FAX:44444444
+TEL;TYPE=PAGER:66666666
+TEL;TYPE=HOME:22222222
+TEL;TYPE=CELL:11111111
+TEL;TYPE=FAX:55555555
+TEL;TYPE=WORK:33333333
+LABEL;TYPE=HOME:123 Home\, Home Street\r\nKowloon\, N/A\r\nHong Kong
+LABEL;TYPE=HOME:321 Office\, Work Road\r\nTsuen Wan NT\r\nHong Kong
+TITLE:CTO
+ORG:Stepcase.com
+NOTE:Stepcase test user is a robot.
+END:VCARD
+

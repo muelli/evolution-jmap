@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:second contact
+UID:testuid1
+BDAY:20180120
+EMAIL;TYPE=HOME:user@example.com
+TEL:0123456789
+END:VCARD
+

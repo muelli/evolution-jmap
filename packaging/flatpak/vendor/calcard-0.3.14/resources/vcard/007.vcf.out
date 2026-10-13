@@ -1,0 +1,18 @@
+BEGIN:VCARD
+VERSION:2.1
+N:Gump;Forrest
+FN:Forrest Gump
+ORG:Bubba Gump Shrimp Co.
+TITLE:Shrimp Man
+TEL;TYPE=WORK,VOICE:(111) 555-1212
+TEL;TYPE=HOME,VOICE:(404) 555-1212
+ADR;TYPE=WORK:;;100 Waters Edge;Baytown;LA;30314;United States of America
+LABEL;TYPE=WORK:100 Waters Edge\r\nBaytown\, LA 30314\r\nUnited States of A
+ merica
+ADR;TYPE=HOME:;;42 Plantation St.;Baytown;LA;30314;United States of America
+LABEL;TYPE=HOME:42 Plantation St.\r\nBaytown\, LA 30314\r\nUnited States of
+  America
+EMAIL;PREF;INTERNET;TYPE=HOME:forrestgump@example.com
+REV:20080424T195243Z
+END:VCARD
+

@@ -1,0 +1,14 @@
+BEGIN:VCALENDAR
+DURATION:P15DT5H20S
+DURATION:P7W
+URL;CN="John Smith":http://example.com/urivalue.html
+X-SKI-TITLE;RSVP=TRUE: This is an extension property
+SUMMARY:"No Property"
+SUMMARY;RSVP=TRUE,FALSE:Calendaring Interoperability Planning Meeting
+SUMMARY;ALTREP="This is an xname":altrep
+SUMMARY;CUTYPE="DESCRIPTION is a keyword":Xname parameter
+DTEND;VALUE=DATE:19990605
+DTSTART:19990605T103012
+CATEGORIES;RSVP=TRUE,FALSE:one,two
+END:VCALENDAR
+

@@ -1,0 +1,17 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Middle Family;Ny_full
+PHOTO:val\nue
+PHOTO:val\nue
+PHOTO:val\nue
+PHOTO;TYPE=atype:val\nue
+PHOTO;VALUE=binary:val\nue
+PHOTO;VALUE=binary:val\nue
+PHOTO;TYPE=atype;VALUE=binary:val\nue
+PHOTO;VALUE=TEXT:val\nue
+PHOTO;VALUE=TEXT:val\nue
+PHOTO;TYPE=atype;VALUE=TEXT:val\nue
+PHOTO;VALUE=URI:my://
+PHOTO;TYPE=atype;VALUE=URI:my://
+END:VCARD
+

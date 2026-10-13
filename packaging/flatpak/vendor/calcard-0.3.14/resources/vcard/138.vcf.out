@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Thompson;Default;;;
+FN:Default Thompson
+EMAIL;TYPE=INTERNET,WORK,pref:lthompson@example.com
+TEL;TYPE=WORK,pref:1-555-555-5555
+TEL;TYPE=CELL:1-444-444-4444
+item1.ADR;TYPE=WORK,pref:;;1245 Test;Sesame Street;California;11111;USA
+item1.X-ABADR:us
+UID:14:ABPerson
+X-Test;CN="Hello^'World^' want a ^?":test
+END:VCARD
+

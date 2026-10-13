@@ -1,0 +1,15 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Thompson;Default;;;
+FN:Default Thompson
+EMAIL;TYPE=INTERNET,WORK,pref:lthompson@example.com
+TEL;TYPE=WORK,pref:1-555-555-5555
+TEL;TYPE=CELL:1-444-444-4444
+item1.ADR;TYPE=WORK,pref:;;1245 Test;Sesame Street;California;11111;USA
+item1.X-ABADR:us
+X-APPLE-STRUCTURED-LOCATION;VALUE=URI:geo:123.123,123.123
+X-Test:Just some text\, <- here.
+X-Test:geo:123.123\,123.123
+UID:02F8B516-13BB-4C11-8127-386DBA86D906
+END:VCARD
+

@@ -1,0 +1,5 @@
+BEGIN:VCALENDAR
+ATTACH;FMTTYPE=text/plain;X-BASE64-PARAM="UGFyYW1ldGVyCg=";VALUE=BINARY:You
+  really spent the time to base64 decode this?\n
+END:VCALENDAR
+

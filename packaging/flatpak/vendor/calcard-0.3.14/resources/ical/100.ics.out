@@ -1,0 +1,33 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Podio API//EN//view-exporter//52593453
+METHOD:REQUEST
+X-WR-CALNAME:view52593586
+X-WR-TIMEZONE:Europe/Berlin
+CALSCALE:GREGORIAN
+X-COMMENT-USAGE:This calendar does not contain recurring events!
+X-COMMENT-GENERATOR:PHP Version 8.0.16 
+BEGIN:VEVENT
+STATUS:CONFIRMED
+SEQUENCE:0
+TRANSP:OPAQUE
+CLASS:PUBLIC
+UID:20055546456446
+SUMMARY:Termin 4353 und"so"
+DESCRIPTION;ALTREP="data:text/html;base64,PGJvZHk+PHA+VG9sbGVyIDxzdHJvbmcgY
+ 2xhc3M9InRleHQtYm9sZCI+VGVybWluPC9zdHJvbmc+IGbDvHI8L3A+PGJsb2NrcXVvdGU+PHA
+ +bWFsIDxlbSBjbGFzcz0idGV4dC1pdGFsaWMiPnp1Imd1Y2tlbiI8L2VtPjwvcD48L2Jsb2Nrc
+ XVvdGU+PHA+PHUgY2xhc3M9InRleHQtdW5kZXJsaW5lIj51bmQ8L3U+IDxkZWw+c288L2RlbD4
+ 8YnIvPjwvcD48L2JvZHk+":Toller Termin fürmal zu"gucken"und so
+X-ALT-DESC;FMTTYPE=text/html:<html><head></head><body><p>Toller <strong cla
+ ss="text-bold">Termin</strong> für</p><blockquote><p>mal <em class="text-
+ italic">zu"gucken"</em></p></blockquote><p><u class="text-underline">und</
+ u> <del>so</del><br/></p></body></html>
+URL:https://podio.com/xxxxxxyyyyyy/zpodio-testgelande/apps/calendar/items/5
+LOCATION:online
+DTSTART:20220222T183000Z
+DTEND:20220222T193000Z
+DTSTAMP:20220220T142821Z
+END:VEVENT
+END:VCALENDAR
+

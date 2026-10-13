@@ -1,0 +1,16 @@
+BEGIN:VCARD
+VERSION:3.0
+N;CHARSET=UTF-8:München;Falk;;;
+FN;CHARSET=UTF-8:München\, Falk
+ADR;TYPE=HOME:;;Klippe 58;Bad Vilbel;;21255
+LABEL:Klippe 58
+TEL;TYPE=HOME,VOICE:12212/1212
+TEL;TYPE=HOME,FAX:
+TEL;TYPE=CELL,VOICE:0171-9394461
+ADR;TYPE=WORK;CHARSET=UTF-8:;;Platz der Republik 1;Düsseldorf;;40222
+LABEL:Platz des Republik 1
+EMAIL;TYPE=PREF,INTERNET:falk.muenchoen@landtag.xyz.de
+URL;TYPE=HOME:http://falk-muenchoen.de
+TITLE:Landtagsabgeordneter
+END:VCARD
+

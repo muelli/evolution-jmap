@@ -1,0 +1,304 @@
+> test JSPROP
+JSPROP;JSPTR="example.com:foo":true
+> convert
+"example.com:foo": true
+
+> test JSPROP object
+JSPROP;JSPTR="example.com:foo":{"bar":1234\,"baz":"bam"}
+> convert
+"example.com:foo": {
+  "bar": 1234,
+  "baz": "bam"
+}
+
+> test Unsupported object
+BEGIN:VEVENT
+SUMMARY;X-FOO=bar:test
+X-BAR:bam
+BEGIN:X-BAZ
+UID:507A08F9-81D8-4D16-9480-D6D75E977943
+END:X-BAZ
+> convert
+{
+  "@type": "Event",
+  "title": "test",
+  "iCalendar": {
+    "name": "vevent",
+    "convertedProperties": {
+      "title": {
+        "parameters": {
+          "x-foo": "bar"
+        }
+      }
+    },
+    "properties": [
+      [
+        "x-bar",
+        {},
+        "unknown",
+        "bam"
+      ]
+    ],
+    "components": [
+      [
+        "x-baz",
+        [
+          [
+            "uid",
+            {},
+            "unknown",
+            "507A08F9-81D8-4D16-9480-D6D75E977943"
+          ]
+        ],
+        []
+      ]
+    ]
+  }
+}
+
+> test VEVENT with VTIMEZONE
+BEGIN:VCALENDAR
+METHOD:PUBLISH
+X-WR-TIMEZONE:America/Vancouver
+PRODID:-//Apple Inc.//iCal 3.0//EN
+CALSCALE:GREGORIAN
+X-WR-CALNAME:weekly
+VERSION:2.0
+X-WR-RELCALID:967F55F6-968E-49EF-A050-DAF6DB680D39
+X-APPLE-CALENDAR-COLOR:#F57802
+BEGIN:VTIMEZONE
+TZID:America/Vancouver
+BEGIN:DAYLIGHT
+TZOFFSETFROM:-0800
+TZOFFSETTO:-0700
+DTSTART:20070311T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+TZNAME:PDT
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:-0700
+TZOFFSETTO:-0800
+DTSTART:20071104T020000
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+TZNAME:PST
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+SEQUENCE:7
+DESCRIPTION:It will pay the bills.
+UID:CFE00EC6-AB4A-4FCE-A32F-6076BA1D8578
+TRANSP:OPAQUE
+URL;VALUE=URI:http://www.worklessparty.org/
+DTSTART;TZID=America/Vancouver:20090309T090000
+DTSTAMP:20090310T034303Z
+SUMMARY:Go to work.
+CREATED:20090310T033824Z
+DTEND;TZID=America/Vancouver:20090309T170000
+RRULE:FREQ=WEEKLY;INTERVAL=1
+END:VEVENT
+END:VCALENDAR
+> convert
+{
+  "@type": "Group",
+  "entries": [
+    {
+      "@type": "Event",
+      "created": "2009-03-10T03:38:24Z",
+      "description": "It will pay the bills.",
+      "duration": "PT8H",
+      "freeBusyStatus": "busy",
+      "iCalendar": {
+        "convertedProperties": {
+          "duration": {
+            "name": "dtend"
+          },
+          "links/faf840dc-9a59-5649-b048-ea2d2ef7966f/href": {
+            "name": "url"
+          }
+        },
+        "name": "vevent"
+      },
+      "links": {
+        "faf840dc-9a59-5649-b048-ea2d2ef7966f": {
+          "@type": "Link",
+          "href": "http://www.worklessparty.org/",
+          "rel": "describedby"
+        }
+      },
+      "method": "publish",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 1
+      },
+      "sequence": 7,
+      "start": "2009-03-09T09:00:00",
+      "timeZone": "America/Vancouver",
+      "title": "Go to work.",
+      "uid": "CFE00EC6-AB4A-4FCE-A32F-6076BA1D8578",
+      "updated": "2009-03-10T03:43:03Z"
+    }
+  ],
+  "iCalendar": {
+    "components": [
+      [
+        "vtimezone",
+        [
+          [
+            "tzid",
+            {},
+            "unknown",
+            "America/Vancouver"
+          ]
+        ],
+        [
+          [
+            "daylight",
+            [
+              [
+                "dtstart",
+                {},
+                "unknown",
+                "20070311T020000"
+              ],
+              [
+                "tzname",
+                {},
+                "unknown",
+                "PDT"
+              ],
+              [
+                "tzoffsetfrom",
+                {},
+                "unknown",
+                "-0800"
+              ],
+              [
+                "tzoffsetto",
+                {},
+                "unknown",
+                "-0700"
+              ],
+              [
+                "rrule",
+                {},
+                "unknown",
+                "FREQ=YEARLY;BYDAY=2SU;BYMONTH=3"
+              ]
+            ],
+            []
+          ],
+          [
+            "standard",
+            [
+              [
+                "dtstart",
+                {},
+                "unknown",
+                "20071104T020000"
+              ],
+              [
+                "tzname",
+                {},
+                "unknown",
+                "PST"
+              ],
+              [
+                "tzoffsetfrom",
+                {},
+                "unknown",
+                "-0700"
+              ],
+              [
+                "tzoffsetto",
+                {},
+                "unknown",
+                "-0800"
+              ],
+              [
+                "rrule",
+                {},
+                "unknown",
+                "FREQ=YEARLY;BYDAY=1SU;BYMONTH=11"
+              ]
+            ],
+            []
+          ]
+        ]
+      ]
+    ],
+    "name": "vcalendar",
+    "properties": [
+      [
+        "x-apple-calendar-color",
+        {},
+        "unknown",
+        "#F57802"
+      ],
+      [
+        "x-wr-calname",
+        {},
+        "unknown",
+        "weekly"
+      ],
+      [
+        "x-wr-relcalid",
+        {},
+        "unknown",
+        "967F55F6-968E-49EF-A050-DAF6DB680D39"
+      ],
+      [
+        "x-wr-timezone",
+        {},
+        "unknown",
+        "America/Vancouver"
+      ],
+      [
+        "calscale",
+        {},
+        "unknown",
+        "GREGORIAN"
+      ]
+    ]
+  },
+  "prodId": "-//Apple Inc.//iCal 3.0//EN"
+}
+> convert
+BEGIN:VCALENDAR
+X-APPLE-CALENDAR-COLOR:#F57802
+X-WR-CALNAME:weekly
+X-WR-RELCALID:967F55F6-968E-49EF-A050-DAF6DB680D39
+X-WR-TIMEZONE:America/Vancouver
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+PRODID:-//Apple Inc.//iCal 3.0//EN
+BEGIN:VEVENT
+DESCRIPTION:It will pay the bills.
+SUMMARY:Go to work.
+DTEND;TZID=America/Vancouver:20090309T170000
+DTSTART;TZID=America/Vancouver:20090309T090000
+TRANSP:OPAQUE
+URL:http://www.worklessparty.org/
+UID:CFE00EC6-AB4A-4FCE-A32F-6076BA1D8578
+RRULE:FREQ=WEEKLY;INTERVAL=1
+CREATED:20090310T033824Z
+DTSTAMP:20090310T034303Z
+SEQUENCE:7
+END:VEVENT
+BEGIN:VTIMEZONE
+TZID:America/Vancouver
+BEGIN:DAYLIGHT
+TZOFFSETFROM:-0800
+TZOFFSETTO:-0700
+DTSTART:20070311T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+TZNAME:PDT
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:-0700
+TZOFFSETTO:-0800
+DTSTART:20071104T020000
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+TZNAME:PST
+END:STANDARD
+END:VTIMEZONE
+END:VCALENDAR

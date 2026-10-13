@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+REV:20160530T103613Z
+N:Desloovere;Jeroen;;;
+FN:Jeroen Desloovere
+item1.EMAIL;TYPE=INTERNET:site@example.com
+item1.X-ABLabel:$!<Email>!$
+item2.URL:http://www.jeroendesloovere.be
+item2.X-ABLabel:$!<Home>!$
+END:VCARD
+
