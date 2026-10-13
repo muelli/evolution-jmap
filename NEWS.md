@@ -11,8 +11,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   connect to the server, caused by its own setup accidentally
   triggering a second sign-in.
 - Editing a JMAP account's server address now triggers a fresh sign-in
-  instead of needing Evolution restarted to take effect. (Not yet
-  confirmed against a live Evolution session.)
+  instead of needing Evolution restarted to take effect.
 - A new account's Sent and Drafts folders are now configured
   automatically from the server's own folder roles, the same way
   Inbox, Trash and Junk already were.
@@ -35,6 +34,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   against Stalwart): folder creation, calendar participants and
   notifications, and shared-resource ownership now tolerate several
   real-server quirks that used to produce spurious errors.
+- Setting up or reconnecting several JMAP accounts at once no longer
+  lets one slow or unreachable server's address lookup delay the
+  others.
 - Added a German translation.
 - Mail, contacts and calendars have all been verified against a real
   JMAP server at real-world scale (up to 10,000 messages, 5,000

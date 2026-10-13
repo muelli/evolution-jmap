@@ -27,7 +27,14 @@ evolution-jmap (0.5.0) UNRELEASED; urgency=medium
     against Stalwart): folder creation, calendar participants and
     notifications, and shared-resource ownership now tolerate several
     real-server quirks that used to produce spurious errors.
+  * Setting up or reconnecting several JMAP accounts at once no longer
+    lets one slow or unreachable server's address lookup delay the
+    others.
   * Added a German translation.
+  * Mail, contacts and calendars have all been verified against a real
+    JMAP server at real-world scale (up to 10,000 messages, 5,000
+    contacts and 3,000 calendar events, including through
+    evolution-data-server itself), with no correctness problems found.
 
  -- Tobias Mueller <muelli@cryptobitch.de>  Sat, 10 Oct 2026 05:39:49 +0000
 
