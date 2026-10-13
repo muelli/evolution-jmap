@@ -1,55 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A translator's `.po` turned into the `.mo` gettext opens at run time.
+//! Compiles a translator's `.po` into a runtime `.mo` catalogue.
 //!
-//! This is `msgfmt`, restricted to what this project's catalogues contain, and
-//! written here rather than shelled out to.
+//! This crate intentionally implements a small `msgfmt` subset so builds do not
+//! depend on gettext tools being installed.
 //!
-//! ## Why not `msgfmt`
-//!
-//! Because the build would then need the gettext tools installed, and the CI
-//! image does not have them — the extraction step that produces
-//! `po/evolution-jmap.pot` is deliberately a developer's command whose *output*
-//! is committed, so nothing in CI runs `xgettext`. Compiling is different: it
-//! has to happen at build time, once per language, on every machine that builds
-//! the project, because a `.mo` is a binary artefact that has no business being
-//! in the tree. Making that a build dependency on gettext would either add a
-//! package to an image this repository's autonomous sessions must not change,
-//! or make catalogues quietly optional — and "quietly optional" is how a
-//! translated build ships in English.
-//!
-//! The format is small and frozen. `jmap-backend-core`'s `tests/catalogue.rs`
-//! already writes one by hand for the same reason; this is that code grown a
-//! `.po` parser and a set of refusals.
-//!
-//! ## What it refuses, and why refusing is the point
-//!
-//! A compiler for a subset has two ways to meet something outside the subset:
-//! drop it, or stop. Dropping loses a translation with no diagnostic — the
-//! build stays green and a user reads English — so everything here stops:
-//! `msgctxt`, plural forms, an escape it does not know, a duplicate message, a
-//! line it cannot place, a catalogue that declares a charset other than UTF-8.
-//! Every one of those names its line, because a translator's file is edited by
-//! someone who is not reading this code.
-//!
-//! Two things are dropped rather than refused, because dropping is what they
-//! *mean*: an entry marked `fuzzy` (a translator's guess, not yet a
-//! translation) and an entry with an empty `msgstr` (untranslated). gettext
-//! falls back to the English msgid for both, which is the intended result. The
-//! header entry is exempt from the fuzzy rule — `msginit` marks it fuzzy in
-//! every new catalogue, and dropping it would take the charset declaration with
-//! it.
+//! Unsupported constructs are refused with line-aware errors. Empty `msgstr`
+//! entries and fuzzy non-header entries are skipped so gettext falls back to
+//! the msgid.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// Compiles the text of a `.po` file into the bytes of a `.mo` file.
 ///
-/// The entries come out sorted by msgid, which the format requires of a
-/// catalogue with no hash table: gettext binary-searches the table of
-/// originals, so an unsorted catalogue is one whose lookups miss without
-/// saying so.
+/// Entries are sorted by msgid because a hashless `.mo` lookup binary-searches
+/// the originals table.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
@@ -137,8 +104,7 @@ enum Reading {
     Msgstr,
 }
 
-/// The entries of `po`, keyed by msgid — which is also the order the `.mo`
-/// needs them in, `BTreeMap` sorting by the bytes of the key.
+/// Parses entries keyed by msgid, which also provides the sorted `.mo` order.
 fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     let mut entries = BTreeMap::new();
     let mut pending: Option<Pending> = None;
@@ -149,9 +115,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // An obsolete entry — one `msgmerge` kept for its translation's sake
-        // after the message left the sources. It is commented out, and stays
-        // out.
+        // Obsolete `msgmerge` entries are commented out and stay excluded.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -241,8 +205,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     }
 }
 
-/// Files the entry that has just ended, or drops it if it is not a
-/// translation.
+/// Files the finished entry, or drops it when it is not a translation.
 fn take(
     pending: &mut Option<Pending>,
     entries: &mut BTreeMap<String, String>,
@@ -274,13 +237,9 @@ fn take(
     Ok(())
 }
 
-/// The charset the header entry declares, or an empty string if it declares
-/// none.
+/// Returns the header charset, or empty when no charset is declared.
 ///
-/// The header is a set of `Name: value` lines; the one that matters here is
-/// `Content-Type: text/plain; charset=UTF-8`. Only the value after `charset=`
-/// is looked for, because that is the only part of the header this compiler
-/// acts on — everything else in it is for translators and their tools.
+/// Only the `charset=` value from `Content-Type` is relevant here.
 fn charset(header: &str) -> String {
     let Some(at) = header.find("charset=") else {
         return String::new();
@@ -292,12 +251,10 @@ fn charset(header: &str) -> String {
         .to_owned()
 }
 
-/// The contents of a `"…"` string, with its escapes decoded.
+/// Decodes the contents of a `"…"` string.
 ///
-/// `text` is everything after the keyword, or the whole line for a
-/// continuation. Anything outside the quotes is whitespace — a `.po` has no
-/// trailing comments — so this insists on that rather than skipping over what
-/// it does not recognise.
+/// `text` is either a keyword suffix or a continuation line, and must be a
+/// fully quoted string with no trailing tokens.
 fn unquote(text: &str, line: usize) -> Result<String, Error> {
     let trimmed = text.trim();
     let unparsed = || Error::Unparsed {
@@ -328,9 +285,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Octal and hexadecimal escapes are legal in a `.po` and are not
-            // implemented, so they arrive here: refused, rather than decoded
-            // into the wrong character.
+            // Octal and hex escapes are legal in `.po` but unsupported here.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -342,12 +297,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
     Ok(decoded)
 }
 
-/// The entries as the bytes of a `.mo` file.
-///
-/// Little-endian throughout — the byte order of the magic number is the byte
-/// order of every other field, and gettext reads either — and with no hash
-/// table, which the format allows and gettext handles by binary-searching the
-/// (sorted) table of originals.
+/// Encodes parsed entries as a little-endian `.mo` with no hash table.
 fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
@@ -379,8 +329,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     Ok(mo)
 }
 
-/// One row of a table — where its string is and how long it is — with the
-/// string appended to the blob the offsets point into.
+/// Writes one table row and appends the string bytes to the shared blob.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> Result<(), Error> {
     let at = strings_at + blob.len() as u64;
     let end = at + s.len() as u64;

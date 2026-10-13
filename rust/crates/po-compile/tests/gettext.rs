@@ -1,30 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The compiler's output, read by the program that will actually read it.
+//! Verifies glibc gettext can read this crate's compiled `.mo` output.
 //!
-//! `tests/compile.rs` checks the bytes against the documented layout, which is
-//! a statement about this repository's understanding of the format. This test
-//! makes the other statement: glibc's gettext — the exact implementation the
-//! installed modules call — opens the file, finds the message, and hands back
-//! the translation. Nothing here goes through this project's own `i18n`
-//! module, which lives in a crate needing the EDS headers; the three libc
-//! functions are declared where they are used, so the check runs in a plain
-//! `cargo test`.
-//!
-//! ## Why it is alone in its file
-//!
-//! The domain binding, `LANGUAGE`, and the locale are all process-global.
-//! Cargo gives each file in `tests/` its own process, and that is the
-//! isolation.
-//!
-//! ## What it cannot always check
-//!
-//! glibc consults no catalogue at all while `LC_MESSAGES` is `C`, `POSIX` or
-//! `C.UTF-8`: it returns the msgid unchanged, by design. On a machine with no
-//! other locale generated there is therefore nothing to look up, and the test
-//! asserts *that* contract instead — and prints which of the two it ran,
-//! because the difference matters when reading a log.
+//! This test is isolated in its own binary because locale and domain bindings
+//! are process-global. When only C or POSIX locales exist, gettext returns the
+//! msgid unchanged and this test checks that fallback behavior instead.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -38,19 +19,13 @@ unsafe extern "C" {
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
 }
 
-/// glibc's `LC_MESSAGES`. Hard-coded rather than pulled in with a dependency
-/// on `libc` for one integer; it is fixed by the ABI on the platforms this
-/// project builds for.
+/// glibc's `LC_MESSAGES` value.
 const LC_MESSAGES: c_int = 5;
 
-/// A domain of this test's own. Not `evolution-jmap`: binding that one here
-/// would state where the real catalogues are on the strength of a temporary
-/// directory.
+/// A test-only gettext domain.
 const DOMAIN: &CStr = c"po-compile-test";
 
-/// Deliberately not a language anyone speaks — it is selected through
-/// `LANGUAGE`, which glibc consults ahead of the locale, so no locale of this
-/// name has to exist on the machine.
+/// Synthetic language tag selected through `LANGUAGE`.
 const LANGUAGE: &str = "xx";
 
 const MSGID: &CStr = c"For reading and storing mail on JMAP servers.";
@@ -71,18 +46,15 @@ const PO: &str = concat!(
     "msgstr \"Zum Lesen und Speichern von E-Mail auf JMAP-Servern.\"\n",
 );
 
-/// Whether this machine has a locale under which gettext will consult a
-/// catalogue at all.
+/// Returns a locale where gettext consults message catalogues.
 fn a_locale_that_can_translate() -> Option<String> {
     for candidate in [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"] {
-        // SAFETY: a C string, and this is the only thread that touches the
-        // locale — the test is alone in its binary.
+        // SAFETY: this test binary is single-threaded when it runs.
         let set = unsafe { setlocale(LC_MESSAGES, candidate.as_ptr()) };
         if set.is_null() {
             continue;
         }
-        // SAFETY: a non-NULL return is a C string glibc owns; it is copied out
-        // before anything can change the locale again.
+        // SAFETY: non-NULL points to a glibc-owned C string that is copied.
         let name = unsafe { CStr::from_ptr(set) }
             .to_string_lossy()
             .into_owned();
@@ -108,8 +80,7 @@ fn glibc_reads_what_this_compiler_wrote() {
 
     let translating = a_locale_that_can_translate();
 
-    // SAFETY: single-threaded — this is the only test in the binary, and it
-    // runs before any lookup.
+    // SAFETY: this binary contains one test and sets locale-related state once.
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
     let bound = CString::new(root.as_os_str().as_bytes()).expect("a path without a NUL");

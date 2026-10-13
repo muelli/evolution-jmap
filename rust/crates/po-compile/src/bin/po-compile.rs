@@ -1,16 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `po-compile <catalogue.po> <catalogue.mo>` — the build step that turns a
-//! translation into something gettext can open.
+//! Build helper: `po-compile <catalogue.po> <catalogue.mo>`.
 //!
-//! Deliberately two positional arguments and no options: it is called by the
-//! build system, once per language, and every choice it could offer is one the
-//! build system would have to make the same way every time.
-//!
-//! A failure exits non-zero with the reason on stderr, which is what makes a
-//! broken translation a red build rather than a language that quietly reverts
-//! to English.
+//! The interface stays to two positional arguments because the build system
+//! drives it directly. Failures print a reason and exit non-zero.
 
 use std::process::ExitCode;
 
