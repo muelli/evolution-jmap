@@ -19,21 +19,27 @@
 //! card built from entries that are all stateable, and are left for a later
 //! increment.
 //!
-//! `anniversaries` is covered here too, but not by the same invariant: its
-//! key never survives Evolution at all (EDS rebuilds the date line and
-//! `read_contact` hands back a fresh synthetic key every time), so literal
-//! equality with the edited card is the wrong thing to check — that key is
-//! an artifact of the reader, not anything the user chose or the save
-//! should reproduce. What `rekey_keyless` promises instead is that the
-//! content lands back under *current's* key when it pairs by `kind`, and
-//! only a genuine addition (a kind with no current counterpart) keeps the
-//! edited card's own key, so `arb_anniversary_cards` builds a third,
-//! explicit "expected" card to say so, and `anniversaries_round_trip` checks
-//! against that rather than against `edited` directly. Scoped out, left for
-//! later: a `kind` change on a literally-surviving key (needs a key
-//! collision this generator does not construct) and the `Timestamp`
-//! (point-in-time) date shape, whose whole-value-replace branch this
-//! increment does not exercise.
+//! `anniversaries` and `media` are covered here too, but not by the same
+//! invariant: their keys never survive Evolution at all (EDS rebuilds the
+//! date line, and the first `PHOTO` line, dropping parameters, every time),
+//! so literal equality with the edited card is the wrong thing to check —
+//! that key is an artifact of the reader, not anything the user chose or the
+//! save should reproduce. What `rekey_keyless` promises instead is that the
+//! content lands back under *current's* key when it pairs (by `kind` for an
+//! anniversary, with the first unclaimed visible entry for a photo), and
+//! only a genuine addition (nothing to pair with) keeps the edited card's
+//! own key, so `arb_anniversary_cards`/`arb_media_cards` build a third,
+//! explicit "expected" card to say so, and `anniversaries_round_trip`/
+//! `media_round_trip` check against that rather than against `edited`
+//! directly. Scoped out, left for later: for anniversaries, a `kind` change
+//! on a literally-surviving key (needs a key collision this generator does
+//! not construct) and the `Timestamp` (point-in-time) date shape, whose
+//! whole-value-replace branch this increment does not exercise; for media,
+//! `data:` URI photos (so `mediaType` and the base64/subtype comparison in
+//! `same_photo` stay untested), a second simultaneously-visible photo
+//! (`rekey_keyless`'s "first unclaimed" ordering rather than its
+//! single-candidate case), and non-photo (`logo`/`sound`) entries passing
+//! through `diff_entries` untouched.
 //!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
@@ -67,7 +73,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Link, Nickname, Note, OrgUnit, Organization, Title,
+    Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note, OrgUnit, Organization, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -522,6 +528,82 @@ fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, C
     })
 }
 
+/// One photo's slot across (current, edited), same shape as
+/// `AnniversarySlot`: absent, a genuine addition, a removal, or present on
+/// both with independently-chosen URIs (a modification, possibly a no-op
+/// one).
+#[derive(Clone, Debug)]
+enum MediaSlot {
+    Absent,
+    Added(String),
+    Removed(String),
+    Modified(String, String),
+}
+
+/// A non-`data:` URI, so `same_photo` reduces to comparing this string:
+/// `data:` URIs and `mediaType` are left for a later increment.
+fn arb_photo_uri() -> impl Strategy<Value = String> {
+    "[a-z]{3,8}://[a-z0-9]{1,10}\\.jpg"
+}
+
+fn arb_media_slot() -> impl Strategy<Value = MediaSlot> {
+    prop_oneof![
+        Just(MediaSlot::Absent),
+        arb_photo_uri().prop_map(MediaSlot::Added),
+        arb_photo_uri().prop_map(MediaSlot::Removed),
+        (arb_photo_uri(), arb_photo_uri()).prop_map(|(old, new)| MediaSlot::Modified(old, new)),
+    ]
+}
+
+fn card_with_media(map: BTreeMap<String, Media>) -> ContactCard {
+    ContactCard {
+        media: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// Builds (current, edited, expected) for the one photo Evolution shows and
+/// can edit. Like `arb_anniversary_cards`, `current` and `edited` always use
+/// different keys (`c-photo` / `e-photo`), modelling that a photo's key is
+/// never the same one twice; `expected` is what `rekey_keyless` should
+/// produce: a `Modified` slot lands under current's key (the pairing this
+/// increment exists to check), an `Added` one keeps edited's own key, and a
+/// `Removed` one leaves no entry at all.
+fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    arb_media_slot().prop_map(|slot| {
+        let mut current = BTreeMap::new();
+        let mut edited = BTreeMap::new();
+        let mut expected = BTreeMap::new();
+        let current_key = "c-photo".to_owned();
+        let edited_key = "e-photo".to_owned();
+        let entry = |uri: String| Media {
+            kind: Some("photo".to_owned()),
+            uri,
+            ..Media::default()
+        };
+        match slot {
+            MediaSlot::Absent => {}
+            MediaSlot::Added(uri) => {
+                edited.insert(edited_key.clone(), entry(uri.clone()));
+                expected.insert(edited_key, entry(uri));
+            }
+            MediaSlot::Removed(uri) => {
+                current.insert(current_key, entry(uri));
+            }
+            MediaSlot::Modified(old, new) => {
+                current.insert(current_key.clone(), entry(old));
+                edited.insert(edited_key, entry(new.clone()));
+                expected.insert(current_key, entry(new));
+            }
+        }
+        (
+            card_with_media(current),
+            card_with_media(edited),
+            card_with_media(expected),
+        )
+    })
+}
+
 /// Like [`round_trips`], but against an `expected` card distinct from
 /// `edited`: the right check for a property whose key `rekey_keyless`
 /// reassigns rather than preserves. See `arb_anniversary_cards`.
@@ -610,6 +692,13 @@ proptest! {
     #[test]
     fn anniversaries_round_trip(
         (current_card, edited_card, expected_card) in arb_anniversary_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
+    }
+
+    #[test]
+    fn media_round_trip(
+        (current_card, edited_card, expected_card) in arb_media_cards()
     ) {
         round_trips_to(&current_card, &edited_card, &expected_card)?;
     }
