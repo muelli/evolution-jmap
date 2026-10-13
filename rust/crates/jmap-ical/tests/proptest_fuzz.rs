@@ -156,7 +156,7 @@ fn arb_time_zone_string() -> impl Strategy<Value = String> {
         Just("Africa/Cairo".to_string()),
         Just("Pacific/Auckland".to_string()),
         Just("Etc/GMT+5".to_string()),
-        // Windows time zone names from real exporters (Unicode CLDR / batch 8)
+        // Windows time zone names from real exporters (Unicode CLDR)
         Just("W. Europe Standard Time".to_string()),
         Just("Romance Standard Time".to_string()),
         Just("GMT Standard Time".to_string()),
@@ -172,7 +172,7 @@ fn arb_time_zone_string() -> impl Strategy<Value = String> {
         Just("E. South America Standard Time".to_string()),
         Just("UTC-11".to_string()),
         Just("UTC+12".to_string()),
-        // Globally-unique TZID forms (RFC 5545 §3.8.3.1 / batch 8)
+        // Globally-unique TZID forms (RFC 5545 §3.8.3.1)
         Just("/mozilla.org/20070129_1/Europe/Berlin".to_string()),
         Just("/citadel.org/20080105_1/Europe/Paris".to_string()),
         Just("/freeassociation.sourceforge.net/Tzfile/Europe/Berlin".to_string()),
@@ -1359,14 +1359,8 @@ proptest! {
     }
 }
 
-/// Regression test for the minimal input `prop_ical_roundtrip_reaches_fixed_point_stability`
-/// found: a `CATEGORIES` tag ending in a space right before a character `calcard`
-/// escapes on emit (here `;`) used to lose that space on the next parse — `calcard`'s
-/// tokenizer treated it as trailing whitespace to trim, not realising the following
-/// backslash-escape would keep the token going. Fixed upstream between calcard 0.3.9
-/// (bundled when this was found) and 0.3.11 (bumped for this fix); pinned here as a
-/// deterministic case so a future downgrade or reintroduction is caught without
-/// relying on `proptest` to regenerate the same random seed.
+/// Regression test: a `CATEGORIES` tag ending in a space before an escaped character
+/// (here `;`) previously lost that space on subsequent parse in calcard.
 #[test]
 fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:a ;\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -1386,14 +1380,8 @@ fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
     );
 }
 
-/// Regression test for the finding that `jmap-ical` round trip is not a
-/// fixed point for a whitespace-only `CATEGORIES` value: a `CATEGORIES`
-/// value that is a single backslash-escaped space parses as the literal tag
-/// `" "` (calcard keeps an escaped character verbatim), which this crate then
-/// writes back unescaped as a bare `CATEGORIES: ` line — and calcard's own
-/// parser trims that bare, unescaped whitespace to the empty string on the
-/// next parse, so the tag disappears one round trip later than an event
-/// starting with no tag at all.
+/// Regression test: a whitespace-only `CATEGORIES` tag reaches fixed-point
+/// stability on the first emit rather than drifting across parses.
 #[test]
 fn a_category_that_is_only_whitespace_reaches_fixed_point_on_the_first_emit() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\ \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -1409,13 +1397,8 @@ fn a_category_that_is_only_whitespace_reaches_fixed_point_on_the_first_emit() {
     );
 }
 
-/// Same root cause as the test above, but with real content beside the
-/// whitespace: a trailing space survives the first parse (escaped) but is
-/// trimmed by calcard on the second (unescaped, bare) — so a tag `"0 "`
-/// settles to `"0"` one round trip later than a tag starting at `"0"`
-/// outright. Found by `proptest` after the whitespace-only fix above landed;
-/// pinned deterministically for the same reason the sibling regression tests
-/// in this file are.
+/// Regression test: a `CATEGORIES` tag with trailing whitespace reaches fixed-point
+/// stability on the first emit rather than settling one round-trip later.
 #[test]
 fn a_category_with_trailing_whitespace_reaches_fixed_point_on_the_first_emit() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\0 \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
