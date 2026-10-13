@@ -93,8 +93,7 @@ impl<T> GetResponse<T> {
 
 /// `Foo/set` arguments (RFC 8620 §5.3).
 ///
-/// `update` values are `PatchObject`s — maps of (JSON-pointer-ish) paths to
-/// new values — so they stay untyped here.
+/// `update` values are `PatchObject`s: maps of paths to new values, kept untyped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
@@ -169,14 +168,7 @@ pub struct SetResponse<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_state: Option<State>,
-    /// The state `Foo/get` will now return.
-    ///
-    /// RFC 8620 §5.3 types this `String`, not `String|null`, but Fastmail
-    /// answers `VacationResponse/set` with `"newState": null` (its
-    /// `VacationResponse/get` reports `"state": ""`, so it tracks no state for
-    /// the singleton at all). Refusing that is refusing a `200` whose `updated`
-    /// says the change was applied, which reports a save that happened as a
-    /// failure, so the null is taken as the "no state" it means.
+    /// The state `Foo/get` will now return. Nullable for servers omitting state on singletons.
     #[serde(default)]
     pub new_state: Option<State>,
     /// Server-set properties (at minimum `id`) per creation id.

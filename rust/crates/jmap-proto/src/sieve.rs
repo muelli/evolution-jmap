@@ -143,12 +143,8 @@ impl SieveScript {
 pub struct SieveScriptSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<SieveScript>,
-    /// `serde`'s blanket `Option<T>` impl treats a JSON `null` the same as
-    /// the key being absent, collapsing both to `None` — indistinguishable
-    /// here, where they mean opposite things ("leave the active script
-    /// alone" vs "deactivate it"). `deserialize_present` only runs when the
-    /// key is there at all, `null` included, so it is the field's presence
-    /// that this `Option` tracks, not whether its value is non-null.
+    /// Distinguishes key absence from JSON `null` ("deactivate script").
+    /// `deserialize_present` tracks property presence.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -307,17 +303,8 @@ impl SieveScriptValidateResponse {
     }
 }
 
-/// The two `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
-/// `invalidSieve` for a create or update whose content fails to parse, and
-/// `sieveIsActive` for a destroy of the currently active script (it must be
-/// deactivated in a separate call first). The RFC reuses three standard RFC
-/// 8620 §5.3 errors rather than defining Sieve-specific ones for the other
-/// documented failures: `alreadyExists` (duplicate name, with an
-/// `existingId` property), `tooLarge` (over `maxSizeScript`) and `overQuota`
-/// (over `maxNumberScripts` or storage) — see [`crate::error::set`].
-/// Activating two scripts at once cannot arise: `onSuccessActivateScript`
-/// names at most one id per call, so there is no `multipleActiveScripts`
-/// error to report.
+/// The `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
+/// `invalidSieve` for content parse failures, and `sieveIsActive` for destroy of active scripts.
 pub mod sieve_set_error {
     pub const INVALID_SIEVE: &str = "invalidSieve";
     pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";

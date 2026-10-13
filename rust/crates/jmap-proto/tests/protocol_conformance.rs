@@ -863,9 +863,7 @@ fn rfc9661_sieve_script_and_validation_forward_compatibility() {
     assert_eq!(script.extra["futureExtensionProperty"], "flag-tag");
     assert_eq!(script.extra["vendorAudit"]["passedValidation"], true);
 
-    // Real wire shape (RFC 9661 §2.6): only `accountId` and `error`, the
-    // latter a plain `SetError` — no `isValid` property, confirmed against
-    // real Stalwart 2026-10-10 (`STALWART-RFC-FINDINGS.md`).
+    // Real wire shape (RFC 9661 §2.6): only `accountId` and `error` (a plain `SetError`).
     let validate_resp_payload = json!({
         "accountId": "acc_sieve",
         "error": {

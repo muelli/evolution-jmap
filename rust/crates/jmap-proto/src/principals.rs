@@ -2,16 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JMAP Principals & Sharing (RFC 9670): the `Principal` object and its
-//! `/get`/`/query` methods — the shared floor both scheduling
+//! `/get`/`/query` methods, providing the floor for scheduling
 //! (`Principal/getAvailability`, draft-ietf-jmap-calendars) and per-source
-//! sharing build on. See `docs/PRINCIPALS-DESIGN.md` for the full design.
+//! sharing.
 //!
-//! `Principal/get`, `Principal/query` and `ShareNotification/get`/`/query`
-//! (RFC 9670 §4) are modeled here: resolving an email/name to a principal
-//! id and its capability bag, plus reading the notifications a `shareWith`
-//! grant produces, is all Track E Phase C needs. `Principal/set`,
-//! `Principal/changes` and `Principal/queryChanges` are not — this project
-//! never edits principals, and nothing yet syncs them.
+//! Models `Principal/get`, `Principal/query`, and `ShareNotification/get`/`/query`
+//! (RFC 9670 §4) for resolving principals and reading sharing notifications.
 
 use std::collections::BTreeMap;
 
@@ -45,12 +41,8 @@ pub struct Principal {
     /// Valid methods for sending scheduling messages to this principal (RFC 9670 §2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_to: Option<BTreeMap<String, String>>,
-    /// Server-set, per-*principal* capability bag — distinct from the
-    /// account/server capability maps in `session.rs`. This is where the
-    /// calendars draft hangs `mayGetAvailability` (draft-ietf-jmap-calendars
-    /// §2.2) among other extension-specific fields. Kept as a `Value` bag,
-    /// like every extension-defined property here, so one server's unknown
-    /// per-principal capability can't sink the whole `Principal/get`.
+    /// Server-set, per-*principal* capability bag, distinct from the
+    /// account/server capability maps in `session.rs`.
     #[serde(default)]
     pub capabilities: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,12 +144,8 @@ impl PrincipalQueryFilter {
     }
 }
 
-/// `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2 — spec'd in
-/// the calendars draft even though the object queried is a `Principal`; see
-/// `docs/PRINCIPALS-DESIGN.md` §2.3). A bespoke request/response shape, not
-/// the generic `GetRequest`/`GetResponse` in `methods.rs`, because the
-/// argument set is its own — mirrors how `EmailImportRequest` is bespoke in
-/// `mail.rs`.
+/// `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2).
+/// Bespoke request shape specifying principal ID and time range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAvailabilityRequest {
@@ -271,9 +259,8 @@ pub struct ShareNotification {
     pub changed_by: Option<Principal>,
     pub object_type: String,
     pub object_id: Id,
-    /// The account the shared object lives in (RFC 9670 §4). Spelled
-    /// `objectAccountId` on the wire, not `accountId` — verified against a
-    /// real Stalwart response (Track E Phase C's probe).
+    /// The account the shared object lives in (RFC 9670 §4).
+    /// Spelled `objectAccountId` on the wire, not `accountId`.
     pub object_account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

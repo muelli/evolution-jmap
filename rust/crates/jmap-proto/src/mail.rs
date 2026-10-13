@@ -338,23 +338,18 @@ pub mod role {
     /// Held for later sending (RFC 9979 §8.2).
     pub const SCHEDULED: &str = "scheduled";
     pub const SENT: &str = "sent";
-    /// Where snoozed messages wait (RFC 9979 §8.1 — the role is standard,
+    /// Where snoozed messages wait (RFC 9979 §8.1: the role is standard,
     /// the snoozing mechanism is not; see [`super::SnoozeDetails`]).
     pub const SNOOZED: &str = "snoozed";
     pub const SUBSCRIBED: &str = "subscribed";
     pub const TRASH: &str = "trash";
 }
 
-/// When a snoozed message wakes and where it goes: `Email.snoozed`, per
-/// draft-ietf-extra-email-snooze §4 as Cyrus implements it behind
-/// [`crate::session::CAPABILITY_CYRUS_MAIL`].
+/// When a snoozed message wakes and where it goes (`Email.snoozed`, per
+/// draft-ietf-extra-email-snooze §4 as implemented by Cyrus).
 ///
-/// The draft expired in 2024 without replacement, so this shape is vendor
-/// territory. It is modeled in this one place — plus the capability constant —
-/// so that a future RFC is a constant swap and a field check, not a rewrite.
-/// Setting it goes together with moving the message into the
-/// [`role::SNOOZED`] mailbox; the server moves it to `move_to_mailbox_id`
-/// (the inbox when absent) at `until` and applies `set_keywords`.
+/// Moving a message to [`role::SNOOZED`] moves it to `move_to_mailbox_id`
+/// at `until` and applies `set_keywords`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnoozeDetails {
@@ -622,18 +617,8 @@ impl Email {
     }
 }
 
-/// One message handed to `Email/import` (RFC 8621 §4.8): the blob the raw
-/// message was uploaded as, and what the account should file it under.
-///
-/// Every property is optional although the RFC makes `blobId` and `mailboxIds`
-/// required, for the reason [`Email`]'s are: this type is what a request is
-/// *deserialized into* as well as what a client fills in, and RFC 8621 §4.8 is
-/// explicit that a `blobId`, `mailboxIds` or `keywords` that is "missing, wrong
-/// type, id not found" is refused with an `invalidProperties` `SetError` — a
-/// per-message refusal, in a method whose other messages must still be
-/// imported. A required field here would turn one client mistake into a whole
-/// call failing to parse, which is the answer the RFC reserves for a request
-/// that is not an `Email/import` at all.
+/// One message handed to `Email/import` (RFC 8621 §4.8).
+/// Fields are optional on deserialization to isolate per-message invalidProperties errors.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailImport {
@@ -711,10 +696,8 @@ impl EmailImportRequest {
 
 /// `Email/import` response (RFC 8621 §4.8).
 ///
-/// `created` carries the properties the server chose — the RFC names `id`,
-/// `blobId`, `threadId` and `size` — as an [`Email`], whose properties are all
-/// optional, so what the server left out stays left out rather than arriving as
-/// a default.
+/// `created` carries server-chosen properties (`id`, `blobId`, `threadId`, `size`)
+/// as an [`Email`] with optional fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailImportResponse {
@@ -960,16 +943,7 @@ impl EmailParseResponse {
 }
 
 /// The `SetError` type RFC 8621 §4.8 adds for `Email/import`.
-///
-/// The generic types of RFC 8620 §5.3 cannot say this one: the properties of
-/// the `EmailImport` are all fine and the blob is there — what is wrong is the
-/// *content* of the blob, which is not a message. A server is allowed to repair
-/// such a blob instead and answer with a `blobId` of its own; refusing it is
-/// the other branch of the same paragraph.
-///
-/// `alreadyExists` is the paragraph before it and is deliberately not here: it
-/// belongs to a server that forbids two copies of one message in an account,
-/// which RFC 8621 §4.8 leaves as a MAY.
+/// `invalidEmail` indicates the blob content is not a parsable RFC 5322 message.
 pub mod email_import_error {
     pub const INVALID_EMAIL: &str = "invalidEmail";
 }

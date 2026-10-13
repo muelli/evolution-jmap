@@ -174,15 +174,8 @@ pub mod quota_scope {
     pub const GLOBAL: &str = "global";
 }
 
-/// Common `types` entries a `Quota` names (RFC 9425 §4.1): values come from
-/// the JMAP Types Names registry, not a closed set specific to quotas — the
-/// RFC gives "Email" and "Calendar" only as examples. These three are the
-/// ones this codebase checks quotas against, confirmed against a real
-/// Stalwart server's own `Quota/get` response (an account-wide disk quota
-/// named `types: ["Email", "SieveScript", "FileNode", "CalendarEvent",
-/// "ContactCard"]`), not assumed: earlier values ("Mail", "Contacts",
-/// "Calendars") were never emitted by any real server and never matched
-/// anything.
+/// Common `types` entries a `Quota` names (RFC 9425 §4.1). Values come from
+/// the JMAP Types Names registry rather than a closed set.
 pub mod quota_data_type {
     pub const MAIL: &str = "Email";
     pub const CONTACTS: &str = "ContactCard";

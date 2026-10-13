@@ -158,15 +158,7 @@ impl PushVerification {
 pub type TypeState = BTreeMap<String, State>;
 
 /// A server-pushed notification that something changed (RFC 8620 §7.1),
-/// delivered over the `text/event-stream` resource named by the session
-/// object's `eventSourceUrl` (§7.3).
-///
-/// Carries no more than *that* something changed and roughly *what* — a
-/// recipient compares each state string against what it already has and
-/// fetches only the accounts/types that moved, via the existing `/changes`
-/// methods. `@type` is required to be present and MUST be the literal string
-/// `"StateChange"`; nothing else is ever pushed on this channel to confuse
-/// it with.
+/// delivered over EventSource (§7.3). `@type` MUST be `"StateChange"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StateChange {
     #[serde(rename = "@type")]

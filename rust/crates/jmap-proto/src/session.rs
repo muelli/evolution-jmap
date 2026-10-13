@@ -33,11 +33,8 @@ pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
 pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
 pub const CAPABILITY_PRINCIPALS_AVAILABILITY: &str = "urn:ietf:params:jmap:principals:availability";
 pub const CAPABILITY_WEBPUSH_VAPID: &str = "urn:ietf:params:jmap:webpush-vapid";
-/// Cyrus's vendor mail extension: the only capability naming
-/// `Email.snoozed`, with draft-ietf-extra-email-snooze expired. Cyrus hides
-/// it behind `jmap_nonstandard_extensions`, and Fastmail's public API
-/// rejects it outright (see `jmap_client::snooze`), so an account
-/// advertising this is currently the exception rather than the rule.
+/// Cyrus's vendor mail extension: capability naming `Email.snoozed`
+/// per draft-ietf-extra-email-snooze.
 pub const CAPABILITY_CYRUS_MAIL: &str = "https://cyrusimap.org/ns/jmap/mail";
 
 /// Server capabilities, available accounts, and endpoint URLs.
@@ -115,29 +112,11 @@ impl Session {
         self.primary_accounts.get(capability)
     }
 
-    /// Which account serves `capability`, resolved the way RFC 8620 actually
-    /// allows rather than by `primaryAccounts` alone.
+    /// Which account serves `capability`, resolved per RFC 8620 §2.
     ///
-    /// `None` when `capability` names no server capability at all (a `using`
-    /// naming it would be answered `unknownCapability`, so nothing behind it
-    /// is reachable), or when nothing in the document can be believed there —
-    /// but before giving up, two more sources are tried:
-    ///
-    /// - `primaryAccounts` (RFC 8620 §2), taken as given when it has an entry
-    ///   — including one naming an account outside [`Account::is_personal`],
-    ///   because a server that designates a shared account as primary has
-    ///   said something deliberate.
-    /// - Failing that, §2 permits a server to omit `primaryAccounts`
-    ///   outright ("a server that does not support this concept MUST omit
-    ///   this property"), so the account is inferred from a position where
-    ///   there is nothing to guess: exactly one of the user's own accounts
-    ///   (`isPersonal`) offers the capability. Two of them and the answer is
-    ///   `None` — guessing wrong is worse than admitting the document does
-    ///   not say.
-    ///
-    /// Either way, a `primaryAccounts` entry naming an account that is absent
-    /// from `accounts`, or one that does not itself claim the capability, is
-    /// a contradiction in the document and is not believed.
+    /// Checks `primaryAccounts` first. If omitted by the server, falls back
+    /// to the sole personal account offering the capability. Returns `None` if
+    /// the capability is unknown or cannot be uniquely resolved.
     pub fn resolve_primary_account(&self, capability: &str) -> Option<&Id> {
         if !self.capabilities.contains_key(capability) {
             return None;
@@ -154,8 +133,7 @@ impl Session {
         Some(id)
     }
 
-    /// The one account of the user's own that offers `capability` — `None`
-    /// when there is none, or more than one to choose between.
+    /// The sole personal account of the user offering `capability`, or `None` if zero or multiple.
     fn sole_personal_account(&self, capability: &str) -> Option<&Id> {
         let mut candidates = self.accounts.iter().filter(|(_, account)| {
             account.is_personal && account.account_capabilities.contains_key(capability)
@@ -167,15 +145,7 @@ impl Session {
         }
     }
 
-    /// How many ids one `/get` call may name (RFC 8620 §2, the core
-    /// capability's `maxObjectsInGet`).
-    ///
-    /// `None` when the server does not say — which RFC 8620 does not allow,
-    /// but which a caller has to have an answer for anyway, because asking for
-    /// too many is a `requestTooLarge` that fails the whole call rather than a
-    /// truncated answer. What to fall back to is the caller's decision, not
-    /// this type's: the limit that matters is the one for the objects it is
-    /// about to ask for.
+    /// Maximum object IDs allowed in a `/get` call (RFC 8620 §2 `maxObjectsInGet`).
     pub fn max_objects_in_get(&self) -> Option<u64> {
         self.capabilities
             .get(CAPABILITY_CORE)?
@@ -183,19 +153,7 @@ impl Session {
             .as_u64()
     }
 
-    /// How many method calls one request to `apiUrl` may carry (RFC 8620 §2,
-    /// the core capability's `maxCallsInRequest`).
-    ///
-    /// The number that decides whether two calls chained through a
-    /// back-reference may travel together. Over it, the whole request is
-    /// refused with `urn:ietf:params:jmap:error:limit` — not the last call
-    /// alone — so a client that chains without asking loses the calls that
-    /// would have been fine.
-    ///
-    /// `None` when the server does not say, like the other two limits here:
-    /// what to do without a number is the caller's decision. Both guesses are
-    /// wrong in their own direction — a low one splits requests the server
-    /// would have taken whole, a high one sends requests it refuses.
+    /// Maximum method calls allowed in one API request (RFC 8620 §2 `maxCallsInRequest`).
     pub fn max_calls_in_request(&self) -> Option<u64> {
         self.capabilities
             .get(CAPABILITY_CORE)?
@@ -203,20 +161,7 @@ impl Session {
             .as_u64()
     }
 
-    /// The largest request the server will take at `apiUrl`, in octets (RFC
-    /// 8620 §2, the core capability's `maxSizeRequest`).
-    ///
-    /// The sibling of [`Self::max_calls_in_request`], counting octets where
-    /// that one counts calls, and refused the same way: over it the server
-    /// answers `urn:ietf:params:jmap:error:limit` and *nothing* in the request
-    /// runs. A client that never asks finds out by sending the request, which
-    /// for a long list of ids is the whole cost of the operation spent on an
-    /// answer that was in the session document all along.
-    ///
-    /// `None` when the server does not say, as for the other three limits. A
-    /// number invented here would split requests the server would have taken
-    /// whole — and a split request is not merely slower, it has a window in it
-    /// where another client can change what the first half found.
+    /// Maximum request size accepted at `apiUrl` in octets (RFC 8620 §2 `maxSizeRequest`).
     pub fn max_size_request(&self) -> Option<u64> {
         self.capabilities
             .get(CAPABILITY_CORE)?
@@ -224,14 +169,7 @@ impl Session {
             .as_u64()
     }
 
-    /// The largest file the server will take on `uploadUrl`, in octets (RFC
-    /// 8620 §6.1, the core capability's `maxSizeUpload`).
-    ///
-    /// `None` when the server does not say — which RFC 8620 §2 does not allow,
-    /// and which is again the caller's decision rather than this type's: there
-    /// is no safe number to invent here, because a limit made up locally would
-    /// refuse uploads the server would have taken, and would be this crate's
-    /// number appearing in front of a user as the account's.
+    /// Maximum upload size accepted at `uploadUrl` in octets (RFC 8620 §6.1 `maxSizeUpload`).
     pub fn max_size_upload(&self) -> Option<u64> {
         self.capabilities
             .get(CAPABILITY_CORE)?
@@ -628,17 +566,7 @@ impl Account {
         self
     }
 
-    /// The furthest into the future a submission may be scheduled (RFC 8621
-    /// §7.1, the submission account capability's `maxDelayedSend`, in
-    /// seconds), backed server-side by SMTP FUTURERELEASE (RFC 4865).
-    ///
-    /// `None` means the server did not name a limit for this account — which
-    /// covers two different server shapes a caller cannot tell apart from
-    /// this alone: no delayed send at all (`maxDelayedSend` absent, or `0`
-    /// per RFC 8621's own "MUST be 0 if this feature is not supported"), and
-    /// an account that does not offer the submission capability in the first
-    /// place. Either way, the answer to "does this account support scheduled
-    /// send" is the same: do not offer scheduled send.
+    /// Maximum delay for future message submission in seconds (RFC 8621 §7.1 `maxDelayedSend`).
     pub fn max_delayed_send(&self) -> Option<u64> {
         self.account_capabilities
             .get(CAPABILITY_SUBMISSION)?
@@ -646,9 +574,7 @@ impl Account {
             .as_u64()
     }
 
-    /// Whether this account claims `capability` among its
-    /// `accountCapabilities` — the RFC 8620 §1.6.2 test every optional
-    /// feature gate starts from.
+    /// Whether this account claims `capability` among its `accountCapabilities` (RFC 8620 §1.6.2).
     pub fn has_capability(&self, capability: &str) -> bool {
         self.account_capabilities.contains_key(capability)
     }

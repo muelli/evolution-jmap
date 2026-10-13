@@ -462,10 +462,8 @@ fn principal_availability_capability_roundtrip_and_session_accessor() {
     );
 }
 
-/// A real `ShareNotification/get` response captured from a live Stalwart
-/// 0.16 server (Track E Phase C's probe step). RFC 9670 §4 names the
-/// property `objectAccountId`, matching `docs/PRINCIPALS-DESIGN.md`'s own
-/// reading of the spec; Stalwart's wire response confirms it.
+/// A real `ShareNotification/get` response captured from a live Stalwart server.
+/// RFC 9670 §4 names the property `objectAccountId`.
 #[test]
 fn share_notification_deserializes_a_real_stalwart_response() {
     use jmap_proto::principals::ShareNotification;
