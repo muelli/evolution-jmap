@@ -130,6 +130,15 @@ if(_unexpected)
 		"package and this test.")
 endif()
 
+foreach(_file IN LISTS _actual)
+	if(_file MATCHES "^/usr/local/")
+		message(FATAL_ERROR
+			"${_deb} carries files under /usr/local, violating Debian policy:\n"
+			"  ${_file}\n"
+			"Package install destinations must use /usr, never /usr/local.")
+	endif()
+endforeach()
+
 #
 # Control fields. A package that carries the right files under the wrong name,
 # or with no dependencies, is one `apt install ./evolution-jmap.deb` refuses or
