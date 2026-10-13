@@ -1,0 +1,25 @@
+// Source: RFC 9553 §2.3.4 (Figure 28: Example for the preferredLanguages Property), May 2024
+{
+  "preferredLanguages": {
+    "l1": {
+      "language": "en",
+      "contexts": {
+        "work": true
+      },
+      "pref": 1
+    },
+    "l2": {
+      "language": "fr",
+      "contexts": {
+        "work": true
+      },
+      "pref": 2
+    },
+    "l3": {
+      "language": "fr",
+      "contexts": {
+        "private": true
+      }
+    }
+  }
+}

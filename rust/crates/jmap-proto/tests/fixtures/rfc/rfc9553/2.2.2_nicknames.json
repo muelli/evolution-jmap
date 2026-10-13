@@ -1,0 +1,8 @@
+// Source: RFC 9553 §2.2.2 (Figure 21: Example for the nicknames Property), May 2024
+{
+  "nicknames": {
+    "k391": {
+      "name": "Johnny"
+    }
+  }
+}

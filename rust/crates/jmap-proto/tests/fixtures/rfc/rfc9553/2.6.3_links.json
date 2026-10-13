@@ -1,0 +1,10 @@
+// Source: RFC 9553 §2.6.3 (Figure 37: Example for the links Property), May 2024
+{
+  "links": {
+    "link3": {
+      "kind": "contact",
+      "uri": "mailto:contact@example.com",
+      "pref": 1
+    }
+  }
+}

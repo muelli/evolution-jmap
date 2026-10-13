@@ -1,0 +1,16 @@
+// Source: RFC 9553 §2.2.4 (Figure 23: Example for the speakToAs Property), May 2024
+{
+  "speakToAs": {
+    "grammaticalGender": "neuter",
+    "pronouns": {
+      "k19": {
+        "pronouns": "they/them",
+        "pref": 2
+      },
+      "k32": {
+        "pronouns": "xe/xir",
+        "pref": 1
+      }
+    }
+  }
+}

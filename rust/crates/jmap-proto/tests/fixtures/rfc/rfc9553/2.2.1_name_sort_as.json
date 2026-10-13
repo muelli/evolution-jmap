@@ -1,0 +1,24 @@
+// Source: RFC 9553 §2.2.1 (Figure 19: Example for the sortAs Property), May 2024
+{
+  "name": {
+    "components": [
+      {
+        "kind": "given",
+        "value": "Robert"
+      },
+      {
+        "kind": "given2",
+        "value": "Pau"
+      },
+      {
+        "kind": "surname",
+        "value": "Shou Chang"
+      }
+    ],
+    "sortAs": {
+      "surname": "Pau Shou Chang",
+      "given": "Robert"
+    },
+    "isOrdered": true
+  }
+}

@@ -10,6 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jmap_proto::contacts::{AddressBook, AddressBookSetRequest, ContactCard, Name};
 use jmap_proto::error::RequestError;
 use jmap_proto::id::Id;
 use jmap_proto::mail::{
@@ -1280,4 +1281,498 @@ fn rfc8621_sec_7_5_1_set_error_response() {
     let err = &res.not_created.unwrap()["k1490"];
     assert_eq!(err.error_type, "forbiddenToSend");
     assert!(err.description.as_ref().unwrap().contains("Verzeihung"));
+}
+
+// ===========================================================================
+// RFC 9610 Contacts (December 2024)
+// ===========================================================================
+
+#[test]
+fn rfc9610_sec_4_1_get_request() {
+    let (note, invocations, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9610/4.1_get_request.json");
+    assert!(note.contains("RFC 9610 §4.1"));
+    assert_roundtrip(&invocations);
+
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[0].name, "AddressBook/get");
+    assert_eq!(invocations[0].call_id, "0");
+    let ab_get: GetRequest = serde_json::from_value(invocations[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(ab_get.account_id.as_str(), "a0x9");
+
+    assert_eq!(invocations[1].name, "ContactCard/get");
+    assert_eq!(invocations[1].call_id, "1");
+    let cc_get: GetRequest = serde_json::from_value(invocations[1].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(cc_get.account_id.as_str(), "a0x9");
+}
+
+#[test]
+fn rfc9610_sec_4_1_get_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9610/4.1_get_response.json");
+    assert!(note.contains("RFC 9610 §4.1"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "AddressBook/get");
+    let ab_res: GetResponse<AddressBook> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<AddressBook>");
+    assert_eq!(ab_res.list.len(), 2);
+    assert_eq!(ab_res.list[0].name, "Personal");
+    assert_eq!(ab_res.list[0].is_default, Some(true));
+    assert_eq!(ab_res.list[1].name, "Autosaved");
+    assert_eq!(ab_res.list[1].is_default, Some(false));
+
+    assert_eq!(responses[1].name, "ContactCard/get");
+    let cc_res: GetResponse<ContactCard> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<ContactCard>");
+    assert_eq!(cc_res.list.len(), 1);
+    let card = &cc_res.list[0];
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "3");
+    assert!(
+        card.address_book_ids
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::from("062adcfa-105d-455c-bc60-6db68b69c3f3"))
+    );
+    assert_eq!(
+        card.name
+            .as_ref()
+            .unwrap()
+            .components
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn rfc9610_sec_4_2_set_request() {
+    let (note, invocations, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9610/4.2_set_request.json");
+    assert!(note.contains("RFC 9610 §4.2"));
+    assert_roundtrip(&invocations);
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].name, "AddressBook/set");
+    let set_req: AddressBookSetRequest = serde_json::from_value(invocations[0].arguments.clone())
+        .expect("arguments must deserialize into AddressBookSetRequest");
+    assert_eq!(set_req.set.account_id.as_str(), "a0x9");
+    assert_eq!(
+        set_req.on_success_set_is_default.as_ref().unwrap().as_str(),
+        "cd40089d-35f9-4fd7-980b-ba3a9f1d74fe"
+    );
+}
+
+#[test]
+fn rfc9610_sec_4_2_set_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9610/4.2_set_response.json");
+    assert!(note.contains("RFC 9610 §4.2"));
+    assert_roundtrip(&responses);
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "AddressBook/set");
+    // Note: In RFC 9610 §4.2 Figure 4, oldState and newState were mistakenly
+    // placed inside the 'updated' map rather than at the top level of SetResponse.
+    assert_eq!(responses[0].arguments["accountId"], "a0x9");
+    assert!(responses[0].arguments["updated"].is_object());
+    assert_eq!(
+        responses[0].arguments["updated"]["cd40089d-35f9-4fd7-980b-ba3a9f1d74fe"]["isDefault"],
+        true
+    );
+}
+
+// ===========================================================================
+// RFC 9553 JSContact (May 2024)
+// ===========================================================================
+
+#[test]
+fn rfc9553_sec_1_4_5_phonetic() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/1.4.5_phonetic.json");
+    assert!(note.contains("RFC 9553 §1.4.5"));
+    assert_roundtrip(&card);
+    assert!(card.name.is_some());
+}
+
+#[test]
+fn rfc9553_sec_1_6_2_vendor_properties() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/1.6.2_vendor_properties.json");
+    assert!(note.contains("RFC 9553 §1.6.2"));
+    assert_roundtrip(&card);
+    assert!(card.extra.contains_key("example.com:foo"));
+}
+
+#[test]
+fn rfc9553_sec_1_6_2_vendor_value() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/1.6.2_vendor_value.json");
+    assert!(note.contains("RFC 9553 §1.6.2"));
+    assert_roundtrip(&card);
+    assert_eq!(card.kind.as_deref(), Some("example.com:baz"));
+}
+
+#[test]
+fn rfc9553_sec_2_1_basic_card() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1_basic_card.json");
+    assert!(note.contains("RFC 9553 §2.1"));
+    assert_roundtrip(&card);
+    assert_eq!(card.version.as_deref(), Some("1.0"));
+    assert_eq!(
+        card.name
+            .as_ref()
+            .unwrap()
+            .components
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn rfc9553_sec_2_1_2_version() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.2_version.json");
+    assert!(note.contains("RFC 9553 §2.1.2"));
+    assert_roundtrip(&card);
+    assert_eq!(card.version.as_deref(), Some("1.0"));
+}
+
+#[test]
+fn rfc9553_sec_2_1_3_created() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.3_created.json");
+    assert!(note.contains("RFC 9553 §2.1.3"));
+    assert_roundtrip(&card);
+    assert!(card.created.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_1_4_kind() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.4_kind.json");
+    assert!(note.contains("RFC 9553 §2.1.4"));
+    assert_roundtrip(&card);
+    assert_eq!(card.kind.as_deref(), Some("individual"));
+}
+
+#[test]
+fn rfc9553_sec_2_1_5_language() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.5_language.json");
+    assert!(note.contains("RFC 9553 §2.1.5"));
+    assert_roundtrip(&card);
+    assert_eq!(card.language.as_deref(), Some("de-AT"));
+}
+
+#[test]
+fn rfc9553_sec_2_1_6_members() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.6_members.json");
+    assert!(note.contains("RFC 9553 §2.1.6"));
+    assert_roundtrip(&card);
+    assert_eq!(card.kind.as_deref(), Some("group"));
+    assert_eq!(card.members.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_1_7_prod_id() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.7_prod_id.json");
+    assert!(note.contains("RFC 9553 §2.1.7"));
+    assert_roundtrip(&card);
+    assert!(card.prod_id.as_ref().unwrap().contains("ACME Contacts App"));
+}
+
+#[test]
+fn rfc9553_sec_2_1_8_related_to() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.8_related_to.json");
+    assert!(note.contains("RFC 9553 §2.1.8"));
+    assert_roundtrip(&card);
+    assert_eq!(card.related_to.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_1_9_uid() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.9_uid.json");
+    assert!(note.contains("RFC 9553 §2.1.9"));
+    assert_roundtrip(&card);
+    assert_eq!(
+        card.uid.as_deref(),
+        Some("urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    );
+}
+
+#[test]
+fn rfc9553_sec_2_1_10_updated() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.1.10_updated.json");
+    assert!(note.contains("RFC 9553 §2.1.10"));
+    assert_roundtrip(&card);
+    assert!(card.updated.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_2_1_name_two_words() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.1_name_two_words.json");
+    assert!(note.contains("RFC 9553 §2.2.1"));
+    assert_roundtrip(&card);
+    assert_eq!(
+        card.name
+            .as_ref()
+            .unwrap()
+            .components
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn rfc9553_sec_2_2_1_name_second_surname() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.1_name_second_surname.json");
+    assert!(note.contains("RFC 9553 §2.2.1"));
+    assert_roundtrip(&card);
+    assert_eq!(
+        card.name
+            .as_ref()
+            .unwrap()
+            .components
+            .as_ref()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn rfc9553_sec_2_2_1_name_full() {
+    let (note, card, _) = load_rfc_fixture::<Name>("rfc9553/2.2.1_name_full.json");
+    assert!(note.contains("RFC 9553 §2.2.1"));
+    assert_roundtrip(&card);
+    assert_eq!(card.full.as_deref(), Some("Mr. John Q. Public, Esq."));
+}
+
+#[test]
+fn rfc9553_sec_2_2_1_name_sort_as() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.1_name_sort_as.json");
+    assert!(note.contains("RFC 9553 §2.2.1"));
+    assert_roundtrip(&card);
+    assert!(card.name.as_ref().unwrap().sort_as.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_2_1_name_phonetic_localizations() {
+    let (note, card, _) =
+        load_rfc_fixture::<ContactCard>("rfc9553/2.2.1_name_phonetic_localizations.json");
+    assert!(note.contains("RFC 9553 §2.2.1"));
+    assert_roundtrip(&card);
+    assert!(card.localizations.is_some());
+    assert_eq!(card.language.as_deref(), Some("zh-Hant"));
+}
+
+#[test]
+fn rfc9553_sec_2_2_2_nicknames() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.2_nicknames.json");
+    assert!(note.contains("RFC 9553 §2.2.2"));
+    assert_roundtrip(&card);
+    assert!(card.nicknames.as_ref().unwrap().contains_key("k391"));
+}
+
+#[test]
+fn rfc9553_sec_2_2_3_organizations() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.3_organizations.json");
+    assert!(note.contains("RFC 9553 §2.2.3"));
+    assert_roundtrip(&card);
+    assert_eq!(card.organizations.as_ref().unwrap().len(), 1);
+}
+
+#[test]
+fn rfc9553_sec_2_2_4_speak_to_as() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.4_speak_to_as.json");
+    assert!(note.contains("RFC 9553 §2.2.4"));
+    assert_roundtrip(&card);
+    assert_eq!(
+        card.speak_to_as
+            .as_ref()
+            .unwrap()
+            .grammatical_gender
+            .as_deref(),
+        Some("neuter")
+    );
+    assert!(card.speak_to_as.as_ref().unwrap().pronouns.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_2_5_titles() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.2.5_titles.json");
+    assert!(note.contains("RFC 9553 §2.2.5"));
+    assert_roundtrip(&card);
+    assert_eq!(card.titles.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_3_1_emails() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.3.1_emails.json");
+    assert!(note.contains("RFC 9553 §2.3.1"));
+    assert_roundtrip(&card);
+    assert_eq!(card.emails.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_3_2_online_services() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.3.2_online_services.json");
+    assert!(note.contains("RFC 9553 §2.3.2"));
+    assert_roundtrip(&card);
+    assert_eq!(card.online_services.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_3_3_phones() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.3.3_phones.json");
+    assert!(note.contains("RFC 9553 §2.3.3"));
+    assert_roundtrip(&card);
+    assert_eq!(card.phones.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_3_4_preferred_languages() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.3.4_preferred_languages.json");
+    assert!(note.contains("RFC 9553 §2.3.4"));
+    assert_roundtrip(&card);
+    assert_eq!(card.preferred_languages.as_ref().unwrap().len(), 3);
+}
+
+#[test]
+fn rfc9553_sec_2_4_1_calendars() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.4.1_calendars.json");
+    assert!(note.contains("RFC 9553 §2.4.1"));
+    assert_roundtrip(&card);
+    assert_eq!(card.calendars.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_4_2_scheduling_addresses() {
+    let (note, card, _) =
+        load_rfc_fixture::<ContactCard>("rfc9553/2.4.2_scheduling_addresses.json");
+    assert!(note.contains("RFC 9553 §2.4.2"));
+    assert_roundtrip(&card);
+    assert!(
+        card.scheduling_addresses
+            .as_ref()
+            .unwrap()
+            .contains_key("sched1")
+    );
+}
+
+#[test]
+fn rfc9553_sec_2_5_1_address_usa() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.5.1_address_usa.json");
+    assert!(note.contains("RFC 9553 §2.5.1"));
+    assert_roundtrip(&card);
+    assert!(card.addresses.as_ref().unwrap().contains_key("k23"));
+}
+
+#[test]
+fn rfc9553_sec_2_5_1_address_thailand() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.5.1_address_thailand.json");
+    assert!(note.contains("RFC 9553 §2.5.1"));
+    assert_roundtrip(&card);
+    assert!(card.addresses.as_ref().unwrap().contains_key("k25"));
+}
+
+#[test]
+fn rfc9553_sec_2_5_1_address_tokyo() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.5.1_address_tokyo.json");
+    assert!(note.contains("RFC 9553 §2.5.1"));
+    assert_roundtrip(&card);
+    assert!(card.addresses.as_ref().unwrap().contains_key("k26"));
+    assert!(card.localizations.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_6_1_crypto_keys_external() {
+    let (note, card, _) =
+        load_rfc_fixture::<ContactCard>("rfc9553/2.6.1_crypto_keys_external.json");
+    assert!(note.contains("RFC 9553 §2.6.1"));
+    assert_roundtrip(&card);
+    assert!(card.crypto_keys.as_ref().unwrap().contains_key("mykey1"));
+}
+
+#[test]
+fn rfc9553_sec_2_6_1_crypto_keys_embedded() {
+    let (note, card, _) =
+        load_rfc_fixture::<ContactCard>("rfc9553/2.6.1_crypto_keys_embedded.json");
+    assert!(note.contains("RFC 9553 §2.6.1"));
+    assert_roundtrip(&card);
+    assert!(card.crypto_keys.as_ref().unwrap().contains_key("mykey2"));
+}
+
+#[test]
+fn rfc9553_sec_2_6_2_directories() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.6.2_directories.json");
+    assert!(note.contains("RFC 9553 §2.6.2"));
+    assert_roundtrip(&card);
+    assert_eq!(card.directories.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_6_3_links() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.6.3_links.json");
+    assert!(note.contains("RFC 9553 §2.6.3"));
+    assert_roundtrip(&card);
+    assert!(card.links.as_ref().unwrap().contains_key("link3"));
+}
+
+#[test]
+fn rfc9553_sec_2_6_4_media() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.6.4_media.json");
+    assert!(note.contains("RFC 9553 §2.6.4"));
+    assert_roundtrip(&card);
+    assert_eq!(card.media.as_ref().unwrap().len(), 3);
+}
+
+#[test]
+fn rfc9553_sec_2_7_1_localization_top_level() {
+    let (note, card, _) =
+        load_rfc_fixture::<ContactCard>("rfc9553/2.7.1_localization_top_level.json");
+    assert!(note.contains("RFC 9553 §2.7.1"));
+    assert_roundtrip(&card);
+    assert!(card.localizations.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_7_1_localization_nested() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.7.1_localization_nested.json");
+    assert!(note.contains("RFC 9553 §2.7.1"));
+    assert_roundtrip(&card);
+    assert!(card.localizations.is_some());
+    assert!(card.titles.is_some());
+}
+
+#[test]
+fn rfc9553_sec_2_8_1_anniversaries() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.8.1_anniversaries.json");
+    assert!(note.contains("RFC 9553 §2.8.1"));
+    assert_roundtrip(&card);
+    assert_eq!(card.anniversaries.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_8_2_keywords() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.8.2_keywords.json");
+    assert!(note.contains("RFC 9553 §2.8.2"));
+    assert_roundtrip(&card);
+    assert_eq!(card.keywords.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc9553_sec_2_8_3_notes() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.8.3_notes.json");
+    assert!(note.contains("RFC 9553 §2.8.3"));
+    assert_roundtrip(&card);
+    assert!(card.notes.as_ref().unwrap().contains_key("n1"));
+}
+
+#[test]
+fn rfc9553_sec_2_8_4_personal_info() {
+    let (note, card, _) = load_rfc_fixture::<ContactCard>("rfc9553/2.8.4_personal_info.json");
+    assert!(note.contains("RFC 9553 §2.8.4"));
+    assert_roundtrip(&card);
+    assert_eq!(card.personal_info.as_ref().unwrap().len(), 3);
 }

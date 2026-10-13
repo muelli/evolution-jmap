@@ -1,0 +1,7 @@
+// Source: RFC 9553 §2.8.2 (Figure 42: Example for the keywords Property), May 2024
+{
+  "keywords": {
+    "internet": true,
+    "IETF": true
+  }
+}

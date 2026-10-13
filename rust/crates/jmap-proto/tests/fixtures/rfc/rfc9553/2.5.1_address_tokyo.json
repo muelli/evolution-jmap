@@ -1,0 +1,87 @@
+// Source: RFC 9553 §2.5.1 (Figure 33: Example of an Address in Tokyo and Its Localization in Japanese), May 2024
+{
+  "addresses": {
+    "k26": {
+      "components": [
+        {
+          "kind": "block",
+          "value": "2-7"
+        },
+        {
+          "kind": "separator",
+          "value": "-"
+        },
+        {
+          "kind": "number",
+          "value": "2"
+        },
+        {
+          "kind": "separator",
+          "value": " "
+        },
+        {
+          "kind": "district",
+          "value": "Marunouchi"
+        },
+        {
+          "kind": "locality",
+          "value": "Chiyoda-ku"
+        },
+        {
+          "kind": "region",
+          "value": "Tokyo"
+        },
+        {
+          "kind": "separator",
+          "value": " "
+        },
+        {
+          "kind": "postcode",
+          "value": "100-8994"
+        }
+      ],
+      "defaultSeparator": ", ",
+      "full": "2-7-2 Marunouchi, Chiyoda-ku, Tokyo 100-8994",
+      "isOrdered": true
+    }
+  },
+  "localizations": {
+    "jp": {
+      "addresses/k26": {
+        "components": [
+          {
+            "kind": "region",
+            "value": "\u6771\u4eac\u90fd"
+          },
+          {
+            "kind": "locality",
+            "value": "\u5343\u4ee3\u7530\u533a"
+          },
+          {
+            "kind": "district",
+            "value": "\u4e38\u30ce\u5185"
+          },
+          {
+            "kind": "block",
+            "value": "2-7"
+          },
+          {
+            "kind": "separator",
+            "value": "-"
+          },
+          {
+            "kind": "number",
+            "value": "2"
+          },
+          {
+            "kind": "postcode",
+            "value": "\u3012100-8994"
+          }
+        ],
+        "defaultSeparator": "",
+        "full": "\u3012100-8994\u6771\u4eac\u90fd\u5343\u4ee3\u7530\u533a\u4e38\u30ce\u51852-7-2",
+        "isOrdered": true
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+// Source: RFC 9553 §1.6.2 (Figure 3: Examples of Vendor-Specific Properties), May 2024
+{
+  "example.com:foo": "bar",
+  "example.com:foo2": {
+    "bar": "baz"
+  }
+}

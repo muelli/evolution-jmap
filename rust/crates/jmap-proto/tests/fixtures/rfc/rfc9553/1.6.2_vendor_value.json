@@ -1,0 +1,4 @@
+// Source: RFC 9553 §1.6.2 (Figure 4: Example of a Vendor-Specific Value), May 2024
+{
+  "kind": "example.com:baz"
+}
