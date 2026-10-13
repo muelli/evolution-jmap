@@ -352,12 +352,28 @@ records their loader output for the source-built extension payload.
   known-working built-in modules too, treat them as loader probe noise in this
   mode, not as a standalone backend-load failure signal.
 
+### Headless registration check via `SourceManager.RefreshBackend`
+
+- Probe setup used isolated config/cache/data roots under
+  `~/.var/app/org.gnome.Evolution/cache/` and wrote a temporary
+  `probe.source` collection file.
+- With `BackendName=jmap`, source-registry logs showed
+  `Adding probe ('Source')` after startup and
+  `timeout 25 gdbus call --session --dest org.gnome.Evolution.org.gnome.evolution.dataserver.Sources5 --object-path /org/gnome/evolution/dataserver/SourceManager --method org.gnome.evolution.dataserver.SourceManager.RefreshBackend probe`
+  returned `()` with exit status `0`.
+- Control run with `BackendName=notarealbackend` never added `probe` to the
+  registry and the same `RefreshBackend probe` call failed with:
+  `Cannot find source "probe"`.
+- This A/B check gives headless behavioral proof that the registry accepts the
+  JMAP collection backend and can dispatch a refresh for it, while unknown
+  backend names are rejected.
+
 Conclusion for Batch 6 step 3: the source-built extension now clears ABI SONAME
 compatibility, and loader traces show JMAP modules following the same load path
-shape as built-in modules. Headless factory logs still do not emit explicit
-"backend registered" lines for JMAP, so interactive Evolution UI behavior
-remains unverified in a running Evolution session, as required by the batch
-scope.
+shape as built-in modules. The `RefreshBackend` probe adds explicit headless
+evidence that JMAP backend registration is active in source-registry. Interactive
+Evolution UI behavior remains unverified in a running Evolution session, as
+required by the batch scope.
 
 ## Batch 6 step 4 Flathub submission requirements (2026-10-13 UTC)
 
@@ -399,6 +415,7 @@ Current status at the end of Batch 6 step 4 plus this step-3 probe:
 naming and branch constraints are documented, and an ABI-matched offline source
 build now installs as a local extension runtime when vendored crates are staged
 locally first. Submission remains pending on a committed Flathub-friendly
-vendoring path plus the expected review artifacts. Headless probes still do not
-emit explicit JMAP registration lines, so interactive Evolution behavior
-verification remains out of scope for this headless lane.
+vendoring path plus the expected review artifacts. Headless probes now include a
+successful `SourceManager.RefreshBackend` dispatch for `BackendName=jmap`, while
+interactive Evolution behavior verification remains out of scope for this
+headless lane.
