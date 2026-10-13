@@ -99,24 +99,15 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
-/// JSContact address component kinds that share a vCard `ADR` field with
-/// another kind instead of having one of their own, paired with the kind
-/// whose field they join.
+/// JSContact component kinds that share another kind's `ADR` field.
 ///
-/// RFC 2426 §3.2.1 gives the street address one field, while RFC 9553 §2.5.1
-/// lets a card name the street and the house number separately. Leaving the
-/// number off the line would take the house out of the address the user
-/// reads, so it goes on the street field beside the street name, in the order
-/// the card lists its components — which is the only thing that says whether
-/// the number is read before the street name (`1 Main Street`) or after it
-/// (`Hauptstraße 1`).
+/// `number` joins `name` so house numbers are preserved in the street field.
 const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
 /// JSContact title `kind` values and the vCard property stating each.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 
-/// RFC 2426 §3.7.1's `CATEGORIES` — the tags EDS reads as
-/// `E_CONTACT_CATEGORY_LIST`, which is Evolution's Categories field.
+/// RFC 2426 §3.7.1 `CATEGORIES`, mapped to EDS `E_CONTACT_CATEGORY_LIST`.
 const CATEGORIES: &str = "CATEGORIES";
 
 /// The one RFC 9553 §2.6.4 media kind a vCard 3.0 `PHOTO` line states: the
@@ -135,29 +126,19 @@ const BASE64_MARKER: &str = ";base64";
 /// [`image_subtype`].
 const IMAGE_PREFIX: &str = "image/";
 
-/// What EDS puts in a `PHOTO`'s `TYPE` for a picture it holds no media type
-/// for: measured against libebook-contacts 3.52, setting a photo whose
-/// `mime_type` is NULL writes `TYPE="X-EVOLUTION-UNKNOWN"`. It names no image
-/// format, so [`read_photo`] reads it as no media type rather than as
-/// `image/X-EVOLUTION-UNKNOWN`, which would tell the server the bytes are a
-/// format that does not exist.
+/// EDS placeholder `PHOTO` type when the image mime type is unknown.
+///
+/// This is treated as "no media type", not as `image/X-EVOLUTION-UNKNOWN`.
 const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 
 /// The `VALUE` a `PHOTO` line carrying a reference states, rather than the
 /// bytes themselves.
 const URI_VALUE: &str = "uri";
 
-/// The online services EDS keeps a contact's handles for, paired with the
-/// vCard property each is stated on, and spelled as RFC 9553 §2.3.2 invites —
-/// the way the service itself does.
+/// Services with dedicated EDS IM slots, paired with their vCard property.
 ///
-/// These are exactly the services libebook-contacts 3.52 gives per-slot fields
-/// to (`E_CONTACT_IM_JABBER_HOME_1` and its fifty-nine siblings), which is what
-/// makes a handle on one of them a handle Evolution's contact editor can show
-/// and change. Two of EDS's own instant-messaging fields are deliberately
-/// missing: `X-TWITTER`, which it knows only as a multi-valued field with no
-/// slots to put a handle in, and `X-SIP`, which is not a service name but a
-/// protocol EDS keeps in a field of a different shape.
+/// Non-slot fields such as `X-TWITTER` and protocol-only lines such as `X-SIP`
+/// are excluded.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -171,36 +152,10 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("Yahoo", "X-YAHOO"),
 ];
 
-/// The URI schemes each service states its handles under, for the services whose
-/// scheme names the handle *literally* — `xmpp:vera@jabber.example` is the JID
-/// `vera@jabber.example` with a prefix and nothing else.
+/// URI schemes accepted as bare handles for each online service.
 ///
-/// This is what lets an entry stating only a `uri` (RFC 9553 §2.3.2 asks for
-/// either that or a `user`) reach the free-text field EDS keeps handles in:
-/// without it the handle would have to be guessed out of the URI, and the guess
-/// would be written back on the next save.
-///
-/// - `aim` and `aol` for AIM (`aim:<screenname>` or `aol:<screenname>`).
-/// - `gg`, `gadugadu`, and `gadu` for Gadu-Gadu (RFC 7595 template `gg:<userid>`,
-///   whose path is the numerical user identifier / UIN).
-/// - `xmpp` (RFC 5122 §2.1) and `jabber` for Jabber / XMPP JIDs.
-/// - `xmpp` and `gtalk` for Google Talk JIDs.
-/// - `groupwise` and `novell` for GroupWise.
-/// - `icq` for ICQ (`icq:<uin>`).
-/// - `msn` and `msnim` for MSN Messenger (`msn:<user>` or `msnim:<user>`).
-/// - `matrix` for Matrix bare handle URIs (`matrix:<handle>`).
-/// - `skype` is the scheme Skype's own links use, where the bare form
-///   `skype:<name>` is the Skype Name and the rest is a query telling the client
-///   what to do with it — which [`plain_handle`] refuses.
-/// - `yahoo` and `ymsgr` for Yahoo Messenger (`yahoo:<user>` or `ymsgr:<user>`).
-///
-/// Action/query URIs (such as `aim:goim?screenname=...`, `msnim:chat?contact=...`,
-/// `ymsgr:sendim?...`, `icq:message?uin=...`, `matrix:u/vera:...`) are refused by
-/// [`plain_handle`] because they carry query parameters or path structures that
-/// do not represent bare handles.
-///
-/// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
-/// match is not drawn, which is the behaviour of every service missing here.
+/// This table lets URI-only entries map to EDS handle fields without guessing.
+/// [`plain_handle`] rejects action/query URIs and non-bare path forms.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -222,46 +177,27 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("Yahoo", "ymsgr"),
 ];
 
-/// The slot EDS files a handle in when nothing says otherwise, and the only one
-/// it writes a handle of its own accord into (measured against
-/// libebook-contacts 3.52).
+/// Default EDS IM slot when no explicit context is stated.
 const DEFAULT_SLOT: &str = "HOME";
 
-/// The line EDS 3.52 keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
-/// contact editor labels "Anniversary".
+/// Vendor anniversary property used by EDS 3.52 compatibility path.
 ///
-/// vCard 3.0 has no standard property for a wedding day: RFC 6474's `ANNIVERSARY`
-/// is vCard 4.0. In EDS 3.52, `e_contact_new_from_vcard()` reads
-/// `X-EVOLUTION-ANNIVERSARY` (ignoring `ANNIVERSARY`), while in EDS 3.60+ it
-/// reads standard `ANNIVERSARY`. We emit both lines so that EDS 3.52 reads its
-/// vendor line and EDS 3.60+ reads standard ANNIVERSARY, and each preserves
-/// the other as an unrecognised extension without requiring build-time version detection.
+/// We emit this and standard `ANNIVERSARY` so EDS 3.52 and 3.60+ both round-trip.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
-/// JSContact anniversary `kind` values and the vCard property stating each.
+/// JSContact anniversary kinds that map to vCard/EDS lines.
 ///
-/// RFC 9553 §2.8.1's third kind, `death`, is missing on purpose: no vCard 3.0
-/// property and no EDS field states it, and putting the date on a `BDAY`
-/// would tell the user it is a birthday.
+/// `death` is omitted because vCard 3.0 and EDS expose no matching field.
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
-/// The line EDS keeps `E_CONTACT_SPOUSE` on — the field Evolution's contact
-/// editor labels "Spouse".
-///
-/// vCard 3.0 has no property for a relation at all: RFC 6350 §6.6.6's `RELATED`
-/// is vCard 4.0, which `e_contact_new_from_vcard()` is not given. So this is not
-/// a shortcut past a standard line, it is the only line there is — and it is the
-/// one EDS reads the field off and writes it back onto, measured against
-/// libebook-contacts 3.52.
+/// Vendor spouse line used for EDS `E_CONTACT_SPOUSE` round-trip.
 const X_EVOLUTION_SPOUSE: &str = "X-EVOLUTION-SPOUSE";
 
-/// The line EDS keeps `E_CONTACT_MANAGER` on — the field Evolution's contact
-/// editor labels "Manager".
+/// Vendor line for EDS `E_CONTACT_MANAGER`.
 const X_EVOLUTION_MANAGER: &str = "X-EVOLUTION-MANAGER";
 
-/// The line EDS keeps `E_CONTACT_ASSISTANT` on — the field Evolution's contact
-/// editor labels "Assistant".
+/// Vendor line for EDS `E_CONTACT_ASSISTANT`.
 const X_EVOLUTION_ASSISTANT: &str = "X-EVOLUTION-ASSISTANT";
 
 /// RFC 9553 §2.1.8 relation types this mapping states on EDS relation lines.
@@ -275,17 +211,9 @@ const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 /// The line EDS keeps `E_CONTACT_VIDEO_URL` on.
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
-/// JSContact calendar `kind` values and the vCard property stating each.
+/// JSContact calendar kinds mapped to vCard lines EDS preserves.
 ///
-/// RFC 9555 §2.13.2 and §2.13.3 pair them: `calendar` with RFC 6350 §6.9.3's
-/// `CALURI` and `freeBusy` with §6.9.1's `FBURL`. Both are vCard 4.0
-/// properties, and both are nevertheless written on the 3.0 card EDS is handed
-/// — because EDS reads them off one and writes them back onto one, measured
-/// against libebook-contacts 3.52, which is what decides the question here.
-///
-/// EDS's third calendaring field, `ICSCALENDAR`, is missing on purpose: RFC
-/// 9553 §2.4.1 has two kinds, so nothing on a card says an entry belongs there
-/// rather than on the `CALURI` beside it.
+/// `ICSCALENDAR` is excluded because JSContact has no distinct kind for it.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
 /// RFC 9553 §2.2.4's default `kind` for a title that names none.
