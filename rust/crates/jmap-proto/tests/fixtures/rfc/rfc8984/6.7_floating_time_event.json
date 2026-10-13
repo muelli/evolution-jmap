@@ -1,0 +1,13 @@
+// Source: RFC 8984 §6.7 (Floating-Time Event (with Recurrence)), July 2021
+{
+  "...": "",
+  "title": "Yoga",
+  "start": "2020-01-01T07:00:00",
+  "duration": "PT30M",
+  "recurrenceRules": [
+    {
+      "@type": "RecurrenceRule",
+      "frequency": "daily"
+    }
+  ]
+}

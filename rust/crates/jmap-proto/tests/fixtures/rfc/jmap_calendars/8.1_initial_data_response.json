@@ -1,0 +1,90 @@
+// Source: draft-ietf-jmap-calendars-32 §8.1 (Figure 8: "methodResponses" Property of a JMAP Response), October 2026
+[
+  [
+    "Calendar/get",
+    {
+      "accountId": "a0x9",
+      "list": [
+        {
+          "id": "062adcfa-105d-455c-bc60-6db68b69c3f3",
+          "name": "Private",
+          "sortOrder": 12,
+          "isDefault": false,
+          "defaultAlertsWithTime": null
+        },
+        {
+          "id": "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662",
+          "name": "Work",
+          "sortOrder": 4,
+          "isDefault": true,
+          "defaultAlertsWithTime": {
+            "631BE24C-A3B6-11EC-BF4C-B027680D752E": {
+              "@type": "Alert",
+              "action": "display",
+              "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT1H",
+                "relativeTo": "start"
+              }
+            }
+          }
+        }
+      ],
+      "notFound": [],
+      "state": "~506"
+    },
+    "0"
+  ],
+  [
+    "ParticipantIdentity/get",
+    {
+      "accountId": "a0x9",
+      "list": [
+        {
+          "id": "3",
+          "name": "Jane Doe",
+          "calendarAddress": "mailto:jane@example.com",
+          "isDefault": true
+        }
+      ],
+      "notFound": [],
+      "state": "lgkf:98144:aae"
+    },
+    "1"
+  ],
+  [
+    "CalendarEvent/query",
+    {
+      "accountId": "a0x9",
+      "canCalculateChanges": false,
+      "position": 0,
+      "queryState": "~206",
+      "ids": [
+        "E-01c9626e-1490-43df-a34f-457021256281",
+        "E-07a2b89d-96b6-4920-982a-54fdf0a386ce"
+      ]
+    },
+    "2"
+  ],
+  [
+    "CalendarEvent/get",
+    {
+      "accountId": "a0x9",
+      "list": [
+        {
+          "id": "E-01c9626e-1490-43df-a34f-457021256281",
+          "calendarIds": {
+            "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": true
+          },
+          "title": "Q1 All hands",
+          "start": "2023-01-09T10:00:00",
+          "duration": "PT1H",
+          "timeZone": "Australia/Sydney"
+        }
+      ],
+      "notFound": [],
+      "state": "$$/413/206"
+    },
+    "3"
+  ]
+]

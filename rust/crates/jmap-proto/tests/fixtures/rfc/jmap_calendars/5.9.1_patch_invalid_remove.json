@@ -1,0 +1,15 @@
+// Source: draft-ietf-jmap-calendars-32 §5.9.1 (Figure 5: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "CalendarEvent/set",
+    {
+      "accountId": "a0x9",
+      "update": {
+        "123": {
+          "recurrenceOverrides/2025-03-05T09:00:00/participants~1dG9tQGZvb2Jhci5xlLmNvbQ": null
+        }
+      }
+    },
+    "0"
+  ]
+]

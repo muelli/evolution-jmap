@@ -1,0 +1,14 @@
+// Source: RFC 8984 §6.4 (All-Day Event), July 2021
+{
+  "...": "",
+  "title": "April Fool's Day",
+  "showWithoutTime": true,
+  "start": "1900-04-01T00:00:00",
+  "duration": "P1D",
+  "recurrenceRules": [
+    {
+      "@type": "RecurrenceRule",
+      "frequency": "yearly"
+    }
+  ]
+}

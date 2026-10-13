@@ -1,0 +1,37 @@
+// Source: draft-ietf-jmap-calendars-32 §5.9.1 (Figure 1: A CalendarEvent object), October 2026
+{
+  "id": "123",
+  "title": "FooBar team meeting",
+  "start": "2025-01-08T09:00:00",
+  "recurrenceRule": {
+    "@type": "RecurrenceRule",
+    "frequency": "weekly"
+  },
+  "organizerCalendarAddress": "mailto:6489-4f14@itip.example.com",
+  "participants": {
+    "dG9tQGZvb2Jhci5xlLmNvbQ": {
+      "@type": "Participant",
+      "name": "Tom",
+      "email": "tom@foobar.example.com",
+      "calendarAddress": "mailto:tom@foobar.example.com",
+      "participationStatus": "accepted"
+    },
+    "em9lQGZvb2GFtcGxlLmNvbQ": {
+      "@type": "Participant",
+      "name": "Zoe",
+      "email": "zoe@foobar.example.com",
+      "calendarAddress": "mailto:zoe@foobar.example.com",
+      "participationStatus": "accepted",
+      "roles": {
+        "owner": true,
+        "chair": true
+      }
+    }
+  },
+  "recurrenceOverrides": {
+    "2025-03-05T09:00:00": {
+      "start": "2025-03-05T10:00:00",
+      "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus": "declined"
+    }
+  }
+}

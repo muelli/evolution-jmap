@@ -210,6 +210,7 @@ pub struct Task {
     pub task_list_id: Option<Id>,
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub uid: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, EventRelation>>,

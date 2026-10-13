@@ -10,6 +10,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jmap_proto::calendars::{
+    Calendar, CalendarAlert, CalendarEvent, CalendarEventParseRequest, CalendarEventSetRequest,
+    CalendarGroup, CalendarSetRequest,
+};
 use jmap_proto::contacts::{AddressBook, AddressBookSetRequest, ContactCard, Name};
 use jmap_proto::error::RequestError;
 use jmap_proto::id::Id;
@@ -26,6 +30,7 @@ use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
 use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
+use jmap_proto::tasks::Task;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -1775,4 +1780,378 @@ fn rfc9553_sec_2_8_4_personal_info() {
     assert!(note.contains("RFC 9553 §2.8.4"));
     assert_roundtrip(&card);
     assert_eq!(card.personal_info.as_ref().unwrap().len(), 3);
+}
+
+// ===========================================================================
+// RFC 8984 JSCalendar Specifications (July 2021)
+// ===========================================================================
+
+#[test]
+fn rfc8984_sec_6_1_simple_event() {
+    let (note, event, _) = load_rfc_fixture::<CalendarEvent>("rfc8984/6.1_simple_event.json");
+    assert!(note.contains("RFC 8984 §6.1"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("Some event"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+}
+
+#[test]
+fn rfc8984_sec_6_2_simple_task() {
+    let (note, task, _) = load_rfc_fixture::<Task>("rfc8984/6.2_simple_task.json");
+    assert!(note.contains("RFC 8984 §6.2"));
+    assert_roundtrip(&task);
+    assert_eq!(task.title.as_deref(), Some("Do something"));
+}
+
+#[test]
+fn rfc8984_sec_6_3_simple_group() {
+    let (note, group, _) = load_rfc_fixture::<CalendarGroup>("rfc8984/6.3_simple_group.json");
+    assert!(note.contains("RFC 8984 §6.3"));
+    assert_roundtrip(&group);
+    assert_eq!(
+        group.uid.as_deref(),
+        Some("bf0ac22b-4989-4caf-9ebd-54301b4ee51a")
+    );
+    assert!(group.entries.is_some());
+}
+
+#[test]
+fn rfc8984_sec_6_4_all_day_event() {
+    let (note, event, _) = load_rfc_fixture::<CalendarEvent>("rfc8984/6.4_all_day_event.json");
+    assert!(note.contains("RFC 8984 §6.4"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("April Fool's Day"));
+    assert_eq!(event.show_without_time, Some(true));
+}
+
+#[test]
+fn rfc8984_sec_6_5_task_due_date() {
+    let (note, task, _) = load_rfc_fixture::<Task>("rfc8984/6.5_task_due_date.json");
+    assert!(note.contains("RFC 8984 §6.5"));
+    assert_roundtrip(&task);
+    assert_eq!(task.title.as_deref(), Some("Buy groceries"));
+    assert_eq!(task.due.as_deref(), Some("2020-01-19T18:00:00"));
+}
+
+#[test]
+fn rfc8984_sec_6_6_event_end_time_zone() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("rfc8984/6.6_event_end_time_zone.json");
+    assert!(note.contains("RFC 8984 §6.6"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("Flight XY51 to Tokyo"));
+    assert_eq!(event.locations.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn rfc8984_sec_6_7_floating_time_event() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("rfc8984/6.7_floating_time_event.json");
+    assert!(note.contains("RFC 8984 §6.7"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("Yoga"));
+    assert_eq!(event.duration.as_deref(), Some("PT30M"));
+}
+
+#[test]
+fn rfc8984_sec_6_8_multiple_locations() {
+    let (note, event, _) = load_rfc_fixture::<CalendarEvent>("rfc8984/6.8_multiple_locations.json");
+    assert!(note.contains("RFC 8984 §6.8"));
+    assert_roundtrip(&event);
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Live from Music Bowl: The Band")
+    );
+    assert!(event.locations.is_some());
+    assert!(event.virtual_locations.is_some());
+    assert!(event.localizations.is_some());
+}
+
+#[test]
+fn rfc8984_sec_6_9_recurring_event_overrides() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("rfc8984/6.9_recurring_event_overrides.json");
+    assert!(note.contains("RFC 8984 §6.9"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("Calculus I"));
+    assert_eq!(event.recurrence_overrides.as_ref().unwrap().len(), 3);
+}
+
+#[test]
+fn rfc8984_sec_6_10_recurring_event_participants() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("rfc8984/6.10_recurring_event_participants.json");
+    assert!(note.contains("RFC 8984 §6.10"));
+    assert_roundtrip(&event);
+    assert_eq!(event.title.as_deref(), Some("FooBar team meeting"));
+    assert_eq!(event.participants.as_ref().unwrap().len(), 2);
+    assert!(event.virtual_locations.is_some());
+}
+
+// ===========================================================================
+// draft-ietf-jmap-calendars (October 2026 / draft-32)
+// ===========================================================================
+
+#[test]
+fn jmap_calendars_sec_5_9_1_calendar_event() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("jmap_calendars/5.9.1_calendar_event.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&event);
+    assert_eq!(event.id.as_ref().map(|id| id.as_str()), Some("123"));
+    assert_eq!(event.title.as_deref(), Some("FooBar team meeting"));
+    assert!(event.recurrence_rule.is_some());
+    assert_eq!(event.participants.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn jmap_calendars_sec_5_9_1_patch_zoe_decline() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_zoe_decline.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+}
+
+#[test]
+fn jmap_calendars_sec_5_9_1_recurrence_overrides() {
+    let (note, event, _) =
+        load_rfc_fixture::<CalendarEvent>("jmap_calendars/5.9.1_recurrence_overrides.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&event);
+    assert!(event.recurrence_overrides.is_some());
+}
+
+#[test]
+fn jmap_calendars_sec_5_9_1_patch_tom_restore() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_tom_restore.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+}
+
+#[test]
+fn jmap_calendars_sec_5_9_1_patch_invalid_remove() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_invalid_remove.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+}
+
+#[test]
+fn jmap_calendars_sec_5_9_1_patch_tom_remove_instance() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_tom_remove_instance.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+}
+
+#[test]
+fn jmap_calendars_sec_8_1_initial_data_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.1_initial_data_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].name, "Calendar/get");
+    assert_eq!(calls[1].name, "ParticipantIdentity/get");
+    assert_eq!(calls[2].name, "CalendarEvent/query");
+    assert_eq!(calls[3].name, "CalendarEvent/get");
+}
+
+#[test]
+fn jmap_calendars_sec_8_1_initial_data_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.1_initial_data_response.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 4);
+    assert_eq!(responses[0].name, "Calendar/get");
+    assert_eq!(responses[1].name, "ParticipantIdentity/get");
+    assert_eq!(responses[2].name, "CalendarEvent/query");
+    assert_eq!(responses[3].name, "CalendarEvent/get");
+}
+
+#[test]
+fn jmap_calendars_sec_8_2_create_event_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.2_create_event_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.2"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+
+    let set: CalendarEventSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into CalendarEventSetRequest");
+    assert_eq!(set.send_scheduling_messages, Some(true));
+    let draft = &set.set.create.unwrap()["k559"];
+    assert_eq!(draft.title.as_deref(), Some("Party at Pete's"));
+}
+
+#[test]
+fn jmap_calendars_sec_8_2_create_event_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.2_create_event_response.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.2"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "CalendarEvent/set");
+
+    let res: SetResponse<CalendarEvent> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<CalendarEvent>");
+    let created = &res.created.unwrap()["k559"];
+    assert_eq!(
+        created.id.as_ref().map(|id| id.as_str()),
+        Some("E-5d5776f6-ff8e-4bfd-ab3e-fe2fe5d4fa91")
+    );
+    assert_eq!(created.is_origin, Some(true));
+}
+
+#[test]
+fn jmap_calendars_sec_8_3_push_alert_notification() {
+    let (note, alert, _) =
+        load_rfc_fixture::<CalendarAlert>("jmap_calendars/8.3_push_alert_notification.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert_roundtrip(&alert);
+    assert_eq!(alert.account_id.as_str(), "a0x9");
+    assert_eq!(
+        alert.calendar_event_id.as_str(),
+        "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f"
+    );
+    assert_eq!(
+        alert.alert_id.as_str(),
+        "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd"
+    );
+}
+
+#[test]
+fn jmap_calendars_sec_8_3_get_event_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_get_event_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/get");
+
+    let get: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(
+        get.ids,
+        Some(vec![Id::from("E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f")])
+    );
+}
+
+#[test]
+fn jmap_calendars_sec_8_3_get_event_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_get_event_response.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "CalendarEvent/get");
+
+    let res: GetResponse<CalendarEvent> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<CalendarEvent>");
+    assert_eq!(res.list.len(), 1);
+    assert_eq!(
+        res.list[0].id.as_ref().map(|id| id.as_str()),
+        Some("E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f")
+    );
+}
+
+#[test]
+fn jmap_calendars_sec_8_3_snooze_alert_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_snooze_alert_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/set");
+}
+
+#[test]
+fn jmap_calendars_sec_8_4_default_calendar_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.4_default_calendar_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.4"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Calendar/set");
+
+    let set: CalendarSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into CalendarSetRequest");
+    assert_eq!(
+        set.on_success_set_is_default,
+        Some(Id::from("062adcfa-105d-455c-bc60-6db68b69c3f3"))
+    );
+}
+
+#[test]
+fn jmap_calendars_sec_8_4_default_calendar_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.4_default_calendar_response.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.4"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Calendar/set");
+
+    let res: SetResponse<Calendar> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<Calendar>");
+    assert!(res.updated.is_some());
+}
+
+#[test]
+fn jmap_calendars_sec_8_5_parse_ical_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.5_parse_ical_request.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "CalendarEvent/parse");
+
+    let parse: CalendarEventParseRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into CalendarEventParseRequest");
+    assert_eq!(
+        parse.blob_ids,
+        vec![Id::from("Ge682d5d7aad50b3a4f7180a7ed9276476485ea52")]
+    );
+}
+
+#[test]
+fn jmap_calendars_sec_8_5_parse_ical_parsed_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.5_parse_ical_parsed_response.json");
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "CalendarEvent/parse");
+}
+
+#[test]
+fn jmap_calendars_sec_8_5_parse_ical_not_found_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>(
+        "jmap_calendars/8.5_parse_ical_not_found_response.json",
+    );
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "CalendarEvent/parse");
+}
+
+#[test]
+fn jmap_calendars_sec_8_5_parse_ical_not_parsable_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>(
+        "jmap_calendars/8.5_parse_ical_not_parsable_response.json",
+    );
+    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "CalendarEvent/parse");
 }

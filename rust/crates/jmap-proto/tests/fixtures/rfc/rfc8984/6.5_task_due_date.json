@@ -1,0 +1,8 @@
+// Source: RFC 8984 §6.5 (Task with a Due Date), July 2021
+{
+  "...": "",
+  "title": "Buy groceries",
+  "due": "2020-01-19T18:00:00",
+  "timeZone": "Europe/Vienna",
+  "estimatedDuration": "PT1H"
+}

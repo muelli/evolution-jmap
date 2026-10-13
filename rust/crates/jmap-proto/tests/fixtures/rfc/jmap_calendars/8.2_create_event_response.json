@@ -1,0 +1,21 @@
+// Source: draft-ietf-jmap-calendars-32 §8.2 (Figure 10: "methodResponses" Property of a JMAP Response), October 2026
+[
+  [
+    "CalendarEvent/set",
+    {
+      "accountId": "a0x9",
+      "created": {
+        "k559": {
+          "id": "E-5d5776f6-ff8e-4bfd-ab3e-fe2fe5d4fa91",
+          "isOrigin": true,
+          "@type": "Event",
+          "version": "2.0",
+          "created": "2022-10-05T20:42:13Z",
+          "updated": "2022-10-05T20:42:13Z",
+          "organizerCalendarAddress": "mailto:3e87-1b18@itip.example.com"
+        }
+      }
+    },
+    "0"
+  ]
+]

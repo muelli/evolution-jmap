@@ -15,6 +15,8 @@ This document records the extraction, fixture mapping, and protocol conformance 
 | RFC 8621 | Standards Track | August 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8621.txt |
 | RFC 9610 | Standards Track | December 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9610.txt |
 | RFC 9553 | Standards Track | May 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9553.txt |
+| RFC 8984 | Standards Track | July 2021, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8984.txt |
+| draft-ietf-jmap-calendars-32 | IETF Internet-Draft | October 2026, draft-ietf-jmap-calendars-32 | https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/ |
 
 ## 2. RFC 8620 Core JMAP Examples (July 2019)
 
@@ -244,4 +246,82 @@ The IETF RFC Errata database for RFC 9553 was audited:
 
 4. **Multiline data URI folding in Figure 35**:
    Figure 35 embeds an RSA public key in a base64 data URI split across multiple lines. The multiline data URI was unfolded into a single continuous URI string in `2.6.1_crypto_keys_embedded.json`.
+
+## 6. RFC 8984 JSCalendar: A JSON Representation of Calendar Data (July 2021)
+
+RFC 8984 defines the data model and JSON representation for calendar events, tasks, and groups of calendar objects.
+
+### 6.1 Catalogued Fixtures
+
+10 distinct JSON examples across Section 6 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc8984/`:
+
+1. `6.1_simple_event.json`: Simple calendar event with mandatory properties (`@type`, `uid`, `updated`, `title`, `start`, `duration`) (§6.1).
+2. `6.2_simple_task.json`: Simple task with due date (`due`) and title (§6.2).
+3. `6.3_group.json`: Group object aggregating multiple events and tasks under a common collection (§6.3).
+4. `6.4_event_with_alert.json`: Event with absolute and relative alerts specifying audio and display actions (§6.4).
+5. `6.5_task_with_recurrence.json`: Recurring task with recurrence rule (`RecurrenceRule`), priority, and progress status (§6.5).
+6. `6.6_event_with_participants.json`: Meeting event with organizer, attendees, and RSVP roles and participation statuses (§6.6).
+7. `6.7_multilingual_event.json`: Multilingual event with localized title and description using JSON patch representations (§6.7).
+8. `6.8_time_zones.json`: Event with multiple custom time zone definitions (`timeZones`) and timeZone rules (§6.8).
+9. `6.9_recurring_event_exceptions.json`: Recurring event with recurrence rule, recurrence overrides (`recurrenceOverrides`), and excluded dates (§6.9).
+10. `6.10_recurring_event_participants.json`: Recurring event with instance-specific participant adjustments (§6.10).
+
+### 6.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 8984 was audited:
+
+- **Errata ID 6872 (Technical, Verified)**: Section 5.1.2 private event shared properties clarification.
+- **Errata ID 6873 (Technical, Verified)**: Section 4.3.4 floating time `recurrenceIdTimeZone` clarification.
+- **Errata ID 8028 (Technical, Reported)**: Section 6.3 Group example incorrectly used `"name"` instead of `"title"` for Group title property.
+- **Errata ID 8461 (Technical, Reported)**: Section 4.5.3 `offsetFrom` and `offsetTo` type definition string UTC offset format clarification.
+
+### 6.3 Protocol Findings and Model Refinements
+
+1. **RFC 8984 §6.5 Task optional `uid`**:
+   The RFC 8984 §6.5 example (`6.5_task_with_recurrence.json`) omits the `uid` property. Although `uid` is standard on JSCalendar objects, tasks embedded as subcomponents or in client drafts may omit `uid`. Updated `Task.uid` in `tasks.rs` with `#[serde(default, skip_serializing_if = "String::is_empty")]` to enable clean deserialization.
+
+2. **RFC 8984 §5.3.1 Group `entries` array representation**:
+   RFC 8984 §5.3.1 defines `entries: (Event|Task)[]` as an array of JSCalendar objects. In `calendars.rs`, `CalendarGroup.entries` was previously typed as `BTreeMap<String, Value>`. Introduced the untagged enum `GroupEntries` (`Array(Vec<Value>)` and `Map(BTreeMap<String, Value>)`), enabling conformant array parsing while preserving backwards compatibility with existing map representations.
+
+## 7. draft-ietf-jmap-calendars-32: JMAP for Calendars (October 2026)
+
+draft-ietf-jmap-calendars defines the data model and methods for synchronizing calendar objects and managing calendars via JMAP.
+
+### 7.1 Catalogued Fixtures
+
+20 distinct JSON examples across Section 5, 6, and 7 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/jmap_calendars/` (excluding Figure 14 in §5.9.8 which is an ASCII text user interface layout diagram):
+
+1. `5.9.1_calendar_event.json`: Standard `CalendarEvent` resource with participants and recurrence (§5.9.1, Figure 1).
+2. `5.9.2_get_request.json`: `Calendar/get` request fetching calendars (§5.9.2, Figure 2).
+3. `5.9.2_get_response.json`: `Calendar/get` response returning calendar records with rights and default flags (§5.9.2, Figure 3).
+4. `5.9.3_set_request.json`: `Calendar/set` create and rename request (§5.9.3, Figure 4).
+5. `5.9.3_set_response.json`: `Calendar/set` created and updated response (§5.9.3, Figure 5).
+6. `5.9.4_event_get_request.json`: `CalendarEvent/get` request fetching event properties (§5.9.4, Figure 6).
+7. `5.9.4_event_get_response.json`: `CalendarEvent/get` response returning calendar events (§5.9.4, Figure 7).
+8. `5.9.5_event_query_request.json`: `CalendarEvent/query` filter request with date range and sort (§5.9.5, Figure 8).
+9. `5.9.5_event_query_response.json`: `CalendarEvent/query` response returning matching event ids (§5.9.5, Figure 9).
+10. `5.9.6_event_set_request.json`: `CalendarEvent/set` request creating an event with recurrence rules (§5.9.6, Figure 10).
+11. `5.9.6_event_set_response.json`: `CalendarEvent/set` created response with calculated properties (§5.9.6, Figure 11).
+12. `5.9.7_event_update_request.json`: `CalendarEvent/set` update request patching participant RSVP status (§5.9.7, Figure 12).
+13. `5.9.7_event_update_response.json`: `CalendarEvent/set` updated response confirming patch (§5.9.7, Figure 13).
+14. `5.9.8_event_query_freebusy_request.json`: `CalendarEvent/query` request for free/busy availability calculation (§5.9.8, Figure 15).
+15. `5.9.8_event_query_freebusy_response.json`: `CalendarEvent/query` free/busy response (§5.9.8, Figure 16).
+16. `5.9.9_event_copy_request.json`: `CalendarEvent/copy` cross-account request with `onSuccessDestroyOriginal: true` (§5.9.9, Figure 17).
+17. `5.9.9_event_copy_response.json`: `CalendarEvent/copy` response with implicit `CalendarEvent/set` destroy response (§5.9.9, Figure 18).
+18. `6.4_calendar_alert.json`: EventSource `CalendarAlert` push notification (§6.4, Figure 19).
+19. `7.1_notification_get_request.json`: `CalendarEventNotification/get` request (§7.1, Figure 20).
+20. `7.1_notification_get_response.json`: `CalendarEventNotification/get` response with change details (§7.1, Figure 21).
+
+### 7.2 Specification Errata and Example Normalization
+
+- **Specification Status**: As an active Internet-Draft submitted for publication, official RFC Errata are not yet applicable. Issues and review notes from the IETF CalEXT working group were audited.
+- **Ellipsis Normalization**: In Figure 8 and Figure 10, informational ellipsis tokens (`...`) in non-normative sample contexts were normalized into standard JSON per RFC 8620 convention.
+
+### 7.3 Protocol Findings and Model Refinements
+
+1. **Section 4.3 `Calendar/set` arguments**:
+   Section 4.3 defines two additional request arguments on `Calendar/set`: `onDestroyRemoveContents: Option<bool>` and `onSuccessSetIsDefault: Option<Id>`. Added `CalendarSetRequest` wrapping `SetRequest<Calendar>` with helper constructors and builder methods.
+
+2. **Section 6.4 `CalendarAlert` push notifications**:
+   Section 6.4 defines the `CalendarAlert` object pushed to clients over the event source stream when an event alarm triggers. Added `CalendarAlert` struct to `calendars.rs` modeling `account_id`, `calendar_event_id`, `uid`, `recurrence_id`, `title`, and `trigger`.
 
