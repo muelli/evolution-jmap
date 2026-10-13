@@ -12,11 +12,10 @@
 //! nicknames, notes, titles, links, calendars, and the whole-set-replace
 //! `keywords`; plus `organizations`, whose entries are patched member by
 //! member and whose `units` list is merged by name (`merge_units`).
-//! `patch.rs`'s own module doc explains why the rest (name components,
-//! related_to) deliberately keep entries the vCard never showed untouched,
-//! or match entries by value rather than by key: those need generators that
-//! model that lossiness on purpose, not a card built from entries that are
-//! all stateable, and are left for a later increment.
+//! `patch.rs`'s own module doc explains why `related_to` deliberately keeps
+//! entries the vCard never showed untouched: it needs a generator that
+//! models that lossiness on purpose, not a card built from entries that are
+//! all stateable, and is left for a later increment.
 //!
 //! `anniversaries` and `media` are covered here too, but not by the same
 //! invariant: their keys never survive Evolution at all (EDS rebuilds the
@@ -94,13 +93,26 @@
 //! `sortAs`/`contexts` are out of scope too: `diff_organizations` never
 //! patches them, so their preservation is not this property's job, and is
 //! already covered by `tests/save.rs`.
+//!
+//! `name_components_round_trip` covers the same `merge_named` machinery
+//! again, this time through `diff_name`'s component-list branch
+//! (`restore_name_components` plus the merge). A `Name` is a single struct
+//! rather than a keyed map, so there is no entry key at all, surviving or
+//! not: `diff_name` always writes the whole merged list back under
+//! `name/components`, a literal round trip with `edited` like addresses'.
+//! The one joined-field case here is `restore_shared_fields`'s splice of two
+//! same-kind components sharing one `N` field, a double-barrelled given name
+//! with both components of kind `given`, and the generator avoids it by
+//! construction: one component per kind. `full`, `isOrdered`, `sortAs` and
+//! `extra` are held at their default on both sides, the way addresses held
+//! `full`/`contexts`/`pref`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note,
-    OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Name,
+    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -594,6 +606,113 @@ fn card_with_addresses(map: BTreeMap<String, Address>) -> ContactCard {
     }
 }
 
+fn arb_name_value() -> impl Strategy<Value = String> {
+    "[a-zA-Z]{1,10}"
+}
+
+/// The vCard-mapped `N` component kinds. Unlike `ADDRESS_COMPONENT_KINDS`
+/// none needs excluding: each sits at its own `N` field (`given` and
+/// `given2` included, RFC 9553 §2.2.1's two halves of a double-barrelled
+/// given name are both the kind `given`, not one of each), so one component
+/// per kind never shares a field with another kind. Sharing only arises
+/// from two components of the *same* kind, which this generator does not
+/// construct.
+const NAME_COMPONENT_KINDS: [&str; 5] = ["title", "given", "given2", "surname", "credential"];
+
+/// [`AddressComponentSlot`] for a `Name`'s components: same four shapes
+/// (kept, added, removed, modified), over [`NameComponent`] instead of
+/// [`AddressComponent`].
+#[derive(Clone, Debug)]
+enum NameComponentSlot {
+    Absent,
+    Kept(String),
+    Added(String),
+    Removed(String),
+    Modified(String, String),
+}
+
+fn arb_name_component_slot() -> impl Strategy<Value = NameComponentSlot> {
+    prop_oneof![
+        Just(NameComponentSlot::Absent),
+        arb_name_value().prop_map(NameComponentSlot::Kept),
+        arb_name_value().prop_map(NameComponentSlot::Added),
+        arb_name_value().prop_map(NameComponentSlot::Removed),
+        (arb_name_value(), arb_name_value())
+            .prop_filter("value must actually change", |(old, new)| old != new)
+            .prop_map(|(old, new)| NameComponentSlot::Modified(old, new)),
+    ]
+}
+
+/// Builds a `(current, edited)` pair of `Name.components`, one slot per
+/// [`NAME_COMPONENT_KINDS`] kind, the same way [`arb_address_components_pair`]
+/// builds an address's: a `Kept` kind's component is the server's own copy,
+/// matched by `(kind, value)`; a `Removed` one is dropped (its kind is
+/// stated, so its disappearance is the user deleting it); an `Added` or
+/// `Modified` kind's new value has nothing in `current` to match, so it is
+/// appended after every kept component, in the same order on both sides.
+/// That keeps `merge_named`'s result a literal match for `edited` without
+/// needing a third "expected" card.
+///
+/// `full`, `isOrdered`, `sortAs` and `extra` are held at their default on
+/// both sides, left for a later increment the way `online_services`'
+/// non-core fields were.
+fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
+    proptest::collection::vec(arb_name_component_slot(), NAME_COMPONENT_KINDS.len())
+        .prop_filter(
+            "at least one current-side component, to exercise the merge",
+            |slots| {
+                slots.iter().any(|slot| {
+                    matches!(
+                        slot,
+                        NameComponentSlot::Kept(_)
+                            | NameComponentSlot::Removed(_)
+                            | NameComponentSlot::Modified(_, _)
+                    )
+                })
+            },
+        )
+        .prop_map(|slots| {
+            let mut current = Vec::new();
+            let mut current_tail = Vec::new();
+            let mut edited = Vec::new();
+            let mut edited_tail = Vec::new();
+            for (kind, slot) in NAME_COMPONENT_KINDS.into_iter().zip(slots) {
+                match slot {
+                    NameComponentSlot::Absent => {}
+                    NameComponentSlot::Kept(value) => {
+                        let component = NameComponent::new(kind, value);
+                        current.push(component.clone());
+                        edited.push(component);
+                    }
+                    NameComponentSlot::Added(value) => {
+                        edited_tail.push(NameComponent::new(kind, value));
+                    }
+                    NameComponentSlot::Removed(value) => {
+                        current_tail.push(NameComponent::new(kind, value));
+                    }
+                    NameComponentSlot::Modified(old, new) => {
+                        current_tail.push(NameComponent::new(kind, old));
+                        edited_tail.push(NameComponent::new(kind, new));
+                    }
+                }
+            }
+            current.extend(current_tail);
+            edited.extend(edited_tail);
+            let to_name = |components: Vec<NameComponent>| Name {
+                components: (!components.is_empty()).then_some(components),
+                ..Name::default()
+            };
+            (to_name(current), to_name(edited))
+        })
+}
+
+fn card_with_name(name: Name) -> ContactCard {
+    ContactCard {
+        name: Some(name),
+        ..ContactCard::default()
+    }
+}
+
 /// One `kind`'s slot across (current, edited): absent on both sides, present
 /// only on the edited side (a genuine addition), present only on current
 /// (removed), or present on both with independently-chosen dates (a
@@ -973,5 +1092,12 @@ proptest! {
         )
     ) {
         round_trips(&card_with_addresses(current), &card_with_addresses(edited))?;
+    }
+
+    #[test]
+    fn name_components_round_trip(
+        (current, edited) in arb_name_components_pair()
+    ) {
+        round_trips(&card_with_name(current), &card_with_name(edited))?;
     }
 }
