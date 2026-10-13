@@ -985,12 +985,6 @@ proptest! {
         let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateResponse>(&text);
     }
 
-    #[test]
-    fn arbitrary_json_never_panics_deserializing_sieve_script_validate_error(value in json_value()) {
-        let text = value.to_string();
-        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateError>(&text);
-    }
-
     #[cfg(feature = "calendars")]
     #[test]
     fn arbitrary_json_never_panics_deserializing_calendar_group(value in json_value()) {

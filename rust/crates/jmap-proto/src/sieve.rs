@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::SetError;
 use crate::id::Id;
 use crate::methods::SetRequest;
 
@@ -197,45 +198,32 @@ impl SieveScriptQueryFilter {
     }
 }
 
-/// `SieveScript/validate` arguments (RFC 9661 §2.6).
+/// `SieveScript/validate` arguments (RFC 9661 §2.6). The RFC names exactly
+/// two arguments, `accountId` and `blobId`: script content must already be
+/// uploaded as a blob (§2.2) before it can be validated, there is no raw
+/// `content` or existing-script `id` shorthand on the wire. An earlier
+/// version of this type invented both as convenience fields; real Stalwart
+/// rejected them (confirmed live, 2026-10-10: a request with only `content`
+/// came back `blobNotFound`, since it has no `blobId` at all). The
+/// `jmap-client` crate's `Client::sieve_script_validate_content` is the
+/// client-side equivalent: it uploads the content first, then validates the
+/// resulting `blobId`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateRequest {
     pub account_id: Id,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blob_id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub blob_id: Id,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl SieveScriptValidateRequest {
-    pub fn new(account_id: impl Into<Id>) -> Self {
+    pub fn new(account_id: impl Into<Id>, blob_id: impl Into<Id>) -> Self {
         Self {
             account_id: account_id.into(),
-            id: None,
-            blob_id: None,
-            content: None,
+            blob_id: blob_id.into(),
             extra: BTreeMap::new(),
         }
-    }
-
-    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
-        self.id = Some(id.into());
-        self
-    }
-
-    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
-        self.blob_id = Some(blob_id.into());
-        self
-    }
-
-    pub fn with_content(mut self, content: impl Into<String>) -> Self {
-        self.content = Some(content.into());
-        self
     }
 
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
@@ -244,14 +232,22 @@ impl SieveScriptValidateRequest {
     }
 }
 
-/// `SieveScript/validate` response (RFC 9661 §2.6).
+/// `SieveScript/validate` response (RFC 9661 §2.6). The RFC names exactly
+/// two response arguments, `accountId` and `error` (a `SetError|null`);
+/// there is no `isValid` property on the wire at all, validity is simply
+/// whether `error` is null. Confirmed live against real Stalwart
+/// (2026-10-10): a valid script answers `{"accountId":"b0","error":null}`
+/// and an invalid one `{"accountId":"b0","error":{"type":"invalidScript",
+/// "description":"..."}}`, neither with an `isValid` field. An earlier
+/// version of this type declared `isValid` as a mandatory field, so it
+/// failed to deserialize every real server response; [`Self::is_valid`]
+/// replaces it as a derived accessor instead of a wire field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateResponse {
     pub account_id: Id,
-    pub is_valid: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<SieveScriptValidateError>,
+    pub error: Option<SetError>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -260,16 +256,14 @@ impl SieveScriptValidateResponse {
     pub fn valid(account_id: impl Into<Id>) -> Self {
         Self {
             account_id: account_id.into(),
-            is_valid: true,
             error: None,
             extra: BTreeMap::new(),
         }
     }
 
-    pub fn invalid(account_id: impl Into<Id>, error: SieveScriptValidateError) -> Self {
+    pub fn invalid(account_id: impl Into<Id>, error: SetError) -> Self {
         Self {
             account_id: account_id.into(),
-            is_valid: false,
             error: Some(error),
             extra: BTreeMap::new(),
         }
@@ -279,52 +273,10 @@ impl SieveScriptValidateResponse {
         self.extra = extra;
         self
     }
-}
 
-/// Detailed syntax or semantic error in a Sieve script (RFC 9661 §2.6).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SieveScriptValidateError {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub line_number: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column_number: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-impl SieveScriptValidateError {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    pub fn with_line_number(mut self, line_number: u64) -> Self {
-        self.line_number = Some(line_number);
-        self
-    }
-
-    pub fn with_column_number(mut self, column_number: u64) -> Self {
-        self.column_number = Some(column_number);
-        self
-    }
-
-    pub fn with_action(mut self, action: impl Into<String>) -> Self {
-        self.action = Some(action.into());
-        self
-    }
-
-    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
-        self.extra = extra;
-        self
+    /// No wire field names this; it is simply whether `error` is null.
+    pub fn is_valid(&self) -> bool {
+        self.error.is_none()
     }
 }
 

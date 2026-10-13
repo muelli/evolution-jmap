@@ -3,10 +3,11 @@
 
 //! RFC 9661 (JMAP for Sieve Scripts) unit and roundtrip tests.
 
+use jmap_proto::error::SetError;
 use jmap_proto::session::{CAPABILITY_SIEVE, Session};
 use jmap_proto::sieve::{
-    SieveCapability, SieveScript, SieveScriptQueryFilter, SieveScriptValidateError,
-    SieveScriptValidateRequest, SieveScriptValidateResponse, sieve_set_error,
+    SieveCapability, SieveScript, SieveScriptQueryFilter, SieveScriptValidateRequest,
+    SieveScriptValidateResponse, sieve_set_error,
 };
 use serde_json::json;
 
@@ -92,17 +93,13 @@ fn sieve_query_filter_roundtrip_and_builders() {
 
 #[test]
 fn sieve_validate_request_and_response_roundtrip() {
-    let req = SieveScriptValidateRequest::new("acc1")
-        .with_blob_id("blob_123")
-        .with_content("require [\"fileinto\"]; fileinto \"Spam\";");
+    let req = SieveScriptValidateRequest::new("acc1", "blob_123");
 
     let val_req = serde_json::to_value(&req).expect("serialize SieveScriptValidateRequest");
     assert_eq!(val_req["accountId"], "acc1");
     assert_eq!(val_req["blobId"], "blob_123");
-    assert_eq!(
-        val_req["content"],
-        "require [\"fileinto\"]; fileinto \"Spam\";"
-    );
+    assert!(val_req.get("content").is_none());
+    assert!(val_req.get("id").is_none());
 
     let back_req: SieveScriptValidateRequest =
         serde_json::from_value(val_req).expect("deserialize SieveScriptValidateRequest");
@@ -112,31 +109,54 @@ fn sieve_validate_request_and_response_roundtrip() {
     let val_valid =
         serde_json::to_value(&resp_valid).expect("serialize SieveScriptValidateResponse");
     assert_eq!(val_valid["accountId"], "acc1");
-    assert_eq!(val_valid["isValid"], true);
+    assert!(val_valid.get("isValid").is_none());
     assert!(val_valid.get("error").is_none());
+    assert!(resp_valid.is_valid());
 
-    let err = SieveScriptValidateError::new()
-        .with_description("Unknown action 'discard-all'")
-        .with_line_number(4)
-        .with_column_number(12)
-        .with_action("discard-all");
+    let err = SetError::new(sieve_set_error::INVALID_SIEVE)
+        .with_description("Unknown action 'discard-all' at line 4, column 12");
 
     let resp_invalid = SieveScriptValidateResponse::invalid("acc1", err);
     let val_invalid =
         serde_json::to_value(&resp_invalid).expect("serialize invalid SieveScriptValidateResponse");
     assert_eq!(val_invalid["accountId"], "acc1");
-    assert_eq!(val_invalid["isValid"], false);
+    assert!(val_invalid.get("isValid").is_none());
+    assert_eq!(val_invalid["error"]["type"], "invalidSieve");
     assert_eq!(
         val_invalid["error"]["description"],
-        "Unknown action 'discard-all'"
+        "Unknown action 'discard-all' at line 4, column 12"
     );
-    assert_eq!(val_invalid["error"]["lineNumber"], 4);
-    assert_eq!(val_invalid["error"]["columnNumber"], 12);
-    assert_eq!(val_invalid["error"]["action"], "discard-all");
+    assert!(!resp_invalid.is_valid());
 
     let back_invalid: SieveScriptValidateResponse =
         serde_json::from_value(val_invalid).expect("deserialize invalid response");
     assert_eq!(back_invalid, resp_invalid);
+}
+
+/// Literal response bodies captured from a real Stalwart 0.16 server
+/// (2026-10-10, `STALWART-RFC-FINDINGS.md`'s sieve-validate probe): neither
+/// carries an `isValid` property at all, only `accountId` and `error`, per
+/// RFC 9661 §2.6's actual response shape. A `SieveScriptValidateResponse`
+/// that declared `isValid` as a mandatory field (the bug this test guards
+/// against) would fail to deserialize either one.
+#[test]
+fn sieve_validate_response_decodes_the_real_wire_shape() {
+    let valid = json!({"accountId": "b0", "error": null});
+    let response: SieveScriptValidateResponse =
+        serde_json::from_value(valid).expect("deserialize a real valid-script response");
+    assert!(response.is_valid());
+
+    let invalid = json!({
+        "accountId": "b0",
+        "error": {
+            "type": "invalidScript",
+            "description": "Undeclared capability 'fileinto' at line 1, column 35."
+        }
+    });
+    let response: SieveScriptValidateResponse =
+        serde_json::from_value(invalid).expect("deserialize a real invalid-script response");
+    assert!(!response.is_valid());
+    assert_eq!(response.error.unwrap().error_type, "invalidScript");
 }
 
 #[test]
