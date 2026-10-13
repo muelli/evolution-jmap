@@ -430,6 +430,14 @@ in the invocation, worth failing loudly on.
   both the size and limit, and verifying that downloading with a `max_bytes` ceiling
   smaller than the blob size returns `Error::ResponseTooLarge`.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `snoozed_mailbox_finds_or_creates_the_real_role_mailbox_on_the_real_server`:
+  exercises `Client::snoozed_mailbox` (`jmap-client/src/snooze.rs`), which
+  Stalwart can answer even though it has no Cyrus snooze extension at all:
+  the snoozed-role mailbox it finds-or-creates is an ordinary `Mailbox/set`
+  (RFC 9979 Section 8.1), nothing vendor-specific. Confirms the mailbox gets
+  a real id with the right name and role, and that a second call reuses it
+  rather than creating a sibling. Skipped, not failed, when
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 - `eventsource_reconnect_and_gap_handling_through_the_real_api`:
   exercises EventSource stream reconnection and gap handling (RFC 8620 Section 7.3,
   Batch 27). Connects to Stalwart's `eventSourceUrl`, shuts down the active socket from

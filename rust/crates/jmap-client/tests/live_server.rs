@@ -85,13 +85,13 @@ use jmap_proto::methods::{
     SetRequest,
 };
 use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
-use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
+use jmap_proto::quota::{Quota, QuotaQueryFilter, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
     CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
 };
-use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
+use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript, SieveScriptQueryFilter};
 use jmap_proto::state::UtcDate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1387,6 +1387,114 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
     );
 }
 
+/// `SieveScript/query` (RFC 9661 §2.5) against a real server: the only
+/// other live sieve coverage above drives `/get`, `/set` and `/validate`,
+/// never `/query`. Mock-tested only before this
+/// (`jmap-client/tests/sieve.rs`'s `sieve_script_query_filters_by_name` and
+/// `_by_is_active`). Creates two scripts with unique, run-specific names so
+/// the name filter cannot match any leftover script from a prior session
+/// sharing this write-test account, confirms the name filter narrows to
+/// just one of them, then activates one and confirms the `isActive: true`
+/// filter returns exactly that one script account-wide — safe even with
+/// leftover scripts, since Stalwart enforces at most one active script per
+/// account (the earlier round-trip test above already pins that
+/// activating one deactivates every other).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_script_query_filters_by_name_and_is_active_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_SIEVE) else {
+        eprintln!("server names no primary account for {CAPABILITY_SIEVE}; skipping");
+        return;
+    };
+
+    let suffix = unique_suffix();
+    let name_a = format!("agent-sievequery-{suffix}-a");
+    let name_b = format!("agent-sievequery-{suffix}-b");
+
+    let upload_a = client
+        .upload_blob(&account_id, "application/sieve", b"keep;\r\n".to_vec())
+        .expect("blob upload failed against the real server");
+    let id_a = client
+        .sieve_script_create(
+            &account_id,
+            &SieveScript::new(name_a.clone(), upload_a.blob_id),
+        )
+        .expect("SieveScript/set create failed against the real server")
+        .id
+        .expect("the server named the new script");
+
+    let upload_b = client
+        .upload_blob(&account_id, "application/sieve", b"keep;\r\n".to_vec())
+        .expect("blob upload failed against the real server");
+    let id_b = client
+        .sieve_script_create(
+            &account_id,
+            &SieveScript::new(name_b.clone(), upload_b.blob_id),
+        )
+        .expect("SieveScript/set create failed against the real server")
+        .id
+        .expect("the server named the new script");
+
+    let by_shared_substring = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_name(format!("agent-sievequery-{suffix}-")),
+        )
+        .expect("SieveScript/query failed against the real server");
+    let mut sorted = by_shared_substring.clone();
+    sorted.sort();
+    let mut expected = vec![id_a.clone(), id_b.clone()];
+    expected.sort();
+    assert_eq!(
+        sorted, expected,
+        "the shared-substring name filter did not return both scripts"
+    );
+
+    let by_exact_name = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_name(&name_a),
+        )
+        .expect("SieveScript/query failed against the real server");
+    assert_eq!(
+        by_exact_name,
+        vec![id_a.clone()],
+        "the exact-name filter did not narrow to just the one matching script"
+    );
+
+    client
+        .sieve_script_activate(&account_id, &id_b)
+        .expect("SieveScript/set activate failed against the real server");
+    let active = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_is_active(true),
+        )
+        .expect("SieveScript/query failed against the real server");
+    assert_eq!(
+        active,
+        vec![id_b.clone()],
+        "the isActive:true filter did not narrow to exactly the one active script"
+    );
+
+    // Cleanup: the direct-patch workaround (see the round-trip test above
+    // for why the RFC's own deactivate is a documented Stalwart no-op),
+    // then destroy both scripts.
+    client
+        .sieve_script_update(&account_id, &id_b, serde_json::json!({"isActive": false}))
+        .expect("the direct isActive:false patch workaround was rejected");
+    client
+        .sieve_script_destroy(&account_id, &id_a)
+        .expect("SieveScript/set destroy failed against the real server");
+    client
+        .sieve_script_destroy(&account_id, &id_b)
+        .expect("SieveScript/set destroy failed against the real server");
+}
+
 /// `SieveScript/validate` (RFC 9661 §2.6) against a real server's actual
 /// Sieve parser: nothing before this test ever sent genuinely invalid Sieve
 /// content to a live server (`jmap-client/tests/sieve.rs` only runs against
@@ -2021,6 +2129,128 @@ fn quota_used_reflects_a_real_email_import() {
         "quota used ({}) did not grow after importing a message (before: {})",
         after.used,
         before.used
+    );
+}
+
+/// `Client::quota_query` (RFC 9425 §4.4, `Quota/query`) had never been
+/// exercised against a real server through this crate's own method —
+/// `jmap-client/tests/quota.rs` only checks it against `jmap-mockd`, which
+/// necessarily honours whatever filter it is given. A real Stalwart server
+/// does not: `STALWART-RFC-FINDINGS.md` finding 6 found, by reading
+/// Stalwart's own source and then confirming live over raw HTTP, that
+/// `Quota/query` ignores its filter entirely and always answers every
+/// `Quota` id the account has. This pins that same behaviour through the
+/// actual `Client::quota_query` call this codebase ships, not raw HTTP: a
+/// filter that cannot possibly match (a `name` substring no real quota
+/// would ever contain) still returns the quota's id. If this ever starts
+/// failing, Stalwart may have fixed `Quota/query`; update finding 6 and
+/// this test together.
+///
+/// Needs the same per-account `octets` quota as `quota_used_reflects_a_
+/// real_email_import` (`docs/manual-test-live-server.md` step 3b); skipped,
+/// not failed, under the same conditions that test is.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn quota_query_ignores_its_filter_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    if !client
+        .session()
+        .accounts
+        .get(&account_id)
+        .is_some_and(|account| account.has_capability(CAPABILITY_QUOTA))
+    {
+        eprintln!("the write-test account does not advertise {CAPABILITY_QUOTA}; skipping");
+        return;
+    }
+
+    let quotas = client
+        .quotas(&account_id)
+        .expect("Quota/get failed against the real server");
+    let Some(quota) = quotas.first() else {
+        eprintln!(
+            "the write-test account has no configured Quota object \
+             (no maxDiskQuota set); skipping"
+        );
+        return;
+    };
+
+    let non_matching_filter =
+        QuotaQueryFilter::new().with_name("definitely-not-a-real-quota-name-5f3c9a");
+    let ids = client
+        .quota_query(&account_id, non_matching_filter)
+        .expect("Quota/query failed against the real server");
+
+    assert!(
+        ids.contains(&quota.id),
+        "finding 6 expects Quota/query to ignore its filter and return every \
+         quota id regardless; a non-matching name filter returned {ids:?}, \
+         missing the account's own quota {:?} — Stalwart may have fixed the \
+         filter, which would need finding 6 updated, not this assertion \
+         loosened",
+        quota.id
+    );
+}
+
+/// `Client::snoozed_mailbox` (`jmap-client/src/snooze.rs`) only ever had mock
+/// coverage: the `snoozed`-role mailbox it finds-or-creates is an ordinary
+/// RFC 9979 §8.1 mailbox, ordinary enough that `snoozing_without_the_
+/// extension_is_refused` (`jmap-client/tests/mail_snooze.rs`) already proves
+/// it works on a mock with the Cyrus snooze extension turned off. Stalwart is
+/// exactly that case for real: it has no snooze extension at all (see this
+/// module's doc comment), but the mailbox it stores the role on is plain
+/// `Mailbox/set`, nothing vendor-specific.
+///
+/// Confirms both halves of what the mock test already pins: the mailbox gets
+/// a real id with the right name and role, and a second call reuses it
+/// rather than creating a sibling (checked by both the returned id and a
+/// fresh `Mailbox/get` listing — a duplicate find-or-create would show up
+/// there even if the returned id happened to match the first result by
+/// coincidence).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn snoozed_mailbox_finds_or_creates_the_real_role_mailbox_on_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let first = client
+        .snoozed_mailbox(&account_id)
+        .expect("Client::snoozed_mailbox failed against the real server");
+    let snoozed_id = first.id.clone().expect("the server named the mailbox");
+    assert_eq!(first.role.as_deref(), Some(role::SNOOZED));
+    assert_eq!(first.name, "Snoozed");
+
+    let second = client
+        .snoozed_mailbox(&account_id)
+        .expect("Client::snoozed_mailbox failed against the real server");
+    assert_eq!(
+        second.id.as_ref(),
+        Some(&snoozed_id),
+        "a second call must reuse the existing snoozed-role mailbox, not create a sibling"
+    );
+
+    let snoozed_role_mailboxes: Vec<_> = client
+        .mailbox_get(&account_id)
+        .expect("Mailbox/get failed against the real server")
+        .list
+        .into_iter()
+        .filter(|mailbox| mailbox.role.as_deref() == Some(role::SNOOZED))
+        .collect();
+    assert_eq!(
+        snoozed_role_mailboxes.len(),
+        1,
+        "exactly one mailbox should carry the snoozed role after two finds-or-creates, got {snoozed_role_mailboxes:?}"
     );
 }
 
@@ -4385,6 +4615,47 @@ fn changes_paging_and_resumption_through_the_real_api() {
     client
         .contact_destroy(&account_id, &id2)
         .expect("cleanup destroy id2 failed");
+}
+
+/// Finding 17 (STALWART-RFC-FINDINGS.md): a `/changes` call carrying an
+/// unrecognized `sinceState` answers `invalidArguments`, not RFC 8620 §5.2's
+/// own `cannotCalculateChanges`. `jmap-client/src/error.rs`'s
+/// `Error::is_unrecognized_changes_state` exists to paper over exactly this
+/// and is unit-tested against a synthetic `MethodError` built to match the
+/// shape finding 17 recorded, but nothing before this test had ever driven a
+/// garbage `sinceState` through the real `Client::changes` against a genuine
+/// Stalwart response to confirm the predicate actually recognizes it.
+///
+/// Read-only: a nonsense `sinceState` queries state, it never changes it, so
+/// this runs against the shared read account rather than the write-test one.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calculate_changes() {
+    let client = connect();
+    let Ok(account_id) = client.primary_account(CAPABILITY_MAIL) else {
+        eprintln!("server names no primary account for {CAPABILITY_MAIL}; skipping");
+        return;
+    };
+
+    let bogus_state = jmap_proto::State::new("this-state-was-never-issued-by-the-server");
+    let error = client
+        .changes(&account_id, "Mailbox", &bogus_state)
+        .expect_err("an unrecognized sinceState must be rejected, not answered");
+
+    assert!(
+        error.is_unrecognized_changes_state(),
+        "finding 17 expects Mailbox/changes with a bogus sinceState to come back as \
+         invalidArguments mentioning state; got {error:?} instead — Stalwart may have \
+         fixed this to answer cannotCalculateChanges, which would need finding 17 \
+         updated and is_cannot_calculate_changes() checked instead, not this assertion \
+         loosened"
+    );
+    assert!(
+        !error.is_cannot_calculate_changes(),
+        "finding 17 is specifically that the server does NOT use the RFC's own error \
+         type for this; if it now does, both predicates agreeing is the bug report, \
+         not a reason to accept it silently"
+    );
 }
 
 /// Finding 12 (STALWART-RFC-FINDINGS.md): Unauthenticated GET to the session
