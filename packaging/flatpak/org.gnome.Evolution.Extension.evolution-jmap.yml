@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+id: org.gnome.Evolution.Extension.evolution-jmap
+runtime: org.gnome.Evolution
+runtime-version: stable
+sdk: org.gnome.Sdk//50
+branch: stable
+build-extension: true
+separate-locales: false
+appstream-compose: false
+modules:
+  - name: evolution-jmap-extension-files
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so "${FLATPAK_DEST}/lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so"
+      - install -Dm755 lib/evolution-data-server/calendar-backends/libecalbackendjmap.so "${FLATPAK_DEST}/lib/evolution-data-server/calendar-backends/libecalbackendjmap.so"
+      - install -Dm755 lib/evolution-data-server/camel-providers/libcameljmap.so "${FLATPAK_DEST}/lib/evolution-data-server/camel-providers/libcameljmap.so"
+      - install -Dm644 lib/evolution-data-server/camel-providers/libcameljmap.urls "${FLATPAK_DEST}/lib/evolution-data-server/camel-providers/libcameljmap.urls"
+      - install -Dm755 lib/evolution-data-server/registry-modules/module-jmap-backend.so "${FLATPAK_DEST}/lib/evolution-data-server/registry-modules/module-jmap-backend.so"
+      - install -Dm755 lib/evolution/modules/module-jmap-configuration.so "${FLATPAK_DEST}/lib/evolution/modules/module-jmap-configuration.so"
+    sources:
+      - type: dir
+        path: payload
