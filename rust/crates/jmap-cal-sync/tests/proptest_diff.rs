@@ -46,16 +46,29 @@
 //! drops, which `diff_links` leaves alone by design and so needs a check
 //! against the unpatched property rather than a round trip to `edited`.
 //!
+//! Also covered: `virtualLocations` (`diff_virtual_locations`), restricted to
+//! entries with a plain `https:` `uri` on both sides (so every entry survives
+//! [`maps_virtual_locations`] and keeps naming a place, never removed by the
+//! diff) and independently varied `name` and `features` (a subset of
+//! `CONFERENCE_FEATURES`). `diff_virtual_locations` patches `uri`/`name`/
+//! `features` into an existing key member by member and neither adds a key
+//! `edited` states that `current` does not nor removes one `edited` drops, so
+//! the generator keeps the same key set on both sides, like `links_round_trip`
+//! above. Scoped out, left for later: a key one side adds or drops (needs a
+//! check against the unpatched property, not a round trip to `edited`), and a
+//! `uri` that stops naming a place at all (removes the entry from being read
+//! back as a virtual location in the first place, not a patched member).
+//!
 //! Scoped out, left for later: `start` (its absence cannot be expressed, so
 //! it needs its own generator) and `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
-//! remaining six properties the module doc already calls out as needing
-//! more than the baseline (`locations`, `virtualLocations`, `alerts`,
-//! `recurrenceRule`, `recurrenceOverrides`, `timeZones`) — each needs its
-//! own generator and is left for its own increment.
+//! remaining five properties the module doc already calls out as needing
+//! more than the baseline (`locations`, `alerts`, `recurrenceRule`,
+//! `recurrenceOverrides`, `timeZones`) — each needs its own generator and is
+//! left for its own increment.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -193,6 +206,86 @@ fn arb_links() -> impl Strategy<Value = BTreeMap<String, (String, String, Option
     )
 }
 
+/// A `name` `stated_name` draws back unchanged, or none at all: plain
+/// alphanumeric, so never the empty string `stated_name` treats as absent.
+fn arb_place_name() -> impl Strategy<Value = Option<String>> {
+    prop::option::of("[a-zA-Z0-9]{1,10}")
+}
+
+/// A `features` set drawn from `CONFERENCE_FEATURES`, as the `Value` a save
+/// would see: `None` for an empty subset, since `read_virtual_locations` only
+/// ever writes the member when at least one `FEATURE` param was read.
+fn arb_features() -> impl Strategy<Value = Option<Value>> {
+    prop::collection::btree_set(
+        prop::sample::select(
+            &[
+                "audio",
+                "chat",
+                "feed",
+                "moderator",
+                "phone",
+                "screen",
+                "video",
+            ][..],
+        ),
+        0..3,
+    )
+    .prop_map(|features| {
+        (!features.is_empty()).then(|| {
+            Value::Object(
+                features
+                    .into_iter()
+                    .map(|feature| (feature.to_owned(), Value::Bool(true)))
+                    .collect(),
+            )
+        })
+    })
+}
+
+/// A VirtualLocation entry: a `uri` (required, held across old/new so the
+/// entry always keeps naming a place) and independently varied `name` and
+/// `features`.
+fn virtual_location_value(uri: &str, name: &Option<String>, features: &Option<Value>) -> Value {
+    let mut place = json!({"@type": "VirtualLocation", "uri": uri});
+    if let Some(name) = name {
+        place["name"] = Value::String(name.clone());
+    }
+    if let Some(features) = features {
+        place["features"] = features.clone();
+    }
+    place
+}
+
+/// A set of 1 to 4 keys, each carrying a `uri` (held constant: the entry must
+/// keep naming a place on both sides, since a `uri` that stops naming one is
+/// a removal from the read, not a patched member) and old/new `name` and
+/// `features`.
+#[allow(clippy::type_complexity)]
+fn arb_virtual_locations() -> impl Strategy<
+    Value = BTreeMap<
+        String,
+        (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<Value>,
+            Option<Value>,
+        ),
+    >,
+> {
+    prop::collection::btree_map(
+        arb_key(),
+        (
+            arb_href(),
+            arb_place_name(),
+            arb_place_name(),
+            arb_features(),
+            arb_features(),
+        ),
+        1..4,
+    )
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -282,6 +375,31 @@ proptest! {
             entries
                 .iter()
                 .map(|(key, (_, new, content_type))| (key.clone(), link_value(new, content_type)))
+                .collect(),
+        );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn virtual_locations_round_trip(entries in arb_virtual_locations()) {
+        let mut old_event = base();
+        old_event.virtual_locations = Some(
+            entries
+                .iter()
+                .map(|(key, (uri, old_name, _, old_features, _))| {
+                    (key.clone(), virtual_location_value(uri, old_name, old_features))
+                })
+                .collect(),
+        );
+        let mut new_event = base();
+        new_event.virtual_locations = Some(
+            entries
+                .iter()
+                .map(|(key, (uri, _, new_name, _, new_features))| {
+                    (key.clone(), virtual_location_value(uri, new_name, new_features))
+                })
                 .collect(),
         );
         let current = stable(old_event);
