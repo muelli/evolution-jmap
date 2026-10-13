@@ -1,13 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `GET /eventsource` actually serving `text/event-stream` and pushing a
-//! `StateChange` on the `MockServer::push_state_change` test hook (RFC 8620
-//! §7.1/§7.3).
-//!
-//! Asked over a raw `TcpStream` like `jmap-mock/tests/upload.rs`: this is a
-//! long-lived connection with no `Content-Length`, which is exactly the
-//! shape no client dependency of this crate speaks yet.
+//! `GET /eventsource` behavior (RFC 8620 §7.1/§7.3).
+//! Uses a raw stream because this crate has no SSE-capable client dependency.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -18,8 +13,7 @@ use jmap_mock::MockServer;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// Open `GET /eventsource?{query}` and send the request; the caller reads
-/// the response at its own pace.
+/// Open `GET /eventsource?{query}` and return the connected stream.
 fn open_eventsource(server: &MockServer, query: &str) -> TcpStream {
     let address = server
         .origin()
@@ -42,8 +36,7 @@ fn a_pushed_state_change_arrives_as_an_sse_state_event() {
     let server = MockServer::builder().start();
     let mut stream = open_eventsource(&server, "types=*&closeafter=state&ping=0");
 
-    // `closeafter=state` (RFC 8620 §7.3) ends the response right after the
-    // pushed event, so reading to EOF terminates instead of hanging forever.
+    // `closeafter=state` ends the stream after one state event.
     let reader = std::thread::spawn(move || {
         let mut response = String::new();
         stream
@@ -79,15 +72,13 @@ fn a_subscriber_filtered_by_types_only_receives_matching_pushes() {
 
     server.wait_for_event_source_subscriber(Duration::from_secs(5));
 
-    // A `Mailbox` change does not match this subscriber's `types=ContactCard`
-    // filter, so it must be sent nothing at all — not an empty `StateChange`,
-    // which nothing distinguishes from a match with no surviving types.
+    // Non-matching types must emit no event at all.
     server.push_state_change(&StateChange::new(BTreeMap::from([(
         Id::new("a1"),
         BTreeMap::from([("Mailbox".to_owned(), State::new("1"))]),
     )])));
 
-    // A `ContactCard` change does match, and must still arrive.
+    // Matching types still arrive.
     let mut changed = BTreeMap::new();
     changed.insert(
         Id::new("a1"),
@@ -133,8 +124,7 @@ fn a_second_subscriber_also_receives_the_push() {
         response
     });
 
-    // Both connections must have registered before the push, or one would
-    // miss it — not a "some subscriber" but "the count this test opened".
+    // Wait until both subscribers are registered before pushing.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let count = {
@@ -199,8 +189,7 @@ fn closeafter_no_keeps_the_connection_open_past_one_push() {
         BTreeMap::from([("Mailbox".to_owned(), State::new("1"))]),
     )])));
 
-    // First push arrives, and the connection is still alive to carry a
-    // second one — the opposite of `closeafter=state`.
+    // After the first push, the stream remains open for another push.
     let mut line = String::new();
     loop {
         line.clear();

@@ -1,23 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the mock does with an upload that is larger than the `maxSizeUpload`
-//! it advertises (RFC 8620 §6.1).
-//!
-//! Asked over a socket rather than through `jmap-client`, deliberately: the
-//! client refuses such an upload locally, so a test that went through it could
-//! never reach this code. The question here is what a client that *ignores* the
-//! session document is told — which is the whole reason the mock enforces the
-//! limit it advertises, rather than advertising a number and taking anything.
+//! Upload limit behavior for `maxSizeUpload` (RFC 8620 §6.1).
+//! Uses a raw socket because `jmap-client` blocks oversize uploads locally.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use jmap_mock::MockServer;
 
-/// Posts `body` to `/upload/<account>` and answers (status line, body) —
-/// a whole HTTP/1.1 request written out, because the point is to be a client
-/// that does not know what this one knows.
+/// Post `body` to `/upload/<account>` and return `(status_line, body)`.
 fn post_upload(server: &MockServer, body: &[u8]) -> (String, String) {
     let address = server
         .origin()
@@ -60,11 +52,10 @@ fn an_upload_over_the_advertised_limit_is_refused_with_the_limit_it_broke() {
     assert!(status.contains("400"), "{status}");
     let problem: serde_json::Value = serde_json::from_str(&body).expect("problem details JSON");
     assert_eq!(problem["type"], "urn:ietf:params:jmap:error:limit");
-    // RFC 8620 §3.6.1: the `limit` property names *which* limit was broken.
-    // Without it a client cannot tell this from a request that was too large.
+    // RFC 8620 §3.6.1: the error names the specific broken limit.
     assert_eq!(problem["limit"], "maxSizeUpload");
 
-    // And nothing was stored: a refusal, not a truncation.
+    // Refused uploads are not stored.
     let state = server.state();
     let state = state.lock().unwrap();
     assert!(
