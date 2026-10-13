@@ -59,14 +59,28 @@
 //! `uri` that stops naming a place at all (removes the entry from being read
 //! back as a virtual location in the first place, not a patched member).
 //!
+//! Also covered: `locations` (`diff_locations`), restricted to the bare
+//! `{"@type": "Location", "name": ...}` shape `read_locations` itself ever
+//! produces — no other member — and to zero or one entry, the only cases
+//! `maps_locations` allows through at all. That shape means every clear goes
+//! through the whole-property branch (the entry holds nothing but the name,
+//! so there is nothing left to keep), so the generator exercises rename
+//! (entry present on both sides, name changes), clear (present then absent),
+//! create (absent then present) and no-op (absent on both, or present with
+//! the same name) by varying an `Option<String>` name independently on each
+//! side, with the key held constant where an entry exists on either side.
+//! Scoped out, left for later: an entry with more than a name (so a clear
+//! would remove only `locations/<key>/name` and keep the rest, the branch
+//! this increment's shape never reaches).
+//!
 //! Scoped out, left for later: `start` (its absence cannot be expressed, so
 //! it needs its own generator) and `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
-//! remaining five properties the module doc already calls out as needing
-//! more than the baseline (`locations`, `alerts`, `recurrenceRule`,
+//! remaining four properties the module doc already calls out as needing
+//! more than the baseline (`alerts`, `recurrenceRule`,
 //! `recurrenceOverrides`, `timeZones`) — each needs its own generator and is
 //! left for its own increment.
 //!
@@ -242,6 +256,12 @@ fn arb_features() -> impl Strategy<Value = Option<Value>> {
     })
 }
 
+/// A bare Location entry: just the name `read_locations` itself ever
+/// produces, nothing a clear would need to reach past to delete.
+fn location_value(name: &str) -> Value {
+    json!({"@type": "Location", "name": name})
+}
+
 /// A VirtualLocation entry: a `uri` (required, held across old/new so the
 /// entry always keeps naming a place) and independently varied `name` and
 /// `features`.
@@ -356,6 +376,25 @@ proptest! {
         old_event.keywords = Some(old);
         let mut new_event = base();
         new_event.keywords = Some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn locations_round_trip(
+        key in arb_key(),
+        old_name in arb_place_name(),
+        new_name in arb_place_name(),
+    ) {
+        let mut old_event = base();
+        old_event.locations = old_name
+            .as_deref()
+            .map(|name| [(key.clone(), location_value(name))].into());
+        let mut new_event = base();
+        new_event.locations = new_name
+            .as_deref()
+            .map(|name| [(key.clone(), location_value(name))].into());
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
