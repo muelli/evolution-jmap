@@ -2090,6 +2090,62 @@ fn quota_query_ignores_its_filter_against_the_real_server() {
     );
 }
 
+/// `Client::snoozed_mailbox` (`jmap-client/src/snooze.rs`) only ever had mock
+/// coverage: the `snoozed`-role mailbox it finds-or-creates is an ordinary
+/// RFC 9979 §8.1 mailbox, ordinary enough that `snoozing_without_the_
+/// extension_is_refused` (`jmap-client/tests/mail_snooze.rs`) already proves
+/// it works on a mock with the Cyrus snooze extension turned off. Stalwart is
+/// exactly that case for real: it has no snooze extension at all (see this
+/// module's doc comment), but the mailbox it stores the role on is plain
+/// `Mailbox/set`, nothing vendor-specific.
+///
+/// Confirms both halves of what the mock test already pins: the mailbox gets
+/// a real id with the right name and role, and a second call reuses it
+/// rather than creating a sibling (checked by both the returned id and a
+/// fresh `Mailbox/get` listing — a duplicate find-or-create would show up
+/// there even if the returned id happened to match the first result by
+/// coincidence).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn snoozed_mailbox_finds_or_creates_the_real_role_mailbox_on_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let first = client
+        .snoozed_mailbox(&account_id)
+        .expect("Client::snoozed_mailbox failed against the real server");
+    let snoozed_id = first.id.clone().expect("the server named the mailbox");
+    assert_eq!(first.role.as_deref(), Some(role::SNOOZED));
+    assert_eq!(first.name, "Snoozed");
+
+    let second = client
+        .snoozed_mailbox(&account_id)
+        .expect("Client::snoozed_mailbox failed against the real server");
+    assert_eq!(
+        second.id.as_ref(),
+        Some(&snoozed_id),
+        "a second call must reuse the existing snoozed-role mailbox, not create a sibling"
+    );
+
+    let snoozed_role_mailboxes: Vec<_> = client
+        .mailbox_get(&account_id)
+        .expect("Mailbox/get failed against the real server")
+        .list
+        .into_iter()
+        .filter(|mailbox| mailbox.role.as_deref() == Some(role::SNOOZED))
+        .collect();
+    assert_eq!(
+        snoozed_role_mailboxes.len(),
+        1,
+        "exactly one mailbox should carry the snoozed role after two finds-or-creates, got {snoozed_role_mailboxes:?}"
+    );
+}
+
 /// Checks that `book_id` is not visible to `recipient` on `owner_account_id`,
 /// tolerating either an outright `forbidden` (the recipient has no shared
 /// books at all on that account) or a successful list that simply omits
