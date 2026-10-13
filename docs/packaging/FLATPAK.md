@@ -262,3 +262,40 @@ configure, and the expected EDS and Evolution headers are visible from the app
 runtime. The remaining step-2 blocker is Rust dependency vendoring for offline
 Flatpak builds. The next step is to add vendored crate sources plus cargo
 offline configuration to this manifest.
+
+## Batch 6 step 3 factory-load probe (2026-10-13 UTC)
+
+This increment exercises the EDS factory processes inside the sandbox and
+records their own loader output for the currently installed extension payload.
+
+### Commands run
+
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-source-registry'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-addressbook-factory -r'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-calendar-factory -r'`
+
+Each command reaches startup and is then terminated by timeout after collecting
+startup logs.
+
+### Loader evidence from the factory logs
+
+- `evolution-source-registry` reports:
+  - `Failed to load module: .../module-jmap-backend.so`
+  - `module_load: libedataserver-1.2.so.27: cannot open shared object file`
+  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
+- `evolution-addressbook-factory` reports:
+  - `Failed to load module: .../libebookbackendjmap.so`
+  - `module_load: libedataserver-1.2.so.27: cannot open shared object file`
+  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
+- `evolution-calendar-factory` reports:
+  - `Failed to load module: .../libecalbackendjmap.so`
+  - `module_load: libical-glib.so.3: cannot open shared object file`
+  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
+
+No log line indicates a successful JMAP backend registration. The source
+registry and both factories continue with built-in providers only.
+
+Conclusion for Batch 6 step 3: on this extension payload, the JMAP backends do
+not register in the sandboxed EDS factories because the module dependencies do
+not match runtime SONAMEs. Interactive Evolution UI behavior remains unverified
+in a running Evolution session, as required by the batch scope.
