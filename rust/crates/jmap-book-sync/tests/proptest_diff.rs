@@ -13,10 +13,10 @@
 //! `keywords`; plus `organizations`, whose entries are patched member by
 //! member and whose `units` list is merged by name (`merge_units`).
 //! `patch.rs`'s own module doc explains why the rest (name components,
-//! addresses, related_to) deliberately keep entries the vCard never showed
-//! untouched, or match entries by value rather than by key: those need
-//! generators that model that lossiness on purpose, not a card built from
-//! entries that are all stateable, and are left for a later increment.
+//! related_to) deliberately keep entries the vCard never showed untouched,
+//! or match entries by value rather than by key: those need generators that
+//! model that lossiness on purpose, not a card built from entries that are
+//! all stateable, and are left for a later increment.
 //!
 //! `anniversaries` and `media` are covered here too, but not by the same
 //! invariant: their keys never survive Evolution at all (EDS rebuilds the
@@ -55,6 +55,18 @@
 //! equality on those fields is never in question; only `user`/`uri`/`service`
 //! vary.
 //!
+//! `addresses_components_round_trip` covers `merge_components`
+//! (`restore_address_components` plus `merge_named`, the list-merge-by-value
+//! `units` also uses), exercised through `arb_address_components_pair`'s
+//! per-`ADR`-field-kind slot. Unlike `anniversaries`/`media`/
+//! `online_services`, an address's own key does survive Evolution (the `ADR`
+//! line keeps `X-JMAP-KEY`), so this is a literal round trip with `edited`,
+//! no third "expected" card needed. Scoped out, left for later: the
+//! `number`/`name` joined-field case (`restore_shared_fields`'s splice,
+//! which only matters once two component kinds share one `ADR` field), and
+//! `full` (`LABEL`), `contexts` and `pref`, held at their default on both
+//! sides the way `online_services`' non-core fields were.
+//!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
 //! "title", and `diff_titles` writes that default back out as the literal
@@ -87,8 +99,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note, OnlineService, OrgUnit,
-    Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note,
+    OnlineService, OrgUnit, Organization, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -459,6 +471,129 @@ fn arb_organization_units_pair() -> impl Strategy<Value = (Organization, Organiz
     })
 }
 
+fn arb_address_value() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9 ]{1,10}"
+}
+
+/// The vCard-mapped `ADR` component kinds, minus `number`: it shares its field
+/// with `name` (`restore_shared_fields`'s splice), which is its own later
+/// increment, so every kind here matches a single `ADR` field on its own.
+const ADDRESS_COMPONENT_KINDS: [&str; 7] = [
+    "postOfficeBox",
+    "apartment",
+    "name",
+    "locality",
+    "region",
+    "postcode",
+    "country",
+];
+
+fn arb_address_with_components() -> impl Strategy<Value = Address> {
+    arb_address_value().prop_map(|value| Address {
+        components: Some(vec![AddressComponent::new("locality", value)]),
+        ..Address::default()
+    })
+}
+
+/// One component kind's slot across (current, edited): absent on both sides,
+/// present only on the edited side (a genuine addition), present only on
+/// current (removed), present unchanged on both (kept), or present on both
+/// with independently-chosen values (modified).
+#[derive(Clone, Debug)]
+enum AddressComponentSlot {
+    Absent,
+    Kept(String),
+    Added(String),
+    Removed(String),
+    Modified(String, String),
+}
+
+fn arb_address_component_slot() -> impl Strategy<Value = AddressComponentSlot> {
+    prop_oneof![
+        Just(AddressComponentSlot::Absent),
+        arb_address_value().prop_map(AddressComponentSlot::Kept),
+        arb_address_value().prop_map(AddressComponentSlot::Added),
+        arb_address_value().prop_map(AddressComponentSlot::Removed),
+        (arb_address_value(), arb_address_value())
+            .prop_filter("value must actually change", |(old, new)| old != new)
+            .prop_map(|(old, new)| AddressComponentSlot::Modified(old, new)),
+    ]
+}
+
+/// Builds a `(current, edited)` address pair, one slot per `ADDRESS_COMPONENT_KINDS`
+/// kind, modelling `merge_components`: a `Kept` kind's component is the
+/// server's own copy, matched by `(kind, value)` and so placed in the result
+/// wherever `current` had it; a `Removed` one is dropped (its kind is stated,
+/// i.e. mapped and non-empty, so its disappearance from the line is the user
+/// deleting it); an `Added` or a `Modified` kind's new value is a `spare`
+/// entry with nothing in `current` to match, so it is appended after every
+/// kept component, in `edited`'s own order — which is also where `edited`
+/// states it, since `edited` is built kept-first, new-material-after, the
+/// same order `current` is. That is what keeps `merge_components`' result a
+/// literal match for `edited` rather than needing a third "expected" card,
+/// unlike `anniversaries`/`media`/`online_services`, whose keys do not
+/// survive Evolution at all.
+///
+/// `full`, `contexts` and `pref` are held at their default on both sides,
+/// left for a later increment the way `online_services`' non-core fields
+/// were.
+fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
+    proptest::collection::vec(arb_address_component_slot(), ADDRESS_COMPONENT_KINDS.len())
+        .prop_filter(
+            "at least one current-side component, to exercise the merge",
+            |slots| {
+                slots.iter().any(|slot| {
+                    matches!(
+                        slot,
+                        AddressComponentSlot::Kept(_)
+                            | AddressComponentSlot::Removed(_)
+                            | AddressComponentSlot::Modified(_, _)
+                    )
+                })
+            },
+        )
+        .prop_map(|slots| {
+            let mut current = Vec::new();
+            let mut current_tail = Vec::new();
+            let mut edited = Vec::new();
+            let mut edited_tail = Vec::new();
+            for (kind, slot) in ADDRESS_COMPONENT_KINDS.into_iter().zip(slots) {
+                match slot {
+                    AddressComponentSlot::Absent => {}
+                    AddressComponentSlot::Kept(value) => {
+                        let component = AddressComponent::new(kind, value);
+                        current.push(component.clone());
+                        edited.push(component);
+                    }
+                    AddressComponentSlot::Added(value) => {
+                        edited_tail.push(AddressComponent::new(kind, value));
+                    }
+                    AddressComponentSlot::Removed(value) => {
+                        current_tail.push(AddressComponent::new(kind, value));
+                    }
+                    AddressComponentSlot::Modified(old, new) => {
+                        current_tail.push(AddressComponent::new(kind, old));
+                        edited_tail.push(AddressComponent::new(kind, new));
+                    }
+                }
+            }
+            current.extend(current_tail);
+            edited.extend(edited_tail);
+            let to_address = |components: Vec<AddressComponent>| Address {
+                components: (!components.is_empty()).then_some(components),
+                ..Address::default()
+            };
+            (to_address(current), to_address(edited))
+        })
+}
+
+fn card_with_addresses(map: BTreeMap<String, Address>) -> ContactCard {
+    ContactCard {
+        addresses: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
 /// One `kind`'s slot across (current, edited): absent on both sides, present
 /// only on the edited side (a genuine addition), present only on current
 /// (removed), or present on both with independently-chosen dates (a
@@ -826,5 +961,17 @@ proptest! {
         (current_card, edited_card, expected_card) in arb_online_service_handle_cards()
     ) {
         round_trips_to(&current_card, &edited_card, &expected_card)?;
+    }
+
+    #[test]
+    fn addresses_components_round_trip(
+        (current, edited) in entry_sets(
+            arb_address_with_components(),
+            arb_address_components_pair(),
+            arb_address_with_components(),
+            arb_address_with_components(),
+        )
+    ) {
+        round_trips(&card_with_addresses(current), &card_with_addresses(edited))?;
     }
 }
