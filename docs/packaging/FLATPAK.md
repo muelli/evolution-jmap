@@ -305,39 +305,53 @@ sandbox.
 ## Batch 6 step 3 factory-load probe (2026-10-13 UTC)
 
 This increment exercises the EDS factory processes inside the sandbox and
-records their own loader output for the currently installed extension payload.
+records their loader output for the source-built extension payload.
 
 ### Commands run
 
-- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-source-registry'`
-- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-addressbook-factory -r'`
-- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-calendar-factory -r'`
+1. ABI sanity checks for installed extension modules:
 
-Each command reaches startup and is then terminated by timeout after collecting
-startup logs.
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd /app/evolution/extensions/evolution-jmap/lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd /app/evolution/extensions/evolution-jmap/lib/evolution-data-server/calendar-backends/libecalbackendjmap.so'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd /app/evolution/extensions/evolution-jmap/lib/evolution-data-server/camel-providers/libcameljmap.so'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd /app/evolution/extensions/evolution-jmap/lib/evolution-data-server/registry-modules/module-jmap-backend.so'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'ldd /app/evolution/extensions/evolution-jmap/lib/evolution/modules/module-jmap-configuration.so'`
 
-### Loader evidence from the factory logs
+2. Factory startup probes with normal debug logging:
 
-- `evolution-source-registry` reports:
-  - `Failed to load module: .../module-jmap-backend.so`
-  - `module_load: libedataserver-1.2.so.27: cannot open shared object file`
-  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
-- `evolution-addressbook-factory` reports:
-  - `Failed to load module: .../libebookbackendjmap.so`
-  - `module_load: libedataserver-1.2.so.27: cannot open shared object file`
-  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
-- `evolution-calendar-factory` reports:
-  - `Failed to load module: .../libecalbackendjmap.so`
-  - `module_load: libical-glib.so.3: cannot open shared object file`
-  - `camel_provider_list: Could not load .../libcameljmap.so: libedataserver-1.2.so.27: cannot open shared object file`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-source-registry --disable-migration 2>&1'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-addressbook-factory -r 2>&1'`
+- `timeout 120 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all /app/libexec/evolution-calendar-factory -r 2>&1'`
 
-No log line indicates a successful JMAP backend registration. The source
-registry and both factories continue with built-in providers only.
+3. Loader-trace probes for explicit module-load evidence:
 
-Conclusion for Batch 6 step 3: on this extension payload, the JMAP backends do
-not register in the sandboxed EDS factories because the module dependencies do
-not match runtime SONAMEs. Interactive Evolution UI behavior remains unverified
-in a running Evolution session, as required by the batch scope.
+- `timeout 60 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all LD_DEBUG=files /app/libexec/evolution-source-registry --disable-migration 2>&1'`
+- `timeout 60 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all LD_DEBUG=files /app/libexec/evolution-addressbook-factory -r 2>&1'`
+- `timeout 60 flatpak run --user --command=sh org.gnome.Evolution -c 'G_MESSAGES_DEBUG=all LD_DEBUG=files /app/libexec/evolution-calendar-factory -r 2>&1'`
+
+### Loader evidence from the factory probes
+
+- ABI checks now resolve against current runtime libraries (`libedataserver-1.2.so.28`,
+  `libebackend-1.2.so.11`, `libebook-contacts-1.2.so.5`, `libecal-2.0.so.3`,
+  `libcamel-1.2.so.68`, `libical-glib.so.4.0`) with no `not found` entries.
+- Plain `G_MESSAGES_DEBUG=all` startup logs no longer report old SONAME-mismatch
+  failures, but they also do not print explicit JMAP registration lines.
+- `LD_DEBUG=files` proves all four relevant JMAP modules are discovered and
+  `dlopen` is attempted from extension paths under
+  `/app/evolution/extensions/evolution-jmap/lib/...`:
+  - `module-jmap-backend.so`
+  - `libebookbackendjmap.so`
+  - `libecalbackendjmap.so`
+  - `libcameljmap.so`
+- Each load attempt fails with the same unresolved symbols during module init:
+  - `undefined symbol: g_module_check_init`
+  - `undefined symbol: g_module_unload`
+
+Conclusion for Batch 6 step 3: the source-built extension now clears ABI SONAME
+compatibility, but JMAP backends still do not register in sandboxed EDS
+factories because module initialization fails on unresolved `g_module_*`
+symbols. Interactive Evolution UI behavior remains unverified in a running
+Evolution session, as required by the batch scope.
 
 ## Batch 6 step 4 Flathub submission requirements (2026-10-13 UTC)
 
@@ -346,10 +360,10 @@ proposed as a Flathub contribution. It does not submit anything.
 
 ### 1. Vendored Rust sources and offline cargo build
 
-- The source-build manifest currently reaches CMake configure but fails in cargo
-  with `Could not resolve host: index.crates.io`.
-- Flathub packaging therefore needs vendored crates committed in-tree and a
-  cargo offline configuration wired into
+- The source-build manifest now completes locally with `CARGO_NET_OFFLINE=true`
+  and a local `packaging/flatpak/vendor/` tree staged before the build.
+- Flathub packaging still needs a committed vendoring path in-tree plus cargo
+  offline configuration wired into
   `org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`.
 - Acceptance check for this item: `flatpak-builder --user --install` completes
   without any network access during cargo dependency resolution.
@@ -372,12 +386,12 @@ proposed as a Flathub contribution. It does not submit anything.
 - Keep `LICENSES/GPL-3.0-or-later.txt` available in the extension payload, as
   the existing CPack packaging rules already do.
 - Provide a concise review bundle with: exact source commit, manifest file,
-  vendoring instructions, and the factory-load proof from Batch 6 step 3 that
-  demonstrates successful backend registration after ABI-matched rebuild.
+  vendoring instructions, and the factory-load probe evidence from Batch 6
+  step 3.
 
-Current status at the end of Batch 6 step 4 plus this step-2 follow-up:
+Current status at the end of Batch 6 step 4 plus this step-3 probe:
 naming and branch constraints are documented, and an ABI-matched offline source
 build now installs as a local extension runtime when vendored crates are staged
 locally first. Submission remains pending on a committed Flathub-friendly
-vendoring path and the factory-load proof from in-sandbox EDS processes after
-this rebuild.
+vendoring path and a fix for the unresolved `g_module_*` symbols that currently
+prevent JMAP backend registration inside in-sandbox EDS processes.
