@@ -281,6 +281,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-book-stale-token-client PRIVATE
 		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# Item 101(b)'s acceptance test: a 401 that only arrives after a
+	# redirect dropped the Authorization header must not escalate to
+	# interactive consent. Another libebook consumer needing
+	# libedataserver for e_source_store_password_sync, like the stale-token
+	# client just above, but with no connection-status.c: a failed connect
+	# never reaches `connected` and this test does not wait for it to.
+	add_executable(functional-redirect-credentials-withheld-client
+		tests/functional/redirect-credentials-withheld-client.c)
+	target_include_directories(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# The stale-source-uid reproduction client. A registry-only
 	# libedataserver consumer like functional-collection-client, plus GSettings
 	# — which is not a separate dependency here: `gio-2.0` comes in with
@@ -819,6 +836,25 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# Item 101(b)'s acceptance test: does a real `EBookMetaBackend` connect
+	# through a cross-origin redirect that drops credentials fail cleanly,
+	# with no interactive-consent escalation and no retry storm, instead of
+	# the endless OAuth2 popup loop the operator hit on 0.5.0? No OAuth2
+	# modules needed — the account authenticates with plain Basic, so only
+	# the book backend itself is staged.
+	add_test(
+		NAME functional-redirect-credentials-withheld
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test redirect-credentials-withheld
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-redirect-credentials-withheld PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_REDIRECT_CREDENTIALS_WITHHELD_CLIENT=$<TARGET_FILE:functional-redirect-credentials-withheld-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
 	# Whether a source UID reachable only from dconf/GSettings can drive the
