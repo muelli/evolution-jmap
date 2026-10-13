@@ -1,36 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Whether the standalone `jmap-mockd` binary can be told to speak RFC
-//! 8414/7591 OAuth 2.0 discovery.
-//!
-//! `jmap_mock::MockServer::builder()` has offered
-//! `oauth_authorization_server`/`oauth_client_registration` since the
-//! `discover_and_register` work, and `jmap-config`/`jmap-client`'s own tests
-//! already drive that in-process. What is untested is the standalone
-//! binary's own command line. Functional coverage needs to turn this on from
-//! outside the process, not from a builder call this binary's `main` never
-//! exposes. This test drives `jmap-mockd` itself as a child process over a
-//! real socket rather than calling `MockServer` directly.
-//!
-//! Asked over a raw `TcpStream` like `jmap-mock/tests/upload.rs`, for the
-//! same reason: no HTTP client is a dependency of this crate, and adding one
-//! only for a test would be more than this needs.
+//! Tests OAuth 2.0 discovery flags on the standalone `jmap-mockd` binary.
+//! This drives the child process over a raw `TcpStream`.
+//! It covers command-line behavior that in-process `MockServer` tests do not.
+//! A raw socket keeps this crate free of HTTP-client test dependencies.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 
-/// A `jmap-mockd` child process, killed when dropped so a failing assertion
-/// never leaves one running.
+/// A `jmap-mockd` child process, killed on drop.
 struct Mockd {
     child: Child,
     origin: String,
 }
 
 impl Mockd {
-    /// Spawn `jmap-mockd --port 0 <extra_args>` and block until its startup
-    /// line names the ephemeral port it actually bound.
+    /// Spawn `jmap-mockd --port 0 <extra_args>` and wait for its bound port.
     fn spawn(extra_args: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_jmap-mockd"))
             .arg("--port")
@@ -52,12 +39,8 @@ impl Mockd {
             .unwrap_or_else(|| panic!("unexpected startup line: {first_line}"))
             .to_owned();
 
-        // The daemon prints two more startup lines (and may print more over
-        // its life); its `println!` panics on EPIPE, so dropping this pipe
-        // here would race those writes and kill the daemon at startup —
-        // observed on CI as "failed printing to stdout: Broken pipe" in the
-        // child followed by a headerless response to the test's request.
-        // Keep the read end open and drained until the child is killed.
+        // Keep draining stdout so child `println!` calls do not fail with EPIPE.
+        // CI saw early child exit and a headerless response when this was dropped.
         std::thread::spawn(move || {
             let _ = std::io::copy(&mut reader, &mut std::io::sink());
         });
@@ -65,9 +48,7 @@ impl Mockd {
         Self { child, origin }
     }
 
-    /// Send a whole HTTP/1.1 request and answer (status line, body) — see
-    /// `upload.rs`'s `post_upload` for why this is a raw socket rather than
-    /// a client crate.
+    /// Send one HTTP/1.1 request and return `(status_line, body)`.
     fn request(&self, method: &str, path: &str, body: &[u8]) -> (String, String) {
         let address = self
             .origin
