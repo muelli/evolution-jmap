@@ -2065,12 +2065,47 @@ Command note:
 - `libFuzzer` still emitted a long recommended dictionary block before the
   final `stat::` lines in this mode.
 
-## Resume commands
+## Rotation totals and pause point (2026-10-13 UTC)
+
+Operator direction on 2026-10-13 is to stop additional rotations until a fuzz
+target or `jmap-vcard` code changes. The log above now captures the complete
+bounded campaign totals from 2026-10-10 through 2026-10-13.
+
+Campaign totals:
+- Bounded runs completed: `73`.
+- Aggregate executions: `1,595,686,421`.
+- Aggregate crashes: `0`.
+- Aggregate hangs: `0`.
+- Aggregate OOMs: `0`.
+- Highest observed peak RSS: `764Mb`.
+
+Per-target totals:
+- `fuzz_vcard_to_jscontact`
+  - Runs: `25`.
+  - Aggregate executions: `402,731,388`.
+  - Aggregate new units added: `2,861,080` (reported in `22` runs).
+  - Highest observed peak RSS: `736Mb`.
+- `fuzz_jscontact_to_vcard`
+  - Runs: `24`.
+  - Aggregate executions: `1,083,629,409`.
+  - Aggregate new units added: `2,034,946` (reported in `22` runs).
+  - Highest observed peak RSS: `764Mb`.
+- `fuzz_vcard_roundtrip_fixed_point`
+  - Runs: `24`.
+  - Aggregate executions: `109,325,624`.
+  - Aggregate new units added: `1,404,263` (reported in `23` runs).
+  - Highest observed peak RSS: `641Mb`.
+
+`New units added` was not emitted by libFuzzer in all runs because early
+sessions used default verbosity or `-verbosity=0` without
+`-print_final_stats=1`.
+
+## Resume commands (only when target or code changes)
 
 ```bash
 cd rust/crates/jmap-vcard
-cargo +nightly fuzz check
-cargo +nightly fuzz run fuzz_jscontact_to_vcard -- -max_total_time=2700
-cargo +nightly fuzz run fuzz_vcard_roundtrip_fixed_point -- -max_total_time=2700
-cargo +nightly fuzz run fuzz_vcard_to_jscontact -- -max_total_time=2700
+timeout 1200 cargo +nightly fuzz check
+timeout 3900 cargo +nightly fuzz run fuzz_jscontact_to_vcard -- -max_total_time=2700
+timeout 3900 cargo +nightly fuzz run fuzz_vcard_roundtrip_fixed_point -- -max_total_time=2700
+timeout 3900 cargo +nightly fuzz run fuzz_vcard_to_jscontact -- -max_total_time=2700
 ```
