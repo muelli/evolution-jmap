@@ -3,9 +3,8 @@
 
 //! Verifies glibc gettext can read this crate's compiled `.mo` output.
 //!
-//! This test is isolated in its own binary because locale and domain bindings
-//! are process-global. When only C or POSIX locales exist, gettext returns the
-//! msgid unchanged and this test checks that fallback behavior instead.
+//! Locale and domain bindings are process-global, so this runs in its own
+//! binary. If only C or POSIX locales exist, gettext should return `msgid`.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -92,8 +91,7 @@ fn glibc_reads_what_this_compiler_wrote() {
     };
     assert!(!reported.is_null(), "gettext did not record the binding");
 
-    // SAFETY: a NUL-terminated domain and msgid; `dgettext` never returns
-    // NULL, and what it returns is gettext's to keep, so it is copied out.
+    // SAFETY: `dgettext` sees valid C strings and returns a non-NULL gettext-owned pointer.
     let translated = unsafe { CStr::from_ptr(dgettext(DOMAIN.as_ptr(), MSGID.as_ptr())) }
         .to_string_lossy()
         .into_owned();

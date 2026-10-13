@@ -3,41 +3,36 @@
 
 //! Compiles a translator's `.po` into a runtime `.mo` catalogue.
 //!
-//! This crate intentionally implements a small `msgfmt` subset so builds do not
-//! depend on gettext tools being installed.
-//!
-//! Unsupported constructs are refused with line-aware errors. Empty `msgstr`
-//! entries and fuzzy non-header entries are skipped so gettext falls back to
-//! the msgid.
+//! This crate keeps a small `msgfmt` subset so builds do not depend on gettext
+//! tools being installed.
+//! Unsupported constructs fail with line-aware errors. Empty `msgstr` entries
+//! and fuzzy non-header entries are skipped so gettext falls back to `msgid`.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// Compiles the text of a `.po` file into the bytes of a `.mo` file.
 ///
-/// Entries are sorted by msgid because a hashless `.mo` lookup binary-searches
-/// the originals table.
+/// Entries are sorted by msgid because hashless `.mo` lookups binary-search the
+/// originals table.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
 /// Why a `.po` could not be compiled.
 ///
-/// Every variant that can name a line does, counting from 1, so the message
-/// reads like the compiler diagnostic it is.
+/// Variants that can name a line do so with 1-based numbering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// No entry with an empty msgid, so nothing declares the file's charset.
     NoHeader,
-    /// The header declares a charset this compiler does not read. Empty when
-    /// the header has no `Content-Type` charset at all.
+    /// The header charset is unsupported, or empty when no charset is declared.
     Charset { declared: String },
     /// Two entries translate the same message.
     Duplicate { msgid: String, line: usize },
     /// A `.po` construct this compiler does not implement.
     Unsupported { construct: String, line: usize },
-    /// A line that is not a comment, a keyword, or the continuation of a
-    /// string.
+    /// A line that is not a comment, keyword, or string continuation.
     Unparsed { line: usize, text: String },
     /// A backslash escape that is not one of the ones a catalogue uses.
     UnknownEscape { line: usize, escape: char },
@@ -221,8 +216,7 @@ fn take(
         });
     };
 
-    // The header is exempt: `msginit` marks it fuzzy in every new catalogue,
-    // and it is where the charset is declared.
+    // `msginit` marks fresh headers fuzzy, and the header declares the charset.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -272,8 +266,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // A backslash with nothing after it means the closing quote this
-        // function found was itself escaped: the string never ended.
+        // A trailing backslash escapes the closing quote, so the string never ends.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -341,8 +334,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // The recorded length excludes it, but gettext hands the pointer out as a
-    // C string all the same.
+    // Length excludes this NUL byte, but gettext still treats the pointer as C string data.
     blob.push(0);
     Ok(())
 }
