@@ -1,0 +1,23 @@
+// Source: RFC 8621 §4.10 (Email/set Create HTML Draft and Destroy Old Draft Response), August 2019
+[
+  [
+    "Email/set",
+    {
+      "accountId": "ue150411c",
+      "oldState": "780839",
+      "newState": "780842",
+      "created": {
+        "k1546": {
+          "id": "Md45b47b4877521042cec0938",
+          "blobId": "Ge8de6c9f6de198239b982ea214e0f3a704e4af74",
+          "threadId": "Td957e72e89f516dc",
+          "size": 11721
+        }
+      },
+      "destroyed": [
+        "Mf40b5f831efa7233b9eb1c7f"
+      ]
+    },
+    "0"
+  ]
+]

@@ -1,0 +1,20 @@
+// Source: RFC 8621 §4.10 (Email/copy Request - Cross-Account Copy with onSuccessDestroyOriginal), August 2019
+[
+  [
+    "Email/copy",
+    {
+      "fromAccountId": "ue150411c",
+      "accountId": "u6c6c41ac",
+      "create": {
+        "k45": {
+          "id": "Md45b47b4877521042cec0938",
+          "mailboxIds": {
+            "75a4c956": true
+          }
+        }
+      },
+      "onSuccessDestroyOriginal": true
+    },
+    "0"
+  ]
+]

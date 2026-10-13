@@ -1,0 +1,40 @@
+// Source: RFC 8621 §2.6 (Mailbox/changes and Backreferenced Mailbox/get Request), August 2019
+[
+  [
+    "Mailbox/changes",
+    {
+      "accountId": "u33084183",
+      "sinceState": "78540"
+    },
+    "0"
+  ],
+  [
+    "Mailbox/get",
+    {
+      "accountId": "u33084183",
+      "#ids": {
+        "resultOf": "0",
+        "name": "Mailbox/changes",
+        "path": "/created"
+      }
+    },
+    "1"
+  ],
+  [
+    "Mailbox/get",
+    {
+      "accountId": "u33084183",
+      "#ids": {
+        "resultOf": "0",
+        "name": "Mailbox/changes",
+        "path": "/updated"
+      },
+      "#properties": {
+        "resultOf": "0",
+        "name": "Mailbox/changes",
+        "path": "/updatedProperties"
+      }
+    },
+    "2"
+  ]
+]

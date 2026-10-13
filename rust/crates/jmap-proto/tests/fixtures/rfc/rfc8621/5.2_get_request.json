@@ -1,0 +1,18 @@
+// Source: RFC 8621 §5.2 (SearchSnippet/get Request), August 2019
+[
+  [
+    "SearchSnippet/get",
+    {
+      "accountId": "ue150411c",
+      "filter": {
+        "text": "foo"
+      },
+      "emailIds": [
+        "M44200ec123de277c0c1ce69c",
+        "M7bcbcb0b58d7729686e83d99",
+        "M28d12783a0969584b6deaac0"
+      ]
+    },
+    "0"
+  ]
+]

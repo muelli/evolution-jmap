@@ -1,0 +1,33 @@
+// Source: RFC 8621 §4.10 (Resync Email/changes and Email/queryChanges Request), August 2019
+[
+  [
+    "Email/changes",
+    {
+      "accountId": "ue150411c",
+      "sinceState": "780605",
+      "maxChanges": 50
+    },
+    "3"
+  ],
+  [
+    "Email/queryChanges",
+    {
+      "accountId": "ue150411c",
+      "filter": {
+        "inMailbox": "fb666a55"
+      },
+      "sort": [
+        {
+          "property": "receivedAt",
+          "isAscending": false
+        }
+      ],
+      "collapseThreads": true,
+      "sinceQueryState": "09aa9a075588-780599:0",
+      "upToId": "Mc2781d5e856a908d8a35a564",
+      "maxChanges": 25,
+      "calculateTotal": true
+    },
+    "11"
+  ]
+]

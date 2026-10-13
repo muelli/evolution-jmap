@@ -12,6 +12,7 @@ This document records the extraction, fixture mapping, and protocol conformance 
 | Specification | Status | Date / Version | Source |
 |---|---|---|---|
 | RFC 8620 | Standards Track | July 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8620.txt |
+| RFC 8621 | Standards Track | August 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8621.txt |
 
 ## 2. RFC 8620 Core JMAP Examples (July 2019)
 
@@ -78,3 +79,60 @@ The IETF RFC Errata database for RFC 8620 was audited and applied:
 
 3. **RFC text ellipsis notation**:
    Informational RFC examples use ellipsis `...` to represent omitted properties or additional array elements (e.g. §2.1 `accountCapabilities`, §3.7 list responses, §5.7 `list` and `Todo/set` responses). Normalized in fixtures into valid JSON structures without altering any field modeled by `jmap-proto`.
+
+## 3. RFC 8621 JMAP for Mail Examples (August 2019)
+
+RFC 8621 defines the data model for synchronizing email data with a JMAP server, covering Mailboxes, Threads, Emails, SearchSnippets, Identities, and EmailSubmissions.
+
+### 3.1 Catalogued Fixtures
+
+31 distinct JSON examples across 7 sections were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc8621/`:
+
+1. `2.6_get_request.json`: `Mailbox/get` request fetching all mailboxes with `ids: null` (§2.6).
+2. `2.6_get_response.json`: `Mailbox/get` response returning Inbox with `myRights` and `isSubscribed` (§2.6).
+3. `2.6_changes_request.json`: Pipelined request chaining `Mailbox/changes` and back-referenced `Mailbox/get` calls (§2.6).
+4. `2.6_changes_response.json`: Pipelined response returning `Mailbox/changes` and updated Mailbox data (§2.6).
+5. `2.6_set_request.json`: `Mailbox/set` request renaming one mailbox and destroying another (§2.6).
+6. `2.6_set_response.json`: `Mailbox/set` response returning updated mailbox and forbidden error for destroy (§2.6).
+7. `3.1.1_get_request.json`: `Thread/get` request with explicit ids (§3.1.1).
+8. `3.1.1_get_response.json`: `Thread/get` response returning thread records with `emailIds` (§3.1.1).
+9. `4.1.2.3_addresses.json`: Header field parsed form `EmailAddress[]` with display names and email addresses (§4.1.2.3).
+10. `4.1.2.4_grouped_addresses.json`: Header field parsed form `EmailAddressGroup[]` preserving group information (§4.1.2.4).
+11. `4.2.1_get_request.json`: `Email/get` request specifying body properties, `fetchHTMLBodyValues`, and `maxBodyValueBytes` (§4.2.1).
+12. `4.2.1_get_response.json`: `Email/get` response with `htmlBody`, truncated `bodyValues`, and `notFound` (§4.2.1).
+13. `4.10_initial_sync_request.json`: Initial mailbox sync pipeline chaining `Email/query`, `Email/get`, `Thread/get`, and `Email/get` (§4.10).
+14. `4.10_initial_sync_response.json`: Initial mailbox sync response returning query results, thread ids, thread records, and email summaries (§4.10).
+15. `4.10_set_update_request.json`: `Email/set` request updating keywords patch (`keywords/$seen: null` to mark unread) (§4.10).
+16. `4.10_set_update_response.json`: `Email/set` response confirming keywords update (§4.10).
+17. `4.10_resync_request.json`: Resynchronization request chaining `Email/changes` and `Email/queryChanges` (§4.10).
+18. `4.10_resync_response.json`: Resynchronization response returning created, updated, and destroyed email ids along with query delta items (§4.10).
+19. `4.10_set_create_text_request.json`: `Email/set` request creating a plaintext draft with `bodyStructure` and `bodyValues` (§4.10).
+20. `4.10_set_create_text_response.json`: `Email/set` response returning created draft metadata (§4.10).
+21. `4.10_set_create_html_request.json`: `Email/set` request creating a multipart/alternative HTML draft and destroying the previous draft (§4.10).
+22. `4.10_set_create_html_response.json`: `Email/set` response confirming HTML draft creation and old draft destruction (§4.10).
+23. `4.10_copy_request.json`: Cross-account `Email/copy` request with `onSuccessDestroyOriginal: true` (§4.10).
+24. `4.10_copy_response.json`: Cross-account `Email/copy` response with implicit `Email/set` destroy response sharing call id (§4.10).
+25. `5.2_get_request.json`: `SearchSnippet/get` request filtering by text query across email ids (§5.2).
+26. `5.2_get_response.json`: `SearchSnippet/get` response returning match snippets with `<mark>` highlight tags (§5.2).
+27. `6.4_get_request.json`: `Identity/get` request invocation (§6.4).
+28. `6.4_get_response.json`: `Identity/get` response invocation returning identities with text and HTML signatures (§6.4).
+29. `7.5.1_set_create_request.json`: `EmailSubmission/set` create request with `envelope` and `onSuccessUpdateEmail` patch (§7.5.1).
+30. `7.5.1_set_created_response.json`: `EmailSubmission/set` response with implicit `Email/set` update response (§7.5.1).
+31. `7.5.1_set_error_response.json`: `EmailSubmission/set` error response returning localized `forbiddenToSend` failure (§7.5.1).
+
+### 3.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 8621 was audited:
+
+- **Errata Search**: Queried `https://errata.rfc-editor.org/search/?rfc_number=8621`. No matching errata found. RFC 8621 has zero reported or verified errata.
+
+### 3.3 Protocol Findings and Model Refinements
+
+1. **RFC 8621 §4.2 `Email/get` arguments**:
+   RFC 8621 §4.2 specifies `Email/get` as extending standard `/get` with `bodyProperties`, `fetchTextBodyValues`, `fetchHTMLBodyValues`, `fetchAllBodyValues`, and `maxBodyValueBytes`. In the specification's own example in §4.2.1, `accountId` is omitted in the request. Added typed `EmailGetRequest` with optional `account_id` and complete body-fetching argument options, allowing seamless typed parsing and roundtrip fidelity.
+
+2. **RFC line folding in string literals**:
+   Plain-text RFC formatting folds lines exceeding 72 characters, splitting string literals across lines in §4.2.1 (`bodyValues`), §4.10 (`preview`, `bodyValues` text and HTML contents), §5.2 (`preview`), §6.4 (`htmlSignature`), and §7.5.1 (`description`). Unfolded in fixtures into valid JSON strings.
+
+3. **Ellipsis notation in RFC examples**:
+   RFC 8621 uses ellipsis `...` to indicate omitted fields in responses (§2.6 `list`, §4.10 `ids`, `list`, and `SetResponse` omitted maps, §5.2 `emailIds` and `list`, §7.5.1 `rcptTo`). Normalized in fixtures into syntactically valid JSON structures while preserving all fields modeled by `jmap-proto`.

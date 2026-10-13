@@ -1,0 +1,15 @@
+// Source: RFC 8621 §4.10 (Email/set Update Response - Mark Unread), August 2019
+[
+  [
+    "Email/set",
+    {
+      "accountId": "ue150411c",
+      "oldState": "780605",
+      "newState": "780606",
+      "updated": {
+        "Ma783e5cdf5f2deffbc97930a": null
+      }
+    },
+    "0"
+  ]
+]

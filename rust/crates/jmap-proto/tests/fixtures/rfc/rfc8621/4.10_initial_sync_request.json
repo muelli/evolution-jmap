@@ -1,0 +1,73 @@
+// Source: RFC 8621 §4.10 (Initial Mailbox Sync Pipeline Request), August 2019
+[
+  [
+    "Email/query",
+    {
+      "accountId": "ue150411c",
+      "filter": {
+        "inMailbox": "fb666a55"
+      },
+      "sort": [
+        {
+          "isAscending": false,
+          "property": "receivedAt"
+        }
+      ],
+      "collapseThreads": true,
+      "position": 0,
+      "limit": 30,
+      "calculateTotal": true
+    },
+    "0"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "ue150411c",
+      "#ids": {
+        "resultOf": "0",
+        "name": "Email/query",
+        "path": "/ids"
+      },
+      "properties": [
+        "threadId"
+      ]
+    },
+    "1"
+  ],
+  [
+    "Thread/get",
+    {
+      "accountId": "ue150411c",
+      "#ids": {
+        "resultOf": "1",
+        "name": "Email/get",
+        "path": "/list/*/threadId"
+      }
+    },
+    "2"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "ue150411c",
+      "#ids": {
+        "resultOf": "2",
+        "name": "Thread/get",
+        "path": "/list/*/emailIds"
+      },
+      "properties": [
+        "threadId",
+        "mailboxIds",
+        "keywords",
+        "hasAttachment",
+        "from",
+        "subject",
+        "receivedAt",
+        "size",
+        "preview"
+      ]
+    },
+    "3"
+  ]
+]
