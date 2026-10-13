@@ -13040,22 +13040,11 @@ fn email_four_slots_and_attribute_list_matrix_roundtrip() {
 
 #[test]
 fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
-    // Audit & characterization of EDS Address and Label slots:
-    // EDS provides 3 primary address slots (each with 7 subfields = 21 fields) + 3 synthetic label string fields:
-    //   - Work slot:  E_CONTACT_ADDRESS_WORK (field 5)  / E_CONTACT_ADDRESS_LABEL_WORK (field 14)  [TYPE=WORK]
-    //   - Home slot:  E_CONTACT_ADDRESS_HOME (field 4)  / E_CONTACT_ADDRESS_LABEL_HOME (field 13)  [TYPE=HOME]
-    //   - Other slot: E_CONTACT_ADDRESS_OTHER (field 6) / E_CONTACT_ADDRESS_LABEL_OTHER (field 15) [TYPE=OTHER / bare]
-    //
-    // Test matrix covers:
-    // 1. All 3 slots with structured ADR + matching standalone LABEL lines.
-    // 2. All 3 slots with standalone LABEL only (no structured ADR).
-    // 3. All 3 slots with structured ADR only (no LABEL).
-    // 4. Mixed slots (Work: ADR+LABEL, Home: LABEL only, Other: ADR only).
-    // 5. In-place modification of synthetic label fields in EDS.
-    // 6. PREF interplay across address slots: highest preference emitted first with TYPE=PREF.
-    // 7. Unkeyed inbound vCards pairing ADR and LABEL by context fallback (WORK, HOME, OTHER/bare).
+    // EDS exposes work, home, and other address slots as both structured ADR and
+    // synthetic label fields. This matrix checks each slot shape, mixed slot
+    // combinations, in-place label edits, PREF ordering, and unkeyed ADR/LABEL pairing.
 
-    // --- 1. All 3 slots with structured ADR + matching standalone LABEL ---
+    // 1. All three slots with structured ADR and matching LABEL lines.
     let mut extra_work = BTreeMap::new();
     extra_work.insert("pref".to_owned(), json!(1));
 
@@ -15309,9 +15298,8 @@ fn twitter_sip_and_unslotted_social_services_characterization_and_rationale() {
 
 #[test]
 fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
-    // Audit & characterization of LOGO (RFC 2426 §3.5.3 / E_CONTACT_LOGO) and KEY (RFC 2426 §3.7.2 / E_CONTACT_X509_CERT / E_CONTACT_PGP_CERT):
-    //
-    // 1. Inbound vCard with LOGO, KEY (X509, PGP, URI), PHOTO, and standard contact properties
+    // LOGO and KEY lines must stay ignored while PHOTO and regular contact fields
+    // remain round-trippable.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:pas-id-test-logo-key-001\r\n",
@@ -15321,10 +15309,10 @@ fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
         "TEL;X-JMAP-KEY=p1;TYPE=WORK,CELL:+1-555-0199\r\n",
         "ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstr. 1;Berlin;;10115;Germany\r\n",
         "PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==\r\n",
-        // LOGO lines: inline base64 and remote URI
+        // LOGO lines: inline base64 and remote URI.
         "LOGO;TYPE=PNG;ENCODING=b:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
         "LOGO;VALUE=uri:https://example.com/corporate_logo.png\r\n",
-        // KEY lines: X.509 certificate in base64, PGP public key in base64, URI reference, case-insensitive
+        // KEY lines: X.509, PGP, URI, and lower-case property spelling.
         "KEY;TYPE=X509;ENCODING=b:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Y123\r\n",
         "KEY;TYPE=PGP;ENCODING=b:mQGNBF+1234567890abcdef\r\n",
         "KEY;VALUE=uri:https://example.com/keys/vera.asc\r\n",
@@ -15335,7 +15323,7 @@ fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
 
     let card = vcard_to_card(vcard).expect("parse vcard with logo and key");
 
-    // Verify contact name, email, phone, address, and PHOTO are parsed intact
+    // Contact identity fields and PHOTO parse as usual.
     assert_eq!(
         card.name.as_ref().and_then(|n| n.full.as_deref()),
         Some("Dr. Vera Marie Oldenburg")
@@ -15344,17 +15332,17 @@ fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
     assert_eq!(card.phones.as_ref().map(|p| p.len()), Some(1));
     assert_eq!(card.addresses.as_ref().map(|a| a.len()), Some(1));
 
-    // Media map contains ONLY the PHOTO — LOGO lines are safely dropped on parse
+    // Media contains only PHOTO. LOGO lines are dropped.
     let media = card.media.as_ref().expect("media present");
     assert_eq!(media.len(), 1);
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
     assert!(media["m1"].uri.starts_with("data:image/JPEG;base64,"));
 
-    // JSContact extra is empty (no unmodeled junk leaked)
+    // Parsing does not leak unmodeled lines into `extra`.
     assert!(card.extra.is_empty());
 
-    // Outbound emission: emits standard PHOTO line and strictly omits LOGO and KEY
+    // Emission keeps PHOTO and omits LOGO and KEY.
     let emitted = card_to_vcard(&card);
     assert!(
         emitted.contains("PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==")
@@ -15374,7 +15362,7 @@ fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
         "KEY: must not be emitted: {emitted}"
     );
 
-    // Multi-pass roundtrip fixed-point stability
+    // Round-trip reaches a fixed point.
     let card2 = vcard_to_card(&emitted).expect("re-parse emitted vcard");
     assert_eq!(card2, card);
     let emitted2 = card_to_vcard(&card2);
@@ -20878,10 +20866,8 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
 
 #[test]
 fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
-    // Backlog finding, first manifestation: A raw vCard with unescaped trailing whitespace in NICKNAME (e.g. from an ENCODING=b
-    // envelope or raw imported stream) keeps the trailing space on first emit (NICKNAME;X-JMAP-KEY=k1:! ),
-    // but on the second pass calcard's parser trims unescaped trailing whitespace, normalizing it to '!'.
-    // Multi-stage fixpoint asserts that pass 2 (vcard2, card2) and pass 3 (vcard3, card3) reach an exact byte-identical fixed point.
+    // Unescaped trailing whitespace in inbound NICKNAME survives pass 1 emit, then
+    // calcard trims it on pass 2. Passes 2 and 3 must be byte-identical.
     let raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
     let parsed1 = vcard_to_card(raw_vcard).expect("first parse of raw vcard");
     assert_eq!(
