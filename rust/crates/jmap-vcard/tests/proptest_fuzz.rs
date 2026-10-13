@@ -1337,10 +1337,8 @@ proptest! {
             // Exactly the RFC 2426 §2.6 width: calcard's own writer overshoots
             // when empty structured slots trail a value at the boundary
             // (stalwartlabs/calcard#25), and `card_to_vcard`'s refold pass
-            // exists to take that back to 75 — a looser bound here is what let
-            // that overshoot go unseen. The batch-5 branch independently hit
-            // the same overshoot with these richer generators and had loosened
-            // this to 90; the refold supersedes that.
+            // exists to take that back to 75. A looser bound here lets
+            // overshoots go unseen, even with these richer generators.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",

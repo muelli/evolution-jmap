@@ -18504,7 +18504,7 @@ fn hyphenated_dates_bday_and_anniversary_variations_fidelity() {
 
 #[test]
 fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
-    // 1. Server-side JSContact card with full spectrum of batch 5/6 modeled and unmodeled fields
+    // 1. Server-side JSContact card with mapped and unmodeled fields
     let mut name_extra = BTreeMap::new();
     name_extra.insert("fileAs".to_string(), json!("Sync, Fuzz (Name Extra)"));
     name_extra.insert("sortAs".to_string(), json!("SYNC"));
@@ -18704,7 +18704,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
     assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
     assert_eq!(parsed1, parsed2, "Card₂ == Card₃ fixpoint invariant");
 
-    // 4. Inbound vCard 4.0 stream containing full batch-5/6 feature matrix
+    // 4. Inbound vCard 4.0 stream covering the same feature matrix
     let raw_v4 = concat!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\n",
         "FN:Comprehensive v4 Fuzz\r\n",
