@@ -278,9 +278,7 @@ fn maps_organizations_onto_the_structured_org_property() {
 
 #[test]
 fn maps_organization_units_onto_the_components_after_the_name() {
-    // RFC 2426 §3.5.5: the ORG value is the organisation's name followed by
-    // its units, outermost first — which is the order RFC 9553 §2.2.3 gives
-    // `units` too.
+    // ORG keeps name then units, outermost first (RFC 2426 §3.5.5, RFC 9553 §2.2.3).
     let card = ContactCard {
         organizations: Some(
             [(
@@ -308,8 +306,7 @@ fn maps_organization_units_onto_the_components_after_the_name() {
 
 #[test]
 fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
-    // The name is the first component, so a unit cannot move up into its
-    // place without changing which organisation is meant.
+    // Component one is the organization name, so units cannot move into it.
     let card = ContactCard {
         organizations: Some(
             [(
@@ -346,8 +343,7 @@ fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
 
 #[test]
 fn an_organization_with_an_empty_name_string_behaves_consistently() {
-    // An organisation whose name is `""` rather than absent:
-    // 1. When it has no units, it states nothing and is skipped rather than emitting an empty `ORG:` line.
+    // `name = ""` with no units states nothing, so no ORG line is emitted.
     let card_empty_name = ContactCard {
         organizations: Some(
             [(
@@ -369,8 +365,7 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, None);
 
-    // 2. When it has units, the empty name is preserved as an empty first component:
-    // the leading semicolon keeps units in their structured component position.
+    // With units present, the empty first component is preserved via leading `;`.
     let card_empty_name_with_units = ContactCard {
         organizations: Some(
             [(
@@ -423,9 +418,7 @@ fn invents_a_key_for_an_organization_that_has_none() {
 
 #[test]
 fn maps_titles_onto_title_and_role_by_their_kind() {
-    // RFC 9553 §2.2.4 holds the job title and the role played in one map,
-    // told apart by `kind`; vCard 3.0 has a property for each (RFC 2426
-    // §§3.5.1–3.5.2).
+    // `kind` selects TITLE or ROLE (RFC 9553 §2.2.4, RFC 2426 §§3.5.1-3.5.2).
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "TITLE"),
@@ -1669,9 +1662,7 @@ fn maps_a_wedding_day_onto_the_line_evolution_reads_as_the_anniversary() {
 
 #[test]
 fn an_anniversary_of_a_kind_vcard_has_no_property_for_is_dropped() {
-    // RFC 9553 §2.8.1 also has `death`, which vCard 3.0 states nowhere — RFC
-    // 6474's DEATHDATE is vCard 4.0, and EDS has no field for it. Putting the
-    // date on a BDAY would tell the user it is a birthday.
+    // `death` has no vCard 3.0 property or EDS field, so it must not reuse BDAY.
     let vcard = card_to_vcard(&one_anniversary(
         "death",
         json!({"year": 2019, "month": 10, "day": 15}),
@@ -1683,11 +1674,8 @@ fn an_anniversary_of_a_kind_vcard_has_no_property_for_is_dropped() {
 
 #[test]
 fn a_date_that_names_no_single_day_gets_no_line() {
-    // RFC 9553 §2.8.1's PartialDate may state only a year, or a day in a
-    // month with no year. EDS's e_contact_date_from_string reads anything
-    // short of a whole date as no date at all and hands the contact editor
-    // 1000-01-01 — so a partial date written onto a line would reach the user
-    // as a wrong date, and be saved back as one.
+    // Partial dates can omit year or month-day pieces.
+    // EDS treats those as missing and can surface a wrong fallback date, so no line is written.
     for date in [
         json!({"year": 1964}),
         json!({"month": 3, "day": 27}),
@@ -1700,15 +1688,8 @@ fn a_date_that_names_no_single_day_gets_no_line() {
 
 #[test]
 fn a_date_before_the_year_eds_can_write_gets_no_line() {
-    // `e_contact_date_to_string()` CLAMPs the year to 1000..=9999 — measured
-    // against libebook-contacts 3.52 in `eds-sys/tests/contacts.rs`. The line
-    // is only rewritten when the field is set, so a card merely passing
-    // through keeps the year it arrived with; but the contact editor sets
-    // every field it shows, so the first time the user opens Charlemagne and
-    // presses Save, `BDAY:0800-06-21` becomes `BDAY:1000-06-21` — the same day
-    // of the same month, moved two centuries. Stating nothing keeps the
-    // server's date the server's; `diff_entries` then leaves an anniversary no
-    // line states alone.
+    // `e_contact_date_to_string()` clamps years to 1000..=9999 (measured in `eds-sys/tests/contacts.rs`).
+    // Writing older years would shift them on first user edit, so this side emits no line for them.
     for date in [
         json!({"year": 800, "month": 6, "day": 21}),
         json!({"year": 999, "month": 12, "day": 31}),
@@ -1719,7 +1700,7 @@ fn a_date_before_the_year_eds_can_write_gets_no_line() {
         assert!(!vcard.contains("\r\nBDAY"), "{date}: {vcard}");
     }
 
-    // The first year it can write is written.
+    // Year 1000 is the first year EDS can write.
     let vcard = card_to_vcard(&one_anniversary(
         "birth",
         json!({"year": 1000, "month": 6, "day": 21}),
@@ -1729,9 +1710,7 @@ fn a_date_before_the_year_eds_can_write_gets_no_line() {
 
 #[test]
 fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
-    // The other shape RFC 9553 §2.8.1 allows. A vCard 3.0 date line states a
-    // day, so the hour is left behind — and, being left behind rather than
-    // mapped, must survive the save untouched.
+    // Timestamps map to a day-only vCard date; time-of-day is intentionally not encoded.
     let vcard = card_to_vcard(&one_anniversary(
         "birth",
         json!({"@type": "Timestamp", "utc": "1953-10-15T23:10:00Z"}),
@@ -1741,8 +1720,7 @@ fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
 
 #[test]
 fn a_date_line_written_without_separators_states_the_same_day() {
-    // ISO 8601's basic form, which EDS parses as readily as the extended one,
-    // so a vCard from elsewhere may well carry it.
+    // Accept ISO 8601 basic form because external vCards can use it.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "BDAY:19640327\r\n",
@@ -1761,9 +1739,7 @@ fn a_date_line_that_states_no_day_is_skipped_in_both_directions() {
     let card = one_anniversary("birth", json!({}));
     assert!(!card_to_vcard(&card).contains("\r\nBDAY"));
 
-    // Nothing at all, prose, and a date that does not exist. None of them
-    // says which day the user meant, and inventing one would write it to the
-    // server on the next save.
+    // Empty, free text, and impossible dates state no valid day.
     for value in ["", "sometime in March", "1964-13-45", "1964-03"] {
         let back = vcard_to_card(&format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:{value}\r\nEND:VCARD\r\n"
@@ -1775,9 +1751,7 @@ fn a_date_line_that_states_no_day_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_date_that_has_none() {
-    // Evolution stores the birthday in a structured field and rebuilds the
-    // line from it, dropping the X-JMAP-KEY this side wrote — so a date that
-    // has just been edited arrives needing a key of its own.
+    // Evolution rebuilds birthday lines and drops X-JMAP-KEY, so edited lines need fresh keys.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "BDAY:1964-03-27\r\n",
@@ -1885,10 +1859,7 @@ fn one_nickname(key: &str, name: &str) -> ContactCard {
 
 #[test]
 fn maps_nicknames_onto_nickname_lines() {
-    // RFC 9553 §2.2.2 keys the nicknames like every other JSContact map; RFC
-    // 2426 §3.1.3's NICKNAME is text, so the key rides in X-JMAP-KEY as it
-    // does on an EMAIL — and unlike a date line, EDS rewrites the value in
-    // place and leaves the parameter alone, so the key comes back.
+    // NICKNAME is plain text, so the JSContact key rides in X-JMAP-KEY and survives EDS rewrites.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
 
@@ -1900,9 +1871,8 @@ fn maps_nicknames_onto_nickname_lines() {
 
 #[test]
 fn each_nickname_gets_a_line_of_its_own() {
-    // RFC 2426 §3.1.3 states the nicknames as one comma-separated list, which
-    // would leave the entries with no key each and nowhere to carry one. EDS
-    // does not read the value as a list anyway — verified against
+    // Separate lines preserve per-entry keys; one comma list has nowhere to store them.
+    // EDS also does not read NICKNAME as a list, verified against
     // libebook-contacts 3.52, which hands the whole value back as one string
     // and escapes a comma inside it — so a list on one line would reach the
     // user as a single nickname with commas in it.
@@ -2256,16 +2226,9 @@ fn spouse_of(vcard: &str) -> Option<String> {
 
 #[test]
 fn maps_a_spouse_onto_the_line_eds_keeps_the_spouse_on() {
-    // RFC 9553 §2.1.8's `relatedTo` states who else an entity is related to,
-    // and of the twenty relation types it lists, `spouse` is the one Evolution
-    // has a field for: `E_CONTACT_SPOUSE`, which libebook-contacts 3.52 keeps
-    // on `X-EVOLUTION-SPOUSE` and the contact editor labels "Spouse". vCard 3.0
-    // has no `RELATED` at all — RFC 6350 §6.6.6 is 4.0 — so the `X-` line is not
-    // a shortcut, it is the only line there is.
-    //
-    // And it carries no X-JMAP-KEY, which every other keyed map here needs:
-    // §2.1.8 keys the map by *who the related entity is*, so the name on the
-    // line is the key, and there is nothing left for a parameter to say.
+    // Only spouse maps to an EDS field, which is stored as X-EVOLUTION-SPOUSE.
+    // vCard 3.0 has no RELATED line, so this X- line is the only channel.
+    // The spouse name itself is the key, so X-JMAP-KEY is not used.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-EVOLUTION-SPOUSE"),
@@ -2294,20 +2257,13 @@ fn maps_a_spouse_onto_the_line_eds_keeps_the_spouse_on() {
 
 #[test]
 fn a_relation_no_eds_field_holds_gets_no_line() {
-    // The fixture's `Nils Oldenburg` is a `child`. Nineteen of RFC 9553
-    // §2.1.8's twenty relation types are like that: no vCard 3.0 property and
-    // no EDS field states them, and putting a name on the spouse line would
-    // tell the user something the card never said. Evolution's Manager and
-    // Assistant fields are the near misses, and §2.1.8 has no type meaning
-    // either — `agent` is whoever acts on the contact's behalf, which is wider
-    // than an assistant, so it stays off the line too.
+    // Most relation kinds, including `child`, have no vCard 3.0 or EDS field.
+    // Mapping them onto spouse would mislabel the relation shown to users.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("X-EVOLUTION-SPOUSE").count(), 1, "{vcard}");
     assert!(!vcard.contains("Nils"), "{vcard}");
 
-    // Nor does a relation stating no type at all reach a line: RFC 9555 §2.9.5
-    // reads a `RELATED` line carrying no `TYPE` into exactly that, and an
-    // unspecified relation is not a marriage.
+    // Untyped relations also stay off spouse lines.
     let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &[]));
     assert!(!vcard.contains("SPOUSE"), "{vcard}");
     let vcard = card_to_vcard(&ContactCard {
@@ -2319,17 +2275,12 @@ fn a_relation_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_spouse_the_card_names_by_uid_gets_no_line() {
-    // The fixture's third entry is a spouse the way RFC 9553 §2.1.8 asks for
-    // one: keyed by the related Card's `uid`. There is no name in a UID, so the
-    // line would show the user a URN under the heading "Spouse" — and the next
-    // save would write it back as the person's name. RFC 9555 §2.9.5 is what
-    // says the other kind of key exists: a `RELATED;VALUE=text` becomes a key
-    // holding free text, which is the case that holds a name.
+    // UID-keyed spouse entries have no displayable person name.
+    // Emitting them on spouse lines would expose identifiers as names and roundtrip them wrongly.
     let vcard = card_to_vcard(&fixture_card());
     assert!(!vcard.contains("e1f0a1c2"), "{vcard}");
 
-    // Any URI, not just a URN: what disqualifies the key is that it names an
-    // identifier rather than a person.
+    // Any URI key is treated as an identifier, not a person name.
     for key in [
         "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44",
         "mailto:jean@example.com",
@@ -2340,21 +2291,15 @@ fn a_spouse_the_card_names_by_uid_gets_no_line() {
         assert!(!vcard.contains("SPOUSE"), "{key}: {vcard}");
     }
 
-    // A name is not a URI for holding a colon in it, only for holding one after
-    // something that reads as an RFC 3986 §3.1 scheme.
+    // A plain name can contain `:` when it is not a URI scheme.
     let vcard = card_to_vcard(&one_relation("Jean Paul: the second", &["spouse"]));
     assert!(vcard.contains("SPOUSE"), "{vcard}");
 }
 
 #[test]
 fn a_spouse_whose_name_eds_would_rename_gets_no_line() {
-    // The name is the key, so a name EDS gives back spelled differently is a
-    // *different entry* to the save — it would delete the relation the server
-    // holds and add one under the renamed key. Three spellings do that, all
-    // measured or forced on this side: ends made of ASCII whitespace are
-    // trimmed by EDS, as they are on an instant-messaging handle; a carriage
-    // return is dropped by `syntax::write`; and the empty name says nothing at
-    // all.
+    // The spouse name is the key, so EDS-normalized names would become different entries.
+    // Names EDS trims or rewrites are therefore not emitted.
     for key in [" Jean Paul Oldenburg", "Jean Paul Oldenburg\t", ""] {
         let vcard = card_to_vcard(&one_relation(key, &["spouse"]));
         assert!(!vcard.contains("SPOUSE"), "[{key}]: {vcard}");
@@ -2362,20 +2307,15 @@ fn a_spouse_whose_name_eds_would_rename_gets_no_line() {
     let vcard = card_to_vcard(&one_relation("Jean\rPaul", &["spouse"]));
     assert!(!vcard.contains("SPOUSE"), "{vcard}");
 
-    // What does survive: a name whose middle holds the whitespace, which is
-    // every name with a space in it.
+    // Internal spaces remain stable and are accepted.
     let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &["spouse"]));
     assert_eq!(spouse_of(&vcard).as_deref(), Some("Jean Paul Oldenburg"));
 }
 
 #[test]
 fn reads_every_spouse_line_and_keys_each_by_its_own_name() {
-    // EDS shows the user the first `X-EVOLUTION-SPOUSE` line and passes any
-    // further one through untouched, measured against libebook-contacts 3.52 —
-    // so a second line is one a save must not delete. And an X-JMAP-KEY on a
-    // line is not the key here: the name is. A line carrying one — from another
-    // client, or from a card this mapping wrote before the key stopped being
-    // written — is read by its text like any other.
+    // EDS preserves extra spouse lines, so readers must keep all non-empty lines.
+    // The name text is the key even when an X-JMAP-KEY parameter is present.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg\r\n",
@@ -2432,12 +2372,8 @@ const PAYLOAD: &str = "aGVsbG8tcGhvdG8=";
 
 #[test]
 fn maps_a_photo_onto_the_line_evolution_shows_it_on() {
-    // The fixture's `m1` is a picture the card carries rather than points at:
-    // RFC 9553 §2.6.4 states it as a `data:` URI, and RFC 2426 §3.1.4's `PHOTO`
-    // takes the bytes themselves under `ENCODING=b`. That is the only form EDS
-    // reads a mime type off — measured against libebook-contacts 3.52,
-    // `TYPE=JPEG` arrives as `image/JPEG` — and it is what EDS's own writer
-    // emits for a photo the user has just chosen.
+    // Fixture media `m1` is inline photo data.
+    // For EDS compatibility, PHOTO is written as inline bytes with `ENCODING=b`.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "PHOTO"),
@@ -2447,28 +2383,21 @@ fn maps_a_photo_onto_the_line_evolution_shows_it_on() {
 
 #[test]
 fn a_picture_the_card_only_points_at_crosses_as_a_uri_line() {
-    // A `media` entry may name any URI, and one that is not a `data:` URI has
-    // no bytes to inline: it goes on the line RFC 2426 §3.1.4 gives a reference,
-    // with `VALUE=uri`. The parameter is not decoration — measured against
-    // libebook-contacts 3.52, a `PHOTO` whose value is a URI and which does not
-    // carry it reaches no field at all, so EDS shows the user no picture.
+    // Non-`data:` photos have no inline bytes, so PHOTO uses `VALUE=uri`.
+    // EDS ignores URI-valued PHOTO lines without that parameter.
     let vcard = card_to_vcard(&one_photo("https://vera.example/me.png", None));
     assert_eq!(
         line(&vcard, "PHOTO"),
         "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://vera.example/me.png"
     );
 
-    // And no `TYPE`: on a URI line EDS reads no mime type off it (measured),
-    // and its own writer emits none, so the parameter would state something
-    // nothing reads. `TYPE` here means the inlined bytes' media type, once.
+    // URI photo lines intentionally omit `TYPE`; EDS neither reads nor writes it there.
     assert!(!vcard.contains("TYPE"), "{vcard}");
 }
 
 #[test]
 fn the_type_parameter_states_the_subtype_and_nothing_else() {
-    // Because EDS builds the mime type by putting `image/` in front of it:
-    // measured against libebook-contacts 3.52, `TYPE=image/jpeg` arrives as
-    // `image/image/jpeg`, which names no image format at all.
+    // EDS prepends `image/` to TYPE, so TYPE must hold only the subtype.
     let vcard = card_to_vcard(&one_photo(
         &format!("data:image/jpeg;base64,{PAYLOAD}"),
         Some("image/png"),
@@ -2479,8 +2408,7 @@ fn the_type_parameter_states_the_subtype_and_nothing_else() {
         "the entry's own `mediaType` is what it says the bytes are"
     );
 
-    // With none stated, the `data:` URI states its own (RFC 2397 §3) — and a
-    // media type may carry parameters, which are no part of the subtype.
+    // Without explicit mediaType, parse subtype from the `data:` URI itself.
     let vcard = card_to_vcard(&one_photo(
         &format!("data:image/png;charset=binary;base64,{PAYLOAD}"),
         None,
@@ -2493,11 +2421,8 @@ fn the_type_parameter_states_the_subtype_and_nothing_else() {
 
 #[test]
 fn bytes_that_are_not_an_image_are_stated_without_a_type() {
-    // A `TYPE` reaches EDS as `image/<type>`, so writing one for a media type
-    // outside `image/*` would tell the user's address book the bytes are an
-    // image format that does not exist. The line is still written — the bytes
-    // are what the card carries — and EDS hands them on with no mime type,
-    // which its own reader accepts (measured against libebook-contacts 3.52).
+    // Non-image inline bytes still map to PHOTO, but TYPE is omitted.
+    // Adding TYPE would mislabel them as `image/<type>` in EDS.
     let vcard = card_to_vcard(&one_photo(
         &format!("data:application/pdf;base64,{PAYLOAD}"),
         None,
@@ -2507,8 +2432,7 @@ fn bytes_that_are_not_an_image_are_stated_without_a_type() {
         format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}")
     );
 
-    // The same for a `data:` URI that states no media type at all, whose RFC
-    // 2397 §2 default is `text/plain`.
+    // The same applies when the `data:` URI omits media type.
     let vcard = card_to_vcard(&one_photo(&format!("data:;base64,{PAYLOAD}"), None));
     assert_eq!(
         line(&vcard, "PHOTO"),
@@ -2518,10 +2442,8 @@ fn bytes_that_are_not_an_image_are_stated_without_a_type() {
 
 #[test]
 fn a_payload_spelled_loosely_is_written_out_as_canonical_base64() {
-    // The bytes are decoded and re-encoded rather than copied across, so what
-    // the line carries is the canonical spelling of what the URI meant. A
-    // `data:` URI is written by hand as often as by a library, and EDS decodes
-    // the line with glib's base64 reader rather than with the URI's.
+    // Inline bytes are normalized by decode + re-encode, not copied verbatim.
+    // This matches EDS consuming base64 payload bytes.
     let vcard = card_to_vcard(&one_photo(
         &format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
         None,
@@ -2534,11 +2456,8 @@ fn a_payload_spelled_loosely_is_written_out_as_canonical_base64() {
 
 #[test]
 fn a_picture_whose_bytes_the_line_cannot_state_gets_no_line() {
-    // RFC 2397 §3 lets a `data:` URI spell its data as percent-encoded octets
-    // instead of base64, and `ENCODING=b` is the only encoding an EDS-bound
-    // vCard 3.0 `PHOTO` carries. Rather than hand EDS a value it would decode
-    // into a broken image, such an entry gets no line — the same invisibility
-    // every other keyed map has — and must therefore be invisible to the save.
+    // EDS-facing PHOTO lines require decodable base64 payload bytes.
+    // URI forms that cannot supply that payload are dropped.
     for uri in [
         "data:image/jpeg,%89PNG%0D%0A",
         "data:image/jpeg;base64,not base64 at all",
@@ -2560,11 +2479,8 @@ fn a_picture_whose_bytes_the_line_cannot_state_gets_no_line() {
 
 #[test]
 fn a_media_entry_of_a_kind_no_photo_line_states_gets_no_line() {
-    // The fixture's `m2` is a `logo`: RFC 9553 §2.6.4 keeps the three kinds of
-    // media in one map, and a `PHOTO` line is the picture *of the contact*.
-    // Putting a logo — or a sound, or a vendor kind — on it would show the user
-    // the wrong image, so only a photo crosses, exactly as only some `titles`
-    // and only some `links` do.
+    // PHOTO is only for contact photos, not other media kinds.
+    // Non-`photo` entries are not emitted.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nPHOTO").count(), 1, "{vcard}");
     assert!(!vcard.contains("logo.png"), "{vcard}");
@@ -2603,18 +2519,14 @@ fn photo_line(line: &str) -> Media {
 
 #[test]
 fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
-    // The picture the *user* chose in Evolution arrives on the line EDS's own
-    // writer emits — measured against libebook-contacts 3.52, a photo set with
-    // mime type `image/jpeg` is written `PHOTO;TYPE=jpeg;ENCODING=b:…`. It comes
-    // back as RFC 9553 §2.6.4 states a picture a card carries: a `data:` URI
-    // (RFC 2397), with the media type the `TYPE` named.
+    // EDS writes chosen photos as inline PHOTO bytes with TYPE.
+    // Reader reconstructs the JSContact `data:` URI and media type from that line.
     let media = photo_line(&format!("PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.kind.as_deref(), Some("photo"));
     assert_eq!(media.uri, format!("data:image/jpeg;base64,{PAYLOAD}"));
     assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
 
-    // `ENCODING=BASE64` is the same encoding spelled the way older exporters
-    // spell it, and EDS reads it (measured), so this side does too.
+    // Accept legacy spelling `ENCODING=BASE64` too.
     let media = photo_line(&format!("PHOTO;ENCODING=BASE64;TYPE=PNG:{PAYLOAD}"));
     assert_eq!(media.uri, format!("data:image/PNG;base64,{PAYLOAD}"));
     assert_eq!(media.media_type.as_deref(), Some("image/PNG"));
@@ -2622,18 +2534,15 @@ fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
 
 #[test]
 fn a_photo_eds_holds_no_media_type_for_reads_back_without_one() {
-    // Measured against libebook-contacts 3.52: a photo whose `mime_type` is
-    // NULL is written `TYPE="X-EVOLUTION-UNKNOWN"`, which names no image format
-    // — reading it as `image/X-EVOLUTION-UNKNOWN` would tell the server the
-    // bytes are a format that does not exist.
+    // EDS uses `TYPE="X-EVOLUTION-UNKNOWN"` for unknown mime_type.
+    // Treat that marker as no media type.
     let media = photo_line(&format!(
         "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:{PAYLOAD}"
     ));
     assert_eq!(media.media_type, None);
     assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
 
-    // And a line carrying no `TYPE` at all, which is what this mapping writes
-    // for bytes that are not an image.
+    // PHOTO lines without TYPE also read back as no media type.
     let media = photo_line(&format!("PHOTO;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.media_type, None);
     assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
@@ -2644,23 +2553,18 @@ fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
     let media = photo_line("PHOTO;VALUE=uri:https://vera.example/me.png");
     assert_eq!(media.kind.as_deref(), Some("photo"));
     assert_eq!(media.uri, "https://vera.example/me.png");
-    // EDS writes no `TYPE` on a URI line and reads none off one (measured), so
-    // there is nothing here that says what the resource is.
+    // URI PHOTO lines carry no usable media type in EDS.
     assert_eq!(media.media_type, None);
 }
 
 #[test]
 fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
-    // The real case: a PNG signature is not valid UTF-8, so the line's value is
-    // binary rather than text and the reader has to take the decoded bytes. A
-    // picture that *is* text — an SVG — goes through the other path, which the
-    // round-trip tests exercise with their own payload.
+    // Non-UTF8 payloads must roundtrip through decoded bytes, not text coercion.
     // `iVBORw0KGgr//g==` is a PNG signature followed by 0xFF 0xFE.
     let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");
     assert_eq!(media.uri, "data:image/png;base64,iVBORw0KGgr//g==");
 
-    // Driven the whole way round, so that what comes back is compared against
-    // the bytes that went in rather than against a payload written out by hand.
+    // Full roundtrip guards against hand-written fixture bias.
     let uri = "data:image/png;base64,iVBORw0KGgr//g==";
     let vcard = card_to_vcard(&one_photo(uri, None));
     assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
@@ -2668,17 +2572,12 @@ fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
 
 #[test]
 fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice() {
-    // Fuzzer-found regression (`prop_photo_inline_and_uri_roundtrip_stability`,
-    // shrunk case `is_uri = false, subtype = "jpeg", raw_bytes = [97, 65, 56]`).
-    // `[97, 65, 56]` is the ASCII text "aA8", which calcard decodes from
-    // `ENCODING=b` and, being valid UTF-8, hands back as text rather than
-    // binary — the same path the SVG case above takes. "aA8" also happens to
-    // be valid base64 (it decodes to `[104, 15]`), so a reader that decodes it
-    // a second time silently corrupts the photo instead of erroring.
+    // Regression from fuzzer case `raw_bytes = [97, 65, 56]`.
+    // UTF-8 payload text can also be valid base64 text, so reader must not decode twice.
     let media = photo_line("PHOTO;TYPE=jpeg;ENCODING=b:YUE4");
     assert_eq!(media.uri, "data:image/jpeg;base64,YUE4");
 
-    // Driven the whole way round, exactly as the property test does.
+    // Validate with full roundtrip, matching the property test path.
     let uri = "data:image/jpeg;base64,YUE4";
     let vcard = card_to_vcard(&one_photo(uri, Some("image/jpeg")));
     assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
@@ -2686,11 +2585,8 @@ fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice
 
 #[test]
 fn a_photo_line_states_the_key_its_entry_is_filed_under() {
-    // As every other keyed map's line does, so that an untouched picture is
-    // recognised as the entry it came from. The key only survives a line EDS
-    // merely re-renders — a `set()` rebuilds it and drops the parameters
-    // (measured) — which is why the save path also pairs a keyless photo with
-    // the entry it replaced; see `jmap-book-sync`'s patch module.
+    // Like other keyed maps, PHOTO can carry X-JMAP-KEY to keep identity stable.
+    // EDS can drop params on rewritten lines, so readers must also handle keyless lines.
     let card = vcard_to_card(&format!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n\
          PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}\r\n\
@@ -2711,9 +2607,7 @@ fn a_photo_line_states_the_key_its_entry_is_filed_under() {
 
 #[test]
 fn a_photo_that_says_nothing_reads_back_as_no_entry() {
-    // An empty value names neither bytes nor a resource, which says no more
-    // than an `EMAIL:` with no address — and `photo()` gives such an entry no
-    // line either, so a card holding one would state it back on every save.
+    // Empty PHOTO values name neither bytes nor URI and therefore create no entry.
     for line in ["PHOTO;ENCODING=b:", "PHOTO;VALUE=uri:"] {
         let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
         let card = vcard_to_card(&vcard).unwrap_or_else(|e| panic!("{line}: {e}"));
