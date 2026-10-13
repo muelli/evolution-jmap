@@ -1,217 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] ↔ vCard 3.0.
+//! JSContact [`ContactCard`] to vCard 3.0 mapping used by the address book backend.
 //!
-//! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the `X-` lines EDS
-//! keeps instant-messaging handles, spouse, manager, assistant, blog URL,
-//! and video URL on —
-//! and no more. Everything else on a card (preferred languages, the crypto keys
-//! it lists, what the contact is spoken to as, …) is *dropped*, which is only
-//! safe because saving goes back to the server as a PatchObject naming the
-//! mapped properties: a property we never mapped is a property we never
-//! overwrite.
+//! The mapping is intentionally partial. It emits the properties Evolution can
+//! round-trip through EDS fields and leaves unsupported data to the save path,
+//! which patches only mapped properties.
 //!
-//! `ORG` is the one property whose *value* is a list rather than a field: RFC
-//! 2426 §3.5.5 states the organisation's name and then the units within it,
-//! in the order RFC 9553 §2.2.3's `units` gives them, so an entry crosses as
-//! one line with as many components as it has units. What does not cross is
-//! the entry's `sortAs` and `contexts`, which `ORG` has no component and no
-//! parameter for — hence the `X_JMAP_KEY` this side already writes on an
-//! `EMAIL`, and a save that patches `organizations/<key>/name` in place.
+//! Lossy areas are explicit and helper predicates (`states_*`) describe what an
+//! edited line actually states so unseen data is preserved. `X_JMAP_UID` and
+//! `X_JMAP_KEY` carry stable identity where vCard fields have no keyed slot.
 //!
-//! `titles` is the one property of which only *some* entries cross. RFC 9553
-//! §2.2.4 keeps the job title and the role played in one map, told apart by
-//! `kind`, and allows vendor kinds besides those two; vCard 3.0 has exactly
-//! `TITLE` and `ROLE`. An entry of any other kind is therefore dropped rather
-//! than written on a line that would misstate it — and, as with every other
-//! dropped thing here, the save path must then leave it alone.
-//!
-//! `addresses` is lossy the same way one level down, and is the one property
-//! that crosses on two lines. RFC 2426 §3.2.1's `ADR` has seven fields; RFC
-//! 9553 §2.5.1 builds an address out of named components, sixteen kinds of
-//! them. Seven of those kinds have a field of their own
-//! (`ADDRESS_COMPONENTS`) and one more, the house `number`, shares the
-//! street's (`JOINED_COMPONENTS`); the rest — `floor`, `room`, `landmark` —
-//! have nowhere to go, and are left off the line rather than written into a
-//! field that would say something else about them. Beside the `ADR`
-//! goes RFC 2426 §3.2.2's `LABEL`, the address written out as it should be
-//! printed, which is RFC 9553's `full` and what EDS keeps in its three
-//! synthetic address-label fields. An address may have either line, or both:
-//! `full` stands on its own for an address "even if the individual address
-//! components are not known", and an address stated only in components vCard
-//! has no field for has neither line and is invisible — so `addresses` too is
-//! a map of which the vCard states only some entries.
-//!
-//! `notes` is the plainest of them and lossy only around the value: RFC 2426
-//! §3.6.2's `NOTE` is free text, so an entry's own text crosses whole, while
-//! RFC 9553 §2.8.3's `created` and `author` — when the note was written and
-//! by whom — have no component and no parameter to sit in, and so ride along
-//! in the entry's `extra` for the save to patch around. An entry saying
-//! nothing at all gets no line, which is the same invisibility again.
-//!
-//! `anniversaries` is lossy in its *value*, which is new: RFC 9553 §2.8.1
-//! dates a memorable event either as a `PartialDate`, which may state as
-//! little as a year, or as a `Timestamp`, which states a point in time. A
-//! vCard date line states one calendar day and nothing else, so a date that
-//! names no single day gets no line — not because the line has nowhere to put
-//! it, but because EDS reads anything short of a whole date as *no* date and
-//! would show the user 1000-01-01. A whole date before the year 1000 gets no
-//! line for the neighbouring reason: EDS reads it correctly and writes it back
-//! clamped, so the line would come home naming a different millennium — see
-//! `Day::survives_the_field_it_lands_in`. A point in time crosses as the
-//! day it falls on, leaving the hour behind for the save to patch around
-//! ([`states_a_point_in_time`]). Of the three kinds, `birth` goes on RFC 2426
-//! §3.1.5's `BDAY` and `wedding` on the line EDS reads `E_CONTACT_ANNIVERSARY`
-//! off; `death` has no line at all, so `anniversaries` too is a map of which
-//! the vCard states only some entries.
-//!
-//! `nicknames` is the one property whose vCard *cardinality* is the decision.
-//! RFC 2426 §3.1.3 states the nicknames as one comma-separated list on a
-//! single `NICKNAME` line, which would leave RFC 9553 §2.2.2's keyed entries
-//! with nowhere to carry a key each — so an entry gets a line of its own
-//! instead, as `NOTE` and `TITLE` already do. That is also what EDS does with
-//! the value: measured against libebook-contacts 3.52, it hands the whole
-//! value back as one string rather than splitting it on commas, and escapes a
-//! comma the user typed, so a list on one line would reach the contact editor
-//! as a single nickname with commas in it. Unlike a date line, the `NICKNAME`
-//! is rewritten in place with its parameters intact, so the `X_JMAP_KEY`
-//! survives the trip through Evolution and the save needs no rekeying. An
-//! entry that names nothing gets no line, which is the same invisibility again.
-//!
-//! `links` is `titles`' shape with a stricter filter: RFC 9553 §2.6.3 keys the
-//! resources a card points at and tells them apart by `kind`, of which it
-//! defines exactly one — `contact`, a URI for writing to the person, which RFC
-//! 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`. vCard 3.0 has only RFC
-//! 2426 §3.6.8's `URL`, the plain website, so *only* an entry naming no kind
-//! at all crosses; `contact` and any vendor kind get no line rather than one
-//! that would tell the user this is the contact's home page. What also does not
-//! cross is the entry's `mediaType`, `contexts`, `pref` and `label`, for which
-//! a bare URI has no parameter, so they ride in its `extra` as a nickname's do.
-//! The `X_JMAP_KEY` survives here too: measured against libebook-contacts
-//! 3.52, `E_CONTACT_HOMEPAGE_URL` is the first `URL` line, a set rewrites that
-//! line's value and leaves its parameters alone, and any further `URL` line
-//! passes through untouched.
-//!
-//! `calendars` is the first property whose `kind` picks the *line* rather than
-//! deciding whether there is one. RFC 9553 §2.4.1 keys the calendaring
-//! resources of the contact and tells them apart by a `kind` it makes
-//! mandatory: a `calendar` of theirs, or the `freeBusy` data drawn from one.
-//! RFC 9555 §2.13.2 and §2.13.3 state those on `CALURI` and `FBURL`, which are
-//! vCard 4.0 properties (RFC 6350 §6.9.3 and §6.9.1) — and they are written on
-//! the 3.0 card anyway, because EDS keeps `E_CONTACT_CALENDAR_URI` and
-//! `E_CONTACT_FREEBUSY_URL` on exactly those lines whatever the version says,
-//! measured against libebook-contacts 3.52. So the two kinds cross and an entry
-//! naming any other — or, malformed, naming none — gets no line at all, since
-//! nothing then says which of the two fields it belongs in and both are in
-//! front of the user under a heading of their own. What does not cross is the
-//! entry's `mediaType`, `contexts`, `pref` and `label`, for which neither line
-//! has a parameter, so they ride in its `extra` as a link's do. The
-//! `X_JMAP_KEY` survives here too, for the reason it survives on a `URL`: a
-//! set rewrites the first line of that name in place and leaves its parameters
-//! alone, and any further line of the same name passes through untouched.
-//!
-//! `contexts` is the one member that crosses on four different properties, and
-//! the one narrowed by what EDS does with the parameter rather than by what
-//! vCard can spell. RFC 9553 §1.5.1 lets an entry name every context it belongs
-//! to; an `ADR` and a `TEL` state exactly one, because EDS picks the field a
-//! line lands in by matching `TYPE`, and a line wearing both matches two — one
-//! address filling both the Home and the Work block of Evolution's contact
-//! editor, with one line behind them, so retyping either rewrites the other.
-//! See `context_slot` for the measurement and [`states_context`] for what the
-//! save then does about the context left off. An `EMAIL` is not narrowed: EDS
-//! files it by position rather than by `TYPE`. A phone's `features` are
-//! narrowed the same way and for the same reason — `TYPE=WORK,VOICE,FAX` fills
-//! the Business Phone and the Business Fax field alike, and without a context
-//! `TYPE=VOICE,FAX` fills neither, leaving the number in no field at all. See
-//! `feature_slot` and [`states_phone_feature`].
-//!
-//! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
-//! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
-//! 4770's `IMPP` is vCard 4.0, which is not the format
-//! `e_contact_new_from_vcard()` is handed, so the line is the `X-` one EDS
-//! itself keeps a handle on — `ONLINE_SERVICES` — and the mapping states only
-//! the ten services libebook-contacts 3.52 gives contact-editor slots to. Which
-//! makes the property lossy in three separate places: a service EDS has no field
-//! for has no line, an entry stating a `uri` and no `user` has one only where
-//! `SERVICE_SCHEMES` says the URI holds the handle and nothing else (see
-//! `drawn_service`), and neither has a handle the line would come back from
-//! EDS having renamed.
-//!
-//! Its `TYPE` is also the one parameter here that is *not* the JSContact member
-//! it looks like. It is the slot EDS files the handle in — `HOME` or `WORK`,
-//! measured — and a line carrying none reaches no field the user can see, so
-//! every line must carry one whether the entry states a context or not. It is
-//! therefore written from the entry's `contexts` where they say something and
-//! never read back off the line — which is why [`OnlineService`] models no
-//! `contexts` of its own, and lets them ride in its `extra` as a nickname's do.
-//!
-//! `keywords` is the first mapped property that is a *set* rather than a keyed
-//! map, and the first to cross on one line holding all of it. RFC 9553 §2.8.2
-//! files a card under bare-string tags; RFC 2426 §3.7.1's `CATEGORIES` lists
-//! them, comma-separated, and EDS reads that line as `E_CONTACT_CATEGORY_LIST` —
-//! Evolution's Categories field. There is nothing inside an entry to preserve
-//! and no key to patch by, so unlike every property above it the set goes back
-//! **replaced whole**, and a tag the line cannot carry is therefore a tag the
-//! next save would *delete* rather than merely one the user cannot see — unless
-//! the save puts it back, which is what it does. What those tags are is
-//! [`states_keyword`]. One line rather than one per tag — the opposite of the
-//! `NICKNAME` decision — because a second `CATEGORIES` line reaches no field the
-//! user can see, measured against libebook-contacts 3.52; the reader takes them
-//! all in anyway, so tags on a line EDS ignores are not lost by a save.
-//!
-//! `media` is the one mapped property whose value is not text. RFC 9553 §2.6.4 keys the media a card
-//! carries and tells a photo, a sound and a logo apart by a `kind` it makes
-//! mandatory; RFC 2426 §3.1.4's `PHOTO` is the picture *of the contact*, which
-//! is what Evolution shows beside the name, so only a photo crosses and the
-//! other kinds get no line — `titles`' filter again. A picture the card
-//! *carries* arrives as a `data:` URI (RFC 2397) and crosses as the bytes
-//! themselves under `ENCODING=b`, which is the only form EDS reads a media type
-//! off: measured against libebook-contacts 3.52, `TYPE=JPEG` becomes
-//! `image/JPEG` and `TYPE=image/jpeg` becomes `image/image/jpeg`, so the
-//! parameter states the subtype alone (`image_subtype`). A picture the card
-//! only *points at* crosses as a `VALUE=uri` reference — the shape EDS's own
-//! writer emits, and one it reads as no picture at all when that parameter is
-//! missing, also measured. What else gets no line is a `data:` URI spelling its
-//! bytes as percent-encoded octets rather than base64, since `ENCODING=b` is
-//! the only encoding the line carries (`photo`).
-//!
-//! A `PHOTO` line is read back into a `media` entry the same way (`read_photo`),
-//! so the picture the *user* chooses in Evolution reaches the server. Only the
-//! two forms above are read, because they are the two EDS's own writer emits;
-//! what a line the reader has to be careful about is spelled out there. The
-//! sounds and logos a card carries have no vCard 3.0 property at all and so come
-//! back from nothing — the save patches around them, as it does around every
-//! other entry the emitter left off.
-//!
-//! What the save cannot lean on is the `X_JMAP_KEY`: unlike a `NICKNAME`'s,
-//! the key on a `PHOTO` line does not survive an edit. EDS rebuilds the line out
-//! of the photo it holds and writes none of the parameters back, exactly as it
-//! does for a date line (measured against libebook-contacts 3.52) — so the entry
-//! a chosen picture belongs to is found by pairing rather than by key, which is
-//! `jmap-book-sync`'s `diff_media`.
-//!
-//! `relatedTo` is the one property whose *key* is what crosses. RFC 9553 §2.1.8
-//! keys the entities a card relates to by the related Card's `uid` and says how
-//! each relates in a set of types; vCard 3.0 has no `RELATED` — RFC 6350 §6.6.6
-//! is 4.0 — and of the twenty types, `spouse` is the one Evolution has a field
-//! for, on the line EDS keeps `E_CONTACT_SPOUSE` on
-//! (`X_EVOLUTION_SPOUSE`). The value on that line is the person's *name*, and
-//! the only place a name can be is the key: RFC 9555 §2.9.5 is what says a key
-//! may hold free text rather than an identifier, since that is what a vCard
-//! `RELATED;VALUE=text` becomes. So an entry keyed by a URI has no line — a URN
-//! shown under the heading "Spouse" would be written back as the person's name by
-//! the next save — and neither has one keyed by a name EDS would respell, which
-//! for this property is not merely a rename but a *different entry*. See
-//! [`states_spouse`].
-//!
-//! Which also makes it the one property that carries no `X_JMAP_KEY`: there is
-//! nothing for the parameter to say that the value does not. The reader takes the
-//! key off the line's own text, so nothing is invented and no key has to survive
-//! Evolution — but a marriage the user retypes arrives under a key the server
-//! never had, which is the save's problem rather than this layer's.
+//! Key constraints are per-property:
+//! - `ORG` and `NICKNAME` shape keyed maps into vCard 3.0 value forms.
+//! - `TITLE` and `ROLE` map known title kinds only.
+//! - `ADR` and `LABEL` map address parts that have real vCard fields.
+//! - `ANNIVERSARY` values are emitted only when EDS can round-trip them.
+//! - `PHOTO` maps contact images; other media kinds remain patch-preserved.
+//! - `relatedTo` maps spouse via `X-EVOLUTION-SPOUSE`.
 
 use std::collections::BTreeMap;
 
@@ -626,40 +432,12 @@ pub fn maps_phone_feature(key: &str) -> bool {
     PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// The one feature `TYPE` a `TEL` carries, or `None` for a phone whose
-/// features vCard 3.0 can spell none of.
+/// The one phone feature emitted as `TYPE`, or `None` if none is mappable.
 ///
-/// [`context_slot`]'s problem one axis over: EDS picks the phone field by
-/// matching `TYPE` there too, and a number that says it is both a voice line
-/// and a fax says it to two fields the user edits separately —
-/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE`, `E_CONTACT_PHONE_BUSINESS_FAX`
-/// wants `WORK`+`FAX`, and one `TEL;TYPE=WORK,VOICE,FAX` satisfies both, so
-/// retyping the office number silently moves the office fax with it. Without a
-/// context it is worse than duplication: the two unqualified fields
-/// `E_CONTACT_PHONE_OTHER` (`VOICE`) and `E_CONTACT_PHONE_OTHER_FAX` (`FAX`)
-/// are exclusive, and a bare `TEL;TYPE=VOICE,FAX` lands in *neither* — the
-/// number is in no field of the contact editor at all. Measured against
-/// libebook-contacts 3.52 by `eds-sys`'
-/// `a_line_wearing_several_feature_types_reaches_two_fields_or_none` and
-/// `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`.
-///
-/// **Which** feature survives is [`PHONE_FEATURES`]' order, and most of that
-/// order is EDS's own, read off the pairs where EDS resolves the collision
-/// itself: `VOICE,CELL` and `FAX,CELL` reach the mobile field alone, and
-/// `VOICE,PAGER` and `FAX,PAGER` the pager alone, so a feature naming a device
-/// outranks the two unqualified ones. `VIDEO` is last because this EDS knows
-/// no such `TYPE`: alone it reaches nothing, so it can never be the slot while
-/// another feature is available to be stated. `voice` sits just above it as
-/// the unmarked default — a `TEL;TYPE=WORK` with no feature at all already
-/// fills the *voice* field, so `voice` is the feature still said when it is
-/// left off, and `fax` the one that would be lost.
-///
-/// Two orderings EDS does not decide and this mapping does: `mobile` over
-/// `pager` (`CELL,PAGER` fills both fields, so there is nothing to read off),
-/// and `fax` over `voice` (`VOICE,FAX` fills neither). Neither pick loses
-/// anything from the *card* — the feature left off the line is kept by
-/// [`states_phone_feature`] — only which of the contact editor's phone fields
-/// the number appears in.
+/// EDS resolves phone editor fields from one effective feature slot. Emitting
+/// one slot avoids ambiguous multi-feature `TEL` lines and keeps UI edits
+/// stable. The dropped feature, if any, remains preserved by
+/// [`states_phone_feature`].
 fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
     type_names(&PHONE_FEATURES, features).into_iter().next()
 }
@@ -2641,36 +2419,14 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     })
 }
 
-/// The media entry a `PHOTO` line states, or `None` for a line naming no
-/// picture at all.
+/// Decodes a `PHOTO` line into one media entry.
 ///
-/// The inverse of the emitter's two forms, and only of those two: `VALUE=uri` is
-/// a picture the card points at, and anything else is a picture it carries,
-/// whose bytes cross as a `data:` URI (RFC 2397) because that is how RFC 9553
-/// §2.6.4 states one. Both are what EDS's own writer emits, measured against
-/// libebook-contacts 3.52 — with the `X-JMAP-KEY` gone from a line the user
-/// edited, which is the save's problem rather than this one's.
+/// Supports the two emitted forms: URI reference (`VALUE=uri`) and embedded
+/// image bytes. calcard already applies transfer decoding, so this function
+/// must treat `Text` and `Binary` as final and never decode again.
 ///
-/// The bytes come from [`entry_binary`] where the line carried bytes and from
-/// the value's own text otherwise. calcard consumes `ENCODING=b`/`BASE64`
-/// itself — it never survives into `entry.params` — decoding the value and
-/// handing back [`VCardValue::Binary`] when the result is not a valid string,
-/// or plain [`VCardValue::Text`] when it is: an SVG is a picture whose bytes
-/// *are* text, and a photo whose bytes happen to be valid UTF-8 hits the same
-/// path. Either way the value calcard hands back is already final; this side
-/// must not decode it a second time — a photo whose already-decoded bytes
-/// coincidentally also look like base64 would otherwise be corrupted. The
-/// cost of taking both paths as final is that a `PHOTO` line stating neither
-/// `VALUE=uri` nor a transfer encoding — a bare `PHOTO:<uri>`, which EDS reads
-/// as no picture at all (measured) — is indistinguishable here from a picture
-/// whose bytes are text, and is read as the latter. Neither EDS's writer nor
-/// this emitter produces such a line.
-///
-/// The media type is built from the `TYPE` parameter rather than taken from
-/// calcard, so that the one rule EDS applies is applied once and in one place:
-/// the parameter states the subtype and the type is `image/` in front of it (see
-/// [`image_subtype`]). [`UNKNOWN_TYPE`] is what EDS writes when it has none, and
-/// names no format, so it reads back as none.
+/// Media type follows EDS behavior: derive from `MEDIATYPE` or normalize
+/// `TYPE` as an image subtype via [`image_subtype`].
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
     let states_a_reference = (entry_param(entry, "VALUE")
