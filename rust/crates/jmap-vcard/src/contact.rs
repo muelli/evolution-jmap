@@ -301,34 +301,11 @@ pub fn maps_context(key: &str) -> bool {
     CONTEXTS.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// The one context `TYPE` a line carries, or `None` for an entry whose
-/// contexts vCard 3.0 can spell none of.
+/// Selects the one emitted context `TYPE`, or `None` when no mappable context
+/// is present.
 ///
-/// **One and only one**, and that is the whole point of the function. EDS
-/// picks the field a line lands in by matching the field's `TYPE` set against
-/// the line's, so a single `ADR;TYPE=WORK,HOME` satisfies both
-/// `E_CONTACT_ADDRESS_WORK` and `E_CONTACT_ADDRESS_HOME`, and one address shows
-/// up in two of the blocks Evolution's contact editor lets the user edit
-/// separately. There is only one line behind them: retyping the work address
-/// rewrites it, and the home address the user never touched becomes the new
-/// work one. Measured against libebook-contacts 3.52 — `eds-sys`'
-/// `a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other`
-/// drives exactly that sequence — and the same holds for `TEL`, where
-/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME`
-/// wants `HOME`+`VOICE`, so a line carrying all three satisfies both.
-///
-/// So an entry at work *and* privately lands in [`DEFAULT_SLOT`], where the
-/// user looks first — the choice [`service_slot`] already makes for a handle,
-/// for the same reason. An entry with no context vCard can spell carries no
-/// `TYPE` at all, which is a slot of its own: EDS reads such a line as
-/// `E_CONTACT_ADDRESS_OTHER`.
-///
-/// A phone's `features` are narrowed the same way and for the same reason, by
-/// [`feature_slot`]. What is *not* narrowed is an `EMAIL`, which EDS files by
-/// position (`E_CONTACT_EMAIL_1` to `_4`) and not by `TYPE` at all.
-///
-/// The context left off the line is the save's problem, and
-/// [`states_context`] is the answer.
+/// Multiple mapped contexts collapse to [`DEFAULT_SLOT`] to avoid EDS placing
+/// one line into multiple editable UI slots.
 fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
     let stated = type_names(&CONTEXTS, contexts);
     match stated.len() {
@@ -341,11 +318,7 @@ fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for an entry with these `contexts` states this
 /// context.
 ///
-/// The question the save path asks before reading a context's absence from an
-/// edited line as the user having removed it. `context_slot` leaves one of two
-/// contexts off the line, and a context the user was never shown is not one
-/// they can have cleared — the same treatment [`maps_context`] already gives a
-/// context vCard 3.0 has no `TYPE` for at all.
+/// Save uses this before treating an omitted context as removed.
 pub fn states_context(contexts: Option<&Value>, key: &str) -> bool {
     let Some(slot) = context_slot(contexts) else {
         return false;
@@ -362,10 +335,7 @@ pub fn maps_phone_feature(key: &str) -> bool {
 
 /// The one phone feature emitted as `TYPE`, or `None` if none is mappable.
 ///
-/// EDS resolves phone editor fields from one effective feature slot. Emitting
-/// one slot avoids ambiguous multi-feature `TEL` lines and keeps UI edits
-/// stable. The dropped feature, if any, remains preserved by
-/// [`states_phone_feature`].
+/// Emitting one slot keeps EDS phone-field assignment stable.
 fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
     type_names(&PHONE_FEATURES, features).into_iter().next()
 }
@@ -373,8 +343,7 @@ fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for a phone with these `features` states this
 /// feature.
 ///
-/// [`states_context`] for features: a feature `feature_slot` left off the line
-/// is not one the user can have cleared by not typing it back.
+/// A feature omitted by [`feature_slot`] is preserved, not treated as deleted.
 pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
     let Some(slot) = feature_slot(features) else {
         return false;
@@ -384,10 +353,7 @@ pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
         .any(|(mapped, name)| *mapped == key && *name == slot)
 }
 
-/// Whether the `ADR` line written for an address states this component —
-/// [`states_name_component`]'s question one property over, and answered the
-/// same way: the seven fields must have room for its kind, and it must say
-/// something to put there. See `address_fields`, which skips both.
+/// Whether this component can be stated on an `ADR` line and has a value.
 pub fn states_address_component(component: &AddressComponent) -> bool {
     !component.value.is_empty() && address_field(&component.kind).is_some()
 }
@@ -410,44 +376,27 @@ fn address_field(kind: &str) -> Option<usize> {
         .map(|(_, index)| *index)
 }
 
-/// Whether an address reaches the user at all — whether it has anything an
-/// `ADR` or a `LABEL` line can state.
-///
-/// This is the emitter's own decision, asked of it by name, so that the save
-/// path cannot drift from what [`card_to_vcard`] actually wrote. Every keyed
-/// map the mapping carries has one of these, because every one of them has
-/// entries a vCard leaves out; a save that decided for itself which those
-/// were would eventually decide differently, and delete an entry the user
-/// never saw.
+/// Whether an address is user-visible through either `ADR` or `LABEL`.
 pub fn states_address(address: &Address) -> bool {
     address_fields(address).is_some() || address_label(address).is_some()
 }
 
-/// The text a `LABEL` line states for an address, or `None` for one written
-/// out as nothing — which says no more than an `EMAIL:` with no address does,
-/// and gets no line either.
+/// The non-empty text a `LABEL` line can state for this address.
 pub fn address_label(address: &Address) -> Option<&str> {
     address.full.as_deref().filter(|full| !full.is_empty())
 }
 
-/// Whether a note reaches the user at all — whether it says anything a
-/// `NOTE` line could state.
+/// Whether a note contains text a `NOTE` line can state.
 pub fn states_note(note: &Note) -> bool {
     !note.note.is_empty()
 }
 
-/// Whether a nickname reaches the user at all — whether it names anything a
-/// `NICKNAME` line could state.
+/// Whether a nickname contains text a `NICKNAME` line can state.
 pub fn states_nickname(nickname: &Nickname) -> bool {
     !nickname.name.is_empty()
 }
 
-/// Whether a link reaches the user at all: it must point somewhere *and* be
-/// of a kind vCard 3.0 or EDS has a property for.
-///
-/// As with a title, the kind alone is not the question — a plain link with no
-/// URI has no line either, and calling it visible would let a save
-/// delete it.
+/// Whether a link has a URI and a kind this mapping can emit.
 pub fn states_link(link: &Link) -> bool {
     !link.uri.is_empty()
         && !edged_with_whitespace(&link.uri)
@@ -455,35 +404,17 @@ pub fn states_link(link: &Link) -> bool {
         && maps_link_kind(link.kind.as_deref())
 }
 
-/// Whether the vCard mapping covers a JSContact link of this `kind`.
-///
-/// - `None`: plain website, mapped to RFC 2426 §3.6.8 `URL` (Evolution Homepage).
-/// - `Some("blog")`: blog URL, mapped to `X-EVOLUTION-BLOG-URL` (Evolution Blog URL).
-/// - `Some("video")`: video stream URL, mapped to `X-EVOLUTION-VIDEO-URL` (Evolution Video URL).
-///
-/// RFC 9553 §2.6.3 defines `contact` (a URI for writing to the person), which RFC 9555
-/// §2.6.3 states on vCard 4.0's `CONTACT-URI`. Other kinds outside this set get no line
-/// and remain safe on the server.
+/// Whether this link kind maps to an emitted vCard line.
 fn maps_link_kind(kind: Option<&str>) -> bool {
     matches!(kind, None | Some("blog") | Some("video"))
 }
 
-/// Whether a calendar reaches the user at all: it must point somewhere *and*
-/// be of a kind one of the two lines states.
-///
-/// As with a link, the kind alone is not the question — a calendar with no URI
-/// has no line either, and calling it visible would let a save delete it.
+/// Whether a calendar has a URI and a mapped calendar kind.
 pub fn states_calendar(calendar: &Calendar) -> bool {
     !calendar.uri.is_empty() && calendar_property(calendar.kind.as_deref()).is_some()
 }
 
-/// The vCard property a calendar of this `kind` is stated on.
-///
-/// RFC 9553 §2.4.1 makes the kind mandatory and gives it no default, so an
-/// entry naming none says nothing about which of the two lines its URI belongs
-/// on — and the two are different fields in front of the user. A kind outside
-/// the table, vendor kinds included, is the same case: the mapping states the
-/// kinds it knows and leaves the rest to the server.
+/// The vCard property a mapped calendar kind is stated on.
 fn calendar_property(kind: Option<&str>) -> Option<&'static str> {
     let kind = kind?;
     CALENDAR_KINDS
@@ -531,15 +462,7 @@ pub fn states_assistant(key: &str, relation: &Relation) -> bool {
 /// Whether the marriage is all a relation says, so that withdrawing it leaves
 /// nothing of the entry to keep.
 ///
-/// The question a save has to answer about the name the user just replaced. The
-/// line stated one thing about that entity — that it is a spouse — so that is the
-/// only thing the save may withdraw: an entry the server also calls `kin` stays,
-/// with the marriage struck off, and an entry that said nothing else goes
-/// altogether rather than lingering as a relation of no stated type, which is
-/// not what emptying the field said. A member this version has never heard of
-/// counts as something else said, for the reason every property here patches
-/// rather than replaces; the `@type` tag does not, because naming the object's
-/// type says nothing about the relation.
+/// `@type` does not count as relation data, but unknown extra members do.
 pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
     relation.extra.keys().all(|member| member == "@type")
         && relation
@@ -555,13 +478,7 @@ fn names_a_person(key: &str) -> bool {
     !key.is_empty() && !names_a_uri(key) && !edged_with_whitespace(key) && !key.contains('\r')
 }
 
-/// Whether a value is a URI rather than free text, by RFC 3986 §3.1's grammar
-/// for the scheme: an ASCII letter, then letters, digits, `+`, `-` and `.`, then
-/// the colon.
-///
-/// Checking the grammar rather than looking for a colon is what keeps a name
-/// from being mistaken for an identifier: `Jean Paul: the second` holds a colon
-/// and no scheme.
+/// Whether `value` starts with an RFC 3986 scheme and `:`.
 fn names_a_uri(value: &str) -> bool {
     let Some((scheme, _)) = value.split_once(':') else {
         return false;
@@ -710,38 +627,15 @@ fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
 
 /// Whether a handle at an online service reaches the user at all.
 ///
-/// Three things have to hold at once, and `drawn_service` is where each is
-/// spelled out: the service must be one EDS has a field for, the entry must
-/// state a handle — as a `user`, or as a `uri` this side can read one out of —
-/// and that handle must survive the trip through EDS unrenamed.
+/// Delegates to [`drawn_service`], which checks mapping and round-trip safety.
 pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
 
-/// The vCard property a handle is stated on and the handle itself, or `None` for
-/// an entry with no line — the single point [`states_online_service`] and
-/// [`card_to_vcard`] agree through, so an entry cannot be called visible and
-/// then left out.
+/// The mapped property and handle for a drawable service entry.
 ///
-/// An entry has no line when:
-///
-/// - **its service is not one EDS has a field for.** The line *is* the service:
-///   there is no property that states an arbitrary one, and an invented
-///   `X-SIGNAL` would reach nothing the user can see while making the save
-///   believe the entry had been shown. See [`ONLINE_SERVICES`].
-/// - **it states no handle.** RFC 9553 §2.3.2 asks for a `user` or a `uri`, and
-///   only the first is a handle, which is what the EDS field holds. An entry
-///   stating only a URI is drawn when [`SERVICE_SCHEMES`] says what its scheme
-///   means and the URI states the handle and nothing besides — see
-///   [`online_service_handle`] — and left invisible otherwise, because the
-///   alternative is guessing at a handle and then writing the guess back.
-/// - **its handle would come back from EDS spelled differently.** The empty
-///   handle says nothing; a carriage return is dropped by [`card_to_vcard`]
-///   as a security property; and ends made of ASCII whitespace are trimmed by
-///   EDS — measured against libebook-contacts 3.52, where `X-JABBER: vera@a `
-///   reaches the user as `vera@a`. Each would have the next save rename the
-///   handle on the server, which costs more than not showing it. See
-///   [`edged_with_whitespace`].
+/// Returns `None` when service is unmapped, no handle can be extracted, or the
+/// handle would not round-trip unchanged through EDS.
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
     let handle = online_service_handle(service)?;
@@ -749,17 +643,9 @@ fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     drawable.then_some((property, handle))
 }
 
-/// The handle a line states for an entry: its `user`, or — for an entry that
-/// names none — the one its `uri` spells out.
+/// The emitted handle for a service entry.
 ///
-/// The `user` wins where both are there: it is what the service calls the
-/// contact, while the URI is a second way of saying the same thing, and the
-/// field the line reaches holds the first.
-///
-/// The save path compares *this* rather than the `user` on either side, because
-/// the vCard states only the handle: an entry that arrived as a URI comes back
-/// as a `user` saying the same thing, and calling that an edit would rewrite the
-/// entry every time the contact is touched.
+/// Prefers `user`; falls back to extracting a plain handle from `uri`.
 pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     match service.user.as_deref() {
         Some(user) => Some(user),
