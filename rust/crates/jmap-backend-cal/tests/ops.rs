@@ -1,15 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `ECalMetaBackend` vfunc bodies, called the way EDS calls them:
-//! out-parameters that start NULL, a `GError **` that starts NULL, and a return
-//! value that says which of the two was written.
-//!
-//! Every test runs against `jmap-mockd`, so the assertions are about what the
-//! server was actually told. What is deliberately *not* here is a live
-//! `ECalMetaBackend`: constructing one needs an `ESourceRegistry` and so a
-//! running `evolution-source-registry` on the session bus. Keeping the vfunc
-//! bodies in a layer that takes a `&CalSync` is what lets them be tested at all.
+//! Tests for calendar operations and vfunc bodies called with EDS out-parameters against `jmap-mockd`.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -102,11 +94,7 @@ struct ChangeOuts {
 }
 
 impl Default for ChangeOuts {
-    /// `repeat` starts TRUE, which is *not* what EDS does — it passes a FALSE
-    /// it initialised itself. Starting from the other value is what makes "the
-    /// answer is always no" an assertion rather than a coincidence: a body that
-    /// never writes the parameter would otherwise look identical to one that
-    /// answers correctly.
+    /// Initialises repeat to TRUE to verify that the operation explicitly clears it.
     fn default() -> Self {
         Self {
             tag: ptr::null_mut(),
@@ -119,8 +107,7 @@ impl Default for ChangeOuts {
 }
 
 impl Drop for ChangeOuts {
-    /// All three lists are freed as `ECalMetaBackendInfo`s — including the
-    /// removals, which is where the calendar differs from the address book.
+    /// Frees created, modified, and removed lists as ECalMetaBackendInfo.
     fn drop(&mut self) {
         unsafe {
             g_free(self.tag.cast());
@@ -254,9 +241,7 @@ fn an_empty_calendar_lists_as_a_null_list_with_a_sync_tag() {
     }
 }
 
-/// A NULL out-parameter is GLib's "the caller does not want this one". It has
-/// to be skipped rather than written through, and the list it would have held
-/// must not be built at all — there would be nobody to free it.
+/// Verifies NULL out-parameters are skipped and their lists are not allocated.
 #[test]
 fn out_parameters_the_caller_did_not_ask_for_are_skipped() {
     let fixture = Fixture::start();
@@ -454,16 +439,7 @@ fn saving_an_existing_component_patches_it_rather_than_adding_a_second() {
     }
 }
 
-/// An edit whose master carries no identifier would otherwise be sent as a
-/// create, which silently duplicates the user's appointment on the server. A
-/// visible failure is the better answer.
-///
-/// The uid has to be *emptied* to get here, and that is the point: an
-/// `ECalComponent` built from text with no `UID` invents one — `e_util_generate_uid`
-/// — so a component that reached EDS intact always has an identifier of some
-/// kind. Which is exactly why this guard cannot be dropped as unreachable: what
-/// it defends against is a uid that reads back as nothing, and EDS's own
-/// generosity is what would otherwise hide that.
+/// Verifies an edit without an identifier fails instead of duplicating as a create.
 #[test]
 fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
     let fixture = Fixture::start();
@@ -506,9 +482,7 @@ fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
     }
 }
 
-/// No master among the instances — only a detached occurrence, or no instances
-/// at all. There is nothing honest to send, and the marshalling says so; the
-/// vfunc has to turn that into a failure rather than into a silent no-op.
+/// Verifies saving instances with no master component returns an invalid argument error.
 #[test]
 fn saving_instances_with_no_master_is_an_invalid_argument() {
     let fixture = Fixture::start();
@@ -643,10 +617,7 @@ fn get_changes_reports_changed_events_and_the_ones_that_are_gone() {
     }
 }
 
-/// EDS sets `is_repeat` when it is coming back for the rest of a delta. This
-/// backend never asks it to — the paging happens inside `CalSync::get_changes`
-/// and `out_repeat` is always FALSE — so the flag can only arrive as a caller's
-/// own bookkeeping, and the delta a tag names is the same either way.
+/// Verifies a repeat call answers from the tag just like the first call.
 #[test]
 fn a_repeat_call_answers_from_the_tag_just_like_the_first_one() {
     let fixture = Fixture::start();
@@ -680,18 +651,7 @@ fn a_repeat_call_answers_from_the_tag_just_like_the_first_one() {
     }
 }
 
-/// The first sync has no tag to go from. Answering it with an empty delta would
-/// leave the calendar permanently empty, so the meta backend's own
-/// implementation — list the calendar and diff it against the cache — has to
-/// run.
-///
-/// The server is stopped first, which is what makes this an assertion rather
-/// than a coincidence: an absent tag sent on as an empty `sinceState` would
-/// come back a transport failure.
-///
-/// Both spellings of "absent" are checked. The EDS cache writes NULL, but an
-/// empty string reaches the same place through a hand-edited cache — and `""`
-/// handed back as a `sinceState` is a state, not the absence of one.
+/// Verifies get_changes without a sync tag asks for a full listing without server request.
 #[test]
 fn get_changes_without_a_sync_tag_asks_for_a_full_listing_without_asking_the_server() {
     let fixture = Fixture::start();
@@ -728,9 +688,7 @@ fn get_changes_without_a_sync_tag_asks_for_a_full_listing_without_asking_the_ser
     }
 }
 
-/// RFC 8620 §5.2: a server may refuse a state it can no longer diff from. That
-/// is not an error either — it is the same full listing, and reporting it as a
-/// failure would strand the calendar until someone deleted the cache.
+/// Verifies state server cannot diff from falls back to a full listing.
 #[test]
 fn a_state_the_server_cannot_diff_from_falls_back_to_a_full_listing() {
     let fixture = Fixture::start();
@@ -783,11 +741,7 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
             unsafe { e_client_error_quark() },
             E_CLIENT_ERROR_INVALID_ARG as i32,
         ),
-        // A component we could read but cannot state as JSCalendar — a create
-        // whose recurrence rule would go out as one the server may refuse. Also
-        // the argument, not the server: the meta backend must report the save
-        // as failed rather than shelve it for a retry that would fail the same
-        // way, and the message names what the user has to change.
+        // Component read but not expressible in JSCalendar (e.g. unsupported recurrence).
         (
             SyncError::Unsendable(Unsendable::Recurrence),
             unsafe { e_client_error_quark() },
@@ -802,19 +756,7 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
     }
 }
 
-/// The sentence a user reads when a create was refused over its recurrence.
-///
-/// It is written here rather than in `jmap-cal-sync` for one reason: this is
-/// where it can be translated. The sync layer decides *that* the save cannot go
-/// out and what about it could not be stated; turning that into a sentence is a
-/// user-interface act, and gettext lives on this side of the FFI. So the
-/// refusal travels as a reason and is phrased at the point where the message
-/// can also be looked up in the user's language — which is why the two facts
-/// that identify the appointment have to survive the trip.
-///
-/// Untranslated here, this test's process having no catalogue: what is asserted
-/// is that both facts reach the message, in a form the user can act on. The
-/// instant is the one the mapping kept, so its spelling is pinned too.
+/// Verifies localized refusal message contains actionable appointment details.
 #[test]
 fn a_recurrence_refused_over_its_time_zone_names_the_zone_and_the_instant() {
     let failure = SyncError::Unsendable(Unsendable::RecurrenceEnd {
@@ -876,10 +818,7 @@ fn gerror_message(failure: &SyncError) -> String {
 // ---------------------------------------------------------------------------
 // get_free_busy
 
-/// Seconds since the epoch for the window the tests ask about —
-/// 2026-09-01T00:00:00Z to 2026-09-02T00:00:00Z. Written as constants rather
-/// than computed, so the test states the instant it means and
-/// `marshal::utc_date` is the only thing converting.
+/// Seconds since Unix epoch for the free/busy test query window.
 const WINDOW_START: i64 = 1_788_220_800;
 const WINDOW_END: i64 = 1_788_307_200;
 
@@ -928,8 +867,7 @@ fn seed_principal(fixture: &Fixture, email: &str) {
     });
 }
 
-/// Reads the answer list the way `e_data_cal_respond_get_free_busy` does — as
-/// plain strings, not as structs — and frees it.
+/// Reads and frees free/busy string list as EDS does.
 unsafe fn take_free_busy(list: *mut GSList) -> Vec<String> {
     unsafe {
         let mut answers = Vec::new();
@@ -994,9 +932,7 @@ fn get_free_busy_reports_a_vfreebusy_per_attendee_it_could_answer_for() {
     );
 }
 
-/// The answer that makes the vfunc chain up. Nothing may be written on this
-/// path — the parent is about to write the same out-parameter, and a `GError`
-/// left set would make its own `g_set_error` a critical.
+/// Verifies get_free_busy answers NothingKnown without touching out-parameters.
 #[test]
 fn get_free_busy_answers_nothing_known_without_touching_the_out_parameters() {
     let fixture = Fixture::start();
@@ -1092,9 +1028,7 @@ fn get_free_busy_survives_a_null_user_list() {
     assert!(error.is_null());
 }
 
-/// A NULL out-parameter means "not interested", and must not be written
-/// through — `set_out_list` is what keeps that true, and the answer is still
-/// `Reported` because the work was done.
+/// Verifies get_free_busy skips NULL out-parameters.
 #[test]
 fn get_free_busy_skips_an_out_parameter_the_caller_did_not_ask_for() {
     let fixture = Fixture::start();
@@ -1121,9 +1055,7 @@ fn get_free_busy_skips_an_out_parameter_the_caller_did_not_ask_for() {
     assert!(error.is_null());
 }
 
-/// `marshal::utc_date` is the only calendar arithmetic in the calendar path,
-/// and it is GLib's rather than ours — these pin the two ends and the epoch
-/// itself, which is where an off-by-a-timezone would show.
+/// Verifies time_t values convert correctly to UTC date format.
 #[test]
 fn a_time_t_becomes_the_utc_date_the_draft_asks_for() {
     assert_eq!(
@@ -1141,8 +1073,7 @@ fn a_time_t_becomes_the_utc_date_the_draft_asks_for() {
     );
 }
 
-/// Out of `GDateTime`'s range is `None` rather than a wrong date — the caller
-/// reads that as "let the parent answer", never as an instant.
+/// Verifies out-of-range timestamps return None instead of wrapping.
 #[test]
 fn a_time_t_no_calendar_can_show_is_refused_rather_than_wrapped() {
     assert_eq!(marshal::utc_date(i64::MAX), None);
@@ -1152,10 +1083,7 @@ fn a_time_t_no_calendar_can_show_is_refused_rather_than_wrapped() {
 // ---------------------------------------------------------------------------
 // on_source_changed
 
-/// The colour matching the baseline is the ordinary case — every
-/// `source_changed` firing that is not about the colour at all, plus every
-/// firing right after this backend's own read path rewrote it — and must not
-/// send anything.
+/// Verifies matching color baseline results in a no-op without sending requests.
 #[test]
 fn a_colour_matching_the_baseline_is_a_no_op() {
     let fixture = Fixture::start();

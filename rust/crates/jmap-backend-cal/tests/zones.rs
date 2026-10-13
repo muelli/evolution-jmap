@@ -1,31 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Every zone an appointment can be in, through the one conversion that needs
-//! to know what a zone's offset *was*.
-//!
-//! RFC 5545 §3.3.10 states a recurrence's `UNTIL` as a UTC instant beside a
-//! zoned `DTSTART`, RFC 8984 §4.3.3 states it as a local time in that zone, and
-//! `jmap-ical` converts between them by reading the transitions out of the
-//! `VTIMEZONE` in the same object — deliberately, rather than by shipping a
-//! zone database. A definition written in a shape it will not count costs the
-//! whole conversion: the end of the series is kept verbatim, `maps_recurrence_
-//! rule` refuses it, and the user is told their recurring appointment cannot be
-//! saved.
-//!
-//! Which makes "what shapes are actually written" a question about the
-//! *producer*, and on the save path the producer is libical:
-//! `marshal::icalendar_from_instances` copies libical's own builtin
-//! `VTIMEZONE` into the save envelope for every `TZID` the components refer to.
-//! So this drives every zone libical ships, not a handful chosen here —
-//! `jmap-ical`'s own tests spell out the individual shapes, and this is the
-//! measurement that says whether that list is the list that occurs.
-//!
-//! Two assertions per instant, and the second is the point of the first: that
-//! the conversion happened, and that it agrees with **libical's own** answer
-//! for the same instant in the same zone. A conversion that is merely produced
-//! is worth nothing — an offset an hour out reads as a perfectly ordinary
-//! `UNTIL` all the way to the server.
+//! Validation of timezone offset conversions across system zoneinfo definitions against libical.
 
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
@@ -38,19 +14,10 @@ use glib_sys::g_free;
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 
-/// Where tzdata keeps the zones libical resolves names out of. libical is built
-/// against the system database here rather than with its own copy, so this
-/// directory *is* its table; see [`zone_names`] for what happens if it is not
-/// there.
+/// Path to system zoneinfo directory.
 const ZONEINFO: &str = "/usr/share/zoneinfo";
 
-/// Instants spread across a year, each one a `UNTIL` in its own right.
-///
-/// Four rather than one because a zone's offset is a function of the instant:
-/// a single probe in August would let every southern-hemisphere zone through
-/// on its winter offset. Two of them sit a day either side of the last Sunday
-/// in March, which is when most of Europe moves, so a rule read off by one
-/// transition shows up as an hour rather than as nothing at all.
+/// Probe instants across the year testing standard and DST offsets.
 const PROBES: [&str; 4] = [
     "20260128T070000Z",
     "20260328T233000Z",
@@ -58,13 +25,7 @@ const PROBES: [&str; 4] = [
     "20260901T070000Z",
 ];
 
-/// Every IANA name the system database holds, in sorted order.
-///
-/// Walked rather than read out of `zone.tab`, which lists only the canonical
-/// names of *countries* — `Eire`, `GB`, `Etc/GMT-14` and the rest resolve just
-/// as well and are just as much a zone an appointment can be in. `posix/` and
-/// `right/` are the same zones again under two interpretations of leap seconds,
-/// which libical does not resolve by those names.
+/// Returns sorted list of all valid IANA timezone names found in system zoneinfo.
 fn zone_names() -> Vec<String> {
     let root = PathBuf::from(ZONEINFO);
     let mut names = Vec::new();
@@ -93,9 +54,7 @@ fn zone_names() -> Vec<String> {
     names
 }
 
-/// libical's `VTIMEZONE` for a zone, rendered, and the `TZID` it carries — the
-/// solidus-prefixed identifier libical writes for its own builtin zones, which
-/// is what a `DTSTART` Evolution wrote names.
+/// Returns rendered VTIMEZONE and TZID for named builtin timezone.
 fn definition(name: &str) -> Option<(String, String)> {
     let name = CString::new(name).ok()?;
     // SAFETY: `name` is NUL-terminated and valid for the call. The builtin zone
@@ -121,13 +80,7 @@ fn definition(name: &str) -> Option<(String, String)> {
     Some((rendered, tzid))
 }
 
-/// What libical makes of `utc` in the zone `name`, as an RFC 8984 §1.4.4
-/// LocalDateTime — the answer `jmap-ical` has to agree with.
-///
-/// This is the oracle, and it is deliberately a different implementation of the
-/// same question: libical resolves the instant through the zone object it built
-/// out of tzdata's binary file, while `jmap-ical` reads the transition rules out
-/// of the `VTIMEZONE` text. Two ways of asking, one answer.
+/// Returns libical conversion of UTC instant into local time for named zone.
 fn libical_reads(name: &str, utc: &str) -> String {
     let name = CString::new(name).expect("a zone name with no NUL in it");
     let utc = CString::new(utc).expect("an instant with no NUL in it");

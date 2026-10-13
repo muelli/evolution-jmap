@@ -15,13 +15,11 @@ workspace = true
 
 [lib]
 name = "jmap_backend_cal_module"
-# cdylib and nothing else, which is the point of the crate. See src/lib.rs.
+# cdylib exporting C module entry points.
 crate-type = ["cdylib"]
 
 [dependencies]
 jmap-backend-cal = { workspace = true }
 gobject-sys = { workspace = true }
-# Metadata-only, for this crate's own build.rs: not called from any Rust code
-# here, but needs to be a direct (non-build) dependency for Cargo to set
-# `DEP_EVOLUTION_SHELL_LIBDIRS` from its `links` key. See build.rs.
+# Metadata-only dependency so Cargo exposes DEP_EVOLUTION_SHELL_LIBDIRS to build.rs.
 evo-sys = { workspace = true }

@@ -1,21 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `ECalMetaBackend` subclass: the type EDS registers, the vfunc slots it
-//! dispatches through, and what those slots do with the connection the
-//! instance holds.
-//!
-//! Every call here goes *through the class struct* rather than at the Rust
-//! functions directly, because that is the only thing EDS ever does: a vfunc
-//! that is correct but not installed is a backend that silently uses
-//! `ECalMetaBackend`'s own defaults — an empty calendar and no error.
-//!
-//! What is not here is a real instance. Constructing one needs an
-//! `ESourceRegistry` and so a running `evolution-source-registry` on the
-//! session bus, which neither this VM nor CI has. [`JmapCalBackend::detached`]
-//! is the stand-in: the parent bytes are zeroed and nothing may touch them,
-//! which is exactly why `connect_sync` — the one vfunc that reads the parent's
-//! `ESource` — is tested one layer down, in `tests/connect.rs`.
+//! Tests for the `ECalMetaBackend` subclass and installed vfuncs.
 
 use std::ffi::{CStr, CString};
 use std::mem::{MaybeUninit, size_of};
@@ -48,8 +34,7 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
 
-/// The class EDS would dispatch through, kept referenced for the test's
-/// duration so the vfunc pointers stay valid.
+/// The class EDS dispatches through, kept referenced for the test duration.
 struct Class(*mut JmapCalBackendClass);
 
 impl Class {
@@ -61,24 +46,18 @@ impl Class {
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
-    /// The `ECalMetaBackendClass` half, which is where every slot we override
-    /// lives.
+    /// The `ECalMetaBackendClass` half containing overridden slots.
     fn vfuncs(&self) -> &ECalMetaBackendClass {
         // SAFETY: the class is referenced and leads with the parent's.
         unsafe { &(*self.0).parent_class }
     }
 
-    /// The `ECalBackendSyncClass` half, two levels up: `get_free_busy_sync` is
-    /// declared there rather than on `ECalMetaBackend`, which merely fills it
-    /// in like any other subclass would.
+    /// The `ECalBackendSyncClass` half where `get_free_busy_sync` is declared.
     fn sync_vfuncs(&self) -> &ECalBackendSyncClass {
         &self.vfuncs().parent_class
     }
 
-    /// The `EBackendClass` half, three levels up:
-    /// `ECalMetaBackendClass` -> `ECalBackendSyncClass` -> `ECalBackendClass`
-    /// -> `EBackendClass`. This is where `get_destination_address` lives, and
-    /// where `class_init` must write it to be reachable by EDS.
+    /// The `EBackendClass` half where `get_destination_address` lives.
     fn backend_vfuncs(&self) -> &EBackendClass {
         &self.vfuncs().parent_class.parent_class.parent_class
     }
@@ -91,8 +70,7 @@ impl Drop for Class {
     }
 }
 
-/// An instance the GObject type system knows nothing about — see the module
-/// comment. Only the session slot may be touched through it.
+/// Detached backend instance for tests without GObject initialization.
 struct Detached(Box<JmapCalBackend>);
 
 impl Detached {
@@ -105,8 +83,7 @@ impl Detached {
     }
 }
 
-/// A mock server and the `CalSync` over its default calendar, so a detached
-/// instance can be handed a connection without going through `connect_sync`.
+/// Test fixture providing a mock server and CalSync connection.
 struct Fixture {
     server: MockServer,
     account_id: Id,
@@ -156,9 +133,7 @@ impl Fixture {
     }
 }
 
-/// Asserts that a failed call reported the account as offline, and frees the
-/// error. The code matters: it is what makes `ECalMetaBackend` serve its cache
-/// rather than show the user a broken calendar.
+/// Asserts that a failed call reported the account as offline, and frees the error.
 unsafe fn assert_offline(error: &mut *mut GError) {
     unsafe {
         assert!(!error.is_null(), "the call failed without setting an error");
@@ -191,9 +166,7 @@ fn the_backend_registers_as_a_subclass_of_ecalmetabackend() {
     );
 }
 
-/// The layout check `eds-sys` does for the EDS types, for ours: GObject
-/// allocates from the sizes registration reported, so a struct that has grown
-/// past what was registered is a heap overflow on every instance.
+/// Verifies instance and class struct sizes match registration sizes.
 #[test]
 fn the_registered_sizes_are_the_rust_struct_sizes() {
     let gtype = register_static::<JmapCalBackend>();
@@ -212,9 +185,7 @@ fn the_registered_sizes_are_the_rust_struct_sizes() {
     );
 }
 
-/// A vfunc that is implemented but not installed is the worst of both worlds:
-/// EDS falls back to `ECalMetaBackend`'s own defaults, which report an empty
-/// calendar rather than an error.
+/// Verifies class_init installs all required vfuncs on the meta backend class.
 #[test]
 fn class_init_installs_every_vfunc_the_meta_backend_dispatches_on() {
     let class = Class::get();
@@ -233,9 +204,7 @@ fn class_init_installs_every_vfunc_the_meta_backend_dispatches_on() {
     assert!(vfuncs.source_changed.is_some(), "source_changed");
 }
 
-/// Unlike every other slot here, the base class never fills this one in — the
-/// module comment traces why, from `e_cal_meta_backend_class_init`'s own
-/// source: there is nothing to chain up to, so this override must not try.
+/// Verifies the parent class leaves source_changed unset.
 #[test]
 fn the_parent_leaves_source_changed_unfilled_so_there_is_nothing_to_chain_up_to() {
     let parent = parent_class().expect("ECalMetaBackendClass is initialised");
@@ -245,11 +214,7 @@ fn the_parent_leaves_source_changed_unfilled_so_there_is_nothing_to_chain_up_to(
     );
 }
 
-/// The two search slots stay the parent's. `ECalMetaBackend` answers a query by
-/// running it over the offline cache, which is a complete answer for a calendar
-/// it has just synced — and JMAP's `CalendarEvent/query` cannot express an
-/// S-expression anyway. Overriding them with something partial would take the
-/// working implementation away.
+/// Verifies search vfuncs remain inherited from the parent class.
 #[test]
 fn the_search_slots_are_left_to_the_meta_backend_cache() {
     let class = Class::get();
@@ -267,11 +232,7 @@ fn the_search_slots_are_left_to_the_meta_backend_cache() {
     );
 }
 
-/// `get_free_busy_sync` is not one of `ECalMetaBackend`'s own slots — it is
-/// declared two classes up, on `ECalBackendSync`, which is where this backend
-/// has to install it and where `E_CAL_BACKEND_SYNC_GET_CLASS` looks. Installed
-/// on the wrong struct it would silently never be called, and the free/busy
-/// panel would stay blank with nothing to show for it.
+/// Verifies get_free_busy_sync is overridden on ECalBackendSyncClass.
 #[test]
 fn class_init_installs_get_free_busy_on_the_sync_class_where_it_is_dispatched() {
     let class = Class::get();
@@ -291,11 +252,7 @@ fn class_init_installs_get_free_busy_on_the_sync_class_where_it_is_dispatched() 
     );
 }
 
-/// And the parent's has to still be there to fall back on. It answers out of
-/// the offline cache for the account's *own* address, which is the whole
-/// answer when the account is offline and the only answer for the organiser
-/// themselves on a server with no principals — so chaining up is not a
-/// courtesy, it is where most of the useful data comes from.
+/// Verifies the parent class offers a get_free_busy_sync to chain up to.
 #[test]
 fn the_parent_class_offers_a_get_free_busy_sync_to_chain_up_to() {
     let _class = Class::get();
@@ -306,10 +263,7 @@ fn the_parent_class_offers_a_get_free_busy_sync_to_chain_up_to() {
     );
 }
 
-/// `get_changes_sync` answers "list the whole calendar instead" by chaining up
-/// to the parent, which is the only implementation of a full diff against the
-/// cache there is. If the parent has no such slot the fallback is a silent
-/// no-op — a calendar that stays empty forever.
+/// Verifies the parent class provides get_changes_sync for chain-up.
 #[test]
 fn the_parent_class_offers_a_get_changes_sync_to_chain_up_to() {
     let _class = Class::get();
@@ -323,11 +277,7 @@ fn the_parent_class_offers_a_get_changes_sync_to_chain_up_to() {
 // ---------------------------------------------------------------------------
 // dispatch without a connection
 
-/// EDS calls `connect_sync` before anything else, so reaching an operation
-/// without a connection means a disconnect raced it — which is what going
-/// offline looks like. Reporting that as offline is what makes the meta
-/// backend serve its cache; anything else is a visible failure for a state the
-/// user asked for.
+/// Verifies operations report offline when dispatched without a connection.
 #[test]
 fn every_operation_without_a_connection_reports_offline_instead_of_crashing() {
     let class = Class::get();
@@ -500,9 +450,7 @@ fn a_connected_backend_dispatches_load_component_to_the_sync_layer() {
     }
 }
 
-/// Going offline has to leave the backend in the state a fresh one is in, and
-/// EDS is entitled to say it twice — it disconnects on shutdown as well as on
-/// the offline transition.
+/// Verifies disconnect_sync drops the connection idempotently.
 #[test]
 fn disconnect_drops_the_connection_and_saying_it_twice_is_still_success() {
     let fixture = Fixture::start();
@@ -544,9 +492,7 @@ fn disconnect_drops_the_connection_and_saying_it_twice_is_still_success() {
     }
 }
 
-/// GObject frees the instance struct without running a Rust destructor over
-/// it, so a connection the slot still holds at `finalize` is leaked — together
-/// with its socket.
+/// Verifies finalize drops the connection held by the instance.
 #[test]
 fn finalize_drops_the_connection_the_instance_still_holds() {
     let fixture = Fixture::start();
@@ -563,9 +509,7 @@ fn finalize_drops_the_connection_the_instance_still_holds() {
 // ---------------------------------------------------------------------------
 // push subscriptions: teardown and stale-header reconnect
 
-/// A live push subscription against the fixture's own mock, which needs no
-/// GObject — `PushRefresh` is deliberately given its refresh action rather
-/// than deriving it from a backend, so a detached instance can hold one.
+/// Creates a live push subscription for testing.
 fn subscription(fixture: &Fixture) -> PushRefresh {
     let url = expand_url(
         &format!("{}/eventsource", fixture.server.origin()),
@@ -582,10 +526,7 @@ fn subscription(fixture: &Fixture) -> PushRefresh {
     )
 }
 
-/// `disconnect_sync` has to end the push subscription as well as the
-/// connection. A subscription that outlived its connection would keep
-/// scheduling refreshes on a backend with nothing to refresh with — and, once
-/// EDS dropped the backend, on nothing at all.
+/// Verifies disconnect_sync stops active push subscriptions.
 #[test]
 fn disconnect_stops_the_push_subscription_with_the_connection() {
     let fixture = Fixture::start();
@@ -612,11 +553,7 @@ fn disconnect_stops_the_push_subscription_with_the_connection() {
     assert!(!backend.0.is_connected());
 }
 
-/// And `finalize` has to do it too, because EDS does not promise a
-/// `disconnect_sync` first: `ecmb_dispose` cancels its own refreshes and
-/// drops its own cache, but never asks the subclass to disconnect. A push
-/// thread that survived here would be holding a `GWeakRef` to freed instance
-/// memory.
+/// Verifies finalize stops active push subscriptions.
 #[test]
 fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
     let fixture = Fixture::start();
@@ -636,13 +573,7 @@ fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
     assert!(!backend.0.is_connected());
 }
 
-/// The header-refresh piece of item 28: a push subscription's `Authorization`
-/// header can go stale for the same reason the pooled connection's does — an
-/// OAuth 2.0 access token rotates. `refresh_credentials` cannot be driven
-/// end-to-end here since it needs a real `ESource`'s token exchange, but
-/// `JmapCalBackend::refresh_push_headers` is the half it hands off to, and is
-/// directly testable: a subscription started with a stale header is refused,
-/// reconnects, and resumes listening once the fresh header replaces it.
+/// Verifies refreshing push headers allows a stalled subscription to reconnect.
 #[test]
 fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
     let server = MockServer::builder().bearer_token("fresh-token").start();
@@ -681,12 +612,7 @@ fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
 // ---------------------------------------------------------------------------
 // push subscription ordering on connect
 
-/// Starting push spawns a pump thread that can immediately receive a push
-/// and trigger `schedule_refresh`, reaching `get_changes_sync`. If push starts
-/// before the connection is installed into the session lock, that refresh
-/// finds no connection and reports the account offline for a change that
-/// already arrived. `install_connection` must install the connection into the
-/// session lock before invoking `start_push`.
+/// Verifies install_connection stores the connection before starting push.
 #[test]
 fn install_connection_installs_connection_before_starting_push() {
     let fixture = Fixture::start();
@@ -724,12 +650,7 @@ fn install_connection_stores_push_subscription() {
 // ---------------------------------------------------------------------------
 // get_destination_address
 
-/// The `EBackendClass` EDS installed its own defaults into. `get_destination_address`
-/// is one of them: it reads the backend's "connectable" property via
-/// `e_backend_ref_connectable`, which nothing in this crate ever sets, so the
-/// inherited default always answers `FALSE`. That leaves EDS's host-specific
-/// reachability monitor seeing only generic network-up/down for a JMAP account
-/// rather than this account's actual host.
+/// Verifies the base EBackendClass default for get_destination_address.
 fn e_backend_class() -> *mut EBackendClass {
     // SAFETY: `e_backend_get_type()` is valid to call, and `g_type_class_peek`
     // is safe for any type whose class is already initialised (which any type
@@ -737,13 +658,7 @@ fn e_backend_class() -> *mut EBackendClass {
     unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
 }
 
-/// A vfunc that is installed but not overriding the parent's default is the
-/// silent wrong-answer case. `EBackendClass::get_destination_address` is the
-/// one here: left at EDS's own default it always answers `FALSE` because nothing
-/// in this crate ever sets the "connectable" property it reads, so EDS's
-/// host-specific reachability monitor sees only generic network-up/down for a
-/// JMAP account. The fix is overriding the slot. This test verifies that
-/// override is in place; it fails until `class_init` writes it.
+/// Verifies class_init overrides get_destination_address on EBackendClass.
 #[test]
 fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
     let class = Class::get();

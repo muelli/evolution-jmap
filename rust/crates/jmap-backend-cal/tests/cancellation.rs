@@ -1,18 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The Stop button, and the vfuncs that had never looked at it.
-//!
-//! The address book's `tests/cancellation.rs` says the whole of it, and this
-//! is the same story on `ECalMetaBackend`: every sync vfunc but `connect_sync`
-//! named its `GCancellable` `_cancellable` and ignored it, so the only
-//! cancellation that reached anything belonged to the account rather than to
-//! the operation. `jmap-backend-core`'s `observe` is what the vfuncs now hold
-//! for the length of their call.
-//!
-//! The calls go through the class struct, on a [`JmapCalBackend::detached`]
-//! instance, and the cancellable is stopped before the call — see the address
-//! book's module comment for why each of those is the right shape.
+//! Cancellation tests verifying operation-level GCancellable handling in vfuncs.
 
 use std::ffi::CString;
 use std::ptr;
@@ -37,8 +26,7 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
 
-/// The class EDS would dispatch through, kept referenced for the test's
-/// duration so the vfunc pointers stay valid.
+/// The class EDS dispatches through, kept referenced for the test duration.
 struct Class(*mut JmapCalBackendClass);
 
 impl Class {
@@ -63,8 +51,7 @@ impl Drop for Class {
     }
 }
 
-/// An instance the GObject type system knows nothing about. Only the session
-/// slot may be touched through it.
+/// Detached backend instance for tests without GObject initialization.
 struct Detached(Box<JmapCalBackend>);
 
 impl Detached {
@@ -132,9 +119,7 @@ impl Fixture {
             .expect("server assigned id")
     }
 
-    /// What the server holds now, asked over a connection of its own — the
-    /// vfunc's scope is gone by the time this runs, so this call is not
-    /// cancelled by it.
+    /// Checks current server event count over an independent connection.
     fn events_on_the_server(&self) -> usize {
         self.sync().list_existing().expect("listed").1.len()
     }
@@ -208,8 +193,7 @@ const NEW_EVENT: &str = "BEGIN:VEVENT\r\n\
                          DURATION:PT30M\r\n\
                          END:VEVENT\r\n";
 
-/// The first sync of a calendar is the longest operation this backend has, and
-/// the one a user is most likely to stop.
+/// Verifies cancelled initial listing aborts without querying server.
 #[test]
 fn a_listing_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
@@ -240,7 +224,7 @@ fn a_listing_the_user_stopped_does_not_go_to_the_server() {
     Refusal(error).is_the_stop_the_user_pressed("list_existing_sync");
 }
 
-/// The incremental sync, which runs on every refresh.
+/// Verifies cancelled incremental change check aborts without querying server.
 #[test]
 fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
@@ -248,8 +232,7 @@ fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
     let mut backend = Detached::new(fixture.sync());
     let stopped = Stopped::new();
 
-    // A tag, so the vfunc asks the server for a diff rather than answering
-    // "list the whole calendar instead" without a request.
+    // Valid sync tag to request changes rather than falling back to full list.
     let tag = CString::new("0").expect("a tag with no NUL");
     let mut error: *mut GError = ptr::null_mut();
 
@@ -304,8 +287,7 @@ fn a_component_the_user_stopped_loading_is_not_fetched() {
     Refusal(error).is_the_stop_the_user_pressed("load_component_sync");
 }
 
-/// A write, not a read: what the user stopped here is a change to their
-/// calendar, and it must not be on the server afterwards.
+/// Verifies cancelled save aborts without writing to server.
 #[test]
 fn a_component_the_user_stopped_saving_is_not_written() {
     let fixture = Fixture::start();
@@ -356,7 +338,7 @@ fn a_component_the_user_stopped_saving_is_not_written() {
     );
 }
 
-/// The other write, and the one where getting it wrong loses data.
+/// Verifies cancelled removal aborts without deleting from server.
 #[test]
 fn a_component_the_user_stopped_removing_is_still_there() {
     let fixture = Fixture::start();
@@ -396,8 +378,7 @@ fn a_component_the_user_stopped_removing_is_still_there() {
     );
 }
 
-/// A NULL cancellable is GIO's "this call cannot be cancelled", and must not
-/// be read as "already stopped".
+/// Verifies operations proceed normally when cancellable is NULL.
 #[test]
 fn an_operation_with_no_cancellable_at_all_still_runs() {
     let fixture = Fixture::start();

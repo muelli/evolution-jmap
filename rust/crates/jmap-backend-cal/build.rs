@@ -1,14 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Re-emits the `eds-sys` feature cfg this crate's tests need. See
-//! `jmap-mail/build.rs`'s module comment for why the detection lives in
-//! `eds-sys` and only the re-emission is duplicated per dependent.
+//! Propagates `eds-sys` feature cfgs for test builds.
 
-/// Whether the installed EDS brings its own `EOAuth2ServiceDynamic`, in which
-/// case this module registers no `EOAuth2Service` of its own and
-/// `tests/oauth2_service.rs` expects upstream's to be the one the registry
-/// finds.
+/// Emits `eds_oauth2_dynamic` if provided by the installed EDS.
 const EDS_FEATURES: &[&str] = &["eds_oauth2_dynamic"];
 
 fn main() {

@@ -15,20 +15,11 @@ workspace = true
 
 [lib]
 name = "jmap_backend_cal"
-# rlib only. What EDS dlopens (installed as libecalbackendjmap.so) is the
-# companion `jmap-backend-cal-module` crate, which is a cdylib holding nothing
-# but the two `#[unsafe(no_mangle)]` entry points and delegating both to
-# `module::load`/`module::unload` here. See that crate for why the C symbols
-# cannot live in an rlib.
+# rlib only. The companion cdylib `jmap-backend-cal-module` exports the C entry points.
 crate-type = ["rlib"]
 
 [features]
-# Compiler-enforced (not just documented) test-only gate on `detached()`,
-# which builds an instance by zeroing memory outside the GObject type system —
-# see docs/UNSAFE-AUDIT.md Pattern A. Enabled for this crate's own test builds
-# via the self dev-dependency below; never on for a normal build. Reaches
-# through to jmap-backend-core's own `testing` gate on `instance::zeroed_box`,
-# the shared helper `detached()` is built on.
+# Test-only gate on `detached()`, which builds an instance outside the GObject type system.
 testing = ["jmap-backend-core/testing"]
 
 [dependencies]
@@ -44,19 +35,12 @@ gobject-sys = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# To read `mallinfo2`'s byte-exact heap accounting in `tests/references.rs`,
-# which is how a leaked libical reference is caught — a page-granularity RSS
-# reading is not sensitive enough for a couple of hundred bytes per iteration.
+# For mallinfo2 heap accounting in tests/references.rs.
 libc = "0.2.189"
-# Self dev-dependency to turn on `testing` (and so `detached()`) for this
-# crate's own test builds only — see the `[features]` comment above.
+# Self dev-dependency to enable `testing` for crate test targets.
 jmap-backend-cal = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
-# To name an ICalError variant when checking the error mapping — the backend
-# itself never sees one that jmap-cal-sync has not already wrapped — and to
-# render the object whose zone libical is asked to resolve, so that what is
-# measured is what the mapping writes rather than a copy of it.
+# Error variant inspection and timezone resolution test assertions.
 evolution-jmap-ical = { workspace = true }
-# Only to state the JSON members of a JSCalendar event the mapping holds as
-# values: a `timeZones` definition, in the test above.
+# JSON test values for timeZones definitions.
 serde_json = { workspace = true }
