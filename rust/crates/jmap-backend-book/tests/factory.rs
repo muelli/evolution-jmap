@@ -1,22 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The module entry point and the `EBookBackendFactory` it registers — the
-//! last two pieces between `evolution-addressbook-factory` and the backend.
-//!
-//! EDS never calls anything in this crate directly. It scans its backend
-//! directory, `g_type_module_use`s an `EModule` per shared object it finds —
-//! which dlopens the module and calls `e_module_load` — and then looks for
-//! children of `EBookBackendFactory` among the types that appeared. What the
-//! address book of an account resolves to is whichever of those factories
-//! answers to the `BackendName` in its `.source` file.
-//!
-//! So the test drives that path rather than the functions underneath it: a
-//! `GTypeModule` subclass whose `load` calls our entry point, standing in for
-//! the `EModule` that would dlopen the built `.so`. Everything is asserted
-//! through the class struct, as in `tests/backend.rs`, because a `factory_name`
-//! that is right in Rust and not installed in the class is an account whose
-//! address book never opens.
+//! Tests for the module entry point and `EBookBackendFactory` registration.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -39,8 +24,7 @@ use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 /// A `GTypeModule` standing in for the `EModule` EDS would load us as.
 ///
 /// `EModule`'s own `load` dlopens a shared object, resolves `e_module_load` in
-/// it and calls it; this does the same without a file to open, which is what
-/// lets the test reach the entry point the way EDS will.
+/// it and calls it; this does the same without a file to open.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -84,14 +68,7 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// The one module in the process, used, unused, and used again.
-///
-/// One, because two `GTypeModule`s cannot register the same type name: the
-/// second is a GLib warning and a zero `GType`. Used twice around an unuse
-/// because that is the interesting case and it happens in the field —
-/// `g_type_module_unuse` marks every type the module registered as unloaded
-/// when the last user of it goes away, and GLib will not hand the module back
-/// until a second `e_module_load` has registered them again.
+/// The single test module in the process, exercised across load, unload, and reload.
 struct Loaded {
     module: *mut GTypeModule,
     first_use: gboolean,
@@ -115,8 +92,7 @@ fn loaded() -> &'static Loaded {
         assert!(!module.is_null(), "g_object_new returned NULL");
 
         // SAFETY: `module` is a GTypeModule, and the reference taken by the
-        // second use is never given back — the types stay usable for the rest
-        // of the process, which is what every test below relies on.
+        // second use is kept so types remain usable for subsequent tests.
         unsafe {
             let first_use = g_type_module_use(module);
             g_type_module_unuse(module);
@@ -221,9 +197,7 @@ fn the_factory_builds_the_jmap_backend() {
     );
 }
 
-/// Registered against the module, not statically: a statically registered type
-/// keeps its class — and so pointers into this shared object — alive after EDS
-/// has unloaded the module underneath it.
+/// Types are registered dynamically against the module rather than statically.
 #[test]
 fn the_types_belong_to_the_module_that_registered_them() {
     let loaded = loaded();
@@ -240,11 +214,7 @@ fn the_types_belong_to_the_module_that_registered_them() {
     }
 }
 
-/// EDS unuses a module when the last backend it provided goes away, and uses
-/// it again when the next account wants one. The second use calls
-/// `e_module_load` a second time, and an entry point that treats "already
-/// registered" as "nothing to do" leaves every type marked unloaded — GLib
-/// then refuses the module and the address book never opens again.
+/// Unloading and reloading the module successfully re-registers its types.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
     let loaded = loaded();

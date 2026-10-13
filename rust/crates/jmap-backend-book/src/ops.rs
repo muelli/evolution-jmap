@@ -1,26 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The bodies of the `EBookMetaBackend` sync vfuncs.
-//!
-//! Each function here has the shape of the vfunc it implements — the same
-//! out-parameters, the same "FALSE means `error` is set" contract — but takes
-//! a `&BookSync` instead of an `EBookMetaBackend *`. The subclass on top is
-//! then a panic guard, a look at the connection slot, and a call to one of
-//! these; and, more to the point, all of this is testable, because
-//! constructing a real `EBookMetaBackend` needs an `ESourceRegistry` and so a
-//! running `evolution-source-registry` on the session bus.
-//!
-//! The out-parameter discipline is the same throughout, because it is what
-//! EDS relies on:
-//!
-//! - on success every out-parameter the caller asked for is written, and
-//!   ownership of what is written passes to EDS;
-//! - on failure nothing is written and `error` is set instead — a vfunc that
-//!   returns FALSE having already filled an out-parameter leaks it, since EDS
-//!   only frees the outputs of a call that succeeded;
-//! - a NULL out-parameter means "not interested" and is skipped, which is why
-//!   the lists are not even built when nobody wants them.
+//! Implementation bodies for `EBookMetaBackend` vfuncs operating over [`BookSync`].
+//! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
 use eds_sys::{E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EContact, e_book_client_error_create};
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
@@ -33,28 +15,22 @@ use jmap_proto::State;
 
 use crate::marshal;
 
-/// What `get_changes_sync` decided, which is one answer more than a `gboolean`
-/// can carry.
+/// Outcome of a `get_changes` operation.
 #[derive(Debug)]
 pub enum Outcome {
-    /// The out-parameters are filled in; the vfunc returns TRUE.
+    /// Changes were calculated and out-parameters populated.
     Reported,
-    /// This delta cannot be computed, and that is not a failure: the caller
-    /// chains up to `EBookMetaBackend`'s own `get_changes_sync`, which lists
-    /// the book in full and diffs it against the offline cache. Nothing has
-    /// been written and no error has been set.
+    /// Changes cannot be calculated; caller chains up to full cache diffing.
     ListInstead,
-    /// `error` is set; the vfunc returns FALSE.
+    /// Operation failed; GError set.
     Failed,
 }
 
-/// Every card in the address book — `list_existing_sync`.
+/// Lists all existing contacts in the address book for `list_existing_sync`.
 ///
 /// # Safety
 ///
-/// The out-parameters must each be NULL or point at a writable, currently-NULL
-/// location of the matching type, and `error` must be NULL or a valid,
-/// currently-NULL `GError **`. That is what an EDS vfunc receives.
+/// Out-parameters and `error` must be valid pointers per EDS vfunc contracts.
 pub unsafe fn list_existing(
     sync: &BookSync,
     out_new_sync_tag: *mut *mut gchar,
@@ -100,27 +76,14 @@ pub unsafe fn list_existing(
     GTRUE
 }
 
-/// What changed since `last_sync_tag` — `get_changes_sync`.
+/// Computes contact changes since `last_sync_tag` for `get_changes_sync`.
 ///
-/// Two of the three answers are "list the whole book instead": no tag at all,
-/// which is the first sync, and a tag the server will not diff from (RFC 8620
-/// §5.2, `cannotCalculateChanges`). Reporting either as a failure would leave
-/// the address book empty until someone deleted the cache by hand.
-///
-/// Everything that changed is reported as **modified** rather than split
-/// across `out_created_objects` and `out_modified_objects`. JMAP does draw
-/// that distinction, but `BookSync::get_changes` has already spent it on a
-/// question only it can answer — a card that shows up as *updated* and is no
-/// longer filed in this address book has been moved out and must be reported
-/// gone, whereas a *created* one that is not ours never was our business — and
-/// what remains is a set of cards that exist and are ours. EDS runs both lists
-/// through the same loader, so the split is presentational; inventing one
-/// would be a guess dressed up as information.
+/// Returns [`Outcome::ListInstead`] if `last_sync_tag` is absent or the server
+/// returns `cannotCalculateChanges` (RFC 8620 §5.2).
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `last_sync_tag` must be NULL or a valid
-/// NUL-terminated string.
+/// As [`list_existing`], and `last_sync_tag` must be NULL or a valid NUL-terminated string.
 #[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
 pub unsafe fn get_changes(
     sync: &BookSync,
@@ -187,8 +150,7 @@ pub unsafe fn get_changes(
     // ownership of which passes to the caller.
     unsafe {
         set_out_string(out_new_sync_tag, changes.new_state.as_str());
-        // The paging happens inside `BookSync::get_changes`, so there is never
-        // anything left for EDS to ask again for.
+        // Paging occurs inside BookSync::get_changes; signal completion to EDS.
         if !out_repeat.is_null() {
             *out_repeat = GFALSE;
         }
@@ -202,17 +164,11 @@ pub unsafe fn get_changes(
     Outcome::Reported
 }
 
-/// One card by identifier — `load_contact_sync`.
-///
-/// `out_extra` is deliberately left alone. It is per-object opaque state a
-/// backend may park in the EDS cache, and this one has none: the JMAP id *is*
-/// the uid and the revision already carries the change token, which is why
-/// [`marshal::info_list`] reports a NULL extra for the same reason.
+/// Loads a contact by UID for `load_contact_sync`.
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated
-/// string.
+/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated string.
 pub unsafe fn load_contact(
     sync: &BookSync,
     uid: *const gchar,
@@ -293,9 +249,7 @@ pub unsafe fn load_contact(
     GTRUE
 }
 
-/// Store a card — `save_contact_sync`.
-///
-/// `out_new_extra` is left alone, for the reason given on [`load_contact`].
+/// Creates or updates a contact for `save_contact_sync`.
 ///
 /// # Safety
 ///
@@ -324,15 +278,13 @@ pub unsafe fn save_contact(
     };
 
     let existing_uid = if !is_overwrite {
-        // A create. The vCard's UID is a name Evolution invented locally
-        // (`pas-id-…`) and never a JMAP id, so the server assigns the real one.
+        // A create. Local UID is ignored; the server assigns the identifier.
         None
     } else {
         // SAFETY: as above.
         match unsafe { marshal::contact_uid(contact) } {
             Some(uid) => Some(uid),
-            // Sending this as a create would silently duplicate the user's
-            // contact on the server, which is worse than a visible failure.
+            // Editing without a UID would duplicate rather than update; report invalid argument.
             // SAFETY: as above.
             None => {
                 tracing::debug!(
@@ -385,12 +337,11 @@ pub unsafe fn save_contact(
     GTRUE
 }
 
-/// Destroy a card — `remove_contact_sync`.
+/// Destroys a contact for `remove_contact_sync`.
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated
-/// string.
+/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated string.
 pub unsafe fn remove_contact(
     sync: &BookSync,
     uid: *const gchar,
@@ -440,15 +391,7 @@ pub unsafe fn remove_contact(
     }
 }
 
-/// Allocates a `GError` describing `failure`. Ownership passes to the caller,
-/// as with [`jmap_backend_core::error::to_gerror`], which handles the
-/// [`SyncError::Client`] half.
-///
-/// The other half is where the address book differs from every other EDS
-/// client: a card that is not there has to be reported in the
-/// `E_BOOK_CLIENT_ERROR` domain, because `EBookMetaBackend` matches on exactly
-/// that domain and code to decide that a card is gone rather than that the
-/// sync failed. Any other code and the cache entry never goes away.
+/// Allocates a `GError` for `failure`, mapping `NotFound` to `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND`.
 pub fn to_gerror(failure: &SyncError) -> *mut GError {
     match failure {
         SyncError::Client(error) => jmap_backend_core::error::to_gerror(error),

@@ -1,18 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! That the module registers `jmap_config::oauth2_service::Service` in
-//! `evolution-addressbook-factory`'s own process — see
-//! `jmap-backend-book/src/module.rs`'s "why the OAuth2 service registers here
-//! too" for the full reasoning, and `jmap-backend-collection/tests/
-//! oauth2_service.rs` for the same test against the registry process.
-//!
-//! Without this, `jmap_backend_core::oauth2::source_uses_oauth2` answers
-//! `false` for every address book in this process even when EDS itself can
-//! fetch the account's token just fine, because the alias check it makes
-//! (`e_oauth2_services_is_oauth2_alias`) is a query against *this
-//! process's* `EOAuth2Services` singleton, not a D-Bus round trip — CURRENT
-//! PRIORITY item 12's own diagnosis of the endless consent loop.
+//! Verifies that the module registers the OAuth2 service in the address book factory process.
 
 use std::ffi::CString;
 use std::ptr;
@@ -30,8 +19,7 @@ use jmap_backend_book::module::{load, unload};
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// A `GTypeModule` standing in for the `EModule` the factory would load us
-/// as — the same stand-in `tests/factory.rs`/`tests/textdomain.rs` use.
+/// A `GTypeModule` standing in for the `EModule` the factory would load us as.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -75,9 +63,7 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// A throwaway `ESource` authenticating by this service's own name — what a
-/// real JMAP account's `[Authentication] method` is set to when M7's setup UI
-/// writes an OAuth2 account.
+/// A throwaway `ESource` authenticating with this service's authentication method.
 fn source_naming_this_service() -> *mut ESource {
     let uid = CString::new("jmap-book-oauth2-service-test").expect("no NUL in a literal");
     let mut error = ptr::null_mut();
@@ -96,10 +82,7 @@ fn source_naming_this_service() -> *mut ESource {
     source
 }
 
-/// Registering the module, then asking the `EOAuth2Services` singleton to
-/// find a service for a matching source — the exact path
-/// `evolution-addressbook-factory` takes when it decides whether to send an
-/// account's requests as Bearer.
+/// The `EOAuth2Services` singleton finds the JMAP OAuth2 service once the module has loaded.
 #[test]
 fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
     let gtype = register_static::<TestModule>();
@@ -132,9 +115,8 @@ fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
         assert!(
             !found.is_null(),
             "the module load did not register a service that answers to \
-             this service's own authentication method — every OAuth2 \
-             address book would fall back to a password prompt it has no \
-             password for"
+             this service's own authentication method, so an OAuth2 \
+             address book would fall back to a password prompt"
         );
 
         // Which service answered is the half that changes with the EDS in

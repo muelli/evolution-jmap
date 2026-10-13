@@ -5,10 +5,7 @@
 //! C that consumes it.
 //!
 //! `jmap-vcard`'s own `tests/hostile.rs` pins the text this crate renders. This
-//! file is the other half of the same finding: what `EVCard` — the parser that
-//! actually decides what lands in the user's address book — makes of that text.
-//! A property the server managed to inject would be invisible in a string
-//! comparison and perfectly visible here.
+//! file checks what `EVCard` makes of that text.
 //!
 //! See `docs/AUDIT-FFI.md`, findings F1 and F7.
 
@@ -91,8 +88,8 @@ fn a_map_key_cannot_terminate_the_card_early() {
         ..ContactCard::default()
     };
 
-    // Counted as *lines*: the text survives inside the quoted parameter, which
-    // is data and stays data — what must not happen is it starting a line.
+    // Counted as lines: the text survives inside the quoted parameter as data,
+    // and must not begin a new line.
     let vcard = jmap_vcard::card_to_vcard(&card);
     let lines = |name: &str| {
         vcard
@@ -115,16 +112,7 @@ fn a_map_key_cannot_terminate_the_card_early() {
     }
 }
 
-/// F7: the threading claim the instance struct rests on, made a compile error
-/// rather than a comment.
-///
-/// EDS dispatches a meta backend's read-only vfuncs from more than one thread,
-/// and `with_connection` hands each of them a `&BookSync` taken from the same
-/// [`Slot`]. Nothing in the type system checks that: the instance arrives as a
-/// raw pointer and is turned into a `&` by hand, so the compiler never sees the
-/// sharing and would not object if `BookSync` — or the `Client` and boxed
-/// `Transport` inside it — grew an `Rc` or a `RefCell`. This is that check,
-/// written where a change to `jmap-client` would trip over it.
+/// Threading safety check: verifies `BookSync` and its components implement `Send + Sync`.
 #[test]
 fn the_connection_an_instance_holds_is_shareable_across_threads() {
     fn assert_send_sync<T: Send + Sync>() {}

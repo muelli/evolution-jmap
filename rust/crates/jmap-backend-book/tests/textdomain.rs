@@ -1,32 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! That the module binds this project's gettext domain when EDS loads it.
+//! Verifies that the module binds the gettext domain when loaded.
 //!
-//! `evolution-addressbook-factory` has never heard of this project, so nothing
-//! in that process has told gettext where our catalogues are. Until something
-//! does, every lookup in the `evolution-jmap` domain goes to whatever directory
-//! gettext defaults to — which is not where CMake installed the `.mo` files
-//! unless the prefix happened to be `/usr` — and answers with the untranslated
-//! string. There is no diagnostic for that: a missing catalogue and a
-//! catalogue with no translation for the message look identical.
-//!
-//! The binding therefore has to be made by the only code of ours that is
-//! guaranteed to have run before any string is asked for: the entry point EDS
-//! dlopened the module for. Doing it lazily at the first lookup would be a
-//! shorter argument if we owned every lookup, and we do not — the strings this
-//! backend will hand back are in `GError`s that Evolution displays, and by then
-//! the text has already been chosen.
-//!
-//! ## Why this is a test binary of its own
-//!
-//! It starts from a deliberately wrong binding, so that "the domain is bound
-//! where the build put the catalogues" can only become true by the entry point
-//! making it true. That is process-global state, and
-//! [`bind`](jmap_backend_core::i18n::bind) is a `OnceLock` that a sibling test
-//! reaching the entry point first would spend — leaving the decoy in place and
-//! failing this one for the wrong reason. Cargo gives each file in `tests/` its
-//! own process; being the only test in this file is the isolation.
+//! This test binary runs in an isolated process to check that `load` binds
+//! the project locale directory even when preceded by an unconfigured state.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -83,19 +61,7 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// Loading the module moves the domain's binding to the installed catalogue
-/// directory.
-///
-/// The decoy directory is what makes this an assertion about the entry point
-/// rather than about the machine. On an uninstalled build [`LOCALE_DIR`] is
-/// gettext's own compiled-in default, so a process that had never bound
-/// anything would report it too, and the test would pass against a module that
-/// did nothing at all.
-///
-/// Driven through `g_type_module_use` rather than by calling [`load`] directly,
-/// because that is the path EDS takes and it is no harder to write: the entry
-/// point is reached through the `GTypeModuleClass.load` vfunc, exactly as it
-/// would be from `EModule`.
+/// Loading the module binds the gettext domain to the project locale directory.
 #[test]
 fn the_entry_point_binds_the_domain() {
     let decoy = c"/nonexistent/jmap-book-decoy-locale";

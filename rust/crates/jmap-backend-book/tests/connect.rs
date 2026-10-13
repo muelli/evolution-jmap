@@ -73,14 +73,7 @@ impl Fixture {
     }
 }
 
-/// `open_book` takes resolved credentials; this stands in for the caller that
-/// resolves them, which is `connect_with`. It takes the password path
-/// deliberately — the OAuth 2.0 path needs an `ESource` and a consented
-/// account, and *which* path an account takes is
-/// `jmap-backend-core/tests/oauth2.rs`'s question, not this file's. What is
-/// this file's is that whatever credentials come out reach the server, which
-/// `the_password_is_sent_as_basic_credentials` and
-/// `an_access_token_is_sent_as_bearer_credentials` are the two halves of.
+/// Helper opening an address book using resolved credentials.
 fn open(
     config: &SourceConfig,
     password: Option<&str>,
@@ -116,9 +109,7 @@ fn a_source_that_names_an_address_book_gets_that_one() {
     assert_eq!(sync.address_book_id(), &fixture.other_book);
 }
 
-/// A typo in a hand-written `.source` must not present as an address book
-/// that is merely empty — the user would have no way to tell the difference
-/// from a server that lost their contacts.
+/// An unrecognised address book ID is rejected as an error.
 #[test]
 fn an_address_book_the_server_does_not_have_is_refused() {
     let fixture = Fixture::start(true);
@@ -142,9 +133,7 @@ fn an_account_with_no_default_address_book_is_an_error_not_a_guess() {
     }
 }
 
-/// The address book resolves its account under `urn:ietf:params:jmap:contacts`
-/// — the mirror of the calendar backend's check, and the reason the mock can
-/// leave a capability out at all.
+/// An account lacking the contacts capability is refused.
 #[test]
 fn an_account_that_offers_no_contacts_is_refused() {
     let server = MockServer::builder()
@@ -165,12 +154,7 @@ fn an_account_that_offers_no_contacts_is_refused() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
 }
 
-/// RFC 8620 §2: a server "MAY" omit `primaryAccounts` entirely. Such a
-/// server is still usable when exactly one personal account offers the
-/// capability — the same inference the collection backend (M6) already
-/// relies on to decide whether to fan out an address-book child at all, so a
-/// source that backend created must be able to connect, not fail forever
-/// with "no primary account".
+/// When the server omits primaryAccounts, resolve the single personal contacts account.
 #[test]
 fn a_server_with_no_primary_accounts_resolves_the_sole_personal_contacts_account() {
     let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
@@ -200,11 +184,7 @@ fn the_password_is_sent_as_basic_credentials() {
     assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
 }
 
-/// The other half of the credentials story: an account that authenticates with
-/// OAuth 2.0 reaches the server as `Authorization: Bearer …`, with no user name
-/// involved at all. Which accounts those are, and where the token comes from,
-/// is `jmap-backend-core`'s — what is proved here is that a resolved bearer
-/// credential survives the trip to the wire, the same way the password does.
+/// A resolved bearer credential is sent as an Authorization header on connect.
 #[test]
 fn an_access_token_is_sent_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
@@ -214,16 +194,7 @@ fn an_access_token_is_sent_as_bearer_credentials() {
     assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
 }
 
-/// The EDS-side sibling of `jmap_mail::connect::StoreError`'s reclassification
-/// (`jmap-mail/tests/connect.rs::a_401_on_a_bearer_token_reclassifies_to_the_
-/// same_oauth2_failure_a_fetch_would_get`): a 401 on a bearer token this
-/// backend itself just sent must not be treated like a wrong Basic password,
-/// because `REJECTED` here tells EDS to throw away a refresh token a
-/// transient rejection has not invalidated. The 401 itself is real, from
-/// `jmap-mock`, not hand-built — only the reclassification (which needs to
-/// know the attempt was OAuth 2.0, something `open_book` alone is never told;
-/// that is `connect_with`'s job) is applied by hand, the same way the mail
-/// sibling test does for `open_mail`.
+/// A 401 on a bearer token reclassifies to REQUIRED so EDS prompts for consent.
 #[test]
 fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
@@ -430,8 +401,7 @@ fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted(
     let source = TestSource::new().at(fixture.server.origin());
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: a live ESource, no credentials, no cancellable, and two
-    // writable out-parameters — what EDS passes on a first connect.
+    // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -451,9 +421,7 @@ fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted(
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// The prompt has to happen before anything is sent, so a source that names a
-/// user and has no password yet must not reach the server at all — which is
-/// what asserting on a server that was never started proves.
+/// A source naming a user but having no password prompts before connecting.
 #[test]
 fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     let source = TestSource::new().at("http://127.0.0.1:1").user("vera");
@@ -476,12 +444,7 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// The API-token method's whole point: an account with no user name at all
-/// reaches the server as `Authorization: Bearer …`, off the same
-/// `E_SOURCE_CREDENTIAL_PASSWORD` slot Basic reads its password from — proved
-/// end to end, `[Authentication] Method` on a real `ESource` down to the
-/// wire, the way `connecting_from_a_source_opens_the_default_address_book_and_reports_accepted`
-/// proves the password path.
+/// An API-token source sends the stored secret as bearer credentials.
 #[test]
 fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
@@ -502,9 +465,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
         params
     };
 
-    // SAFETY: a live ESource, the credentials just built, no cancellable and
-    // two writable out-parameters — what EDS passes on a re-connect with a
-    // prompted secret in hand.
+    // SAFETY: live ESource, prompted credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -526,9 +487,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// The same prompt-before-sending rule the password path follows: an
-/// API-token account with no stored secret yet must not reach the server
-/// either.
+/// An API-token account with no stored secret prompts before connecting.
 #[test]
 fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
     let source = TestSource::new()
@@ -536,7 +495,7 @@ fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
         .method(API_TOKEN_METHOD.to_str().unwrap());
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: as `a_source_with_a_user_and_no_password_asks_for_one_before_connecting`.
+    // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -601,9 +560,7 @@ fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
 }
 
-/// EDS constructs a backend *from* a source, so this cannot happen — but a
-/// NULL dereference here takes `evolution-addressbook-factory` down and with
-/// it every other account in the process.
+/// A backend without an ESource fails instead of dereferencing NULL.
 #[test]
 fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
     let mut outs = ConnectOuts::default();
