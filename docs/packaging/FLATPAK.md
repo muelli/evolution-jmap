@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Flatpak extension feasibility notes (Batch 5)
 
-Date: 2026-10-10 (UTC)
+Dates: 2026-10-10 and 2026-10-13 (UTC)
 
 This note records Batch 5 evidence from the live Flathub manifest for
 `org.gnome.Evolution`, then maps that evidence to this repository's module
@@ -60,29 +60,54 @@ an `org.gnome.Evolution.Extension` package can place the five module artifacts
 under `lib/...` inside the extension payload so they appear in the sandbox
 module search paths.
 
-## Runtime verification status in this session
+## Runtime verification (Batch 5 step 2, 2026-10-13 UTC)
 
-Batch 5 step 2 requires `flatpak` and `flatpak-builder`. They are not present
-in this runner image, and this user cannot install distro packages:
+Step 2 is now exercised end to end on this VM with user-scoped Flatpak
+installation only.
 
-- `command -v flatpak`: not found
-- `command -v flatpak-builder`: not found
-- `sudo -n true`: denied for user `codex`
+### Tooling and app install
 
-So this increment records source-level feasibility evidence, but does not yet
-run a local extension build or install.
+- `flatpak --version`: `Flatpak 1.16.6`
+- `flatpak-builder --version`: `flatpak-builder-1.4.8`
+- Added Flathub remote for `--user` installation.
+- Installed `org.gnome.Evolution` (`app/org.gnome.Evolution/x86_64/stable`).
+- Installed `org.gnome.Sdk` branch `50` for local extension builds.
 
-## Next commands once flatpak tooling is available
+### Local extension manifest and payload
 
-1. Create an extension manifest under `packaging/flatpak/` targeting
-   `org.gnome.Evolution.Extension`.
-2. Build with `flatpak-builder --user`.
-3. Install beside `org.gnome.Evolution` and check from inside the sandbox:
-   - `pkg-config --variable=backenddir libedata-book-1.2`
-   - `pkg-config --variable=backenddir libedata-cal-2.0`
-   - `pkg-config --variable=camel_providerdir camel-1.2`
-   - `pkg-config --variable=moduledir libebackend-1.2`
-   - `pkg-config --variable=moduledir evolution-shell-3.0`
-4. Confirm the five JMAP module files are visible at those resolved paths.
+- Added local manifest:
+  `packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.yml`
+- The manifest builds extension id
+  `org.gnome.Evolution.Extension.evolution-jmap` against runtime
+  `org.gnome.Evolution` (`stable`) with sdk `org.gnome.Sdk//50`.
+- For this verification run, payload files were copied from an existing local
+  CPack Debian payload tree under `build/.../_CPack_Packages/.../usr/lib/...`
+  into `packaging/flatpak/payload/lib/...`.
+- Built and installed with:
+  `flatpak-builder --user --install --force-clean --state-dir packaging/flatpak/.flatpak-builder packaging/flatpak/.build packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.yml`
 
-Loading in a real interactive Evolution UI remains unverified in this runner.
+### In-sandbox visibility checks
+
+- `flatpak info --show-metadata org.gnome.Evolution.Extension.evolution-jmap`
+  reports:
+  - `[ExtensionOf] ref=app/org.gnome.Evolution/x86_64/stable`
+  - `[ExtensionOf] runtime=org.gnome.Platform/x86_64/50`
+- `flatpak info --show-extensions org.gnome.Evolution` lists the installed
+  extension runtime `org.gnome.Evolution.Extension.evolution-jmap`.
+- Inside the Evolution sandbox,
+  `find /app/evolution/extensions/evolution-jmap -maxdepth 8 -type f` shows:
+  - `lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so`
+  - `lib/evolution-data-server/calendar-backends/libecalbackendjmap.so`
+  - `lib/evolution-data-server/camel-providers/libcameljmap.so`
+  - `lib/evolution-data-server/camel-providers/libcameljmap.urls`
+  - `lib/evolution-data-server/registry-modules/module-jmap-backend.so`
+  - `lib/evolution/modules/module-jmap-configuration.so`
+
+This confirms the local extension is mounted and the expected JMAP module
+artifacts are visible to sandboxed Evolution in the extension tree.
+
+### Notes and limits
+
+- `pkg-config` is not present in the app runtime sandbox, so path verification
+  used direct in-sandbox file listing rather than `pkg-config --variable`.
+- Loading in a real interactive Evolution UI remains unverified in this runner.
