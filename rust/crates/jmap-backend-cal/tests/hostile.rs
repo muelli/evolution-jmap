@@ -1,16 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The server-controlled half of the calendar boundary, checked against the C
-//! that consumes it.
-//!
-//! `jmap-ical`'s own `tests/hostile.rs` pins the text this crate renders. This
-//! file is the other half of the same finding: what *libical* — the parser that
-//! decides what lands in the user's calendar — makes of that text. A property
-//! the server managed to inject would be invisible in a string comparison and
-//! perfectly visible here.
-//!
-//! See `docs/AUDIT-FFI.md`, findings F2, F4 and F7.
+//! Hostile input tests verifying parser boundary handling and property injection resistance.
 
 use std::ffi::CStr;
 use std::sync::RwLock;
@@ -54,8 +45,7 @@ fn hostile_event() -> CalendarEvent {
     }
 }
 
-/// The exploit, run all the way into libical: the summary Evolution shows must
-/// be the one `title` says, and the injected properties must not exist at all.
+/// Verifies unescaped values cannot inject properties into libical components.
 #[test]
 fn no_unescaped_value_can_add_a_property_to_the_component() {
     let ics = jmap_ical::event_to_ical(&hostile_event());
@@ -140,9 +130,7 @@ fn no_unescaped_value_can_close_the_event_and_open_another() {
     }
 }
 
-/// F4, at the C boundary: a document nested past the parser's cap is refused as
-/// an error rather than parsed into a tree whose recursive drop aborts the
-/// process. libical is asked nothing here — `ical_to_event` never gets that far.
+/// Verifies pathologically nested objects return an error rather than aborting.
 #[test]
 fn a_pathologically_nested_object_is_an_error_not_an_abort() {
     let mut ics = String::from("BEGIN:VCALENDAR\r\n");
@@ -160,8 +148,7 @@ fn a_pathologically_nested_object_is_an_error_not_an_abort() {
     ));
 }
 
-/// F7: the threading claim the instance struct rests on, made a compile error
-/// rather than a comment. See `jmap-backend-book`'s counterpart.
+/// Verifies CalSync and connection slot types implement Send and Sync.
 #[test]
 fn the_connection_an_instance_holds_is_shareable_across_threads() {
     fn assert_send_sync<T: Send + Sync>() {}

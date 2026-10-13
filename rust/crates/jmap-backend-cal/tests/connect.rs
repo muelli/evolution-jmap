@@ -1,13 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `connect_sync`, minus the GObject: turning a [`SourceConfig`] and whatever
-//! EDS got out of libsecret into a [`CalSync`], against `jmap-mockd`.
-//!
-//! The mirror of `jmap-backend-book`'s `connect` test, and deliberately so:
-//! everything but "which collection is being resolved" now lives in
-//! `jmap-backend-core::connect`, and two tests that disagree about the rules
-//! would be the first sign that a backend grew its own.
+//! Tests for `connect_sync` and source configuration resolution against `jmap-mockd`.
 
 use std::ffi::CString;
 use std::ptr;
@@ -42,14 +36,12 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Two calendars; `default_calendar` is the one flagged `isDefault`.
+    /// Starts mock server; `default_calendar` is the one flagged `isDefault`.
     fn start(with_default: bool) -> Self {
         Self::start_with(MockServer::builder(), with_default)
     }
 
-    /// The non-default calendar is seeded *first* on purpose, so that resolving
-    /// "the default one" as "the first one" is a visible failure rather than an
-    /// accident that happens to pass.
+    /// Seeds non-default calendar first to verify explicit default selection.
     fn start_with(builder: jmap_mock::MockServerBuilder, with_default: bool) -> Self {
         let server = builder.start();
         let account_id = server.account_id();
@@ -115,9 +107,7 @@ fn a_source_that_names_a_calendar_gets_that_one() {
     assert_eq!(sync.calendar_id(), &fixture.other_calendar);
 }
 
-/// A typo in a hand-written `.source` must not present as a calendar that is
-/// merely empty — the user would have no way to tell the difference from a
-/// server that lost their appointments.
+/// Verifies connecting to an unlisted calendar ID is rejected.
 #[test]
 fn a_calendar_the_server_does_not_have_is_refused() {
     let fixture = Fixture::start(true);
@@ -139,9 +129,7 @@ fn an_account_with_no_default_calendar_is_an_error_not_a_guess() {
     }
 }
 
-/// The calendar resolves its account under `urn:ietf:params:jmap:calendars`.
-/// A server that offers contacts but not calendars must be refused rather than
-/// synced against whatever account the other capability happens to name.
+/// Verifies an account offering no calendars capability is rejected.
 #[test]
 fn an_account_that_offers_no_calendars_is_refused() {
     let server = MockServer::builder()
@@ -162,12 +150,7 @@ fn an_account_that_offers_no_calendars_is_refused() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
 }
 
-/// RFC 8620 §2: a server "MAY" omit `primaryAccounts` entirely. Such a
-/// server is still usable when exactly one personal account offers the
-/// capability — the same inference the collection backend (M6) already
-/// relies on to decide whether to fan out a calendar child at all, so a
-/// source that backend created must be able to connect, not fail forever
-/// with "no primary account".
+/// RFC 8620 §2: a server may omit primaryAccounts entirely if one personal account offers calendars.
 #[test]
 fn a_server_with_no_primary_accounts_resolves_the_sole_personal_calendars_account() {
     let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
@@ -187,8 +170,7 @@ fn a_user_name_with_no_password_asks_evolution_for_credentials() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
 
-/// The mirror of the address book backend's bearer test — see it for what this
-/// is proving and what it deliberately is not.
+/// Verifies access token is sent as bearer credentials.
 #[test]
 fn an_access_token_is_sent_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
@@ -198,10 +180,7 @@ fn an_access_token_is_sent_as_bearer_credentials() {
     assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
 }
 
-/// The EDS-side sibling of `jmap_mail::connect::StoreError`'s reclassification:
-/// a 401 on a bearer token this backend itself just sent must not be treated
-/// like a wrong Basic password, because `REJECTED` here tells EDS to throw away
-/// a refresh token a transient rejection has not invalidated.
+/// Verifies 401 on a bearer token reclassifies to CredentialsRequired rather than Rejected.
 #[test]
 fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
@@ -220,10 +199,7 @@ fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     assert_eq!(reclassified.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
 
-/// The failures all have to reach Evolution as a `GError` too, and the code
-/// is not decoration: `AUTHENTICATION_REQUIRED` is what makes Evolution offer
-/// a password prompt, and `REPOSITORY_OFFLINE` is what makes the meta backend
-/// serve its cache instead of showing an empty calendar.
+/// Verifies connect failures map to expected EDS EClientError codes.
 #[test]
 fn each_failure_carries_the_client_error_code_evolution_routes_on() {
     for (error, expected) in [
@@ -352,9 +328,7 @@ impl TestSource {
         self
     }
 
-    /// `ESourceResource:identity` — the one field whose *meaning* differs
-    /// between the two backends, which is why `SourceConfig` calls it
-    /// `resource_id` and neither an address book nor a calendar.
+    /// Sets ESourceResource identity (calendar ID).
     fn identity(self, id: &str) -> Self {
         let id = CString::new(id).expect("no NUL in an identity");
         // SAFETY: as `at`.
@@ -389,9 +363,7 @@ impl Drop for TestSource {
     }
 }
 
-/// The out-parameters EDS hands `connect_sync`, started at values it never
-/// passes: a body that writes neither would otherwise be indistinguishable
-/// from one that answers correctly.
+/// Out-parameters passed by EDS to connect_sync.
 struct ConnectOuts {
     auth_result: ESourceAuthenticationResult,
     error: *mut GError,
@@ -421,7 +393,7 @@ impl ConnectOuts {
 
 fn connect_from(source: &TestSource, outs: &mut ConnectOuts) -> Option<CalSync> {
     // SAFETY: a live ESource, no credentials, no cancellable, and two writable
-    // out-parameters — what EDS passes on a first connect.
+    // out-parameters: what EDS passes on a first connect.
     unsafe {
         connect::connect(
             source.0,
@@ -448,9 +420,7 @@ fn connecting_from_a_source_opens_the_default_calendar_and_reports_accepted() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// `[Resource] Identity=` is a calendar id here and an address book id in the
-/// other backend. Reading it as anything else — or not reading it at all —
-/// would silently sync the default calendar instead of the named one.
+/// Verifies Resource identity extension selects the target calendar.
 #[test]
 fn the_resource_identity_selects_the_calendar() {
     let fixture = Fixture::start(true);
@@ -463,9 +433,7 @@ fn the_resource_identity_selects_the_calendar() {
     assert_eq!(sync.calendar_id(), &fixture.other_calendar);
 }
 
-/// The prompt has to happen before anything is sent, so a source that names a
-/// user and has no password yet must not reach the server at all — which is
-/// what asserting on a server that was never started proves.
+/// Verifies user without password prompts before network request.
 #[test]
 fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     let source = TestSource::new().at("http://127.0.0.1:1").user("vera");
@@ -477,12 +445,7 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// The API-token method's whole point: an account with no user name at all
-/// reaches the server as `Authorization: Bearer …`, off the same
-/// `E_SOURCE_CREDENTIAL_PASSWORD` slot Basic reads its password from — proved
-/// end to end, `[Authentication] Method` on a real `ESource` down to the
-/// wire, the way `connecting_from_a_source_opens_the_default_calendar_and_reports_accepted`
-/// proves the password path.
+/// Verifies API token source sends bearer credentials from password parameter.
 #[test]
 fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
@@ -504,8 +467,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     };
 
     // SAFETY: a live ESource, the credentials just built, no cancellable and
-    // two writable out-parameters — what EDS passes on a re-connect with a
-    // prompted secret in hand.
+    // two writable out-parameters: what EDS passes on re-connect.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -578,8 +540,7 @@ fn an_oauth2_source_with_no_token_asks_for_consent_before_connecting() {
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// A source with no host is a misconfigured account: no password prompt fixes
-/// it, so it must not be reported as a credentials problem.
+/// Verifies source with no host returns error rather than prompting.
 #[test]
 fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
     let source = TestSource::new();
@@ -591,9 +552,7 @@ fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
 }
 
-/// EDS constructs a backend *from* a source, so this cannot happen — but a
-/// NULL dereference here takes `evolution-calendar-factory` down and with it
-/// every other calendar in the process.
+/// Verifies NULL source returns error rather than dereferencing NULL.
 #[test]
 fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
     let mut outs = ConnectOuts::default();

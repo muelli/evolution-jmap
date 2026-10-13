@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-backend-cal` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-backend-cal`.
 //!
 //! Asserts structured fields attached to `tracing` events during calendar
-//! connection, component listing, change diffing, component loading, saving,
-//! removal, free-busy querying, and color change pushing.
+//! operations.
 
 use std::ffi::{CStr, CString};
 use std::ptr;

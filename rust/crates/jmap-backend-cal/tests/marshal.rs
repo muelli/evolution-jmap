@@ -1,11 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The C boundary of the calendar backend, exercised the way EDS will: every
-//! list is walked as a `GSList` and freed with the function EDS would call, and
-//! the instances handed to a save are real `ECalComponent`s owned by the
-//! caller — so a wrong node type, a missing copy or a stolen reference shows up
-//! here rather than as a crash in `evolution-calendar-factory`.
+//! Tests for calendar component marshalling and conversion across the C boundary.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -35,7 +31,7 @@ const OBJECT: &str = "BEGIN:VCALENDAR\r\n\
                       END:VEVENT\r\n\
                       END:VCALENDAR\r\n";
 
-/// The same, for an event that names no zone at all — a UTC instant, which is
+/// The same, for an event that names no zone at all: a UTC instant, which is
 /// the form `jmap-ical` writes there. Used where the test is about the
 /// marshalling and nothing else: an object that refers to a zone is handed on
 /// with the *definition* of it (see
@@ -138,7 +134,7 @@ fn an_empty_list_is_null() {
 }
 
 /// The calendar's removals are `ECalMetaBackendInfo`s, not bare strings the way
-/// the address book's are — a `GSList` of `gchar *` here would be read as
+/// the address book's are: a `GSList` of `gchar *` here would be read as
 /// structs and dereference the first characters of a uid as pointers. Only the
 /// uid can be filled in: a component that is gone has no revision and no
 /// object to report, and `e_cal_meta_backend_info_new` documents both as
@@ -189,7 +185,7 @@ fn text_that_is_not_a_calendar_object_is_refused() {
 }
 
 /// libical parses an envelope with nothing in it happily, and EDS would take
-/// the result — an appointment that exists and has no properties. It has to be
+/// the result: an appointment that exists and has no properties. It has to be
 /// a failure instead, for the same reason a malformed vCard is on the address
 /// book side.
 #[test]
@@ -204,8 +200,8 @@ fn an_envelope_with_no_event_in_it_is_refused() {
 /// missing one must not come back as a usable identifier: the save path tells an
 /// edit from a create by exactly this.
 ///
-/// Both spellings are checked although libical folds them together — a `UID:`
-/// line with no value reads back as absent, not as `""` — because that is a
+/// Both spellings are checked although libical folds them together: a `UID:`
+/// line with no value reads back as absent, not as `""`: because that is a
 /// libical behaviour rather than a promise, and it is the one thing standing
 /// between an empty uid and a `CalendarEvent/set` update naming it.
 #[test]
@@ -223,8 +219,8 @@ fn a_component_without_a_uid_reports_none() {
     }
 }
 
-/// ...and an empty uid that *is* there — the shape libical does keep, when it
-/// is set rather than parsed — is absent too, for the same reason: "" would be
+/// ...and an empty uid that *is* there: the shape libical does keep, when it
+/// is set rather than parsed: is absent too, for the same reason: "" would be
 /// sent to the server as the identifier of an event to patch.
 #[test]
 fn a_component_whose_uid_was_emptied_reports_none() {
@@ -238,7 +234,7 @@ fn a_component_whose_uid_was_emptied_reports_none() {
 }
 
 /// The master is the instance without a `RECURRENCE-ID`, and it leads the
-/// envelope — *whatever position it holds in the list*. Taking the first node
+/// envelope: *whatever position it holds in the list*. Taking the first node
 /// instead would map a moved single occurrence as if it were the series.
 ///
 /// The detached occurrences come with it. `jmap-ical` reads a series' overrides
@@ -285,7 +281,7 @@ fn the_master_leads_the_envelope_and_the_overrides_follow_it() {
 
 /// The instances belong to EDS. Cloning rather than taking is not an optimisation
 /// question here: `i_cal_component_take_component` takes ownership, and the
-/// component an `ECalComponent` lends out is not ours to give away — doing so
+/// component an `ECalComponent` lends out is not ours to give away: doing so
 /// aborts the process on a double free once EDS drops its own reference, which
 /// this test's teardown is.
 #[test]
@@ -306,7 +302,7 @@ fn the_instances_survive_being_marshalled() {
 
 /// Only a detached occurrence, with no series to attach it to. JSCalendar says
 /// "this instance differs" only relative to a series, so there is nothing
-/// honest to send — and a failure the user sees beats a save that silently
+/// honest to send, and a failure the user sees beats a save that silently
 /// rewrites the whole series to look like one moved day.
 #[test]
 fn a_save_of_nothing_but_an_override_is_refused() {
@@ -329,7 +325,7 @@ fn a_save_with_no_instances_at_all_is_refused() {
 
 /// libical's own identifier for a builtin zone. Evolution's appointment editor
 /// sets a start with the zone *object*, and the `TZID` libical then writes is
-/// this — a form RFC 5545 §3.2.19 allows only because the `VTIMEZONE` that
+/// this: a form RFC 5545 §3.2.19 allows only because the `VTIMEZONE` that
 /// defines it is meant to travel in the same object. Nothing outside libical
 /// resolves it, and it is not an RFC 8984 §1.4.9 `TimeZoneId` either, so an
 /// envelope that names it and defines nothing says "some zone" and no more.
@@ -351,7 +347,7 @@ fn definitions(icalendar: &str) -> usize {
 /// The zone an event is in has to reach the server, and the only thing that can
 /// carry it is the definition libical holds: the identifier on the `DTSTART` is
 /// libical's own, so an envelope without the `VTIMEZONE` beside it hands the
-/// mapping a zone it cannot name — and `patch::diff` then leaves `timeZone`
+/// mapping a zone it cannot name, and `patch::diff` then leaves `timeZone`
 /// alone, which is a zone change the user made and nobody else ever sees.
 ///
 /// The last assertion is the one that matters; the two before it say *how* the
@@ -400,7 +396,7 @@ fn a_zoned_instance_brings_the_definition_of_its_zone() {
 /// that mapping is only reached with the transition rules some producer wrote,
 /// and the producer on the save path is libical. A definition it states in a
 /// shape the conversion will not guess at turns this red while every unit test
-/// stays green — and the answer would then be an error dialog for the
+/// stays green, and the answer would then be an error dialog for the
 /// commonest recurring appointment there is.
 #[test]
 fn a_recurrence_ending_at_a_utc_instant_converts_through_the_definition_libical_holds() {
@@ -439,7 +435,7 @@ fn a_recurrence_ending_at_a_utc_instant_converts_through_the_definition_libical_
 }
 
 /// A zone already spelled the way JSCalendar wants it needs no translating, but
-/// it does need defining — and under the identifier the event's properties use,
+/// it does need defining, and under the identifier the event's properties use,
 /// not libical's, or the envelope refers to one zone and defines another.
 #[test]
 fn a_zone_named_plainly_is_defined_under_the_name_the_event_uses() {
@@ -474,7 +470,7 @@ fn a_zone_named_plainly_is_defined_under_the_name_the_event_uses() {
     }
 }
 
-/// Every instance is asked which zone it means, and every property of it — a
+/// Every instance is asked which zone it means, and every property of it: a
 /// detached occurrence states the instant it replaces in the zone of the series,
 /// and may have been moved into another. One definition per zone, however many
 /// properties refer to it: a second copy of the same `VTIMEZONE` is a duplicate
@@ -520,8 +516,8 @@ fn every_instance_and_every_property_is_asked_which_zone_it_means() {
     }
 }
 
-/// A `TZID` no zone database knows — Windows' own spelling is the one that
-/// reaches EDS from an Exchange invitation — is left undefined rather than
+/// A `TZID` no zone database knows: Windows' own spelling is the one that
+/// reaches EDS from an Exchange invitation: is left undefined rather than
 /// guessed at. The event still goes, and the mapping refuses the zone
 /// downstream, which leaves the server's own value standing.
 #[test]
@@ -548,7 +544,7 @@ fn a_zone_no_database_knows_is_left_undefined() {
     }
 }
 
-/// UTC is the zone libical resolves and has no `VTIMEZONE` for — it is not a
+/// UTC is the zone libical resolves and has no `VTIMEZONE` for: it is not a
 /// zone with rules, it is the absence of them. Asking it for a definition
 /// returns NULL, and NULL is not something to put in an envelope.
 #[test]
@@ -573,7 +569,7 @@ fn utc_is_a_zone_with_nothing_to_define() {
 /// An RFC 8984 §1.4.9 custom identifier: no zone database holds it, and the
 /// solidus is what makes it the *other* legal form of a `TimeZoneId` rather than
 /// a misspelled IANA name. This is the shape a `VTIMEZONE` written by another
-/// client — an Exchange invitation, an exported `.ics` — arrives under.
+/// client: an Exchange invitation, an exported `.ics`: arrives under.
 const CUSTOM_TZID: &str = "/Example Corp/Reindeer Standard Time";
 
 /// The object such a zone arrives in, and the only place its rules exist.
@@ -611,7 +607,7 @@ static CACHES: AtomicU32 = AtomicU32::new(0);
 ///
 /// An `ECalCache` rather than a hand-rolled implementation of the interface:
 /// it is the object an `ECalMetaBackend` actually keeps, and the one EDS files a
-/// client's `VTIMEZONE` in — so what the test hands the marshalling is the same
+/// client's `VTIMEZONE` in, so what the test hands the marshalling is the same
 /// implementation the backend will.
 fn zone_cache(objects: &[(&str, &str)]) -> *mut ETimezoneCache {
     let path = std::env::temp_dir().join(format!(
@@ -653,8 +649,8 @@ fn zone_cache(objects: &[(&str, &str)]) -> *mut ETimezoneCache {
 /// This is the half of the custom-zone story the mapping already had and the
 /// backend did not: `jmap-ical` reads a `VTIMEZONE` back into an RFC 8984 §4.7.2
 /// `timeZones` entry, but only ever saw one if the document it was handed
-/// carried it. EDS does not keep a client's `VTIMEZONE` in the component — it
-/// files it in the calendar's timezone cache and leaves the instance naming it —
+/// carried it. EDS does not keep a client's `VTIMEZONE` in the component: it
+/// files it in the calendar's timezone cache and leaves the instance naming it,
 /// so an envelope built from the instances alone named a zone nothing could
 /// resolve, and the mapping then refused it and left the server's own value
 /// standing. The user's zone never went anywhere.
@@ -702,7 +698,7 @@ fn a_custom_zone_the_calendar_holds_is_defined_out_of_it() {
 /// through EDS.
 ///
 /// RFC 5545 §3.6.5's own examples end an observance's `RRULE` at a UTC instant,
-/// beside a `DTSTART` that is a local time — so a zone whose rules changed at
+/// beside a `DTSTART` that is a local time, so a zone whose rules changed at
 /// some point in its history, which is most of the ones a real invitation
 /// carries, arrives with a `Z` that has to be read against the
 /// `TZOFFSETFROM` in the same component. Reading its digits as a local time
@@ -729,7 +725,7 @@ fn an_observance_that_stopped_repeating_keeps_its_end_through_the_calendar() {
             [CUSTOM_TZID]["daylight"][0]["recurrenceRules"][0]["until"]
             .clone();
 
-        // 01:00 UTC is 02:00 where the offset before the transition is +0100 —
+        // 01:00 UTC is 02:00 where the offset before the transition is +0100,
         // the wall clock the rule always named, which is what RFC 8984 §4.7.2
         // states a TimeZoneRule's times in.
         assert_eq!(
@@ -746,7 +742,7 @@ fn an_observance_that_stopped_repeating_keeps_its_end_through_the_calendar() {
 }
 
 /// And a zone neither the builtin table nor the calendar knows is still left
-/// undefined rather than guessed at — asking the cache adds a place to look, not
+/// undefined rather than guessed at: asking the cache adds a place to look, not
 /// a licence to invent.
 #[test]
 fn a_zone_the_calendar_does_not_hold_either_is_still_left_undefined() {
@@ -775,7 +771,7 @@ fn a_zone_the_calendar_does_not_hold_either_is_still_left_undefined() {
 }
 
 /// A caller with no calendar to hand asks nothing of one. The zone stays
-/// undefined — which is what every other test here passes NULL for, and is
+/// undefined, which is what every other test here passes NULL for, and is
 /// stated once rather than assumed everywhere.
 #[test]
 fn no_calendar_means_no_second_place_to_look() {
@@ -812,7 +808,7 @@ fn resolves(icalendar: &str, tzid: &str) -> bool {
     resolved_definition(icalendar, tzid).is_some()
 }
 
-/// The definition libical built the zone out of, rendered — `None` where it
+/// The definition libical built the zone out of, rendered: `None` where it
 /// resolved no zone at all.
 ///
 /// [`resolves`] asks whether a reader can find the zone; this asks what the
@@ -855,8 +851,8 @@ fn resolved_definition(icalendar: &str, tzid: &str) -> Option<String> {
 /// leaning on libical resolving an IANA name out of its builtin table. RFC 5545
 /// §3.2.19 says the parameter names a `VTIMEZONE` in the same object, so what
 /// went out was not a calendar object: it happened to work because the reader on
-/// the other side was libical. Anything else — a stricter parser, an event
-/// exported to a file, an invitation forwarded on — reads an event at a wall
+/// the other side was libical. Anything else: a stricter parser, an event
+/// exported to a file, an invitation forwarded on: reads an event at a wall
 /// clock time in no particular zone.
 #[test]
 fn an_object_handed_to_eds_defines_the_zone_it_refers_to() {
@@ -976,9 +972,9 @@ fn one_zone_named_by_two_events_is_defined_once() {
 }
 
 /// A zone the object already defines is left alone. `jmap-ical` defines the one
-/// kind libical cannot resolve — a custom identifier the event carries its own
+/// kind libical cannot resolve: a custom identifier the event carries its own
 /// RFC 8984 §4.7.2 definition for, see
-/// [`the_zone_only_the_server_could_name_reaches_eds_and_resolves`] — so this is
+/// [`the_zone_only_the_server_could_name_reaches_eds_and_resolves`], so this is
 /// what keeps the two from meeting as a duplicate `TZID` in one object, here and
 /// on the day EDS hands one of these objects back through this path.
 #[test]
@@ -1059,10 +1055,10 @@ fn in_a_zone_only_the_server_can_name() -> String {
 ///
 /// This is the one identifier `jmap-ical` cannot lean on the reader for. An IANA
 /// name resolves out of libical's builtin table, and the marshalling puts that
-/// definition in the object EDS caches — see
+/// definition in the object EDS caches: see
 /// [`an_object_handed_to_eds_defines_the_zone_it_refers_to`]; a custom identifier
 /// resolves nowhere, so the definition the server
-/// sent is all there is — and a `VTIMEZONE` libical rejects would leave the
+/// sent is all there is, and a `VTIMEZONE` libical rejects would leave the
 /// `DTSTART` floating, which moves the appointment by the zone's offset without
 /// saying so.
 ///
@@ -1116,7 +1112,7 @@ fn the_zone_only_the_server_could_name_reaches_eds_and_resolves() {
             "the zone is defined more than once, or not at all: {object}"
         );
         // Handed over byte for byte: the zone is already defined, so there is
-        // nothing for the marshalling to add and the object is not rebuilt —
+        // nothing for the marshalling to add and the object is not rebuilt,
         // which is what keeps the save path's comparison a comparison of the
         // event rather than of two spellings of it.
         assert_eq!(object, text, "the object was rebuilt for nothing");
@@ -1125,7 +1121,7 @@ fn the_zone_only_the_server_could_name_reaches_eds_and_resolves() {
 }
 
 /// And on the way in: the component `load_component_sync` hands back keeps the
-/// definition, and libical resolves the identifier out of *that* — the path EDS
+/// definition, and libical resolves the identifier out of *that*: the path EDS
 /// takes for an event whose info carried no object.
 #[test]
 fn the_component_handed_back_defines_the_zone_only_the_server_could_name() {
@@ -1149,7 +1145,7 @@ fn the_component_handed_back_defines_the_zone_only_the_server_could_name() {
 ///
 /// `jmap-ical` emits `BYDAY` before `BYMONTHDAY` before `BYMONTH` because that
 /// is the order libical writes them in, and a rule that comes back out of EDS's
-/// own cache spelled differently than it went in compares unequal to itself —
+/// own cache spelled differently than it went in compares unequal to itself,
 /// which the save path reads as an edit. Nothing in `jmap-ical` can check that
 /// claim: calcard is what parses there. This is where libical is available to be
 /// asked.
@@ -1175,7 +1171,7 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         "FREQ=MONTHLY;COUNT=4;BYDAY=FR;BYSETPOS=-1",
         "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,-1",
         // And where `BYSETPOS` is written: after the months, before the day the
-        // week is counted from — the seventh part, and the one that decides
+        // week is counted from: the seventh part, and the one that decides
         // where a rule naming everything folds.
         "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;\
          BYSETPOS=2;WKST=SU",
@@ -1186,7 +1182,7 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         // may carry one and `jmap-ical` does not gate it as it gates BYMONTHDAY.
         "FREQ=WEEKLY;BYDAY=MO;BYMONTH=12",
         // And the two parts that are not `BYxxx` at all: libical writes the end
-        // of the series — `COUNT` or `UNTIL` — *before* `INTERVAL`, which is why
+        // of the series: `COUNT` or `UNTIL`: *before* `INTERVAL`, which is why
         // `jmap-ical` emits them in that order. It is the only ordering claim in
         // the mapping that concerns a part outside the `BYxxx` block.
         "FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO",
@@ -1216,7 +1212,7 @@ fn a_day_of_the_month_no_month_has_would_cost_libical_the_whole_rule() {
 }
 
 /// The same question for the months of the year, whose answers are three
-/// different shapes — which together are why `jmap-ical`'s `month_token` accepts
+/// different shapes, which together are why `jmap-ical`'s `month_token` accepts
 /// only the canonical decimal spelling of a month 1 to 12, and measured here
 /// rather than assumed.
 #[test]
@@ -1232,7 +1228,7 @@ fn libical_answers_for_a_month_this_mapping_refuses() {
     ] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
     }
-    // A thirteenth month and a leap month, though, libical keeps verbatim — so
+    // A thirteenth month and a leap month, though, libical keeps verbatim: so
     // the reason to refuse them is not that the parser objects. It is that a
     // Gregorian series has neither, so the rule would sit in the cache as one
     // that never occurs; `5L` names a month at all only under RFC 7529's
@@ -1243,7 +1239,7 @@ fn libical_answers_for_a_month_this_mapping_refuses() {
     }
     // And the third shape: a spelling that is kept but *changed*. RFC 5545's
     // `monthnum` admits the leading zero, and a rule written `03` comes back `3`
-    // — a difference the save path reads as an edit the user never made.
+    //: a difference the save path reads as an edit the user never made.
     assert_eq!(
         reparsed_rrule("FREQ=YEARLY;BYMONTH=03").as_deref(),
         Some("FREQ=YEARLY;BYMONTH=3"),
@@ -1251,7 +1247,7 @@ fn libical_answers_for_a_month_this_mapping_refuses() {
 }
 
 /// The same question for the days of the year, whose answers split the same
-/// three ways the months' do — and not along the boundary RFC 5545 draws, which
+/// three ways the months' do, and not along the boundary RFC 5545 draws, which
 /// is why `jmap-ical`'s `year_day_token` and its frequency gate are measured here
 /// rather than assumed.
 #[test]
@@ -1268,7 +1264,7 @@ fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
     }
     // But not every day outside RFC 5545's `yeardaynum`: 367 and -367 libical
     // keeps verbatim, where 999 costs the rule. So the reason to refuse a day just
-    // past the end of a leap year is not that the parser objects — it is that no
+    // past the end of a leap year is not that the parser objects: it is that no
     // year has one, and the rule would sit in EDS's cache as a series that never
     // occurs.
     for rrule in ["FREQ=YEARLY;BYYEARDAY=367", "FREQ=YEARLY;BYYEARDAY=-367"] {
@@ -1288,7 +1284,7 @@ fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
     }
     // And the third shape, a spelling kept but *changed*: RFC 5545's `yeardaynum`
     // admits the leading zero and the leading plus, and both come back canonical.
-    // Unlike `BYMONTH=03`, that cannot bite the save path here — `byYearDay` holds
+    // Unlike `BYMONTH=03`, that cannot bite the save path here: `byYearDay` holds
     // a number, so the only spelling this mapping can write is the canonical one.
     for (written, back) in [
         ("FREQ=YEARLY;BYYEARDAY=010", "FREQ=YEARLY;BYYEARDAY=10"),
@@ -1299,7 +1295,7 @@ fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
 }
 
 /// The same question for the weeks of the year, whose answers split the same
-/// three ways the days of the year's do — and, as there, not along the boundary
+/// three ways the days of the year's do: and, as there, not along the boundary
 /// RFC 5545 draws, which is why `jmap-ical`'s `week_no_token` and its frequency
 /// gate are measured here rather than assumed.
 #[test]
@@ -1315,14 +1311,14 @@ fn libical_answers_for_a_week_of_the_year_this_mapping_refuses() {
     }
     // But not every week outside RFC 5545's `ordwk`: 54 and -54 libical keeps
     // verbatim, where 999 costs the rule. So the reason to refuse a week just past
-    // the end of the longest year is not that the parser objects — it is that no
+    // the end of the longest year is not that the parser objects: it is that no
     // year has one, and the rule would sit in EDS's cache as a series that never
     // occurs.
     for rrule in ["FREQ=YEARLY;BYWEEKNO=54", "FREQ=YEARLY;BYWEEKNO=-54"] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
     }
     // The frequency gate libical does not enforce either: it keeps `BYWEEKNO=20`
-    // beside every frequency RFC 5545 §3.3.10 forbids it next to — which here is
+    // beside every frequency RFC 5545 §3.3.10 forbids it next to, which here is
     // every frequency but `YEARLY`. `jmap-ical` leaves the part off anyway, because
     // no other reader of the rule is obliged to be as forgiving.
     for rrule in [
@@ -1335,7 +1331,7 @@ fn libical_answers_for_a_week_of_the_year_this_mapping_refuses() {
     }
     // And the third shape, a spelling kept but *changed*: `weeknum` admits the
     // leading zero and the leading plus, and both come back canonical. As with
-    // `BYYEARDAY`, that cannot bite the save path — `byWeekNo` holds a number, so
+    // `BYYEARDAY`, that cannot bite the save path: `byWeekNo` holds a number, so
     // the only spelling this mapping can write is the canonical one.
     for (written, back) in [
         ("FREQ=YEARLY;BYWEEKNO=020", "FREQ=YEARLY;BYWEEKNO=20"),
@@ -1346,7 +1342,7 @@ fn libical_answers_for_a_week_of_the_year_this_mapping_refuses() {
 }
 
 /// The same question for the occurrence a rule selects out of its set, whose
-/// answers split the same three ways the weeks of the year's do — and where the
+/// answers split the same three ways the weeks of the year's do, and where the
 /// gate that matters most, RFC 5545 §3.3.10's "only in conjunction with another
 /// BYxxx rule part", libical does not enforce at all.
 #[test]
@@ -1363,7 +1359,7 @@ fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
     // But not every position outside RFC 5545's `setposday`: 367 and -367
     // libical keeps verbatim, where 999 costs the rule. So the reason
     // `jmap-ical`'s `set_position_token` refuses a position just past the end of
-    // a leap year is not that the parser objects — it is that no interval
+    // a leap year is not that the parser objects: it is that no interval
     // expands to that many occurrences, and the rule would sit in EDS's cache
     // selecting an occurrence that is never there.
     for rrule in [
@@ -1376,7 +1372,7 @@ fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
     // libical keeps a `BYSETPOS` with no other `BYxxx` beside it, at every
     // frequency, though §3.3.10 admits none of these. Such a rule selects out of
     // the single occurrence the frequency already names, so `BYSETPOS=2` is a
-    // series that happens once and never again — which is why the mapping leaves
+    // series that happens once and never again, which is why the mapping leaves
     // the part off rather than trusting the parser to object.
     for rrule in [
         "FREQ=DAILY;BYSETPOS=1",
@@ -1387,7 +1383,7 @@ fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
     }
     // And the third shape, a spelling kept but *changed*: `setposday` admits the
     // leading zero and the leading plus, and both come back canonical. As with
-    // `BYYEARDAY`, that cannot bite the save path — `bySetPosition` holds a
+    // `BYYEARDAY`, that cannot bite the save path: `bySetPosition` holds a
     // number, so the only spelling this mapping can write is the canonical one.
     for (written, back) in [
         (
@@ -1409,7 +1405,7 @@ fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
 /// whole rule.
 #[test]
 fn libical_answers_for_the_hours_of_the_day() {
-    // Where `BYHOUR` goes: **first**, ahead of the days — not last, where each
+    // Where `BYHOUR` goes: **first**, ahead of the days, not last, where each
     // part added before it went. `jmap-ical`'s `named_by_parts` puts it there
     // because of this measurement; a rule emitted in any other order comes back
     // out of EDS's own cache reordered and compares unequal to itself, which the
@@ -1430,7 +1426,7 @@ fn libical_answers_for_the_hours_of_the_day() {
         ),
     );
     // The hours themselves survive verbatim, in the order given and at every
-    // frequency — §3.3.10 defines the part beside all of them — so the mapping
+    // frequency: §3.3.10 defines the part beside all of them, so the mapping
     // neither sorts them nor gates them on the frequency.
     for rrule in [
         "FREQ=DAILY;BYHOUR=0",
@@ -1444,7 +1440,7 @@ fn libical_answers_for_the_hours_of_the_day() {
     // And why `time_of_day_part` refuses anything outside RFC 5545's `hour`: unlike
     // days of the year and the positions in the set, where libical keeps an
     // out-of-range value verbatim, *every* hour it cannot use costs the *whole*
-    // `RRULE` — the event reaches EDS's cache as a single appointment with the
+    // `RRULE`: the event reaches EDS's cache as a single appointment with the
     // user's series gone.
     for rrule in [
         "FREQ=DAILY;BYHOUR=24",
@@ -1474,11 +1470,11 @@ fn libical_answers_for_the_hours_of_the_day() {
 }
 
 /// The same question for the minutes and seconds a rule repeats at, the last two
-/// `BYxxx` parts of RFC 8984 §4.3.3 this mapping models — and the two that go
+/// `BYxxx` parts of RFC 8984 §4.3.3 this mapping models, and the two that go
 /// ahead of even the hours.
 #[test]
 fn libical_answers_for_the_minutes_and_seconds() {
-    // Where they go: `BYSECOND`, then `BYMINUTE`, then `BYHOUR`, then the dates —
+    // Where they go: `BYSECOND`, then `BYMINUTE`, then `BYHOUR`, then the dates,
     // libical's own order, and the one `jmap-ical`'s `named_by_parts` writes, so
     // a rule that goes out this way comes back out of EDS's cache spelled
     // identically instead of reordered and read as an edit.
@@ -1490,7 +1486,7 @@ fn libical_answers_for_the_minutes_and_seconds() {
                BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU";
     assert_eq!(reparsed_rrule(all).as_deref(), Some(all));
     // The values survive verbatim, in the order given and at every frequency, so
-    // the mapping neither sorts nor gates them — and the sixtieth second is a
+    // the mapping neither sorts nor gates them, and the sixtieth second is a
     // *legal* value, RFC 5545 §3.3.10's `seconds` running 0 to 60 to admit the
     // leap second, which is the one place the two ranges differ.
     for rrule in [
@@ -1505,7 +1501,7 @@ fn libical_answers_for_the_minutes_and_seconds() {
         assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
     }
     // And why `time_of_day_part` refuses a value out of range: as with the hours,
-    // *every* one libical cannot use costs the **whole** `RRULE` — the event
+    // *every* one libical cannot use costs the **whole** `RRULE`: the event
     // reaches EDS's cache as a single appointment with the user's series gone.
     for rrule in [
         "FREQ=DAILY;BYMINUTE=60",
@@ -1534,7 +1530,7 @@ fn libical_answers_for_the_minutes_and_seconds() {
 /// `BYHOUR`, `BYMINUTE` and `BYSECOND` beside a `DTSTART` of value type DATE,
 /// since a time of day means nothing on a day with no clock. libical keeps such a
 /// component whole, so `jmap-ical` is the only place the contradiction is
-/// resolved — by drawing an all-day event whose rule names a time as a timed one
+/// resolved: by drawing an all-day event whose rule names a time as a timed one
 /// instead.
 #[test]
 fn libical_keeps_a_time_of_day_beside_an_all_day_start_that_forbids_it() {
@@ -1573,13 +1569,13 @@ fn libical_keeps_a_time_of_day_beside_an_all_day_start_that_forbids_it() {
 fn libical_answers_for_the_day_a_week_starts_on() {
     // The reason the default is left off: libical drops `WKST=MO` from a rule it
     // reads, because RFC 5545 §3.3.10 makes Monday the default. A rule written
-    // with it would come back out of EDS's cache without it — which the save path
+    // with it would come back out of EDS's cache without it, which the save path
     // would read as the user removing `firstDayOfWeek`.
     assert_eq!(
         reparsed_rrule("FREQ=WEEKLY;WKST=MO").as_deref(),
         Some("FREQ=WEEKLY"),
     );
-    // Every other day survives verbatim, at every frequency — including the ones
+    // Every other day survives verbatim, at every frequency: including the ones
     // where §3.3.10 calls the part insignificant. So there is no frequency gate in
     // the mapping: dropping the day where libical keeps it would be the mapping
     // inventing a narrowing of its own.
@@ -1606,7 +1602,7 @@ fn libical_answers_for_the_day_a_week_starts_on() {
         reparsed_rrule("FREQ=YEARLY;WKST=su").as_deref(),
         Some("FREQ=YEARLY;WKST=SU"),
     );
-    // Written last, after `BYMONTH` — which is the order `jmap-ical` emits the
+    // Written last, after `BYMONTH`, which is the order `jmap-ical` emits the
     // parts in, so that a rule that went out this way and came back through EDS's
     // own cache compares equal to itself.
     assert_eq!(
@@ -1653,8 +1649,8 @@ fn reparsed_rrule(value: &str) -> Option<String> {
 /// `jmap-ical` writes the key of the `locations` entry a `LOCATION` came from as
 /// an `X-JMAP-KEY` parameter, so that a save patches the server's own entry
 /// instead of replacing the property. Nothing in `jmap-ical` can check that
-/// libical keeps a parameter it has never heard of — calcard is what parses
-/// there — and if libical dropped it, the key would be gone by the time EDS
+/// libical keeps a parameter it has never heard of: calcard is what parses
+/// there, and if libical dropped it, the key would be gone by the time EDS
 /// handed the component back. It does keep it, verbatim, escaping and all.
 ///
 /// This is a measurement, not a requirement: the save path deliberately takes
@@ -1674,7 +1670,7 @@ fn libical_keeps_the_location_key_this_mapping_writes() {
     }
     // And what libical does *not* do: enforce RFC 5545 §3.6.1's one `LOCATION`
     // per `VEVENT`. A component may therefore arrive naming two places, which
-    // `jmap-ical` reads as the first — the same narrowing as an event whose
+    // `jmap-ical` reads as the first: the same narrowing as an event whose
     // `locations` map holds two, and the same refusal to write it back.
     assert_eq!(
         reparsed_lines("LOCATION:Room 42\r\nLOCATION:Cafeteria"),
@@ -1689,13 +1685,13 @@ fn libical_keeps_the_location_key_this_mapping_writes() {
 ///
 /// `jmap-ical` writes the whole `keywords` set as **one** `CATEGORIES` line of
 /// `,`-separated TEXT values, and the save path replaces the property from what
-/// comes back — so a tag libical dropped or re-spelled would be a tag the next
+/// comes back, so a tag libical dropped or re-spelled would be a tag the next
 /// save deletes.
 ///
 /// It does neither, but it does **not hand the line back as it was written**: it
 /// splits every value onto a `CATEGORIES` line of its own, escaping intact. That
 /// is why `jmap_ical::ical_to_event` reads *every* occurrence of the property
-/// rather than the first — a component EDS hands back holds one line per tag, not
+/// rather than the first: a component EDS hands back holds one line per tag, not
 /// the line we wrote, so reading the first alone would see a set of one and the
 /// save would delete the rest. This test is that case being reachable rather than
 /// hypothetical, measured rather than assumed.
@@ -1709,7 +1705,7 @@ fn libical_splits_the_categories_this_mapping_writes_and_keeps_every_tag() {
         ]
     );
     // TEXT escaping (RFC 5545 §3.3.11) inside one value, which is what keeps a
-    // tag holding a comma from becoming two tags — including across the split.
+    // tag holding a comma from becoming two tags: including across the split.
     assert_eq!(
         reparsed(
             "CATEGORIES",
@@ -1743,7 +1739,7 @@ fn libical_splits_the_categories_this_mapping_writes_and_keeps_every_tag() {
 ///
 /// An override may restate the tags (`jmap_ical::OVERRIDE_PROPERTIES`), and the
 /// only place the set for one occurrence is stated is that instance's own
-/// `CATEGORIES` — so the claim rests entirely on libical keeping the two
+/// `CATEGORIES`, so the claim rests entirely on libical keeping the two
 /// components' sets apart through the marshalling. It does: each keeps its own,
 /// split per value as above, and neither acquires the other's. Which is what
 /// makes the difference between them the user's edit rather than an artefact of
@@ -1805,11 +1801,11 @@ fn libical_keeps_the_tags_of_one_occurrence_apart_from_the_series() {
 ///
 /// The same claim as the tags above, one nesting level deeper: an override may
 /// restate `alerts` (`jmap_ical::OVERRIDE_PROPERTIES`) and the only place the
-/// reminders of one occurrence are stated is that instance's own `VALARM`s — which
+/// reminders of one occurrence are stated is that instance's own `VALARM`s: which
 /// are a child component *of a child component* once the two `VEVENT`s are
 /// marshalled into one `VCALENDAR`. So the claim rests on libical keeping each
 /// instance's alarms with the instance, rather than hoisting them onto the master
-/// or merging the two sets. It does, keys and signs intact — which is what makes
+/// or merging the two sets. It does, keys and signs intact, which is what makes
 /// the difference between the two the user's edit rather than an artefact of the
 /// trip through EDS's cache.
 #[test]
@@ -1878,12 +1874,12 @@ fn libical_keeps_the_reminder_of_one_occurrence_apart_from_the_series() {
 /// §3.8.2.7's OPAQUE default, so that a save can tell an event the server never
 /// gave a transparency from one the user just set back to busy. That reading is
 /// only sound if the component EDS hands back does not acquire a line the
-/// mapping never wrote — libical filling the default in would turn every save of
+/// mapping never wrote: libical filling the default in would turn every save of
 /// such an event into a patch stating `busy`.
 ///
 /// It does not: a `VEVENT` with no `TRANSP` comes back with none, and one that
 /// has it comes back with the same value, unrespelled. What this cannot say is
-/// what Evolution's *appointment editor* writes — it may well set the property
+/// what Evolution's *appointment editor* writes: it may well set the property
 /// explicitly from its "Show Time as" combo, and a patch stating the default
 /// would then be sent once. That is a redundant write, not a wrong one: RFC 8984
 /// §4.4.2 makes `busy` and no value the same state.
@@ -1914,7 +1910,7 @@ fn libical_neither_invents_a_transparency_nor_respells_one() {
 /// Two readings rest on this. `jmap-ical` reads a missing `PRIORITY` as *nothing
 /// said* rather than as RFC 5545 §3.8.1.9's undefined priority, so a save can tell
 /// an event the server never gave an importance from one the user just made
-/// unimportant — which is only sound if the component EDS hands back does not
+/// unimportant, which is only sound if the component EDS hands back does not
 /// acquire a line the mapping never wrote.
 ///
 /// And `PRIORITY:0` is written out rather than left off, even though RFC 5545
@@ -1922,16 +1918,16 @@ fn libical_neither_invents_a_transparency_nor_respells_one() {
 /// the reading with something to lose: were libical to drop the property as
 /// meaning nothing, an event the server states as 0 would come back with no line,
 /// read as `None`, and every save of it would carry a redundant `"priority": null`
-/// — the same state, so not wrong, but a write nobody asked for.
+///: the same state, so not wrong, but a write nobody asked for.
 ///
 /// It does neither: no line stays no line, and every value 0 to 9 comes back as
-/// itself. What this cannot say is what Evolution's *appointment editor* writes —
+/// itself. What this cannot say is what Evolution's *appointment editor* writes,
 /// but for once that question has an answer that does not need a display:
 /// `e_comp_editor_property_part_priority_new` is called only from
 /// `e_comp_editor_task` and `e_bulk_edit_tasks` in Evolution 3.52's
 /// `libevolution-calendar.so`, never from `e_comp_editor_event`. The event editor
 /// has no priority control at all, so it has nothing to write and leaves the line
-/// as it found it — which is what makes this probe the whole story for events.
+/// as it found it, which is what makes this probe the whole story for events.
 #[test]
 fn libical_neither_invents_a_priority_nor_respells_one() {
     assert_eq!(
@@ -1957,7 +1953,7 @@ fn libical_neither_invents_a_priority_nor_respells_one() {
 ///
 /// The first: `jmap-ical` reads a missing `CLASS` as *nothing said* rather than as
 /// RFC 5545 §3.8.1.3's PUBLIC default, so a save can tell an event the server
-/// never classified from one the user just made public — which is only sound if
+/// never classified from one the user just made public, which is only sound if
 /// the component EDS hands back does not acquire a line the mapping never wrote.
 ///
 /// The second, and the one with something to lose: `CLASS:PUBLIC` is written out
@@ -1968,14 +1964,14 @@ fn libical_neither_invents_a_priority_nor_respells_one() {
 ///
 /// It does neither: no line stays no line, and all three values come back as
 /// themselves. And unlike `TRANSP` and `PRIORITY`, what Evolution's *appointment
-/// editor* does here is not left open — it is measurable from the installed
+/// editor* does here is not left open: it is measurable from the installed
 /// binary. Evolution 3.52's `libevolution-calendar.so` has no classification
 /// property *part* on the event editor (`e_comp_editor_property_part_classification_new`
 /// is called only from the task, memo and bulk-task editors); the appointment
 /// editor exposes the classification as an Options ▸ Classification radio menu
 /// (`classify-public` / `classify-private` / `classify-confidential`) and its
-/// `fill_component` reads that menu and calls `i_cal_property_set_class` — or
-/// `i_cal_property_new_class` when the component has no `CLASS` yet —
+/// `fill_component` reads that menu and calls `i_cal_property_set_class`: or
+/// `i_cal_property_new_class` when the component has no `CLASS` yet,
 /// **unconditionally**. So the editor states the classification on every save,
 /// defaulting to public, which is exactly why writing `CLASS:PUBLIC` out is not
 /// optional: a baseline rendered without it would differ from what EDS hands back
@@ -2006,14 +2002,14 @@ fn libical_neither_invents_a_classification_nor_respells_one() {
 /// `jmap-ical` draws RFC 8984's `created` and `updated` as `CREATED`, `DTSTAMP`
 /// and `LAST-MODIFIED` and never reads any of the three back, so no value the
 /// save path uses rests on libical here. What does is one claim `jmap-ical`
-/// cannot check for itself: that a component written **without** a `DTSTAMP` —
+/// cannot check for itself: that a component written **without** a `DTSTAMP`,
 /// which is what an event whose server states no `updated` gets, RFC 5545 §3.6.1
-/// requiring the property notwithstanding — is read rather than refused.
+/// requiring the property notwithstanding: is read rather than refused.
 ///
 /// It is, and libical closes the gap itself: it stamps a `DTSTAMP` from the
 /// clock, so what EDS hands a save always carries one. That is the measurement
-/// worth having, because it says exactly what such a line *is* — libical's
-/// moment, not the server's — and it is why reading `updated` back off a
+/// worth having, because it says exactly what such a line *is*: libical's
+/// moment, not the server's, and it is why reading `updated` back off a
 /// component would be reading the local clock. It invents neither of the other
 /// two, and it re-renders all three verbatim when they are written.
 #[test]
@@ -2036,7 +2032,7 @@ fn libical_stamps_a_dtstamp_of_its_own_and_keeps_the_timestamps_written() {
         );
     }
     // And what it does with the ones this mapping writes: hands them back
-    // verbatim, UTC designator included — the invented stamp is a default, not
+    // verbatim, UTC designator included: the invented stamp is a default, not
     // an overwrite.
     for line in [
         "CREATED:20260102T093000Z",
@@ -2055,7 +2051,7 @@ fn libical_stamps_a_dtstamp_of_its_own_and_keeps_the_timestamps_written() {
 /// no value the save path uses rests on libical here either. What does rest on
 /// it is what the user is *shown*: these lines exist to be read, and a parameter
 /// libical dropped or a value it mangled would be a guest list Evolution shows
-/// wrongly — an attendee with no name, or one whose reply went missing.
+/// wrongly: an attendee with no name, or one whose reply went missing.
 ///
 /// It keeps both lines with every parameter this mapping writes, in the order
 /// they were written.
@@ -2126,14 +2122,14 @@ fn reparsed_object(lines: &str) -> String {
 /// This is the first mapped property that is a **child component**, so more of it
 /// rests on libical than a content line does: `jmap-ical` writes a `VALARM` per
 /// alert, and the key of the `alerts` entry rides on the RFC 9074 §6 `UID` inside
-/// it — a property RFC 5545 never gave a `VALARM`, and one nothing in `jmap-ical`
+/// it: a property RFC 5545 never gave a `VALARM`, and one nothing in `jmap-ical`
 /// can check the survival of, since calcard is what parses there. If libical
 /// dropped the alarm, the reminder would be gone by the time EDS handed the
 /// component back and the next save would delete it server-side; if it dropped
 /// just the `UID`, every save would re-key the property.
 ///
 /// It keeps all of it: the alarm, its `UID`, the `RELATED=END` parameter and the
-/// **sign** on the trigger — a reminder a quarter of an hour *before* the event
+/// **sign** on the trigger: a reminder a quarter of an hour *before* the event
 /// coming back as one a quarter of an hour after it is the failure this watches
 /// for. What libical adds is an `X-EVOLUTION-ALARM-UID` of its own, which is what
 /// Evolution keys alarms on and which this mapping ignores.
@@ -2180,12 +2176,12 @@ fn libical_keeps_the_reminder_this_mapping_writes() {
 // source_changed's colour read
 
 /// A distinct uid per source, so two sources in one test process never
-/// collide — EDS derives the uid from what it is given, and this is the
+/// collide: EDS derives the uid from what it is given, and this is the
 /// literal that stands in for it here.
 static NEXT_SOURCE: AtomicU32 = AtomicU32::new(0);
 
 /// A bare `ESource`, built directly the way `tests/connect.rs` and
-/// `jmap-backend-collection/tests/child_source.rs`'s `TestSource` do — not
+/// `jmap-backend-collection/tests/child_source.rs`'s `TestSource` do: not
 /// through a registry, which `tests/backend.rs`'s own module comment says
 /// neither this VM nor CI has running. [`marshal::selectable_color`] only
 /// reads the "Calendar" extension off whatever `ESource` it is handed, so
@@ -2243,7 +2239,7 @@ fn selectable_color_reads_the_calendar_extensions_color() {
 /// `ESourceSelectable:color` is not NULL-by-default the way a freshly created
 /// extension's other properties are: EDS's own GParamSpec gives it a built-in
 /// default (`#62a0ea`, GNOME's accent blue). A source nobody has coloured
-/// therefore still answers `Some`, not `None` — which is exactly why
+/// therefore still answers `Some`, not `None`, which is exactly why
 /// `source_changed`'s diff needs a real baseline rather than treating "no
 /// colour yet" as the same as "matches the baseline".
 #[test]
