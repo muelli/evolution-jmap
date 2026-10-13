@@ -119,13 +119,21 @@
 //! states this base can reach are `Some(true)` and `None`, and the generator
 //! varies between exactly those.
 //!
-//! Scoped out, left for later: the remaining two properties the module doc
-//! already calls out as needing more than the baseline (`recurrenceRule`,
-//! `recurrenceOverrides`), each needing its own generator, left for its own
-//! increment. `timeZones` itself is not diffed at all (the module doc: "added
-//! to", never compared or replaced), so it has no round-trip property to
-//! state beyond what the `timeZone` increment above already confirms stays
-//! empty for a named zone.
+//! Also covered: `recurrenceRule` (`diff_recurrence`), replaced whole like
+//! `alerts`, gated by [`jmap_ical::maps_recurrence_rule`] on both `current`
+//! and `edited` (neither side may hold a rule the `RRULE` could only narrow
+//! or reject). Restricted to frequency plus an optional interval and count,
+//! no `until` and no `BYxxx` part: that shape clears every
+//! `maps_recurrence_rule` check trivially, so the patch is a literal round
+//! trip with `edited.recurrence_rule`, no third "expected" event needed.
+//! `rrule_to_rule` never restores `RecurrenceRule::rule_type`, so both sides
+//! are run through `stable()` first, the same as every other property here.
+//!
+//! Scoped out, left for later: `recurrenceOverrides`, the module doc's last
+//! remaining property, needing its own generator. `timeZones` itself is not
+//! diffed at all (the module doc: "added to", never compared or replaced),
+//! so it has no round-trip property to state beyond what the `timeZone`
+//! increment above already confirms stays empty for a named zone.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -136,7 +144,7 @@ use std::collections::BTreeMap;
 
 use jmap_cal_sync::patch::diff;
 use jmap_ical::{event_to_ical, ical_to_event};
-use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
 
@@ -420,6 +428,39 @@ fn arb_virtual_locations() -> impl Strategy<
     )
 }
 
+/// A frequency `writable` always accepts (a non-empty string), the plain
+/// iCalendar `FREQ` tokens `rule_to_rrule`/`rrule_to_rule` draw back
+/// unchanged (lower case, the form `rrule_to_rule` always produces).
+fn arb_frequency() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(&["daily", "weekly", "monthly", "yearly"][..])
+}
+
+/// A `RecurrenceRule` restricted to frequency plus an optional interval and
+/// count, no `until` and no `BYxxx` part: a shape [`maps_recurrence_rule`]
+/// always accepts, since every `BYxxx` gate is vacuous when the part is
+/// absent and `writable` needs only the non-empty frequency this always has.
+///
+/// [`maps_recurrence_rule`]: jmap_ical::maps_recurrence_rule
+fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
+    prop::option::of(
+        (
+            arb_frequency(),
+            prop::option::of(1u32..5),
+            prop::option::of(1u32..20),
+        )
+            .prop_map(|(frequency, interval, count)| {
+                let mut rule = RecurrenceRule::new(frequency);
+                if let Some(interval) = interval {
+                    rule = rule.with_interval(interval);
+                }
+                if let Some(count) = count {
+                    rule = rule.with_count(count);
+                }
+                rule
+            }),
+    )
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -591,6 +632,17 @@ proptest! {
                 })
                 .collect(),
         );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_rule_round_trip(old in arb_recurrence_rule(), new in arb_recurrence_rule()) {
+        let mut old_event = base();
+        old_event.recurrence_rule = old;
+        let mut new_event = base();
+        new_event.recurrence_rule = new;
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;

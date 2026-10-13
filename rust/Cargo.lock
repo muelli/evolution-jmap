@@ -319,6 +319,7 @@ dependencies = [
  "evolution-jmap-ical",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "proptest",
  "serde_json",
  "tracing",
@@ -404,6 +405,13 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "evolution-jmap-tracing-capture"
+version = "0.4.1"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
