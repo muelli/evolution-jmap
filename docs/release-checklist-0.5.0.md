@@ -11,10 +11,31 @@ this branch; part (3), a local dry run of everything
 `.github/workflows/release.yml` does short of publishing, found and fixed two
 real release-blocking bugs (below) before they could hit a real tag push.
 
+**Refreshed 2026-10-13 (item 96), tip `e466767e`.** `master` had gained 18
+commits since item 95's `ae19d06c` (real fixes: `a75d29a3` SieveScript/validate's
+wire shape, `df8e19f3` the resolver thread pool addressing F31, `1a9b09bc`
+confirming item 63 live, `ed7d7973` the `/usr` install-prefix default; the rest
+is live-server test coverage and an FFI re-audit report, no further behaviour
+change). Merged `origin/master` into `release/0.5.0` with no conflicts (the two
+packaging fixes, `d2ba3be5` and `ed7d7973`, touch disjoint files: RPM-generator
+gating vs. the install-prefix default, so neither undoes the other). `NEWS.md`
+and `docs/packaging/changelog` updated: item 63's live-session caveat dropped
+(now confirmed), the resolver-pool fix added, and the changelog brought back in
+sync with `NEWS.md` (it had silently fallen behind the real-world-scale bullet
+since `b006dab3`, before this session). `ci/checks.sh` green on the merge tip,
+foreground, `EXIT=0`; `package-default-generator` (added by `d2ba3be5`) now
+exercises the exact `cmake --build build --target package` release.yml runs,
+so this is no longer a gap `ci/checks.sh` misses. Reran the `release` job's own
+steps by hand on this tip: cacheless `jmap-mockd` release build, source
+tarball, SBOM (byte-identical across two runs), checksums, see below. `master`'s
+CI is green on `a2e57762` (the merged tip): `checks`, `reproducible`, `build`
+all `success`; the GUI-smoke/EDS-matrix/functional jobs show `skipped`, matching
+this project's normal job gating, not a failure.
+
 ## Before tagging
 
 - [ ] Confirm `release/0.5.0` is the branch to release from and `ci/checks.sh`
-      is green on its tip (it is, as of this checklist).
+      is green on its tip (it is, as of this checklist, tip `e466767e`).
 - [ ] Re-read `NEWS.md`'s new `[0.5.0]` section; confirm nothing merged after
       it needs adding.
 - [ ] Decide whether `release/0.5.0` merges to `master` before or after
@@ -97,3 +118,21 @@ Both were confirmed red (reproduced the exact release-workflow failure
 locally) before the fix, and green after, using the same pinned-image
 package set this runner has (Ubuntu 24.04, EDS 3.52.3), not a guess from
 reading the YAML.
+
+## Rerun on the refreshed tip (item 96, 2026-10-13, tip `e466767e`)
+
+Same steps, repeated after merging 18 `master` commits in (above). No new
+bugs found; both fixes above still hold with nothing to re-fix or duplicate.
+
+```
+c4600b55743814747d330ad392b0fd9f8a9c7128fd97206aabfb1a0a63c29bc5  evolution-jmap-v0.5.0.cdx.json
+87e7a829cf40956b25a362453aab62998faca87be4353fcc9a1f9c554d06b96b  evolution-jmap-v0.5.0.tar.xz
+e9234d4ba95e92a051a5f178969c30cb972cd32f998059f927717fa240e6a16f  evolution-jmap_0.5.0_amd64.deb
+dca8b97792f3f2807bc3a3aac2b8fa65177573795e12ef647e5de2536d2dab80  jmap-mockd
+```
+
+These are this dry run's own checksums, not the real release's (the real
+tag build will differ since it runs on the pinned `ci-image` container, not
+this VM). Re-running a tag still needs its own `SHA256SUMS` verification per
+`docs/verifying-artifacts.md`; this table is evidence the pipeline runs
+clean end to end on the refreshed tip, not a value to check against later.
