@@ -996,10 +996,10 @@ impl Client {
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
         let response = self.execute_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
-        if crate::url::origin_of(&response.final_url) != crate::url::origin_of(&url) {
+        if !crate::url::same_origin(&url, &response.final_url) {
             return Err(Error::CrossOriginRedirect {
-                requested: crate::url::origin_of(&url).to_owned(),
-                followed: crate::url::origin_of(&response.final_url).to_owned(),
+                requested: crate::url::origin_of(&url).into_owned(),
+                followed: crate::url::origin_of(&response.final_url).into_owned(),
                 rebase_note: self.rebase_note().map(str::to_owned),
             });
         }

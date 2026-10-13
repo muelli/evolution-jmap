@@ -21,6 +21,8 @@
 //! template to find out which; percent-encoding everything outside
 //! §2.3's unreserved set is the one answer that is correct in both.
 
+use std::borrow::Cow;
+
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 /// RFC 3986 §2.3's unreserved set (`ALPHA / DIGIT / "-" / "." / "_" / "~"`),
@@ -67,26 +69,104 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
 /// The scheme+authority prefix of `url`: everything before its first `/`
 /// after `://`, or the whole string if it has none.
 ///
-/// Used to decide whether a response came from the URL it was asked for or
-/// wandered somewhere else via a redirect (see
-/// [`crate::transport::HttpResponse::final_url`] and
-/// [`crate::Client::download_blob`]): two URLs naming the same scheme, host
-/// and port are the same origin even if their paths differ, and differ in
-/// this string if either does. Byte comparison rather than RFC 6454's own
-/// normalisation (case-folding the host, dropping a default port) is
-/// deliberate: both sides being compared are strings this crate itself
-/// built or a transport reported back from a URL it built, not
-/// attacker-chosen text to normalise defensively against.
-pub(crate) fn origin_of(url: &str) -> &str {
+/// A host and the same host with one trailing dot are treated as the same
+/// origin (e.g. `https://example.com.` and `https://example.com`), so DNS
+/// root labels do not cause cross-origin credential dropping or redirect
+/// mismatch errors.
+pub(crate) fn origin_of(url: &str) -> Cow<'_, str> {
     match url.find("://") {
         Some(scheme_end) => {
             let after_scheme = scheme_end + 3;
-            match url[after_scheme..].find('/') {
-                Some(slash) => &url[..after_scheme + slash],
-                None => url,
+            let authority_end = match url[after_scheme..].find('/') {
+                Some(slash) => after_scheme + slash,
+                None => url.len(),
+            };
+            let authority = &url[after_scheme..authority_end];
+            let host_port = match authority.find('@') {
+                Some(at) => &authority[at + 1..],
+                None => authority,
+            };
+            let userinfo = match authority.find('@') {
+                Some(at) => &authority[..=at],
+                None => "",
+            };
+
+            let (host, port) = if host_port.starts_with('[') {
+                match host_port.find(']') {
+                    Some(end) => {
+                        let host = &host_port[..=end];
+                        let rest = &host_port[end + 1..];
+                        let port = rest.strip_prefix(':');
+                        (host, port)
+                    }
+                    None => (host_port, None),
+                }
+            } else {
+                match host_port.rfind(':') {
+                    Some(colon) => (&host_port[..colon], Some(&host_port[colon + 1..])),
+                    None => (host_port, None),
+                }
+            };
+
+            let normalized_host = if host.len() > 1 && host.ends_with('.') && !host.ends_with("..")
+            {
+                &host[..host.len() - 1]
+            } else {
+                host
+            };
+
+            if normalized_host == host {
+                Cow::Borrowed(&url[..authority_end])
+            } else if port.is_none() && userinfo.is_empty() {
+                Cow::Borrowed(&url[..after_scheme + normalized_host.len()])
+            } else {
+                let scheme = &url[..scheme_end];
+                match port {
+                    Some(p) => Cow::Owned(format!("{scheme}://{userinfo}{normalized_host}:{p}")),
+                    None => Cow::Owned(format!("{scheme}://{userinfo}{normalized_host}")),
+                }
             }
         }
-        None => url,
+        None => Cow::Borrowed(url),
+    }
+}
+
+/// Whether two URLs name the same scheme, host, and port, treating a host and
+/// the same host with one trailing dot as the same origin.
+pub(crate) fn same_origin(a: &str, b: &str) -> bool {
+    origin_of(a) == origin_of(b)
+}
+
+/// Resolves a redirect location against the current URL.
+pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<String, String> {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return Ok(location.to_string());
+    }
+    let scheme_end = current_url
+        .find("://")
+        .ok_or_else(|| "current URL lacks scheme".to_string())?;
+    let scheme = &current_url[..scheme_end];
+
+    if let Some(network_ref) = location.strip_prefix("//") {
+        return Ok(format!("{scheme}://{network_ref}"));
+    }
+
+    if location.starts_with('/') {
+        let origin = origin_of(current_url);
+        return Ok(format!("{origin}{location}"));
+    }
+
+    let path_start = scheme_end + 3;
+    let url_without_query = match current_url.find('?') {
+        Some(q) => &current_url[..q],
+        None => current_url,
+    };
+    let last_slash = url_without_query[path_start..]
+        .rfind('/')
+        .map(|idx| path_start + idx);
+    match last_slash {
+        Some(idx) => Ok(format!("{}{location}", &current_url[..=idx])),
+        None => Ok(format!("{current_url}/{location}")),
     }
 }
 
@@ -94,7 +174,7 @@ pub(crate) fn origin_of(url: &str) -> &str {
 mod tests {
     use proptest::prelude::*;
 
-    use super::{encode_template_value, origin_of, rebase_origin};
+    use super::{encode_template_value, origin_of, rebase_origin, resolve_redirect, same_origin};
 
     #[test]
     fn unreserved_characters_pass_through() {
@@ -188,6 +268,87 @@ mod tests {
         assert_eq!(origin_of("not a url"), "not a url");
     }
 
+    #[test]
+    fn origin_of_normalizes_trailing_dot_in_both_directions() {
+        assert_eq!(origin_of("https://example.com."), "https://example.com");
+        assert_eq!(
+            origin_of("https://example.com"),
+            origin_of("https://example.com.")
+        );
+        assert_eq!(
+            origin_of("https://example.com."),
+            origin_of("https://example.com")
+        );
+        assert_eq!(
+            origin_of("https://example.com.:8080"),
+            origin_of("https://example.com:8080")
+        );
+        assert_eq!(
+            origin_of("https://example.com:8080"),
+            origin_of("https://example.com.:8080")
+        );
+    }
+
+    #[test]
+    fn same_origin_treats_trailing_dot_as_same_origin_in_both_directions() {
+        assert!(same_origin(
+            "https://example.com./.well-known/jmap",
+            "https://example.com/jmap/session"
+        ));
+        assert!(same_origin(
+            "https://example.com/.well-known/jmap",
+            "https://example.com./jmap/session"
+        ));
+        assert!(same_origin(
+            "https://example.com.:8080/download/1",
+            "https://example.com:8080/download/2"
+        ));
+        assert!(same_origin(
+            "https://example.com:8080/download/1",
+            "https://example.com.:8080/download/2"
+        ));
+        assert!(!same_origin(
+            "https://example.com:8080/download/1",
+            "https://example.com:9090/download/1"
+        ));
+        assert!(!same_origin(
+            "http://example.com/download/1",
+            "https://example.com/download/1"
+        ));
+        assert!(!same_origin(
+            "https://example.com./download/1",
+            "https://other.com/download/1"
+        ));
+    }
+
+    #[test]
+    fn resolve_redirect_resolves_absolute_network_root_and_relative_locations() {
+        assert_eq!(
+            resolve_redirect(
+                "https://api.fastmail.com./.well-known/jmap",
+                "https://api.fastmail.com/jmap/session"
+            )
+            .unwrap(),
+            "https://api.fastmail.com/jmap/session"
+        );
+        assert_eq!(
+            resolve_redirect(
+                "https://api.fastmail.com./.well-known/jmap",
+                "/jmap/session"
+            )
+            .unwrap(),
+            "https://api.fastmail.com/jmap/session"
+        );
+        assert_eq!(
+            resolve_redirect("http://example.com/api/v1/auth", "session").unwrap(),
+            "http://example.com/api/v1/session"
+        );
+        assert_eq!(
+            resolve_redirect("https://example.com/foo", "//cdn.example.com/bar").unwrap(),
+            "https://cdn.example.com/bar"
+        );
+    }
+
     proptest! {
         // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
         // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's
@@ -209,6 +370,16 @@ mod tests {
         #[test]
         fn origin_of_never_panics_on_hostile_input(url in ".*") {
             let _ = origin_of(&url);
+        }
+
+        #[test]
+        fn same_origin_never_panics_on_hostile_input(a in ".*", b in ".*") {
+            let _ = same_origin(&a, &b);
+        }
+
+        #[test]
+        fn resolve_redirect_never_panics_on_hostile_input(base in ".*", loc in ".*") {
+            let _ = resolve_redirect(&base, &loc);
         }
 
         // `value` stands in for a server-supplied `blobId`/`accountId`, or

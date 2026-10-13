@@ -250,3 +250,269 @@ fn download_blob_does_not_declare_accept_application_json() {
 
     assert_eq!(body, real_blob);
 }
+
+struct TrailingDotServer {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TrailingDotServer {
+    fn start(redirect_to_dot: bool) -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind trailing dot server");
+        let port = server.server_addr().to_ip().expect("server has ip").port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let path = request.url().split('?').next().unwrap_or_default();
+                            if path == "/.well-known/jmap" {
+                                let target_host = if redirect_to_dot {
+                                    "localhost."
+                                } else {
+                                    "localhost"
+                                };
+                                let location = format!("http://{target_host}:{port}/jmap/session");
+                                let response = tiny_http::Response::empty(307).with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Location"[..],
+                                        location.as_bytes(),
+                                    )
+                                    .expect("location header"),
+                                );
+                                let _ = request.respond(response);
+                            } else if path == "/jmap/session" {
+                                let has_auth = request.headers().iter().any(|h| {
+                                    h.field.equiv("Authorization")
+                                        && h.value.as_str().starts_with("Basic ")
+                                });
+                                let body = if has_auth {
+                                    format!(
+                                        r#"{{"capabilities":{{"urn:ietf:params:jmap:core":{{"maxSizeUpload":10000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-casemap"]}},"urn:ietf:params:jmap:mail":{{}}}},"accounts":{{"a1":{{"name":"agent@example.com","isPersonal":true,"isReadOnly":false,"accountCapabilities":{{"urn:ietf:params:jmap:mail":{{}}}}}}}},"primaryAccounts":{{"urn:ietf:params:jmap:mail":"a1"}},"username":"agent","apiUrl":"http://localhost:{port}/jmap/api","downloadUrl":"http://localhost:{port}/jmap/download","uploadUrl":"http://localhost:{port}/jmap/upload","eventSourceUrl":"http://localhost:{port}/jmap/events","state":"s1"}}"#
+                                    )
+                                } else {
+                                    format!(
+                                        r#"{{"capabilities":{{"urn:ietf:params:jmap:core":{{"maxSizeUpload":10000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-casemap"]}}}},"accounts":{{}},"primaryAccounts":{{}},"username":"","apiUrl":"http://localhost:{port}/jmap/api","downloadUrl":"http://localhost:{port}/jmap/download","uploadUrl":"http://localhost:{port}/jmap/upload","eventSourceUrl":"http://localhost:{port}/jmap/events","state":"s1"}}"#
+                                    )
+                                };
+                                let response = tiny_http::Response::from_data(body.into_bytes())
+                                    .with_status_code(200)
+                                    .with_header(
+                                        tiny_http::Header::from_bytes(
+                                            &b"Content-Type"[..],
+                                            &b"application/json"[..],
+                                        )
+                                        .expect("content type header"),
+                                    );
+                                let _ = request.respond(response);
+                            } else {
+                                let _ = request.respond(tiny_http::Response::empty(404));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            port,
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for TrailingDotServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct UnauthorizedForeignHost {
+    origin: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl UnauthorizedForeignHost {
+    fn start() -> Self {
+        let server =
+            tiny_http::Server::http("127.0.0.2:0").expect("bind unauthorized foreign host");
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("unauthorized host has ip")
+            .port();
+        let origin = format!("http://127.0.0.2:{port}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let response = tiny_http::Response::empty(401).with_header(
+                                tiny_http::Header::from_bytes(
+                                    &b"WWW-Authenticate"[..],
+                                    &b"Bearer"[..],
+                                )
+                                .expect("www-authenticate header"),
+                            );
+                            let _ = request.respond(response);
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            origin,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for UnauthorizedForeignHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct RedirectingServer {
+    origin: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RedirectingServer {
+    fn start(target: &str) -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind redirecting server");
+        let port = server.server_addr().to_ip().expect("server has ip").port();
+        let origin = format!("http://127.0.0.1:{port}");
+        let target = target.to_string();
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let response = tiny_http::Response::empty(302).with_header(
+                                tiny_http::Header::from_bytes(&b"Location"[..], target.as_bytes())
+                                    .expect("location header"),
+                            );
+                            let _ = request.respond(response);
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            origin,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for RedirectingServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[test]
+fn session_fetch_survives_trailing_dot_redirect_to_dotless_host() {
+    let server = TrailingDotServer::start(false);
+    let client = Client::connect(
+        &format!("http://localhost.:{}", server.port),
+        Credentials::basic("agent", "sekret"),
+    )
+    .expect("authenticated session discovery should survive redirect to dotless host");
+
+    assert!(
+        client.session().primary_account(CAPABILITY_MAIL).is_some(),
+        "credentials must be kept when redirecting from trailing-dot to dotless host"
+    );
+}
+
+#[test]
+fn session_fetch_survives_dotless_redirect_to_trailing_dot_host() {
+    let server = TrailingDotServer::start(true);
+    let client = Client::connect(
+        &format!("http://localhost:{}", server.port),
+        Credentials::basic("agent", "sekret"),
+    )
+    .expect("authenticated session discovery should survive redirect to trailing-dot host");
+
+    assert!(
+        client.session().primary_account(CAPABILITY_MAIL).is_some(),
+        "credentials must be kept when redirecting from dotless to trailing-dot host"
+    );
+}
+
+#[test]
+fn cross_origin_redirect_with_credentials_returns_redirect_credentials_withheld_error() {
+    let foreign = UnauthorizedForeignHost::start();
+    let server = RedirectingServer::start(&format!("{}/jmap/session", foreign.origin()));
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(
+            ref err @ Error::RedirectCredentialsWithheld {
+                ref requested,
+                ref followed,
+            },
+        ) => {
+            assert!(
+                err.is_redirect_credentials_withheld(),
+                "predicate should identify the withheld credentials error"
+            );
+            assert!(
+                !err.is_unauthorized(),
+                "withheld credentials error must not be classified as a rejected token"
+            );
+            assert_eq!(requested, server.origin());
+            assert_eq!(followed, foreign.origin());
+        }
+        other => panic!("expected Error::RedirectCredentialsWithheld, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "touches live Fastmail server without credentials"]
+fn fastmail_live_trailing_dot_session_redirect() {
+    let result = Client::connect("https://api.fastmail.com.", Credentials::none());
+    match result {
+        Err(Error::Http { status: 401, .. }) => {}
+        other => {
+            panic!("expected Error::Http 401 on unauthenticated Fastmail redirect, got {other:?}")
+        }
+    }
+}
