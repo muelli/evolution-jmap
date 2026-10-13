@@ -1,0 +1,17 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Minimal Patch Update Request), July 2019
+[
+  [
+    "Todo/set",
+    {
+      "accountId": "x",
+      "ifInState": "10324",
+      "update": {
+        "a": {
+          "keywords/chopin": true,
+          "keywords/mozart": null
+        }
+      }
+    },
+    "0"
+  ]
+]

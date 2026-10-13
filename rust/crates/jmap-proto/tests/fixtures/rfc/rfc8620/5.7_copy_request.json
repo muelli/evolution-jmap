@@ -1,0 +1,17 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Todo/copy Request), July 2019
+[
+  [
+    "Todo/copy",
+    {
+      "fromAccountId": "x",
+      "accountId": "y",
+      "create": {
+        "k5122": {
+          "id": "a"
+        }
+      },
+      "onSuccessDestroyOriginal": true
+    },
+    "0"
+  ]
+]

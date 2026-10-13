@@ -1,0 +1,58 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Todo/query and Todo/get Response), July 2019
+[
+  [
+    "Todo/query",
+    {
+      "accountId": "x",
+      "queryState": "y13213",
+      "canCalculateChanges": true,
+      "position": 0,
+      "ids": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j"
+      ]
+    },
+    "0"
+  ],
+  [
+    "Todo/get",
+    {
+      "accountId": "x",
+      "state": "10324",
+      "list": [
+        {
+          "id": "a",
+          "title": "Practise Piano",
+          "keywords": {
+            "music": true,
+            "beethoven": true,
+            "mozart": true,
+            "liszt": true,
+            "rachmaninov": true
+          },
+          "neuralNetworkTimeEstimation": 3600
+        },
+        {
+          "id": "b",
+          "title": "Watch Daft Punk music video",
+          "keywords": {
+            "music": true,
+            "video": true,
+            "trance": true
+          },
+          "neuralNetworkTimeEstimation": 18000
+        }
+      ],
+      "notFound": []
+    },
+    "1"
+  ]
+]

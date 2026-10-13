@@ -1,0 +1,67 @@
+// Source: RFC 8620 §3.7 (References to Previous Method Results - Email/Thread Example), July 2019
+[
+  [
+    "Email/query",
+    {
+      "accountId": "A1",
+      "filter": {
+        "inMailbox": "id_of_inbox"
+      },
+      "sort": [
+        {
+          "property": "receivedAt",
+          "isAscending": false
+        }
+      ],
+      "collapseThreads": true,
+      "position": 0,
+      "limit": 10,
+      "calculateTotal": true
+    },
+    "t0"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "A1",
+      "#ids": {
+        "resultOf": "t0",
+        "name": "Email/query",
+        "path": "/ids"
+      },
+      "properties": [
+        "threadId"
+      ]
+    },
+    "t1"
+  ],
+  [
+    "Thread/get",
+    {
+      "accountId": "A1",
+      "#ids": {
+        "resultOf": "t1",
+        "name": "Email/get",
+        "path": "/list/*/threadId"
+      }
+    },
+    "t2"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "A1",
+      "#ids": {
+        "resultOf": "t2",
+        "name": "Thread/get",
+        "path": "/list/*/emailIds"
+      },
+      "properties": [
+        "from",
+        "receivedAt",
+        "subject"
+      ]
+    },
+    "t3"
+  ]
+]

@@ -1,0 +1,17 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Set Update Response), July 2019
+[
+  [
+    "Todo/set",
+    {
+      "accountId": "x",
+      "oldState": "10324",
+      "newState": "10329",
+      "updated": {
+        "a": {
+          "neuralNetworkTimeEstimation": 5400
+        }
+      }
+    },
+    "0"
+  ]
+]
