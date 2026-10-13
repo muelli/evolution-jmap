@@ -80,7 +80,7 @@ fn emits_a_vcalendar_envelope_around_one_vevent() {
 fn uid_is_the_jmap_id_and_the_jscalendar_uid_is_kept_aside() {
     // As on the address book side: EDS keys its cache on the iCalendar UID and
     // hands it back to load_component_sync/remove_component_sync, so it has to
-    // be the identifier the JMAP methods take — the server-assigned id.
+    // be the identifier the JMAP methods take: the server-assigned id.
     let ics = event_to_ical(&fixture_event());
     assert_eq!(line(&ics, "UID:"), "UID:E1");
     assert_eq!(
@@ -194,7 +194,7 @@ fn an_event_without_a_time_zone_stays_floating() {
 /// RFC 5545 §3.6.1 makes the two mutually exclusive, so a component that has
 /// one does not have the other. Reading only `DURATION` therefore dropped the
 /// length of every appointment a user created, and an event with no duration
-/// is `P0D` by RFC 8984 §4.2.2 — the calendar the user shares shows a
+/// is `P0D` by RFC 8984 §4.2.2: the calendar the user shares shows a
 /// zero-length blip where their afternoon meeting was.
 #[test]
 fn an_events_length_may_arrive_as_a_dtend_instead_of_a_duration() {
@@ -206,7 +206,7 @@ fn an_events_length_may_arrive_as_a_dtend_instead_of_a_duration() {
         ("20260115T230000", "20260116T003000", "PT1H30M"),
         // Over a month boundary and a leap day: 2024 has a 29 February.
         ("20240228T090000", "20240301T100000", "P2DT1H"),
-        // A whole day, as an all-day event is written — DTEND is exclusive,
+        // A whole day, as an all-day event is written: DTEND is exclusive,
         // so the next day means one day long.
         ("20260115", "20260116", "P1D"),
         ("20260115", "20260122", "P7D"),
@@ -292,7 +292,7 @@ fn a_duration_that_states_no_length_leaves_the_event_without_one() {
     // became the JSCalendar `duration` a save hands the server. RFC 5545 §3.3.6
     // spells a *negative* duration, and RFC 8984 §1.4.6 has none to map it onto:
     // a component saying an event lasts minus an hour became a set the server
-    // rejects — and the save that carried it takes the user's real edits down
+    // rejects, and the save that carried it takes the user's real edits down
     // with it. Everything else here is not a duration at all.
     for value in [
         // Negative, both designators, and the RFC 5545 spelling of "backwards".
@@ -342,7 +342,7 @@ fn a_length_stated_as_a_duration_is_passed_through_as_written() {
         ("PT1H30M15S", "PT1H30M15S"),
         ("P1DT2H30M", "P1DT2H30M"),
         // Zero is a length, and the one this mapping hands over as written
-        // rather than recognising — see the RDATE period tests for why.
+        // rather than recognising: see the RDATE period tests for why.
         ("PT0S", "PT0S"),
         // An explicit plus sign is RFC 5545 §3.3.6's, and is the same length;
         // RFC 8984 §1.4.6 has no sign at all, so it is dropped rather than
@@ -357,7 +357,7 @@ fn a_length_stated_as_a_duration_is_passed_through_as_written() {
         // them: a trailing designator dropped, a missing count read as none,
         // and units put back in order. What is checked is calcard's rendering
         // of the value, not the octets the component carried, so these are
-        // lengths — and refusing them would be refusing the parser's answer.
+        // lengths, and refusing them would be refusing the parser's answer.
         ("P1DT", "P1D"),
         ("PTH", "PT0S"),
         ("PT30M1H", "PT1H30M"),
@@ -375,7 +375,7 @@ fn a_length_stated_as_a_duration_is_passed_through_as_written() {
 fn a_duration_that_states_no_length_lets_a_dtend_state_it_instead() {
     // A value the mapping cannot read is treated as absent, like every other
     // one, and what an absent DURATION leaves is the DTEND branch. RFC 5545
-    // §3.6.1 forbids the pair, so this is a malformed component either way —
+    // §3.6.1 forbids the pair, so this is a malformed component either way :
     // but one of its two statements about the length is usable, and using it
     // beats showing the meeting as a zero-length blip.
     let ics = concat!(
@@ -404,8 +404,8 @@ fn lasting(duration: &str) -> CalendarEvent {
 #[test]
 fn a_duration_that_states_no_length_is_not_written_to_the_component() {
     // The same rule on the way out. A `duration` the server sends was put into
-    // DURATION verbatim, so a value RFC 8984 §1.4.6 has no room for — or one
-    // that is no length at all — became a content line libical has to read, and
+    // DURATION verbatim, so a value RFC 8984 §1.4.6 has no room for, or one
+    // that is no length at all: became a content line libical has to read, and
     // libical refusing a property costs the whole component: the appointment
     // disappears from the calendar rather than merely losing its length.
     for value in [
@@ -433,7 +433,7 @@ fn a_length_the_event_states_is_written_as_the_duration_it_is() {
     // The other half, and the one that matters: the check can only go wrong by
     // refusing too much, and nothing else in the suite would notice a length
     // that stopped being written. `+PT1H` is the one value that changes on the
-    // way through — RFC 5545 §3.3.6's sign, which RFC 8984 has nowhere to put,
+    // way through: RFC 5545 §3.3.6's sign, which RFC 8984 has nowhere to put,
     // and which is dropped rather than handed on.
     for (value, written) in [
         ("PT1H", "PT1H"),
@@ -460,7 +460,7 @@ fn a_length_the_event_states_is_written_as_the_duration_it_is() {
 fn a_date_only_dtstart_is_read_as_an_all_day_event_starting_at_midnight() {
     // Evolution writes VALUE=DATE for an all-day event. The start is read as
     // midnight, because dropping it would leave an event with no time at all,
-    // and the day-ness is carried separately in showWithoutTime — without it
+    // and the day-ness is carried separately in showWithoutTime: without it
     // the server, and every other client reading from it, sees a midnight
     // appointment.
     let ics = concat!(
@@ -582,8 +582,8 @@ fn an_all_day_event_the_date_form_cannot_hold_stays_a_date_time() {
 fn an_all_day_event_with_no_length_is_still_written_as_a_date() {
     // No DURATION and no DTEND next to a DATE start is one day by RFC 5545
     // §3.6.1, where RFC 8984 would call it zero-length. A day is what an event
-    // shown without a time means, and the reverse — a midnight appointment of
-    // no duration — is not something a calendar can draw.
+    // shown without a time means, and the reverse: a midnight appointment of
+    // no duration: is not something a calendar can draw.
     let event = CalendarEvent {
         start: Some("2026-01-15T00:00:00".to_owned()),
         show_without_time: Some(true),
@@ -628,7 +628,7 @@ fn a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled() {
 
 /// Where the line above now sits, and why it moved.
 ///
-/// A DATE-TIME whose seconds — or minutes and seconds — are missing is not
+/// A DATE-TIME whose seconds (or minutes and seconds) are missing is not
 /// legal RFC 5545 §3.3.5, and the hand-rolled lexer refused it. calcard
 /// completes it instead, and that is the better answer for the only case it can
 /// arise in: the missing field can only be zero, so the event does not move,
@@ -637,7 +637,7 @@ fn a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled() {
 ///
 /// The boundary matters, so it is asserted rather than described: a truncated
 /// *date* is refused here only when it is too short to be a date at all
-/// (`202601`, above). `2026011` is read as 2026-01-01 — the day the author
+/// (`202601`, above). `2026011` is read as 2026-01-01: the day the author
 /// meant, 15, lost its second digit and the event moves two weeks. Nothing in
 /// this repository can produce that: the iCalendar this mapping reads comes
 /// from EDS, whose libical would itself have refused the value, and the JMAP
@@ -776,7 +776,7 @@ fn an_unknown_status_is_dropped_rather_than_passed_through() {
 
 #[test]
 fn whether_an_event_blocks_time_is_the_transparency_of_the_component() {
-    // Evolution's "Show Time as: Busy/Free" — RFC 8984 §4.4.2's `freeBusyStatus`
+    // Evolution's "Show Time as: Busy/Free": RFC 8984 §4.4.2's `freeBusyStatus`
     // on one side, RFC 5545 §3.8.2.7's `TRANSP` on the other. Both vocabularies
     // are closed and both spell the same two states, so this is a table and not
     // a judgement.
@@ -855,7 +855,7 @@ fn an_edited_instance_is_drawn_at_the_series_transparency() {
     // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
     // instance's own component is the only place its transparency is stated, so
     // one written without the line reads back as an occurrence the user just set
-    // to the default — a patch removing the property the series holds.
+    // to the default: a patch removing the property the series holds.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
     event.free_busy_status = Some("free".to_owned());
     let ics = event_to_ical(&event);
@@ -872,7 +872,7 @@ fn an_edited_instance_is_drawn_at_the_series_transparency() {
 #[test]
 fn the_importance_of_an_event_is_the_priority_of_the_component() {
     // RFC 8984 §4.4.1's `priority` and RFC 5545 §3.8.1.9's `PRIORITY` are the
-    // same integer with the same meaning — 0 undefined, 1 highest, 9 lowest — so
+    // same integer with the same meaning (0 undefined, 1 highest, 9 lowest) so
     // the whole range crosses unchanged, digit for digit.
     for priority in 0..=9 {
         let event = CalendarEvent {
@@ -892,7 +892,7 @@ fn the_importance_of_an_event_is_the_priority_of_the_component() {
 #[test]
 fn a_priority_outside_the_range_the_two_formats_share_is_dropped() {
     // Both formats close the range at 0..=9, so a value outside it is dropped
-    // rather than passed through in the other's clothes — the rule STATUS and
+    // rather than passed through in the other's clothes: the rule STATUS and
     // TRANSP follow, one type over.
     for priority in [-1, 10, 100] {
         let event = CalendarEvent {
@@ -929,7 +929,7 @@ fn an_event_that_says_nothing_about_priority_carries_no_priority() {
     // the same state: the save path reads an edit off a difference from what was
     // shown, so answering with the default would have a save state it where the
     // server said nothing. Which is also why a `priority` of 0 the server *did*
-    // state is written out as `PRIORITY:0` rather than left off — see
+    // state is written out as `PRIORITY:0` rather than left off: see
     // [`the_importance_of_an_event_is_the_priority_of_the_component`], where 0 is
     // in the table.
     assert_eq!(ical_to_event(&ics).expect("parse").priority, None);
@@ -962,7 +962,7 @@ fn an_edited_instance_is_drawn_at_the_series_priority() {
     // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
     // instance's own component is the only place its priority is stated, so one
     // written without the line reads back as an occurrence the user just made
-    // unimportant — a patch removing the property the series holds.
+    // unimportant: a patch removing the property the series holds.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
     event.priority = Some(2);
     let ics = event_to_ical(&event);
@@ -1002,8 +1002,8 @@ fn who_may_see_an_event_is_the_class_of_the_component() {
 
 #[test]
 fn an_unknown_privacy_is_dropped_rather_than_passed_through() {
-    // Both vocabularies are extensible — RFC 5545 §3.8.1.3 admits an x-name and
-    // RFC 8984 §4.4.3 a registered or vendor value — and neither says how a value
+    // Both vocabularies are extensible: RFC 5545 §3.8.1.3 admits an x-name and
+    // RFC 8984 §4.4.3 a registered or vendor value, and neither says how a value
     // in one maps to a value in the other. So an unknown one is dropped, the rule
     // STATUS and TRANSP follow: passing it through in the other format's clothes
     // would state a classification nobody wrote.
@@ -1053,7 +1053,7 @@ fn an_event_that_says_nothing_about_privacy_carries_no_class() {
     // server said nothing.
     //
     // Which is exactly why a `privacy` the server *did* state as public is
-    // written out as `CLASS:PUBLIC` rather than left off — see
+    // written out as `CLASS:PUBLIC` rather than left off: see
     // [`who_may_see_an_event_is_the_class_of_the_component`], where public is in
     // the table. Evolution's appointment editor sets `CLASS` on every save
     // (Options ▸ Classification, defaulting to public), so a baseline rendered
@@ -1088,7 +1088,7 @@ fn an_edited_instance_is_drawn_at_the_series_privacy() {
     // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
     // instance's own component is the only place its classification is stated, so
     // one written without the line reads back as an occurrence the user just made
-    // public — a patch removing the property the series holds.
+    // public: a patch removing the property the series holds.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
     event.privacy = Some("secret".to_owned());
     let ics = event_to_ical(&event);
@@ -1132,7 +1132,7 @@ fn when_an_event_was_made_and_last_changed_are_stamped_on_the_component() {
 fn a_timestamp_that_is_not_an_instant_in_utc_is_left_off_rather_than_mangled() {
     // The same rule every other unreadable value gets: treated as absent. A
     // timestamp is only ever written, so nothing downstream loses an edit by it
-    // — but a CREATED libical refuses costs the whole component, and every field
+    //, but a CREATED libical refuses costs the whole component, and every field
     // of the event with it.
     for value in [
         // A LocalDateTime: it names no instant without a zone beside it, and
@@ -1159,7 +1159,7 @@ fn a_timestamp_that_is_not_an_instant_in_utc_is_left_off_rather_than_mangled() {
 fn an_event_that_says_nothing_about_its_timestamps_carries_none() {
     // Deliberately, even though RFC 5545 §3.6.1 makes DTSTAMP REQUIRED: the only
     // value that could be invented for it is "now", and a rendering that changes
-    // between two runs is exactly what the save path cannot have — it reads an
+    // between two runs is exactly what the save path cannot have: it reads an
     // edit off a difference from a re-rendering of what the server holds. So a
     // server that states no timestamp gets a component without one, and libical
     // reads such a component perfectly well.
@@ -1190,7 +1190,7 @@ fn the_timestamps_are_written_and_never_read_back() {
     // The mirror of DTEND, which is read and never written. Both instants belong
     // to the server: it stamps `created` when the event first arrives and
     // `updated` whenever anything about it changes. A client that read them off a
-    // component would be proposing a value for them — on a create, a guess at
+    // component would be proposing a value for them: on a create, a guess at
     // when the server first saw the event; on a save, a claim about when the
     // server last changed it. So they are drawn for whoever reads the document
     // and nothing more, and neither appears in `MAPPED_PROPERTIES`.
@@ -1310,7 +1310,7 @@ fn a_place_that_says_more_than_its_name_is_still_drawn_by_name() {
 #[test]
 fn a_place_with_no_name_is_not_drawn_but_may_still_be_named() {
     // A Location may say only where it is. There is no text to put on the line,
-    // so nothing is drawn — and a user who types a place into the empty field
+    // so nothing is drawn, and a user who types a place into the empty field
     // is naming *this* entry, not replacing it.
     let event = placed(
         "loc1",
@@ -1326,7 +1326,7 @@ fn a_place_with_no_name_is_not_drawn_but_may_still_be_named() {
 fn more_than_one_place_is_drawn_in_part_and_flagged() {
     // RFC 5545 §3.6.1 admits one LOCATION in a VEVENT (RFC 9073's VLOCATION
     // components are not something libical reads), so a second place cannot be
-    // shown — and a property shown in part is one a save must not write.
+    // shown, and a property shown in part is one a save must not write.
     let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
     event.locations.as_mut().unwrap().insert(
         "loc2".to_owned(),
@@ -1346,7 +1346,7 @@ fn more_than_one_place_is_drawn_in_part_and_flagged() {
 fn a_place_the_mapping_cannot_read_is_flagged_rather_than_drawn() {
     for location in [
         // Not an object: patching `locations/loc1/name` would be patching
-        // *through* a string, which RFC 8620 §5.3 makes an error — and an error
+        // *through* a string, which RFC 8620 §5.3 makes an error, and an error
         // costs every other edit in the same CalendarEvent/set.
         json!("Room 42"),
         json!(null),
@@ -1382,7 +1382,7 @@ fn a_place_key_no_patch_could_name_is_flagged() {
         "LOCATION;X-JMAP-KEY=wing/2~a:Room 42"
     );
     // It does *not* come back under that key. A key read off a content line may
-    // be created server-side — see the save path — and RFC 8984 §1.4.4 admits
+    // be created server-side (see the save path) and RFC 8984 §1.4.4 admits
     // only letters, digits, `-` and `_` in one; the server's own key is the one
     // a rename patches, and it is taken from the event, not from the component.
     assert_eq!(
@@ -1470,7 +1470,7 @@ fn the_tags_an_event_carries_are_the_categories() {
 #[test]
 fn a_tag_is_escaped_as_text_rather_than_read_as_the_separator() {
     // CATEGORIES is a list of TEXT values (RFC 5545 §3.8.1.2), so a comma inside
-    // one tag has to be escaped or the tag comes back as two — and a semicolon
+    // one tag has to be escaped or the tag comes back as two, and a semicolon
     // would otherwise end the value and start a parameter.
     let event = tagged([("Berlin, offsite; 2026".to_owned().as_str(), json!(true))]);
     let ics = event_to_ical(&event);
@@ -1522,7 +1522,7 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
 #[test]
 fn a_tag_the_component_cannot_show_is_flagged_rather_than_drawn() {
     // RFC 8984 §1.4.3 has every value of a Set be `true`. Anything else is an
-    // entry this mapping will not put on the line — writing it would say the tag
+    // entry this mapping will not put on the line: writing it would say the tag
     // is set when the server said it is not, and drawing nothing at all would
     // have a save replacing the property delete it.
     for set in [json!(false), json!("yes"), json!(null)] {
@@ -1555,8 +1555,8 @@ fn an_empty_tag_is_flagged_rather_than_drawn() {
 
 #[test]
 fn a_tag_carrying_a_carriage_return_is_flagged_rather_than_drawn() {
-    // A CR is dropped on its way onto a content line — it would otherwise end
-    // the line and turn the rest of the tag into a property of its own — so the
+    // A CR is dropped on its way onto a content line: it would otherwise end
+    // the line and turn the rest of the tag into a property of its own, so the
     // tag would come back changed, and a save would rename it behind the user's
     // back. A line feed is not the same case: it has an escape (`\n`) and
     // survives.
@@ -1587,7 +1587,7 @@ fn maps_keyword_answers_for_the_tag_the_line_left_off() {
     // not carry is one the user never saw and therefore never asked to lose, so
     // the save writes it back rather than dropping the whole edit. The predicate
     // is the emitter's own, so what the save calls invisible is what the emitter
-    // actually left off — and a set holding one such tag still states the rest.
+    // actually left off, and a set holding one such tag still states the rest.
     for (tag, set) in [
         ("", json!(true)),
         ("two\rlines", json!(true)),
@@ -1616,7 +1616,7 @@ fn maps_keyword_answers_for_the_tag_the_line_left_off() {
 fn an_edited_instance_is_drawn_with_the_series_tags() {
     // RFC 8984 §4.3.4: an instance holds every property its override does not
     // restate, and this override restates something else. A component that left
-    // the tags off would show one occurrence of a tagged series as untagged —
+    // the tags off would show one occurrence of a tagged series as untagged :
     // and, now that an override *may* restate them (see OVERRIDE_PROPERTIES),
     // would read back as the user having unfiled that one occurrence.
     let mut event = tagged([("offsite", json!(true))]);
@@ -1654,7 +1654,7 @@ fn an_edited_instance_may_show_tags_of_its_own() {
     //
     // The set is *replaced* rather than added to: RFC 8984 §4.3.4 applies an
     // override as a PatchObject, so `keywords` naming one tag says the instance
-    // carries that tag and no other — the series' own set is not merged in. Which
+    // carries that tag and no other: the series' own set is not merged in. Which
     // is why the patch below restates `offsite` to keep it.
     let patch = json!({"keywords": {"cancelled": true, "offsite": true}});
     assert!(maps_override("2026-01-29T13:00:00", &patch));
@@ -1678,7 +1678,7 @@ fn an_edited_instance_may_show_tags_of_its_own() {
 #[test]
 fn an_instance_that_drops_its_tags_reads_back_as_removing_them() {
     // A PatchObject removes a property with a null and the component says the
-    // same thing by carrying no `CATEGORIES` at all — so the one occurrence the
+    // same thing by carrying no `CATEGORIES` at all, so the one occurrence the
     // user unfiled comes back unfiled, rather than at the series' tags, and a
     // save does not refile it.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"keywords": null}}));
@@ -1704,8 +1704,8 @@ fn an_instance_that_drops_its_tags_reads_back_as_removing_them() {
 
 #[test]
 fn the_tags_on_an_instances_own_component_are_the_tags_it_was_refiled_with() {
-    // The direction a save arrives in, written the way another client — or
-    // libical's own re-rendering — leaves it: the instance's set spread over
+    // The direction a save arrives in, written the way another client, or
+    // libical's own re-rendering: leaves it: the instance's set spread over
     // several `CATEGORIES` lines, which is one set, and the series' own left
     // where it was. Nothing here is what this crate emits, which is the point;
     // the tags on that component are the user's answer for that occurrence.
@@ -1740,7 +1740,7 @@ fn a_tag_an_instance_cannot_show_leaves_the_override_flagged() {
     // One level down from [`a_tag_the_component_cannot_show_is_flagged_rather_than_drawn`],
     // and for the same reason: an instance's `CATEGORIES` is drawn whole, so a
     // tag left off it is a tag the next save deletes from that occurrence. An
-    // empty set is refused too — no line at all is what a *removal* reads back
+    // empty set is refused too: no line at all is what a *removal* reads back
     // as, which is a different patch from the empty set that asks for one.
     for keywords in [
         json!({}),
@@ -1805,7 +1805,7 @@ fn a_reminder_is_a_valarm_of_its_own() {
     assert!(ics.contains("BEGIN:VALARM\r\n"), "{ics}");
     assert_eq!(content_line(&ics, "ACTION"), "ACTION:DISPLAY");
     // RFC 5545 §3.8.6.3 spells the offset as a signed duration, negative for a
-    // reminder before the event, and defaults it to relating to the start —
+    // reminder before the event, and defaults it to relating to the start :
     // which is what RFC 8984 §4.5.3's `relativeTo` defaults to as well, so there
     // is nothing to state.
     assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER:-PT15M");
@@ -1852,7 +1852,7 @@ fn a_reminder_relative_to_the_start_says_so_no_more_than_the_default_does() {
     // The other half of the pair: `relativeTo: "start"` is the default said out
     // loud, so the component carries no `RELATED` and the reminder reads back
     // without the member. That is a difference between the server's event and the
-    // baseline, not between the baseline and the save — see `jmap_cal_sync::diff`,
+    // baseline, not between the baseline and the save: see `jmap_cal_sync::diff`,
     // which compares the latter two.
     let mut alert = quarter_of_an_hour_before();
     alert["trigger"]["relativeTo"] = json!("start");
@@ -1925,8 +1925,8 @@ fn a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn() {
 #[test]
 fn a_reminder_under_a_key_no_uid_can_carry_is_flagged_rather_than_drawn() {
     // The key is an RFC 8984 §1.4.4 Id, and it has to come back off the UID line
-    // as itself: one this mapping would read back as a different key — or as the
-    // invented one, having refused it — is a reminder a save renames behind the
+    // as itself: one this mapping would read back as a different key, or as the
+    // invented one, having refused it: is a reminder a save renames behind the
     // user's back.
     for key in ["", "k 1", "k:1", "k\r1", &"k".repeat(256)] {
         let event = reminded([
@@ -1946,7 +1946,7 @@ fn a_reminder_under_a_key_no_uid_can_carry_is_flagged_rather_than_drawn() {
 #[test]
 fn an_alarm_this_mapping_cannot_read_is_dropped_rather_than_guessed_at() {
     // A sound, a program and a mail are all reminders Evolution's editor offers
-    // and RFC 8984 §4.5.2 has no `action` for — only `display` and `email` — so
+    // and RFC 8984 §4.5.2 has no `action` for (only `display` and `email`) so
     // there is nothing to read them as. An absolute trigger is the third case,
     // the one this mapping does not carry in either direction yet.
     let ics = concat!(
@@ -2040,7 +2040,7 @@ fn an_edited_instance_may_show_reminders_of_its_own() {
     //
     // The map is *replaced* rather than added to, exactly as `keywords` is: an
     // override naming one alert is an occurrence with that reminder and no other.
-    // Which is why the patch below restates the series' own key — an hour before
+    // Which is why the patch below restates the series' own key: an hour before
     // rather than a quarter of one is that same reminder moved, and a save under
     // another key would leave the user reminded twice.
     let mut moved = quarter_of_an_hour_before();
@@ -2068,7 +2068,7 @@ fn an_edited_instance_may_show_reminders_of_its_own() {
 #[test]
 fn an_instance_that_drops_its_reminders_reads_back_as_removing_them() {
     // A PatchObject removes a property with a null and the component says the same
-    // thing by carrying no VALARM at all — so the one occurrence the user is not
+    // thing by carrying no VALARM at all, so the one occurrence the user is not
     // reminded of comes back that way, rather than at the series' reminders, and a
     // save does not put them back.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"alerts": null}}));
@@ -2104,7 +2104,7 @@ fn a_reminder_one_instance_could_not_show_is_flagged_rather_than_drawn() {
         // VALARM cannot say.
         json!({"k2": dismissed}),
         // A reminder that sends mail, and one that fires at an instant rather than
-        // at an offset — neither of which this mapping writes.
+        // at an offset: neither of which this mapping writes.
         json!({"k2": {"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "action": "email"}}),
         json!({"k2": {"@type": "Alert", "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-29T12:45:00Z"}}}),
         // A key no UID can carry back, so the entry would return renamed.
@@ -2133,7 +2133,7 @@ fn a_reminder_one_instance_could_not_show_is_flagged_rather_than_drawn() {
         assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 2, "{ics}");
         assert_eq!(ics.matches("\r\nUID:k1\r\n").count(), 2, "{ics}");
         // The unshowable reminder reaches neither component, and the occurrence
-        // reads back reminded as the series is — which is what makes replacing the
+        // reads back reminded as the series is, which is what makes replacing the
         // property from the drawing the deletion `maps_recurrence_override` is
         // refusing.
         assert!(!ics.contains("k2"), "{ics}");
@@ -2163,7 +2163,7 @@ fn an_occurrence_of_an_event_that_uses_the_default_reminders_is_drawn_with_none(
         .insert("useDefaultAlerts".to_owned(), json!(true));
     let ics = event_to_ical(&event);
 
-    // Neither component draws them — an occurrence reminded where the series
+    // Neither component draws them: an occurrence reminded where the series
     // beside it is not would be a reminder that never fires, and would read back as
     // an occurrence the user had just set one on.
     assert_eq!(vevents(&ics), 2, "{ics}");
@@ -2198,7 +2198,7 @@ fn an_occurrence_of_an_event_that_uses_the_default_reminders_is_drawn_with_none(
 
 #[test]
 fn a_recurrence_rule_carries_freq_interval_and_count() {
-    // The end before the interval, which is the order libical writes them in —
+    // The end before the interval, which is the order libical writes them in :
     // measured in `jmap-backend-cal/tests/marshal.rs`, and the same contract the
     // `BYxxx` parts are emitted under: a rule that goes out in another order
     // comes back out of EDS's own cache respelled.
@@ -2301,7 +2301,7 @@ fn an_all_day_event_whose_recurrence_ends_at_a_time_stays_a_date_time() {
 #[test]
 fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() {
     // An UNTIL that cannot be rendered used to be left off the RRULE, which
-    // turns a recurrence that ends into one that never does — an event repeated
+    // turns a recurrence that ends into one that never does: an event repeated
     // into every week of the user's calendar for ever. Showing the rule not at
     // all is the smaller lie, and the save path is told so: recurrenceRule is
     // patched only when every rule the server holds survives the trip.
@@ -2326,14 +2326,14 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 #[test]
 fn a_zoned_rules_utc_until_is_not_taken_for_a_local_time() {
     // RFC 5545 §3.3.10 requires UNTIL to be a UTC instant whenever DTSTART
-    // names a zone, so it is what every conformant producer writes — an
+    // names a zone, so it is what every conformant producer writes: an
     // Exchange invitation, a Google `.ics`, anything imported into the
     // calendar. RFC 8984 §4.3.3's `until` is a local time in the event's own
     // zone, and the two are the same instant only where that zone is UTC.
     //
     // Dropping the `Z` and calling the digits local moves the end of the series
     // by the zone's offset: the rule below would end at 07:00 Zurich time
-    // rather than 09:00, which is two hours before the last occurrence starts —
+    // rather than 09:00, which is two hours before the last occurrence starts :
     // so a save would tell the server the series stops a day earlier than it
     // does.
     let ics = concat!(
@@ -2361,7 +2361,7 @@ fn a_zoned_rules_utc_until_is_not_taken_for_a_local_time() {
 fn a_utc_until_is_read_as_local_wherever_the_two_are_the_same_instant() {
     // The other side of the rule above. A `Z` is only a shift where there is an
     // offset to shift by, so the three cases that have none keep reading as they
-    // did — refusing them would strand every recurring event this crate itself
+    // did: refusing them would strand every recurring event this crate itself
     // writes.
     let zoned = |dtstart: &str, until: &str| {
         format!(
@@ -2453,8 +2453,8 @@ fn recurring_in(tzid: &str, definition: &str, until: &str) -> String {
 fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
     // The other side of `a_zoned_rules_utc_until_is_not_taken_for_a_local_time`:
     // converting the instant §3.3.10 requires needs the offset in force *at* it,
-    // and a document that carries the `VTIMEZONE` — which is every document
-    // Evolution writes, and every invitation and `.ics` worth the name — says
+    // and a document that carries the `VTIMEZONE`, which is every document
+    // Evolution writes, and every invitation and `.ics` worth the name: says
     // what that offset is. So the zone database this crate refuses to ship is
     // not needed after all: the rules are in the file.
     //
@@ -2488,13 +2488,13 @@ fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
             assert_eq!(rules.until.as_deref(), Some(read), "{until} in {tzid}");
             // Which is the point of the conversion: the rule can now be sent,
             // where before it was kept verbatim and the save path had to leave
-            // `recurrenceRule` alone — or refuse the create outright.
+            // `recurrenceRule` alone, or refuse the create outright.
             assert!(maps_recurrence_rule(&rules), "{until} in {tzid}");
         }
     }
 
     // The trip back is the local form beside the zoned `DTSTART`, which is what
-    // this crate has always written and libical reads in the event's own zone —
+    // this crate has always written and libical reads in the event's own zone :
     // the same instant, and one this mapping then reads back unchanged.
     let event = ical_to_event(&recurring_in(
         "Europe/Berlin",
@@ -2517,7 +2517,7 @@ fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
 fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
     // `maps_recurrence_rule` says *whether* a rule can be sent; a save that
     // refuses over it has to tell the user *what to change*, and the only
-    // refusal there is anything useful to say about is this one — the end that
+    // refusal there is anything useful to say about is this one: the end that
     // stayed a UTC instant because the document did not say how to move it into
     // the event's zone. So the value is handed back rather than merely denied,
     // and the save path quotes it beside the zone's name.
@@ -2569,7 +2569,7 @@ fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
 fn a_summer_that_began_last_year_is_still_the_offset_in_force() {
     // Auckland, whose daylight saving starts in September and ends in April, so
     // that a January instant is governed by a transition in the *previous*
-    // year — and whose two observances start in different years, as they do
+    // year, and whose two observances start in different years, as they do
     // wherever one of the two rules changed and the other did not.
     //
     // The naive answer is the transition each rule has in the year asked about,
@@ -2640,8 +2640,8 @@ fn a_zone_of_one_observance_states_the_offset_it_never_moves_from() {
 fn a_transition_the_zone_lists_by_date_counts_like_any_other() {
     // Not every zone moves on a rule. Casablanca's clocks go back for Ramadan,
     // which is not a date any `RRULE` states, so tzdata's renderers write the
-    // transitions out one date at a time — a `DTSTART` and an `RDATE` per year
-    // — and a zone whose dated transitions went uncounted would be read as
+    // transitions out one date at a time: a `DTSTART` and an `RDATE` per year
+    //, and a zone whose dated transitions went uncounted would be read as
     // whatever its last *rule* said, an hour out for weeks at a time.
     let definition = "BEGIN:VTIMEZONE\r\n\
          TZID:Africa/Casablanca\r\n\
@@ -2684,7 +2684,7 @@ fn a_transition_rule_that_has_stopped_stops_being_counted() {
     // rule at all that has been in force since. An `UNTIL` need not fall on an
     // occurrence (RFC 5545 §3.3.10 does not ask it to), and the one here names
     // the moment the rule stopped applying rather than the last transition it
-    // made — so its own year still has an occurrence, one that never happened.
+    // made, so its own year still has an occurrence, one that never happened.
     //
     // Counting it would put the zone back an hour for every instant since, and
     // it is the *later* of the two candidates, so it would win.
@@ -2728,7 +2728,7 @@ fn a_transition_named_by_a_weekday_and_a_run_of_dates_is_counted() {
     // idiom, "the first Sunday on or after the 25th": a `BYDAY` with no ordinal
     // beside a `BYMONTHDAY` listing the run of dates that Sunday can fall on.
     // §3.3.10 makes `BYMONTHDAY` expand and `BYDAY` limit, so the two together
-    // name exactly one day — the run is seven long, and a weekday occurs once
+    // name exactly one day: the run is seven long, and a weekday occurs once
     // in any seven consecutive dates.
     //
     // Ireland, whose autumn transition tzdata states as `Sun>=23`. Measured
@@ -2774,7 +2774,7 @@ fn a_transition_named_by_a_weekday_and_a_run_of_dates_is_counted() {
 }
 
 /// A zone whose one transition is stated by a rule that does not fire every
-/// year: the 25th of March, but only when it is a Sunday — 1990, 2001, 2007,
+/// year: the 25th of March, but only when it is a Sunday: 1990, 2001, 2007,
 /// 2012, 2018 and then nothing until 2029. Nothing moves the clocks back, so
 /// whatever the rule last did is still in force.
 fn sparsely(rule: &str) -> String {
@@ -2804,7 +2804,7 @@ fn a_transition_rule_that_skips_years_is_searched_for_further_back_than_two() {
     // that fires every year, which a transition rule almost always is. A rule
     // that skips years is the case that pair cannot answer: the last time the
     // 25th of March was a Sunday was 2018, so a search two years deep finds
-    // nothing in a rule that has fired five times — and "found nothing" is
+    // nothing in a rule that has fired five times, and "found nothing" is
     // indistinguishable, from inside the search, from a rule that never fires.
     //
     // The clocks went forward in 2018 and nothing here puts them back, so the
@@ -2829,7 +2829,7 @@ fn a_rule_the_search_found_no_occurrence_of_is_refused_rather_than_read_as_silen
     // The other end of the same search. A rule whose shape is understood but
     // which fired in none of the years looked at is not a rule that never
     // fired: it may have fired before them, and reading it as silent would
-    // leave the zone described by whichever *other* observance was latest —
+    // leave the zone described by whichever *other* observance was latest :
     // here the 1970 one, which would answer +0000 and be an hour out for every
     // instant since the rule last ran.
     //
@@ -2852,8 +2852,8 @@ fn a_rule_the_search_found_no_occurrence_of_is_refused_rather_than_read_as_silen
 
 #[test]
 fn an_observance_moving_off_a_sub_minute_offset_west_of_utc_still_describes_the_zone() {
-    // Accra, whose earliest observance leaves local mean time — 52 seconds west
-    // of Greenwich — for GMT in 1915. calcard's offset parser reads four digits
+    // Accra, whose earliest observance leaves local mean time: 52 seconds west
+    // of Greenwich: for GMT in 1915. calcard's offset parser reads four digits
     // and no more, so the value arrives with its seconds dropped, and dropping
     // them from a *western* one leaves `-0000`: a spelling §3.3.14 forbids
     // outright, because the sign says which side of UTC the zone is on and
@@ -2861,7 +2861,7 @@ fn an_observance_moving_off_a_sub_minute_offset_west_of_utc_still_describes_the_
     //
     // So the observance's offset was unreadable, and an observance whose offset
     // cannot be read costs the whole definition. A zone that has not moved its
-    // clocks since 1915 was refused over the offset it moved away from then —
+    // clocks since 1915 was refused over the offset it moved away from then :
     // which is not something an appointment in Accra today is in any way about.
     let definition = "BEGIN:VTIMEZONE\r\n\
          TZID:Africa/Accra\r\n\
@@ -2890,8 +2890,8 @@ fn a_transition_rule_naming_the_start_of_its_workweek_is_counted_all_the_same() 
     // reach an Evolution user as an invitation, which is precisely the
     // `VTIMEZONE` this module cannot fall back to a database for.
     //
-    // §3.3.10 gives `WKST` a meaning in exactly two rules — a `WEEKLY` one
-    // repeating at an interval, and a `YEARLY` one carrying a `BYWEEKNO` —
+    // §3.3.10 gives `WKST` a meaning in exactly two rules: a `WEEKLY` one
+    // repeating at an interval, and a `YEARLY` one carrying a `BYWEEKNO` :
     // neither of which this module counts. So no value of it can move a
     // transition this module reads, and refusing the whole definition over it
     // cost the invitation its recurring appointment for nothing.
@@ -2940,7 +2940,7 @@ fn a_transition_rule_naming_the_start_of_its_workweek_is_counted_all_the_same() 
 fn a_transition_rule_stating_its_own_time_of_day_is_counted() {
     // Lotus Notes' `VTIMEZONE`, verbatim: the hour and the minute the clocks
     // move at are stated in the rule as well as in the `DTSTART`, which
-    // §3.3.10 admits — in a `YEARLY` rule `BYHOUR` and `BYMINUTE` expand, so
+    // §3.3.10 admits: in a `YEARLY` rule `BYHOUR` and `BYMINUTE` expand, so
     // they replace that part of the `DTSTART`'s time of day rather than adding
     // to the days the rule names. Here they agree with it, as they do in every
     // Notes definition; agreeing or not, a part that was not understood cost
@@ -2980,7 +2980,7 @@ fn a_transition_rule_stating_its_own_time_of_day_is_counted() {
 
 /// A zone that goes forward on the last Sunday of March and back on the last
 /// Sunday of October, with the time of day the spring transition happens at
-/// stated by `rule` rather than by the `DTSTART` beside it — which says
+/// stated by `rule` rather than by the `DTSTART` beside it, which says
 /// midnight, two hours before what a real definition of this shape says.
 fn at_the_hour_the_rule_states(rule: &str) -> String {
     format!(
@@ -3010,7 +3010,7 @@ fn a_time_of_day_the_rule_states_is_the_one_the_transition_happens_at() {
     // because they all restate what the `DTSTART` already says: an hour in the
     // rule that *differs* from the `DTSTART`'s. §3.3.10's expansion makes the
     // rule's the answer, and an instant in the two hours between the two is
-    // where the difference is visible — reading the hour off the `DTSTART`
+    // where the difference is visible: reading the hour off the `DTSTART`
     // there answers with an offset the zone does not take up until later.
     for (until, read) in [
         // Between the `DTSTART`'s midnight and the rule's two o'clock: the
@@ -3063,7 +3063,7 @@ fn a_time_of_day_outside_the_range_it_is_stated_in_is_refused() {
     // the transition into the following day rather than being noticed, and the
     // day is the one thing about a transition the rule *has* stated.
     //
-    // Over the top of each of §3.3.10's ranges — and the leap second a
+    // Over the top of each of §3.3.10's ranges, and the leap second a
     // `BYSECOND` may name, which is in range for §3.3.10 and out of it here,
     // because placing it means pushing the onset into the next minute. Only
     // that end of each range is reachable from a document: calcard's parser
@@ -3098,8 +3098,8 @@ fn a_time_of_day_outside_the_range_it_is_stated_in_is_refused() {
 fn a_weekday_and_a_run_of_dates_naming_two_of_them_is_refused() {
     // The pair is a single transition only while the run holds one occurrence
     // of the weekday, and eight consecutive dates hold two: 2026-03-22 and
-    // 2026-03-29 are both Sundays. That is a rule stating a set — the thing
-    // this module refuses — and taking the earlier or the later of them would
+    // 2026-03-29 are both Sundays. That is a rule stating a set: the thing
+    // this module refuses, and taking the earlier or the later of them would
     // be a guess.
     //
     // Which of the two it is depends on the year, so the refusal has to be
@@ -3188,7 +3188,7 @@ fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
     // `rscale` & friends ride in `extra` and do not survive the trip through
     // iCalendar, so the save path must not patch recurrenceRule for them. (It
     // has an iCalendar spelling of its own, RFC 7529's `RSCALE`, which neither
-    // this mapping nor libical carries — a rule counted in another calendar
+    // this mapping nor libical carries: a rule counted in another calendar
     // drawn as a Gregorian one repeats on the wrong days entirely.)
     let mut rule = RecurrenceRule::new("monthly");
     rule.extra.insert("rscale".to_owned(), json!("chinese"));
@@ -3287,8 +3287,8 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
     // MONTHLY or YEARLY. Writing `BYDAY=2MO` beside FREQ=WEEKLY is a line
     // libical is entitled to refuse, and refusing one costs the whole
     // component; dropping only the ordinal would repeat the event every Monday
-    // instead of every second one. So the days are left off — the same
-    // narrowing an unmodeled rule part gets — and the save path is told the
+    // instead of every second one. So the days are left off: the same
+    // narrowing an unmodeled rule part gets, and the save path is told the
     // rule was seen in part.
     for frequency in ["weekly", "daily", "hourly"] {
         let rule = RecurrenceRule {
@@ -3316,7 +3316,7 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
 fn a_day_no_weekday_names_is_flagged_rather_than_written() {
     // `day` is a closed vocabulary in both formats (RFC 8984 §4.3.3, RFC 5545
     // §3.3.10), so a value outside it is dropped rather than passed through in
-    // the other format's clothes — and, as everywhere else in this mapping,
+    // the other format's clothes, and, as everywhere else in this mapping,
     // what was shown in part is not written back.
     for days in [
         vec![NDay::new("monday")],
@@ -3418,7 +3418,7 @@ fn reads_the_days_of_the_month_off_a_rule_written_by_hand() {
 
 #[test]
 fn days_of_the_month_are_refused_where_a_week_is_the_period() {
-    // RFC 5545 §3.3.10: BYMONTHDAY MUST NOT be specified when FREQ is WEEKLY —
+    // RFC 5545 §3.3.10: BYMONTHDAY MUST NOT be specified when FREQ is WEEKLY :
     // a week does not sit inside a month. As with an ordinal weekday, the part
     // is left off whole and the save path told the rule was seen in part, rather
     // than writing a line libical is entitled to refuse.
@@ -3465,7 +3465,7 @@ fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
     // The refusal above, reached the way a component really arrives: through the
     // parser. `32` is outside RFC 5545's `ordmoday` and survives calcard's own
     // representation of the rule unchanged, so the mapping is the one that has to
-    // refuse it — and refuse the whole set, leaving the `RRULE` at its frequency.
+    // refuse it, and refuse the whole set, leaving the `RRULE` at its frequency.
     //
     // Not every malformed token gets this far: calcard re-renders an `RRULE` from
     // what it parsed, which drops a token it could not read (`BYMONTHDAY=15,XX`
@@ -3494,7 +3494,7 @@ fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
 
 #[test]
 fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
-    // "Every 1 January and every 31 December" — RFC 8984 §4.3.3's `byYearDay`,
+    // "Every 1 January and every 31 December": RFC 8984 §4.3.3's `byYearDay`,
     // iCalendar's `BYYEARDAY`, whose negative value counts back from the end of
     // the year the way `byMonthDay`'s does from the end of the month.
     let event = CalendarEvent {
@@ -3519,8 +3519,8 @@ fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
 
 #[test]
 fn the_days_of_the_year_are_written_after_the_days_of_the_month() {
-    // Every modeled part at once, in the order libical writes them —
-    // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH` — so that a rule read back
+    // Every modeled part at once, in the order libical writes them :
+    // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH`, so that a rule read back
     // out of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
         recurrence_rule: Some(RecurrenceRule {
@@ -3564,7 +3564,7 @@ fn reads_the_days_of_the_year_off_a_rule_written_by_hand() {
 #[test]
 fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
     // RFC 5545 §3.3.10: BYYEARDAY MUST NOT be specified when FREQ is DAILY,
-    // WEEKLY, or MONTHLY — none of those periods holds a year. The part is left
+    // WEEKLY, or MONTHLY: none of those periods holds a year. The part is left
     // off whole and the save path told the rule was seen in part, rather than
     // writing a line libical is entitled to refuse.
     for frequency in ["daily", "weekly", "monthly"] {
@@ -3589,8 +3589,8 @@ fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
 #[test]
 fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
     // The other half of §3.3.10's table: `BYYEARDAY` is defined for `HOURLY`,
-    // `MINUTELY` and `SECONDLY` — limiting the occurrences those expand to,
-    // "the ninth hour of every hundredth day of the year" — so the gate names the
+    // `MINUTELY` and `SECONDLY`: limiting the occurrences those expand to,
+    // "the ninth hour of every hundredth day of the year", so the gate names the
     // three frequencies the RFC excludes rather than allowing `YEARLY` alone.
     for frequency in ["hourly", "minutely", "secondly", "yearly"] {
         let event = CalendarEvent {
@@ -3639,7 +3639,7 @@ fn a_day_no_year_has_is_flagged_rather_than_written() {
 fn a_day_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
     // The refusal above, reached the way a component really arrives: through the
     // parser. `367` is outside RFC 5545's `yeardaynum`, so the mapping is the one
-    // that has to refuse it — and refuse the whole set, leaving the `RRULE` at its
+    // that has to refuse it, and refuse the whole set, leaving the `RRULE` at its
     // frequency.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -3663,7 +3663,7 @@ fn a_day_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
 
 #[test]
 fn a_yearly_rule_names_the_months_it_repeats_in() {
-    // "Every March and September" — RFC 8984 §4.3.3's `byMonth`, iCalendar's
+    // "Every March and September": RFC 8984 §4.3.3's `byMonth`, iCalendar's
     // `BYMONTH`. JSCalendar holds each month as a string; the numbers 1 to 12 of
     // the Gregorian calendar are spelled the same in both formats.
     let event = CalendarEvent {
@@ -3692,7 +3692,7 @@ fn a_yearly_rule_names_the_months_it_repeats_in() {
 #[test]
 fn the_months_are_written_after_the_days_of_the_month() {
     // All three parts at once, in the order libical and calcard both write them
-    // — `BYMONTH` last — so that a rule read back out of EDS's own cache
+    // (`BYMONTH` last) so that a rule read back out of EDS's own cache
     // compares equal to the one that went in.
     let event = CalendarEvent {
         recurrence_rule: Some(RecurrenceRule {
@@ -3712,7 +3712,7 @@ fn the_months_are_written_after_the_days_of_the_month() {
 #[test]
 fn a_month_is_carried_at_any_frequency() {
     // Unlike `BYMONTHDAY`, which RFC 5545 §3.3.10 forbids beside `FREQ=WEEKLY`,
-    // `BYMONTH` is defined at every frequency — limiting the occurrences a
+    // `BYMONTH` is defined at every frequency: limiting the occurrences a
     // shorter period produces rather than expanding them. So there is no
     // frequency gate here, and a weekly rule keeps its months.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
@@ -3802,7 +3802,7 @@ fn a_month_no_year_has_is_flagged_rather_than_written() {
 fn a_leap_month_is_flagged_rather_than_written() {
     // The reason RFC 8984 §4.3.3 holds a month as a string at all: `5L` is the
     // leap month of a non-Gregorian calendar. iCalendar can only say it under
-    // RFC 7529's `RSCALE`, which this mapping does not write — the event's
+    // RFC 7529's `RSCALE`, which this mapping does not write: the event's
     // calendar system is not modeled, so writing `BYMONTH=5L` beside a
     // Gregorian series would name a month the series does not have.
     let rule = RecurrenceRule {
@@ -3822,7 +3822,7 @@ fn a_leap_month_is_flagged_rather_than_written() {
 fn a_month_a_hand_written_rule_invents_is_not_written_back() {
     // The refusals above, reached the way a component really arrives: through
     // the parser. Both `13` and a leap month survive calcard's representation of
-    // the rule unchanged, so the mapping is the one that has to refuse them —
+    // the rule unchanged, so the mapping is the one that has to refuse them :
     // and refuse the whole set, leaving the `RRULE` at its frequency.
     for value in ["FREQ=YEARLY;BYMONTH=3,13", "FREQ=YEARLY;BYMONTH=5L"] {
         let ics = format!(
@@ -3847,7 +3847,7 @@ fn a_month_a_hand_written_rule_invents_is_not_written_back() {
 
 #[test]
 fn a_weekly_rule_names_the_day_its_weeks_start_on() {
-    // "Every other Tuesday, weeks counted from Sunday" — RFC 8984 §4.3.3's
+    // "Every other Tuesday, weeks counted from Sunday": RFC 8984 §4.3.3's
     // `firstDayOfWeek`, iCalendar's `WKST`. It is not decoration: RFC 5545
     // §3.3.10 says the day the week starts on decides where the second week of a
     // fortnightly series begins, so the same `BYDAY` counted from Monday and from
@@ -3876,7 +3876,7 @@ fn a_weekly_rule_names_the_day_its_weeks_start_on() {
 #[test]
 fn the_day_the_week_starts_on_is_written_last() {
     // Every modeled part at once, in the order libical and calcard both write
-    // them — `WKST` after `BYMONTH`, last of all — so that a rule read back out
+    // them (`WKST` after `BYMONTH`, last of all) so that a rule read back out
     // of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
         recurrence_rule: Some(RecurrenceRule {
@@ -3898,7 +3898,7 @@ fn the_day_the_week_starts_on_is_written_last() {
 #[test]
 fn a_week_starting_on_monday_is_left_off_the_rule() {
     // `WKST=MO` is RFC 5545 §3.3.10's default, and libical drops it from a rule
-    // it reads — `jmap-backend-cal/tests/marshal.rs` measures that. So writing it
+    // it reads: `jmap-backend-cal/tests/marshal.rs` measures that. So writing it
     // would come back out of EDS's cache missing and read as an edit the user
     // never made; the default is left off instead, exactly as `INTERVAL=1` is.
     //
@@ -3922,9 +3922,9 @@ fn a_week_starting_on_monday_is_left_off_the_rule() {
 
 #[test]
 fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
-    // RFC 5545 §3.3.10 does not exclude `WKST` at any frequency — it says only
+    // RFC 5545 §3.3.10 does not exclude `WKST` at any frequency: it says only
     // where the part is *significant*, which is a reader's business rather than a
-    // writer's — and libical keeps it beside every one. So there is no frequency
+    // writer's, and libical keeps it beside every one. So there is no frequency
     // gate: the day the server named is carried as it came.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
         let event = CalendarEvent {
@@ -3950,7 +3950,7 @@ fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
 fn every_day_of_the_week_can_start_one() {
     // The whole closed vocabulary RFC 8984 §4.3.3 shares with `NDay`'s `day`, in
     // both directions. Monday is absent because it is the default and is left off
-    // — see the test above.
+    //: see the test above.
     for (day, token) in [
         ("tu", "TU"),
         ("we", "WE"),
@@ -4005,14 +4005,14 @@ fn reads_the_day_the_week_starts_on_off_a_rule_written_by_hand() {
 fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
     // Outside the closed vocabulary there is nothing a `WKST` can say, and the
     // cost of guessing is the whole `RRULE`: libical refuses a component carrying
-    // `WKST=XX` outright — measured in `jmap-backend-cal/tests/marshal.rs` — so
+    // `WKST=XX` outright (measured in `jmap-backend-cal/tests/marshal.rs`) so
     // the event would reach EDS's cache as a single appointment with the user's
     // series gone. The part is left off and the save path told the rule was seen
     // in part.
     //
     // `MO` is refused for the subtler reason `BYMONTH=03` is: RFC 8984 §4.3.3
     // spells the day in lower case, so a value in any other case is one this
-    // mapping would hand back respelled — and a rule that comes back spelled
+    // mapping would hand back respelled, and a rule that comes back spelled
     // differently reads as an edit the user never made. The parser can only
     // produce the canonical spelling, so nothing legitimate is lost.
     for day in ["xx", "", "monday", "MO", "SU", "1", "mo,tu"] {
@@ -4036,7 +4036,7 @@ fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
 
 #[test]
 fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
-    // "The first and the last week of the year, weeks counted from Sunday" —
+    // "The first and the last week of the year, weeks counted from Sunday" :
     // RFC 8984 §4.3.3's `byWeekNo`, iCalendar's `BYWEEKNO`, whose negative value
     // counts back from the end of the year the way `byYearDay`'s does.
     //
@@ -4067,8 +4067,8 @@ fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
 
 #[test]
 fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
-    // Every modeled part at once, in the order libical writes them — `BYWEEKNO`
-    // between `BYYEARDAY` and `BYMONTH` — so that a rule read back out of EDS's
+    // Every modeled part at once, in the order libical writes them: `BYWEEKNO`
+    // between `BYYEARDAY` and `BYMONTH`, so that a rule read back out of EDS's
     // own cache compares equal to the one that went in.
     //
     // The sixth part is what first pushes an `RRULE` past 75 octets, so this is
@@ -4137,7 +4137,7 @@ fn calcards_own_writer_folds_a_long_recurrence_rule_unassisted() {
 #[test]
 fn reads_the_weeks_of_the_year_off_a_rule_written_by_hand() {
     // RFC 5545 §3.3.10's `weeknum` may carry the leading plus JSCalendar has no
-    // room for, and counts to 53 — the week a long year has and a short one does
+    // room for, and counts to 53: the week a long year has and a short one does
     // not.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -4162,7 +4162,7 @@ fn reads_the_weeks_of_the_year_off_a_rule_written_by_hand() {
 fn weeks_of_the_year_are_refused_at_every_frequency_but_yearly() {
     // RFC 5545 §3.3.10 is narrower here than for any other part this mapping
     // writes: BYWEEKNO MUST NOT be specified when FREQ is anything *other than*
-    // YEARLY — not even `HOURLY`, which `BYYEARDAY` is allowed beside. So the gate
+    // YEARLY: not even `HOURLY`, which `BYYEARDAY` is allowed beside. So the gate
     // names the one frequency that is allowed rather than the ones that are not.
     //
     // The part is left off whole and the save path told the rule was seen in part,
@@ -4196,7 +4196,7 @@ fn a_week_no_year_has_is_flagged_rather_than_written() {
     // different recurrence rather than a narrower view of this one.
     //
     // 54 has to be refused *here*: libical keeps it verbatim rather than dropping
-    // the rule — `jmap-backend-cal/tests/marshal.rs` measures that — so nothing
+    // the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so nothing
     // below this mapping would catch it.
     for weeks in [vec![0], vec![54], vec![-54], vec![20, 0], vec![]] {
         let rule = RecurrenceRule {
@@ -4221,7 +4221,7 @@ fn a_week_no_year_has_is_flagged_rather_than_written() {
 fn a_week_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
     // The refusal above, reached the way a component really arrives: through the
     // parser. `54` is outside RFC 5545's `ordwk`, so the mapping is the one that
-    // has to refuse it — and refuse the whole set, leaving the `RRULE` at its
+    // has to refuse it, and refuse the whole set, leaving the `RRULE` at its
     // frequency.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -4245,7 +4245,7 @@ fn a_week_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
 
 #[test]
 fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
-    // "The last Friday of the month" — RFC 8984 §4.3.3's `bySetPosition`,
+    // "The last Friday of the month": RFC 8984 §4.3.3's `bySetPosition`,
     // iCalendar's `BYSETPOS`. It is unlike every other part here: the others say
     // which dates the interval expands to, and this one picks out of that set
     // after the fact, counting from the end when negative.
@@ -4275,8 +4275,8 @@ fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
 
 #[test]
 fn the_position_in_the_set_is_written_after_the_months() {
-    // Every modeled part at once, in the order libical writes them — `BYSETPOS`
-    // after `BYMONTH` and before `WKST` — so that a rule read back out of EDS's
+    // Every modeled part at once, in the order libical writes them: `BYSETPOS`
+    // after `BYMONTH` and before `WKST`, so that a rule read back out of EDS's
     // own cache compares equal to the one that went in.
     let rule = RecurrenceRule {
         by_day: Some(vec![NDay::new("we")]),
@@ -4369,7 +4369,7 @@ fn a_position_no_set_has_is_flagged_rather_than_written() {
     // rather than showing fewer of these.
     //
     // 367 has to be refused *here*: libical keeps it verbatim rather than
-    // dropping the rule — `jmap-backend-cal/tests/marshal.rs` measures that — so
+    // dropping the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so
     // nothing below this mapping would catch it.
     for positions in [vec![0], vec![367], vec![-367], vec![1, 0], vec![]] {
         let rule = RecurrenceRule {
@@ -4395,7 +4395,7 @@ fn a_position_no_set_has_is_flagged_rather_than_written() {
 fn a_position_a_hand_written_rule_invents_is_not_written_back() {
     // The refusal above, reached the way a component really arrives: through the
     // parser. `367` is outside RFC 5545's `setposday`, so the mapping is the one
-    // that has to refuse it — and refuse the whole set, leaving the days it
+    // that has to refuse it, and refuse the whole set, leaving the days it
     // selects from in place.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -4442,7 +4442,7 @@ fn carries_the_hours_of_the_day_a_rule_repeats_at() {
 
 #[test]
 fn the_times_of_day_are_written_before_every_other_part() {
-    // Every modeled part at once, in the order libical writes them — and the
+    // Every modeled part at once, in the order libical writes them, and the
     // three that name a time of day go *first*, finest unit outwards, ahead of
     // `BYDAY` and of each other. Measured in `jmap-backend-cal/tests/marshal.rs`:
     // a rule that went out in another order comes back out of EDS's own cache
@@ -4479,7 +4479,7 @@ fn the_times_of_day_are_written_before_every_other_part() {
 #[test]
 fn reads_the_hours_of_the_day_off_a_rule_written_by_hand() {
     // And the hours are a set `BYSETPOS` may select out of: RFC 5545 §3.3.10
-    // asks only that *some* other BYxxx part be there, and BYHOUR is one — so
+    // asks only that *some* other BYxxx part be there, and BYHOUR is one, so
     // "the last of 09:00 and 17:00 each day" is a rule this mapping now writes
     // where before it dropped the position for having nothing to select from.
     let ics = concat!(
@@ -4508,8 +4508,8 @@ fn an_hour_no_day_has_is_flagged_rather_than_written() {
     // set holding one unwritable value is refused whole, because a `BYHOUR`
     // holding the rest names different hours rather than fewer of these.
     //
-    // libical drops the **entire** `RRULE` for an hour out of range — measured
-    // in `jmap-backend-cal/tests/marshal.rs` — so a rule written that way would
+    // libical drops the **entire** `RRULE` for an hour out of range: measured
+    // in `jmap-backend-cal/tests/marshal.rs`, so a rule written that way would
     // reach EDS's cache as a single appointment with the user's series gone.
     // And it answers an *empty* `BYHOUR` by inventing `BYHOUR=0`, which would
     // move the whole series to midnight, so the empty set is refused too.
@@ -4560,7 +4560,7 @@ fn an_hour_a_hand_written_rule_invents_is_not_written_back() {
 #[test]
 fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
     // RFC 5545 §3.3.10: BYHOUR MUST NOT be specified when DTSTART has a value
-    // type of DATE — an hour of the day means nothing beside a day with no
+    // type of DATE: an hour of the day means nothing beside a day with no
     // clock. libical keeps such a rule anyway (measured in
     // `jmap-backend-cal/tests/marshal.rs`), so this mapping is the only place
     // the contradiction can be resolved.
@@ -4691,7 +4691,7 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
     );
 
     // A set holding one unwritable value is refused whole, because a part
-    // holding the rest names different times rather than fewer of these — and
+    // holding the rest names different times rather than fewer of these, and
     // an out-of-range value costs libical the *whole* rule, so the event would
     // reach EDS's cache as a single appointment with the series gone. The empty
     // set is refused for the reason the empty `BYHOUR` is: libical answers it
@@ -4728,8 +4728,8 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
 #[test]
 fn a_minute_a_hand_written_rule_invents_is_not_written_back() {
     // The refusal above, reached the way a component really arrives. `60` is
-    // outside RFC 5545's `minutes` and `61` outside its `seconds`, and — as for
-    // an out-of-range `BYHOUR` — the parts are left off while the days they
+    // outside RFC 5545's `minutes` and `61` outside its `seconds`, and: as for
+    // an out-of-range `BYHOUR`: the parts are left off while the days they
     // would have limited stay in place.
     //
     // Both values are *numbers* out of range rather than unreadable tokens,
@@ -4763,8 +4763,8 @@ fn a_minute_a_hand_written_rule_invents_is_not_written_back() {
 fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
     // RFC 5545 §3.3.10 forbids BYMINUTE and BYSECOND beside a DATE-valued
     // DTSTART for the reason it forbids BYHOUR: a day with no clock has no
-    // minute to repeat at. Resolved the way the hours are — the DATE form is
-    // dropped and the event drawn timed — so all three parts are asked about
+    // minute to repeat at. Resolved the way the hours are: the DATE form is
+    // dropped and the event drawn timed, so all three parts are asked about
     // together rather than one at a time.
     let event = CalendarEvent {
         start: Some("2026-01-15T00:00:00".to_owned()),
@@ -4819,8 +4819,8 @@ fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
 /// nothing about reminders.
 ///
 /// The predicate takes the series because one restated property's coverage is the
-/// series' to decide — RFC 8984 §4.5.1's `useDefaultAlerts`, which an override may
-/// not restate — and that is all it reads the event for. So every test but the
+/// series' to decide: RFC 8984 §4.5.1's `useDefaultAlerts`, which an override may
+/// not restate, and that is all it reads the event for. So every test but the
 /// flag's own asks it of a series that does not set it; see
 /// `an_occurrence_of_an_event_that_uses_the_default_reminders_is_drawn_with_none`,
 /// which asks it of one that does.
@@ -4974,7 +4974,7 @@ fn an_instance_edited_on_its_own_is_a_vevent_of_its_own() {
     // RFC 8984 §4.3.4's third kind of override: not off, not merely on, but
     // *different*. iCalendar says that with a second VEVENT carrying the
     // series' UID and a RECURRENCE-ID naming the instance it stands in for
-    // (RFC 5545 §3.8.4.4) — and the properties it does not restate are the
+    // (RFC 5545 §3.8.4.4), and the properties it does not restate are the
     // series'.
     let patch = json!({"title": "Sprint review"});
     assert!(maps_override("2026-01-29T13:00:00", &patch));
@@ -5037,7 +5037,7 @@ fn an_instance_moved_to_another_zone_carries_it_on_its_own_start() {
     // An occurrence can move across the clock as well as along it, and RFC 8984
     // §4.4.3 lets an override patch `timeZone` like any other property. In
     // iCalendar a zone belongs to the property that carries it, so the
-    // instance's own DTSTART states it — while the RECURRENCE-ID keeps the
+    // instance's own DTSTART states it, while the RECURRENCE-ID keeps the
     // series' zone, because it names the occurrence the *rules* generated and
     // the rules run on the series' clock (RFC 5545 §3.8.4.4).
     let patch = json!({"start": "2026-01-29T09:00:00", "timeZone": "America/New_York"});
@@ -5110,7 +5110,7 @@ fn an_instance_that_drops_its_zone_floats_rather_than_inheriting_the_series() {
 fn a_zone_an_instance_cannot_name_is_flagged_rather_than_written_back() {
     // The same rule the series' own zone follows, one level down: a `TZID` is
     // an iCalendar identifier and only sometimes an RFC 8984 §1.4.9 name, and
-    // `recurrenceOverrides` is replaced whole — so an entry carrying a value
+    // `recurrenceOverrides` is replaced whole, so an entry carrying a value
     // JSCalendar cannot hold would risk the server rejecting the save, and with
     // it every other edit in it.
     for zone in [
@@ -5233,7 +5233,7 @@ fn an_instance_that_drops_a_property_reads_back_as_removing_it() {
 #[test]
 fn an_instance_both_edited_and_excluded_is_excluded_and_flagged() {
     // An instance that does not happen has nothing to show an edited title on,
-    // so the exclusion wins and the rest of the patch is lost — which the save
+    // so the exclusion wins and the rest of the patch is lost, which the save
     // path has to be told, or the next save writes the loss back.
     let patch = json!({"excluded": true, "title": "Sprint review"});
     assert!(!maps_override("2026-01-29T13:00:00", &patch));
@@ -5251,7 +5251,7 @@ fn an_instance_both_edited_and_excluded_is_excluded_and_flagged() {
 #[test]
 fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
     // The narrowing that remains: a patch naming properties outside the drawn
-    // set — or carrying a value the drawing cannot take — is placed by a bare
+    // set (or carrying a value the drawing cannot take) is placed by a bare
     // RDATE, so the occurrence is at least visible, and flagged so that a save
     // never replaces the property it came from.
     for patch in [
@@ -5401,7 +5401,7 @@ fn the_series_is_the_vevent_without_a_recurrence_id_whatever_the_order() {
 
 #[test]
 fn a_detached_instance_that_restates_the_series_is_an_instance_that_happens() {
-    // Nothing differs, so the patch is empty — which is exactly what an RDATE
+    // Nothing differs, so the patch is empty, which is exactly what an RDATE
     // says, and the same override either spelling produced.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -5431,7 +5431,7 @@ fn an_override_for_this_and_future_instances_is_not_read_as_one_instance() {
     // RFC 5545 §3.2.13's RANGE=THISANDFUTURE makes the component stand for
     // every instance from that one on. Reading it as a single override would
     // move one day and quietly drop the change to all the others, so it is
-    // skipped — the same answer this mapping gives any value it cannot read.
+    // skipped: the same answer this mapping gives any value it cannot read.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
         "VERSION:2.0\r\n",
@@ -5458,7 +5458,7 @@ fn an_override_for_this_and_future_instances_is_not_read_as_one_instance() {
 #[test]
 fn a_detached_instance_with_no_series_is_still_read_as_an_event() {
     // Nothing to attach it to and nothing honest to say about the series, so
-    // the component is read as the event it describes — which is what this
+    // the component is read as the event it describes, which is what this
     // mapping did before it knew what a RECURRENCE-ID was.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -5513,7 +5513,7 @@ fn a_detached_instance_wins_over_an_rdate_for_the_same_instant() {
 }
 
 /// A weekly hour-long series whose `RDATE` names one extra instance the given
-/// way — a bare date-time, or either spelling of RFC 5545 §3.3.9's period.
+/// way: a bare date-time, or either spelling of RFC 5545 §3.3.9's period.
 fn series_with_rdate(value: &str) -> String {
     format!(
         concat!(
@@ -5539,7 +5539,7 @@ fn an_rdate_period_gives_its_instance_the_length_the_period_states() {
     // RFC 5545 §3.8.5.2 lets an RDATE state a period rather than an instant,
     // which is how iCalendar says "this extra occurrence runs longer than the
     // rest". Reading only its start showed the two-hour slot as the series'
-    // hour — the occurrence was there, at the wrong length.
+    // hour: the occurrence was there, at the wrong length.
     for value in ["20260205T130000Z/PT2H", "20260205T130000Z/20260205T150000Z"] {
         let event = ical_to_event(&series_with_rdate(value)).expect("parse");
 
@@ -5577,7 +5577,7 @@ fn an_rdate_period_as_long_as_the_series_patches_nothing() {
 fn an_rdate_period_naming_no_usable_length_leaves_the_instance_with_none() {
     // A period ending before it starts, and one whose duration is negative:
     // neither states a length an occurrence can have. The instance still
-    // happens — that is what the RDATE said — but its length is removed rather
+    // happens (that is what the RDATE said) but its length is removed rather
     // than silently inherited from the series, which is the answer a detached
     // VEVENT carrying neither DURATION nor DTEND already gives.
     for value in [
@@ -5622,8 +5622,8 @@ fn an_rdate_period_naming_no_usable_length_leaves_the_instance_with_none() {
 fn an_instance_an_rdate_period_lengthened_is_written_back_at_that_length() {
     // The length has to survive the way out as well, or the next save hands the
     // server back the occurrence at the series' hour. A patch that says
-    // something is written as a VEVENT of its own — the RDATE's job was only to
-    // place the instance — so the length is stated by that component's DURATION.
+    // something is written as a VEVENT of its own: the RDATE's job was only to
+    // place the instance, so the length is stated by that component's DURATION.
     let event = ical_to_event(&series_with_rdate("20260205T130000Z/PT2H")).expect("parse");
     let ics = event_to_ical(&event);
 
@@ -5690,7 +5690,7 @@ fn an_overrides_duration_that_states_no_length_is_flagged() {
     // an instance's own length is that VEVENT's DURATION, so a length that
     // cannot be written there is an override the document shows in part. Read
     // back, the instance is at the series' length, and a save replacing
-    // recurrenceOverrides would hand the server that as the user's edit —
+    // recurrenceOverrides would hand the server that as the user's edit :
     // quietly shortening an occurrence nobody touched.
     for value in ["-PT1H", "next tuesday", "PT", "3600"] {
         assert!(
@@ -5925,7 +5925,7 @@ fn a_time_zone_is_a_name_or_it_is_not_one() {
     }
 }
 
-/// The identifier of a zone no database names — RFC 8984 §1.4.9's other form,
+/// The identifier of a zone no database names: RFC 8984 §1.4.9's other form,
 /// which MUST begin with a solidus and which the event itself defines. It is
 /// what an Exchange invitation's own `VTIMEZONE` becomes when a server converts
 /// the invitation to JSCalendar, so it is what arrives from a JMAP account that
@@ -6008,7 +6008,7 @@ fn defining(zone: &str, definitions: Value) -> CalendarEvent {
 /// This is the one `TZID` the mapping cannot lean on the consumer for. An IANA
 /// name libical resolves out of its builtin table; a custom identifier resolves
 /// nowhere, so a `DTSTART` naming one and defining nothing is a wall-clock time
-/// in no particular zone — libical floats it and the appointment lands hours
+/// in no particular zone: libical floats it and the appointment lands hours
 /// from where the server put it.
 #[test]
 fn a_custom_zone_the_event_defines_is_defined_in_the_document() {
@@ -6054,8 +6054,8 @@ fn a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with() {
 /// it belongs.
 ///
 /// Reading it back is therefore not bookkeeping: it is the only way a document
-/// whose zone came from somewhere other than a database — an Exchange
-/// invitation's own `VTIMEZONE`, an `.ics` another client wrote — can be saved
+/// whose zone came from somewhere other than a database: an Exchange
+/// invitation's own `VTIMEZONE`, an `.ics` another client wrote: can be saved
 /// as the event it is rather than as a floating one. See `read_time_zones`.
 #[test]
 fn a_custom_zone_the_document_defines_is_read_back_as_a_definition() {
@@ -6097,7 +6097,7 @@ fn ending(until: &str, offset_from: &str) -> String {
 }
 
 /// The same zone as RFC 8984 §4.7.2 spells one, with `until` stated in
-/// `offset_from` — which is where §4.7.2 puts a TimeZoneRule's `start`, and the
+/// `offset_from`, which is where §4.7.2 puts a TimeZoneRule's `start`, and the
 /// only reading of `until` consistent with it, since the two bound one series of
 /// the same local times.
 fn ending_zone(until: &str, offset_from: &str) -> Value {
@@ -6122,14 +6122,14 @@ fn ending_zone(until: &str, offset_from: &str) -> Value {
 }
 
 /// The same bug as `a_zoned_rules_utc_until_is_not_taken_for_a_local_time`, one
-/// level down — and this one *is* convertible without a zone database, which is
+/// level down, and this one *is* convertible without a zone database, which is
 /// why it is converted rather than refused.
 ///
 /// An observance dates itself in the zone it is defining, so the offset that
 /// resolves its `DTSTART` is not a zone whose rules have to be evaluated: it is
 /// the fixed number of seconds `TZOFFSETFROM` states, sitting in the same
 /// component. Reading a UTC `UNTIL` there as local digits moves the end of the
-/// transition rule by that offset — five hours, for the example below — which
+/// transition rule by that offset (five hours, for the example below) which
 /// puts the zone's last spring-forward in the wrong place and every event after
 /// it an hour out.
 #[test]
@@ -6137,7 +6137,7 @@ fn an_observances_utc_until_is_read_in_the_offset_it_states() {
     for (until, offset_from, read) in [
         // The RFC's own example: 07:00 UTC is 02:00 where the offset is -0500.
         ("19730429T070000Z", "-0500", "1973-04-29T02:00:00"),
-        // Backwards over a month, a year and into a February — 1973 is not a
+        // Backwards over a month, a year and into a February: 1973 is not a
         // leap year and 1972 is, so the day the shift lands on differs.
         ("19730101T020000Z", "-0500", "1972-12-31T21:00:00"),
         ("19730301T000000Z", "-0500", "1973-02-28T19:00:00"),
@@ -6147,7 +6147,7 @@ fn an_observances_utc_until_is_read_in_the_offset_it_states() {
         // No offset to shift by, so the digits are the instant.
         ("19730429T070000Z", "+0000", "1973-04-29T07:00:00"),
         // Already the local time §3.3.10 asks for beside a local `DTSTART`,
-        // which is what this crate itself writes — read as itself.
+        // which is what this crate itself writes: read as itself.
         ("19730429T020000", "-0500", "1973-04-29T02:00:00"),
     ] {
         let ics = zoned(ENDING_TZID, &ending(until, offset_from));
@@ -6164,7 +6164,7 @@ fn an_observances_utc_until_is_read_in_the_offset_it_states() {
 
 /// The other direction of the same conversion. RFC 5545 §3.6.5's examples state
 /// an observance's `UNTIL` as a UTC instant, which is what every producer of a
-/// `VTIMEZONE` writes — tzdata's, libical's, Exchange's — so that is what this
+/// `VTIMEZONE` writes (tzdata's, libical's, Exchange's) so that is what this
 /// draws, rather than asking a reader to accept a spelling it may never have
 /// seen. It also makes the trip through JSCalendar and back byte-identical, so
 /// a save of an untouched component still has nothing to report.
@@ -6195,12 +6195,12 @@ fn an_observances_until_is_drawn_as_the_utc_instant_it_names() {
 }
 
 /// The end of a transition rule is the one part of an observance that cannot be
-/// narrowed, only lost — and losing it is a zone that never stops moving.
+/// narrowed, only lost, and losing it is a zone that never stops moving.
 ///
 /// The mirror of what the drawing already does: `observance` gives up the whole
 /// `VTIMEZONE` rather than write a rule whose `UNTIL` it cannot state, because a
 /// zone that keeps springing forward puts every event in it an hour out from the
-/// day the transitions should have stopped. Reading was the asymmetric half — an
+/// day the transitions should have stopped. Reading was the asymmetric half: an
 /// `UNTIL` it could not convert simply went missing, and the unbounded rule left
 /// behind was then sent to the server as the zone's description.
 ///
@@ -6208,7 +6208,7 @@ fn an_observances_until_is_drawn_as_the_utc_instant_it_names() {
 /// already draws every definition it reads and keeps only what came back, which
 /// is what `a_definition_with_a_part_that_cannot_be_read_is_not_read_in_part`
 /// covers for an observance's *parts*. An end that went missing was invisible to
-/// that check — the rule it left behind drew perfectly well, just not as the
+/// that check: the rule it left behind drew perfectly well, just not as the
 /// zone the document described.
 ///
 /// Not describing the zone at all is the conservative answer, and one the rest
@@ -6245,7 +6245,7 @@ fn an_observance_whose_until_cannot_be_read_costs_the_whole_zone() {
 /// the answer.
 ///
 /// An event's `UNTIL` that cannot be read used to leave the rule looking like a
-/// recurrence that never ends — which the save path would then have patched over
+/// recurrence that never ends, which the save path would then have patched over
 /// the server's, replacing an appointment that stops with one that repeats for
 /// ever. The unreadable value is kept instead, exactly as a zoned UTC instant
 /// is: it is no LocalDateTime, so the rule does not map and `recurrenceRule` is
@@ -6276,15 +6276,15 @@ fn a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all() {
 /// the *parser* refuses never reaches this mapping at all, so there is nothing
 /// here to notice it by.
 ///
-/// A value with digits in the wrong places is read and handed on — that is the
-/// hostile `.ics` the tests above drive, and the one libical itself would pass —
+/// A value with digits in the wrong places is read and handed on: that is the
+/// hostile `.ics` the tests above drive, and the one libical itself would pass :
 /// but a value that is no date-time in any shape takes the rest of the rule with
 /// it: what arrives is the frequency alone, and this crate cannot tell that from
 /// a rule written that way. On an event that is a recurrence shown as unbounded;
 /// on a `VTIMEZONE` observance it is a zone that keeps moving, which
 /// `an_observance_whose_until_cannot_be_read_costs_the_whole_zone` closes only
 /// for the values that get through. Closing it too means a reader that reports
-/// what it discarded — a narrowing below this crate, not a decision of its own.
+/// what it discarded: a narrowing below this crate, not a decision of its own.
 ///
 /// Here as a canary: a parser that starts passing the value through turns this
 /// red, and whoever sees that should widen the refusal to cover it.
@@ -6326,7 +6326,7 @@ fn a_named_zones_definition_is_not_read_back_as_a_definition() {
 /// An identifier RFC 8984 §1.4.9 admits in neither form defines nothing, however
 /// complete the `VTIMEZONE` beside it. An unresolvable custom zone name is not an IANA name
 /// and does not begin with the solidus a custom identifier must, so there is no
-/// `timeZones` key it could be filed under — inventing one would mean inventing
+/// `timeZones` key it could be filed under: inventing one would mean inventing
 /// the identifier the event is in.
 #[test]
 fn a_zone_no_identifier_admits_is_read_back_undefined() {
@@ -6341,7 +6341,7 @@ fn a_zone_no_identifier_admits_is_read_back_undefined() {
     assert_eq!(event.time_zones, None, "{ics}");
 }
 
-/// Half a definition is not a zone — see `vtimezone_of`, which will not *draw*
+/// Half a definition is not a zone: see `vtimezone_of`, which will not *draw*
 /// one for the same reason. A `VTIMEZONE` this mapping cannot read whole is read
 /// as no definition at all, so the identifier stays undefined and
 /// [`maps_time_zone`] refuses it, rather than the event being filed in a zone
@@ -6358,7 +6358,7 @@ fn a_definition_with_a_part_that_cannot_be_read_is_not_read_in_part() {
         // A transition dated to a day that does not exist.
         ics.replace("DTSTART:19701025T030000", "DTSTART:19701325T030000"),
         // A rule that repeats the transition in a month no year has, which
-        // `rule_to_rrule` refuses to spell — so the zone would move once where
+        // `rule_to_rrule` refuses to spell, so the zone would move once where
         // it moves every year.
         ics.replace("BYMONTH=10", "BYMONTH=13"),
     ] {
@@ -6372,9 +6372,9 @@ fn a_definition_with_a_part_that_cannot_be_read_is_not_read_in_part() {
 
 /// The question the save path asks: may this event's zone be stated to a server?
 ///
-/// Three answers are yes — no zone at all (a floating event, which is a real
+/// Three answers are yes: no zone at all (a floating event, which is a real
 /// thing to save), an IANA name, and a custom identifier the event itself
-/// defines — and one is no: an identifier with nothing to resolve it, which is
+/// defines, and one is no: an identifier with nothing to resolve it, which is
 /// what an undefined `TZID` off a foreign document reads as.
 #[test]
 fn a_zone_is_sendable_when_something_says_what_it_is() {
@@ -6435,7 +6435,7 @@ fn windows_time_zone_names_are_refused_as_unsendable_by_design() {
     }
 }
 
-/// What a save sends is the definitions the event still refers to — not the
+/// What a save sends is the definitions the event still refers to: not the
 /// series' alone, and not the whole map regardless.
 ///
 /// The caller is the create path, which clears a zone it cannot state. Clearing
@@ -6542,7 +6542,7 @@ fn a_zone_with_a_name_of_its_own_is_left_to_the_reader() {
 }
 
 /// A custom identifier the event defines nothing for is drawn as it came and
-/// left undefined — the state everything was in before this existed. The value
+/// left undefined: the state everything was in before this existed. The value
 /// has to reach the component either way: the save path tells a zone this
 /// mapping cannot name from no zone at all, and reading the first as the second
 /// would clear the server's zone on an edit that never touched it.
@@ -6563,7 +6563,7 @@ fn a_custom_zone_with_no_definition_is_named_and_left_undefined() {
 }
 
 /// A weekly series in a zone every database names, with one occurrence moved
-/// into a zone only the event itself can name — RFC 5545 §3.2.19 puts the zone
+/// into a zone only the event itself can name: RFC 5545 §3.2.19 puts the zone
 /// on the *property*, so a detached instance need not share the series'.
 ///
 /// The identifier is [`CUSTOM_TZID`], defined once in the event's own
@@ -6599,7 +6599,7 @@ fn instance_in_a_custom_zone() -> CalendarEvent {
 /// define, but it is not the only zone the document can refer to: an override
 /// carries `timeZone` (RFC 8984 §4.3.4) and the instance's `DTSTART` states it
 /// as a `TZID` of its own. Drawing the instance at the series' clock instead is
-/// not a narrowing — it is the occurrence shown in a zone nobody moved it to,
+/// not a narrowing: it is the occurrence shown in a zone nobody moved it to,
 /// and wherever the two zones differ that is a different instant, silently.
 ///
 /// [`custom_zone`] happens to describe the same rules as `Europe/Berlin`, which
@@ -6637,7 +6637,7 @@ fn an_occurrence_moved_into_a_custom_zone_is_drawn_in_that_zone() {
 /// And the definition comes back, which is what makes a *create* of such a
 /// document send the event it describes.
 ///
-/// `ical_to_event` used to look for one definition — the series' — so an
+/// `ical_to_event` used to look for one definition (the series') so an
 /// occurrence's own custom identifier reached the server with nothing to resolve
 /// it. That is a dangling `TimeZoneId`, which RFC 8984 §1.4.9 does not admit and
 /// a server is entitled to reject; and a server that keeps it has one occurrence
@@ -6673,11 +6673,11 @@ fn an_occurrences_own_custom_zone_is_read_back_with_its_definition() {
 /// tells them apart: what a save may state depends on what else that save is
 /// willing to send.
 ///
-/// A component can state a custom identifier — beside the `VTIMEZONE` that
+/// A component can state a custom identifier: beside the `VTIMEZONE` that
 /// defines it, which the test above pins. A patch naming `recurrenceOverrides`
 /// and nothing else cannot: the property goes back replaced whole, so the
 /// identifier would reach the server with nothing to say what it means, and RFC
-/// 8984 §1.4.9 admits it only beside its `timeZones` entry — a dangling
+/// 8984 §1.4.9 admits it only beside its `timeZones` entry: a dangling
 /// reference the server may reject the whole `CalendarEvent/set` over, costing
 /// every other edit in the same save. That is `maps_recurrence_override`.
 ///
@@ -6714,7 +6714,7 @@ fn an_occurrences_custom_zone_is_sendable_only_beside_its_definition() {
 /// predicate admits it.
 ///
 /// A definition it can send is what makes the difference above, so an event that
-/// has none is back where it started — there is nothing to put in `timeZones`,
+/// has none is back where it started: there is nothing to put in `timeZones`,
 /// and an entry drawn from half a description would be a different zone. The
 /// series' own identifier is the one defined here, which keeps the fixture
 /// honest: what the override names is undefined, not the whole event.
@@ -6747,7 +6747,7 @@ fn an_occurrence_naming_an_undefined_zone_is_sendable_by_neither_rule() {
 ///
 /// Every observance of a zone describes the offsets between the transitions the
 /// others name, so a `VTIMEZONE` missing one is not a narrowed description of the
-/// zone — it is a different zone, and an event in it is at a different instant.
+/// zone: it is a different zone, and an event in it is at a different instant.
 /// Half a definition is therefore worse than none: none leaves the reader
 /// floating the event, which is visibly wrong, where half of one is confidently
 /// wrong by an hour.
@@ -6755,7 +6755,7 @@ fn an_occurrence_naming_an_undefined_zone_is_sendable_by_neither_rule() {
 fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
     let unmappable = [
         // No offset to move to, which RFC 5545 §3.6.5 makes REQUIRED of every
-        // observance — and without it there is nothing to say what the zone is.
+        // observance, and without it there is nothing to say what the zone is.
         json!({"start": "1970-10-25T03:00:00", "offsetFrom": "+0200"}),
         // An offset that is not one.
         json!({
@@ -6770,7 +6770,7 @@ fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
             "offsetTo": "+0100",
         }),
         // A rule with no frequency has no `RRULE` spelling at all, so the
-        // observance would be drawn as happening once — the transition stops
+        // observance would be drawn as happening once: the transition stops
         // repeating and every date after 1970 is in the other observance.
         json!({
             "start": "1970-10-25T03:00:00",
@@ -6781,7 +6781,7 @@ fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
         // A rule with a part that has no `RRULE` spelling. `rule_to_rrule`
         // leaves such a part off and still writes a line, which here would be a
         // zone that moves on the last Sunday of *every* month rather than of
-        // October — one hour wrong for eleven months of the year, stated with
+        // October: one hour wrong for eleven months of the year, stated with
         // the same confidence as the truth.
         json!({
             "start": "1970-10-25T03:00:00",
@@ -6810,7 +6810,7 @@ fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
 
 /// A zone with no observance in it is no definition: RFC 5545 §3.6.5 requires at
 /// least one `STANDARD` or `DAYLIGHT` subcomponent, and libical refuses a
-/// `VTIMEZONE` without one — which would cost the whole object, not just the
+/// `VTIMEZONE` without one, which would cost the whole object, not just the
 /// zone.
 #[test]
 fn a_zone_stating_no_observance_is_not_drawn() {
@@ -6825,8 +6825,8 @@ fn a_zone_stating_no_observance_is_not_drawn() {
     }
 }
 
-/// A zone with one observance and no rule is a zone that never moves — most of
-/// the world — and is drawn with the one it has.
+/// A zone with one observance and no rule is a zone that never moves: most of
+/// the world, and is drawn with the one it has.
 #[test]
 fn a_zone_that_never_changes_is_drawn_with_the_one_observance_it_has() {
     let zone = json!({
@@ -6934,7 +6934,7 @@ fn a_value_that_is_no_offset_defines_no_zone() {
 ///
 /// An override may restate `timeZone`, but `maps_override_field` admits only a
 /// value `names_time_zone` accepts, so an instance moved into a custom zone is
-/// drawn at the series' zone instead — the same refusal that keeps a save from
+/// drawn at the series' zone instead: the same refusal that keeps a save from
 /// sending a `recurrenceOverrides` map the server would reject. Which is just as
 /// well, since a second copy of one `VTIMEZONE` is a duplicate `TZID` in one
 /// object, and two of them would be two definitions of the same zone.
@@ -6967,8 +6967,8 @@ fn an_instance_names_no_zone_the_series_did_not() {
     );
 }
 
-/// An all-day event names no zone at all — its `DTSTART` is a date, which RFC
-/// 5545 §3.2.19 gives no `TZID` to carry one on — so there is nothing to define.
+/// An all-day event names no zone at all: its `DTSTART` is a date, which RFC
+/// 5545 §3.2.19 gives no `TZID` to carry one on, so there is nothing to define.
 #[test]
 fn an_event_written_as_a_date_defines_no_zone() {
     let event = CalendarEvent {
@@ -7036,7 +7036,7 @@ fn the_people_invited_to_an_event_are_written_as_attendees() {
     // address to reach them at, a name, the roles they hold and whether they
     // have replied; RFC 5545 §3.8.4.1 spells one as an ATTENDEE line whose value
     // is the CAL-ADDRESS and whose parameters carry the rest. The address comes
-    // from `sendTo/imip` — the method (RFC 8984 §4.4.6) whose URI is exactly the
+    // from `sendTo/imip`: the method (RFC 8984 §4.4.6) whose URI is exactly the
     // mailto: iCalendar wants.
     let ics = event_to_ical(&attended(json!({
         "bob": guest("mailto:bob@example.com", "Bob Example", json!({
@@ -7073,7 +7073,7 @@ fn the_people_invited_to_an_event_are_written_as_attendees() {
 fn the_participant_that_owns_the_event_is_its_organizer() {
     // RFC 8984 §4.4.6 gives the organizer no property of its own: it is the
     // participant holding the `owner` role. RFC 5545 §3.8.4.3 states it on a
-    // line of its own — and one whose only role is owner is not attending, so it
+    // line of its own, and one whose only role is owner is not attending, so it
     // gets no ATTENDEE line to go with it.
     let ics = event_to_ical(&attended(json!({
         "alice": guest("mailto:alice@example.com", "Alice Example", json!({
@@ -7130,7 +7130,7 @@ fn an_owner_who_is_also_attending_gets_both_lines() {
 #[test]
 fn a_room_the_event_is_booked_in_is_written_as_one() {
     // RFC 8984 §4.4.6's `kind` says what sort of participant it is, and RFC 5545
-    // §3.2.3's CUTYPE the same — the two vocabularies differ in one word, a
+    // §3.2.3's CUTYPE the same: the two vocabularies differ in one word, a
     // JSCalendar `location` being iCalendar's ROOM.
     for (kind, cutype) in [
         ("individual", "INDIVIDUAL"),
@@ -7155,7 +7155,7 @@ fn a_participant_with_no_address_to_send_to_is_left_off() {
     // An ATTENDEE's value is a CAL-ADDRESS (RFC 5545 §3.3.3), which is a URI:
     // there is no way to write a guest the server gave no address for, and
     // inventing one would name somebody it never named. So the participant is
-    // dropped, like every other value this mapping cannot spell — and it is only
+    // dropped, like every other value this mapping cannot spell, and it is only
     // safe to drop because `participants` is written and never read back.
     for participant in [
         json!({"@type": "Participant", "name": "Nobody"}),
@@ -7184,7 +7184,7 @@ fn a_participant_with_no_address_to_send_to_is_left_off() {
 fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
     // The rule every closed vocabulary in this mapping gets: a value the other
     // format has no spelling for is dropped rather than passed through in its
-    // clothes. The guest still goes on the line — it is the parameter that is
+    // clothes. The guest still goes on the line: it is the parameter that is
     // unwritable, not the participant.
     let ics = event_to_ical(&attended(json!({
         "bob": guest("mailto:bob@example.com", "Bob Example", json!({
@@ -7207,7 +7207,7 @@ fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
 #[test]
 fn the_guest_list_is_written_and_never_read_back() {
     // The precedent CREATED and LAST-MODIFIED set, for a different reason:
-    // changing who is invited, or what they replied, is *scheduling* — it means
+    // changing who is invited, or what they replied, is *scheduling*: it means
     // an iTIP REQUEST or REPLY going out (RFC 5546), which this backend does not
     // send. So the guest list is drawn for the user to read and nothing more:
     // `participants` is absent from MAPPED_PROPERTIES, so no save can name it,
@@ -7225,7 +7225,7 @@ fn the_guest_list_is_written_and_never_read_back() {
 #[test]
 fn an_edited_instance_carries_the_guest_list_of_the_series() {
     // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
-    // participants, so the occurrence's own component states the series' — an
+    // participants, so the occurrence's own component states the series': an
     // instance drawn without them would show a meeting nobody was invited to.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
     event.participants = serde_json::from_value(json!({
@@ -7311,7 +7311,7 @@ fn where_an_event_is_joined_online_is_written_as_a_conference() {
 
 #[test]
 fn a_conference_states_the_value_type_it_is_required_to() {
-    // RFC 7986 §5.11's `confparam` makes `VALUE=URI` REQUIRED on the property —
+    // RFC 7986 §5.11's `confparam` makes `VALUE=URI` REQUIRED on the property :
     // the one place in this mapping where a parameter is written that says
     // nothing the default would not. A reader that trusts the grammar is
     // entitled to demand it.
@@ -7332,7 +7332,7 @@ fn a_way_of_joining_outside_the_shared_vocabulary_is_left_off() {
     // RFC 7986 §6.3 name the same seven ways of taking part in the same words,
     // so each crosses to the other format's spelling of itself; a value outside
     // them is dropped rather than passed through in the other format's clothes,
-    // and the conference still goes on the line — it is the parameter that is
+    // and the conference still goes on the line: it is the parameter that is
     // unwritable, not the place.
     let ics = event_to_ical(&held_online(json!({
         "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
@@ -7361,7 +7361,7 @@ fn a_virtual_location_with_nowhere_to_join_is_left_off() {
     // `uri` the one mandatory member of a VirtualLocation: there is nothing to
     // write for a place the server named none for, and inventing one would send
     // the user somewhere the server never did. So the entry is dropped, like
-    // every other value this mapping cannot spell — which is only safe because
+    // every other value this mapping cannot spell, which is only safe because
     // `virtualLocations` is written and never read back.
     for location in [
         json!({"@type": "VirtualLocation", "name": "Team room"}),
@@ -7387,7 +7387,7 @@ fn a_virtual_location_with_nowhere_to_join_is_left_off() {
 #[test]
 fn a_virtual_location_with_no_name_carries_no_label() {
     // RFC 8984 §4.2.6 defaults `name` to the empty string, and a LABEL of
-    // nothing is a parameter that names the place as having no name — where
+    // nothing is a parameter that names the place as having no name, where
     // leaving it off says only that the URI speaks for itself.
     for location in [
         json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/sprint"}),
@@ -7406,7 +7406,7 @@ fn a_virtual_location_with_no_name_carries_no_label() {
 
 #[test]
 fn where_an_event_is_joined_online_is_read_back_off_the_line() {
-    // What a CONFERENCE line shows — the URI, the LABEL, the FEATUREs — reads
+    // What a CONFERENCE line shows (the URI, the LABEL, the FEATUREs) reads
     // back, and nothing else does: a VirtualLocation's `description` (RFC 8984
     // §4.2.6) has no room on the line, so it is neither drawn nor read. That is
     // safe only because the save path names `virtualLocations/<key>/...` rather
@@ -7460,8 +7460,8 @@ fn a_conference_carries_the_key_of_the_entry_it_came_from() {
 #[test]
 fn a_conference_with_no_key_is_read_under_an_invented_one() {
     // What another client's component looks like, and what Evolution would write
-    // if it ever grew a UI for this. A key is still needed — `virtualLocations`
-    // is a map — so one is invented per line, avoiding the keys already taken so
+    // if it ever grew a UI for this. A key is still needed: `virtualLocations`
+    // is a map, so one is invented per line, avoiding the keys already taken so
     // that two conferences cannot collapse into one. The save path only ever
     // patches keys the *server* holds, so an invented key can create an entry on
     // a create and reaches nothing on an edit.
@@ -7570,7 +7570,7 @@ fn a_conference_shown_in_part_is_not_the_users_to_have_edited() {
 #[test]
 fn an_edited_instance_carries_the_conferences_of_the_series() {
     // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
-    // virtual locations, so the occurrence's own component states the series' —
+    // virtual locations, so the occurrence's own component states the series' :
     // an instance drawn without them would show a meeting with nowhere to join
     // it.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
@@ -7642,7 +7642,7 @@ fn an_external_resource_is_written_as_an_attach() {
         "l2": fetched_from("https://files.example.com/minutes.txt", json!({})),
     })));
 
-    // In the map's own order, so a document is stable across renderings — which
+    // In the map's own order, so a document is stable across renderings, which
     // is what the save path's diff against a re-rendering needs.
     assert_eq!(
         attachments(&ics),
@@ -7654,7 +7654,7 @@ fn an_external_resource_is_written_as_an_attach() {
         "{ics}"
     );
     // ATTACH's default value type is already URI (RFC 5545 §3.8.1.1), so no
-    // VALUE parameter is written — unlike CONFERENCE, whose grammar demands one.
+    // VALUE parameter is written: unlike CONFERENCE, whose grammar demands one.
     assert!(!ics.contains("ATTACH;VALUE"), "{ics}");
 }
 
@@ -7664,7 +7664,7 @@ fn a_link_with_nowhere_to_fetch_it_from_is_left_off() {
     // mandatory member of a Link: there is nothing to write for a resource the
     // server named no address for, and inventing one would send the user
     // somewhere the server never did. So the entry is dropped, like every other
-    // value this mapping cannot spell — which is only safe because `links` is
+    // value this mapping cannot spell, which is only safe because `links` is
     // written and never read back.
     for link in [
         json!({"@type": "Link", "title": "The agenda"}),
@@ -7694,7 +7694,7 @@ fn a_media_type_no_fmttype_can_carry_is_left_off() {
     // 6838's restricted-name, and no more: a media type carrying parameters, or
     // one whose name holds a character the grammar does not admit, has no
     // spelling here. It is the parameter that is unwritable, not the resource,
-    // so the attachment still goes on the line — the user can still open it.
+    // so the attachment still goes on the line: the user can still open it.
     for content_type in [
         json!("application"),
         json!("application/"),
@@ -7723,7 +7723,7 @@ fn a_media_type_no_fmttype_can_carry_is_left_off() {
 
 #[test]
 fn a_size_that_is_not_a_count_of_octets_is_left_off() {
-    // RFC 8984 §1.4.11 makes `size` an UnsignedInt — a count of the octets the
+    // RFC 8984 §1.4.11 makes `size` an UnsignedInt: a count of the octets the
     // user would download. A negative number, a fraction or a string is not
     // one, and stating it anyway would put a SIZE outside RFC 8607 §4.1's
     // `1*DIGIT` on the line.
@@ -7753,7 +7753,7 @@ fn a_link_to_an_icon_is_written_as_an_image() {
     // RFC 8984 §1.4.11 gives a picture of the event a `rel` of "icon" and a
     // `display` saying what it is for; RFC 7986 §5.10's IMAGE is that property
     // in iCalendar, with §6.1's DISPLAY parameter naming the same four
-    // intentions — badge, graphic, fullsize, thumbnail — in the same words,
+    // intentions (badge, graphic, fullsize, thumbnail) in the same words,
     // differing only in case. So an icon is an IMAGE and not an ATTACH: the
     // picture shown beside a title is not a document the user opens.
     for (display, drawn) in [
@@ -7790,7 +7790,7 @@ fn a_link_to_an_icon_is_written_as_an_image() {
 #[test]
 fn an_icon_with_no_way_of_displaying_it_carries_no_display() {
     // RFC 7986 §6.1 defaults DISPLAY to BADGE and requires a reader to show no
-    // image at all for a value it does not recognise — so a `display` outside
+    // image at all for a value it does not recognise, so a `display` outside
     // the four both formats share is dropped rather than passed through in the
     // other format's clothes, which would hide the picture entirely. Leaving
     // the parameter off says only that the default applies.
@@ -7815,7 +7815,7 @@ fn a_link_that_is_not_an_icon_is_an_attachment_however_it_asks_to_be_displayed()
     // RFC 8984 §1.4.11 lets `display` be set only when `rel` is "icon", so a
     // link that says otherwise is one whose author contradicted themselves.
     // `rel` decides, because it is the property that says what the resource *is*
-    // — and an ATTACH has nowhere to put a DISPLAY anyway (RFC 7986 §6.1 admits
+    //, and an ATTACH has nowhere to put a DISPLAY anyway (RFC 7986 §6.1 admits
     // the parameter on IMAGE alone).
     for rel in [
         json!(null),
@@ -7845,8 +7845,8 @@ fn a_resource_line_carries_the_key_of_the_entry_it_was_drawn_from() {
     // that makes that possible: a Link holds a `cid`, a `rel` and a `title` (RFC
     // 8984 §1.4.11) no line has room for, so a save names `links/<key>/href` and
     // the line has to say which entry of the server's map it is a drawing of.
-    // Position could not do it — an editor that drops a line it has no UI for
-    // would slide every later resource onto the wrong entry — and both
+    // Position could not do it: an editor that drops a line it has no UI for
+    // would slide every later resource onto the wrong entry, and both
     // properties admit being stated more than once, so there really are several
     // lines to tell apart.
     let ics = event_to_ical(&points_at(json!({
@@ -7868,8 +7868,8 @@ fn a_resource_line_carries_the_key_of_the_entry_it_was_drawn_from() {
 
 #[test]
 fn a_component_that_names_resources_reads_them_back_under_the_servers_keys() {
-    // What the two lines show — the address, the media type, the size, and for a
-    // picture the way of displaying it — reads back into the entry it was drawn
+    // What the two lines show: the address, the media type, the size, and for a
+    // picture the way of displaying it: reads back into the entry it was drawn
     // from, so that a save patches `links/<key>/href` and the `cid`, `rel` and
     // `title` the line had no room for stay where the server put them. The
     // property name is itself a member: RFC 7986 §5.10's IMAGE is a link whose
@@ -7939,8 +7939,8 @@ fn what_was_read_back_off_a_resource_line_draws_the_same_line_again() {
 fn a_resource_line_naming_no_entry_gets_a_key_of_its_own() {
     // What another client's component looks like, and what an editor writing an
     // attachment afresh writes: a line with no X-JMAP-KEY on it. A key is
-    // invented so that the resource is still read — on a create the property is
-    // written whole under the keys read here — and the invented keys avoid the
+    // invented so that the resource is still read: on a create the property is
+    // written whole under the keys read here, and the invented keys avoid the
     // ones the document already named, because two resources that collided on a
     // key would become one.
     let ics = "BEGIN:VCALENDAR\r\n\
@@ -7978,7 +7978,7 @@ END:VCALENDAR\r\n";
 fn a_resource_line_pointing_at_a_local_file_is_not_read_back() {
     // A `file:` URI is where Evolution keeps an attachment the user added from
     // their own disk. It is not an address the server, or anybody else's client,
-    // could fetch — and the path names the user's home directory, so filing it
+    // could fetch, and the path names the user's home directory, so filing it
     // as a Link would put a local path in a record every other client of the
     // account can read. Sending the file itself means uploading it as a blob,
     // which this crate has no part in, so the line is left unread: the entry the
@@ -8009,9 +8009,9 @@ fn a_component_that_names_no_resource_reads_back_no_links() {
     // `None` rather than an empty map, for the reason every other read-back
     // gives: the save path reads an edit off a difference from what was shown,
     // and an empty map would claim the event points at nothing where the
-    // component made no claim at all. A value that is not a URI — an inline
+    // component made no claim at all. A value that is not a URI: an inline
     // binary attachment, which is what Evolution writes for a file it holds
-    // itself — says nothing either.
+    // itself: says nothing either.
     for line in [
         "",
         "ATTACH;VALUE=BINARY;ENCODING=BASE64:dGhlIGFnZW5kYQ==\r\n",
@@ -8036,7 +8036,7 @@ END:VCALENDAR\r\n"
 #[test]
 fn an_edited_instance_carries_the_links_of_the_series() {
     // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
-    // links, so the occurrence's own component states the series' — an instance
+    // links, so the occurrence's own component states the series': an instance
     // drawn without them would show a meeting whose agenda had gone missing.
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
     event.links = serde_json::from_value(json!({
@@ -12346,7 +12346,7 @@ fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Batch 10 Item 1: Recurrence-Overrides Round-Trip Audit & Characterization
+// Recurrence-Overrides Round-Trip Audit & Characterization
 // (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
 // ─────────────────────────────────────────────────────────────────────────────
 

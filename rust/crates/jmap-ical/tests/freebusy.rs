@@ -133,10 +133,8 @@ fn the_draft_busy_statuses_map_onto_rfc_5545_fbtypes() {
     assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
 }
 
-/// `getAvailability` answers with busy periods only — there is no "free" in
-/// its vocabulary — so a status this mapping does not know is still a period
-/// the attendee is unavailable for. Reporting it as anything but busy would
-/// let a later draft's new value book a meeting over someone's calendar.
+/// `getAvailability` answers with busy periods only ("free" is not in
+/// its vocabulary), so unknown statuses are treated as busy.
 #[test]
 fn an_unknown_busy_status_is_still_busy() {
     assert_eq!(free_busy_type("something-draft-28-invented"), "BUSY");
@@ -163,11 +161,7 @@ fn a_fractional_second_is_truncated_not_rejected() {
     );
 }
 
-/// The safety rule of this mapping, and the reason it answers with an
-/// `Option`: a period that cannot be read is **not** dropped. Dropping it
-/// would render the attendee free for a time they are busy, and a scheduler
-/// acts on that — it books the slot. Refusing the whole component instead
-/// leaves the attendee's row blank, which is the true statement.
+/// An unreadable period refuses the whole component to avoid incorrectly reporting free time.
 #[test]
 fn a_period_that_cannot_be_read_refuses_the_whole_component() {
     for (start, end) in [
@@ -210,12 +204,7 @@ fn a_window_that_cannot_be_read_refuses_the_whole_component() {
     );
 }
 
-/// A component this crate emits has to stay one component however hostile the
-/// attendee string is: a raw newline in it, written through, would end the
-/// `ATTENDEE` line and let the rest be read as properties of its own. The
-/// protection is the escaping the writer already applies to a value — this
-/// pins it, because nothing else in the free/busy path would notice it going
-/// away, and `users` reaches the vfunc from outside this process.
+/// A raw newline in the attendee string must be escaped so it cannot inject properties.
 #[test]
 fn an_attendee_cannot_inject_a_property_of_its_own() {
     let ics = render("bob@example.com\r\nSUMMARY:injected", &[]).expect("renders");

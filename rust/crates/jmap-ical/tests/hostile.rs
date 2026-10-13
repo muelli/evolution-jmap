@@ -5,8 +5,8 @@
 //!
 //! Every string in a `CalendarEvent` came off the network, and three of them
 //! reach the wire without passing through `escape`: `duration` and a
-//! recurrence rule's `frequency` are emitted by `Property::raw` — their
-//! punctuation is structure, so escaping would destroy them — and `timeZone`
+//! recurrence rule's `frequency` are emitted by `Property::raw` (their
+//! punctuation is structure, so escaping would destroy them), and `timeZone`
 //! becomes the `TZID` parameter of `DTSTART`, where a quoted value has no
 //! escape mechanism at all. The rendered object is handed straight to
 //! `i_cal_component_new_from_string`, so a string that can end a content line
@@ -106,7 +106,7 @@ fn a_crlf_in_the_time_zone_cannot_add_a_property() {
 
 /// A lone LF and a lone CR are the same attack: libical's unfolder splits on
 /// either, so neither may survive into a content line. Both raw values carry it
-/// here, so the assertion covers the duration — refused as a length — and the
+/// here, so the assertion covers the duration (refused as a length) and the
 /// frequency, which is stripped, in one document.
 #[test]
 fn a_bare_lf_or_cr_is_stripped_as_well() {
@@ -133,7 +133,7 @@ fn a_bare_lf_or_cr_is_stripped_as_well() {
 }
 
 /// The TEXT values, which do go through `escape`, keep their newline as `\n`
-/// rather than losing it — the strip is a backstop for the unescaped values,
+/// rather than losing it: the strip is a backstop for the unescaped values,
 /// not a replacement for escaping.
 #[test]
 fn a_newline_in_a_text_value_is_still_escaped_rather_than_dropped() {
@@ -224,7 +224,7 @@ fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// Adversarial-input robustness net (Batch 13 Item 5)
+// Adversarial-input robustness suite
 
 use std::time::{Duration, Instant};
 
@@ -489,7 +489,7 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
 }
 
 /// The scheduling payload is the same rendering wrapped in a `METHOD`-bearing
-/// `VCALENDAR`, so it inherits F2's guarantee — but `METHOD` and the
+/// `VCALENDAR`, so it inherits F2's guarantee, but `METHOD` and the
 /// `RECURRENCE-ID` that scopes a message to one occurrence are two values
 /// `event_to_ical` never writes, and both are written by
 /// `scheduling_ical`'s own callers. Neither may end a content line.

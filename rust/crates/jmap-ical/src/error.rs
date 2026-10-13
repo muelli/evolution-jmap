@@ -31,7 +31,7 @@ pub enum ICalError {
     ///
     /// [`MAX_DEPTH`]: crate::event::MAX_DEPTH
     TooDeep(String),
-    /// A well-formed calendar that holds no `VEVENT` — a `VTODO` or a bare
+    /// A well-formed calendar that holds no `VEVENT`: a `VTODO` or a bare
     /// `VTIMEZONE`. There is no event to hand back and nothing to store.
     NoEvent,
 }
