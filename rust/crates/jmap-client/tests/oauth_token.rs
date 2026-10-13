@@ -6,7 +6,7 @@
 //!
 //! The unit tests next to the code cover response parsing and PKCE
 //! verifier/challenge construction; these cover the part only a server can
-//! show — exactly which form fields a client sends, and that the PKCE
+//! show: exactly which form fields a client sends, and that the PKCE
 //! verifier really does hash to the challenge a prior authorization step
 //! would have carried.
 
@@ -56,8 +56,8 @@ fn exchange_code_sends_the_grant_type_code_redirect_uri_client_id_and_verifier()
 #[test]
 fn the_pkce_verifier_sent_hashes_to_the_challenge_a_prior_authorization_step_carried() {
     // Simulates the two-step flow: a challenge would have been sent to
-    // `authorization_endpoint` earlier, and only the verifier — never the
-    // challenge again — is sent here. A real server checks the pairing
+    // `authorization_endpoint` earlier, and only the verifier (never the
+    // challenge again) is sent here. A real server checks the pairing
     // itself; this proves the client's own hash and encoding agree with an
     // independent RFC 7636 §4.2 computation, not just with itself.
     let verifier = PkceVerifier::generate();

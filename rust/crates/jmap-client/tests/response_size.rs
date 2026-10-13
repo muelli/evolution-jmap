@@ -8,7 +8,7 @@
 //! `maxSizeRequest` and `maxSizeUpload`, both about what the client sends, and
 //! there is no counterpart for what comes back. So the ceiling is this
 //! repository's to choose, and until it did the number in force was `ureq`'s
-//! `MAX_BODY_SIZE` — 10 MiB, applied by the convenience method the transport
+//! `MAX_BODY_SIZE` (10 MiB), applied by the convenience method the transport
 //! happened to call. A limit nobody chose is a limit nobody can defend: it made
 //! one photo attachment the largest message this provider could open, and said
 //! so nowhere.
@@ -58,7 +58,7 @@ fn payload(size: usize) -> Vec<u8> {
 }
 
 /// The message that used not to fit. A blob past `ureq`'s default arrives
-/// whole — every octet of it, not a prefix.
+/// whole: every octet of it, not a prefix.
 #[test]
 fn a_blob_larger_than_the_dependency_default_arrives_whole() {
     let server = MockServer::builder().start();
@@ -83,7 +83,7 @@ fn a_blob_larger_than_the_dependency_default_arrives_whole() {
 }
 
 /// Over the ceiling is an error the caller can recognise, carrying the number
-/// it went over — not a transport string it would have to match on, and not a
+/// it went over: not a transport string it would have to match on, and not a
 /// short body.
 #[test]
 fn a_body_over_the_ceiling_is_refused_by_the_number_it_passed() {

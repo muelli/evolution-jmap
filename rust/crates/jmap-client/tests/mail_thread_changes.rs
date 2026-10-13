@@ -3,7 +3,7 @@
 
 //! `Thread/changes` (RFC 8620 §5.2, RFC 8621 §3): this mock never merges
 //! replies into an existing thread, so a Thread's whole lifecycle mirrors its
-//! one Email's — created and destroyed alongside it, never updated.
+//! one Email's: created and destroyed alongside it, never updated.
 
 use std::collections::BTreeSet;
 

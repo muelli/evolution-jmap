@@ -3,8 +3,8 @@
 //
 // Live probe of the exact code path Evolution's mail provider uses to fetch a
 // message body: `Client::connect` (honouring `JMAP_LIVE_SERVER_REBASE_URLS`,
-// like every backend) followed by `Client::download_blob` — guardrail,
-// download-URL templating, Accept header and all. Built to verify item 9
+// like every backend) followed by `Client::download_blob`: guardrail,
+// download-URL templating, Accept header and all. Built to verify blob download
 // against a real server without clicking through Evolution.
 //
 // Usage:

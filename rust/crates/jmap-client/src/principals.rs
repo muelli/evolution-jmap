@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Principal operations (RFC 9670): resolving an email/name to a principal
-//! id and its capability bag — the shared floor for scheduling and
-//! per-source sharing. See `docs/PRINCIPALS-DESIGN.md`.
+//! id and its capability bag, the shared floor for scheduling and
+//! per-source sharing.
 
 use jmap_proto::Id;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
@@ -36,10 +36,9 @@ impl Client {
     ///
     /// When a single ID is requested and matches either `account_id` or the
     /// advertised `currentUserPrincipalId` in the session document, but the server
-    /// reports it as `notFound` (Stalwart Finding 18: `currentUserPrincipalId`
-    /// advertises the account ID instead of the principal ID), this method
-    /// automatically falls back to resolving the account owner's true principal
-    /// by username or email.
+    /// reports it as `notFound` because it advertised the account ID instead of the
+    /// principal ID, this method falls back to resolving the account owner's true
+    /// principal by username or email.
     pub fn principal_get(&self, account_id: &Id, ids: &[Id]) -> Result<Vec<Principal>, Error> {
         let request = GetRequest::ids(account_id.clone(), ids.to_vec());
         let arguments = self.single_call(USING, "Principal/get", &request)?;
@@ -82,9 +81,9 @@ impl Client {
     ///
     /// Reads `currentUserPrincipalId` from the account's `urn:ietf:params:jmap:principals`
     /// capability and queries `Principal/get`. When the server advertises its account
-    /// identifier instead of a principal identifier (Stalwart Finding 18), `Principal/get`
-    /// returns `notFound` for that ID. In that case, this method falls back to querying the
-    /// user's principal by username or email via `Principal/query` and matching against
+    /// identifier instead of a principal identifier, `Principal/get` returns `notFound`
+    /// for that ID. In that case, this method falls back to querying the user's
+    /// principal by username or email via `Principal/query` and matching against
     /// [`principals`](Self::principals).
     pub fn current_user_principal(&self, account_id: &Id) -> Result<Option<Principal>, Error> {
         if !self
@@ -118,24 +117,17 @@ impl Client {
     /// Resolve the current user's principal identifier (RFC 9670 Section 2).
     ///
     /// Returns the true principal identifier corresponding to the account owner,
-    /// resolving past Stalwart's `currentUserPrincipalId` account-id mismatch
-    /// (Finding 18).
+    /// resolving past servers that report an account ID for `currentUserPrincipalId`.
     pub fn current_user_principal_id(&self, account_id: &Id) -> Result<Option<Id>, Error> {
         Ok(self.current_user_principal(account_id)?.and_then(|p| p.id))
     }
 
     /// Helper to resolve the owner principal when currentUserPrincipalId is missing or
-    /// points to the account ID (Finding 18 fallback).
+    /// points to the account ID.
     ///
     /// `Principal/query`'s own "text"/"email" filters match by substring
-    /// containment (RFC 9670 Section 2.4.1), so a server with more than one
-    /// principal sharing a substring with `username` can return several
-    /// candidate ids. Every candidate is checked with
-    /// [`principal_identifies_username`] before being accepted; the earlier
-    /// shape here returned whichever one `Principal/get` answered first with
-    /// no check at all, so a decoy principal that merely contained
-    /// `username` as a substring and happened to sort first would be
-    /// returned as if it were the account owner.
+    /// containment (RFC 9670 Section 2.4.1), so candidates are verified with
+    /// [`principal_identifies_username`].
     fn resolve_owner_principal(&self, account_id: &Id) -> Result<Option<Principal>, Error> {
         let username = &self.session().username;
         if !username.is_empty() {
@@ -186,7 +178,7 @@ impl Client {
             .find(|p| principal_identifies_username(p, username))
     }
 
-    /// Resolve principals matching `filter` (`Principal/query`) — e.g. by
+    /// Resolve principals matching `filter` (`Principal/query`), e.g. by
     /// email, to turn a meeting attendee's address into a principal id.
     pub fn principal_query(
         &self,
@@ -200,7 +192,7 @@ impl Client {
     }
 
     /// Fetch all `ShareNotification`s visible to this credential (RFC 9670
-    /// §4) — one appears for each `shareWith` grant, widen, narrow, or
+    /// §4): one appears for each `shareWith` grant, widen, narrow, or
     /// revoke a caller was the recipient of.
     pub fn share_notifications(&self, account_id: &Id) -> Result<Vec<ShareNotification>, Error> {
         let arguments = self.single_call(
@@ -253,18 +245,10 @@ impl Client {
     }
 }
 
-/// Whether `principal` is the one `username` (the session's own login
-/// identity) actually names, checked by exact identity rather than the
-/// substring containment `Principal/query`'s own filters use: `username`
-/// equals the principal's email outright, or — when `username` carries no
-/// `@` and is plausibly a bare login name rather than an address — equals
-/// the local part of its email, or equals its name outright. RFC 9670
-/// defines no `isPersonal` property on `Principal` at all (Section 2 lists
-/// exactly `id`/`type`/`name`/`description`/`email`/`timeZone`/
-/// `capabilities`/`accounts`); no server this crate talks to, mock or real,
-/// has ever been seen to set one, so a prior revision of this check that
-/// also accepted any candidate with `is_personal == Some(true)` could never
-/// actually fire and is not reinstated here.
+/// Whether `principal` identifies `username` (the session's login identity)
+/// by exact matching rather than substring containment: `username` equals the
+/// principal's email, or (when `username` carries no `@`) the local part of its
+/// email, or its display name.
 fn principal_identifies_username(principal: &Principal, username: &str) -> bool {
     if username.is_empty() {
         return false;

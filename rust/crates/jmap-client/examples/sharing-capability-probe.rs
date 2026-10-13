@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Live probe of Track E Phase C's step 1: what does a real Stalwart
+// Live probe of sharing capabilities: what does a real Stalwart
 // deployment actually advertise and accept for `shareWith` / `myRights` /
 // `ShareNotification` (RFC 9670 §4's "Framework for Shared Data") across
-// AddressBook, Mailbox and Calendar? The design in docs/PRINCIPALS-DESIGN.md
-// models the types against the specs; this probe checks them against the
-// wire before the mock is extended to match and any wiring is TDD'd.
+// AddressBook, Mailbox and Calendar? The design models the types against the specs;
+// this probe checks them against the wire.
 //
 // Deliberately uses `Client::single_call` for every `shareWith` write so a
 // field-name mismatch shows up as a raw JSON diff rather than a silently
@@ -200,7 +199,7 @@ fn main() {
 
     // --- Mailbox sharing: RFC 8621 has no standard shareWith, but this
     // server advertises the Stalwart-local `urn:ietf:params:jmap:mail:share`
-    // account capability — check whether Mailbox/set actually accepts it.
+    // account capability: check whether Mailbox/set actually accepts it.
     let mailboxes = alice.mailbox_get(&alice_account).expect("Mailbox/get");
     if let Some(mailbox) = mailboxes.list.into_iter().next() {
         let mailbox_id = mailbox.id.clone().expect("server-set mailbox id");

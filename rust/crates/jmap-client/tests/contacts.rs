@@ -306,7 +306,7 @@ fn contact_query_by_addressbook() {
     assert_eq!(by_text, work_ids);
 }
 
-/// Track E Phase C step 2: `shareWith` on `AddressBook/set` actually grants
+/// `shareWith` on `AddressBook/set` actually grants
 /// cross-account access in the mock, matching the live Stalwart probe
 /// (`docs` findings in the work queue, not cited here per the boundary
 /// lint): before any grant a foreign principal gets `forbidden` outright on
@@ -370,11 +370,11 @@ fn address_book_shared_with_a_principal_is_visible_only_to_them() {
     );
 }
 
-/// Track E Phase C step 2: a grant is not one-shot. Widening an existing
+/// A grant is not one-shot. Widening an existing
 /// `shareWith` entry changes `myRights` on the next `/get`, and revoking it
 /// entirely (patching the principal's key to `null`, RFC 8620 §5.3) returns
 /// the previously-shared principal to outright `forbidden`, matching the
-/// live Stalwart probe's own manual revoke check (Track E Phase C step 1's
+/// live Stalwart probe's own manual revoke check (earlier
 /// findings, recorded in the work queue).
 #[test]
 fn address_book_share_can_be_widened_then_revoked() {

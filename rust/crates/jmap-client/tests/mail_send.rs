@@ -94,7 +94,7 @@ fn send_email_full_flow() {
 }
 
 /// RFC 8620 §5.3 lets a `created` entry omit properties the client already
-/// sent — and a client always sends `identityId`/`emailId` when creating a
+/// sent, and a client always sends `identityId`/`emailId` when creating a
 /// submission, so a spec-following server (Stalwart, in the finding this
 /// regression-tests) may leave both out. `send_email`'s chained
 /// `Email/set`+`EmailSubmission/set` form must still come back with a
@@ -257,7 +257,7 @@ fn the_session_names_the_accounts_delayed_send_limit() {
 }
 
 /// A server that never advertised `maxDelayedSend` answers `None`, not an
-/// invented number — the ordinary case, since most deployments have no SMTP
+/// invented number: the ordinary case, since most deployments have no SMTP
 /// FUTURERELEASE.
 #[test]
 fn a_server_with_no_delayed_send_support_says_so() {
@@ -315,9 +315,9 @@ fn alice_to_bob() -> Envelope {
 }
 
 /// `submit_email_at` with a `HOLDFOR`: the mock holds the message rather than
-/// delivering it — `undoStatus: "pending"`, the release time answered in
-/// `sendAt`, nothing in the outbox — proving the client's scheduled-send path
-/// end to end even though nothing in Evolution calls it yet (item 29's "ready
+/// delivering it (`undoStatus: "pending"`, the release time answered in
+/// `sendAt`, nothing in the outbox), proving the client's scheduled-send path
+/// end to end even though nothing in Evolution calls it yet ("ready
 /// and proven").
 #[test]
 fn a_held_submission_is_pending_with_the_release_time_in_send_at() {
@@ -336,7 +336,7 @@ fn a_held_submission_is_pending_with_the_release_time_in_send_at() {
         )
         .unwrap();
 
-    // The mock's clock stands at 2026-01-01T00:00:00Z; the hold lands 600
+    // The mock's clock stands at baseline; the hold lands 600
     // seconds past it, computed by the server, not echoed from the client.
     assert_eq!(
         submission.send_at,
@@ -399,7 +399,7 @@ fn hold_until_holds_for_the_future_and_releases_the_past() {
     );
 }
 
-/// A hold the server never offered — no `maxDelayedSend` advertised — is
+/// A hold the server never offered (no `maxDelayedSend` advertised) is
 /// refused as `invalidProperties`, and one beyond the advertised limit
 /// likewise: the gate a caller is supposed to read first, enforced.
 #[test]
@@ -534,7 +534,7 @@ fn a_client_set_send_at_is_refused_as_server_set() {
 }
 
 /// Canceling a submission the mock already delivered (never held, so it went
-/// out immediately with `undoStatus: "final"`) is refused — undoing an
+/// out immediately with `undoStatus: "final"`) is refused: undoing an
 /// already-sent message is not on offer.
 #[test]
 fn canceling_an_already_final_submission_is_refused() {

@@ -211,7 +211,7 @@ fn destroy_dismisses_a_notification_and_create_update_are_forbidden() {
     // Create and update are always rejected: the object is entirely
     // server-created (draft §8, verified against real Stalwart's
     // `calendar_event_notification/set.rs`), so there is no `Client`
-    // convenience method for either — this drives the wire call directly.
+    // convenience method for either: this drives the wire call directly.
     let response = bob_client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],

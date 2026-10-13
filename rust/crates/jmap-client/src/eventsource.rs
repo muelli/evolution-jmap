@@ -3,26 +3,26 @@
 
 //! JMAP Push: a long-lived `EventSource` (SSE) reader (RFC 8620 §7.1, §7.3).
 //!
-//! [`crate::transport::Transport`] is a unary request/response abstraction —
-//! deliberately, so a libsoup-backed transport can drop in later without
-//! touching protocol logic — but a push connection is the opposite shape: one
+//! [`crate::transport::Transport`] is a unary request/response abstraction:
+//! deliberately so, so a libsoup-backed transport can drop in later without
+//! touching protocol logic, but a push connection is the opposite shape: one
 //! request whose response body never ends. So this reads the wire itself,
 //! on a dedicated thread per subscription, rather than going through
 //! `Transport`. It speaks both plain `http://` (the mock, and every URL this
 //! codebase builds today) and `https://` (`rustls` over the same raw
-//! `TcpStream`, since `ureq`'s own TLS backend is exactly that already — one
+//! `TcpStream`, since `ureq`'s own TLS backend is exactly that already: one
 //! layer below the unary request/response API this module deliberately
 //! bypasses, not a second implementation of it).
 //!
-//! [`expand_url`] turns the session object's `eventSourceUrl` — an RFC 6570
-//! URI template, per RFC 8620 §7.3 — into the URL to open.
+//! [`expand_url`] turns the session object's `eventSourceUrl` (an RFC 6570
+//! URI template, per RFC 8620 §7.3) into the URL to open.
 //! [`EventSourceSubscription::start`] connects, reads chunked-transfer SSE
 //! frames, and forwards every `event: state` block's `data:` as a parsed
-//! [`StateChange`]. A `ping` (or any other) event is read and discarded — it
+//! [`StateChange`]. A `ping` (or any other) event is read and discarded: it
 //! exists only to prove the connection is still alive. Both a clean end (the
 //! server closed the stream, as `closeafter=state` does) and a broken one
-//! (a network error, a non-200 status) are just reasons to reconnect, with
-//! exponential backoff, until [`CancelFlag::cancel`] is called — [`Drop`]
+//! (a network error, a non-200 status) are reasons to reconnect, with
+//! exponential backoff, until [`CancelFlag::cancel`] is called. [`Drop`]
 //! calls it too, and also shuts down whatever socket the background thread
 //! currently holds, so tearing a subscription down can never block on a dead
 //! or merely idle push connection.
@@ -437,7 +437,7 @@ fn connect_and_stream(
     stream_events(&mut body, cancel, sender, &ctx.last_id_slot)
 }
 
-/// The two shapes a connection can take once a scheme is known — `Read`/
+/// The two shapes a connection can take once a scheme is known: `Read`/
 /// `Write` just dispatch to whichever one this attempt picked, so everything
 /// downstream (`ChunkedBody`, the SSE line reader) stays scheme-agnostic.
 enum Conn {
@@ -472,10 +472,10 @@ impl Write for Conn {
 
 /// The process-wide TLS client config: the real webpki CA roots, plus (test
 /// builds only) the one self-signed root this crate's own `tests/fixtures`
-/// TLS test server uses — never compiled into a shipped binary, since it is
+/// TLS test server uses, never compiled into a shipped binary, since it is
 /// behind `#[cfg(test)]`. Installing a default crypto provider a second time
 /// (another `rustls` user in the same process already did) returns `Err`
-/// rather than panicking, so it is ignored rather than unwrapped — the same
+/// rather than panicking, so it is ignored rather than unwrapped, using the same
 /// "tolerant of being called again" idiom `jmap_backend_core::logging::init`
 /// and `i18n::bind` already use for their own once-per-process setup.
 fn tls_config() -> &'static Arc<ClientConfig> {
@@ -532,8 +532,8 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     // DNS host.
     let (host, dial) = match authority.rsplit_once(':') {
         Some((host, _port)) => (host.to_owned(), authority.clone()),
-        // A real server's `eventSourceUrl` names no port — RFC 3986 leaves
-        // it to the scheme — and `TcpStream::connect` has no scheme to
+        // A real server's `eventSourceUrl` names no port (RFC 3986 leaves
+        // it to the scheme) and `TcpStream::connect` has no scheme to
         // consult, so fill the default in here rather than fail to dial.
         // Only for dialling: `Host:` keeps the authority the URL wrote, so
         // a server that routes on it sees what it advertised.
@@ -561,8 +561,8 @@ fn parse_url(url: &str) -> Option<UrlParts> {
 /// a `ping` event on, `0` meaning "do not".
 ///
 /// A server that advertises a URL naming *none* of the three variables has
-/// not followed §7.3 — `jmap-mock` is one such, deliberately, since its
-/// session document predates this — so rather than send a request with no
+/// not followed §7.3 (`jmap-mock` is one such, deliberately, since its
+/// session document predates this), so rather than send a request with no
 /// parameters at all, they are appended as an ordinary query string. That is
 /// a guess, but the only one available, and it is what the template would
 /// have produced.
@@ -620,7 +620,7 @@ pub fn expand_url(
     expanded
 }
 
-/// Read the status line and headers, checking the response is chunked —
+/// Read the status line and headers, checking the response is chunked:
 /// the only framing this reader knows how to consume, and the only one an
 /// indefinite stream (no `Content-Length` is possible) can arrive as.
 fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
@@ -714,7 +714,7 @@ fn stream_events(
 /// Decodes an HTTP/1.1 chunked-transfer body (RFC 9112 §7.1) on the fly, so
 /// the SSE parser above can just read lines without knowing chunk
 /// boundaries exist. Deliberately does not assume one SSE frame is one
-/// chunk — true of `jmap-mock`'s own writer, not guaranteed by the spec.
+/// chunk: true of `jmap-mock`'s own writer, not guaranteed by the spec.
 struct ChunkedBody<R> {
     inner: R,
     remaining_in_chunk: usize,
@@ -1011,7 +1011,7 @@ mod tests {
 
         // The connection above just closed, but its dead subscriber is
         // only pruned lazily, on the next failed broadcast (see
-        // `EventSourceHub::broadcast`) — so `wait_for_event_source_
+        // `EventSourceHub::broadcast`), so `wait_for_event_source_
         // subscriber` (count > 0) would see the stale entry and return
         // immediately, racing ahead of the actual reconnect. Wait for a
         // *second* registered subscriber instead, as
@@ -1074,7 +1074,7 @@ mod tests {
         )]);
         let subscription = EventSourceSubscription::start(url, headers, CancelFlag::new());
 
-        // The stale token is refused, so no subscriber connects — proving
+        // The stale token is refused, so no subscriber connects, proving
         // the reconnect loop is actually retrying with the header this
         // subscription started with, not by some other route.
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1135,7 +1135,7 @@ mod tests {
             let mut tls = StreamOwned::new(server_conn, stream);
 
             // Read (and discard) the request up to its terminating blank
-            // line — enough to know the client is done sending, without a
+            // line: enough to know the client is done sending, without a
             // full HTTP parser this one-shot server doesn't need.
             let mut request = Vec::new();
             let mut byte = [0u8; 1];

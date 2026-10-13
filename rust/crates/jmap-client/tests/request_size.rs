@@ -4,7 +4,7 @@
 //! `maxSizeRequest` (RFC 8620 §2): the octets one request to `apiUrl` may
 //! carry, against a server that takes only small ones.
 //!
-//! The sibling of `call_limits.rs`, and the same shape of failure — over the
+//! The sibling of `call_limits.rs`, and the same shape of failure: over the
 //! limit the whole request is refused with
 //! `urn:ietf:params:jmap:error:limit` and none of its calls run. What differs
 //! is where the size comes from: not from the client chaining calls to save a
@@ -23,7 +23,7 @@ use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use serde_json::{Value, json};
 
 /// Small enough that an `Email/get` naming every seeded message is well over
-/// it, and large enough that a request naming one is well under — the band
+/// it, and large enough that a request naming one is well under, the band
 /// where splitting is the difference between reading the mailbox and failing.
 ///
 /// An `Email/get` naming no ids at all is 150 octets here (two capability URNs
@@ -59,7 +59,7 @@ fn seed_inbox(server: &MockServer) -> Vec<Id> {
 /// refused whole, and nothing in it runs. Without this the tests below would
 /// pass against a permissive mock while proving nothing.
 ///
-/// Sent past the client on purpose — [`Client::api_call`] refuses an oversized
+/// Sent past the client on purpose: [`Client::api_call`] refuses an oversized
 /// request itself (the test at the bottom of this file), so a client-side
 /// assertion here would be about the client twice and about the server not at
 /// all.
@@ -213,7 +213,7 @@ fn an_id_that_cannot_fit_alone_is_refused_without_a_request() {
 
 /// The boundary itself: a request whose body is exactly `maxSizeRequest`
 /// octets is under the limit, not over it, so it is sent rather than refused.
-/// Distinguishes "over the limit" from "at or over the limit" — a server that
+/// Distinguishes "over the limit" from "at or over the limit": a server that
 /// states a limit of N octets is stating what it will accept, not the first
 /// size it refuses.
 #[test]

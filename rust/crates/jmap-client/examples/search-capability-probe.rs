@@ -80,7 +80,7 @@ fn main() {
         );
     };
 
-    // 1. body full-text search — the flagship path (item 46).
+    // 1. body full-text search: the flagship path.
     let hits = c
         .email_query(
             &account,
@@ -128,7 +128,7 @@ fn main() {
         format!("subject:Quarterly -> {} hit(s), expected 1", subj.ids.len()),
     );
 
-    // 4. SearchSnippet on the body hit (item 47).
+    // 4. SearchSnippet on the body hit.
     if let Some(id) = hits.ids.first() {
         let snips = c
             .search_snippet_get(
@@ -143,13 +143,13 @@ fn main() {
                 .is_some_and(|p| p.to_lowercase().contains("kumquat"))
         });
         check(
-            "snippet (item 47)",
+            "snippet (item 46)",
             got,
             format!("{} snippet(s), highlight present: {got}", snips.len()),
         );
     }
 
-    // 5. Quota/get (item 49). The call being accepted and answering a
+    // 5. Quota/get: The call being accepted and answering a
     // well-formed list is the check; a fresh account with no configured limit
     // legitimately reports zero Quota objects (Stalwart returns one only when
     // a limit is set), so an empty list is a pass, not a failure.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JMAP Quota (RFC 9425): read-only mailbox/account usage and limits. There
-//! is no `Quota/set` — the RFC defines quotas as server-computed.
+//! is no `Quota/set`: the RFC defines quotas as server-computed.
 
 use jmap_proto::Id;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};

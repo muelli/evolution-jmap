@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Live probe of `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2)
-// against a real server. Built to answer the roadmap's Track E "OPERATOR
-// CONFIRMATION now RUNNER-CLAIMABLE" item: does the real deployment
-// implement the method at all, and if so, does it spell the response
-// fields the way `jmap-proto::principals` assumes?
+// against a real server: does the real deployment implement the method at all,
+// and if so, does it spell the response fields the way `jmap-proto::principals` assumes?
 //
 // Deliberately uses `Client::single_call` to get the raw `serde_json::Value`
 // back rather than the typed `Client::get_availability` wrapper, so a
@@ -97,7 +95,7 @@ fn main() {
     );
 
     // Create a real busy event first, so getAvailability has something
-    // non-empty to answer with — an empty `list` proves nothing about field
+    // non-empty to answer with: an empty `list` proves nothing about field
     // spelling.
     let calendar_id = client
         .calendars(&account_id)

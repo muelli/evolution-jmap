@@ -4,25 +4,15 @@
 //! Snoozing mail: `Email.snoozed`, the vendor extension Cyrus implements
 //! (draft-ietf-extra-email-snooze expired without an RFC).
 //!
-//! No server this project has tested exposes it. Cyrus gates the capability
-//! behind `jmap_nonstandard_extensions`, and Fastmail — a Cyrus deployment
-//! whose *web UI* snoozes — does not enable it on the public JMAP API:
-//! probed 2026-09-04, `using` the capability is answered
-//! `unknownCapability` (HTTP 400), `Email/get` of `snoozed` is
-//! `invalidArguments`, there is no `snoozed`-role mailbox, and
-//! `snoozedUntil` is an `unsupportedSort`. Stalwart implements the mailbox
-//! role only. So this path is written to the extension as specified and
-//! exercised against the mock; it lights up for a Cyrus install with
-//! nonstandard extensions on, and correctly stays dark elsewhere.
+//! Cyrus gates the capability behind `jmap_nonstandard_extensions`. Stalwart
+//! implements the mailbox role only. This client path is written to the
+//! extension as specified and exercised against the mock.
 //!
 //! Everything snooze-shaped in this client lives here and in
-//! [`jmap_proto::mail::SnoozeDetails`], so the day the draft revives as an
-//! RFC the change is a capability constant and whatever fields it renames,
-//! not a hunt through the crate. Gate callers on
+//! [`jmap_proto::mail::SnoozeDetails`]. Callers should check
 //! [`jmap_proto::session::Account::has_capability`] with
-//! [`CAPABILITY_CYRUS_MAIL`]: a server without it (Stalwart, for one) has no
-//! wake-up machinery, and offering snooze there would strand messages in a
-//! folder nothing ever empties.
+//! [`CAPABILITY_CYRUS_MAIL`]: a server without it has no wake-up machinery,
+//! and offering snooze there would strand messages in a folder nothing empties.
 
 use jmap_proto::Id;
 use jmap_proto::mail::{Email, Mailbox, SnoozeDetails, role};
@@ -37,17 +27,12 @@ const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_CYRUS_MAIL
 
 impl Client {
     /// Snooze one message: an `Email/set` update writing `snoozed` and moving
-    /// the message into `snoozed_mailbox_id` — *only* there, the whole
-    /// `mailboxIds` replaced, which is what snoozing means in every client
-    /// that has it (the message leaves the inbox until it wakes) and spares
-    /// the caller mapping its current folder to a mailbox id. Setting
-    /// `snoozed` on a message not entering the snoozed mailbox is refused
-    /// server-side.
+    /// the message into `snoozed_mailbox_id` (only there, replacing `mailboxIds`),
+    /// removing the message from the inbox until it wakes. Setting `snoozed` on a
+    /// message not entering the snoozed mailbox is refused server-side.
     ///
     /// The server wakes the message at `details.until`, moving it to
-    /// `details.move_to_mailbox_id` (its inbox when absent) — nothing on the
-    /// client side has to remember the appointment, which is the point of
-    /// gating on server support.
+    /// `details.move_to_mailbox_id` (its inbox when absent).
     pub fn snooze_email(
         &self,
         account_id: &Id,
@@ -81,7 +66,7 @@ impl Client {
     }
 
     /// The account's snoozed-role mailbox, created (named "Snoozed") when the
-    /// account has none — the storage location RFC 9979 §8.1 standardizes
+    /// account has none: the storage location RFC 9979 §8.1 standardizes
     /// even though the snoozing mechanism itself is vendor territory.
     pub fn snoozed_mailbox(&self, account_id: &Id) -> Result<Mailbox, Error> {
         if let Some(mailbox) = self

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Incremental sync via `/changes` (RFC 8620 §5.2) — the primitive the
+//! Incremental sync via `/changes` (RFC 8620 §5.2): the primitive the
 //! Evolution Data Server meta-backends' `get_changes_sync` will drive.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -101,7 +101,7 @@ impl Client {
     /// Every change since `since_state`, however many pages the server needs.
     ///
     /// RFC 8620 §5.2 lets a server truncate a `/changes` answer whenever it
-    /// likes — `maxChanges` is the client's cap, not the only reason for one —
+    /// likes (maxChanges is the client's cap, not the only reason for one),
     /// so a caller that reads a single response is a caller that silently
     /// misses changes. Following `hasMoreChanges` here is what lets the layers
     /// above treat "what changed" as one question.

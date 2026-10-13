@@ -6,7 +6,7 @@
 //! Root-caused by an operator session testing a real `muelli@fastmail.com`
 //! account: the password path fetches
 //! `https://<email domain>/.well-known/jmap`, which 404s for
-//! Fastmail — JMAP actually lives at `api.fastmail.com`, published via a
+//! Fastmail: JMAP actually lives at `api.fastmail.com`, published via a
 //! `_jmap._tcp.fastmail.com` SRV record. This is the client-side half of the
 //! fix: a [`Resolver`] seam `ClientBuilder::connect_domain` consults before
 //! falling back to the bare-domain URL, tested with a fake resolver and a

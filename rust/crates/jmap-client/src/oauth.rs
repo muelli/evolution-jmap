@@ -6,47 +6,30 @@
 //!
 //! EDS authenticates an OAuth 2.0 account through an `EOAuth2Service`, whose
 //! vfuncs are asked for an authorization URI, a token URI, a client id and a
-//! redirect URI. The three services EDS ships — Google, Outlook, Yahoo —
+//! redirect URI. The three services EDS ships (Google, Outlook, Yahoo)
 //! answer those from constants compiled in, because each of them is exactly
 //! one identity provider. A JMAP service cannot: "JMAP" is not a provider but
 //! a protocol, and the endpoints belong to whichever deployment the account
-//! lives on. Fastmail's are not Stalwart's, and a self-hosted Stalwart's are
-//! not another one's.
+//! lives on.
 //!
-//! So they are discovered rather than compiled in. RFC 8414 is the mechanism
-//! both target deployments already publish: a JSON document at a well-known
-//! path naming the authorization and token endpoints, which grant types and
-//! PKCE methods the server does, and — where the server supports RFC 7591
-//! dynamic client registration — where to register for a client id.
+//! Endpoints are discovered via RFC 8414 at a well-known path naming the
+//! authorization and token endpoints, supported grant types and PKCE methods,
+//! and (where the server supports RFC 7591 dynamic client registration)
+//! registration endpoints.
 //!
-//! This module is the part of that which can be built and tested here: fetch
-//! and validate the metadata document ([`discover`]), where a deployment
-//! offers it, register this client for a `client_id` ([`register_client`]),
-//! and redeem an authorization code or a refresh token for an access token
-//! ([`exchange_code`], [`refresh_access_token`]) — nothing here is a
-//! compiled-in constant, unlike EDS's Google/Outlook/Yahoo services. The
-//! vfuncs that wire this to EDS are `jmap-config`'s `EOAuth2Service`
-//! implementation. What is still missing is the consent exchange itself
-//! against a real deployment: sending the user to `authorization_endpoint`
-//! and getting a code back needs a browser and a real provider.
+//! This module provides [`discover`] to fetch and validate metadata documents,
+//! [`register_client`] for RFC 7591 dynamic client registration, and
+//! [`exchange_code`] / [`refresh_access_token`] to redeem codes and tokens.
 //!
 //! ## What is enforced, and what is not
 //!
 //! The security-relevant check is RFC 8414 §3.3: the `issuer` in the document
-//! must be *identical* to the issuer the well-known URL was built from. Skip
-//! it and a deployment can hand back another authorization server's endpoints,
-//! sending the user to consent somewhere the client thinks is the deployment
-//! and delivering the authorization code to a third party. It is the same
-//! mix-up defence OpenID Connect's discovery carries, and it is why this
-//! function takes the issuer as an argument rather than reading it out of the
-//! answer.
+//! must be *identical* to the issuer the well-known URL was built from.
+//! OpenID Connect carries this same mix-up defence.
 //!
 //! Not enforced here: that the issuer is `https`. RFC 8414 §2 requires it, but
-//! nothing else in this client requires TLS either — the session document,
-//! `apiUrl` and every blob URL are taken as the deployment states them — and
-//! adding the rule in one place only would be a check the user cannot rely on
-//! while making the plaintext mock untestable. Where TLS gets required it has
-//! to be required of the account as a whole; that is its own piece of work.
+//! nothing else in this client requires TLS either (session documents, apiUrl,
+//! and blob URLs are accepted as stated).
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -63,12 +46,8 @@ const WELL_KNOWN: &str = "/.well-known/oauth-authorization-server";
 /// What RFC 8414 §2 says `grant_types_supported` means when it is absent.
 const DEFAULT_GRANT_TYPES: [&str; 2] = ["authorization_code", "implicit"];
 
-/// An authorization server's metadata, as RFC 8414 §2 defines it — the fields
+/// An authorization server's metadata, as RFC 8414 §2 defines it: the fields
 /// an EDS `EOAuth2Service` for a JMAP account needs, and no others.
-///
-/// The document real servers publish carries many more; they are parsed past
-/// rather than rejected, because a field this client has no use for is not a
-/// reason to refuse an account.
 ///
 /// Only [`discover`] and [`AuthorizationServer::parse`] construct one, and
 /// both validate: a value of this type has been checked against the issuer it
@@ -76,23 +55,18 @@ const DEFAULT_GRANT_TYPES: [&str; 2] = ["authorization_code", "implicit"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationServer {
     /// The issuer identifier, equal to the (normalised) one discovery asked
-    /// for — see this module's note on RFC 8414 §3.3.
+    /// for: see this module's note on RFC 8414 §3.3.
     pub issuer: String,
     /// Where the user is sent to consent. `None` only for a server that does
     /// no grant type using it, which is not one a JMAP account can use.
     pub authorization_endpoint: Option<String>,
     /// Where an authorization code is exchanged for a token, and where a
-    /// refresh token is redeemed. EDS asks for these two separately
-    /// (`get_authentication_uri` and `get_refresh_uri`), RFC 6749 has one
-    /// endpoint serve both, and this is it.
+    /// refresh token is redeemed.
     pub token_endpoint: Option<String>,
     /// RFC 7591 dynamic client registration, where the server offers it.
-    /// Its presence is what lets a self-hosted deployment be used at all
-    /// without the user pasting in a client id by hand.
     pub registration_endpoint: Option<String>,
     /// RFC 8628 device authorization, for a flow that needs no browser in the
-    /// client. Recorded because it is the one path to a token that does not
-    /// need the display this project cannot assume.
+    /// client.
     pub device_authorization_endpoint: Option<String>,
     /// Scopes the server advertises. JMAP's own are the capability URNs.
     pub scopes_supported: Vec<String>,
@@ -105,10 +79,6 @@ pub struct AuthorizationServer {
 }
 
 /// The document as it arrives, before anything about it has been checked.
-///
-/// Separate from [`AuthorizationServer`] so that the validated type cannot be
-/// deserialised into directly: a cached document parsed straight into it would
-/// be one that never met the issuer check.
 #[derive(Debug, Deserialize)]
 struct Document {
     issuer: Option<String>,
@@ -128,10 +98,9 @@ struct Document {
 impl AuthorizationServer {
     /// Parse and validate a metadata document said to be `issuer`'s.
     ///
-    /// `issuer` is the identifier the document was fetched *for* — normally
+    /// `issuer` is the identifier the document was fetched *for*, normally
     /// what [`discover`] was given. It is normalised the same way
-    /// [`metadata_url`] normalises it, so the comparison is against the string
-    /// the well-known URL was actually built from.
+    /// [`metadata_url`] normalises it.
     pub fn parse(issuer: &str, body: &[u8]) -> Result<Self, Error> {
         let (issuer, _) = well_known_for(issuer)?;
         let document: Document = serde_json::from_slice(body)?;
@@ -176,7 +145,7 @@ impl AuthorizationServer {
         })
     }
 
-    /// Whether this server does the authorization-code flow — the one an
+    /// Whether this server does the authorization-code flow: the one an
     /// `EOAuth2Service` drives.
     pub fn supports_authorization_code(&self) -> bool {
         self.authorization_endpoint.is_some()
@@ -239,71 +208,50 @@ pub fn discover(
 /// legitimately vary.
 const CLIENT_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"];
 
-/// The response types this client asks to be registered for — the
+/// The response types this client asks to be registered for: the
 /// authorization-code grant only; this client does no implicit flow.
 const CLIENT_RESPONSE_TYPES: [&str; 1] = ["code"];
 
 /// RFC 8252 §8.4: a native application cannot keep a client secret
 /// confidential, so it registers as a public client and relies on PKCE
-/// (RFC 7636) rather than one. Requested here, not merely hoped for: a
-/// server that ignores it and issues a secret anyway is handled too (see
-/// [`ClientRegistration::client_secret`]), but the client never behaves as if
-/// it can keep one.
+/// (RFC 7636) rather than one.
 const CLIENT_AUTH_METHOD: &str = "none";
 
 /// What this client asks an RFC 7591 registration endpoint to register it
 /// as. `client_name`, `redirect_uris` and `scope` are the fields that vary
-/// between deployments; grant types, response types and the auth method
-/// follow from this being one native EDS client talking the
-/// authorization-code grant, and are not parameters.
+/// between deployments.
 #[derive(Debug, Clone)]
 pub struct ClientRegistrationRequest<'a> {
-    /// Shown to the user on the consent page a real IdP renders — RFC 7591
-    /// §2's `client_name`.
+    /// Shown to the user on the consent page a real IdP renders (RFC 7591
+    /// §2 `client_name`).
     pub client_name: &'a str,
-    /// Where the authorization code is delivered back to — RFC 7591 §2's
-    /// `redirect_uris`. At least one is required by RFC 6749 §3.1.2 for the
-    /// authorization-code grant this client registers for.
+    /// Where the authorization code is delivered back to: RFC 7591 §2's
+    /// `redirect_uris`. At least one is required by RFC 6749 §3.1.2.
     pub redirect_uris: &'a [&'a str],
     /// RFC 7591 §2's `scope`: a space-delimited list that becomes this
     /// client's *default* granted scope for an authorization request that
-    /// itself names none (RFC 6749 §3.3) — which is exactly the request this
-    /// client sends, since JMAP itself defines no scope vocabulary of its own
-    /// to pick from. `None` omits the field, asking the server for whatever it
-    /// treats as a default; some deployments' default is an *empty* scope —
-    /// confirmed against a real deployment's registration endpoint, not
-    /// assumed — which would silently register a client that can be
-    /// authorized into a token with no access at all. Callers that discovered
-    /// a non-empty `scopes_supported` should pass it joined here rather than
-    /// risk that.
+    /// itself names none (RFC 6749 §3.3).
     pub scope: Option<&'a str>,
 }
 
 /// A client registered with a deployment, as RFC 7591 §3.2.1 hands one back.
-///
-/// Only `ClientRegistration::parse` and [`register_client`] construct one,
-/// so a value of this type has already been checked for the one thing this
-/// client cannot proceed without: a `client_id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientRegistration {
     /// RFC 7591 §3.2.1's one required response field.
     pub client_id: String,
     /// Present if the server issued one despite this client asking to
-    /// register as public (see `CLIENT_AUTH_METHOD`), a server is free to
-    /// ignore that request, and a secret this client never sends back is not
-    /// a reason to refuse the account.
+    /// register as public (see `CLIENT_AUTH_METHOD`).
     pub client_secret: Option<String>,
     /// RFC 7591 §3.2.1: required if `client_secret` was issued, `0` meaning
     /// it never expires. Left as the server stated it, including absent,
-    /// rather than defaulted — a missing expiry on an issued secret is a
-    /// malformed response, not one this client should guess about.
+    /// rather than defaulted: a missing expiry on an issued secret is a
+    /// malformed response.
     pub client_secret_expires_at: Option<u64>,
 }
 
 /// The registration request body, RFC 7591 §2's fields this client sends and
 /// no others. `scope` is omitted entirely, not sent empty, when the caller
-/// named none — an absent field is what asks the server for its own default,
-/// where an explicit empty string is itself a (likely wrong) scope request.
+/// named none: an absent field is what asks the server for its own default.
 #[derive(Serialize)]
 struct RegistrationBody<'a> {
     client_name: &'a str,
@@ -346,10 +294,6 @@ impl ClientRegistration {
 
 /// Register this client with a deployment's RFC 7591 endpoint, discovered as
 /// [`AuthorizationServer::registration_endpoint`].
-///
-/// Sent with no credentials, matching [`discover`]: registration is how a
-/// client *obtains* an identity with the server, so there is nothing to
-/// authenticate with yet.
 pub fn register_client(
     transport: &dyn Transport,
     registration_endpoint: &str,
@@ -390,10 +334,8 @@ pub fn register_client(
 
     if !(200..300).contains(&response.status) {
         // RFC 7591 §3.2.2 has its own error object (`error`/
-        // `error_description`) rather than RFC 7807 problem details — a
-        // different shape than the JMAP API answers with, and not parsed out
-        // here for the same reason `discover` does not: the status already
-        // says registration was refused.
+        // `error_description`) rather than RFC 7807 problem details, a
+        // different shape than the JMAP API answers with.
         return Err(Error::Http {
             status: response.status,
             problem: None,
@@ -404,30 +346,28 @@ pub fn register_client(
 }
 
 /// RFC 7636 Proof Key for Code Exchange: a secret generated fresh for one
-/// authorization attempt, whose SHA-256 hash — not the secret itself — is
+/// authorization attempt, whose SHA-256 hash (not the secret itself) is
 /// sent with the authorization request, and whose plaintext is sent only
 /// once, later, to the token endpoint. Redeeming the code then proves
 /// possession of the same secret that produced the challenge the
 /// authorization request carried.
 ///
-/// Without this, an authorization code intercepted in transit — a real risk
-/// for a native app's redirect URI, RFC 8252 §8.1 — is redeemable by whoever
-/// captured it; PKCE is what makes a stolen code alone insufficient.
+/// Without this, an authorization code intercepted in transit (RFC 8252 §8.1)
+/// is redeemable by whoever captured it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkceVerifier(String);
 
 impl PkceVerifier {
     /// A fresh verifier: 32 octets from the OS random source, base64url
-    /// (no padding) encoded — 43 characters, within RFC 7636 §4.1's required
-    /// 43-to-128 and drawn from an alphabet that is a subset of the
-    /// `unreserved` characters §4.1 requires a verifier be built from.
+    /// (no padding) encoded: 43 characters, within RFC 7636 §4.1's required
+    /// 43-to-128 characters.
     pub fn generate() -> Self {
         let mut octets = [0u8; 32];
         getrandom::fill(&mut octets).expect("the operating system's random source is unavailable");
         Self(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(octets))
     }
 
-    /// The verifier itself — sent to the token endpoint alongside the code it
+    /// The verifier itself: sent to the token endpoint alongside the code it
     /// challenged ([`exchange_code`]), and nowhere else.
     pub fn secret(&self) -> &str {
         &self.0
@@ -435,28 +375,25 @@ impl PkceVerifier {
 
     /// The S256 challenge (RFC 7636 §4.2) to send in the authorization
     /// request: `BASE64URL-ENCODE(SHA256(verifier))`. This client only ever
-    /// offers S256 — `plain` exists in the RFC for a client that cannot hash,
-    /// which is not this one.
+    /// offers S256: `plain` exists in the RFC for a client that cannot hash.
     pub fn challenge(&self) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(self.0.as_bytes()))
     }
 }
 
-/// A successful token response (RFC 6749 §5.1) — the fields an
+/// A successful token response (RFC 6749 §5.1): the fields an
 /// `EOAuth2Service` needs to hand back to EDS's credential store, and no
 /// others.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenResponse {
     /// RFC 6749 §5.1's one required field.
     pub access_token: String,
-    /// RFC 6749 §7.1's token type, checked rather than merely recorded — see
+    /// RFC 6749 §7.1's token type, checked rather than merely recorded: see
     /// the module-level note on why a non-`bearer` value is refused.
     pub token_type: String,
     /// Seconds until `access_token` expires, if the server states one.
     pub expires_in: Option<u64>,
-    /// A new refresh token, present only if the server issued one — RFC 6749
-    /// §6 lets a server rotate it, omit it from a refresh response (meaning
-    /// the old one is still valid), or never issue one at all.
+    /// A new refresh token, present only if the server issued one (RFC 6749 §6).
     pub refresh_token: Option<String>,
     /// The scope actually granted, if the server states it (RFC 6749 §5.1:
     /// required only if it differs from what was requested).
@@ -474,9 +411,8 @@ struct TokenDocument {
     scope: Option<String>,
 }
 
-/// RFC 6749 §5.2's error object — the one thing this client parses out of a
-/// token-endpoint failure, and the reason [`Error::OAuthTokenRefused`] exists
-/// (see its doc comment for why the status code alone is not enough here).
+/// RFC 6749 §5.2's error object: the one thing this client parses out of a
+/// token-endpoint failure, and the reason [`Error::OAuthTokenRefused`] exists.
 #[derive(Debug, Deserialize)]
 struct TokenErrorDocument {
     error: String,
@@ -488,9 +424,7 @@ struct TokenErrorDocument {
 /// from (RFC 7636 §4.5).
 ///
 /// `redirect_uri` must be byte-identical to the one the authorization request
-/// named — RFC 6749 §4.1.3 requires the token endpoint to check it, and a
-/// mismatch here is the server refusing to trust that this exchange follows
-/// the same authorization the user consented to.
+/// named: RFC 6749 §4.1.3 requires the token endpoint to check it.
 pub fn exchange_code(
     transport: &dyn Transport,
     token_endpoint: &str,
@@ -513,8 +447,7 @@ pub fn exchange_code(
 /// Redeem a refresh token for a new access token (RFC 6749 §6).
 ///
 /// No PKCE verifier here: a verifier proves who redeemed the *original*
-/// code, not who is refreshing it, and no RFC ties one to a refresh grant —
-/// this request is only as trustworthy as `refresh_token` itself.
+/// code, not who is refreshing it, and no RFC ties one to a refresh grant.
 pub fn refresh_access_token(
     transport: &dyn Transport,
     token_endpoint: &str,
@@ -571,10 +504,8 @@ fn token_request(
 }
 
 /// Parse whichever of RFC 6749 §5.1 (success) or §5.2 (error) a token-endpoint
-/// response turns out to be, from the status and body alone — separate from
-/// [`token_request`] so it can be exercised directly against hostile bodies,
-/// the same reason [`AuthorizationServer::parse`] is separate from
-/// [`discover`].
+/// response turns out to be, from the status and body alone: separate from
+/// [`token_request`] so it can be exercised directly against hostile bodies.
 fn parse_token_response(status: u16, body: &[u8]) -> Result<TokenResponse, Error> {
     if (200..300).contains(&status) {
         let document: TokenDocument = serde_json::from_slice(body)?;
@@ -626,11 +557,9 @@ fn parse_token_response(status: u16, body: &[u8]) -> Result<TokenResponse, Error
 /// Build an `application/x-www-form-urlencoded` body (RFC 6749 §4.1.3's
 /// request shape).
 ///
-/// Reuses [`encode_template_value`]'s RFC 3986 unreserved-set percent-encoding
-/// rather than a second encoder: it escapes a space as `%20` where this media
-/// type's own history prefers `+`, but a percent-decoder — which any correct
-/// parser of it applies before treating `+` as space — reads the two
-/// identically, so nothing this client sends is lost or misread.
+/// Reuses [`encode_template_value`]'s RFC 3986 unreserved-set percent-encoding:
+/// escapes a space as `%20` where historical forms prefer `+`, but
+/// percent-decoders read both identically.
 fn form_body(pairs: &[(&str, &str)]) -> String {
     pairs
         .iter()
@@ -641,12 +570,10 @@ fn form_body(pairs: &[(&str, &str)]) -> String {
 
 /// The URL `issuer`'s metadata document lives at.
 ///
-/// RFC 8414 §3.1 *inserts* the well-known path between the host and the path
-/// of the issuer identifier rather than appending it — so a deployment at
+/// RFC 8414 §3.1 inserts the well-known path between the host and the path
+/// of the issuer identifier rather than appending it: a deployment at
 /// `https://example.com/tenant1` publishes at
-/// `https://example.com/.well-known/oauth-authorization-server/tenant1`. The
-/// intuitive append gives `…/tenant1/.well-known/…`, which is what OpenID
-/// Connect Discovery does and what RFC 8414 deliberately does not.
+/// `https://example.com/.well-known/oauth-authorization-server/tenant1`.
 pub fn metadata_url(issuer: &str) -> Result<String, Error> {
     well_known_for(issuer).map(|(_, url)| url)
 }
@@ -688,7 +615,7 @@ fn well_known_for(issuer: &str) -> Result<(String, String), Error> {
     ))
 }
 
-/// An endpoint URL as it may be used — absolute, and http(s).
+/// An endpoint URL as it may be used: absolute, and http(s).
 ///
 /// A relative or otherwise odd value would be handed to a browser widget or
 /// posted to; `javascript:` and `data:` are the reason the scheme is checked

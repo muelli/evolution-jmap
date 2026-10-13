@@ -132,7 +132,7 @@ fn receive_email_attachment_blob_download() {
 /// `Email/query` filter fields the mock did not apply until now: `cc`,
 /// `bcc`, `body`, `text`, `header`, `minSize`/`maxSize`, `hasAttachment`.
 /// `from`/`to`/`subject`/`inMailbox`/keyword/date filters are covered above
-/// and elsewhere; this test is only about the fields item 46(b) added.
+/// and elsewhere; this test is only about the extended search and snippet fields.
 #[test]
 fn email_query_filters_the_fields_the_mock_used_to_ignore() {
     let server = MockServer::builder().start();
