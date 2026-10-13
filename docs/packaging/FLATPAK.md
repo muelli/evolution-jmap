@@ -273,8 +273,10 @@ sandbox.
 
 - Added cargo source replacement config:
   `packaging/flatpak/cargo-vendor-config.toml`.
-- Added vendored crates under `packaging/flatpak/vendor/` from:
+- Added vendor workflow for `packaging/flatpak/vendor/` from:
   `timeout 7200 cargo vendor --locked --versioned-dirs ../packaging/flatpak/vendor`.
+- `packaging/flatpak/vendor/` stays untracked in git for now and is generated
+  locally before running `flatpak-builder`.
 - Updated source-build manifest
   `packaging/flatpak/org.gnome.Evolution.Extension.evolution-jmap.from-source.yml`:
   - Added `CARGO_NET_OFFLINE=true`.
@@ -375,5 +377,7 @@ proposed as a Flathub contribution. It does not submit anything.
 
 Current status at the end of Batch 6 step 4 plus this step-2 follow-up:
 naming and branch constraints are documented, and an ABI-matched offline source
-build now installs as a local extension runtime. Submission remains pending on
-the factory-load proof from in-sandbox EDS processes after this rebuild.
+build now installs as a local extension runtime when vendored crates are staged
+locally first. Submission remains pending on a committed Flathub-friendly
+vendoring path and the factory-load proof from in-sandbox EDS processes after
+this rebuild.

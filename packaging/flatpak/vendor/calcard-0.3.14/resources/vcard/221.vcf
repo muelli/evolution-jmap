@@ -1,9 +1,0 @@
-BEGIN:VCARD
-VERSION:2.1
-N:Spahn
-FN:Michael
-ADR:;;Teststraße 1;Hamburg;;12345;
-TEL;WORK:040 12345
-EMAIL;INTERNET:m.spahn@metaways.de
-URL;WORK:http://michaelspahn.de
-END:VCARD
