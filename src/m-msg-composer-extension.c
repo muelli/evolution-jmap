@@ -162,7 +162,6 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 	ui_manager = e_html_editor_get_ui_manager (html_editor);
 	action_group = e_html_editor_get_action_group (html_editor, "core");
 
-	/* Register example actions. */
 	e_action_group_add_actions_localized (
 		action_group, GETTEXT_PACKAGE,
 		msg_composer_entries, G_N_ELEMENTS (msg_composer_entries), msg_composer_ext);
@@ -185,7 +184,6 @@ m_msg_composer_extension_constructed (GObject *object)
 	EExtension *extension;
 	EExtensible *extensible;
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_msg_composer_extension_parent_class)->constructed (object);
 
 	extension = E_EXTENSION (object);
@@ -203,7 +201,6 @@ m_msg_composer_extension_class_init (MMsgComposerExtensionClass *class)
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = m_msg_composer_extension_constructed;
 
-	/* Extend EMsgComposer instances. */
 	extension_class = E_EXTENSION_CLASS (class);
 	extension_class->extensible_type = E_TYPE_MSG_COMPOSER;
 }

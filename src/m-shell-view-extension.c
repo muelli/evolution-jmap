@@ -130,7 +130,6 @@ m_shell_view_extension_constructed (GObject *object)
 	EExtension *extension;
 	EExtensible *extensible;
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_shell_view_extension_parent_class)->constructed (object);
 
 	extension = E_EXTENSION (object);
@@ -159,7 +158,6 @@ m_shell_view_extension_finalize (GObject *object)
 
 	g_hash_table_destroy (shell_view_ext->priv->ui_definitions);
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_shell_view_extension_parent_class)->finalize (object);
 }
 
@@ -173,7 +171,6 @@ m_shell_view_extension_class_init (MShellViewExtensionClass *class)
 	object_class->constructed = m_shell_view_extension_constructed;
 	object_class->finalize = m_shell_view_extension_finalize;
 
-	/* Extend EShellView instances. */
 	extension_class = E_EXTENSION_CLASS (class);
 	extension_class->extensible_type = E_TYPE_SHELL_VIEW;
 }

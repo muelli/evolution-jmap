@@ -273,7 +273,6 @@ m_calendar_ui_init (GtkUIManager *ui_manager,
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	action_group = e_shell_window_get_action_group (shell_window, "calendar");
 
-	/* Register example actions. */
 	e_action_group_add_actions_localized (
 		action_group, GETTEXT_PACKAGE,
 		calendar_event_context_entries, G_N_ELEMENTS (calendar_event_context_entries), shell_view);
@@ -281,7 +280,6 @@ m_calendar_ui_init (GtkUIManager *ui_manager,
 		action_group, GETTEXT_PACKAGE,
 		calendar_action_menu_entries, G_N_ELEMENTS (calendar_action_menu_entries), shell_view);
 
-	/* Refresh action state on shell updates. */
 	g_signal_connect (
 		shell_view, "update-actions",
 		G_CALLBACK (m_calendar_ui_update_actions_cb),

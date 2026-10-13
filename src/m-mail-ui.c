@@ -45,7 +45,6 @@ get_store_from_folder_tree (EShellView *shell_view,
 	CamelStore *selected_store = NULL;
 	gboolean found = FALSE;
 
-	/* Resolve the currently selected folder tree entry. */
 	shell_sidebar = e_shell_view_get_shell_sidebar (shell_view);
 	g_object_get (shell_sidebar, "folder-tree", &folder_tree, NULL);
 	if (em_folder_tree_get_selected (folder_tree, &selected_store, &selected_path) ||
@@ -353,7 +352,6 @@ m_mail_ui_init (GtkUIManager *ui_manager,
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	action_group = e_shell_window_get_action_group (shell_window, "mail");
 
-	/* Register example actions. */
 	e_action_group_add_actions_localized (
 		action_group, GETTEXT_PACKAGE,
 		mail_folder_context_entries, G_N_ELEMENTS (mail_folder_context_entries), shell_view);
@@ -361,7 +359,6 @@ m_mail_ui_init (GtkUIManager *ui_manager,
 		action_group, GETTEXT_PACKAGE,
 		mail_message_menu_entries, G_N_ELEMENTS (mail_message_menu_entries), shell_view);
 
-	/* Refresh action state on shell updates. */
 	g_signal_connect (
 		shell_view, "update-actions",
 		G_CALLBACK (m_mail_ui_update_actions_cb),
