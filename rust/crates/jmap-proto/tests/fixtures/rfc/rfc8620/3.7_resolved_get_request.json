@@ -1,0 +1,16 @@
+// Source: RFC 8620 §3.7 (References to Previous Method Results - Resolved Call Arguments), July 2019
+{
+  "accountId": "A1",
+  "ids": [
+    "msg1020",
+    "msg1021",
+    "msg1023",
+    "msg201",
+    "msg223"
+  ],
+  "properties": [
+    "from",
+    "receivedAt",
+    "subject"
+  ]
+}

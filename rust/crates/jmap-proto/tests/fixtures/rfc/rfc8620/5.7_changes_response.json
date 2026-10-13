@@ -1,0 +1,31 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Changes and QueryChanges Response), July 2019
+[
+  [
+    "Todo/changes",
+    {
+      "accountId": "x",
+      "oldState": "10324",
+      "newState": "871903",
+      "hasMoreChanges": false,
+      "created": [],
+      "updated": [],
+      "destroyed": [
+        "b"
+      ]
+    },
+    "0"
+  ],
+  [
+    "Todo/queryChanges",
+    {
+      "accountId": "x",
+      "oldQueryState": "y13213",
+      "newQueryState": "y13218",
+      "removed": [
+        "b"
+      ],
+      "added": null
+    },
+    "1"
+  ]
+]

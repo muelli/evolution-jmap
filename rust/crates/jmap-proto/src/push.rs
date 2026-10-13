@@ -19,13 +19,16 @@ pub struct PushSubscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
     pub device_client_id: String,
-    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<PushSubscriptionKeys>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_code: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -35,10 +38,11 @@ impl PushSubscription {
         Self {
             id: None,
             device_client_id: device_client_id.into(),
-            url: url.into(),
+            url: Some(url.into()),
             keys: None,
             expires: None,
             types: None,
+            verification_code: None,
             extra: BTreeMap::new(),
         }
     }
@@ -54,7 +58,7 @@ impl PushSubscription {
     }
 
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
-        self.url = url.into();
+        self.url = Some(url.into());
         self
     }
 
@@ -70,6 +74,11 @@ impl PushSubscription {
 
     pub fn with_types(mut self, types: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.types = Some(types.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_verification_code(mut self, verification_code: impl Into<String>) -> Self {
+        self.verification_code = Some(verification_code.into());
         self
     }
 

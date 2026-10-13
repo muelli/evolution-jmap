@@ -1,0 +1,71 @@
+// Source: RFC 8620 §3.7 (References to Previous Method Results - Partial Execution Response), July 2019
+[
+  [
+    "Email/query",
+    {
+      "accountId": "A1",
+      "queryState": "abcdefg",
+      "canCalculateChanges": true,
+      "position": 0,
+      "total": 101,
+      "ids": [
+        "msg1023",
+        "msg223",
+        "msg110",
+        "msg93",
+        "msg91",
+        "msg38",
+        "msg36",
+        "msg33",
+        "msg11",
+        "msg1"
+      ]
+    },
+    "t0"
+  ],
+  [
+    "Email/get",
+    {
+      "accountId": "A1",
+      "state": "123456",
+      "list": [
+        {
+          "id": "msg1023",
+          "threadId": "trd194"
+        },
+        {
+          "id": "msg223",
+          "threadId": "trd114"
+        }
+      ],
+      "notFound": []
+    },
+    "t1"
+  ],
+  [
+    "Thread/get",
+    {
+      "accountId": "A1",
+      "state": "123456",
+      "list": [
+        {
+          "id": "trd194",
+          "emailIds": [
+            "msg1020",
+            "msg1021",
+            "msg1023"
+          ]
+        },
+        {
+          "id": "trd114",
+          "emailIds": [
+            "msg201",
+            "msg223"
+          ]
+        }
+      ],
+      "notFound": []
+    },
+    "t2"
+  ]
+]

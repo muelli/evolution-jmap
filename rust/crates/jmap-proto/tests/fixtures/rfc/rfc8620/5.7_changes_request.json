@@ -1,0 +1,37 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Changes and QueryChanges Request), July 2019
+[
+  [
+    "Todo/changes",
+    {
+      "accountId": "x",
+      "sinceState": "10324",
+      "maxChanges": 50
+    },
+    "0"
+  ],
+  [
+    "Todo/queryChanges",
+    {
+      "accountId": "x",
+      "filter": {
+        "operator": "OR",
+        "conditions": [
+          {
+            "hasKeyword": "music"
+          },
+          {
+            "hasKeyword": "video"
+          }
+        ]
+      },
+      "sort": [
+        {
+          "property": "title"
+        }
+      ],
+      "sinceQueryState": "y13213",
+      "maxChanges": 50
+    },
+    "1"
+  ]
+]

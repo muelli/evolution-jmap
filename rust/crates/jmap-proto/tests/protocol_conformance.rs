@@ -1341,7 +1341,10 @@ fn push_subscription_verification_and_state_change_forward_compatibility() {
         .expect("PushSubscription deserializes with unknown fields");
     assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_enterprise_99");
     assert_eq!(sub.device_client_id, "device_desktop_linux_42");
-    assert_eq!(sub.url, "https://push.example.com/endpoints/sub_99");
+    assert_eq!(
+        sub.url.as_deref(),
+        Some("https://push.example.com/endpoints/sub_99")
+    );
     let keys = sub.keys.as_ref().expect("keys present");
     assert_eq!(
         keys.p256dh,

@@ -894,13 +894,14 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     let sub = PushSubscription {
         id: Some(Id::new("sub_1")),
         device_client_id: "device_abc".to_owned(),
-        url: "https://push.example.com/endpoint".to_owned(),
+        url: Some("https://push.example.com/endpoint".to_owned()),
         keys: Some(PushSubscriptionKeys {
             p256dh: "key_p256dh".to_owned(),
             auth: "key_auth".to_owned(),
         }),
         expires: Some(UtcDate::new("2026-10-01T00:00:00Z")),
         types: Some(vec!["Email".to_owned(), "CalendarEvent".to_owned()]),
+        verification_code: None,
         extra: BTreeMap::new(),
     };
 
@@ -1105,7 +1106,7 @@ fn result_reference_and_push_builders_roundtrip() {
 
     assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_1");
     assert_eq!(sub.device_client_id, "dev_1");
-    assert_eq!(sub.url, "https://push.example.com/sub");
+    assert_eq!(sub.url.as_deref(), Some("https://push.example.com/sub"));
     assert_eq!(sub.keys.as_ref().unwrap().p256dh, "key_p256");
     assert_eq!(sub.keys.as_ref().unwrap().auth, "auth_secret");
     assert_eq!(
