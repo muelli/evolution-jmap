@@ -1148,12 +1148,9 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Regression for a fixed-point failure `prop_card_roundtrip_reaches_fixed_point_stability`
-// found on a random seed, second occurrence: a `Name` with a stated-but-empty
-// `full` and only a `given` component round-tripped once (to `parsed1`) drops `full`
-// (an empty FN is indistinguishable from an absent one on read), but round-tripping that
-// result again (to `parsed2`) synthesizes a derived `full` from the components — so
-// `parsed1 != parsed2` and the property never reaches the fixed point it asserts.
+// Regression for fixed-point stability: `full: Some("")` with only `given`
+// round-trips once to no `full` (`FN:` empty is read as absent), then
+// re-synthesizes `full` from components on the next pass.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1177,9 +1174,8 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression for empty organisation name normalization:
-// an organisation with `name: Some("")` and units must normalize to `name: None`,
-// preserve the leading unit slot semicolon, and reach an immediate fixed point.
+// Regression for empty-organization-name normalization: keep the leading unit
+// slot semicolon, normalize `name: Some("")` to `None`, and reach a fixed point.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1244,14 +1240,9 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression for `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8`
-// found on a random seed (CI run 32663971912): calcard's writer emits a
-// structured value's `;` separators *after* its fold check, and skips the fold
-// altogether when the component coming next is empty text — so an `ADR` whose
-// value folds to exactly 75 octets keeps all six empty trailing slots on the
-// same physical line, at 81. The value here is byte-for-byte the minimal case
-// proptest shrank to: 53 octets of multi-byte UTF-8 that land the 22-octet
-// prefix `ADR;X-JMAP-KEY=-AaaAa:` plus the value at exactly the edge.
+// Regression for the 75-octet fold boundary check. In calcard, empty trailing
+// structured slots can bypass the fold pass and push an `ADR` line past 75.
+// This input is the minimized boundary case from the failing seed.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1334,11 +1325,8 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Exactly the RFC 2426 §2.6 width: calcard's own writer overshoots
-            // when empty structured slots trail a value at the boundary
-            // (stalwartlabs/calcard#25), and `card_to_vcard`'s refold pass
-            // exists to take that back to 75. A looser bound here lets
-            // overshoots go unseen, even with these richer generators.
+            // Enforce RFC 2426 §2.6 exactly at 75 octets so the refold pass
+            // still catches boundary overshoots from structured values.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
@@ -1392,7 +1380,7 @@ proptest! {
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("parse emitted escaped vcard");
         let parsed_note = &parsed1.notes.as_ref().unwrap()["n1"].note;
-        // Text must match original exactly (calcard preserves CRLF and escapes losslessly)
+        // Escaping must preserve exact text content across parse.
         prop_assert_eq!(parsed_note, &text);
 
         let vcard2 = card_to_vcard(&parsed1);
