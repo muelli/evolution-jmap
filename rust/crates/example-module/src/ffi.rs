@@ -16,22 +16,18 @@ const _: () = assert!(
 
 pub type GBoolean = c_int;
 
-// Opaque handles are pointer-only in this crate.
-
 pub type GTypeModule = c_void;
 
 pub type GObject = c_void;
 
 pub type GError = c_void;
 
-// Evolution opaque handles.
 pub type EExtensible = c_void;
 pub type EShellView = c_void;
 pub type EShellWindow = c_void;
 pub type EMsgComposer = c_void;
 pub type EHTMLEditor = c_void;
 
-// GTK 3 opaque handles.
 pub type GtkUIManager = c_void;
 pub type GtkActionGroup = c_void;
 pub type GtkAction = c_void;

@@ -1,6 +1,4 @@
 //! Shell view extension.
-//!
-//! Registers one `EExtension` type for `EShellView`.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -178,7 +176,6 @@ unsafe fn init_view_ui(
 
             Some(CALENDAR_UI_DEF)
         } else {
-            // Other views are currently unsupported.
             None
         }
     }
@@ -194,7 +191,6 @@ unsafe extern "C" fn shell_view_toggled_cb(
         let ui_manager = ffi::e_shell_window_get_ui_manager(shell_window);
         let priv_ = get_private(extension);
 
-        // Remove UI merged during a prior activation.
         let need_update = priv_.current_ui_id != 0;
         if priv_.current_ui_id != 0 {
             ffi::gtk_ui_manager_remove_ui(ui_manager, priv_.current_ui_id);
@@ -209,13 +205,11 @@ unsafe extern "C" fn shell_view_toggled_cb(
             return;
         }
 
-        // Register view-specific actions once.
         if !priv_.actions_initialized {
             priv_.view_ui_def = init_view_ui(shell_view, shell_window);
             priv_.actions_initialized = true;
         }
 
-        // Merge UI XML for this view.
         if let Some(ui_def) = priv_.view_ui_def {
             let mut error: *mut ffi::GError = std::ptr::null_mut();
             priv_.current_ui_id = ffi::gtk_ui_manager_add_ui_from_string(

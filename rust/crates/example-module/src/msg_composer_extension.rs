@@ -1,6 +1,4 @@
 //! Message composer extension.
-//!
-//! Registers one `EExtension` type for `EMsgComposer`.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -87,7 +85,6 @@ unsafe fn add_composer_ui(extension: *mut ffi::GObject, composer: *mut ffi::EMsg
     }
 }
 
-/// Add actions and merged UI during construction.
 unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     unsafe {
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
@@ -100,7 +97,6 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     }
 }
 
-/// Populate the dynamic class vtable.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     unsafe {
         PARENT_CLASS.store(
@@ -120,7 +116,6 @@ unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 
 unsafe extern "C" fn instance_init(_instance: *mut c_void, _klass: *mut c_void) {}
 
-/// Register the dynamic type in `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
