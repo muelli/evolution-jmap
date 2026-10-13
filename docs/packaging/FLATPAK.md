@@ -399,5 +399,6 @@ Current status at the end of Batch 6 step 4 plus this step-3 probe:
 naming and branch constraints are documented, and an ABI-matched offline source
 build now installs as a local extension runtime when vendored crates are staged
 locally first. Submission remains pending on a committed Flathub-friendly
-vendoring path and a fix for the unresolved `g_module_*` symbols that currently
-prevent JMAP backend registration inside in-sandbox EDS processes.
+vendoring path plus the expected review artifacts. Headless probes still do not
+emit explicit JMAP registration lines, so interactive Evolution behavior
+verification remains out of scope for this headless lane.
