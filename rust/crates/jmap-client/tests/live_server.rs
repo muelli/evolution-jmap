@@ -85,7 +85,7 @@ use jmap_proto::methods::{
     SetRequest,
 };
 use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
-use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
+use jmap_proto::quota::{Quota, QuotaQueryFilter, quota_resource_type, quota_scope};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
@@ -2021,6 +2021,72 @@ fn quota_used_reflects_a_real_email_import() {
         "quota used ({}) did not grow after importing a message (before: {})",
         after.used,
         before.used
+    );
+}
+
+/// `Client::quota_query` (RFC 9425 §4.4, `Quota/query`) had never been
+/// exercised against a real server through this crate's own method —
+/// `jmap-client/tests/quota.rs` only checks it against `jmap-mockd`, which
+/// necessarily honours whatever filter it is given. A real Stalwart server
+/// does not: `STALWART-RFC-FINDINGS.md` finding 6 found, by reading
+/// Stalwart's own source and then confirming live over raw HTTP, that
+/// `Quota/query` ignores its filter entirely and always answers every
+/// `Quota` id the account has. This pins that same behaviour through the
+/// actual `Client::quota_query` call this codebase ships, not raw HTTP: a
+/// filter that cannot possibly match (a `name` substring no real quota
+/// would ever contain) still returns the quota's id. If this ever starts
+/// failing, Stalwart may have fixed `Quota/query`; update finding 6 and
+/// this test together.
+///
+/// Needs the same per-account `octets` quota as `quota_used_reflects_a_
+/// real_email_import` (`docs/manual-test-live-server.md` step 3b); skipped,
+/// not failed, under the same conditions that test is.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn quota_query_ignores_its_filter_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    if !client
+        .session()
+        .accounts
+        .get(&account_id)
+        .is_some_and(|account| account.has_capability(CAPABILITY_QUOTA))
+    {
+        eprintln!("the write-test account does not advertise {CAPABILITY_QUOTA}; skipping");
+        return;
+    }
+
+    let quotas = client
+        .quotas(&account_id)
+        .expect("Quota/get failed against the real server");
+    let Some(quota) = quotas.first() else {
+        eprintln!(
+            "the write-test account has no configured Quota object \
+             (no maxDiskQuota set); skipping"
+        );
+        return;
+    };
+
+    let non_matching_filter =
+        QuotaQueryFilter::new().with_name("definitely-not-a-real-quota-name-5f3c9a");
+    let ids = client
+        .quota_query(&account_id, non_matching_filter)
+        .expect("Quota/query failed against the real server");
+
+    assert!(
+        ids.contains(&quota.id),
+        "finding 6 expects Quota/query to ignore its filter and return every \
+         quota id regardless; a non-matching name filter returned {ids:?}, \
+         missing the account's own quota {:?} — Stalwart may have fixed the \
+         filter, which would need finding 6 updated, not this assertion \
+         loosened",
+        quota.id
     );
 }
 
