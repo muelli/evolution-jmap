@@ -34,9 +34,7 @@ pub struct AddressBook {
     /// Server-computed permissions on this address book (RFC 9610 §2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<AddressBookRights>,
-    /// Rights granted to other principals (RFC 9610 §2), keyed by principal
-    /// id. Modeled but unread today — writing shares is Phase C, deliberately
-    /// separate from reading `myRights`.
+    /// Rights granted to other principals (RFC 9610 §2), keyed by principal id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,12 +148,8 @@ impl AddressBookRights {
         self
     }
 
-    /// Whether these rights let the holder write to the address book — the
-    /// one bit [`crate::calendars::Calendar`]'s sibling collection-sync layer
-    /// narrows a writable account down to. Absent `mayWrite` reads as `false`
-    /// (fail closed): a `myRights` object the server bothered to send but left
-    /// this field out of is not grounds to assume write access it never
-    /// stated.
+    /// Whether these rights let the holder write to the address book.
+    /// Absent `mayWrite` defaults to `false` (fail closed).
     pub fn is_writable(&self) -> bool {
         self.may_write.unwrap_or(false)
     }
@@ -202,7 +196,7 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phones: Option<BTreeMap<String, ContactPhone>>,
     /// The organisations the contact belongs to (RFC 9553 §2.2.3), keyed by
-    /// an id of whoever wrote them — the employer and the department within
+    /// an id of whoever wrote them: the employer and the department within
     /// it, which vCard states in one `ORG` line each.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organizations: Option<BTreeMap<String, Organization>>,
@@ -246,9 +240,8 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<BTreeMap<String, Media>>,
     /// The online services the contact is reachable on (RFC 9553 §2.3.2),
-    /// keyed like the other JSContact maps. vCard states each on the `X-` line
-    /// EDS keeps that service's handles on — `X-JABBER`, `X-MATRIX`, … — which
-    /// is what Evolution shows as an instant-messaging address.
+    /// keyed like the other JSContact maps. vCard states each on an `X-` line
+    /// (e.g. `X-JABBER`, `X-MATRIX`), which Evolution shows as an IM address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online_services: Option<BTreeMap<String, OnlineService>>,
     /// The tags the contact is filed under (RFC 9553 §2.8.2), an RFC 9553
@@ -263,11 +256,8 @@ pub struct ContactCard {
     /// write the property back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
-    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed — unlike
-    /// every other JSContact map here — by *who the related entity is* rather
-    /// than by an id of whoever wrote the entry. vCard 3.0 states none of the
-    /// relations; the one Evolution has a field for is the spouse, on the `X-`
-    /// line EDS keeps `E_CONTACT_SPOUSE` on.
+    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed, unlike
+    /// other JSContact maps, by *who the related entity is* rather than by an entry id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, Relation>>,
     /// The cryptographic keys for the contact (RFC 9553 §2.6.1).
@@ -458,12 +448,8 @@ impl Name {
     }
 }
 
-/// One name component: kind is `given`, `surname`, `title`, …
-///
-/// Like [`AddressComponent`] this keeps what it does not model — a component
-/// carries a `phonetic` spelling besides its value — because the save path
-/// writes the component list back whole, so a member dropped on the way in is
-/// a member deleted on the way out.
+/// One name component: kind is `given`, `surname`, `title`, etc.
+/// Unmodeled properties (such as phonetic spellings) are preserved in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameComponent {
@@ -602,7 +588,7 @@ pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The units within it, outermost first — the departments the `ORG` value
+    /// The units within it, outermost first: the departments the `ORG` value
     /// lists after the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<Vec<OrgUnit>>,
@@ -667,10 +653,7 @@ impl OrgUnit {
 pub struct Title {
     #[serde(default)]
     pub name: String,
-    /// `title` or `role`. Absent means `title`, RFC 9553 §2.2.4's default,
-    /// which this side leaves unsaid rather than writing out — so a card
-    /// that never named a kind is not rewritten by a save that changed
-    /// nothing.
+    /// `title` or `role`. Absent means `title` (RFC 9553 §2.2.4 default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -840,10 +823,7 @@ impl Note {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Anniversary {
-    /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which
-    /// gives it no default — an entry that names none says nothing about
-    /// what its date is the date *of*, and is treated here as a kind no
-    /// vCard property states.
+    /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which gives it no default.
     #[serde(default)]
     pub kind: String,
     /// The date itself, kept as it arrived rather than parsed into a shape
@@ -884,8 +864,8 @@ pub struct Link {
     /// part of a link a `URL` line has room for.
     #[serde(default)]
     pub uri: String,
-    /// What kind of link it is — `contact`, a URI for getting in touch, is
-    /// the one kind RFC 9553 §2.6.3 defines, and it has no default.
+    /// What kind of link it is: `contact` (a URI for getting in touch) is
+    /// the defined kind in RFC 9553 §2.6.3, with no default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -925,7 +905,7 @@ impl Link {
 }
 
 /// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
-/// contact — a calendar of theirs, or the free/busy data drawn from one.
+/// contact: a calendar of theirs, or the free/busy data drawn from one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
@@ -1068,7 +1048,7 @@ impl Media {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OnlineService {
-    /// The name of the service or protocol — `Jabber`, `Matrix`, `Skype`.
+    /// The name of the service or protocol: `Jabber`, `Matrix`, `Skype`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
     /// The name the contact is known by at the service. Free text per RFC 9553
@@ -1123,24 +1103,14 @@ impl OnlineService {
 /// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
 /// the contact.
 ///
-/// The entity itself is the map key over in [`ContactCard::related_to`] — RFC
+/// The entity itself is the map key in [`ContactCard::related_to`]: RFC
 /// 9553 §2.1.8 makes it the related Card's `uid`, and RFC 9555 §2.9.5 puts free
-/// text there for a vCard `RELATED;VALUE=text`, which is the case that holds a
-/// name a user could read. So a Relation object carries no identity of its own
-/// and there is nothing else on it to model.
+/// text there for a vCard `RELATED;VALUE=text`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Relation {
-    /// The relation types the entity stands in, an RFC 9553 §1.4.3 Set: the
-    /// keys are the types — `spouse`, `child`, `colleague`, … — and every value
-    /// is `true`. An empty set, which RFC 9555 §2.9.5's example produces from a
-    /// `RELATED` line carrying no `TYPE`, means the relation is unspecified.
-    ///
-    /// The values are left as JSON rather than as `bool` for the reason
-    /// [`ContactCard::keywords`] gives: a whole `ContactCard/get` response is
-    /// deserialized at once, so a server answering `{"spouse": 1}` for one card
-    /// must not cost the user the whole address book. The odd entry stays
-    /// visible as itself and the vCard mapping refuses it.
+    /// Relation types the entity stands in (RFC 9553 §1.4.3 Set mapping types
+    /// such as `spouse`, `child`, `colleague` to boolean values).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relation: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]

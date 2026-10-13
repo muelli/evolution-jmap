@@ -112,9 +112,7 @@ impl Calendar {
     }
 }
 
-/// `Calendar.myRights`/a `shareWith` entry (calendars draft §4, draft-27 field
-/// names — no plain `mayWrite`, unlike [`crate::contacts::AddressBookRights`]:
-/// the draft splits it into "all items" and "just my own").
+/// `Calendar.myRights` or `shareWith` entry (JMAP Calendars §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarRights {
@@ -161,14 +159,8 @@ impl CalendarRights {
         }
     }
 
-    /// Whether these rights let the holder write *something* to the
-    /// calendar. EDS's read-only flag is a single bit per source, with no
-    /// "read-only except your own items" shade to represent — marking the
-    /// whole calendar read-only for a holder who may still create and edit
-    /// their own events (`mayWriteOwn`) would block ordinary use of it, so
-    /// either write right counts. Absent fields read as `false` (fail
-    /// closed), same reasoning as
-    /// [`crate::contacts::AddressBookRights::is_writable`].
+    /// Whether these rights let the holder write to the calendar.
+    /// Either `may_write_all` or `may_write_own` counts; absent fields default to `false`.
     pub fn is_writable(&self) -> bool {
         self.may_write_all.unwrap_or(false) || self.may_write_own.unwrap_or(false)
     }
@@ -228,35 +220,25 @@ pub struct CalendarEvent {
     pub calendar_ids: Option<BTreeMap<Id, bool>>,
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub event_type: Option<String>,
-    /// The JSCalendar version this object conforms to — jscalendarbis §3.1.2,
-    /// which a standalone Event MUST set. In JMAP the value is `"2.0"`:
-    /// draft-ietf-jmap-calendars-28 §1.4 defines CalendarEvent as a
-    /// jscalendarbis Event, and Fastmail refuses both a version-less create
-    /// and `"1.0"` with `invalidProperties: ["version"]` (observed
-    /// 2026-08-24, wire-traced).
+    /// The JSCalendar version this object conforms to (jscalendarbis §3.1.2).
+    /// In JMAP Calendars the value is `"2.0"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
-    /// When the event first arrived — RFC 8984 §4.1.7's `created`, a
-    /// UTCDateTime such as `2026-01-02T09:30:00Z`.
-    ///
-    /// The server's to state: it stamps this when the event is created and
-    /// nothing here ever proposes a value for it. The iCalendar mapping draws it
-    /// as a `CREATED` for whoever reads the document and does not read it back.
+    /// When the event was created (RFC 8984 §4.1.7 `created`, UTCDateTime).
+    /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
-    /// When the event was last changed — RFC 8984 §4.1.8's `updated`, a
-    /// UTCDateTime. The server's to state, for the reason [`Self::created`]
-    /// gives.
+    /// When the event was last changed (RFC 8984 §4.1.8 `updated`, UTCDateTime).
+    /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// JSCalendar LocalDateTime, e.g. `2026-01-15T13:00:00` — interpreted in
-    /// `timeZone`.
+    /// JSCalendar LocalDateTime, interpreted in `time_zone`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,190 +246,68 @@ pub struct CalendarEvent {
     /// ISO 8601 duration, e.g. `PT1H`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<String>,
-    /// Whether the event is shown without a time — an all-day event (RFC 8984
-    /// §4.1.5). `None` and `Some(false)` mean the same thing to a server, which
-    /// defaults the property to false; the mapping uses `None` for "nothing was
-    /// said", so that a save can tell an event that was never all-day from one
-    /// the user just made timed.
+    /// Whether the event is shown without a time: an all-day event (RFC 8984 §4.1.5).
+    /// Defaults to false; `None` preserves omission on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_without_time: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    /// Whether the event blocks the time it occupies — RFC 8984 §4.4.2's
-    /// `freeBusyStatus`, one of `free` and `busy`, which is what Evolution's
-    /// "Show Time as" states.
-    ///
-    /// `None` is "nothing was said" rather than the RFC's default of `busy`, for
-    /// the reason [`Self::show_without_time`] gives: a save reads an edit off a
-    /// difference from what the component showed, so answering with the default
-    /// would have it state the value where the server never did.
+    /// Whether the event blocks time (RFC 8984 §4.4.2 `freeBusyStatus`: `free` or `busy`).
+    /// `None` preserves omission on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub free_busy_status: Option<String>,
-    /// How important the event is — RFC 8984 §4.4.1's `priority`, the same
-    /// integer iCalendar's `PRIORITY` (RFC 5545 §3.8.1.9) carries: 0 undefined,
-    /// 1 highest, 9 lowest.
-    ///
-    /// `None` is "nothing was said" rather than the RFC's default of 0, for the
-    /// reason [`Self::show_without_time`] gives.
-    ///
-    /// Signed and wider than the range, though the RFC admits only 0 to 9,
-    /// because a whole `CalendarEvent/get` response is deserialized into this
-    /// type at once: a server answering `-1` for one event must not fail the
-    /// response and take every event in the calendar down with it. The mapping
-    /// refuses to write a value outside the range instead.
+    /// Event priority (RFC 8984 §4.4.1 / RFC 5545 §3.8.1.9): 0 undefined, 1 highest, 9 lowest.
+    /// Signed `i64` allows lenient deserialization of out-of-range values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i64>,
-    /// How much of the event may be shared with other calendar users — RFC 8984
-    /// §4.4.3's `privacy`, one of `public`, `private` and `secret`, which is what
-    /// Evolution's Options ▸ Classification states.
-    ///
-    /// `None` is "nothing was said" rather than the RFC's default of `public`,
-    /// for the reason [`Self::show_without_time`] gives.
-    ///
-    /// Held as a string rather than an enum because RFC 8984 §4.4.3 leaves the
-    /// vocabulary open — a registered or a vendor-specific value is legal — and
-    /// a whole `CalendarEvent/get` response is deserialized into this type at
-    /// once, so one event's unusual value must not take the calendar down with
-    /// it. The mapping refuses to write a value it cannot spell instead.
+    /// Sharing privacy (RFC 8984 §4.4.3: `public`, `private`, `secret`, or custom).
+    /// Kept as String to accept open vocabulary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privacy: Option<String>,
-    /// The places the event happens at (RFC 8984 §4.2.5), keyed by an id of
-    /// whoever wrote them.
-    ///
-    /// Left as JSON, for the reason [`Self::recurrence_overrides`] is: a
-    /// Location holds a `description`, `coordinates`, `links`, `locationTypes`
-    /// and a `timeZone` besides its `name`, and iCalendar's `LOCATION` is one
-    /// line of text. The mapping therefore patches the name *in place*, by the
-    /// entry's key, rather than replacing the property — which it can only do
-    /// if it can see what else is in there.
+    /// Locations (RFC 8984 §4.2.5), keyed by location id.
+    /// Preserved as JSON map for lossless round-tripping and partial patching.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locations: Option<BTreeMap<String, Value>>,
-    /// The places the event may be joined online at (RFC 8984 §4.2.6), keyed by
-    /// an id of whoever wrote them — the conference link and the number to dial.
-    ///
-    /// Left as JSON, for the reason [`Self::participants`] is: a VirtualLocation
-    /// holds a `description` and a set of `features` besides the `uri` and the
-    /// `name`, and iCalendar spells the part of that it shares on a `CONFERENCE`
-    /// line (RFC 7986 §5.11) and its parameters. The mapping draws the places
-    /// and never reads them back, so nothing here has to model the rest; holding
-    /// them as values keeps one server's unusual entry from failing a
-    /// `CalendarEvent/get` and taking every event in the calendar with it.
+    /// Virtual locations / conference links (RFC 8984 §4.2.6), keyed by id.
+    /// Preserved as JSON map for lossless round-tripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_locations: Option<BTreeMap<String, Value>>,
-    /// The external resources the event points at (RFC 8984 §4.2.7), keyed by
-    /// an id of whoever wrote them — the agenda document, the minutes, the
-    /// picture shown beside the title.
-    ///
-    /// Left as JSON, for the reason [`Self::virtual_locations`] is: a Link (RFC
-    /// 8984 §1.4.11) holds a `cid` and a `title` besides the `href`,
-    /// `contentType`, `size`, `rel` and `display` that iCalendar's `ATTACH` (RFC
-    /// 5545 §3.8.1.1) and `IMAGE` (RFC 7986 §5.10) have room for. The mapping
-    /// reads back only what it drew and a save patches one member of an entry, so
-    /// nothing here has to model the rest; holding them as values keeps one
-    /// server's unusual link from failing a `CalendarEvent/get` and taking every
-    /// event in the calendar with it.
+    /// External resources / attachments (RFC 8984 §4.2.7), keyed by id.
+    /// Preserved as JSON map for lossless round-tripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Value>>,
-    /// The tags the event carries (RFC 8984 §4.2.9), an RFC 8984 §1.4.3 Set:
-    /// the keys are the keywords and every value is `true`.
-    ///
-    /// The values are left as JSON rather than as `bool`, which is how
-    /// [`crate::mail::Email`] holds its keywords, because of what this type is:
-    /// a whole `CalendarEvent/get` response is deserialized into it at once, so
-    /// a server answering `{"offsite": 1}` for one event would fail the response
-    /// and take every event in the calendar down with it. Held as values, the
-    /// odd entry is visible as itself and the mapping refuses to write the
-    /// property back — the calendar still opens, which is the trade the
-    /// iCalendar mapping makes everywhere else too.
+    /// Event keywords / tags (RFC 8984 §4.2.9 Set: keys are tags, values `true`).
+    /// Values kept as JSON to tolerate non-boolean server responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
-    /// The reminders the event carries (RFC 8984 §4.5.2), keyed by an id of
-    /// whoever wrote them.
-    ///
-    /// Left as JSON, for the reason [`Self::locations`] is: an Alert holds a
-    /// `trigger` that is one of two object types — an offset from the event or an
-    /// absolute instant — and an `acknowledged` timestamp saying the user has
-    /// already dismissed it (RFC 9074 §6.1), none of which the `VALARM` this
-    /// mapping writes carries. The save path has to see them in order to refuse
-    /// to replace the property.
+    /// Reminders / alerts (RFC 8984 §4.5.2), keyed by alert id.
+    /// Preserved as JSON map for lossless round-tripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alerts: Option<BTreeMap<String, Value>>,
-    /// Who is invited to the event (RFC 8984 §4.4.6), keyed by an id of whoever
-    /// wrote them — the guest list, and the organizer with them: RFC 8984 gives
-    /// the organizer no property of its own, it is the participant holding the
-    /// `owner` role.
-    ///
-    /// Left as JSON, for the reason [`Self::locations`] is and then some: a
-    /// Participant holds a `sendTo` map of addressing methods, a set of `roles`,
-    /// a `kind`, a `participationStatus`, `delegatedTo`/`delegatedFrom`,
-    /// `memberOf`, a scheduling agent and more — iCalendar spells the part of
-    /// that it shares on the parameters of an `ATTENDEE` line. The mapping draws
-    /// the guest list and never reads it back, so nothing here has to model the
-    /// rest; holding it as values keeps one server's unusual participant from
-    /// failing a `CalendarEvent/get` and taking every event in the calendar with
-    /// it.
+    /// Participants and organizer (RFC 8984 §4.4.6), keyed by participant id.
+    /// Preserved as JSON map for lossless round-tripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participants: Option<BTreeMap<String, Value>>,
-    /// The URI iTIP scheduling messages for this event come from
-    /// (draft-ietf-jmap-calendars-28 §5.9.2): the organizer's
-    /// `calendarAddress`. `None` says nobody outside this account organises
-    /// the event, which is one of the two ways §10.9.5 makes an account the
-    /// event's *origin*; the other is that the URI is one of the account's
-    /// own [`ParticipantIdentity::calendar_address`]es. Only the origin
-    /// invites and cancels; everyone else only ever replies.
+    /// Organizer `calendarAddress` for incoming iTIP scheduling messages
+    /// (JMAP Calendars §5.9.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organizer_calendar_address: Option<String>,
-    /// Whether the event is still a draft (draft-ietf-jmap-calendars-28
-    /// §5.1). A server sends no scheduling message and raises no alert for a
-    /// draft. It may only be set on create, and once false it cannot be made
-    /// true again.
+    /// Whether the event is still a draft (JMAP Calendars §5.1).
+    /// May only be set on create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_draft: Option<bool>,
-    /// Whether only the owners of the event may see the full guest list
-    /// (draft-ietf-jmap-calendars-28 §5.1.3): everyone else sees only the
-    /// owners and themselves. §5.9.2.1 extends the same rule to a
-    /// scheduling message's own payload.
+    /// Whether only owners see the full participant list (JMAP Calendars §5.1.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_attendees: Option<bool>,
-    /// jscalendarbis §3.3.3 (draft-ietf-calext-jscalendarbis): a single
-    /// `RecurrenceRule`, not RFC 8984's plural `recurrenceRules` array — the
-    /// property was renamed and restructured from array-valued to
-    /// singular/object-valued in the base that obsoletes it. Confirmed
-    /// against the draft's own text (three independent fetches, one a
-    /// full-text search for every "recurrenceRule" occurrence): no plural
-    /// form appears anywhere, including the IANA properties registry entry.
+    /// Single recurrence rule (jscalendarbis §3.3.3 replaces RFC 8984 array).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rule: Option<RecurrenceRule>,
-    /// The instances named one at a time rather than by a rule (RFC 8984
-    /// §4.3.4): a map from an instance's start, as a LocalDateTime, to a
-    /// PatchObject describing how that instance differs.
-    ///
-    /// The patch is left as JSON because it is genuinely open — `excluded: true`
-    /// for an instance that does not happen, `{}` for one that happens as the
-    /// rules would have it, and any set of event properties for one that was
-    /// edited on its own. Modeling only the shapes the iCalendar mapping can
-    /// spell would quietly discard the third, which the mapping instead has to
-    /// see in order to refuse to overwrite it.
+    /// Recurrence overrides (RFC 8984 §4.3.4): map from start `LocalDateTime`
+    /// to patch object. Kept as JSON to preserve arbitrary patch properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_overrides: Option<BTreeMap<String, Value>>,
-    /// The zones the event defines for itself (RFC 8984 §4.7.2), keyed by the
-    /// identifier [`Self::time_zone`] and the overrides refer to them by.
-    ///
-    /// §1.4.9 lets a `TimeZoneId` be either an IANA name or a custom identifier
-    /// beginning with a solidus **that this property defines** — the second is
-    /// what a server has to invent for a zone no database names, such as the
-    /// one an Exchange invitation carries its own `VTIMEZONE` for. A reader
-    /// cannot look such an identifier up anywhere, so the definition is the only
-    /// thing that says what the zone is, and the iCalendar mapping draws it as a
-    /// `VTIMEZONE` beside the event.
-    ///
-    /// Left as JSON, for the reason [`Self::locations`] is: a TimeZone holds
-    /// `aliases`, a `validUntil`, a `url` and two arrays of transition rules with
-    /// names and comments on them, of which the mapping draws what a `VTIMEZONE`
-    /// can hold. Nothing ever writes the property back — a zone definition is the
-    /// server's, not something Evolution offers to edit — so the odd entry costs
-    /// only the sight of itself rather than failing a whole
-    /// `CalendarEvent/get`.
+    /// Custom time zone definitions (RFC 8984 §4.7.2), keyed by time zone id.
+    /// Kept as JSON for lossless preservation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zones: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,12 +318,8 @@ pub struct CalendarEvent {
     pub locale: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub localizations: Option<BTreeMap<String, Value>>,
-    /// Section 5.6: whether this account is the event's origin (section
-    /// 10.9.5), i.e. the one that invites and withdraws rather than only
-    /// ever answering. Server-set, and computed fresh on every
-    /// `CalendarEvent/get` rather than stored, since a
-    /// `ParticipantIdentity/set` can change which address is "this account"
-    /// between two fetches of the same event.
+    /// Whether this account is the event's origin (JMAP Calendars §5.6, §10.9.5).
+    /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_origin: Option<bool>,
     #[serde(flatten)]
@@ -586,8 +442,7 @@ impl CalendarEvent {
     }
 }
 
-/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `rscale`
-/// & friends ride in `extra`.
+/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecurrenceRule {
@@ -601,71 +456,34 @@ pub struct RecurrenceRule {
     pub count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
-    /// The seconds of the minute it repeats at — iCalendar's `BYSECOND`. 0 to
-    /// 60, the sixtieth being the leap second RFC 5545 §3.3.10's `seconds`
-    /// admits and UTC occasionally inserts.
-    ///
-    /// The first of the three parts that name a *time of day* rather than a
-    /// date, which RFC 5545 §3.3.10 says MUST NOT stand beside a `DTSTART` of
-    /// value type DATE — so an all-day event whose rule carries any of them is
-    /// drawn as a timed event instead.
-    ///
-    /// All three are unsigned, unlike the day and week parts below: RFC 8984
-    /// §4.3.3 has them as `UnsignedInt[]`, and RFC 5545 §3.3.10 gives no way to
-    /// count a time backwards from the end of the period holding it.
+    /// Seconds of the minute (RFC 8984 §4.3.3 / RFC 5545 `BYSECOND`, 0..=60).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_second: Option<Vec<u32>>,
-    /// The minutes of the hour it repeats at — iCalendar's `BYMINUTE`. 0 to 59.
+    /// Minutes of the hour (RFC 8984 §4.3.3 / RFC 5545 `BYMINUTE`, 0..=59).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_minute: Option<Vec<u32>>,
-    /// The hours of the day it repeats at — iCalendar's `BYHOUR`. 0 to 23.
+    /// Hours of the day (RFC 8984 §4.3.3 / RFC 5545 `BYHOUR`, 0..=23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_hour: Option<Vec<u32>>,
-    /// The days of the week the rule repeats on — iCalendar's `BYDAY`.
+    /// Days of the week (RFC 8984 §4.3.3 / RFC 5545 `BYDAY`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_day: Option<Vec<NDay>>,
-    /// The days of the *month* it repeats on — iCalendar's `BYMONTHDAY`. 1 to 31
-    /// counting from the start of the month, -1 to -31 from its end.
+    /// Days of the month (RFC 8984 §4.3.3 / RFC 5545 `BYMONTHDAY`, 1..=31 or -31..=-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month_day: Option<Vec<i32>>,
-    /// The days of the *year* it repeats on — iCalendar's `BYYEARDAY`. 1 to 366
-    /// counting from 1 January, -1 to -366 from 31 December.
+    /// Days of the year (RFC 8984 §4.3.3 / RFC 5545 `BYYEARDAY`, 1..=366 or -366..=-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_year_day: Option<Vec<i32>>,
-    /// The weeks of the year it repeats in — iCalendar's `BYWEEKNO`. 1 to 53
-    /// counting from the first week of the year, -1 to -53 from its last.
-    ///
-    /// Which days a week holds depends on [`Self::first_day_of_week`]: RFC 5545
-    /// §3.3.10 numbers the weeks by ISO 8601, counting from that day.
+    /// Weeks of the year (RFC 8984 §4.3.3 / RFC 5545 `BYWEEKNO`, 1..=53 or -53..=-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_week_no: Option<Vec<i32>>,
-    /// The months of the year it repeats in — iCalendar's `BYMONTH`.
-    ///
-    /// A string rather than a number, as RFC 8984 §4.3.3 has it: the month
-    /// number, optionally followed by `L` for a leap month in a non-Gregorian
-    /// calendar (`5L`). Kept verbatim so a value this mapping cannot spell as an
-    /// `RRULE` is visible as itself rather than as a number it would have to
-    /// invent a spelling for.
+    /// Months of the year (RFC 8984 §4.3.3 / RFC 5545 `BYMONTH`, e.g. "1".."12" or "5L").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month: Option<Vec<String>>,
-    /// Which occurrences of the ones the rest of the rule names it keeps —
-    /// iCalendar's `BYSETPOS`. 1 to 366 counting from the first occurrence in
-    /// the interval, -1 to -366 from the last.
-    ///
-    /// The only part here that does not *name* dates: the others say which dates
-    /// an interval expands to, and this one selects out of that set afterwards,
-    /// so it means nothing on its own. RFC 5545 §3.3.10 says as much — it MUST
-    /// only be used together with another `BYxxx` part.
+    /// Occurrence indices to keep (RFC 8984 §4.3.3 / RFC 5545 `BYSETPOS`, 1..=366 or -366..=-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_set_position: Option<Vec<i32>>,
-    /// The day each week of the rule starts on — iCalendar's `WKST`. One of the
-    /// two-letter lowercase weekdays [`NDay::day`] uses, and RFC 8984 §4.3.3's
-    /// default is `mo`.
-    ///
-    /// It changes which dates a rule produces rather than merely describing them:
-    /// RFC 5545 §3.3.10 counts a `FREQ=WEEKLY;INTERVAL=2` series' weeks from this
-    /// day, so the same `byDay` counted from Sunday and from Monday name different
-    /// Tuesdays.
+    /// Day each week starts on (RFC 8984 §4.3.3 / RFC 5545 `WKST`, default "mo").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_day_of_week: Option<String>,
     /// The calendar scale the recurrence rule is defined in (RFC 8984 §4.3.3).
