@@ -34,16 +34,28 @@
 //! value, a `\r`), which needs the three-event "expected" shape the book-sync
 //! anniversaries/media/online_services increments used.
 //!
+//! Also covered: `links` (`diff_links`), restricted to plain `ATTACH`-shaped
+//! entries (an `https:` `href` and an optional `contentType`, never the
+//! `rel: "display"` `IMAGE` shape). `diff_links` only ever patches an
+//! existing key's `href` — it neither adds a key `edited` states that
+//! `current` does not, nor removes one `edited` drops — so the generator
+//! keeps the same key set on both sides and only varies `href`, with
+//! `contentType` held constant per key (never patched, so it would fail the
+//! round trip if it varied). Scoped out, left for later: `size` (`ATTACH`
+//! only), the `IMAGE`/`rel`/`display` shape, and a key `edited` adds or
+//! drops, which `diff_links` leaves alone by design and so needs a check
+//! against the unpatched property rather than a round trip to `edited`.
+//!
 //! Scoped out, left for later: `start` (its absence cannot be expressed, so
 //! it needs its own generator) and `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
-//! remaining seven properties the module doc already calls out as needing
-//! more than the baseline (`locations`, `virtualLocations`, `links`,
-//! `alerts`, `recurrenceRule`, `recurrenceOverrides`, `timeZones`) — each
-//! needs its own generator and is left for its own increment.
+//! remaining six properties the module doc already calls out as needing
+//! more than the baseline (`locations`, `virtualLocations`, `alerts`,
+//! `recurrenceRule`, `recurrenceOverrides`, `timeZones`) — each needs its
+//! own generator and is left for its own increment.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -56,7 +68,7 @@ use jmap_cal_sync::patch::diff;
 use jmap_ical::{event_to_ical, ical_to_event};
 use jmap_proto::calendars::CalendarEvent;
 use proptest::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// RFC 8620 §5.3: a `null` value at the end of a path removes that member,
 /// anything else sets it; every path segment before the last already exists.
@@ -138,6 +150,49 @@ fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
     })
 }
 
+/// A key `names_map_entry` always accepts (plain alphanumeric), the only
+/// kind `X-JMAP-KEY` carries here.
+fn arb_key() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,10}"
+}
+
+/// An `href` `names_a_uri` always accepts and `fetched_locally` never drops:
+/// an `https:` URI with a plain alphanumeric path.
+fn arb_href() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,10}".prop_map(|path| format!("https://example.com/{path}"))
+}
+
+/// A `contentType` `media_type` always draws back unchanged, or none at all.
+fn arb_content_type() -> impl Strategy<Value = Option<String>> {
+    prop::option::of(prop::sample::select(
+        &["text/plain", "image/png", "application/pdf"][..],
+    ))
+    .prop_map(|ct| ct.map(str::to_owned))
+}
+
+/// A plain `ATTACH`-shaped Link entry: an `href` and an optional
+/// `contentType`, never the `rel`/`display`/`size` members this increment
+/// scopes out.
+fn link_value(href: &str, content_type: &Option<String>) -> Value {
+    let mut link = json!({"@type": "Link", "href": href});
+    if let Some(content_type) = content_type {
+        link["contentType"] = Value::String(content_type.clone());
+    }
+    link
+}
+
+/// A set of 1 to 4 keys, each carrying an old `href` (for `current`), a new
+/// one (for `edited`), and a `contentType` held constant across both: the one
+/// member `diff_links` ever patches is `href`, so varying anything else would
+/// fail the round trip against a diff that never writes it.
+fn arb_links() -> impl Strategy<Value = BTreeMap<String, (String, String, Option<String>)>> {
+    prop::collection::btree_map(
+        arb_key(),
+        (arb_href(), arb_href(), arb_content_type()),
+        1..4,
+    )
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -208,6 +263,27 @@ proptest! {
         old_event.keywords = Some(old);
         let mut new_event = base();
         new_event.keywords = Some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn links_round_trip(entries in arb_links()) {
+        let mut old_event = base();
+        old_event.links = Some(
+            entries
+                .iter()
+                .map(|(key, (old, _, content_type))| (key.clone(), link_value(old, content_type)))
+                .collect(),
+        );
+        let mut new_event = base();
+        new_event.links = Some(
+            entries
+                .iter()
+                .map(|(key, (_, new, content_type))| (key.clone(), link_value(new, content_type)))
+                .collect(),
+        );
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
