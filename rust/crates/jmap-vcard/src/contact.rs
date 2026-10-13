@@ -774,34 +774,15 @@ fn service_slot(service: &OnlineService) -> &'static str {
     }
 }
 
-/// Whether one tag of `keywords` goes on the `CATEGORIES` line — the
-/// `states_*` predicate of the one mapped property that is a *set* rather than
-/// a keyed map of objects.
+/// Whether one `keywords` entry can be emitted on `CATEGORIES`.
 ///
-/// Being a set changes what the save does with the answer, not what the
-/// question means. A `CATEGORIES` line holds the whole set and a JSContact
-/// keyword is a bare string, so there is nothing inside an entry to preserve
-/// and no key to patch by: the line states what was shown, and the save writes
-/// back a whole new set. A tag this predicate refuses was therefore not merely
-/// unseen but *absent from what the user edited*, and the save has to put it
-/// back by hand rather than read its absence as a deletion. What is refused:
+/// `CATEGORIES` is a set line, so this predicate is the shared gate for both
+/// what we draw and what the save path treats as "stated". Refused tags are
+/// restored by save logic instead of being treated as user removals.
 ///
-/// - **A value that is not `true`.** RFC 9553 §1.4.3 has every value of a Set be
-///   `true`; drawing anything else would say the tag is set where the server
-///   said it is not.
-/// - **An empty tag.** An empty item between two commas reads back as no tag at
-///   all, so the tag would vanish between the drawing and the save.
-/// - **A tag holding a carriage return.** [`crate::syntax::write`] drops it —
-///   that is a security property, not tidiness — so the tag would come back
-///   spelled differently and a save would rename it. A line feed is not this
-///   case: it has an escape and survives both writers.
-/// - **A tag whose ends are whitespace.** EDS trims them: measured against
-///   libebook-contacts 3.52, `CATEGORIES: quiet` reaches the user as `quiet`,
-///   and the next save would rename the tag on the server. See
-///   `edged_with_whitespace`.
-///
-/// The single point the save and `drawn_tags` agree through, so a tag cannot
-/// be called shown and then left off the line.
+/// A tag is renderable only when its set value is `true`, the name is not
+/// empty, it has no carriage return (the writer strips it), and it has no edge
+/// whitespace that EDS would trim.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
@@ -809,21 +790,16 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
         && !edged_with_whitespace(tag)
 }
 
-/// Whether a tag begins or ends with a character EDS would trim off it.
+/// Whether a tag has leading or trailing ASCII whitespace.
 ///
-/// The set is ASCII whitespace, which is one character wider than what EDS was
-/// measured to strip — it keeps a vertical tab — because the two errors are not
-/// the same size. Refusing to draw a tag costs the sight of it; drawing one that
-/// comes back trimmed costs the tag, on the server, without anybody having
-/// asked.
+/// This superset avoids writing tags that EDS may trim and then rename on the
+/// next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
 }
 
-/// The tags to write on the `CATEGORIES` line, in the order the set holds them —
-/// which is sorted, so the vCard is stable across renderings; a reordering would
-/// otherwise look to the save like an edit.
+/// The tags to write on `CATEGORIES`, in stable sorted order.
 fn drawn_tags(card: &ContactCard) -> Vec<&str> {
     card.keywords
         .iter()
@@ -835,22 +811,15 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
 
 /// The tags the card is filed under, as a JSContact `keywords` Set.
 ///
-/// Every `CATEGORIES` line is read, not just the first, and that is not
-/// pedantry about RFC 2426 §3.7.1 admitting the property more than once: EDS
-/// shows the user the first line only and, when the Categories field is edited,
-/// rewrites that one and leaves the second exactly as it was — measured against
-/// libebook-contacts 3.52. Reading both is what keeps the tags on the second
-/// from being deleted by the next save, having never been shown.
+/// Reads every `CATEGORIES` line. EDS edits only the first one, so retaining
+/// later lines avoids deleting unseen tags on the next save.
 ///
-/// A tag named twice — across the lines or within one — is one member, because a
-/// set is what both sides mean. An empty item is dropped rather than carried as
+/// A duplicate tag is kept once because this is a set. Empty items are dropped:
 /// the tag whose name is nothing: `CATEGORIES:` and `CATEGORIES:a,,b` state
 /// nothing between their separators.
 ///
-/// `None` rather than an empty map for a card with no tags, for the reason the
-/// keyed maps have one: the save reads an edit off a difference from what was
-/// shown, and an empty set would claim the contact is untagged where the vCard
-/// made no claim at all.
+/// Returns `None` instead of an empty map so "no CATEGORIES line" stays
+/// distinct from "explicitly untagged" in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
@@ -1500,22 +1469,10 @@ const MAX_LINE_OCTETS: usize = 75;
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
 ///
-/// Folding is calcard's job, and its writer does it. Before calcard 0.3.13,
-/// a structured value's `;` separators were written *after* its fold check,
-/// and that check was skipped when the component coming next was empty
-/// text, so a value whose text folded to exactly 75 octets kept every empty
-/// trailing slot on the same physical line: 81 octets for an `ADR`, one per
-/// empty slot (found by a fuzzer seed; the regression test in
-/// `tests/proptest_fuzz.rs` still carries the shrunken card; was
-/// <https://github.com/stalwartlabs/calcard/issues/25>, fixed upstream in
-/// 0.3.13). This pass is now insurance rather than an active workaround —
-/// kept because it is a single scan and it is the guarantee the tightened
-/// `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8` property
-/// rests on. Folding is defined on the octet layer — unfolding restores the
-/// same stream wherever a cut lands — so any cut is *correct*; cutting at
-/// character boundaries, and never between a `\` and the octet it escapes,
-/// additionally keeps every physical line valid UTF-8 and every escape pair
-/// whole for line-oriented readers.
+/// Calcard already folds output, but this defensive pass keeps a hard 75-octet
+/// bound after the historic structured-value overflow fixed in calcard 0.3.13
+/// (<https://github.com/stalwartlabs/calcard/issues/25>). It also avoids cuts
+/// inside UTF-8 code points and escaped pairs.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1571,21 +1528,9 @@ fn fold_overlong_lines(vcard: String) -> String {
 /// `X-ABDATE`, `X-AB-DATE`) into basic format (`YYYYMMDD` / `YYYYMMDDTHHMMSS...`)
 /// before passing the vCard stream to `calcard`.
 ///
-/// Context & upstream rationale:
-/// Upstream `calcard` (0.3.11) exhibits two date parsing limitations:
-/// 1. `parse_vcard_date` (used when `VALUE=date` is stated) reads extended format
-///    `YYYY-MM-DD` only to the year and month, stopping at the second hyphen and
-///    leaving `day` as `None` (losing the day).
-/// 2. `parse_vcard_date_and_or_time` (used for standard date-and-or-time properties)
-///    misinterprets the second hyphen as a timezone offset transition, storing the
-///    day into `tz_hour` when no timezone offset is present, or overwriting it with
-///    the actual timezone offset (e.g. `+02:00` corrupting day 12 into day 02), or
-///    leaving `day` as `None` on UTC timestamps (`Z`).
-///
-/// In contrast, `calcard`'s basic-format date parser (`YYYYMMDD` / `YYYYMMDDTHHMMSS`)
-/// parses all date components (year, month, day, time, timezone) completely and
-/// losslessly across all versions (vCard 2.1, 3.0, 4.0). Pre-normalizing hyphenated
-/// date lines to basic format on import guarantees 100% fidelity without data loss.
+/// This is an import-side compatibility shim for calcard extended-date parsing.
+/// Converting hyphenated values to basic format preserves day and timezone
+/// fields reliably across supported vCard versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
     let mut remaining = vcard;
