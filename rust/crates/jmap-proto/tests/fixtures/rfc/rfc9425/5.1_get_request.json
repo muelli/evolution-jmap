@@ -1,0 +1,5 @@
+// Source: RFC 9425 §5.1 (Fetching Quotas Request), June 2023
+[[ "Quota/get", {
+  "accountId": "u33084183",
+  "ids": null
+}, "0" ]]

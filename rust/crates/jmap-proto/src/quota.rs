@@ -18,10 +18,15 @@ pub struct Quota {
     pub id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<Id>,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub resource_type: String,
+    #[serde(default)]
     pub used: u64,
+    #[serde(default)]
     pub hard_limit: u64,
+    #[serde(default)]
     pub scope: String,
     #[serde(default)]
     pub types: Vec<String>,

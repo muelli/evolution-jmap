@@ -1,0 +1,29 @@
+// Source: RFC 9661 §2.4.1 (Create and Activate Script Response), September 2024
+[
+  [
+    "SieveScript/set",
+    {
+      "oldState": "1603741717.50737918-4096",
+      "newState": "1603741751.227268529-4096",
+      "created": {
+        "A": {
+          "id": "dd1b164f-8cdc-448c-9f54",
+          "name": "ken-20201210T171432-0",
+          "blobId": "Sdd1b164f-8cdc-448c-9f54",
+          "isActive": true
+        }
+      },
+      "updated": {
+        "8abd6f4a-bcb4d-87650-3fcd": {
+          "isActive": false
+        }
+      },
+      "destroyed": null,
+      "notCreated": null,
+      "notUpdated": null,
+      "notDestroyed": null,
+      "accountId": "ken"
+    },
+    "0"
+  ]
+]

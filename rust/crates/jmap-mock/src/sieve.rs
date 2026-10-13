@@ -64,6 +64,7 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let SieveScriptSetRequest {
         set,
         on_success_activate_script,
+        on_success_deactivate_script,
     } = request;
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;
@@ -223,6 +224,8 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
             }
         };
         activate(account, resolved.as_ref());
+    } else if on_success_deactivate_script == Some(true) {
+        activate(account, None);
     }
 
     to_result(&SetResponse {

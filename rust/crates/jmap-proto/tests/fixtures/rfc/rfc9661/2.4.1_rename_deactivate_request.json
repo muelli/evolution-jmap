@@ -1,0 +1,11 @@
+// Source: RFC 9661 §2.4.1 (Rename and Deactivate Script Request), September 2024
+[
+  ["SieveScript/set", {
+    "accountId": "ken",
+    "update": { "dd1b164f-8cdc-448c-9f54": {
+      "name": "myscript"
+      }
+    },
+    "onSuccessDeactivateScript": true
+  }, "3"]
+]

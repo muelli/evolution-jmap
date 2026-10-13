@@ -1,0 +1,62 @@
+// Source: RFC 9404 §4.1.2 (Blob/upload Complex Example Request), August 2023
+[
+  [
+    "Blob/upload",
+    {
+      "create": {
+        "b4": {
+          "data": [
+            {
+              "data:asText": "The quick brown fox jumped over the lazy dog."
+            }
+          ]
+        }
+      }
+    },
+    "S4"
+  ],
+  [
+    "Blob/upload",
+    {
+      "create": {
+        "cat": {
+          "data": [
+            {
+              "data:asText": "How"
+            },
+            {
+              "blobId": "#b4",
+              "length": 7,
+              "offset": 3
+            },
+            {
+              "data:asText": "was t"
+            },
+            {
+              "blobId": "#b4",
+              "length": 1,
+              "offset": 1
+            },
+            {
+              "data:asBase64": "YXQ/"
+            }
+          ]
+        }
+      }
+    },
+    "CAT"
+  ],
+  [
+    "Blob/get",
+    {
+      "properties": [
+        "data:asText",
+        "size"
+      ],
+      "ids": [
+        "#cat"
+      ]
+    },
+    "G4"
+  ]
+]

@@ -1,0 +1,5 @@
+// Source: RFC 9670 §4.1 (Figure 2: MethodCalls Property of a JMAP Request), November 2024
+[[ "Principal/get", {
+  "accountId": "u33084183",
+  "ids": null
+}, "0" ]]

@@ -1,0 +1,38 @@
+// Source: RFC 9404 §3.1.1 (Blob Capability Session Object), August 2023
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {},
+    "urn:ietf:params:jmap:blob": {}
+  },
+  "accounts": {
+    "A13842": {
+      "name": "john@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+      "accountCapabilities": {
+        "urn:ietf:params:jmap:blob": {
+          "maxSizeBlobSet": 50000000,
+          "maxDataSources": 100,
+          "supportedTypeNames": [
+            "Mailbox",
+            "Thread",
+            "Email"
+          ],
+          "supportedDigestAlgorithms": [
+            "sha",
+            "sha-256"
+          ]
+        }
+      }
+    }
+  },
+  "primaryAccounts": {
+    "urn:ietf:params:jmap:blob": "A13842"
+  },
+  "username": "john@example.com",
+  "apiUrl": "https://jmap.example.com/api/",
+  "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/",
+  "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/events/",
+  "state": "00001"
+}

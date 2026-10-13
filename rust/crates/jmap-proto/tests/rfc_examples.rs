@@ -10,6 +10,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jmap_proto::blob::{
+    BlobGetRequest, BlobGetResponse, BlobLookupRequest, BlobLookupResponse, BlobUploadRequest,
+    BlobUploadResponse,
+};
 use jmap_proto::calendars::{
     Calendar, CalendarAlert, CalendarEvent, CalendarEventParseRequest, CalendarEventSetRequest,
     CalendarGroup, CalendarSetRequest,
@@ -26,10 +30,13 @@ use jmap_proto::methods::{
     ChangesRequest, ChangesResponse, CopyRequest, CopyResponse, GetRequest, GetResponse,
     SetRequest, SetResponse,
 };
+use jmap_proto::principals::Principal;
 use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
+use jmap_proto::quota::Quota;
 use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
+use jmap_proto::sieve::{SieveCapability, SieveScript, SieveScriptSetRequest};
 use jmap_proto::tasks::Task;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -2154,4 +2161,701 @@ fn jmap_calendars_sec_8_5_parse_ical_not_parsable_response() {
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/parse");
+}
+
+// ===========================================================================
+// RFC 9425 JMAP for Quotas (June 2023)
+// ===========================================================================
+
+#[test]
+fn rfc9425_sec_5_1_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9425/5.1_get_request.json");
+    assert!(note.contains("RFC 9425 §5.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Quota/get");
+
+    let req: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(req.account_id, Id::from("u33084183"));
+    assert_eq!(req.ids, None);
+}
+
+#[test]
+fn rfc9425_sec_5_1_get_response() {
+    let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9425/5.1_get_response.json");
+    assert!(note.contains("RFC 9425 §5.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Quota/get");
+
+    let res: GetResponse<Quota> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Quota>");
+    assert_eq!(res.list.len(), 2);
+    assert_eq!(
+        res.list[0].id,
+        Id::from("2a06df0d-9865-4e74-a92f-74dcc814270e")
+    );
+    assert_eq!(res.list[0].resource_type, "count");
+    assert_eq!(res.list[0].used, 1056);
+    assert_eq!(res.list[0].warn_limit, Some(1600));
+    assert_eq!(res.list[0].soft_limit, Some(1800));
+    assert_eq!(res.list[0].hard_limit, 2000);
+    assert_eq!(res.list[0].scope, "account");
+    assert_eq!(res.list[0].types, vec!["Mail", "Calendar", "Contact"]);
+    assert_eq!(res.list[1].resource_type, "octets");
+    assert_eq!(res.list[1].used, 524288000);
+}
+
+#[test]
+fn rfc9425_sec_5_2_changes_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9425/5.2_changes_request.json");
+    assert!(note.contains("RFC 9425 §5.2"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "Quota/changes");
+    assert_eq!(calls[1].name, "Quota/get");
+
+    let changes: ChangesRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into ChangesRequest");
+    assert_eq!(changes.since_state, "78540".into());
+    assert_eq!(changes.max_changes, Some(20));
+
+    let get: GetRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into GetRequest");
+    assert_eq!(get.account_id, Id::from("u33084183"));
+}
+
+#[test]
+fn rfc9425_sec_5_2_changes_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9425/5.2_changes_response.json");
+    assert!(note.contains("RFC 9425 §5.2"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "Quota/changes");
+    assert_eq!(responses[1].name, "Quota/get");
+
+    let changes: ChangesResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into ChangesResponse");
+    assert_eq!(changes.old_state, "78540".into());
+    assert_eq!(changes.new_state, "78542".into());
+    assert_eq!(
+        changes.updated,
+        vec![Id::from("2a06df0d-9865-4e74-a92f-74dcc814270e")]
+    );
+
+    let get: GetResponse<Quota> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into GetResponse<Quota>");
+    assert_eq!(get.list.len(), 1);
+    assert_eq!(
+        get.list[0].id,
+        Id::from("2a06df0d-9865-4e74-a92f-74dcc814270e")
+    );
+    assert_eq!(get.list[0].used, 1246);
+}
+
+// ===========================================================================
+// RFC 9670 JMAP Sharing (November 2024)
+// ===========================================================================
+
+#[test]
+fn rfc9670_sec_4_1_session_object() {
+    let (note, session, _) = load_rfc_fixture::<Session>("rfc9670/4.1_session_object.json");
+    assert!(note.contains("RFC 9670 §4.1"));
+    assert_roundtrip(&session);
+    let account = session
+        .accounts
+        .get(&Id::from("u12345678"))
+        .expect("account must exist");
+    assert_eq!(account.name, "jane.doe@example.com");
+    assert!(account.is_personal);
+    let owner_cap = account
+        .account_capabilities
+        .get("urn:ietf:params:jmap:principals:owner")
+        .expect("owner capability must be present");
+    assert_eq!(owner_cap["accountIdForPrincipal"], "u33084183");
+    assert_eq!(owner_cap["principalId"], "P105aga511jaa");
+}
+
+#[test]
+fn rfc9670_sec_4_1_principal_get_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9670/4.1_principal_get_request.json");
+    assert!(note.contains("RFC 9670 §4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "Principal/get");
+
+    let req: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(req.account_id, Id::from("u33084183"));
+    assert_eq!(req.ids, None);
+}
+
+#[test]
+fn rfc9670_sec_4_1_principal_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9670/4.1_principal_get_response.json");
+    assert!(note.contains("RFC 9670 §4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Principal/get");
+
+    let res: GetResponse<Principal> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<Principal>");
+    assert_eq!(res.list.len(), 2);
+    assert_eq!(res.list[0].id, Some(Id::from("P2342fnddd20")));
+    assert_eq!(res.list[0].name, "Joe Bloggs");
+    assert_eq!(res.list[0].principal_type, Some("individual".to_string()));
+    assert_eq!(
+        res.list[0].email,
+        Some("joe.bloggs@example.com".to_string())
+    );
+    assert_eq!(
+        res.list[0].time_zone,
+        Some("Australia/Melbourne".to_string())
+    );
+    assert_eq!(res.list[1].id, Some(Id::from("P674pp24095qo49pr")));
+    assert_eq!(res.list[1].name, "Board room");
+    assert_eq!(res.list[1].principal_type, Some("location".to_string()));
+}
+
+#[test]
+fn rfc9670_sec_4_1_todolist_set_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9670/4.1_todolist_set_request.json");
+    assert!(note.contains("RFC 9670 §4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "TodoList/set");
+
+    let req: SetRequest<Value> = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SetRequest<Value>");
+    assert_eq!(req.account_id, Id::from("u12345678"));
+    assert!(req.update.is_some());
+}
+
+// ===========================================================================
+// RFC 9661 JMAP for Sieve Scripts (September 2024)
+// ===========================================================================
+
+#[test]
+fn rfc9661_sec_1_2_2_session() {
+    let (note, session, _) = load_rfc_fixture::<Session>("rfc9661/1.2.2_session.json");
+    assert!(note.contains("RFC 9661 §1.2.2"));
+    assert_roundtrip(&session);
+    let account = session
+        .accounts
+        .get(&Id::from("ken"))
+        .expect("account ken must exist");
+    assert_eq!(account.name, "ken@example.com");
+    let sieve_cap = account
+        .account_capabilities
+        .get("urn:ietf:params:jmap:sieve")
+        .expect("sieve capability must be present");
+    let cap: SieveCapability = serde_json::from_value(sieve_cap.clone())
+        .expect("sieve capability must deserialize into SieveCapability");
+    assert_eq!(cap.max_size_script, 65536);
+    assert_eq!(cap.max_number_scripts, Some(5));
+    assert!(cap.sieve_extensions.contains(&"fileinto".to_string()));
+}
+
+#[test]
+fn rfc9661_sec_2_3_1_get_all_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.3.1_get_all_request.json");
+    assert!(note.contains("RFC 9661 §2.3.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "SieveScript/get");
+
+    let req: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into GetRequest");
+    assert_eq!(req.account_id, Id::from("ken"));
+}
+
+#[test]
+fn rfc9661_sec_2_3_1_get_all_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.3.1_get_all_response.json");
+    assert!(note.contains("RFC 9661 §2.3.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "SieveScript/get");
+
+    let res: GetResponse<SieveScript> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into GetResponse<SieveScript>");
+    assert_eq!(res.list.len(), 1);
+    assert_eq!(
+        res.list[0].id,
+        Some(Id::from("2d647053-dded-418d-917a-63eda3ac8f7b"))
+    );
+    assert_eq!(res.list[0].name, "test1");
+    assert!(res.list[0].is_active);
+    assert_eq!(res.list[0].blob_id, Id::from("S7"));
+}
+
+#[test]
+fn rfc9661_sec_2_3_1_get_and_blob_get_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.3.1_get_and_blob_get_request.json");
+    assert!(note.contains("RFC 9661 §2.3.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "SieveScript/get");
+    assert_eq!(calls[1].name, "Blob/get");
+
+    let sieve_get: GetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into GetRequest");
+    assert_eq!(
+        sieve_get.ids,
+        Some(vec![Id::from("2d647053-dded-418d-917a-63eda3ac8f7b")])
+    );
+
+    let blob_get: BlobGetRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into BlobGetRequest");
+    assert_eq!(blob_get.account_id, Id::from("ken"));
+    assert!(blob_get.ids_ref.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_3_1_get_and_blob_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.3.1_get_and_blob_get_response.json");
+    assert!(note.contains("RFC 9661 §2.3.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "SieveScript/get");
+    assert_eq!(responses[1].name, "Blob/get");
+
+    let sieve_res: GetResponse<SieveScript> =
+        serde_json::from_value(responses[0].arguments.clone())
+            .expect("response 0 must deserialize into GetResponse<SieveScript>");
+    assert_eq!(sieve_res.list.len(), 1);
+
+    let blob_res: BlobGetResponse = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into BlobGetResponse");
+    assert_eq!(blob_res.list.len(), 1);
+    assert_eq!(blob_res.list[0].id, Id::from("S7"));
+    assert_eq!(blob_res.list[0].size, Some(49));
+    assert!(
+        blob_res.list[0]
+            .data_as_text
+            .as_ref()
+            .unwrap()
+            .contains("fileinto")
+    );
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_upload_response() {
+    let (note, val, _) = load_rfc_fixture::<Value>("rfc9661/2.4.1_upload_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&val);
+    assert_eq!(val["accountId"], "ken");
+    assert_eq!(val["blobId"], "Gabcc83e44a6e19991c4568d0b94e1767c83dd123");
+    assert_eq!(val["type"], "application/sieve");
+    assert_eq!(val["size"], 98);
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_create_activate_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_create_activate_request.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "SieveScript/set");
+
+    let set: SieveScriptSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SieveScriptSetRequest");
+    assert_eq!(
+        set.on_success_activate_script,
+        Some(Value::String("#A".to_string()))
+    );
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_create_activate_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_create_activate_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "SieveScript/set");
+
+    let res: SetResponse<SieveScript> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<SieveScript>");
+    assert!(res.created.is_some());
+    assert!(res.updated.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_update_blob_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_update_blob_request.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "Blob/upload");
+    assert_eq!(calls[1].name, "SieveScript/set");
+
+    let upload: BlobUploadRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into BlobUploadRequest");
+    assert_eq!(upload.create.len(), 1);
+
+    let set: SieveScriptSetRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into SieveScriptSetRequest");
+    assert!(set.set.update.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_update_blob_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_update_blob_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "Blob/upload");
+    assert_eq!(responses[1].name, "SieveScript/set");
+
+    let upload_res: BlobUploadResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into BlobUploadResponse");
+    assert!(upload_res.created.is_some());
+
+    let set_res: SetResponse<SieveScript> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into SetResponse<SieveScript>");
+    assert!(set_res.updated.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_rename_deactivate_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_rename_deactivate_request.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "SieveScript/set");
+
+    let set: SieveScriptSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SieveScriptSetRequest");
+    assert_eq!(set.on_success_deactivate_script, Some(true));
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_rename_deactivate_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_rename_deactivate_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "SieveScript/set");
+
+    let res: SetResponse<SieveScript> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<SieveScript>");
+    assert!(res.updated.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_reactivate_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_reactivate_request.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "SieveScript/set");
+
+    let set: SieveScriptSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("arguments must deserialize into SieveScriptSetRequest");
+    assert_eq!(
+        set.on_success_activate_script,
+        Some(Value::String("dd1b164f-8cdc-448c-9f54".to_string()))
+    );
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_reactivate_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_reactivate_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "SieveScript/set");
+
+    let res: SetResponse<SieveScript> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("arguments must deserialize into SetResponse<SieveScript>");
+    assert!(res.updated.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_deactivate_destroy_request() {
+    let (note, calls, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_deactivate_destroy_request.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "SieveScript/set");
+    assert_eq!(calls[1].name, "SieveScript/set");
+
+    let set0: SieveScriptSetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into SieveScriptSetRequest");
+    assert_eq!(set0.on_success_deactivate_script, Some(true));
+
+    let set1: SieveScriptSetRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into SieveScriptSetRequest");
+    assert!(set1.set.destroy.is_some());
+}
+
+#[test]
+fn rfc9661_sec_2_4_1_deactivate_destroy_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9661/2.4.1_deactivate_destroy_response.json");
+    assert!(note.contains("RFC 9661 §2.4.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "SieveScript/set");
+    assert_eq!(responses[1].name, "SieveScript/set");
+
+    let res0: SetResponse<SieveScript> = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into SetResponse<SieveScript>");
+    assert!(res0.updated.is_some());
+
+    let res1: SetResponse<SieveScript> = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into SetResponse<SieveScript>");
+    assert!(res1.destroyed.is_some());
+}
+
+// ===========================================================================
+// RFC 9404 JMAP Blob Management Extension (August 2023)
+// ===========================================================================
+
+#[test]
+fn rfc9404_sec_3_1_1_capability() {
+    let (note, session, _) = load_rfc_fixture::<Session>("rfc9404/3.1.1_capability.json");
+    assert!(note.contains("RFC 9404 §3.1.1"));
+    assert_roundtrip(&session);
+    let account = session
+        .accounts
+        .get(&Id::from("A13842"))
+        .expect("account A13842 must exist");
+    let blob_cap = account
+        .blob_capability()
+        .expect("blob capability must be present");
+    assert_eq!(blob_cap.max_size_blob_set, Some(50000000));
+    assert_eq!(blob_cap.max_data_sources, Some(100));
+    assert_eq!(
+        blob_cap.supported_type_names,
+        Some(vec![
+            "Mailbox".to_string(),
+            "Thread".to_string(),
+            "Email".to_string()
+        ])
+    );
+    assert_eq!(
+        blob_cap.supported_digest_algorithms,
+        Some(vec!["sha".to_string(), "sha-256".to_string()])
+    );
+}
+
+#[test]
+fn rfc9404_sec_4_1_1_upload_request() {
+    let (note, call, _) = load_rfc_fixture::<Invocation>("rfc9404/4.1.1_upload_request.json");
+    assert!(note.contains("RFC 9404 §4.1.1"));
+    assert_roundtrip(&call);
+    assert_eq!(call.name, "Blob/upload");
+
+    let req: BlobUploadRequest = serde_json::from_value(call.arguments)
+        .expect("arguments must deserialize into BlobUploadRequest");
+    assert_eq!(req.account_id, Id::from("account1"));
+    assert_eq!(req.create.len(), 1);
+    assert_eq!(req.create["1"].content_type, Some("image/png".to_string()));
+}
+
+#[test]
+fn rfc9404_sec_4_1_1_upload_response() {
+    let (note, res_inv, _) = load_rfc_fixture::<Invocation>("rfc9404/4.1.1_upload_response.json");
+    assert!(note.contains("RFC 9404 §4.1.1"));
+    assert_roundtrip(&res_inv);
+    assert_eq!(res_inv.name, "Blob/upload");
+
+    let res: BlobUploadResponse = serde_json::from_value(res_inv.arguments)
+        .expect("arguments must deserialize into BlobUploadResponse");
+    assert_eq!(res.account_id, Id::from("account1"));
+    let created = res.created.expect("created must be present");
+    assert_eq!(
+        created["1"].id,
+        Id::from("G4c6751edf9dd6903ff54b792e432fba781271beb")
+    );
+    assert_eq!(created["1"].size, 95);
+    assert_eq!(created["1"].content_type, Some("image/png".to_string()));
+}
+
+#[test]
+fn rfc9404_sec_4_1_2_upload_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.1.2_upload_request.json");
+    assert!(note.contains("RFC 9404 §4.1.2"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].name, "Blob/upload");
+    assert_eq!(calls[1].name, "Blob/upload");
+    assert_eq!(calls[2].name, "Blob/get");
+
+    let upload0: BlobUploadRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into BlobUploadRequest");
+    assert!(upload0.account_id.is_empty());
+    assert_eq!(upload0.create.len(), 1);
+
+    let upload1: BlobUploadRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into BlobUploadRequest");
+    assert_eq!(upload1.create.len(), 1);
+
+    let get: BlobGetRequest = serde_json::from_value(calls[2].arguments.clone())
+        .expect("call 2 must deserialize into BlobGetRequest");
+    assert_eq!(get.ids, vec![Id::from("#cat")]);
+}
+
+#[test]
+fn rfc9404_sec_4_1_2_upload_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.1.2_upload_response.json");
+    assert!(note.contains("RFC 9404 §4.1.2"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0].name, "Blob/upload");
+    assert_eq!(responses[1].name, "Blob/upload");
+    assert_eq!(responses[2].name, "Blob/get");
+
+    let upload_res0: BlobUploadResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into BlobUploadResponse");
+    assert!(upload_res0.created.is_some());
+
+    let upload_res1: BlobUploadResponse = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into BlobUploadResponse");
+    assert!(upload_res1.created.is_some());
+
+    let get_res: BlobGetResponse = serde_json::from_value(responses[2].arguments.clone())
+        .expect("response 2 must deserialize into BlobGetResponse");
+    assert_eq!(get_res.list.len(), 1);
+    assert_eq!(
+        get_res.list[0].data_as_text,
+        Some("How quick was that?".to_string())
+    );
+}
+
+#[test]
+fn rfc9404_sec_4_2_1_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.2.1_get_request.json");
+    assert!(note.contains("RFC 9404 §4.2.1"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].name, "Blob/get");
+    assert_eq!(calls[1].name, "Blob/get");
+
+    let get0: BlobGetRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into BlobGetRequest");
+    assert_eq!(get0.ids.len(), 2);
+
+    let get1: BlobGetRequest = serde_json::from_value(calls[1].arguments.clone())
+        .expect("call 1 must deserialize into BlobGetRequest");
+    assert_eq!(get1.offset, Some(4));
+    assert_eq!(get1.length, Some(9));
+}
+
+#[test]
+fn rfc9404_sec_4_2_1_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.2.1_get_response.json");
+    assert!(note.contains("RFC 9404 §4.2.1"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].name, "Blob/get");
+    assert_eq!(responses[1].name, "Blob/get");
+
+    let res0: BlobGetResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into BlobGetResponse");
+    assert_eq!(res0.list.len(), 1);
+    assert_eq!(res0.not_found, vec![Id::from("not-a-blob")]);
+
+    let res1: BlobGetResponse = serde_json::from_value(responses[1].arguments.clone())
+        .expect("response 1 must deserialize into BlobGetResponse");
+    assert_eq!(res1.list.len(), 1);
+    assert_eq!(res1.list[0].data_as_text, Some("quick bro".to_string()));
+}
+
+#[test]
+fn rfc9404_sec_4_2_2_get_request() {
+    let (note, calls, _) = load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.2.2_get_request.json");
+    assert!(note.contains("RFC 9404 §4.2.2"));
+    assert_roundtrip(&calls);
+    assert_eq!(calls.len(), 6);
+    assert_eq!(calls[0].name, "Blob/upload");
+    for call in &calls[1..] {
+        assert_eq!(call.name, "Blob/get");
+    }
+
+    let upload: BlobUploadRequest = serde_json::from_value(calls[0].arguments.clone())
+        .expect("call 0 must deserialize into BlobUploadRequest");
+    assert_eq!(upload.create.len(), 2);
+}
+
+#[test]
+fn rfc9404_sec_4_2_2_get_response() {
+    let (note, responses, _) =
+        load_rfc_fixture::<Vec<Invocation>>("rfc9404/4.2.2_get_response.json");
+    assert!(note.contains("RFC 9404 §4.2.2"));
+    assert_roundtrip(&responses);
+    assert_eq!(responses.len(), 6);
+    assert_eq!(responses[0].name, "Blob/upload");
+    for res in &responses[1..] {
+        assert_eq!(res.name, "Blob/get");
+    }
+
+    let upload_res: BlobUploadResponse = serde_json::from_value(responses[0].arguments.clone())
+        .expect("response 0 must deserialize into BlobUploadResponse");
+    assert!(upload_res.created.is_some());
+
+    let g1_res: BlobGetResponse = serde_json::from_value(responses[1].arguments.clone())
+        .expect("G1 must deserialize into BlobGetResponse");
+    assert_eq!(g1_res.list.len(), 2);
+    assert_eq!(g1_res.list[0].is_encoding_problem, Some(true));
+
+    let g5_res: BlobGetResponse = serde_json::from_value(responses[5].arguments.clone())
+        .expect("G5 must deserialize into BlobGetResponse");
+    assert_eq!(g5_res.list[0].is_truncated, Some(true));
+    assert_eq!(g5_res.list[1].is_truncated, Some(true));
+}
+
+#[test]
+fn rfc9404_sec_4_3_1_lookup_request() {
+    let (note, call, _) = load_rfc_fixture::<Invocation>("rfc9404/4.3.1_lookup_request.json");
+    assert!(note.contains("RFC 9404 §4.3.1"));
+    assert_roundtrip(&call);
+    assert_eq!(call.name, "Blob/lookup");
+
+    let req: BlobLookupRequest = serde_json::from_value(call.arguments)
+        .expect("arguments must deserialize into BlobLookupRequest");
+    assert_eq!(req.type_names, vec!["Mailbox", "Thread", "Email"]);
+    assert_eq!(req.ids.len(), 2);
+}
+
+#[test]
+fn rfc9404_sec_4_3_1_lookup_response() {
+    let (note, res_inv, _) = load_rfc_fixture::<Invocation>("rfc9404/4.3.1_lookup_response.json");
+    assert!(note.contains("RFC 9404 §4.3.1"));
+    assert_roundtrip(&res_inv);
+    assert_eq!(res_inv.name, "Blob/lookup");
+
+    let res: BlobLookupResponse = serde_json::from_value(res_inv.arguments)
+        .expect("arguments must deserialize into BlobLookupResponse");
+    assert_eq!(res.list.len(), 1);
+    assert_eq!(res.not_found, vec![Id::from("not-a-blob")]);
+    assert_eq!(
+        res.list[0].id,
+        Id::from("Gd2f81008cf07d2425418f7f02a3ca63a8bc82003")
+    );
+    assert_eq!(
+        res.list[0].matched_ids["Mailbox"],
+        vec![Id::from("M54e97373"), Id::from("Mcbe6b662")]
+    );
 }
