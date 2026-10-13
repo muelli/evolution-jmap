@@ -1,0 +1,21 @@
+// Source: draft-ietf-jmap-calendars-32 §8.3 (Figure 12: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "CalendarEvent/get",
+    {
+      "accountId": "a0x9",
+      "ids": [
+        "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f"
+      ],
+      "properties": [
+        "calendarIds",
+        "title",
+        "start",
+        "timeZone",
+        "useDefaultAlerts",
+        "alerts"
+      ]
+    },
+    "0"
+  ]
+]

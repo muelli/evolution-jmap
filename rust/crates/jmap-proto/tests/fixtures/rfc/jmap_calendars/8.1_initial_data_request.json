@@ -1,0 +1,41 @@
+// Source: draft-ietf-jmap-calendars-32 §8.1 (Figure 7: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "Calendar/get",
+    {
+      "accountId": "a0x9"
+    },
+    "0"
+  ],
+  [
+    "ParticipantIdentity/get",
+    {
+      "accountId": "a0x9"
+    },
+    "1"
+  ],
+  [
+    "CalendarEvent/query",
+    {
+      "accountId": "a0x9",
+      "timeZone": "Australia/Melbourne",
+      "filter": {
+        "after": "2023-01-01T00:00:00",
+        "before": "2023-02-01T00:00:00"
+      }
+    },
+    "2"
+  ],
+  [
+    "CalendarEvent/get",
+    {
+      "accountId": "a0x9",
+      "#ids": {
+        "resultOf": "2",
+        "name": "CalendarEvent/query",
+        "path": "/ids"
+      }
+    },
+    "3"
+  ]
+]

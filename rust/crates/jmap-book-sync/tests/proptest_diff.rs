@@ -12,11 +12,10 @@
 //! nicknames, notes, titles, links, calendars, and the whole-set-replace
 //! `keywords`; plus `organizations`, whose entries are patched member by
 //! member and whose `units` list is merged by name (`merge_units`).
-//! `patch.rs`'s own module doc explains why the rest (name components,
-//! addresses, related_to) deliberately keep entries the vCard never showed
-//! untouched, or match entries by value rather than by key: those need
-//! generators that model that lossiness on purpose, not a card built from
-//! entries that are all stateable, and are left for a later increment.
+//! `patch.rs`'s own module doc explains why `related_to` deliberately keeps
+//! entries the vCard never showed untouched: it needs a generator that
+//! models that lossiness on purpose, not a card built from entries that are
+//! all stateable, and is left for a later increment.
 //!
 //! `anniversaries` and `media` are covered here too, but not by the same
 //! invariant: their keys never survive Evolution at all (EDS rebuilds the
@@ -55,6 +54,18 @@
 //! equality on those fields is never in question; only `user`/`uri`/`service`
 //! vary.
 //!
+//! `addresses_components_round_trip` covers `merge_components`
+//! (`restore_address_components` plus `merge_named`, the list-merge-by-value
+//! `units` also uses), exercised through `arb_address_components_pair`'s
+//! per-`ADR`-field-kind slot. Unlike `anniversaries`/`media`/
+//! `online_services`, an address's own key does survive Evolution (the `ADR`
+//! line keeps `X-JMAP-KEY`), so this is a literal round trip with `edited`,
+//! no third "expected" card needed. Scoped out, left for later: the
+//! `number`/`name` joined-field case (`restore_shared_fields`'s splice,
+//! which only matters once two component kinds share one `ADR` field), and
+//! `full` (`LABEL`), `contexts` and `pref`, held at their default on both
+//! sides the way `online_services`' non-core fields were.
+//!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
 //! "title", and `diff_titles` writes that default back out as the literal
@@ -82,13 +93,43 @@
 //! `sortAs`/`contexts` are out of scope too: `diff_organizations` never
 //! patches them, so their preservation is not this property's job, and is
 //! already covered by `tests/save.rs`.
+//!
+//! `name_components_round_trip` covers the same `merge_named` machinery
+//! again, this time through `diff_name`'s component-list branch
+//! (`restore_name_components` plus the merge). A `Name` is a single struct
+//! rather than a keyed map, so there is no entry key at all, surviving or
+//! not: `diff_name` always writes the whole merged list back under
+//! `name/components`, a literal round trip with `edited` like addresses'.
+//! The one joined-field case here is `restore_shared_fields`'s splice of two
+//! same-kind components sharing one `N` field, a double-barrelled given name
+//! with both components of kind `given`, and the generator avoids it by
+//! construction: one component per kind. `full`, `isOrdered`, `sortAs` and
+//! `extra` are held at their default on both sides, the way addresses held
+//! `full`/`contexts`/`pref`.
+//!
+//! `related_to_round_trip` covers `diff_related_to`, the one property keyed
+//! by the related entity's own name rather than by an id, so an edit is a
+//! withdrawal from one key and a claim on another instead of a change to an
+//! entry. `arb_related_to_cards` builds several independent named slots, one
+//! mapped kind (`spouse`) at a time: a bare withdrawal deletes the whole
+//! entry, one that leaves an unmapped relation type (`kin`) or an extra
+//! member strikes only `relation/spouse`, and a claim either creates a whole
+//! new entry, reaches into an existing entry's own `relation/spouse`, or
+//! replaces a relation-less existing entry's whole `relation` field,
+//! depending on what the server already held under that name. Because a
+//! withdrawal on one slot and a claim on another are independent adds and
+//! removes keyed by name, the rename the module doc describes falls out
+//! without any special-casing. Scoped out, left for later: two mapped kinds
+//! changing on the same name at once (`is_gaining_other_kind`), already
+//! covered by `a_new_relation_stating_two_mapped_kinds_at_once_is_written_once`
+//! in `patch.rs`'s own unit tests.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note, OnlineService, OrgUnit,
-    Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Name,
+    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -459,6 +500,236 @@ fn arb_organization_units_pair() -> impl Strategy<Value = (Organization, Organiz
     })
 }
 
+fn arb_address_value() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9 ]{1,10}"
+}
+
+/// The vCard-mapped `ADR` component kinds, minus `number`: it shares its field
+/// with `name` (`restore_shared_fields`'s splice), which is its own later
+/// increment, so every kind here matches a single `ADR` field on its own.
+const ADDRESS_COMPONENT_KINDS: [&str; 7] = [
+    "postOfficeBox",
+    "apartment",
+    "name",
+    "locality",
+    "region",
+    "postcode",
+    "country",
+];
+
+fn arb_address_with_components() -> impl Strategy<Value = Address> {
+    arb_address_value().prop_map(|value| Address {
+        components: Some(vec![AddressComponent::new("locality", value)]),
+        ..Address::default()
+    })
+}
+
+/// One component kind's slot across (current, edited): absent on both sides,
+/// present only on the edited side (a genuine addition), present only on
+/// current (removed), present unchanged on both (kept), or present on both
+/// with independently-chosen values (modified).
+#[derive(Clone, Debug)]
+enum AddressComponentSlot {
+    Absent,
+    Kept(String),
+    Added(String),
+    Removed(String),
+    Modified(String, String),
+}
+
+fn arb_address_component_slot() -> impl Strategy<Value = AddressComponentSlot> {
+    prop_oneof![
+        Just(AddressComponentSlot::Absent),
+        arb_address_value().prop_map(AddressComponentSlot::Kept),
+        arb_address_value().prop_map(AddressComponentSlot::Added),
+        arb_address_value().prop_map(AddressComponentSlot::Removed),
+        (arb_address_value(), arb_address_value())
+            .prop_filter("value must actually change", |(old, new)| old != new)
+            .prop_map(|(old, new)| AddressComponentSlot::Modified(old, new)),
+    ]
+}
+
+/// Builds a `(current, edited)` address pair, one slot per `ADDRESS_COMPONENT_KINDS`
+/// kind, modelling `merge_components`: a `Kept` kind's component is the
+/// server's own copy, matched by `(kind, value)` and so placed in the result
+/// wherever `current` had it; a `Removed` one is dropped (its kind is stated,
+/// i.e. mapped and non-empty, so its disappearance from the line is the user
+/// deleting it); an `Added` or a `Modified` kind's new value is a `spare`
+/// entry with nothing in `current` to match, so it is appended after every
+/// kept component, in `edited`'s own order — which is also where `edited`
+/// states it, since `edited` is built kept-first, new-material-after, the
+/// same order `current` is. That is what keeps `merge_components`' result a
+/// literal match for `edited` rather than needing a third "expected" card,
+/// unlike `anniversaries`/`media`/`online_services`, whose keys do not
+/// survive Evolution at all.
+///
+/// `full`, `contexts` and `pref` are held at their default on both sides,
+/// left for a later increment the way `online_services`' non-core fields
+/// were.
+fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
+    proptest::collection::vec(arb_address_component_slot(), ADDRESS_COMPONENT_KINDS.len())
+        .prop_filter(
+            "at least one current-side component, to exercise the merge",
+            |slots| {
+                slots.iter().any(|slot| {
+                    matches!(
+                        slot,
+                        AddressComponentSlot::Kept(_)
+                            | AddressComponentSlot::Removed(_)
+                            | AddressComponentSlot::Modified(_, _)
+                    )
+                })
+            },
+        )
+        .prop_map(|slots| {
+            let mut current = Vec::new();
+            let mut current_tail = Vec::new();
+            let mut edited = Vec::new();
+            let mut edited_tail = Vec::new();
+            for (kind, slot) in ADDRESS_COMPONENT_KINDS.into_iter().zip(slots) {
+                match slot {
+                    AddressComponentSlot::Absent => {}
+                    AddressComponentSlot::Kept(value) => {
+                        let component = AddressComponent::new(kind, value);
+                        current.push(component.clone());
+                        edited.push(component);
+                    }
+                    AddressComponentSlot::Added(value) => {
+                        edited_tail.push(AddressComponent::new(kind, value));
+                    }
+                    AddressComponentSlot::Removed(value) => {
+                        current_tail.push(AddressComponent::new(kind, value));
+                    }
+                    AddressComponentSlot::Modified(old, new) => {
+                        current_tail.push(AddressComponent::new(kind, old));
+                        edited_tail.push(AddressComponent::new(kind, new));
+                    }
+                }
+            }
+            current.extend(current_tail);
+            edited.extend(edited_tail);
+            let to_address = |components: Vec<AddressComponent>| Address {
+                components: (!components.is_empty()).then_some(components),
+                ..Address::default()
+            };
+            (to_address(current), to_address(edited))
+        })
+}
+
+fn card_with_addresses(map: BTreeMap<String, Address>) -> ContactCard {
+    ContactCard {
+        addresses: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+fn arb_name_value() -> impl Strategy<Value = String> {
+    "[a-zA-Z]{1,10}"
+}
+
+/// The vCard-mapped `N` component kinds. Unlike `ADDRESS_COMPONENT_KINDS`
+/// none needs excluding: each sits at its own `N` field (`given` and
+/// `given2` included, RFC 9553 §2.2.1's two halves of a double-barrelled
+/// given name are both the kind `given`, not one of each), so one component
+/// per kind never shares a field with another kind. Sharing only arises
+/// from two components of the *same* kind, which this generator does not
+/// construct.
+const NAME_COMPONENT_KINDS: [&str; 5] = ["title", "given", "given2", "surname", "credential"];
+
+/// [`AddressComponentSlot`] for a `Name`'s components: same four shapes
+/// (kept, added, removed, modified), over [`NameComponent`] instead of
+/// [`AddressComponent`].
+#[derive(Clone, Debug)]
+enum NameComponentSlot {
+    Absent,
+    Kept(String),
+    Added(String),
+    Removed(String),
+    Modified(String, String),
+}
+
+fn arb_name_component_slot() -> impl Strategy<Value = NameComponentSlot> {
+    prop_oneof![
+        Just(NameComponentSlot::Absent),
+        arb_name_value().prop_map(NameComponentSlot::Kept),
+        arb_name_value().prop_map(NameComponentSlot::Added),
+        arb_name_value().prop_map(NameComponentSlot::Removed),
+        (arb_name_value(), arb_name_value())
+            .prop_filter("value must actually change", |(old, new)| old != new)
+            .prop_map(|(old, new)| NameComponentSlot::Modified(old, new)),
+    ]
+}
+
+/// Builds a `(current, edited)` pair of `Name.components`, one slot per
+/// [`NAME_COMPONENT_KINDS`] kind, the same way [`arb_address_components_pair`]
+/// builds an address's: a `Kept` kind's component is the server's own copy,
+/// matched by `(kind, value)`; a `Removed` one is dropped (its kind is
+/// stated, so its disappearance is the user deleting it); an `Added` or
+/// `Modified` kind's new value has nothing in `current` to match, so it is
+/// appended after every kept component, in the same order on both sides.
+/// That keeps `merge_named`'s result a literal match for `edited` without
+/// needing a third "expected" card.
+///
+/// `full`, `isOrdered`, `sortAs` and `extra` are held at their default on
+/// both sides, left for a later increment the way `online_services`'
+/// non-core fields were.
+fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
+    proptest::collection::vec(arb_name_component_slot(), NAME_COMPONENT_KINDS.len())
+        .prop_filter(
+            "at least one current-side component, to exercise the merge",
+            |slots| {
+                slots.iter().any(|slot| {
+                    matches!(
+                        slot,
+                        NameComponentSlot::Kept(_)
+                            | NameComponentSlot::Removed(_)
+                            | NameComponentSlot::Modified(_, _)
+                    )
+                })
+            },
+        )
+        .prop_map(|slots| {
+            let mut current = Vec::new();
+            let mut current_tail = Vec::new();
+            let mut edited = Vec::new();
+            let mut edited_tail = Vec::new();
+            for (kind, slot) in NAME_COMPONENT_KINDS.into_iter().zip(slots) {
+                match slot {
+                    NameComponentSlot::Absent => {}
+                    NameComponentSlot::Kept(value) => {
+                        let component = NameComponent::new(kind, value);
+                        current.push(component.clone());
+                        edited.push(component);
+                    }
+                    NameComponentSlot::Added(value) => {
+                        edited_tail.push(NameComponent::new(kind, value));
+                    }
+                    NameComponentSlot::Removed(value) => {
+                        current_tail.push(NameComponent::new(kind, value));
+                    }
+                    NameComponentSlot::Modified(old, new) => {
+                        current_tail.push(NameComponent::new(kind, old));
+                        edited_tail.push(NameComponent::new(kind, new));
+                    }
+                }
+            }
+            current.extend(current_tail);
+            edited.extend(edited_tail);
+            let to_name = |components: Vec<NameComponent>| Name {
+                components: (!components.is_empty()).then_some(components),
+                ..Name::default()
+            };
+            (to_name(current), to_name(edited))
+        })
+}
+
+fn card_with_name(name: Name) -> ContactCard {
+    ContactCard {
+        name: Some(name),
+        ..ContactCard::default()
+    }
+}
+
 /// One `kind`'s slot across (current, edited): absent on both sides, present
 /// only on the edited side (a genuine addition), present only on current
 /// (removed), or present on both with independently-chosen dates (a
@@ -728,6 +999,189 @@ fn round_trips_to(
     Ok(())
 }
 
+/// The one mapped relation kind this generator exercises; `diff_related_to`
+/// treats `spouse`/`manager`/`assistant` identically, so covering one is
+/// enough to exercise the withdraw/claim shapes without also constructing
+/// the two-kinds-at-once interaction `patch.rs`'s own unit tests already
+/// cover.
+const RELATION_KIND: &str = "spouse";
+
+fn bare_relation() -> Relation {
+    Relation {
+        relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    }
+}
+
+fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
+    ContactCard {
+        related_to: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// One name's slot in `arb_related_to_cards`, covering every shape
+/// `diff_related_to` distinguishes for a single mapped kind.
+#[derive(Clone, Debug)]
+enum RelatedSlot {
+    /// States the kind on the same name both sides: no patch for this key.
+    Kept,
+    /// Current states the kind, bare: withdrawal deletes the whole entry.
+    RemovedBare,
+    /// Current states the kind alongside an unmapped relation type (`kin`):
+    /// withdrawal strikes only `relation/spouse`, the entry and `kin` stay.
+    RemovedKeepsUnmappedKind,
+    /// Current states the kind alongside an extra member vCard has no field
+    /// for: the same partial withdrawal, through the other guard.
+    RemovedKeepsExtra(String),
+    /// Edited states the kind on a name the server never held at all: a
+    /// whole-entry create.
+    AddedNew,
+    /// Edited states the kind on a name the server already held with an
+    /// unmapped relation type: reaches into that entry's `relation/spouse`.
+    AddedExistingWithRelation,
+    /// Edited states the kind on a name the server already held with only
+    /// extra members and no `relation` field at all: replaces the whole
+    /// (absent) `relation` field.
+    AddedExistingNoRelation(String),
+}
+
+fn arb_related_slot() -> impl Strategy<Value = RelatedSlot> {
+    prop_oneof![
+        Just(RelatedSlot::Kept),
+        Just(RelatedSlot::RemovedBare),
+        Just(RelatedSlot::RemovedKeepsUnmappedKind),
+        "[a-z]{1,8}".prop_map(RelatedSlot::RemovedKeepsExtra),
+        Just(RelatedSlot::AddedNew),
+        Just(RelatedSlot::AddedExistingWithRelation),
+        "[a-z]{1,8}".prop_map(RelatedSlot::AddedExistingNoRelation),
+    ]
+}
+
+/// Builds (current, edited, expected) across several independent named
+/// slots. A withdrawal on one slot and a claim on another model the rename
+/// the module doc describes: keyed by name rather than id, it is just an
+/// independent remove and an independent add.
+fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    proptest::collection::vec(arb_related_slot(), 0..=4)
+        .prop_filter(
+            "at least one slot that changes something, to exercise the withdraw/claim logic",
+            |slots| slots.iter().any(|slot| !matches!(slot, RelatedSlot::Kept)),
+        )
+        .prop_map(|slots| {
+            let mut current = BTreeMap::new();
+            let mut edited = BTreeMap::new();
+            let mut expected = BTreeMap::new();
+            for (i, slot) in slots.into_iter().enumerate() {
+                match slot {
+                    RelatedSlot::Kept => {
+                        let key = format!("same-{i}");
+                        let value = bare_relation();
+                        current.insert(key.clone(), value.clone());
+                        edited.insert(key.clone(), value.clone());
+                        expected.insert(key, value);
+                    }
+                    RelatedSlot::RemovedBare => {
+                        current.insert(format!("gone-{i}"), bare_relation());
+                    }
+                    RelatedSlot::RemovedKeepsUnmappedKind => {
+                        let key = format!("kept-kind-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some(
+                                    [
+                                        (RELATION_KIND.to_owned(), json!(true)),
+                                        ("kin".to_owned(), json!(true)),
+                                    ]
+                                    .into(),
+                                ),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some([("kin".to_owned(), json!(true))].into()),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                    }
+                    RelatedSlot::RemovedKeepsExtra(note) => {
+                        let key = format!("kept-extra-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some(BTreeMap::new()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                    }
+                    RelatedSlot::AddedNew => {
+                        let key = format!("brand-new-{i}");
+                        let value = bare_relation();
+                        edited.insert(key.clone(), value.clone());
+                        expected.insert(key, value);
+                    }
+                    RelatedSlot::AddedExistingWithRelation => {
+                        let key = format!("existing-rel-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: Some([("kin".to_owned(), json!(true))].into()),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                        edited.insert(key.clone(), bare_relation());
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some(
+                                    [
+                                        ("kin".to_owned(), json!(true)),
+                                        (RELATION_KIND.to_owned(), json!(true)),
+                                    ]
+                                    .into(),
+                                ),
+                                extra: BTreeMap::new(),
+                            },
+                        );
+                    }
+                    RelatedSlot::AddedExistingNoRelation(note) => {
+                        let key = format!("existing-norel-{i}");
+                        current.insert(
+                            key.clone(),
+                            Relation {
+                                relation: None,
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                        edited.insert(key.clone(), bare_relation());
+                        expected.insert(
+                            key,
+                            Relation {
+                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
+                                extra: [("note".to_owned(), json!(note))].into(),
+                            },
+                        );
+                    }
+                }
+            }
+            (
+                card_with_related_to(current),
+                card_with_related_to(edited),
+                card_with_related_to(expected),
+            )
+        })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -824,6 +1278,32 @@ proptest! {
     #[test]
     fn online_services_handle_round_trip(
         (current_card, edited_card, expected_card) in arb_online_service_handle_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
+    }
+
+    #[test]
+    fn addresses_components_round_trip(
+        (current, edited) in entry_sets(
+            arb_address_with_components(),
+            arb_address_components_pair(),
+            arb_address_with_components(),
+            arb_address_with_components(),
+        )
+    ) {
+        round_trips(&card_with_addresses(current), &card_with_addresses(edited))?;
+    }
+
+    #[test]
+    fn name_components_round_trip(
+        (current, edited) in arb_name_components_pair()
+    ) {
+        round_trips(&card_with_name(current), &card_with_name(edited))?;
+    }
+
+    #[test]
+    fn related_to_round_trip(
+        (current_card, edited_card, expected_card) in arb_related_to_cards()
     ) {
         round_trips_to(&current_card, &edited_card, &expected_card)?;
     }

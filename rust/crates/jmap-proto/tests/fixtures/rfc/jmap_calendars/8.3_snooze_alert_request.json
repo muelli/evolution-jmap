@@ -1,0 +1,31 @@
+// Source: draft-ietf-jmap-calendars-32 §8.3 (Figure 15: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "CalendarEvent/set",
+    {
+      "accountId": "a0x9",
+      "update": {
+        "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f": {
+          "alerts/7519a951-1e6f-4a6c-b08b-20dd2e5a89cd/acknowledged": "2023-02-10T22:00:29Z",
+          "alerts/86b0-318b8291045f": {
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+              "@type": "AbsoluteTrigger",
+              "when": "2023-02-10T22:30:00Z"
+            },
+            "relatedTo": {
+              "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd": {
+                "@type": "Relation",
+                "relation": {
+                  "snooze": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "0"
+  ]
+]

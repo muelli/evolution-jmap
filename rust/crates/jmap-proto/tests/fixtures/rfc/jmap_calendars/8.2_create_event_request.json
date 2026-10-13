@@ -1,0 +1,48 @@
+// Source: draft-ietf-jmap-calendars-32 §8.2 (Figure 9: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "CalendarEvent/set",
+    {
+      "accountId": "a0x9",
+      "create": {
+        "k559": {
+          "uid": "5d5776f6-ff8e-4bfd-ab3e-fe2fe5d4fa91",
+          "calendarIds": {
+            "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": true
+          },
+          "title": "Party at Pete's",
+          "start": "2023-02-03T19:00:00",
+          "duration": "PT3H",
+          "timeZone": "Australia/Melbourne",
+          "showWithoutTime": false,
+          "participants": {
+            "1": {
+              "@type": "Participant",
+              "name": "Jane Doe",
+              "calendarAddress": "mailto:jane@example.com",
+              "kind": "individual",
+              "roles": {
+                "owner": true
+              },
+              "participationStatus": "accepted"
+            },
+            "2": {
+              "@type": "Participant",
+              "name": "Joe Bloggs",
+              "calendarAddress": "mailto:joe@example.com",
+              "kind": "individual",
+              "participationStatus": "needs-action",
+              "expectReply": true
+            }
+          },
+          "mayInviteSelf": false,
+          "mayInviteOthers": false,
+          "useDefaultAlerts": false,
+          "alerts": null
+        }
+      },
+      "sendSchedulingMessages": true
+    },
+    "0"
+  ]
+]

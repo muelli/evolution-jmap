@@ -1,0 +1,18 @@
+// Source: draft-ietf-jmap-calendars-32 §8.4 (Figure 17: "methodResponses" Property of a JMAP Response), October 2026
+[
+  [
+    "Calendar/set",
+    {
+      "accountId": "a0x9",
+      "updated": {
+        "062adcfa-105d-455c-bc60-6db68b69c3f3": {
+          "isDefault": true
+        },
+        "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": {
+          "isDefault": false
+        }
+      }
+    },
+    "0"
+  ]
+]

@@ -1,0 +1,10 @@
+// Source: draft-ietf-jmap-calendars-32 §5.9.1 (Figure 3: "recurrenceOverrides" Property in a CalendarEvent Object), October 2026
+{
+  "recurrenceOverrides": {
+    "2025-03-05T09:00:00": {
+      "start": "2025-03-05T10:00:00",
+      "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus": "declined",
+      "participants/em9lQGZvb2GFtcGxlLmNvbQ/participationStatus": "declined"
+    }
+  }
+}
