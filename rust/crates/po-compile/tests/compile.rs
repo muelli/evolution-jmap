@@ -2,21 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Validates `.po` to `.mo` output and refusal behavior.
-//!
-//! The `.mo` bytes are read with a local parser so this test does not validate
-//! the compiler with its own decoding logic.
+//! It parses generated `.mo` bytes locally so encoder and decoder stay independent.
 
 use std::collections::BTreeMap;
 
 use po_compile::{Error, compile};
 
-/// A header entry, which every `.po` this project compiles has to carry.
+/// Header entry required by this compiler.
 const HEADER: &str = "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n";
 
 /// Returns compiled catalogue entries in on-disk order.
-///
-/// Order matters for hashless `.mo` files because gettext binary-searches the
-/// originals table.
 fn read_mo(mo: &[u8]) -> Vec<(String, String)> {
     let word = |at: usize| -> u32 {
         u32::from_le_bytes(mo[at..at + 4].try_into().expect("four bytes for a word"))

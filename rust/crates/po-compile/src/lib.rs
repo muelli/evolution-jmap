@@ -1,27 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles a translator's `.po` into a runtime `.mo` catalogue.
-//!
-//! This crate keeps a small `msgfmt` subset so builds do not depend on gettext
-//! tools being installed.
-//! Unsupported constructs fail with line-aware errors. Empty `msgstr` entries
-//! and fuzzy non-header entries are skipped so gettext falls back to `msgid`.
+//! Compiles translator `.po` input into runtime `.mo` catalogues.
+//! It implements a small `msgfmt` subset so builds do not depend on gettext tools.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compiles the text of a `.po` file into the bytes of a `.mo` file.
-///
-/// Entries are sorted by msgid because hashless `.mo` lookups binary-search the
-/// originals table.
+/// Compiles `.po` text into `.mo` bytes sorted by msgid.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Why a `.po` could not be compiled.
-///
-/// Variants that can name a line do so with 1-based numbering.
+/// Why `.po` compilation failed; line numbers are 1-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// No entry with an empty msgid, so nothing declares the file's charset.
@@ -83,7 +74,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// An entry being read, from its `msgid` line until the entry ends.
+/// Entry state from `msgid` until the next entry boundary.
 #[derive(Default)]
 struct Pending {
     line: usize,
@@ -92,14 +83,14 @@ struct Pending {
     msgstr: Option<String>,
 }
 
-/// Which string a bare `"…"` continuation line belongs to.
+/// Target field for a bare `"…"` continuation line.
 enum Reading {
     Nothing,
     Msgid,
     Msgstr,
 }
 
-/// Parses entries keyed by msgid, which also provides the sorted `.mo` order.
+/// Parses entries keyed by msgid, which defines `.mo` lookup order.
 fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     let mut entries = BTreeMap::new();
     let mut pending: Option<Pending> = None;
@@ -110,7 +101,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Obsolete `msgmerge` entries are commented out and stay excluded.
+        // Skip obsolete `msgmerge` records (`#~`).
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -200,7 +191,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     }
 }
 
-/// Files the finished entry, or drops it when it is not a translation.
+/// Stores a finished entry unless it should be ignored.
 fn take(
     pending: &mut Option<Pending>,
     entries: &mut BTreeMap<String, String>,
@@ -216,7 +207,7 @@ fn take(
         });
     };
 
-    // `msginit` marks fresh headers fuzzy, and the header declares the charset.
+    // Keep fuzzy headers because they carry the charset declaration.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -231,9 +222,7 @@ fn take(
     Ok(())
 }
 
-/// Returns the header charset, or empty when no charset is declared.
-///
-/// Only the `charset=` value from `Content-Type` is relevant here.
+/// Returns the `Content-Type` `charset=` value, or empty when absent.
 fn charset(header: &str) -> String {
     let Some(at) = header.find("charset=") else {
         return String::new();
@@ -245,10 +234,7 @@ fn charset(header: &str) -> String {
         .to_owned()
 }
 
-/// Decodes the contents of a `"…"` string.
-///
-/// `text` is either a keyword suffix or a continuation line, and must be a
-/// fully quoted string with no trailing tokens.
+/// Decodes a fully quoted `.po` string fragment.
 fn unquote(text: &str, line: usize) -> Result<String, Error> {
     let trimmed = text.trim();
     let unparsed = || Error::Unparsed {
@@ -266,7 +252,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // A trailing backslash escapes the closing quote, so the string never ends.
+        // A trailing backslash means the quoted string is unterminated.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -278,7 +264,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Octal and hex escapes are legal in `.po` but unsupported here.
+            // `.po` also allows octal and hex escapes, which this parser rejects.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -290,12 +276,12 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
     Ok(decoded)
 }
 
-/// Encodes parsed entries as a little-endian `.mo` with no hash table.
+/// Encodes parsed entries as little-endian `.mo` data without a hash table.
 fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // The header, then the two tables of (length, offset), then the strings.
+    // Header, two `(length, offset)` tables, then the NUL-terminated string blob.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -322,7 +308,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     Ok(mo)
 }
 
-/// Writes one table row and appends the string bytes to the shared blob.
+/// Writes one table row and appends bytes to the shared string blob.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> Result<(), Error> {
     let at = strings_at + blob.len() as u64;
     let end = at + s.len() as u64;
@@ -334,7 +320,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Length excludes this NUL byte, but gettext still treats the pointer as C string data.
+    // Length excludes this terminator, but gettext still reads C-string data.
     blob.push(0);
     Ok(())
 }

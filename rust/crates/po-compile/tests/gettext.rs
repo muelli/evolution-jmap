@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Verifies glibc gettext can read this crate's compiled `.mo` output.
-//!
-//! Locale and domain bindings are process-global, so this runs in its own
-//! binary. If only C or POSIX locales exist, gettext should return `msgid`.
+//! Locale and domain bindings are process-global, so this runs in its own binary.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -24,7 +22,7 @@ const LC_MESSAGES: c_int = 5;
 /// A test-only gettext domain.
 const DOMAIN: &CStr = c"po-compile-test";
 
-/// Synthetic language tag selected through `LANGUAGE`.
+/// Synthetic language tag used through `LANGUAGE`.
 const LANGUAGE: &str = "xx";
 
 const MSGID: &CStr = c"For reading and storing mail on JMAP servers.";
@@ -45,7 +43,7 @@ const PO: &str = concat!(
     "msgstr \"Zum Lesen und Speichern von E-Mail auf JMAP-Servern.\"\n",
 );
 
-/// Returns a locale where gettext consults message catalogues.
+/// Returns a locale where gettext consults catalogues.
 fn a_locale_that_can_translate() -> Option<String> {
     for candidate in [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"] {
         // SAFETY: this test binary is single-threaded when it runs.
@@ -53,7 +51,7 @@ fn a_locale_that_can_translate() -> Option<String> {
         if set.is_null() {
             continue;
         }
-        // SAFETY: non-NULL points to a glibc-owned C string that is copied.
+        // SAFETY: non-NULL points to glibc-owned C-string data that is copied.
         let name = unsafe { CStr::from_ptr(set) }
             .to_string_lossy()
             .into_owned();
@@ -79,11 +77,11 @@ fn glibc_reads_what_this_compiler_wrote() {
 
     let translating = a_locale_that_can_translate();
 
-    // SAFETY: this binary contains one test and sets locale-related state once.
+    // SAFETY: this binary has one test and sets locale state once.
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
     let bound = CString::new(root.as_os_str().as_bytes()).expect("a path without a NUL");
-    // SAFETY: two C strings valid for the call, both of which glibc copies.
+    // SAFETY: both C strings are valid and glibc copies them.
     let reported = unsafe {
         let reported = bindtextdomain(DOMAIN.as_ptr(), bound.as_ptr());
         bind_textdomain_codeset(DOMAIN.as_ptr(), c"UTF-8".as_ptr());
@@ -91,7 +89,7 @@ fn glibc_reads_what_this_compiler_wrote() {
     };
     assert!(!reported.is_null(), "gettext did not record the binding");
 
-    // SAFETY: `dgettext` sees valid C strings and returns a non-NULL gettext-owned pointer.
+    // SAFETY: `dgettext` sees valid C strings and returns gettext-owned data.
     let translated = unsafe { CStr::from_ptr(dgettext(DOMAIN.as_ptr(), MSGID.as_ptr())) }
         .to_string_lossy()
         .into_owned();
@@ -110,6 +108,6 @@ fn glibc_reads_what_this_compiler_wrote() {
         }
     }
 
-    // Best effort: a failed test is not improved by a panic in its teardown.
+    // Best effort cleanup.
     let _ = fs::remove_dir_all(&root);
 }

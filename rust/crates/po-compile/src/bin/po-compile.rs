@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Build helper: `po-compile <catalogue.po> <catalogue.mo>`.
-//!
-//! The interface stays to two positional arguments because the build system
-//! drives it directly. Failures print a reason and exit non-zero.
+//! Keeps a two-argument interface for direct build-system use.
 
 use std::process::ExitCode;
 
