@@ -1,39 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The Stop button, and the vfuncs that had never looked at it.
+//! GCancellable observation tests across `EBookMetaBackend` vfuncs.
 //!
-//! Every sync vfunc on this backend is handed a `GCancellable`, and until now
-//! every one of them but `connect_sync` named it `_cancellable` and ignored it.
-//! The only cancellation that reached anything was the connect's, through a
-//! `CancelBridge` whose flag was built into the [`Client`] — and that flag then
-//! belonged to the *account*, not to the operation, for the rest of the
-//! session. So a user stopping a first sync of a large address book was
-//! pressing a button attached to nothing, and a connect they *did* manage to
-//! stop left a client that refused everything afterwards.
-//!
-//! `jmap-backend-core`'s `observe` is what the vfuncs now hold for the length
-//! of their call, and these tests are the proof that holding it is enough: a
-//! cancellable this test cancels stops a request made several layers below, by
-//! a client built before the cancellable existed.
-//!
-//! ## Why the calls go through the class struct
-//!
-//! For the same reason `tests/backend.rs` does: EDS dispatches through the
-//! class, and a vfunc that is correct but not installed is a backend that
-//! silently uses `EBookMetaBackend`'s defaults. The instance is
-//! [`JmapBookBackend::detached`] — a real one needs an `ESourceRegistry` and so
-//! a session bus — and nothing but its session slot is touched.
-//!
-//! ## One cancellable, cancelled before the call
-//!
-//! Rather than a thread racing to stop a fetch in flight. What is under test is
-//! that the vfunc *observes*, and `g_cancellable_connect` fires its callback
-//! immediately for an already-cancelled cancellable — which is exactly what EDS
-//! produces for an operation the user stopped while it was still queued. The
-//! in-flight case is a property of the transport, not of these vfuncs.
-//!
-//! [`Client`]: jmap_client::Client
+//! Asserts that cancelling an operation propagates through `observe` to cancel
+//! the underlying client request and return `G_IO_ERROR_CANCELLED`.
 
 use std::ffi::CString;
 use std::ptr;
@@ -79,8 +50,7 @@ impl Drop for Class {
     }
 }
 
-/// An instance the GObject type system knows nothing about — see the module
-/// comment. Only the session slot may be touched through it.
+/// Detached backend instance for test isolation.
 struct Detached(Box<JmapBookBackend>);
 
 impl Detached {
@@ -142,9 +112,7 @@ impl Fixture {
             .expect("server assigned id")
     }
 
-    /// What the server holds now, asked over a connection of its own — the
-    /// vfunc's scope is gone by the time this runs, so this call is not
-    /// cancelled by it.
+    /// Returns the number of contacts currently held on the server.
     fn contacts_on_the_server(&self) -> usize {
         self.sync().list_existing().expect("listed").1.len()
     }
@@ -176,10 +144,7 @@ impl Drop for Stopped {
 struct Refusal(*mut GError);
 
 impl Refusal {
-    /// The failure is `G_IO_ERROR_CANCELLED` — GLib's own domain, which is
-    /// what EDS tests for before it decides an address book is broken and puts
-    /// an alert in front of the user. Reported as `E_CLIENT_ERROR` instead, a
-    /// user pressing Stop gets an error dialog for doing what they asked.
+    /// Checks that the error domain is `G_IO_ERROR` and code is `G_IO_ERROR_CANCELLED`.
     fn is_the_stop_the_user_pressed(&self, what: &str) {
         assert!(!self.0.is_null(), "{what} did not report the cancellation");
         // SAFETY: a live GError this struct owns.
@@ -387,9 +352,7 @@ fn a_contact_the_user_stopped_removing_is_still_there() {
     );
 }
 
-/// A NULL cancellable is GIO's "this call cannot be cancelled", and must not
-/// be read as "already stopped" — the vfuncs receive one for every operation
-/// EDS runs on its own account.
+/// A NULL cancellable indicates an uncancelable call and must still run to completion.
 #[test]
 fn an_operation_with_no_cancellable_at_all_still_runs() {
     let fixture = Fixture::start();

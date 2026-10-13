@@ -1,38 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `EBookMetaBackend` subclass itself.
+//! `EBookMetaBackend` subclass implementing EDS address book vfuncs.
 //!
-//! Everything it does has already been written and tested one layer down —
-//! [`connect`] opens the connection, [`ops`] is the vfunc bodies,
-//! [`marshal`](crate::marshal) the C conversions. What is
-//! left here, and only here, is the part that cannot be tested against a live
-//! instance: the instance and class structs, the seven vfunc slots, and the
-//! lookup of the connection an instance holds.
-//!
-//! So the code below is deliberately dull. Each vfunc is a panic guard, a look
-//! in the session slot, and a call into `ops`; the one exception is
-//! `get_changes_sync`, which has a third answer — chain up to
-//! `EBookMetaBackend`'s own implementation — and that chain-up needs the parent
-//! class pointer, which is why it could not live in `ops` with the decision
-//! that produces it.
-//!
-//! ## The Stop button
-//!
-//! Every operation here is cancellable, and the cancellable that stops it is
-//! the one EDS handed *that call* — not the account's. [`observe`], held for
-//! the length of the call by `with_connection`, installs it as the
-//! cancellation of every request this thread makes, and the client honours it
-//! in preference to whatever it was built with. The connection itself is built
-//! carrying no flag at all, so a connect the user stopped cannot leave behind a
-//! client that refuses everything afterwards.
-//!
-//! What this does not do is abort a request already blocked in a socket read:
-//! cancellation is checked between requests and before one is sent, so a Stop
-//! during a slow response waits for that response. `tests/cancellation.rs` is
-//! the acceptance suite, and says the same.
-//!
-//! [`observe`]: jmap_backend_core::cancel::observe
+//! Bridges instance and class structs to [`ops`], managing connection and push lifecycles.
 
 use std::ffi::CStr;
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -63,61 +34,32 @@ use jmap_client::Credentials;
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
 use crate::ops::{self, Outcome};
 
-/// The JMAP address book backend.
-///
-/// The name is the one EDS will look the factory's product up by, and it
-/// follows the convention every other backend uses (`EBookBackendEws`,
-/// `EBookBackendCardDAV`) because the module and factory names are derived
-/// from it by hand in the next layer up.
+/// The JMAP address book backend type.
 #[repr(C)]
 pub struct JmapBookBackend {
-    /// GObject's; never read by this code, only handed back to EDS as the
-    /// instance pointer it gave us.
+    /// Parent GObject instance.
     parent: EBookMetaBackend,
-    /// The connection, from `connect_sync` to `disconnect_sync`.
-    ///
-    /// An `RwLock` rather than a `Mutex`: EDS calls the read-only vfuncs from
-    /// several threads at once, and serialising them behind one lock would
-    /// make a long `list_existing_sync` block every `load_contact_sync`
-    /// behind it. Only connect and disconnect, which replace the value, need
-    /// exclusive access.
+    /// Live connection; read-locked across concurrent vfuncs, write-locked on connect/disconnect.
     session: Slot<RwLock<Option<BookSync>>>,
-    /// The JMAP Push subscription, for the same span as `session`: a server
-    /// that advertises an `eventSourceUrl` gets to say "something changed"
-    /// instead of being asked every few minutes.
-    ///
-    /// A plain `Mutex` — unlike `session`, nothing reads this on the hot
-    /// path; it is only installed, taken and dropped, all of which are
-    /// exclusive anyway.
+    /// Active push subscription for server-driven change notifications.
     push: Slot<Mutex<Option<PushRefresh>>>,
 }
 
-/// The class struct. Nothing of ours lives in it yet; it exists because
-/// GObject needs a size to allocate and a place to put the vfunc slots, and
-/// because the factory in the next increment will want to reach it.
+/// Class struct for [`JmapBookBackend`].
 #[repr(C)]
 pub struct JmapBookBackendClass {
     pub parent_class: EBookMetaBackendClass,
 }
 
 impl JmapBookBackend {
-    /// Installs `sync` as the live connection, replacing whatever was there.
-    ///
-    /// Replacing rather than refusing: `connect_sync` is reached again after a
-    /// `requires_reconnect`, and the old connection is exactly what is being
-    /// replaced. It is dropped — and its socket closed — when this returns.
+    /// Installs `sync` as the live connection, replacing any existing connection.
     pub fn store_connection(&self, sync: BookSync) {
         if let Some(session) = self.session() {
             *write(session) = Some(sync);
         }
     }
 
-    /// Installs `sync` as the live connection and starts the push subscription
-    /// via `start_push`.
-    ///
-    /// The connection is installed before `start_push` runs: starting push
-    /// spawns a thread that can immediately trigger a refresh, and that
-    /// refresh needs to find the connection installed.
+    /// Installs `sync` as the live connection and starts the push subscription.
     pub fn install_connection(
         &self,
         sync: BookSync,
@@ -142,9 +84,7 @@ impl JmapBookBackend {
     }
 
     /// Installs `push` as the live push subscription, stopping and dropping
-    /// whatever was there — which is what a reconnect wants, since the old
-    /// subscription is authenticated with the connection that was just
-    /// replaced.
+    /// any prior subscription.
     pub fn store_push(&self, push: PushRefresh) {
         if let Some(slot) = self.push.get() {
             *lock(slot) = Some(push);
@@ -167,13 +107,8 @@ impl JmapBookBackend {
         self.push.get().is_some_and(|slot| lock(slot).is_some())
     }
 
-    /// Replaces the `Authorization` header the live push subscription sends
-    /// on its future reconnect attempts, if there is a subscription — a
-    /// no-op otherwise, which is what a server with no `eventSourceUrl`
-    /// leaves. Called from [`refresh_credentials`] right after it installs a
-    /// fresh OAuth 2.0 token on the connection, so a subscription refused
-    /// with the stale one picks the new one up rather than looping on the
-    /// same failure until the backend itself reconnects.
+    /// Replaces the authorization headers the live push subscription sends
+    /// on future reconnect attempts, if a subscription is active.
     pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
         if let Some(slot) = self.push.get()
             && let Some(push) = lock(slot).as_ref()
@@ -188,17 +123,7 @@ impl JmapBookBackend {
             .is_some_and(|session| read(session).is_some())
     }
 
-    /// An instance outside the GObject type system: zeroed parent bytes and an
-    /// initialised session slot, which is what `instance_init` leaves behind
-    /// minus the GObject.
-    ///
-    /// This exists for the tests, and it is not a shortcut — a real instance
-    /// needs an `ESourceRegistry`, which needs `evolution-source-registry` on
-    /// the session bus, which neither the test VM nor CI has. Nothing but the
-    /// session slot may be touched through the result: the parent bytes are a
-    /// valid bit pattern (every field is a pointer or an integer, and NULL is
-    /// a pointer) but they are not a GObject, so passing one to any EDS
-    /// function is undefined behaviour.
+    /// Detached instance for tests without requiring a running D-Bus registry daemon.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
@@ -210,13 +135,7 @@ impl JmapBookBackend {
         backend
     }
 
-    /// Runs `f` against the live connection the way [`with_connection`] does —
-    /// under a read guard, without replacing it — and answers `None` if there
-    /// is none.
-    ///
-    /// For the tests only, and specifically for the one thing
-    /// [`refresh_credentials`] does that a test can reach without an
-    /// `ESource`: installing fresh credentials on the pooled connection.
+    /// Inspects the live connection under a read lock; for testing only.
     #[cfg(feature = "testing")]
     pub fn inspect_connection<R>(&self, f: impl FnOnce(&BookSync) -> R) -> Option<R> {
         let session = self.session()?;
@@ -255,13 +174,7 @@ unsafe impl ObjectSubclass for JmapBookBackend {
         vfuncs.load_contact_sync = Some(load_contact_sync);
         vfuncs.save_contact_sync = Some(save_contact_sync);
         vfuncs.remove_contact_sync = Some(remove_contact_sync);
-        // Three levels up: `EBookMetaBackendClass` -> `EBookBackendSyncClass`
-        // -> `EBookBackendClass` -> `EBackendClass`. EDS's own default reads
-        // the backend's "connectable" property via `e_backend_ref_connectable`,
-        // which nothing in this crate ever sets, so leaving it inherited means
-        // EDS's host-specific reachability monitor sees only generic
-        // network-up/down for a JMAP account. The override reads the host
-        // directly from `[Authentication]` instead.
+        // Override EBackendClass::get_destination_address using account authentication host.
         vfuncs
             .parent_class
             .parent_class
@@ -278,27 +191,16 @@ unsafe impl ObjectSubclass for JmapBookBackend {
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // Before the session, and before anything else here: the push slot
-        // holds a thread that can call back into this instance, and clearing
-        // it stops and joins that thread. EDS does not promise a
-        // `disconnect_sync` before it drops a backend — `ebmb_dispose` does
-        // not call one — so this, not that, is what guarantees the thread is
-        // gone.
-        //
+        // Stop push thread first before clearing the session to avoid callbacks during finalize.
         // SAFETY: the instance is being finalized, so nothing can still reach
         // it and no borrow handed out by `get` is alive.
         unsafe { (*instance).push.clear() };
-        // SAFETY: as above. Without this the connection — and its socket —
-        // outlives the address book.
+        // SAFETY: As above; drops the connection and closes its socket.
         unsafe { (*instance).session.clear() };
     }
 }
 
-/// The parent's class struct, for the one vfunc that chains up.
-///
-/// `g_type_class_peek` rather than `_ref`: an initialised class is what having
-/// registered a subclass of it guarantees, and taking a reference here would
-/// mean giving one back on a path that has no natural place to do so.
+/// Returns the parent `EBookMetaBackendClass` for chaining up vfuncs.
 pub fn parent_class() -> Option<&'static EBookMetaBackendClass> {
     // SAFETY: the contract above.
     unsafe {
@@ -315,11 +217,7 @@ unsafe extern "C" fn connect_sync(
     meta_backend: *mut EBookMetaBackend,
     credentials: *const ENamedParameters,
     out_auth_result: *mut ESourceAuthenticationResult,
-    // Left untouched. They describe a TLS certificate the user might be asked
-    // to accept, and the client offers no way to get at one — a bad
-    // certificate reaches us as a transport failure and nothing more. Writing
-    // a made-up value would put a dialog in front of the user that cannot be
-    // answered truthfully.
+    // Certificate out-parameters are unused; transport errors report TLS failures directly.
     _out_certificate_pem: *mut *mut gchar,
     _out_certificate_errors: *mut GTlsCertificateFlags,
     cancellable: *mut GCancellable,
@@ -355,24 +253,9 @@ unsafe extern "C" fn connect_sync(
                 address_book_id = sync.address_book_id().as_str(),
                 "address book backend connected"
             );
-            // Push starts only after the connection is installed. The other
-            // order has a window in which a pushed refresh reaches
-            // `get_changes_sync` before `store_connection` ran, which reports
-            // the account offline for a change that had in fact arrived.
+            // Connection must be stored before starting push to avoid race with incoming refresh.
             backend.install_connection(sync, |sync| start_push(meta_backend, sync));
-            // Without this the address book is read-only: every write comes
-            // back as "Permission denied" and Evolution greys the book out.
-            // JMAP has no per-book "may I write" flag, so the answer is the
-            // same as the account's.
-            //
-            // This is `e_book_backend_set_writable` and not the meta
-            // backend's `set_connected_writable`, which reads like the one to
-            // call and is not: the moment this vfunc returns TRUE, EDS's
-            // `ebmb_update_connection_values` *overwrites* connected-writable
-            // with `e_book_backend_get_writable()` — so the meta backend's
-            // setter is undone by the very call that was about to read it,
-            // and the flag EDS keeps for opening the book offline is set from
-            // this one too. What the vfunc's own documentation asks for.
+            // Mark backend writable on EBookBackend so writes are permitted online and offline.
             e_book_backend_set_writable(meta_backend.cast(), GTRUE);
             GTRUE
         })
@@ -387,14 +270,8 @@ unsafe extern "C" fn disconnect_sync(
     // SAFETY: as `connect_sync`.
     unsafe {
         guard_bool("disconnect_sync", error, || {
-            // Dropping a connection that is not there is what EDS asks for on
-            // shutdown after a failed connect, so it is a success, not a
-            // failure: there is nothing left to do and nothing went wrong.
+            // Clean up push subscription first, then drop connection.
             if let Some(backend) = instance(meta_backend) {
-                // Stopped first, and before the connection it authenticates
-                // with goes: a push arriving after this point would schedule
-                // a refresh against a backend that has nothing to refresh
-                // with.
                 let unsubscribed = backend.stop_push();
                 let dropped = backend.drop_connection();
                 tracing::debug!(dropped, unsubscribed, "address book backend disconnected");
@@ -456,8 +333,7 @@ unsafe extern "C" fn get_changes_sync(
                 ) {
                     Outcome::Reported => GTRUE,
                     Outcome::Failed => GFALSE,
-                    // Nothing has been written and no error set, which is exactly
-                    // the state the parent expects to be called in.
+                    // Fall back to parent EBookMetaBackend implementation when changes cannot be calculated.
                     Outcome::ListInstead => {
                         match parent_class().and_then(|class| class.get_changes_sync) {
                             Some(chain_up) => chain_up(
@@ -472,9 +348,6 @@ unsafe extern "C" fn get_changes_sync(
                                 cancellable,
                                 error,
                             ),
-                            // Unreachable against any EDS that has the meta backend at
-                            // all, but silently returning TRUE here would be an address
-                            // book that stays empty and says nothing.
                             None => fail_offline(error),
                         }
                     }
@@ -509,8 +382,7 @@ unsafe extern "C" fn load_contact_sync(
 unsafe extern "C" fn save_contact_sync(
     meta_backend: *mut EBookMetaBackend,
     overwrite_existing: gboolean,
-    // JMAP has no conditional write on `ContactCard/set`, so a conflict is
-    // resolved the only way the protocol allows: last writer wins.
+    // ContactCard/set lacks conditional writes, resolving conflicts as last-writer-wins.
     _conflict_resolution: EConflictResolution,
     contact: *mut EContact,
     _extra: *const gchar,
@@ -567,41 +439,12 @@ unsafe extern "C" fn remove_contact_sync(
 // ---------------------------------------------------------------------------
 // the shared shape
 
-/// Runs `f` against the live connection, under a panic guard and the
-/// operation's own cancellation.
-///
-/// The [`observe`] is here rather than repeated at the top of each vfunc so
-/// that reaching the connection and being cancellable are the same act: a
-/// vfunc added later cannot get the first without the second. It covers the
-/// whole of `f`, which is the whole of the operation's network traffic.
-///
-/// `disconnect_sync` is the one vfunc that deliberately does not go through
-/// here. It makes no request — it drops the connection — and dropping it is
-/// what the caller asked for whether or not they then pressed Stop; refusing
-/// would leave the backend connected to a socket EDS believes is closed.
-///
-/// ## The stale access token, and why the retry lives here
-///
-/// The calendar backend's `with_connection` says the whole of it: this
-/// connection is pooled from `connect_sync` to
-/// `disconnect_sync` and carries the bearer token it was *built* with, an
-/// OAuth 2.0 access token lives about an hour, and the 401 that follows used
-/// to travel straight up to EDS as `E_CLIENT_ERROR_AUTHENTICATION_FAILED` —
-/// the shell's cue to put a consent window in front of the user, once an
-/// hour, with a good refresh token in the keyring the whole time.
-///
-/// So a 401 out of `f` is not reported until a fresh token has been asked for
-/// and the operation tried again on it. `f` runs against a private `GError`
-/// slot rather than the caller's; see [`retry_on_authentication_failure`] for
-/// why that is load-bearing, and for the requirement it puts on `f` (safe to
-/// run twice — every `ops` entry point here writes its out-parameters only in
-/// its success tail).
+/// Runs `f` under cancellable scope [`observe`] and retries on 401 authentication
+/// failure after refreshing OAuth 2.0 credentials via [`retry_on_authentication_failure`].
 ///
 /// # Safety
 ///
-/// `meta_backend` must be NULL or a valid instance of this type, `cancellable`
-/// NULL or a valid `GCancellable` that outlives the call, and `error` NULL or a
-/// valid, currently-NULL `GError **`.
+/// Out-parameters, `cancellable`, and `error` must be valid per EDS vfunc contracts.
 ///
 /// [`observe`]: jmap_backend_core::cancel::observe
 unsafe fn with_connection(
@@ -617,10 +460,7 @@ unsafe fn with_connection(
             let Some(session) = instance(meta_backend).and_then(JmapBookBackend::session) else {
                 return fail_offline(error);
             };
-            // Held across both attempts: the retry replaces the credentials on
-            // the connection rather than the connection, which is what makes a
-            // read guard — and therefore the other threads' concurrent
-            // operations — enough.
+            // Lock held across attempts; token refresh modifies client credentials in place.
             let guard = read(session);
             let Some(sync) = guard.as_ref() else {
                 return fail_offline(error);
@@ -634,25 +474,14 @@ unsafe fn with_connection(
     }
 }
 
-/// The JMAP data types an address book has to hear about: the cards
-/// themselves, and the book they live in — a rename or a share revocation
-/// changes what `list_existing_sync`/`get_changes_sync` would answer just as
-/// a new card does.
+/// JMAP types monitored for address book changes.
 const PUSHED_TYPES: &[&str] = &["ContactCard", "AddressBook"];
 
-/// Asks the server to push changes at this backend, if it offers to.
-///
-/// `None` — and no error, and nothing logged above debug — whenever push is
-/// simply not available: a server with no `eventSourceUrl` is a server where
-/// EDS's own periodic refresh stays the only trigger, which is the arrangement
-/// every JMAP account had until this existed.
+/// Subscribes to JMAP EventSource push notifications if supported by server.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be a valid instance of this type — a *real* one. This
-/// is the one thing on this backend that a detached test instance may not be
-/// passed to: it takes a `GWeakRef` on the pointer, and a detached instance
-/// is not a GObject.
+/// `meta_backend` must be a valid, live GObject instance.
 unsafe fn start_push(meta_backend: *mut EBookMetaBackend, sync: &BookSync) -> Option<PushRefresh> {
     // SAFETY: a valid instance of a type derived from `GObject`, referenced
     // by EDS for the length of the vfunc this runs inside; the trampoline
@@ -669,40 +498,27 @@ unsafe fn start_push(meta_backend: *mut EBookMetaBackend, sync: &BookSync) -> Op
     }
 }
 
-/// The EDS half of a push: hand the change straight to the refresh EDS
-/// already knows how to run, which is what reaches `get_changes_sync` with
-/// the stored sync tag. Nothing here decides *what* changed — that is
-/// `get_changes` against `ContactCard/changes`, unchanged.
+/// Triggers `e_book_meta_backend_schedule_refresh` upon receiving push notification.
 ///
 /// # Safety
 ///
-/// `object` must be a live `EBookMetaBackend`, which is what
-/// [`jmap_backend_core::push::start_for`] guarantees: it only calls this
-/// under a strong reference taken from a `GWeakRef` on the instance
-/// [`start_push`] passed it.
+/// `object` must be a live `EBookMetaBackend` instance.
 unsafe extern "C" fn schedule_refresh(object: *mut gobject_sys::GObject) {
     // SAFETY: forwarded to the caller by this function's own contract.
     unsafe { e_book_meta_backend_schedule_refresh(object.cast()) };
 }
 
-/// Fetches a fresh OAuth 2.0 access token for the account and installs it on
-/// the live connection, reporting whether an operation is now worth retrying.
-/// The calendar backend's `refresh_credentials` is the same function on the
-/// same reasoning, against `ECalMetaBackend`.
+/// Refreshes OAuth 2.0 access token and updates client credentials and push headers.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be a valid instance of this type and `cancellable` NULL
-/// or a valid `GCancellable` — what the vfunc above was called with.
+/// `meta_backend` and `cancellable` must be valid per EDS contracts.
 unsafe fn refresh_credentials(
     meta_backend: *mut EBookMetaBackend,
     sync: &BookSync,
     cancellable: *mut GCancellable,
 ) -> bool {
-    // SAFETY: a valid instance of a type derived from `EBackend`, or one of
-    // this crate's detached test instances — which is exactly what
-    // `backend_source` exists to tell apart. The source is borrowed, not
-    // owned.
+    // SAFETY: Valid EBackend instance or detached test instance. Source is borrowed.
     let source = unsafe { backend_source(meta_backend.cast()) };
     // SAFETY: NULL or a valid `ESource`, which is what `source_uses_oauth2`
     // and `access_token` each ask for. A non-OAuth2 account's 401 means the
@@ -726,8 +542,7 @@ unsafe fn refresh_credentials(
             true
         }
         Err(failure) => {
-            // Reported at debug rather than as an error: the original 401 is
-            // still on its way to EDS, which will raise it properly.
+            // Debug trace only; EDS handles persistent authentication failure.
             tracing::debug!(
                 ?failure,
                 "could not refresh the address book connection's OAuth 2.0 access token"
@@ -748,13 +563,7 @@ unsafe fn instance<'a>(meta_backend: *mut EBookMetaBackend) -> Option<&'a JmapBo
     unsafe { meta_backend.cast::<JmapBookBackend>().as_ref() }
 }
 
-/// What an operation with no connection behind it reports.
-///
-/// `REPOSITORY_OFFLINE` rather than `NOT_OPENED`, because the realistic way to
-/// get here is a `disconnect_sync` racing an operation — which is what going
-/// offline looks like from inside. Reported that way, `EBookMetaBackend` serves
-/// its cache and the user sees their contacts; reported as anything else, they
-/// see an error for a state they asked for.
+/// Sets `E_CLIENT_ERROR_REPOSITORY_OFFLINE` when backend is disconnected.
 ///
 /// # Safety
 ///
@@ -772,10 +581,7 @@ unsafe fn fail_offline(error: *mut *mut GError) -> gboolean {
     GFALSE
 }
 
-/// A poisoned lock means an earlier operation panicked inside the guard; the
-/// connection itself is untouched by that, so carry on rather than panic in
-/// turn — the alternative is an address book that stays broken for the rest of
-/// the session.
+/// Recovers the inner value across poisoned lock boundaries.
 fn read(session: &RwLock<Option<BookSync>>) -> RwLockReadGuard<'_, Option<BookSync>> {
     session.read().unwrap_or_else(PoisonError::into_inner)
 }
@@ -788,22 +594,7 @@ fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>
     push.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// What EDS calls to learn which host to watch for this account's own
-/// reachability, separately from generic network-up/down. Used by
-/// `e_backend_is_destination_reachable` and by EDS's periodic reachability
-/// monitor, neither of which this crate calls directly.
-///
-/// The decision is [`jmap_backend_core::source::destination_address`]'s; what
-/// is here is the account source the vfunc is not handed and the two
-/// out-parameters, which is EDS's own convention for "answer, or say you
-/// cannot" rather than a `GError`. Mirrors the identical implementation in
-/// `jmap-backend-collection` and the gap noted in Surface 6 of
-/// `docs/EWS-PARITY.md`.
-///
-/// A panic becomes `FALSE` with both out-parameters untouched, which is
-/// [`guard`]'s ordinary "answer nothing" fallback and the same honest
-/// non-answer a backend with no account source gets on the path that does not
-/// panic.
+/// Resolves destination host and port for `EBackendClass::get_destination_address`.
 unsafe extern "C" fn get_destination_address(
     backend: *mut EBackend,
     host: *mut *mut gchar,

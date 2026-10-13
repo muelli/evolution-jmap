@@ -71,14 +71,7 @@ fn an_empty_info_list_is_null() {
     assert!(marshal::removed_info_list(&[]).is_null());
 }
 
-/// `out_removed_objects` is a list of `EBookMetaBackendInfo`, exactly like
-/// the created and modified lists — `e-book-meta-backend.h` says so on the
-/// vfunc, `e_book_meta_backend_process_changes_sync` reads `nfo->uid` off
-/// each node, and `ebmb_refresh_thread_func` frees them with
-/// `e_book_meta_backend_info_free`. A list of bare `gchar *` here is read as
-/// structs: the first eight bytes of the uid text become the `uid` pointer,
-/// which EDS then hands to sqlite. That crashed the address book factory in
-/// `sqlite3_vmprintf` the moment a refresh followed a removal.
+/// Removals are represented as `EBookMetaBackendInfo` nodes rather than bare strings.
 #[test]
 fn removals_are_infos_and_not_bare_strings() {
     let uids = ["K1".to_owned(), "K2".to_owned()];
@@ -90,21 +83,15 @@ fn removals_are_infos_and_not_bare_strings() {
             let node = g_slist_nth_data(list, index as u32).cast::<EBookMetaBackendInfo>();
             assert!(!node.is_null(), "no node {index}");
             assert_eq!(CStr::from_ptr((*node).uid).to_str().unwrap(), expected);
-            // The other three are the nullable ones, and a removal has
-            // nothing to put in them; EDS's own removals leave them empty
-            // too.
+            // The other three are nullable and unused for removals.
             assert!((*node).object.is_null(), "a removal described an object");
             assert!((*node).extra.is_null(), "a removal invented extra state");
         }
-        // Frees each node with the function EDS itself uses on this list,
-        // which is only valid if the nodes really are infos.
         g_slist_free_full(list, Some(e_book_meta_backend_info_free));
     }
 }
 
-/// The whole mapping design rests on `X-JMAP-KEY` surviving the trip through
-/// `EContact` — an edit that loses the key becomes a remove-and-re-add
-/// server-side. This is the first test that puts a real `EVCard` under it.
+/// `X-JMAP-KEY` parameters survive round-tripping through `EContact`.
 #[test]
 fn a_vcard_round_trips_through_econtact_keeping_its_jmap_parameters() {
     let vcard = "BEGIN:VCARD\r\n\

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-backend-book` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-backend-book`.
 //!
 //! Asserts structured fields attached to `tracing` events during address book
-//! connection, contact listing, change diffing, contact loading, saving, and removal.
+//! operations.
 
 use std::ffi::{CString, c_void};
 use std::ptr;

@@ -1,19 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Rust values ↔ the C types the `EBookMetaBackend` vfuncs traffic in.
-//!
-//! Every function here allocates with GLib and hands ownership to the caller,
-//! because that is what the vfunc contract says: EDS frees every list a
-//! vfunc hands back — existing, created, modified and removed alike — with
-//! `e_book_meta_backend_info_free`. Pointing a node at a Rust `String` instead
-//! of copying it would therefore not be a leak, it would be a double free in
-//! someone else's process.
-//!
-//! What is *not* here is the half of the boundary that has nothing to do with
-//! contacts — reading and writing out-parameters, and finding the password EDS
-//! fetched from libsecret. That lives in [`jmap_backend_core::marshal`], where
-//! the calendar backend reaches the same code rather than a copy of it.
+//! Marshaling between Rust types and `EBookMetaBackend` C representations.
+//! Allocates with GLib and transfers ownership to callers per EDS contracts.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -29,17 +18,10 @@ use jmap_backend_core::error::cstring_lossy;
 
 use jmap_book_sync::ContactInfo;
 
-/// Wraps `infos` as a `GSList` of `EBookMetaBackendInfo`, the payload
-/// `list_existing_sync` and `get_changes_sync` hand back. An empty slice is
-/// the NULL list, which is what EDS reads as "no objects".
-///
-/// The `extra` field stays NULL: it is per-object opaque state a backend can
-/// park in the EDS cache, and this backend has none — the JMAP id *is* the
-/// uid, and the revision already carries the change token.
+/// Wraps `infos` as an allocated `GSList` of `EBookMetaBackendInfo`.
 pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
-    // Prepending is the only O(1) GSList insertion, so walk backwards and the
-    // result comes out in the order the caller gave.
+    // Prepending is O(1); iterate in reverse order to preserve input sequence.
     for info in infos.iter().rev() {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
@@ -61,20 +43,7 @@ pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
     list
 }
 
-/// The same, for `out_removed_objects`.
-///
-/// Infos, not bare strings, however plausible a list of gone-uids sounds:
-/// `e-book-meta-backend.h` annotates all three of `get_changes_sync`'s output
-/// lists `/* EBookMetaBackendInfo * */`, `e_book_meta_backend_process_changes_
-/// sync` reads `nfo->uid` off every node of this one, and
-/// `ebmb_refresh_thread_func` frees it with `e_book_meta_backend_info_free`.
-/// Handing over `gchar *` nodes instead made EDS read the first bytes of the
-/// uid *text* as the `uid` pointer and give that to sqlite — a segfault in
-/// `sqlite3_vmprintf`, reached the first time a refresh followed a removal.
-///
-/// Only the uid is filled in: a card that is gone has no revision and no
-/// object to describe, and EDS's own `ebmb_get_changes_sync` builds its
-/// removals the same way.
+/// Wraps removed `uids` as a `GSList` of `EBookMetaBackendInfo` with only the `uid` set.
 pub fn removed_info_list(uids: &[String]) -> *mut GSList {
     let mut list = ptr::null_mut();
     for uid in uids.iter().rev() {
@@ -90,13 +59,7 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
     list
 }
 
-/// Parses a vCard into an `EContact`, or NULL if the text is not one.
-///
-/// `EVCard` parses lazily and answers garbage with an empty card rather than
-/// with an error, which would reach Evolution as a contact that exists and
-/// has no properties. The guard is deliberately only the RFC 6350 §6.1.1
-/// envelope — this is not a second vCard parser, it is a check that the thing
-/// being handed over claims to be a vCard at all.
+/// Parses a vCard string into a new `EContact`, or NULL if invalid or missing `BEGIN:VCARD`.
 pub fn contact_from_vcard(vcard: &str) -> *mut EContact {
     if !looks_like_vcard(vcard) {
         return ptr::null_mut();
@@ -115,10 +78,7 @@ fn looks_like_vcard(vcard: &str) -> bool {
         .is_some_and(|line| line.trim_end().eq_ignore_ascii_case("BEGIN:VCARD"))
 }
 
-/// Renders `contact` back to vCard 3.0 text.
-///
-/// 3.0 and not 4.0 because `EVCardFormat` has exactly one member: anything
-/// else would be reparsed as 3.0 on the way back in.
+/// Formats `contact` to a vCard 3.0 string.
 ///
 /// # Safety
 ///
@@ -140,11 +100,7 @@ pub unsafe fn vcard_from_contact(contact: *mut EContact) -> Option<String> {
     }
 }
 
-/// The contact's `UID`, or `None` if it has none.
-///
-/// Absent has to stay distinguishable from empty: `save_contact_sync` tells a
-/// create from an edit by whether EDS gave the contact a uid, and an empty
-/// string would be sent to the server as an identifier.
+/// Extracts the contact's `UID` field, returning `None` if missing or empty.
 ///
 /// # Safety
 ///
