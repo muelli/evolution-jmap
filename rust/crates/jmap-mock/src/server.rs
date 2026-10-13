@@ -25,58 +25,28 @@ use crate::state::ServerState;
 pub const DEFAULT_ACCOUNT_ID: &str = "A1";
 pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 
-/// The `maxObjectsInGet` the mock advertises and enforces unless a test asks
-/// for a different one. RFC 8620 §2 requires a server to name a limit, and one
-/// this size is out of the way of every test that is not about it.
+/// Default advertised and enforced `maxObjectsInGet`.
 pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
 
-/// The `maxSizeUpload` the mock advertises and enforces unless a test asks for
-/// a different one — 50 MB, which is what a real server of this kind offers and
-/// is out of the way of every test that is not about it.
+/// Default advertised and enforced `maxSizeUpload`.
 pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
 
-/// The `maxCallsInRequest` the mock advertises and enforces unless a test asks
-/// for a different one. Comfortably above the longest chain this client builds
-/// (two calls), so only a test about the limit meets it.
+/// Default advertised and enforced `maxCallsInRequest`.
 pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
 
-/// The `maxSizeRequest` the mock advertises and enforces unless a test asks for
-/// a different one — 10 MB, the number RFC 8620 §2's own example carries, and
-/// far above the longest id list any test builds.
+/// Default advertised and enforced `maxSizeRequest`.
 pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
 
-/// Builds the RFC 8414 authorization-server metadata document a mock
-/// deployment publishes, given the origin it ended up bound to.
-///
-/// A closure rather than a `Value` because the port is ephemeral: the
-/// endpoints a real document names are on the deployment's own origin, which
-/// nothing knows until the listener exists.
+/// Builds RFC 8414 metadata from the server origin.
 type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
 
-/// Builds an RFC 7591 dynamic client registration response, given the
-/// request body the client sent.
-///
-/// A closure rather than a fixed `Value`, unlike [`MetadataFn`] there is no
-/// ephemeral origin to close over here — instead a test typically wants to
-/// assert on what the client asked to register as (`redirect_uris`,
-/// `client_name`) before answering, which only a closure over the request
-/// lets it do. Returns the HTTP status alongside the body so a test can drive
-/// RFC 7591 §3.2.2's error responses too.
+/// Builds an RFC 7591 registration response from the request JSON body.
 type RegistrationFn = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
-/// Answers an RFC 6749 §5 token-endpoint request, given the
-/// `application/x-www-form-urlencoded` fields the client sent
-/// (`grant_type`, `code`/`refresh_token`, `client_id`, `code_verifier`, …).
-///
-/// A closure over the parsed fields, like [`RegistrationFn`], so a test can
-/// assert on exactly what a client sent (the PKCE verifier a code exchange
-/// carries, in particular) before deciding the status and JSON body to
-/// answer with.
+/// Builds an RFC 6749 token response from parsed form fields.
 type TokenFn = dyn Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync;
 
-/// The three OAuth 2.0 endpoint handlers a test may configure, bundled so
-/// [`serve`]/[`handle_request`] take one argument for all of them rather than
-/// three.
+/// Optional handlers for the three OAuth endpoints.
 #[derive(Clone, Default)]
 struct OAuthHandlers {
     metadata: Option<Arc<MetadataFn>>,
@@ -129,188 +99,91 @@ impl MockServerBuilder {
         self
     }
 
-    /// Accept a bearer token bound to `principal`, so requests carrying it
-    /// are answered as that principal for the cross-account sharing checks
-    /// (Track E Phase C) — a second identity on the same server, the way a
-    /// share's grantee is a different principal than its owner while both
-    /// sit on one JMAP deployment.
+    /// Accept a bearer token and treat the caller as `principal`.
     pub fn bearer_token_as(mut self, token: &str, principal: jmap_proto::Id) -> Self {
         self.auth.allow_bearer_as(token, principal);
         self
     }
 
-    /// Leave a capability URN out of the session document entirely — the
-    /// account will not list it, and no primary account resolves under it.
-    ///
-    /// A JMAP server need not offer all of mail, contacts and calendars, and a
-    /// client that looks its account up under the wrong capability would
-    /// otherwise be indistinguishable from one that looks it up under the
-    /// right one, because every account here answers to all four.
+    /// Omit a capability URN from the document and `primaryAccounts`.
     pub fn without_capability(mut self, capability: &str) -> Self {
         self.omitted_capabilities.insert(capability.to_owned());
         self
     }
 
-    /// Leave `primaryAccounts` out of the session document entirely, while
-    /// every capability still lists its accounts as usual.
-    ///
-    /// RFC 8620 §2 permits this outright ("a server that does not support
-    /// this concept MUST omit this property") — distinct from
-    /// [`Self::without_capability`], which removes the capability itself. A
-    /// client that only ever reads `primaryAccounts` cannot find an account
-    /// on a server shaped this way, however unambiguous the account is.
+    /// Omit `primaryAccounts` while keeping per-capability account lists.
     pub fn without_primary_accounts(mut self) -> Self {
         self.omit_primary_accounts = true;
         self
     }
 
-    /// Advertise — and enforce — `calls` as `maxCallsInRequest`, as a server
-    /// that takes only short requests does.
-    ///
-    /// A request with more calls than this is refused whole, with RFC 8620
-    /// §3.2's `urn:ietf:params:jmap:error:limit`: none of its calls run, not
-    /// even the ones that would have fit. That is what makes it worth
-    /// configuring — a client that chains two calls through a back-reference
-    /// without reading the session document loses both here, rather than
-    /// passing because the mock was permissive.
+    /// Advertise and enforce `maxCallsInRequest`.
     pub fn calls_in_request(mut self, calls: u64) -> Self {
         self.calls_in_request = Some(calls);
         self
     }
 
-    /// Leave `maxCallsInRequest` out of the session document entirely, and take
-    /// a request of any length.
-    ///
-    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
-    /// it exists for the reason [`Self::no_size_upload`] does: a client has to
-    /// be pinned on what it does when the number it would check against is not
-    /// there.
+    /// Omit `maxCallsInRequest` and accept any call count.
     pub fn no_calls_in_request(mut self) -> Self {
         self.calls_in_request = None;
         self
     }
 
-    /// Answer `/changes` in pages of at most `ids` identifiers, as a busy
-    /// server does with a long backlog.
-    ///
-    /// RFC 8620 §5.2 lets a server split a `/changes` answer whether or not the
-    /// client asked it to, so a client that stops at the first page silently
-    /// misses changes. Without this there is no way to make that happen on
-    /// purpose: the mock otherwise answers everything at once, which is the
-    /// case that hides the bug.
+    /// Cap `/changes` pages to at most `ids` returned ids.
     pub fn changes_page_size(mut self, ids: u64) -> Self {
         self.changes_page_size = Some(ids);
         self
     }
 
-    /// Answer an unparseable `/changes` `sinceState` the way real Stalwart
-    /// does: `invalidArguments`/`"invalid JMAP State"`, not RFC 8620 §5.2's
-    /// own `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17).
-    ///
-    /// Off by default, so every test not about this specific quirk keeps
-    /// getting the RFC's own error type; a client that only ever recognizes
-    /// `cannotCalculateChanges` would otherwise look like it coped with real
-    /// Stalwart's state errors when it never actually does.
+    /// Return Stalwart-style `sinceState` parse errors on `/changes`.
     pub fn stalwart_shaped_unrecognized_changes_state(mut self) -> Self {
         self.stalwart_shaped_unrecognized_changes_state = true;
         self
     }
 
-    /// Advertise — and enforce — `ids` as `maxObjectsInGet`, as a server with a
-    /// small appetite does.
-    ///
-    /// An `Email/get` naming more than this is answered with
-    /// `requestTooLarge`, which is what makes a client that fetches a large
-    /// mailbox in one call fail rather than work by luck. The default is far
-    /// above what any test seeds, so only a test about the limit sees it.
+    /// Advertise and enforce `maxObjectsInGet`.
     pub fn objects_in_get(mut self, ids: u64) -> Self {
         self.objects_in_get = Some(ids);
         self
     }
 
-    /// Answer `Email/query` with at most `ids` identifiers per response, as a
-    /// server that caps a result set does.
-    ///
-    /// RFC 8620 §5.5 lets a server impose its own limit whether or not the
-    /// client sent one, and requires it to report the limit it applied. Without
-    /// this the mock always answers a query in full, which is the case that
-    /// hides a client stopping at the first page.
+    /// Cap `Email/query` responses to at most `ids` ids.
     pub fn query_page_size(mut self, ids: u64) -> Self {
         self.query_page_size = Some(ids);
         self
     }
 
-    /// Answer every `Email/query` with a capped, non-empty page, forever,
-    /// no matter how far the client's `position` has already moved past the
-    /// account's actual messages: a broken or hostile server that never
-    /// admits it has run out.
-    ///
-    /// RFC 8620 §5.5 does not allow this, but a client still has to survive
-    /// it rather than loop forever; this exists to drive
-    /// `jmap-mail-sync`'s runaway-pagination guard.
+    /// Never terminate paginated `Email/query` responses.
     pub fn query_never_terminates(mut self) -> Self {
         self.query_never_terminates = true;
         self
     }
 
-    /// Advertise — and enforce — `bytes` as `maxSizeRequest`, as a server that
-    /// takes only small requests does.
-    ///
-    /// A request whose body is longer than this is refused whole, with RFC 8620
-    /// §3.2's `urn:ietf:params:jmap:error:limit`, before anything in it is
-    /// parsed — so a client that names a long list of ids in one `Email/get`
-    /// without reading the session document gets none of them back, rather than
-    /// passing because the mock was permissive.
+    /// Advertise and enforce `maxSizeRequest`.
     pub fn size_request(mut self, bytes: u64) -> Self {
         self.size_request = Some(bytes);
         self
     }
 
-    /// Leave `maxSizeRequest` out of the session document entirely, and take a
-    /// request of any size.
-    ///
-    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
-    /// it exists for the reason [`Self::no_size_upload`] does: a client has to
-    /// be pinned on what it does when the number it would check against is not
-    /// there.
+    /// Omit `maxSizeRequest` and accept any request size.
     pub fn no_size_request(mut self) -> Self {
         self.size_request = None;
         self
     }
 
-    /// Advertise — and enforce — `bytes` as `maxSizeUpload`, as a server with a
-    /// modest appetite does.
-    ///
-    /// The two being one number is the point, as it is for
-    /// [`Self::objects_in_get`]: an upload larger than this is answered with
-    /// RFC 8620 §6.1's `urn:ietf:params:jmap:error:limit`, so a client that
-    /// never reads the session document fails here rather than passing because
-    /// the mock was permissive.
+    /// Advertise and enforce `maxSizeUpload`.
     pub fn size_upload(mut self, bytes: u64) -> Self {
         self.size_upload = Some(bytes);
         self
     }
 
-    /// Leave `maxSizeUpload` out of the session document entirely, and take an
-    /// upload of any size.
-    ///
-    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
-    /// it exists because a client has to be pinned on what it does when the
-    /// number it would check against is not there.
+    /// Omit `maxSizeUpload` and accept any upload size.
     pub fn no_size_upload(mut self) -> Self {
         self.size_upload = None;
         self
     }
 
-    /// Publish an RFC 8414 authorization-server metadata document at
-    /// `/.well-known/oauth-authorization-server`, built from the origin this
-    /// server binds to.
-    ///
-    /// Off by default, because a JMAP server need not do OAuth 2.0 at all and
-    /// a client has to be able to tell that it does not. Configuring it makes
-    /// the mock a deployment that *advertises* the flow; it does not make it
-    /// an identity provider — nothing here issues or accepts a token, and the
-    /// endpoints the document names are strings, not routes.
+    /// Serve OAuth metadata on `/.well-known/oauth-authorization-server`.
     pub fn oauth_authorization_server(
         mut self,
         metadata: impl Fn(&str) -> Value + Send + Sync + 'static,
@@ -319,16 +192,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Answer `POST /oauth/register` — the path this crate's own
-    /// [`Self::oauth_authorization_server`] test fixtures name as
-    /// `registration_endpoint` — as an RFC 7591 dynamic client registration
-    /// endpoint, with `handler` deciding the status and body from the
-    /// request body the client sent.
-    ///
-    /// Off by default: a deployment need not offer registration even if it
-    /// does OAuth 2.0 at all (a self-hosted server might hand out a fixed
-    /// `client_id` instead), and a client has to be able to tell "not here"
-    /// from a network failure.
+    /// Serve `POST /oauth/register` using `handler`.
     pub fn oauth_client_registration(
         mut self,
         handler: impl Fn(&Value) -> (u16, Value) + Send + Sync + 'static,
@@ -337,15 +201,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Answer `POST /oauth/token` — the path this crate's own
-    /// [`Self::oauth_authorization_server`] test fixtures name as
-    /// `token_endpoint` — as an RFC 6749 §4.1.3/§6 token endpoint, with
-    /// `handler` deciding the status and body from the form fields the
-    /// client sent.
-    ///
-    /// Off by default, matching [`Self::oauth_client_registration`]: a
-    /// deployment need not answer requests here at all until a test asks it
-    /// to.
+    /// Serve `POST /oauth/token` using `handler`.
     pub fn oauth_token(
         mut self,
         handler: impl Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync + 'static,
@@ -360,152 +216,85 @@ impl MockServerBuilder {
         self
     }
 
-    /// Serve the session document through a 307 from `/.well-known/jmap`
-    /// to `/jmap/session`, matching deployments that separate discovery from
-    /// the JSON body endpoint. The redirect target stays 200 with an
-    /// anonymous session body when auth is missing, so clients that lose
-    /// `Authorization` across the hop fail by seeing no primary account.
+    /// Serve discovery through a redirect flow.
     pub fn session_via_redirect(mut self) -> Self {
         self.session_via_redirect = true;
         self
     }
 
-    /// Put `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl` on an
-    /// advertised `origin` instead of the listener address. This reproduces
-    /// deployments where discovery names a configured host that differs from
-    /// the transport endpoint used to fetch the session.
+    /// Advertise API URLs on `origin` instead of the listener address.
     pub fn advertise_origin(mut self, origin: impl Into<String>) -> Self {
         self.advertise_origin = Some(origin.into());
         self
     }
 
-    /// Reply to every `GET /download/...` with a `302` to the same path on
-    /// `origin`, instead of serving the blob bytes. Unlike
-    /// [`Self::advertise_origin`], this keeps session URLs unchanged and only
-    /// changes who answers the download request.
+    /// Redirect `GET /download/...` to the same path on `origin`.
     pub fn download_via_redirect_to(mut self, origin: impl Into<String>) -> Self {
         self.download_via_redirect_to = Some(origin.into());
         self
     }
 
-    /// Answer `GET /download/...` with a `406` instead of the blob when the
-    /// request's `Accept` header is exactly `application/json` — reproducing
-    /// a server that does content negotiation on a blob download and refuses
-    /// a request that (wrongly) claims JSON is the only acceptable answer.
-    /// Serves the blob for any other `Accept`, including none at all.
+    /// Return `406` for download requests with `Accept: application/json`.
     pub fn reject_download_accept_json(mut self) -> Self {
         self.reject_download_accept_json = true;
         self
     }
 
-    /// Omit `identityId` and `emailId` from `EmailSubmission/set` created
-    /// responses. RFC 8620 §5.3 only requires properties the server set, so
-    /// client-provided fields can be absent even when creation succeeds.
-    /// Off by default to preserve baseline fixtures.
+    /// Return terse `EmailSubmission/set` creates without `identityId` and `emailId`.
     pub fn terse_submission_create(mut self) -> Self {
         self.terse_submission_create = true;
         self
     }
 
-    /// Answer a `ContactCard/set` create with only `id` in the `created`
-    /// map, as a server that reads RFC 8620 §5.3 literally does: every
-    /// other property (`name`, `emails`, …) was already sent by the client,
-    /// so none is server-set and a spec-following server may leave all of
-    /// them out — confirmed against a live Stalwart deployment. Off by
-    /// default, matching the mock's own prior behaviour (echoing the full
-    /// card back) and every other test.
+    /// Return terse `ContactCard/set` creates with only `id` in `created`.
     pub fn terse_contact_create(mut self) -> Self {
         self.terse_contact_create = true;
         self
     }
 
-    /// Default a freshly created `AddressBook`/`Calendar` to
-    /// `isSubscribed: false` unless the create explicitly asked for `true` —
-    /// confirmed against a live Stalwart deployment, which does this even
-    /// though neither RFC 9610 nor draft-ietf-jmap-calendars states a
-    /// default for a fresh collection's subscription state. Off by default,
-    /// matching the mock's own prior behaviour (leaving `isSubscribed`
-    /// exactly as the client sent it, typically absent) and every other
-    /// test.
+    /// Default new `AddressBook` and `Calendar` objects to `isSubscribed: false`.
     pub fn new_collections_default_unsubscribed(mut self) -> Self {
         self.new_collections_default_unsubscribed = true;
         self
     }
 
-    /// Answer a `CalendarEvent/set` create with only `id` in the `created`
-    /// map, as a server that reads RFC 8620 §5.3 literally does: every other
-    /// property (`summary`, `start`, …) was already sent by the client, so
-    /// none is server-set and a spec-following server may leave all of them
-    /// out — confirmed against a live Stalwart deployment. Off by default,
-    /// matching the mock's own prior behaviour (echoing the full event back)
-    /// and every other test.
+    /// Return terse `CalendarEvent/set` creates with only `id` in `created`.
     pub fn terse_calendar_event_create(mut self) -> Self {
         self.terse_calendar_event_create = true;
         self
     }
 
-    /// Omit `name` from a created `AddressBook`/`Calendar`'s `created` entry,
-    /// as a server that reads RFC 8620 §5.3 literally does: the client
-    /// supplied `name` itself and the server accepted it unchanged, so it is
-    /// not server-set and may be left out — confirmed against a live
-    /// Fastmail deployment (operator-found 2026-08-31, a created calendar
-    /// showing its server-assigned id as its name in Evolution instead of the
-    /// requested name). Unlike [`Self::terse_contact_create`] and
-    /// [`Self::terse_calendar_event_create`], this does not strip the whole
-    /// object down to `id`: `isDefault`, `myRights` and (for calendars)
-    /// `color` are genuinely server-computed here and stay. Off by default,
-    /// matching the mock's own prior behaviour (echoing `name` back) and
-    /// every other test.
+    /// Omit `name` from created `AddressBook` and `Calendar` responses.
     pub fn terse_collection_create(mut self) -> Self {
         self.terse_collection_create = true;
         self
     }
 
-    /// Omit `id` from a created `AddressBook`/`Calendar`'s `created` entry —
-    /// a server breaking RFC 8620 §5.3, which requires every successful
-    /// create response to name the id. Off by default, matching the mock's
-    /// own prior behaviour (echoing `id` back) and every spec-following
-    /// server.
+    /// Omit `id` from created collection responses.
     pub fn id_omitting_collection_create(mut self) -> Self {
         self.id_omitting_collection_create = true;
         self
     }
 
-    /// Refuse every `AddressBook`/`Calendar` create with a `notCreated`
-    /// `forbidden` `SetError`, simulating a server that will not let this
-    /// login make one (over a quota, a read-only account, …). Off by
-    /// default, matching the mock's own prior behaviour (creating the
-    /// collection as asked) and every other test.
+    /// Reject `AddressBook` and `Calendar` creates as `forbidden`.
     pub fn reject_collection_create(mut self) -> Self {
         self.reject_collection_create = true;
         self
     }
 
-    /// Advertise `maxDelayedSend` (in seconds) and FUTURERELEASE among the
-    /// `submissionExtensions` on the submission account capability (RFC 8621
-    /// §7.1), so a client can detect scheduled-send support before offering
-    /// it (`jmap_proto::session::Account::max_delayed_send`,
-    /// `SubmissionCapability::supports_future_release`). `None` (the default)
-    /// advertises an empty submission capability object, matching every other
-    /// test and every deployment without SMTP FUTURERELEASE; holds are then
-    /// refused.
+    /// Advertise FUTURERELEASE support and set `maxDelayedSend`.
     pub fn max_delayed_send(mut self, seconds: u64) -> Self {
         self.max_delayed_send = Some(seconds);
         self
     }
 
-    /// Advertise the Cyrus vendor mail extension
-    /// (`jmap_proto::session::CAPABILITY_CYRUS_MAIL`) and accept
-    /// `Email.snoozed`, the snooze shape Fastmail deploys. Off by default:
-    /// most servers (Stalwart included) have no snooze, and the capability
-    /// gate is exactly what clients must prove they read.
+    /// Advertise the Cyrus mail extension and accept `Email.snoozed`.
     pub fn snooze_extension(mut self) -> Self {
         self.snooze_extension = true;
         self
     }
 
-    /// Bind to localhost and start serving on a background thread. The
-    /// server stops when the returned handle is dropped.
+    /// Bind localhost and serve in a background thread.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
@@ -758,12 +547,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // Answered before the credential check, and only ever with 200 or 404.
-    // RFC 8414 §3 has the metadata document publicly readable, which is not a
-    // detail: it is what a client reads in order to find out where to *get*
-    // credentials, so a deployment that demanded them here would have closed
-    // the loop on itself. A server with no OAuth 2.0 must equally answer "not
-    // here" rather than "who are you".
+    // OAuth metadata is public per RFC 8414, so this route bypasses auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -779,9 +563,7 @@ fn handle_request(
         return;
     }
 
-    // Also answered before the credential check, for the reason `discover`'s
-    // module doc gives: registration is how a client obtains an identity, so
-    // it cannot be gated on already having one.
+    // Registration also bypasses auth.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/register"
     {
@@ -808,12 +590,7 @@ fn handle_request(
         return;
     }
 
-    // Also answered before the credential check: this client always
-    // registers as a public, PKCE-only client (RFC 8252 §8.4), so it sends no
-    // separate client authentication to this endpoint either — the
-    // `client_id` in the form body, and the PKCE verifier or refresh token
-    // proving possession, are all the identification RFC 6749 §3.2.1 asks a
-    // public client for.
+    // Token requests also bypass auth for public-client flows.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/token"
     {
@@ -837,14 +614,7 @@ fn handle_request(
         return;
     }
 
-    // In `session_via_redirect` mode, `/.well-known/jmap` and its redirect
-    // target are both handled here, ahead of the usual 401 gate below — a
-    // real server answers the initial well-known lookup with the redirect
-    // unconditionally, and answers the target with 200 either way (empty
-    // accounts when unauthenticated), never a 401. That shape is the point:
-    // it is what lets an auth header quietly dropped on the hop surface as
-    // "no primary account" rather than as a request failure a client would
-    // notice immediately.
+    // In redirect mode, both discovery routes run before the normal 401 gate.
     let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
     if session_via_redirect {
         let path_only = request.url().split('?').next().unwrap_or_default();
@@ -1263,10 +1033,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Built as an object rather than written out whole because one of its
-    // properties may be absent: a server that names no `maxSizeUpload` is what
-    // `no_size_upload` asks for, and a `null` would not be that server — it
-    // would be one naming a limit of nothing.
+    // Build dynamically so optional limit fields can be omitted.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,
