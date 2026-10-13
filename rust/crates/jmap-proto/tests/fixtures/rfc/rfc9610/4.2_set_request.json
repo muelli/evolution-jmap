@@ -1,0 +1,11 @@
+// Source: RFC 9610 §4.2 (Figure 3: 'methodCalls' Property of a JMAP Request), December 2024
+[
+  [
+    "AddressBook/set",
+    {
+      "accountId": "a0x9",
+      "onSuccessSetIsDefault": "cd40089d-35f9-4fd7-980b-ba3a9f1d74fe"
+    },
+    "0"
+  ]
+]

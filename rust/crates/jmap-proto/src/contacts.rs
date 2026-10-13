@@ -79,6 +79,38 @@ impl AddressBook {
     }
 }
 
+/// `AddressBook/set` request arguments (RFC 9610 §2.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBookSetRequest {
+    #[serde(flatten)]
+    pub set: crate::methods::SetRequest<AddressBook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_destroy_remove_contents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_set_is_default: Option<Id>,
+}
+
+impl AddressBookSetRequest {
+    pub fn new(set: crate::methods::SetRequest<AddressBook>) -> Self {
+        Self {
+            set,
+            on_destroy_remove_contents: None,
+            on_success_set_is_default: None,
+        }
+    }
+
+    pub fn with_on_destroy_remove_contents(mut self, on_destroy: bool) -> Self {
+        self.on_destroy_remove_contents = Some(on_destroy);
+        self
+    }
+
+    pub fn with_on_success_set_is_default(mut self, default_id: impl Into<Id>) -> Self {
+        self.on_success_set_is_default = Some(default_id.into());
+        self
+    }
+}
+
 /// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +177,12 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prod_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<UtcDate>,
@@ -199,6 +237,9 @@ pub struct ContactCard {
     /// which are the two Evolution shows as the contact's calendar addresses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendars: Option<BTreeMap<String, Calendar>>,
+    /// The scheduling addresses of the contact (RFC 9553 §2.4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduling_addresses: Option<BTreeMap<String, SchedulingAddress>>,
     /// The media the card carries (RFC 9553 §2.6.4), keyed like the other
     /// JSContact maps. vCard states a photo on a `PHOTO` line, which is what
     /// Evolution shows as the contact's picture.
@@ -337,6 +378,17 @@ impl ContactCard {
 
     pub fn with_speak_to_as(mut self, speak_to_as: SpeakToAs) -> Self {
         self.speak_to_as = Some(speak_to_as);
+        self
+    }
+
+    pub fn with_scheduling_address(
+        mut self,
+        key: impl Into<String>,
+        address: SchedulingAddress,
+    ) -> Self {
+        let mut map = self.scheduling_addresses.unwrap_or_default();
+        map.insert(key.into(), address);
+        self.scheduling_addresses = Some(map);
         self
     }
 
@@ -920,6 +972,43 @@ impl Calendar {
     }
 }
 
+/// JSContact SchedulingAddress (RFC 9553 §2.4.2): one scheduling address of the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulingAddress {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub scheduling_address_type: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SchedulingAddress {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1435,14 +1524,82 @@ pub mod grammatical_gender {
     pub const COMMON: &str = "common";
 }
 
-/// JSContact SpeakToAs (RFC 9553 §2.2.5): how to address the contact.
+/// JSContact Pronouns (RFC 9553 §2.2.4): pronouns to use when addressing or speaking about the contact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Pronouns {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub pronouns_type: Option<String>,
+    #[serde(default)]
+    pub pronouns: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Pronouns {
+    pub fn new(pronouns: impl Into<String>) -> Self {
+        Self {
+            pronouns: pronouns.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
+/// JSContact pronouns value, supporting either an RFC 9553 §2.2.4 map of
+/// `Pronouns` or a shorthand plain string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PronounsValue {
+    Map(BTreeMap<String, Pronouns>),
+    Text(String),
+}
+
+impl std::ops::Deref for PronounsValue {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Text(s) => s.as_str(),
+            Self::Map(m) => m.values().next().map(|p| p.pronouns.as_str()).unwrap_or(""),
+        }
+    }
+}
+
+impl From<String> for PronounsValue {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for PronounsValue {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl From<BTreeMap<String, Pronouns>> for PronounsValue {
+    fn from(m: BTreeMap<String, Pronouns>) -> Self {
+        Self::Map(m)
+    }
+}
+
+/// JSContact SpeakToAs (RFC 9553 §2.2.4): how to address the contact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeakToAs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grammatical_gender: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pronouns: Option<String>,
+    pub pronouns: Option<PronounsValue>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -1457,8 +1614,23 @@ impl SpeakToAs {
         self
     }
 
-    pub fn with_pronouns(mut self, pronouns: impl Into<String>) -> Self {
+    pub fn with_pronouns(mut self, pronouns: impl Into<PronounsValue>) -> Self {
         self.pronouns = Some(pronouns.into());
+        self
+    }
+
+    pub fn with_pronouns_entry(mut self, key: impl Into<String>, pronouns: Pronouns) -> Self {
+        let mut map = match self.pronouns.take() {
+            Some(PronounsValue::Map(m)) => m,
+            Some(PronounsValue::Text(s)) => {
+                let mut m = BTreeMap::new();
+                m.insert("default".to_string(), Pronouns::new(s));
+                m
+            }
+            None => BTreeMap::new(),
+        };
+        map.insert(key.into(), pronouns);
+        self.pronouns = Some(PronounsValue::Map(map));
         self
     }
 }

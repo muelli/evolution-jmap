@@ -1,0 +1,13 @@
+// Source: RFC 9553 §2.4.1 (Figure 29: Example for the calendars Property), May 2024
+{
+  "calendars": {
+    "calA": {
+      "kind": "calendar",
+      "uri": "webcal://calendar.example.com/calA.ics"
+    },
+    "project-a": {
+      "kind": "freeBusy",
+      "uri": "https://calendar.example.com/busy/project-a"
+    }
+  }
+}

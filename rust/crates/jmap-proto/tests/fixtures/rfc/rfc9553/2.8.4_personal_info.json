@@ -1,0 +1,20 @@
+// Source: RFC 9553 §2.8.4 (Figure 44: Example for the personalInfo Property), May 2024
+{
+  "personalInfo": {
+    "pi2": {
+      "kind": "expertise",
+      "value": "chemistry",
+      "level": "high"
+    },
+    "pi1": {
+      "kind": "hobby",
+      "value": "reading",
+      "level": "high"
+    },
+    "pi6": {
+      "kind": "interest",
+      "value": "r&b music",
+      "level": "medium"
+    }
+  }
+}

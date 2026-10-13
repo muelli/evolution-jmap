@@ -423,7 +423,7 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
 
     let speak = SpeakToAs {
         grammatical_gender: Some(grammatical_gender::NEUTER.to_owned()),
-        pronouns: Some("they/them".to_owned()),
+        pronouns: Some("they/them".into()),
         extra: BTreeMap::new(),
     };
     let s_val = serde_json::to_value(&speak).unwrap();
@@ -493,7 +493,7 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
         id: Some("card_ext".into()),
         speak_to_as: Some(SpeakToAs {
             grammatical_gender: Some(grammatical_gender::FEMININE.to_owned()),
-            pronouns: Some("she/her".to_owned()),
+            pronouns: Some("she/her".into()),
             extra: BTreeMap::new(),
         }),
         preferred_languages: Some(BTreeMap::from([(

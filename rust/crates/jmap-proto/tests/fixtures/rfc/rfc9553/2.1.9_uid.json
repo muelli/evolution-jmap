@@ -1,0 +1,4 @@
+// Source: RFC 9553 §2.1.9 (Figure 14: Example for the uid Property), May 2024
+{
+  "uid": "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6"
+}

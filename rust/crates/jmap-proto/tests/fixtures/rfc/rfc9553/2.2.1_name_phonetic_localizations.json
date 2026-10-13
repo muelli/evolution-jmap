@@ -1,0 +1,35 @@
+// Source: RFC 9553 §2.2.1 (Figure 20: Example for the phonetic and localizations Properties), May 2024
+{
+  "@type": "Card",
+  "language": "zh-Hant",
+  "name": {
+    "components": [
+      {
+        "kind": "surname",
+        "value": "\u5b6b"
+      },
+      {
+        "kind": "given",
+        "value": "\u4e2d\u5c71"
+      },
+      {
+        "kind": "given2",
+        "value": "\u6587"
+      },
+      {
+        "kind": "given2",
+        "value": "\u9038\u4ed9"
+      }
+    ]
+  },
+  "localizations": {
+    "yue": {
+      "name/phoneticSystem": "jyut",
+      "name/phoneticScript": "Latn",
+      "name/components/0/phonetic": "syun1",
+      "name/components/1/phonetic": "zung1saan1",
+      "name/components/2/phonetic": "man4",
+      "name/components/3/phonetic": "jat6sin1"
+    }
+  }
+}

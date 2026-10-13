@@ -1,0 +1,21 @@
+// Source: RFC 9553 §2.3.3 (Figure 27: Example for the phones Property), May 2024
+{
+  "phones": {
+    "tel0": {
+      "contexts": {
+        "private": true
+      },
+      "features": {
+        "voice": true
+      },
+      "number": "tel:+1-555-555-5555;ext=5555",
+      "pref": 1
+    },
+    "tel3": {
+      "contexts": {
+        "work": true
+      },
+      "number": "tel:+1-201-555-0123"
+    }
+  }
+}

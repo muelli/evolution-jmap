@@ -1,0 +1,12 @@
+// Source: RFC 9553 §2.8.3 (Figure 43: Example for the notes Property), May 2024
+{
+  "notes": {
+    "n1": {
+      "note": "Open office hours are 1600 to 1715 EST, Mon-Fri",
+      "created": "2022-11-23T15:01:32Z",
+      "author": {
+        "name": "John"
+      }
+    }
+  }
+}

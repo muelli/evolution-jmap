@@ -1,0 +1,39 @@
+// Source: RFC 9553 §2.5.1 (Figure 32: Example of an Address in Thailand), May 2024
+{
+  "addresses": {
+    "k25": {
+      "components": [
+        {
+          "kind": "number",
+          "value": "46"
+        },
+        {
+          "kind": "name",
+          "value": "1 Sukhumvit 51 Alley"
+        },
+        {
+          "kind": "subdistrict",
+          "value": "Khlong Tan Nuea"
+        },
+        {
+          "kind": "district",
+          "value": " Watthana"
+        },
+        {
+          "kind": "locality",
+          "value": "Bangkok"
+        },
+        {
+          "kind": "country",
+          "value": "Thailand"
+        },
+        {
+          "kind": "postcode",
+          "value": "10110"
+        }
+      ],
+      "defaultSeparator": ", ",
+      "isOrdered": true
+    }
+  }
+}

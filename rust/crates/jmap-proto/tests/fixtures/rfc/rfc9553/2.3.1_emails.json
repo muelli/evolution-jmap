@@ -1,0 +1,15 @@
+// Source: RFC 9553 §2.3.1 (Figure 25: Example for the emails Property), May 2024
+{
+  "emails": {
+    "e1": {
+      "contexts": {
+        "work": true
+      },
+      "address": "jqpublic@xyz.example.com"
+    },
+    "e2": {
+      "address": "jane_doe@example.com",
+      "pref": 1
+    }
+  }
+}

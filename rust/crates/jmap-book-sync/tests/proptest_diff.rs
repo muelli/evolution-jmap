@@ -10,12 +10,30 @@
 //! covers the properties whose diff logic is the generic add/modify/remove
 //! shape (`diff_entries`) with no further merge or rekey heuristic:
 //! nicknames, notes, titles, links, calendars, and the whole-set-replace
-//! `keywords`. `patch.rs`'s own module doc explains why the rest (name
-//! components, addresses, organizations, media, anniversaries,
-//! online_services, related_to) deliberately keep entries the vCard never
-//! showed untouched, or match entries by value rather than by key — those
-//! need generators that model that lossiness on purpose, not a card built
-//! from entries that are all stateable, and are left for a later increment.
+//! `keywords`; plus `organizations`, whose entries are patched member by
+//! member and whose `units` list is merged by name (`merge_units`).
+//! `patch.rs`'s own module doc explains why the rest (name components,
+//! addresses, media, online_services, related_to) deliberately keep entries
+//! the vCard never showed untouched, or match entries by value rather than
+//! by key: those need generators that model that lossiness on purpose, not a
+//! card built from entries that are all stateable, and are left for a later
+//! increment.
+//!
+//! `anniversaries` is covered here too, but not by the same invariant: its
+//! key never survives Evolution at all (EDS rebuilds the date line and
+//! `read_contact` hands back a fresh synthetic key every time), so literal
+//! equality with the edited card is the wrong thing to check — that key is
+//! an artifact of the reader, not anything the user chose or the save
+//! should reproduce. What `rekey_keyless` promises instead is that the
+//! content lands back under *current's* key when it pairs by `kind`, and
+//! only a genuine addition (a kind with no current counterpart) keeps the
+//! edited card's own key, so `arb_anniversary_cards` builds a third,
+//! explicit "expected" card to say so, and `anniversaries_round_trip` checks
+//! against that rather than against `edited` directly. Scoped out, left for
+//! later: a `kind` change on a literally-surviving key (needs a key
+//! collision this generator does not construct) and the `Timestamp`
+//! (point-in-time) date shape, whose whole-value-replace branch this
+//! increment does not exercise.
 //!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
@@ -25,13 +43,34 @@
 //! representation difference `title_kind()` calls equivalent but
 //! `PartialEq` does not. Restricting the generator to the two explicit
 //! spellings exercises the same comparison without that false alarm.
+//!
+//! `organizations`' units need a restriction of their own, for the same kind
+//! of reason. `read_organization` (jmap-vcard) never sets a parsed
+//! `OrgUnit`'s `sortAs` or `extra`, so a freshly-parsed edited unit is
+//! always bare; only the server-held current side ever carries one.
+//! `merge_units` reuses current's whole struct for a unit whose name is
+//! unchanged, and the edited (bare) struct otherwise, so the generator
+//! keeps every kept unit's edited-side value an exact clone of current's
+//! rather than inventing a different `sortAs` for an unchanged name, which
+//! a real vCard parse could never produce anyway. Out of scope here, left
+//! for later: invisible (empty-name) current units, whose reinsertion
+//! follows an anchor/position rule this generator does not model, and
+//! simultaneous renames matched by position rather than by name (the two
+//! are observably identical here, since nothing in the merged output
+//! depends on which original slot a failed name match was paired with once
+//! no invisible unit's position is at stake). Organization-level
+//! `sortAs`/`contexts` are out of scope too: `diff_organizations` never
+//! patches them, so their preservation is not this property's job, and is
+//! already covered by `tests/save.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
-use jmap_proto::contacts::{Calendar, ContactCard, Link, Nickname, Note, Title};
+use jmap_proto::contacts::{
+    Anniversary, Calendar, ContactCard, Link, Nickname, Note, OrgUnit, Organization, Title,
+};
 use proptest::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// RFC 8620 §5.3: a `null` value at the end of a path removes that member,
 /// anything else sets it; every path segment before the last already exists.
@@ -290,6 +329,217 @@ fn arb_keyword_cards() -> impl Strategy<Value = (ContactCard, ContactCard)> {
         .prop_map(|(current, edited)| (card_with_keywords(current), card_with_keywords(edited)))
 }
 
+fn arb_org_name() -> impl Strategy<Value = String> {
+    "[a-zA-Z]{1,10}"
+}
+
+fn arb_organization_with_name() -> impl Strategy<Value = Organization> {
+    arb_org_name().prop_map(|name| Organization {
+        name: Some(name),
+        ..Organization::default()
+    })
+}
+
+fn arb_organization_name_pair() -> impl Strategy<Value = (Organization, Organization)> {
+    (arb_organization_with_name(), arb_org_name()).prop_map(|(old, name)| {
+        let new = Organization {
+            name: Some(name),
+            ..Organization::default()
+        };
+        (old, new)
+    })
+}
+
+fn card_with_organizations(map: BTreeMap<String, Organization>) -> ContactCard {
+    ContactCard {
+        organizations: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+fn arb_sort_as() -> impl Strategy<Value = Option<String>> {
+    prop_oneof![Just(None), "[a-zA-Z]{1,6}".prop_map(Some)]
+}
+
+fn bare_unit(name: String) -> OrgUnit {
+    OrgUnit {
+        name,
+        sort_as: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+/// A `(current, edited)` units list pair. `kept` units carry the same name
+/// and `sortAs` on both sides (a real vCard round trip can only touch a
+/// unit's name, so an unchanged name never comes back with a different
+/// `sortAs`); `removed` names are current-only; `added` names are
+/// edited-only and bare, matching a freshly-parsed unit. No name collides
+/// across the three groups, so `merge_units` resolves every edited unit by
+/// an exact name match or not at all, never by its position fallback.
+fn arb_units_pair() -> impl Strategy<Value = (Vec<OrgUnit>, Vec<OrgUnit>)> {
+    (
+        proptest::collection::vec(arb_sort_as(), 0..=2),
+        0..=2usize,
+        0..=2usize,
+    )
+        .prop_map(|(kept_sort_as, added, removed)| {
+            let mut current = Vec::new();
+            let mut edited = Vec::new();
+            for (index, sort_as) in kept_sort_as.into_iter().enumerate() {
+                let unit = OrgUnit {
+                    name: format!("k{index}"),
+                    sort_as,
+                    extra: BTreeMap::new(),
+                };
+                current.push(unit.clone());
+                edited.push(unit);
+            }
+            for index in 0..removed {
+                current.push(bare_unit(format!("r{index}")));
+            }
+            for index in 0..added {
+                edited.push(bare_unit(format!("a{index}")));
+            }
+            (current, edited)
+        })
+}
+
+const UNITS_ORG_NAME: &str = "Acme";
+
+fn organization_with_units(units: Vec<OrgUnit>) -> Organization {
+    Organization {
+        name: Some(UNITS_ORG_NAME.to_owned()),
+        units: (!units.is_empty()).then_some(units),
+        ..Organization::default()
+    }
+}
+
+fn arb_organization_units_stable() -> impl Strategy<Value = Organization> {
+    proptest::collection::vec(arb_sort_as(), 0..=2).prop_map(|sort_as_list| {
+        let units = sort_as_list
+            .into_iter()
+            .enumerate()
+            .map(|(index, sort_as)| OrgUnit {
+                name: format!("u{index}"),
+                sort_as,
+                extra: BTreeMap::new(),
+            })
+            .collect();
+        organization_with_units(units)
+    })
+}
+
+fn arb_organization_units_pair() -> impl Strategy<Value = (Organization, Organization)> {
+    arb_units_pair().prop_map(|(current_units, edited_units)| {
+        (
+            organization_with_units(current_units),
+            organization_with_units(edited_units),
+        )
+    })
+}
+
+/// One `kind`'s slot across (current, edited): absent on both sides, present
+/// only on the edited side (a genuine addition), present only on current
+/// (removed), or present on both with independently-chosen dates (a
+/// modification, possibly a no-op one).
+#[derive(Clone, Debug)]
+enum AnniversarySlot {
+    Absent,
+    Added(Value),
+    Removed(Value),
+    Modified(Value, Value),
+}
+
+/// A `PartialDate` (RFC 9553 §2.8.1) safely inside the range a vCard 3.0 date
+/// line can state and read back exactly: year 1000-9999 keeps clear of
+/// `Day::survives_the_field_it_lands_in`'s clamp, already covered by
+/// `eds-sys/tests/contacts.rs`, and day 1-28 keeps every month valid without
+/// having to model which months are short.
+fn arb_anniversary_date() -> impl Strategy<Value = Value> {
+    (1000u32..=9999, 1u32..=12, 1u32..=28).prop_map(|(year, month, day)| {
+        json!({"@type": "PartialDate", "year": year, "month": month, "day": day})
+    })
+}
+
+fn arb_anniversary_slot() -> impl Strategy<Value = AnniversarySlot> {
+    prop_oneof![
+        Just(AnniversarySlot::Absent),
+        arb_anniversary_date().prop_map(AnniversarySlot::Added),
+        arb_anniversary_date().prop_map(AnniversarySlot::Removed),
+        (arb_anniversary_date(), arb_anniversary_date())
+            .prop_map(|(old, new)| AnniversarySlot::Modified(old, new)),
+    ]
+}
+
+fn card_with_anniversaries(map: BTreeMap<String, Anniversary>) -> ContactCard {
+    ContactCard {
+        anniversaries: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// Builds (current, edited, expected) for the two kinds a vCard anniversary
+/// can be (`birth`, `wedding`), each with its own slot. `current` and
+/// `edited` always use different keys per kind (`c-<kind>` / `e-<kind>`),
+/// modelling that an anniversary's key is never the same one twice; `expected`
+/// is what `rekey_keyless` should produce: a `Modified` slot lands under
+/// current's key (the pairing this increment exists to check), an `Added`
+/// one keeps edited's own key, and a `Removed` one leaves no entry at all.
+fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    (arb_anniversary_slot(), arb_anniversary_slot()).prop_map(|(birth, wedding)| {
+        let mut current = BTreeMap::new();
+        let mut edited = BTreeMap::new();
+        let mut expected = BTreeMap::new();
+        for (kind, slot) in [("birth", birth), ("wedding", wedding)] {
+            let current_key = format!("c-{kind}");
+            let edited_key = format!("e-{kind}");
+            let entry = |date: Value| Anniversary {
+                kind: kind.to_owned(),
+                date: Some(date),
+                extra: BTreeMap::new(),
+            };
+            match slot {
+                AnniversarySlot::Absent => {}
+                AnniversarySlot::Added(date) => {
+                    edited.insert(edited_key.clone(), entry(date.clone()));
+                    expected.insert(edited_key, entry(date));
+                }
+                AnniversarySlot::Removed(date) => {
+                    current.insert(current_key, entry(date));
+                }
+                AnniversarySlot::Modified(old, new) => {
+                    current.insert(current_key.clone(), entry(old));
+                    edited.insert(edited_key, entry(new.clone()));
+                    expected.insert(current_key, entry(new));
+                }
+            }
+        }
+        (
+            card_with_anniversaries(current),
+            card_with_anniversaries(edited),
+            card_with_anniversaries(expected),
+        )
+    })
+}
+
+/// Like [`round_trips`], but against an `expected` card distinct from
+/// `edited`: the right check for a property whose key `rekey_keyless`
+/// reassigns rather than preserves. See `arb_anniversary_cards`.
+fn round_trips_to(
+    current_card: &ContactCard,
+    edited_card: &ContactCard,
+    expected_card: &ContactCard,
+) -> Result<(), TestCaseError> {
+    prop_assert!(diff(current_card, current_card).is_empty());
+    let patch = diff(current_card, edited_card);
+    let mut value = serde_json::to_value(current_card).expect("ContactCard always serializes");
+    apply_patch(&mut value, &patch);
+    let applied: ContactCard =
+        serde_json::from_value(value).expect("a patched ContactCard always parses");
+    prop_assert_eq!(&applied, expected_card, "patch was: {:?}", patch);
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -331,5 +581,36 @@ proptest! {
     #[test]
     fn keywords_round_trip((current_card, edited_card) in arb_keyword_cards()) {
         round_trips(&current_card, &edited_card)?;
+    }
+
+    #[test]
+    fn organizations_name_round_trip(
+        (current, edited) in entry_sets(
+            arb_organization_with_name(),
+            arb_organization_name_pair(),
+            arb_organization_with_name(),
+            arb_organization_with_name(),
+        )
+    ) {
+        round_trips(&card_with_organizations(current), &card_with_organizations(edited))?;
+    }
+
+    #[test]
+    fn organizations_units_round_trip(
+        (current, edited) in entry_sets(
+            arb_organization_units_stable(),
+            arb_organization_units_pair(),
+            arb_organization_units_stable(),
+            arb_organization_units_stable(),
+        )
+    ) {
+        round_trips(&card_with_organizations(current), &card_with_organizations(edited))?;
+    }
+
+    #[test]
+    fn anniversaries_round_trip(
+        (current_card, edited_card, expected_card) in arb_anniversary_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
     }
 }

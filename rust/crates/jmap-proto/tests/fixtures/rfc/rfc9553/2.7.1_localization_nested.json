@@ -1,0 +1,17 @@
+// Source: RFC 9553 §2.7.1 (Figure 40: Example of Localizing a Nested Property), May 2024
+{
+  "name": {
+    "full": "Gabriel Garc\u00eda M\u00e1rquez"
+  },
+  "titles": {
+    "t1": {
+      "kind": "title",
+      "name": "novelist"
+    }
+  },
+  "localizations": {
+    "es": {
+      "titles/t1/name": "escritor"
+    }
+  }
+}

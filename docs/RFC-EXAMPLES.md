@@ -13,6 +13,8 @@ This document records the extraction, fixture mapping, and protocol conformance 
 |---|---|---|---|
 | RFC 8620 | Standards Track | July 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8620.txt |
 | RFC 8621 | Standards Track | August 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8621.txt |
+| RFC 9610 | Standards Track | December 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9610.txt |
+| RFC 9553 | Standards Track | May 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9553.txt |
 
 ## 2. RFC 8620 Core JMAP Examples (July 2019)
 
@@ -136,3 +138,110 @@ The IETF RFC Errata database for RFC 8621 was audited:
 
 3. **Ellipsis notation in RFC examples**:
    RFC 8621 uses ellipsis `...` to indicate omitted fields in responses (§2.6 `list`, §4.10 `ids`, `list`, and `SetResponse` omitted maps, §5.2 `emailIds` and `list`, §7.5.1 `rcptTo`). Normalized in fixtures into syntactically valid JSON structures while preserving all fields modeled by `jmap-proto`.
+
+## 4. RFC 9610 JMAP for Contacts Examples (December 2024)
+
+RFC 9610 defines the data model for synchronizing address books and contact cards with a JMAP server, mapping JSContact cards into the JMAP data model with AddressBook and ContactCard types.
+
+### 4.1 Catalogued Fixtures
+
+4 distinct JSON examples across Section 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9610/`:
+
+1. `4.1_get_request.json`: Method calls pipeline requesting `AddressBook/get` and `ContactCard/get` (§4.1, Figure 1).
+2. `4.1_get_response.json`: Method responses returning AddressBook list with `myRights` and `isDefault`, alongside ContactCard records with structured name components and emails (§4.1, Figure 2).
+3. `4.2_set_request.json`: `AddressBook/set` invocation setting `onSuccessSetIsDefault` to reassign the default address book (§4.2, Figure 3).
+4. `4.2_set_response.json`: `AddressBook/set` response confirming update of default address books (§4.2, Figure 4).
+
+### 4.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9610 was audited:
+
+- **Errata Search**: Queried `https://errata.rfc-editor.org/search/?rfc_number=9610`. Zero errata reported.
+
+### 4.3 Protocol Findings and Model Refinements
+
+1. **RFC 9610 §2.3 `AddressBook/set` arguments**:
+   Section 2.3 defines two additional request arguments on `AddressBook/set`:
+   - `onDestroyRemoveContents: Option<bool>`
+   - `onSuccessSetIsDefault: Option<Id>`
+
+   Introduced `AddressBookSetRequest` wrapping `SetRequest<AddressBook>` to cleanly model these arguments while preserving serialization fidelity and builder ergonomics.
+
+2. **RFC 9610 §4.2 Figure 4 erratum in example response**:
+   In Figure 4 of RFC 9610 §4.2, the example `AddressBook/set` response places `"oldState": "~4144"` and `"newState": "~4148"` inside the `"updated"` map rather than at the top level of the `SetResponse` object. In standard JMAP (RFC 8620 §5.3), `oldState` and `newState` are top-level properties of `SetResponse`. In `rfc_examples.rs`, this fixture is verified through invocation inspection, noting the specification erratum.
+
+## 5. RFC 9553 JSContact Card Examples (May 2024)
+
+RFC 9553 defines JSContact, a JSON-based data format for contact card data.
+
+### 5.1 Catalogued Fixtures
+
+42 distinct JSON examples across 20 sections were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9553/` (excluding Figures 2 and 5 which define ABNF grammar rules):
+
+1. `1.4.5_phonetic.json`: Phonetic name pronunciation using the International Phonetic Alphabet (IPA) (§1.4.5, Figure 1).
+2. `1.6.2_vendor_properties.json`: Custom vendor-specific property extensions with domain prefixing (§1.6.2, Figure 3).
+3. `1.6.2_vendor_value.json`: Vendor-specific value for the `kind` property (§1.6.2, Figure 4).
+4. `2.1_basic_card.json`: Minimal valid Card object for an individual with structured name components (§2.1, Figure 6).
+5. `2.1.2_version.json`: Card `version` property (§2.1.2, Figure 7).
+6. `2.1.3_created.json`: Card `created` timestamp (§2.1.3, Figure 8).
+7. `2.1.4_kind.json`: Card `kind` property set to `individual` (§2.1.4, Figure 9).
+8. `2.1.5_language.json`: Card `language` tag (§2.1.5, Figure 10).
+9. `2.1.6_members.json`: Group Card with `members` set (§2.1.6, Figure 11).
+10. `2.1.7_prod_id.json`: Card `prodId` software identifier (§2.1.7, Figure 12).
+11. `2.1.8_related_to.json`: Card `relatedTo` relation mappings (§2.1.8, Figure 13).
+12. `2.1.9_uid.json`: Card mandatory `uid` URI (§2.1.9, Figure 14).
+13. `2.1.10_updated.json`: Card `updated` timestamp (§2.1.10, Figure 15).
+14. `2.2.1_name_two_words.json`: Name component with a multi-word surname (§2.2.1, Figure 16).
+15. `2.2.1_name_second_surname.json`: Name with secondary surname (§2.2.1, Figure 17).
+16. `2.2.1_name_full.json`: Formatted `full` name property (§2.2.1, Figure 18).
+17. `2.2.1_name_sort_as.json`: Name sort order override mappings (§2.2.1, Figure 19).
+18. `2.2.1_name_phonetic_localizations.json`: Card with Chinese characters and Cantonese Jyutping phonetic localization patches (§2.2.1, Figure 20).
+19. `2.2.2_nicknames.json`: Nicknames map with familiar names (§2.2.2, Figure 21).
+20. `2.2.3_organizations.json`: Organizational affiliation with division and department units and sort key (§2.2.3, Figure 22).
+21. `2.2.4_speak_to_as.json`: Addressing preferences with grammatical gender and ranked pronouns (§2.2.4, Figure 23).
+22. `2.2.5_titles.json`: Professional titles and roles linked to organizations (§2.2.5, Figure 24).
+23. `2.3.1_emails.json`: Multiple email addresses with contexts and preferences (§2.3.1, Figure 25).
+24. `2.3.2_online_services.json`: Online service usernames and protocol URIs (§2.3.2, Figure 26).
+25. `2.3.3_phones.json`: Telephone numbers with features and types (§2.3.3, Figure 27).
+26. `2.3.4_preferred_languages.json`: Language communication preferences ranked by context (§2.3.4, Figure 28).
+27. `2.4.1_calendars.json`: Calendaring URIs for personal calendar and free-busy lookups (§2.4.1, Figure 29).
+28. `2.4.2_scheduling_addresses.json`: Calendar scheduling addresses with ranking (§2.4.2, Figure 30).
+29. `2.5.1_address_usa.json`: Structured postal address in the United States (§2.5.1, Figure 31).
+30. `2.5.1_address_thailand.json`: Structured postal address in Thailand with subdistrict and district components (§2.5.1, Figure 32).
+31. `2.5.1_address_tokyo.json`: Postal address in Tokyo alongside its localized Japanese representation (§2.5.1, Figure 33).
+32. `2.6.1_crypto_keys_external.json`: External cryptographic key reference (§2.6.1, Figure 34).
+33. `2.6.1_crypto_keys_embedded.json`: Inlined cryptographic public key with base64 data URI (§2.6.1, Figure 35).
+34. `2.6.2_directories.json`: Directory service URLs for user lookup (§2.6.2, Figure 36).
+35. `2.6.3_links.json`: Contact resource link with custom label and preference (§2.6.3, Figure 37).
+36. `2.6.4_media.json`: Media attachments including sound pronunciation, logo, and photo data URI (§2.6.4, Figure 38).
+37. `2.7.1_localization_top_level.json`: Top-level property localization using JSON patch paths (§2.7.1, Figure 39).
+38. `2.7.1_localization_nested.json`: Nested property localization for name and titles (§2.7.1, Figure 40).
+39. `2.8.1_anniversaries.json`: Anniversaries with partial calendar dates and timestamp (§2.8.1, Figure 41).
+40. `2.8.2_keywords.json`: Keyword tags map (§2.8.2, Figure 42).
+41. `2.8.3_notes.json`: Free-text notes with authorship and creation timestamp (§2.8.3, Figure 43).
+42. `2.8.4_personal_info.json`: Personal hobbies, interests, and expertise with proficiency levels (§2.8.4, Figure 44).
+
+### 5.2 Specification Errata Audited
+
+The IETF RFC Errata database for RFC 9553 was audited:
+
+- **Errata ID 8263 (Technical, Reported)**: Section 2.2.1 Figure 20 omitted required Card properties (`uid`, `version`). The fixture preserves the example as published.
+- **Errata ID 8264 (Editorial, Reported)**: Section 2.7.1 Figure 39 bracket formatting consistency.
+- **Errata ID 8265 (Editorial, Reported)**: Section 2.2.1 Figure 18 property indentation consistency.
+- **Errata ID 8266 (Technical, Reported)**: Section 2.6.2 Figure 36 omitted the closing brace `}` on the `"directories"` map. Fixed in fixture `2.6.2_directories.json`.
+- **Errata ID 8267 (Technical, Reported)**: Section 2.6.1 CryptoKey kind enumeration clarification.
+
+### 5.3 Protocol Findings and Model Refinements
+
+1. **RFC 9553 §2.4.2 `schedulingAddresses`**:
+   The specification defines `schedulingAddresses: Id[SchedulingAddress] (optional)`. Added `SchedulingAddress` struct and modeled `scheduling_addresses: Option<BTreeMap<String, SchedulingAddress>>` on `ContactCard` with builder method `with_scheduling_address`.
+
+2. **RFC 9553 §2.2.4 `speakToAs.pronouns`**:
+   The specification models `pronouns: Id[Pronouns] (optional)`, where each `Pronouns` object carries `pronouns: String`, optional `contexts`, and optional `pref`. Added `Pronouns` struct and introduced `PronounsValue` enum supporting both the standard map of `Pronouns` and shorthand plain strings.
+
+3. **RFC 9553 §2.1 top-level Card properties**:
+   Added typed fields on `ContactCard` for `language: Option<String>`, `members: Option<BTreeMap<String, bool>>`, and `prod_id: Option<String>`, ensuring all standard JSContact core properties deserialize cleanly.
+
+4. **Multiline data URI folding in Figure 35**:
+   Figure 35 embeds an RSA public key in a base64 data URI split across multiple lines. The multiline data URI was unfolded into a single continuous URI string in `2.6.1_crypto_keys_embedded.json`.
+

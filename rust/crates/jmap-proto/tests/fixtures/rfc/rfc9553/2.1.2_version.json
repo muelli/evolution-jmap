@@ -1,0 +1,4 @@
+// Source: RFC 9553 §2.1.2 (Figure 7: Example for the version Property), May 2024
+{
+  "version": "1.0"
+}
