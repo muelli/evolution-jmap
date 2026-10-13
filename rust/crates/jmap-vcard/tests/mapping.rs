@@ -12074,26 +12074,8 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
 
 #[test]
 fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
-    // Comprehensive test verifying all 19 EDS phone fields from libebook-contacts 3.52:
-    //  1. E_CONTACT_PHONE_PRIMARY      (31) -> TEL;TYPE=PREF
-    //  2. E_CONTACT_PHONE_BUSINESS     (17) -> TEL;TYPE=WORK,VOICE
-    //  3. E_CONTACT_PHONE_BUSINESS_2   (18) -> TEL;TYPE=WORK (2nd work phone)
-    //  4. E_CONTACT_PHONE_BUSINESS_FAX (19) -> TEL;TYPE=WORK,FAX
-    //  5. E_CONTACT_PHONE_HOME         (23) -> TEL;TYPE=HOME,VOICE
-    //  6. E_CONTACT_PHONE_HOME_2       (24) -> TEL;TYPE=HOME (2nd home phone)
-    //  7. E_CONTACT_PHONE_HOME_FAX     (25) -> TEL;TYPE=HOME,FAX
-    //  8. E_CONTACT_PHONE_MOBILE       (27) -> TEL;TYPE=CELL / TEL;TYPE=MOBILE
-    //  9. E_CONTACT_PHONE_PAGER        (30) -> TEL;TYPE=PAGER
-    // 10. E_CONTACT_PHONE_OTHER        (28) -> TEL;TYPE=VOICE / bare TEL
-    // 11. E_CONTACT_PHONE_OTHER_FAX    (29) -> TEL;TYPE=FAX
-    // 12. E_CONTACT_PHONE_CAR          (21) -> TEL;TYPE=CAR
-    // 13. E_CONTACT_PHONE_ISDN         (26) -> TEL;TYPE=ISDN
-    // 14. E_CONTACT_PHONE_CALLBACK     (20) -> TEL;TYPE=CALLBACK
-    // 15. E_CONTACT_PHONE_COMPANY      (22) -> TEL;TYPE=COMPANY
-    // 16. E_CONTACT_PHONE_RADIO        (32) -> TEL;TYPE=RADIO
-    // 17. E_CONTACT_PHONE_TELEX        (33) -> TEL;TYPE=TELEX
-    // 18. E_CONTACT_PHONE_TTYTDD       (34) -> TEL;TYPE=TTYTDD
-    // 19. E_CONTACT_PHONE_ASSISTANT    (16) -> TEL;TYPE=ASSISTANT
+    // Covers the full EDS phone slot surface from libebook-contacts 3.52.
+    // The card below exercises each TEL type variant and checks round-trip stability.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -12711,24 +12693,10 @@ fn evolution_links_and_relations_case_insensitivity_and_whitespace() {
 
 #[test]
 fn email_four_slots_and_attribute_list_matrix_roundtrip() {
-    // Audit & characterization of EDS EMAIL slotting:
-    // EDS exposes 4 individual string fields:
-    //   - E_CONTACT_EMAIL_1 (field 8)
-    //   - E_CONTACT_EMAIL_2 (field 9)
-    //   - E_CONTACT_EMAIL_3 (field 10)
-    //   - E_CONTACT_EMAIL_4 (field 11)
-    // plus the E_CONTACT_EMAIL (field 97) attribute list holding all EMAIL properties (lines 1..=4 and 5+).
-    //
-    // Outbound emission: card_to_vcard sorts emails by (pref.unwrap_or(u32::MAX), key) so:
-    //   1st emitted line -> E_CONTACT_EMAIL_1 (primary email in Evolution)
-    //   2nd emitted line -> E_CONTACT_EMAIL_2
-    //   3rd emitted line -> E_CONTACT_EMAIL_3
-    //   4th emitted line -> E_CONTACT_EMAIL_4
-    //   5th+ emitted lines -> E_CONTACT_EMAIL attribute list
-    // All lines carry X-JMAP-KEY, context TYPE, and TYPE=PREF when preferred.
+    // EDS has four dedicated email slots plus the full EMAIL attribute list.
+    // Emission order is by `(pref.unwrap_or(u32::MAX), key)` and drives slot assignment.
 
-    // 1. Six emails: e_work_pri is preferred (pref: 1), remaining 5 are unranked (pref: None)
-    // and emitted in sorted key order.
+    // Six emails: one preferred, five unranked, with deterministic key ordering.
     let card = ContactCard {
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -16161,24 +16129,8 @@ fn vcard_40_type_parameters_quoted_and_comma_delimited() {
 
 #[test]
 fn agent_property_variations_nested_vcards_uris_and_fixpoint() {
-    // RFC 2426 §3.5.4 AGENT property: specifies information about another person
-    // who acts on behalf of the individual associated with the vCard.
-    //
-    // AGENT can be:
-    // 1. A URI resolving to a vCard (e.g. `AGENT;VALUE=uri:http://...` or `AGENT:http://...`)
-    // 2. A structured value containing a nested vCard (with BEGIN:VCARD...END:VCARD)
-    // 3. A plain text name or unescaped representation
-    //
-    // EDS has no E_CONTACT_AGENT and Evolution's contact editor has no UI for agent.
-    // In JSContact (RFC 9553 §2.1.8 / §2.7.2), an agent relation resides in `relatedTo`
-    // with relation type "agent".
-    //
-    // Contract:
-    // - Inbound AGENT lines (nested vCards, URIs, plain text, folded escaping) parse safely
-    //   without corrupting surrounding properties (FN, N, EMAIL, TEL, ADR, NOTE, etc.).
-    // - AGENT is safely dropped on parse and does not pollute `card.extra` or `card.related_to`.
-    // - Outbound vCard 3.0 strictly omits AGENT lines.
-    // - Round-trips reach fixed-point stability (Export₂ == Export₃, Card₂ == Card₃).
+    // AGENT has no mapped EDS slot, so parser input must be non-destructive and export must omit it.
+    // This matrix covers URI, nested vCard, plain-text, case-variant, and empty AGENT forms.
 
     let agent_permutations = [
         // 1. Standard RFC 2426 URI format
@@ -16297,25 +16249,8 @@ fn agent_property_variations_nested_vcards_uris_and_fixpoint() {
 
 #[test]
 fn sound_property_variations_audio_encodings_uris_and_fixpoint() {
-    // RFC 2426 §3.6.3 / RFC 6350 §6.6.5 SOUND property: specifies digital audio
-    // pronunciation or voice signature for the contact's name.
-    //
-    // SOUND can be:
-    // 1. Inline base64 binary audio (TYPE=BASIC for 8-bit mu-law, TYPE=WAV, TYPE=MP3, TYPE=OGG)
-    // 2. Remote URI (e.g. `SOUND;VALUE=uri:http://...` or `SOUND:http://...`)
-    // 3. Local file URI (e.g. `SOUND;VALUE=uri:file:///sounds/name.au`)
-    // 4. vCard 4.0 data URI (`SOUND:data:audio/ogg;base64,...`) or MEDIATYPE param
-    // 5. vCard 2.1 syntax (`SOUND;WAVE;BASE64:...`)
-    //
-    // EDS has no E_CONTACT_SOUND and Evolution's contact editor provides no audio controls.
-    // In JSContact (RFC 9553 §2.6.4), sounds reside in `media` with `kind: "sound"`.
-    //
-    // Contract:
-    // - Inbound SOUND lines parse safely and do NOT corrupt surrounding properties.
-    // - PHOTO (if present) is extracted cleanly without collision from SOUND.
-    // - SOUND is never misparsed as a photo or stored in `card.media` or `card.extra`.
-    // - Outbound vCard 3.0 strictly omits SOUND lines.
-    // - Round-trips reach fixed-point stability (Export₂ == Export₃, Card₂ == Card₃).
+    // SOUND has no mapped EDS slot, so parse must ignore it without damaging mapped fields.
+    // This matrix spans inline audio, URIs, legacy syntax, and folded payload forms.
 
     let sound_permutations = [
         // 1. Standard RFC 2426 BASIC (8-bit mu-law) inline binary
@@ -16441,21 +16376,8 @@ fn sound_property_variations_audio_encodings_uris_and_fixpoint() {
 
 #[test]
 fn jscontact_agent_relations_and_sound_media_server_preservation() {
-    // Tests server-side JSContact card carrying:
-    // 1. `related_to` with relation type "agent" (RFC 9553 §2.1.8 & §2.7.2)
-    // 2. `related_to` with other unmodeled relation types ("child", "colleague", "friend")
-    // 3. `media` with `kind: "sound"` (RFC 9553 §2.6.4)
-    // 4. `media` with `kind: "logo"`
-    // 5. `media` with `kind: "photo"`
-    // 6. `extra["cryptoKeys"]` (RFC 9553 §2.7.1)
-    //
-    // Invariants:
-    // - `states_spouse`, `states_manager`, and `states_assistant` evaluate to false for "agent".
-    // - `states_media` strictly evaluates to true ONLY for `kind: "photo"`.
-    // - `card_to_vcard` emits ONLY PHOTO and mapped relations (X-EVOLUTION-SPOUSE, etc.),
-    //   completely omitting AGENT, SOUND, LOGO, and cryptoKeys.
-    // - During JMAP sync, `jmap-book-sync`'s `PatchObject` safely preserves untouched
-    //   server-side `relatedTo` agent relations, `sound`/`logo` media entries, and `cryptoKeys`.
+    // Unmapped relation/media kinds stay server-owned and are omitted from emitted vCard lines.
+    // Mapped spouse/manager/assistant relations and photo media must still survive round-trip.
 
     let mut related_to = BTreeMap::new();
     // Mapped relations (have EDS slots)
@@ -16644,15 +16566,8 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
 #[test]
 fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
-    // Tests a master contact card containing the full spectrum of supported properties
-    // coexisting with multiple AGENT and SOUND lines:
-    // - Standard mapped fields: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, ORG, TITLE, ROLE,
-    //   NOTE, URL, BDAY, PHOTO, CATEGORIES, X-EVOLUTION-SPOUSE, X-EVOLUTION-MANAGER,
-    //   X-EVOLUTION-ASSISTANT, X-EVOLUTION-FILE-AS, X-JABBER, X-SKYPE.
-    // - Unmapped properties: AGENT (URI, nested vCard, plain text), SOUND (BASIC base64, WAV URI).
-    //
-    // Asserts 100% roundtrip fidelity of all mapped fields, clean omission of AGENT/SOUND,
-    // and multi-pass fixed-point convergence.
+    // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe but omitted.
+    // Asserts fixed-point stability after AGENT/SOUND stripping.
 
     let vcard_input = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -16694,7 +16609,7 @@ fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
 
     let parsed = vcard_to_card(vcard_input).expect("parse master card with AGENT and SOUND");
 
-    // 1. Verify structured name
+    // Structured name remains intact.
     let name = parsed.name.as_ref().expect("name");
     assert_eq!(name.full.as_deref(), Some("Dr. Elena Rostova"));
     assert_eq!(
@@ -16702,18 +16617,18 @@ fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
         Some(&serde_json::json!("Rostova, Elena (Global Tech)"))
     );
 
-    // 2. Verify telephony, emails, addresses
+    // Phone, email, and address counts remain intact.
     assert_eq!(parsed.phones.as_ref().unwrap().len(), 3);
     assert_eq!(parsed.emails.as_ref().unwrap().len(), 2);
     assert_eq!(parsed.addresses.as_ref().unwrap().len(), 1);
 
-    // 3. Verify organization and titles
+    // Organization and title payload stays intact.
     let org = &parsed.organizations.as_ref().unwrap()["o1"];
     assert_eq!(org.name.as_deref(), Some("Global Tech"));
     assert_eq!(org.units.as_ref().unwrap().len(), 2);
     assert_eq!(parsed.titles.as_ref().unwrap().len(), 2);
 
-    // 4. Verify relations (Spouse, Manager, Assistant)
+    // Only mapped relations survive parse.
     let relations = parsed.related_to.as_ref().expect("relations");
     assert_eq!(relations.len(), 3);
     assert!(relations.contains_key("Mikhail Rostov"));
@@ -16724,12 +16639,12 @@ fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
         "AGENT must not create relation"
     );
 
-    // 5. Verify media has only photo
+    // Only photo media survives parse.
     let media = parsed.media.as_ref().expect("media");
     assert_eq!(media.len(), 1);
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
 
-    // 6. Export and assert complete exclusion of AGENT and SOUND
+    // Export omits AGENT and SOUND.
     let export1 = card_to_vcard(&parsed);
     assert!(
         !export1.contains("AGENT"),
@@ -16749,7 +16664,7 @@ fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
         "Export₁ must retain spouse"
     );
 
-    // 7. Fixed-point multi-stage roundtrip
+    // Multi-pass export converges.
     let card2 = vcard_to_card(&export1).expect("parse export1");
     let export2 = card_to_vcard(&card2);
     let card3 = vcard_to_card(&export2).expect("parse export2");
