@@ -19193,9 +19193,8 @@ fn multi_component_org_sparse_and_empty_slots_positioning() {
 
 #[test]
 fn tel_type_work_voice_fax_evolution_contact_editor_dual_field_aliasing_and_slot_narrowing() {
-    // Characterize RFC 2426 §3.3.1 `TEL;TYPE=WORK,VOICE,FAX` vs Evolution's Contact Editor UI:
-    // 1. Inbound parsing: A vCard carrying `TEL;TYPE=WORK,VOICE,FAX` extracts both `voice`
-    //    and `fax` into JSContact `features` and `work` into `contexts` without loss.
+    // `TEL;TYPE=WORK,VOICE,FAX` parses into `features` {voice,fax} and
+    // `contexts` {work} without loss.
     let inbound_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Office\r\n",
         "TEL;TYPE=WORK,VOICE,FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
@@ -19207,30 +19206,23 @@ fn tel_type_work_voice_fax_evolution_contact_editor_dual_field_aliasing_and_slot
     assert_eq!(phone.contexts, Some(json!({"work": true})));
     assert_eq!(phone.features, Some(json!({"voice": true, "fax": true})));
 
-    // 2. Outbound emission & EDS contact editor protection:
-    // In EDS (libebook-contacts 3.52), `TEL;TYPE=WORK,VOICE,FAX` satisfies both
-    // `E_CONTACT_PHONE_BUSINESS` (`WORK`+`VOICE`) and `E_CONTACT_PHONE_BUSINESS_FAX` (`WORK`+`FAX`).
-    // When the user edits the business phone in Evolution, EDS rewrites the single shared TEL line,
-    // mutating the business fax too (verified in `eds-sys`' `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`).
-    // To prevent dual-field aliasing and cross-mutation, `jmap-vcard` narrows the emitted feature
-    // to `FAX` (`PHONE_FEATURES`: CELL > PAGER > FAX > VOICE > VIDEO).
+    // Outbound narrows to `WORK,FAX` so one TEL line does not alias both
+    // `E_CONTACT_PHONE_BUSINESS` and `E_CONTACT_PHONE_BUSINESS_FAX`.
     let emitted_vcard = card_to_vcard(&card);
     assert_eq!(
         line(&emitted_vcard, "TEL"),
         "TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:+1 555 0100"
     );
 
-    // 3. Predicate fidelity & server sync safety:
-    // `states_phone_feature` returns true for the winning slot ("fax") and false for the suppressed
-    // slot ("voice"). This guarantees that sync diffing does not treat the absence of "voice" on
-    // the emitted vCard as a user deletion, preserving the server's multi-feature record intact.
+    // Predicate checks keep `fax` as the winner while suppressing `voice` so sync
+    // diffing does not misclassify the narrowed feature set as a user deletion.
     assert!(states_phone_feature(phone.features.as_ref(), "fax"));
     assert!(!states_phone_feature(phone.features.as_ref(), "voice"));
     assert!(!states_phone_feature(phone.features.as_ref(), "mobile"));
     assert!(!states_phone_feature(phone.features.as_ref(), "pager"));
     assert!(!states_phone_feature(phone.features.as_ref(), "video"));
 
-    // 4. vCard 2.1 bare parameter style and vCard 4.0 quoted parameter style inbound tolerance:
+    // Accept vCard 2.1 bare parameters and vCard 4.0 quoted parameters inbound.
     let vcard21 = concat!(
         "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Alice QP\r\n",
         "TEL;WORK;VOICE;FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
@@ -20976,13 +20968,11 @@ fn vcard_trailing_whitespace_across_all_property_types_matrix() {
 
 #[test]
 fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
-    // Backlog finding, second and third manifestations:
-    // A ContactCard with a stated-but-empty full name (`full: Some("")`) and single/multiple
-    // name components (`given: "0"`, `given: "𞋀"`, Unicode multi-byte characters) previously
-    // took an extra round trip because `card_to_vcard` emitted an empty `FN:` while `read_name`
-    // treated empty `FN:` as absent, causing `derive_full` to synthesize on the next pass.
-    // The empty-is-absent filter in `card_to_vcard` derives `full` immediately, ensuring
-    // immediate fixed-point stability ($vcard_1 \equiv vcard_2$, $card_1 \equiv card_2$).
+    // ContactCards with `full: Some("")` and populated name components used to need one
+    // extra round trip: `card_to_vcard` emitted empty `FN:`, then `read_name` treated empty
+    // `FN` as absent and synthesized `full` on the next pass.
+    // The empty-is-absent filter now derives once, so both vCard and ContactCard stabilize
+    // by pass 2.
     let test_names = vec![
         Name {
             components: Some(vec![NameComponent::new("given", "0")]),
