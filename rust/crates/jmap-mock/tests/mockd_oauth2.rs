@@ -8,11 +8,10 @@
 //! `oauth_authorization_server`/`oauth_client_registration` since the
 //! `discover_and_register` work, and `jmap-config`/`jmap-client`'s own tests
 //! already drive that in-process. What is untested is the standalone
-//! binary's own command line: manual verification (M7's OAuth 2.0 setup) and
-//! any future functional test need to turn this on from outside the
-//! process, not from a builder call this binary's `main` never exposes. So
-//! this test drives `jmap-mockd` itself — spawned as a real child process,
-//! asked over a real socket — rather than `MockServer` directly.
+//! binary's own command line. Functional coverage needs to turn this on from
+//! outside the process, not from a builder call this binary's `main` never
+//! exposes. This test drives `jmap-mockd` itself as a child process over a
+//! real socket rather than calling `MockServer` directly.
 //!
 //! Asked over a raw `TcpStream` like `jmap-mock/tests/upload.rs`, for the
 //! same reason: no HTTP client is a dependency of this crate, and adding one

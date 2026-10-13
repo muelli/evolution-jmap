@@ -221,9 +221,7 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
 pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Same `maxObjectsInGet` enforcement `contact_card_get` documents: scale-
-    // testing item 94's `jmap-cal-sync` slice found `CalendarEvent/get` sent
-    // every id in one call, unenforced here until now.
+    // Enforce `maxObjectsInGet`, consistent with other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -270,14 +268,9 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// jscalendarbis §3.1.2 + draft-ietf-jmap-calendars-28 §1.4: a standalone
-/// Event MUST set `version`, and in JMAP context the object is a
-/// jscalendarbis Event, so the only valid value is "2.0". Enforced exactly
-/// the way Fastmail does — same type, same property list, no description;
-/// it rejects absent AND "1.0" alike (both wire-observed 2026-08-24) —
-/// because reproducing the strictest real deployment is what keeps the mock
-/// honest. Checked on both create and update: a patch can put either value
-/// back on an event that had a valid one already.
+/// jscalendarbis §3.1.2 plus draft-ietf-jmap-calendars-28 §1.4 require
+/// `CalendarEvent.version` to be `"2.0"`. Reject absent and non-`"2.0"`
+/// values on both create and update.
 fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
     if event.version.as_deref() != Some("2.0") {
         return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));

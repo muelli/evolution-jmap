@@ -210,11 +210,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Same `maxObjectsInGet` enforcement `email_get` documents as "the one
-    // limit this mock enforces" — no longer the only `/get` it bites in
-    // practice: scale-testing item 94 against real Stalwart found a
-    // 500-card `ContactCard/get` refused with exactly this error, which this
-    // mock stayed silent about until now.
+    // Enforce `maxObjectsInGet`, consistent with other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
