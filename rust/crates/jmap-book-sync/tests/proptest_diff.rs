@@ -13,11 +13,10 @@
 //! `keywords`; plus `organizations`, whose entries are patched member by
 //! member and whose `units` list is merged by name (`merge_units`).
 //! `patch.rs`'s own module doc explains why the rest (name components,
-//! addresses, media, online_services, related_to) deliberately keep entries
-//! the vCard never showed untouched, or match entries by value rather than
-//! by key: those need generators that model that lossiness on purpose, not a
-//! card built from entries that are all stateable, and are left for a later
-//! increment.
+//! addresses, related_to) deliberately keep entries the vCard never showed
+//! untouched, or match entries by value rather than by key: those need
+//! generators that model that lossiness on purpose, not a card built from
+//! entries that are all stateable, and are left for a later increment.
 //!
 //! `anniversaries` and `media` are covered here too, but not by the same
 //! invariant: their keys never survive Evolution at all (EDS rebuilds the
@@ -40,6 +39,21 @@
 //! (`rekey_keyless`'s "first unclaimed" ordering rather than its
 //! single-candidate case), and non-photo (`logo`/`sound`) entries passing
 //! through `diff_entries` untouched.
+//!
+//! `online_services` is covered by two tests: `online_services_service_round_trip`
+//! is the plain `diff_entries` shape (a service rename with the handle held
+//! constant), and `online_services_handle_round_trip` checks the one
+//! shape-preserving case the module doc calls out — a `vcard_to_card` parse
+//! always builds an entry as `{user: Some(handle), uri: None}` (see its
+//! `IMPP`/`X-` branches), so `edited` is always that shape, but `current` can
+//! be `uri`-drawn from an earlier whole-value write, and a handle rename on
+//! that shape rewrites the `uri` around the new handle rather than switching
+//! to `user`. That is a third, explicit "expected" card again, not literal
+//! equality with `edited`, for the same reason anniversaries' and media's is.
+//! Both tests hold every field the vCard mapping does not read back
+//! (`contexts`, `pref`, `label`, `extra`) at its default on every entry, so
+//! equality on those fields is never in question; only `user`/`uri`/`service`
+//! vary.
 //!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
@@ -73,7 +87,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note, OrgUnit, Organization, Title,
+    Anniversary, Calendar, ContactCard, Link, Media, Nickname, Note, OnlineService, OrgUnit,
+    Organization, Title,
 };
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
@@ -604,6 +619,97 @@ fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Contact
     })
 }
 
+/// Plain `[a-zA-Z0-9]{1,10}`: non-empty and free of `/?#%` and whitespace, so
+/// it is always `plain_handle` (drawable from, and rebuildable into, a URI)
+/// and always `states_online_service`-visible.
+fn arb_handle() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,10}"
+}
+
+/// Two service names from `SERVICE_SCHEMES`/`ONLINE_SERVICES` with exactly one
+/// scheme each, so a handle drawn from or rebuilt into a URI is unambiguous.
+const SERVICE_A: &str = "Skype";
+const SERVICE_B: &str = "Yahoo";
+
+/// The shape every real `vcard_to_card` parse builds an online-service entry
+/// in: a plain `user`, never a `uri`.
+fn user_stated(service: &str, handle: String) -> OnlineService {
+    OnlineService {
+        service: Some(service.to_owned()),
+        user: Some(handle),
+        uri: None,
+        ..OnlineService::default()
+    }
+}
+
+fn arb_online_service() -> impl Strategy<Value = OnlineService> {
+    arb_handle().prop_map(|handle| user_stated(SERVICE_A, handle))
+}
+
+fn arb_online_service_service_pair() -> impl Strategy<Value = (OnlineService, OnlineService)> {
+    arb_handle().prop_map(|handle| {
+        (
+            user_stated(SERVICE_A, handle.clone()),
+            user_stated(SERVICE_B, handle),
+        )
+    })
+}
+
+fn card_with_online_services(map: BTreeMap<String, OnlineService>) -> ContactCard {
+    ContactCard {
+        online_services: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// The two shapes a server-held entry's handle can be stated in: a plain
+/// `user`, or drawn from a `uri` with no `user` of its own (from an earlier
+/// whole-value write — never from a `vcard_to_card` parse, which only ever
+/// produces the first).
+#[derive(Clone, Copy, Debug)]
+enum CurrentShape {
+    UserStated,
+    UriDrawn,
+}
+
+fn shaped(shape: CurrentShape, handle: String) -> OnlineService {
+    match shape {
+        CurrentShape::UserStated => user_stated(SERVICE_A, handle),
+        CurrentShape::UriDrawn => OnlineService {
+            service: Some(SERVICE_A.to_owned()),
+            user: None,
+            uri: Some(format!("skype:{handle}")),
+            ..OnlineService::default()
+        },
+    }
+}
+
+/// One entry's (current, edited, expected) triple for a handle rename.
+/// `edited` is always `user`-shaped, as every real parse builds it; `current`
+/// varies. `expected` is what the save should produce: a `user`-shaped
+/// current keeps stating the new handle as a `user`, and a `uri`-drawn
+/// current keeps the `uri` shape, rebuilt around the new handle — the member
+/// the old handle was drawn from is the one the rename goes back on.
+fn arb_online_service_handle_cards()
+-> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    (
+        prop_oneof![Just(CurrentShape::UserStated), Just(CurrentShape::UriDrawn)],
+        arb_handle(),
+        arb_handle(),
+    )
+        .prop_map(|(shape, old_handle, new_handle)| {
+            let key = "s0".to_owned();
+            let current = shaped(shape, old_handle);
+            let edited = user_stated(SERVICE_A, new_handle.clone());
+            let expected = shaped(shape, new_handle);
+            (
+                card_with_online_services(BTreeMap::from([(key.clone(), current)])),
+                card_with_online_services(BTreeMap::from([(key.clone(), edited)])),
+                card_with_online_services(BTreeMap::from([(key, expected)])),
+            )
+        })
+}
+
 /// Like [`round_trips`], but against an `expected` card distinct from
 /// `edited`: the right check for a property whose key `rekey_keyless`
 /// reassigns rather than preserves. See `arb_anniversary_cards`.
@@ -699,6 +805,25 @@ proptest! {
     #[test]
     fn media_round_trip(
         (current_card, edited_card, expected_card) in arb_media_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
+    }
+
+    #[test]
+    fn online_services_service_round_trip(
+        (current, edited) in entry_sets(
+            arb_online_service(),
+            arb_online_service_service_pair(),
+            arb_online_service(),
+            arb_online_service(),
+        )
+    ) {
+        round_trips(&card_with_online_services(current), &card_with_online_services(edited))?;
+    }
+
+    #[test]
+    fn online_services_handle_round_trip(
+        (current_card, edited_card, expected_card) in arb_online_service_handle_cards()
     ) {
         round_trips_to(&current_card, &edited_card, &expected_card)?;
     }
