@@ -13,11 +13,27 @@
 //! `keywords`; plus `organizations`, whose entries are patched member by
 //! member and whose `units` list is merged by name (`merge_units`).
 //! `patch.rs`'s own module doc explains why the rest (name components,
-//! addresses, media, anniversaries, online_services, related_to)
-//! deliberately keep entries the vCard never showed untouched, or match
-//! entries by value rather than by key: those need generators that model
-//! that lossiness on purpose, not a card built from entries that are all
-//! stateable, and are left for a later increment.
+//! addresses, media, online_services, related_to) deliberately keep entries
+//! the vCard never showed untouched, or match entries by value rather than
+//! by key: those need generators that model that lossiness on purpose, not a
+//! card built from entries that are all stateable, and are left for a later
+//! increment.
+//!
+//! `anniversaries` is covered here too, but not by the same invariant: its
+//! key never survives Evolution at all (EDS rebuilds the date line and
+//! `read_contact` hands back a fresh synthetic key every time), so literal
+//! equality with the edited card is the wrong thing to check — that key is
+//! an artifact of the reader, not anything the user chose or the save
+//! should reproduce. What `rekey_keyless` promises instead is that the
+//! content lands back under *current's* key when it pairs by `kind`, and
+//! only a genuine addition (a kind with no current counterpart) keeps the
+//! edited card's own key, so `arb_anniversary_cards` builds a third,
+//! explicit "expected" card to say so, and `anniversaries_round_trip` checks
+//! against that rather than against `edited` directly. Scoped out, left for
+//! later: a `kind` change on a literally-surviving key (needs a key
+//! collision this generator does not construct) and the `Timestamp`
+//! (point-in-time) date shape, whose whole-value-replace branch this
+//! increment does not exercise.
 //!
 //! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
 //! also generating `None`: `title_kind()` treats an absent `kind` as
@@ -51,10 +67,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_book_sync::patch::diff;
 use jmap_proto::contacts::{
-    Calendar, ContactCard, Link, Nickname, Note, OrgUnit, Organization, Title,
+    Anniversary, Calendar, ContactCard, Link, Nickname, Note, OrgUnit, Organization, Title,
 };
 use proptest::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// RFC 8620 §5.3: a `null` value at the end of a path removes that member,
 /// anything else sets it; every path segment before the last already exists.
@@ -422,6 +438,108 @@ fn arb_organization_units_pair() -> impl Strategy<Value = (Organization, Organiz
     })
 }
 
+/// One `kind`'s slot across (current, edited): absent on both sides, present
+/// only on the edited side (a genuine addition), present only on current
+/// (removed), or present on both with independently-chosen dates (a
+/// modification, possibly a no-op one).
+#[derive(Clone, Debug)]
+enum AnniversarySlot {
+    Absent,
+    Added(Value),
+    Removed(Value),
+    Modified(Value, Value),
+}
+
+/// A `PartialDate` (RFC 9553 §2.8.1) safely inside the range a vCard 3.0 date
+/// line can state and read back exactly: year 1000-9999 keeps clear of
+/// `Day::survives_the_field_it_lands_in`'s clamp, already covered by
+/// `eds-sys/tests/contacts.rs`, and day 1-28 keeps every month valid without
+/// having to model which months are short.
+fn arb_anniversary_date() -> impl Strategy<Value = Value> {
+    (1000u32..=9999, 1u32..=12, 1u32..=28).prop_map(|(year, month, day)| {
+        json!({"@type": "PartialDate", "year": year, "month": month, "day": day})
+    })
+}
+
+fn arb_anniversary_slot() -> impl Strategy<Value = AnniversarySlot> {
+    prop_oneof![
+        Just(AnniversarySlot::Absent),
+        arb_anniversary_date().prop_map(AnniversarySlot::Added),
+        arb_anniversary_date().prop_map(AnniversarySlot::Removed),
+        (arb_anniversary_date(), arb_anniversary_date())
+            .prop_map(|(old, new)| AnniversarySlot::Modified(old, new)),
+    ]
+}
+
+fn card_with_anniversaries(map: BTreeMap<String, Anniversary>) -> ContactCard {
+    ContactCard {
+        anniversaries: (!map.is_empty()).then_some(map),
+        ..ContactCard::default()
+    }
+}
+
+/// Builds (current, edited, expected) for the two kinds a vCard anniversary
+/// can be (`birth`, `wedding`), each with its own slot. `current` and
+/// `edited` always use different keys per kind (`c-<kind>` / `e-<kind>`),
+/// modelling that an anniversary's key is never the same one twice; `expected`
+/// is what `rekey_keyless` should produce: a `Modified` slot lands under
+/// current's key (the pairing this increment exists to check), an `Added`
+/// one keeps edited's own key, and a `Removed` one leaves no entry at all.
+fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
+    (arb_anniversary_slot(), arb_anniversary_slot()).prop_map(|(birth, wedding)| {
+        let mut current = BTreeMap::new();
+        let mut edited = BTreeMap::new();
+        let mut expected = BTreeMap::new();
+        for (kind, slot) in [("birth", birth), ("wedding", wedding)] {
+            let current_key = format!("c-{kind}");
+            let edited_key = format!("e-{kind}");
+            let entry = |date: Value| Anniversary {
+                kind: kind.to_owned(),
+                date: Some(date),
+                extra: BTreeMap::new(),
+            };
+            match slot {
+                AnniversarySlot::Absent => {}
+                AnniversarySlot::Added(date) => {
+                    edited.insert(edited_key.clone(), entry(date.clone()));
+                    expected.insert(edited_key, entry(date));
+                }
+                AnniversarySlot::Removed(date) => {
+                    current.insert(current_key, entry(date));
+                }
+                AnniversarySlot::Modified(old, new) => {
+                    current.insert(current_key.clone(), entry(old));
+                    edited.insert(edited_key, entry(new.clone()));
+                    expected.insert(current_key, entry(new));
+                }
+            }
+        }
+        (
+            card_with_anniversaries(current),
+            card_with_anniversaries(edited),
+            card_with_anniversaries(expected),
+        )
+    })
+}
+
+/// Like [`round_trips`], but against an `expected` card distinct from
+/// `edited`: the right check for a property whose key `rekey_keyless`
+/// reassigns rather than preserves. See `arb_anniversary_cards`.
+fn round_trips_to(
+    current_card: &ContactCard,
+    edited_card: &ContactCard,
+    expected_card: &ContactCard,
+) -> Result<(), TestCaseError> {
+    prop_assert!(diff(current_card, current_card).is_empty());
+    let patch = diff(current_card, edited_card);
+    let mut value = serde_json::to_value(current_card).expect("ContactCard always serializes");
+    apply_patch(&mut value, &patch);
+    let applied: ContactCard =
+        serde_json::from_value(value).expect("a patched ContactCard always parses");
+    prop_assert_eq!(&applied, expected_card, "patch was: {:?}", patch);
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -487,5 +605,12 @@ proptest! {
         )
     ) {
         round_trips(&card_with_organizations(current), &card_with_organizations(edited))?;
+    }
+
+    #[test]
+    fn anniversaries_round_trip(
+        (current_card, edited_card, expected_card) in arb_anniversary_cards()
+    ) {
+        round_trips_to(&current_card, &edited_card, &expected_card)?;
     }
 }
