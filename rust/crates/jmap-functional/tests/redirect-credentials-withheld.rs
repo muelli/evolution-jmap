@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Item 101(b)'s acceptance test, made headless: the endless OAuth2 consent
-//! loop the operator hit on 0.5.0 (`docs/ROADMAP.md` item 101) came from a
-//! 401 that only arrived after a redirect to a different origin had dropped
+//! loop the operator hit on 0.5.0 came from a 401 that only arrived after a
+//! redirect to a different origin had dropped
 //! the `Authorization` header, treated as a rejected credential and
 //! escalated to a fresh interactive consent — forever, since the fresh
 //! token hit the same redirect and the same 401 every time.
