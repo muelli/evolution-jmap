@@ -91,7 +91,7 @@ use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
     CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
 };
-use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
+use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript, SieveScriptQueryFilter};
 use jmap_proto::state::UtcDate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1385,6 +1385,114 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
         !still_present,
         "the destroyed script still shows up in SieveScript/get afterwards"
     );
+}
+
+/// `SieveScript/query` (RFC 9661 §2.5) against a real server: the only
+/// other live sieve coverage above drives `/get`, `/set` and `/validate`,
+/// never `/query`. Mock-tested only before this
+/// (`jmap-client/tests/sieve.rs`'s `sieve_script_query_filters_by_name` and
+/// `_by_is_active`). Creates two scripts with unique, run-specific names so
+/// the name filter cannot match any leftover script from a prior session
+/// sharing this write-test account, confirms the name filter narrows to
+/// just one of them, then activates one and confirms the `isActive: true`
+/// filter returns exactly that one script account-wide — safe even with
+/// leftover scripts, since Stalwart enforces at most one active script per
+/// account (the earlier round-trip test above already pins that
+/// activating one deactivates every other).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_script_query_filters_by_name_and_is_active_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_SIEVE) else {
+        eprintln!("server names no primary account for {CAPABILITY_SIEVE}; skipping");
+        return;
+    };
+
+    let suffix = unique_suffix();
+    let name_a = format!("agent-sievequery-{suffix}-a");
+    let name_b = format!("agent-sievequery-{suffix}-b");
+
+    let upload_a = client
+        .upload_blob(&account_id, "application/sieve", b"keep;\r\n".to_vec())
+        .expect("blob upload failed against the real server");
+    let id_a = client
+        .sieve_script_create(
+            &account_id,
+            &SieveScript::new(name_a.clone(), upload_a.blob_id),
+        )
+        .expect("SieveScript/set create failed against the real server")
+        .id
+        .expect("the server named the new script");
+
+    let upload_b = client
+        .upload_blob(&account_id, "application/sieve", b"keep;\r\n".to_vec())
+        .expect("blob upload failed against the real server");
+    let id_b = client
+        .sieve_script_create(
+            &account_id,
+            &SieveScript::new(name_b.clone(), upload_b.blob_id),
+        )
+        .expect("SieveScript/set create failed against the real server")
+        .id
+        .expect("the server named the new script");
+
+    let by_shared_substring = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_name(format!("agent-sievequery-{suffix}-")),
+        )
+        .expect("SieveScript/query failed against the real server");
+    let mut sorted = by_shared_substring.clone();
+    sorted.sort();
+    let mut expected = vec![id_a.clone(), id_b.clone()];
+    expected.sort();
+    assert_eq!(
+        sorted, expected,
+        "the shared-substring name filter did not return both scripts"
+    );
+
+    let by_exact_name = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_name(&name_a),
+        )
+        .expect("SieveScript/query failed against the real server");
+    assert_eq!(
+        by_exact_name,
+        vec![id_a.clone()],
+        "the exact-name filter did not narrow to just the one matching script"
+    );
+
+    client
+        .sieve_script_activate(&account_id, &id_b)
+        .expect("SieveScript/set activate failed against the real server");
+    let active = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_is_active(true),
+        )
+        .expect("SieveScript/query failed against the real server");
+    assert_eq!(
+        active,
+        vec![id_b.clone()],
+        "the isActive:true filter did not narrow to exactly the one active script"
+    );
+
+    // Cleanup: the direct-patch workaround (see the round-trip test above
+    // for why the RFC's own deactivate is a documented Stalwart no-op),
+    // then destroy both scripts.
+    client
+        .sieve_script_update(&account_id, &id_b, serde_json::json!({"isActive": false}))
+        .expect("the direct isActive:false patch workaround was rejected");
+    client
+        .sieve_script_destroy(&account_id, &id_a)
+        .expect("SieveScript/set destroy failed against the real server");
+    client
+        .sieve_script_destroy(&account_id, &id_b)
+        .expect("SieveScript/set destroy failed against the real server");
 }
 
 /// `SieveScript/validate` (RFC 9661 §2.6) against a real server's actual
