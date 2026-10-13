@@ -108,11 +108,19 @@
 //! `TZID` that is neither a name nor sendable, which `maps_time_zone` refuses
 //! and `diff` leaves alone regardless of what `edited` states.
 //!
-//! Scoped out, left for later: `showWithoutTime` (its own base event, with no
-//! time zone, a midnight start and a whole-day duration, since the shared
-//! timed base this file uses can never render as all-day regardless of the
-//! flag); and the remaining two properties the module doc already calls out
-//! as needing more than the baseline (`recurrenceRule`,
+//! Also covered: `showWithoutTime` (`diff`'s plain compare, writing `null`
+//! rather than `false` to clear), using its own base event — a midnight
+//! start, a whole-day (`P1D`) duration and no time zone — since the shared
+//! timed `base()` this file otherwise uses can never render as all-day
+//! regardless of the flag. `shows_without_time` needs `Some(true)` plus
+//! those three conditions to write a `VALUE=DATE` `DTSTART`; a `false` or
+//! absent flag round-trips through the same component as `None` (the writer
+//! has no distinct way to spell "explicitly timed"), so the only two stable
+//! states this base can reach are `Some(true)` and `None`, and the generator
+//! varies between exactly those.
+//!
+//! Scoped out, left for later: the remaining two properties the module doc
+//! already calls out as needing more than the baseline (`recurrenceRule`,
 //! `recurrenceOverrides`), each needing its own generator, left for its own
 //! increment. `timeZones` itself is not diffed at all (the module doc: "added
 //! to", never compared or replaced), so it has no round-trip property to
@@ -173,6 +181,16 @@ fn base() -> CalendarEvent {
         .with_start("2026-01-15T13:00:00")
         .with_time_zone("Europe/Berlin")
         .with_duration("PT1H")
+}
+
+/// A midnight start, a whole-day duration and no time zone: the three
+/// conditions `shows_without_time` needs besides the flag itself, so this
+/// base can actually render all-day, unlike the shared timed `base()` above.
+fn all_day_base() -> CalendarEvent {
+    CalendarEvent::new()
+        .with_uid("seed-uid")
+        .with_start("2026-01-15T00:00:00")
+        .with_duration("P1D")
 }
 
 /// `event`, put through the same `event_to_ical`/`ical_to_event` round trip
@@ -537,6 +555,17 @@ proptest! {
                 .map(|(key, (_, new, content_type))| (key.clone(), link_value(new, content_type)))
                 .collect(),
         );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn show_without_time_round_trip(old in proptest::bool::ANY, new in proptest::bool::ANY) {
+        let mut old_event = all_day_base();
+        old_event.show_without_time = old.then_some(true);
+        let mut new_event = all_day_base();
+        new_event.show_without_time = new.then_some(true);
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
