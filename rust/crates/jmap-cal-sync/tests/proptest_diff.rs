@@ -87,16 +87,22 @@
 //! than carrying the one entry forward, since there is no key to leave
 //! unnamed in a property replaced whole by this path).
 //!
-//! Scoped out, left for later: `start` (its absence cannot be expressed, so
-//! it needs its own generator) and `timeZone` (checked twice over: via
+//! Also covered: `start` (`diff`'s plain compare against the baseline),
+//! restricted to a calendar-valid date and a time of day with seconds in
+//! `0..59` (a leap second is legal RFC 5545 and RFC 8984 input, but its own
+//! question, so scoped out here) and `timeZone` held constant. `start` is
+//! never cleared, since its absence has no PatchObject shape, so the round
+//! trip only exercises a change and a no-op, the same shape
+//! `duration_round_trip` uses.
+//!
+//! Scoped out, left for later: `timeZone` (checked twice over: via
 //! `maps_time_zone` as it goes out, then again by `diff_time_zones`
 //! afterwards); `showWithoutTime` (its own base event, with no time zone, a
 //! midnight start and a whole-day duration, since the shared timed base this
 //! file uses can never render as all-day regardless of the flag); and the
 //! remaining three properties the module doc already calls out as needing
 //! more than the baseline (`recurrenceRule`, `recurrenceOverrides`,
-//! `timeZones`) — each needs its own generator and is left for its own
-//! increment.
+//! `timeZones`), each needing its own generator, left for its own increment.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -174,6 +180,23 @@ fn round_trips(current: &CalendarEvent, edited: &CalendarEvent) -> Result<(), Te
 
 fn arb_text() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9]{1,20}"
+}
+
+/// A LocalDateTime `to_local_date_time`/`to_ical_date_time` always draws back
+/// byte-identical: a calendar-valid date and a time of day with seconds kept
+/// to `0..59` (a leap second is legal input but its own question).
+fn arb_start() -> impl Strategy<Value = String> {
+    (
+        2000u32..2100,
+        1u32..=12,
+        1u32..=28,
+        0u32..24,
+        0u32..60,
+        0u32..60,
+    )
+        .prop_map(|(year, month, day, hour, minute, second)| {
+            format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
+        })
 }
 
 /// A tag `maps_keyword` always draws: plain alphanumeric, so trimmed,
@@ -355,6 +378,13 @@ proptest! {
     fn title_round_trip(old in arb_text(), new in arb_text()) {
         let current = stable(base().with_title(old));
         let edited = stable(base().with_title(new));
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn start_round_trip(old in arb_start(), new in arb_start()) {
+        let current = stable(base().with_start(old));
+        let edited = stable(base().with_start(new));
         round_trips(&current, &edited)?;
     }
 
