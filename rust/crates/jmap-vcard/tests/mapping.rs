@@ -1046,12 +1046,8 @@ fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
 
 #[test]
 fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
-    // RFC 9553 §2.5.1 lets a card name the street and the house number as two
-    // components; RFC 2426 §3.2.1 gives the street address one field. Leaving
-    // the number off would take the house out of the address the user reads,
-    // so both go on the field, in the order the card lists them — which is
-    // the only thing that says whether the number is read before the street
-    // name or after it.
+    // RFC 9553 splits street name and house number; RFC 2426 has one street
+    // slot, so both components share it in source order.
     let english = one_address(
         "a1",
         Address {
@@ -1080,11 +1076,8 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
-    // Read back, the field is one street name again: nothing in
-    // "Hauptstraße 1" says where the number ends and the street begins, and
-    // a guess would be wrong in half the world's addresses. Putting the parts
-    // back together is the save path's job, and it does it by asking whether
-    // the field still says what they said — see the book-sync save tests.
+    // Readback keeps one `name` component because `Hauptstraße 1` is ambiguous
+    // across locales. Splitting is deferred to the save path tests.
     let back = vcard_to_card(&vcard).expect("parse");
     let addresses = back.addresses.expect("addresses");
     assert_eq!(
@@ -1095,9 +1088,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
 
 #[test]
 fn an_address_that_states_only_a_house_number_is_on_the_line() {
-    // The number is not decoration on a street name: an address holding
-    // nothing else is still something to show, so it gets an ADR of its own
-    // rather than being counted invisible and hidden from the save.
+    // A standalone house number is still address data, so it gets an ADR line.
     let card = one_address(
         "a1",
         Address {
@@ -1141,10 +1132,7 @@ fn an_address_with_nothing_in_it_is_skipped_in_both_directions() {
 
 #[test]
 fn maps_the_written_out_address_onto_the_label_property() {
-    // RFC 9553 §2.5.1's `full` is the address as it should be printed on an
-    // envelope, which is exactly what RFC 2426 §3.2.2's `LABEL` states — and
-    // what EDS keeps in E_CONTACT_ADDRESS_LABEL_WORK. The line breaks in it
-    // are the point: they are what makes it a label rather than a street.
+    // JSContact `full` maps to vCard `LABEL`; embedded newlines are preserved.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "LABEL"),
@@ -1163,11 +1151,7 @@ fn maps_the_written_out_address_onto_the_label_property() {
 
 #[test]
 fn a_label_without_a_key_joins_the_address_of_the_same_type() {
-    // The vCard EDS writes back. E_CONTACT_ADDRESS_LABEL_HOME is one of its
-    // three synthetic fields, so the line is rebuilt from scratch and the
-    // X-JMAP-KEY that named the address is gone. What survives is the TYPE,
-    // which is how RFC 2426 §3.2.2 has a LABEL name the ADR it belongs to,
-    // so that is what the two are paired on.
+    // EDS rewrites LABEL without X-JMAP-KEY, so pairing falls back to TYPE.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
@@ -1197,10 +1181,8 @@ fn a_label_without_a_key_joins_the_address_of_the_same_type() {
 
 #[test]
 fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
-    // A card may hold a written-out address and no components at all — RFC
-    // 9553 §2.5.1 allows exactly that, "even if the individual address
-    // components are not known". It gets a LABEL line and no ADR, so the key
-    // it is filed under crosses on the LABEL or not at all.
+    // RFC 9553 allows `full` without components, so LABEL-only addresses keep
+    // their key on LABEL and do not require an ADR line.
     let card = one_address(
         "a2",
         Address {
@@ -1218,8 +1200,7 @@ fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.addresses, card.addresses);
 
-    // And a label whose TYPE matches no address on the card is not folded
-    // into an unrelated one.
+    // A TYPE-mismatched LABEL does not fold into an unrelated ADR.
     let mixed = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
@@ -2097,14 +2078,8 @@ fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_calendars_onto_the_caluri_and_fburl_lines() {
-    // RFC 9555 §2.13.2 and §2.13.3 pair a Calendar of kind `calendar` with
-    // `CALURI` and one of kind `freeBusy` with `FBURL` — the two lines
-    // libebook-contacts 3.52 gives a field of their own, which Evolution shows
-    // as the contact's Calendar and Free/Busy addresses. Both are bare URIs
-    // with no room for anything else, so the JSContact key rides in
-    // X-JMAP-KEY as it does on a `URL`; measured against that version, a set
-    // rewrites the value of the first line of each name in place and leaves
-    // its parameters — the key included — where they were.
+    // RFC 9555 maps `calendar` to CALURI and `freeBusy` to FBURL.
+    // Both are bare URIs, so keying uses X-JMAP-KEY and survives EDS rewrites.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "CALURI"),
@@ -2130,17 +2105,13 @@ fn maps_calendars_onto_the_caluri_and_fburl_lines() {
 
 #[test]
 fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
-    // The fixture's `c3` names no kind at all. RFC 9553 §2.4.1 makes `kind`
-    // mandatory and gives it no default, so such an entry does not say whether
-    // its URI is a calendar or the free/busy data drawn from one — and the two
-    // are different fields. Guessing either would show the user the URI under a
-    // heading the server never claimed for it, so it gets no line, the same
-    // partial visibility `titles` has, and must be invisible to the save.
+    // Without a recognized kind, there is no safe CALURI or FBURL target.
+    // Unmapped calendar entries stay invisible to this vCard projection.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nCALURI").count(), 1, "{vcard}");
     assert!(!vcard.contains("nameless"), "{vcard}");
 
-    // And a kind this version has never heard of, which is the same case.
+    // Unknown kinds are also omitted.
     let vcard = card_to_vcard(&one_calendar(
         "c1",
         Some("example.com:tasks"),
@@ -2151,15 +2122,11 @@ fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
-    // The same invisibility every other keyed map has: an entry with no URI
-    // says no more than an `EMAIL:` with no address, gets no line, and must
-    // therefore be invisible to the save as well.
+    // Empty URIs are treated as absent entries, like empty EMAIL values.
     let vcard = card_to_vcard(&one_calendar("c1", Some("calendar"), ""));
     assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
 
-    // That empty line is not hypothetical: it is what EDS leaves behind when
-    // the user clears Evolution's Calendar field, measured against
-    // libebook-contacts 3.52, which rewrites the value and keeps the line.
+    // EDS can leave empty CALURI and FBURL lines after clearing fields.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI;X-JMAP-KEY=c1:\r\n",
@@ -2172,11 +2139,8 @@ fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_calendar_that_has_none() {
-    // Which is what an address the user has just typed arrives as: EDS writes
-    // a fresh `CALURI` line with no parameters on it at all, measured against
-    // libebook-contacts 3.52. The two lines are one keyed map, so the keys the
-    // reader invents have to be free of each other's as well as of the ones
-    // the card already carries.
+    // EDS can emit fresh CALURI and FBURL lines without X-JMAP-KEY.
+    // Reader-generated keys must avoid collisions across both line types.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI:https://vera.example/cal/vera.ics\r\n",
@@ -2191,8 +2155,7 @@ fn invents_a_key_for_a_calendar_that_has_none() {
     assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
     assert_eq!(calendars["c2"].uri, "https://vera.example/fb/vera.ifb");
     assert_eq!(calendars["c2"].kind.as_deref(), Some("freeBusy"));
-    // The second `CALURI` line is read too, though EDS shows the user only the
-    // first: a line nobody can edit is still one a save must not delete.
+    // Non-primary CALURI lines must roundtrip even when Evolution hides them.
     assert_eq!(calendars["c7"].uri, "https://vera.example/cal/team.ics");
 }
 
