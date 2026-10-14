@@ -146,6 +146,22 @@
 //! round-trip property to state beyond what the `timeZone` increment above
 //! already confirms stays empty for a named zone.
 //!
+//! Also covered: the restated-field override shape, scoped to the plain
+//! scalar members of `OVERRIDE_PROPERTIES` (`title`, `description`,
+//! `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`), each
+//! independently present or absent on each instance. `instance_patch`
+//! restates a field exactly when it differs from the series, and `base()`
+//! leaves all seven at the default (`duration` is the one exception, so its
+//! generator is drawn away from `base()`'s own `PT1H`), so a present field
+//! always differs and is always restated back. `modified_instance` and
+//! `vevent_of`/`read_vevent` draw and read an instance's restated fields with
+//! the same code the series' own scalar properties use, already proven
+//! round-trip-safe by the increments above, so the per-field values reuse
+//! those same domains. Scoped out, left for later: `start`/`timeZone` (the
+//! id's own meaning) and `keywords`/`alerts` (whole-set restated fields,
+//! needing the same `maps_keyword`/`maps_alerts` gating their series-level
+//! counterparts use).
+//!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
 //! and line folding are a separate question from the baseline-compare shape
@@ -484,6 +500,80 @@ fn arb_exclusions() -> impl Strategy<Value = BTreeMap<String, Value>> {
     })
 }
 
+/// One instance's restated fields: every plain scalar `OVERRIDE_PROPERTIES`
+/// member, independently present or absent. `duration` is drawn from 2..12
+/// hours rather than `duration_round_trip`'s 1..12, so a present value always
+/// differs from `base()`'s own `PT1H` and `instance_patch` always restates
+/// it; every other field differs from `base()`'s `None` regardless of value.
+/// At least one field is present, since an empty patch draws no instance at
+/// all (`modified_instance` returns `None`).
+fn arb_restated_override() -> impl Strategy<Value = Map<String, Value>> {
+    (
+        prop::option::of(arb_text()),
+        prop::option::of(arb_text()),
+        prop::option::of(2u32..12),
+        prop::option::of(prop::sample::select(
+            &["confirmed", "cancelled", "tentative"][..],
+        )),
+        prop::option::of(prop::sample::select(&["free", "busy"][..])),
+        prop::option::of(prop::sample::select(&["public", "private", "secret"][..])),
+        prop::option::of(0i64..=9),
+    )
+        .prop_filter(
+            "at least one field restated",
+            |(title, description, hours, status, free_busy_status, privacy, priority)| {
+                title.is_some()
+                    || description.is_some()
+                    || hours.is_some()
+                    || status.is_some()
+                    || free_busy_status.is_some()
+                    || privacy.is_some()
+                    || priority.is_some()
+            },
+        )
+        .prop_map(
+            |(title, description, hours, status, free_busy_status, privacy, priority)| {
+                let mut patch = Map::new();
+                if let Some(title) = title {
+                    patch.insert("title".to_owned(), Value::String(title));
+                }
+                if let Some(description) = description {
+                    patch.insert("description".to_owned(), Value::String(description));
+                }
+                if let Some(hours) = hours {
+                    patch.insert("duration".to_owned(), Value::String(format!("PT{hours}H")));
+                }
+                if let Some(status) = status {
+                    patch.insert("status".to_owned(), Value::String(status.to_owned()));
+                }
+                if let Some(free_busy_status) = free_busy_status {
+                    patch.insert(
+                        "freeBusyStatus".to_owned(),
+                        Value::String(free_busy_status.to_owned()),
+                    );
+                }
+                if let Some(privacy) = privacy {
+                    patch.insert("privacy".to_owned(), Value::String(privacy.to_owned()));
+                }
+                if let Some(priority) = priority {
+                    patch.insert("priority".to_owned(), Value::from(priority));
+                }
+                patch
+            },
+        )
+}
+
+/// A `recurrenceOverrides` map of 0 to 3 instances, each an
+/// `arb_restated_override` keyed by an `arb_start` id.
+fn arb_restated_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_map(arb_start(), arb_restated_override(), 0..3).prop_map(|entries| {
+        entries
+            .into_iter()
+            .map(|(id, patch)| (id, Value::Object(patch)))
+            .collect()
+    })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -673,6 +763,20 @@ proptest! {
 
     #[test]
     fn recurrence_overrides_excluded_round_trip(old in arb_exclusions(), new in arb_exclusions()) {
+        let mut old_event = base();
+        old_event.recurrence_overrides = (!old.is_empty()).then_some(old);
+        let mut new_event = base();
+        new_event.recurrence_overrides = (!new.is_empty()).then_some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_overrides_restated_round_trip(
+        old in arb_restated_overrides(),
+        new in arb_restated_overrides(),
+    ) {
         let mut old_event = base();
         old_event.recurrence_overrides = (!old.is_empty()).then_some(old);
         let mut new_event = base();
