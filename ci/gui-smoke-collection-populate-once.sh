@@ -2,13 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Item 66's live-Evolution caveat: a brand-new JMAP collection account's
-# first populate must authenticate ONCE, not twice. Same harness as
-# ci/gui-smoke.sh (private Xvfb/D-Bus/XDG tree against jmap-mockd), but a
-# collection account rather than the standalone mail source gui-smoke.sh
-# drops: the double-populate bug item 66 fixed (`on_account_changed`
-# answering its own write) lives in `jmap-backend-collection`, which a
-# standalone mail source never exercises.
+# A live-Evolution caveat: a brand-new JMAP collection account's first
+# populate must authenticate ONCE, not twice. Same harness as ci/gui-smoke.sh
+# (private Xvfb/D-Bus/XDG tree against jmap-mockd), but a collection account
+# rather than the standalone mail source gui-smoke.sh drops: the
+# double-populate bug this guards against (`on_account_changed` answering
+# its own write) lives in `jmap-backend-collection`, which a standalone mail
+# source never exercises.
 #
 # Contacts and calendars are deliberately OFF on this collection account
 # (unlike docs/examples/jmap-mock-mail-collection.source, which is the

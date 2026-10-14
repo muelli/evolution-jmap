@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Item 74's live-Evolution caveat: the packaged example-module's merged
+# A live-Evolution caveat: the packaged example-module's merged
 # mail-message-menu item must actually appear, not merely link, under a real
 # Evolution shell. Same harness as ci/gui-smoke.sh (private Xvfb/D-Bus/XDG
 # tree against jmap-mockd), a different assertion

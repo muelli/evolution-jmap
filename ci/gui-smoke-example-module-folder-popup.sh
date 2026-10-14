@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Item 74's other live-Evolution caveat: the packaged example-module's merged
+# Another live-Evolution caveat: the packaged example-module's merged
 # mail-folder-popup item must actually appear in the folder tree's real
 # context menu, not merely link, under a real Evolution shell. Same harness
 # as ci/gui-smoke.sh and ci/gui-smoke-example-module.sh (private
