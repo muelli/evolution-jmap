@@ -7,15 +7,13 @@
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //! ```
 //!
-//! Serves one account (`A1`, alice@example.com) pre-seeded with an inbox
-//! containing two messages, a sending identity, an address book, and a
-//! calendar.
+//! Serves one account (`A1`, alice@example.com) with seeded mail, identity,
+//! address book, and calendar data.
 
 use jmap_mock::{EmailSeed, MockServer};
 use serde_json::json;
 
-/// Fixed `client_id` returned by `--oauth2` registration.
-/// This binary serves one account, so one stable value is enough.
+/// Fixed `client_id` returned by `--oauth2` registration for this single-account binary.
 const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 
 fn main() {
@@ -53,9 +51,8 @@ fn main() {
         }
     }
 
-    // Off by default so manual tests can still cover a deployment with no
-    // OAuth 2.0 metadata endpoint. With the flag, this mirrors
-    // `jmap_config::oauth2_setup::discover_and_register` in one process.
+    // Off by default so manual tests can cover deployments with no OAuth 2.0 metadata endpoint.
+    // With the flag, this mirrors `jmap_config::oauth2_setup::discover_and_register`.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
@@ -74,7 +71,7 @@ fn main() {
 
     let server = builder.port(port).start();
 
-    // Demo data, so the server is interesting straight away.
+    // Seed demo data so manual runs start with visible state.
     {
         let state = server.state();
         let mut state = state.lock().expect("state lock");
@@ -107,7 +104,6 @@ fn main() {
     println!("session: {}/.well-known/jmap", server.origin());
     println!("account: A1 (alice@example.com) — Ctrl-C to stop");
 
-    // Serve until killed; the server thread does the work.
     loop {
         std::thread::park();
     }
