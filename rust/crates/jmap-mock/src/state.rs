@@ -10,13 +10,12 @@ use std::sync::mpsc::Sender;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// One [`ServerState::type_state_snapshot`] — every account's state counter
-/// per tracked type name, at one point in time.
+/// Snapshot of [`ServerState::type_state_snapshot`]: per-account state
+/// counters for tracked type names.
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
-/// Everything the mock server knows. Tests hold this behind
-/// `Arc<Mutex<..>>` (via `MockServer::state()`) to seed data and make
-/// white-box assertions.
+/// Global mock-server state. Tests keep this behind `Arc<Mutex<_>>` via
+/// `MockServer::state()` for fixture seeding and assertions.
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
@@ -215,12 +214,9 @@ impl EventSourceHub {
         receiver
     }
 
-    /// Send `change`, narrowed to each subscriber's own `types` filter, to
-    /// every currently connected subscriber whose filter matches at least
-    /// one of its changed types — dropping any subscriber whose receiving
-    /// end has gone away (the client disconnected). A subscriber whose
-    /// filter matches nothing in `change` is left connected but sent
-    /// nothing, same as a request that mutated nothing at all.
+    /// Send `change` to each subscriber after applying its optional type
+    /// filter. Disconnected subscribers are dropped. Subscribers with no
+    /// matching type stay connected and receive nothing.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -240,10 +236,9 @@ impl EventSourceHub {
     }
 }
 
-/// Narrow `change`'s `changed` map to the type names in `types` (`None` =
-/// every type, so `change` passes through unchanged); an account whose
-/// entry has no matching type is dropped entirely, and `None` is returned
-/// when nothing survives — the signal to send this subscriber nothing.
+/// Return `change` narrowed to `types`.
+/// `None` means all types. Accounts with no matching type are dropped.
+/// Returns `None` when no account has any matching type.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
         return Some(change.clone());
@@ -268,67 +263,39 @@ pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
-    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`: this
-    /// mock never merges replies into an existing thread (see
-    /// `crate::mail::thread_get`), so a thread's whole lifecycle is exactly
-    /// its one email's — created and destroyed alongside it, never updated.
+    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`.
+    /// This mock never merges replies into existing threads.
     pub threads: Store<jmap_proto::mail::Thread>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
-    /// The `VacationResponse` singleton (RFC 8621 §8.1). Always holds exactly
-    /// one object, seeded at account creation under the fixed id
-    /// `"singleton"`, since the type has no create or destroy: `Store<T>`'s
-    /// state counter and changes log are reused unchanged rather than
-    /// building a separate mechanism for one object.
+    /// `VacationResponse` singleton (RFC 8621 §8.1), seeded as `"singleton"`.
     pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
-    /// `Quota` objects (RFC 9425 §2). Read-only from the client's side (the
-    /// RFC defines no `Quota/set`), seeded at account creation the same way
-    /// `vacation_response` is.
+    /// `Quota` objects (RFC 9425 §2), seeded once and read-only to clients.
     pub quotas: Store<jmap_proto::quota::Quota>,
-    /// `SieveScript` objects (RFC 9661 §2.1). Unlike `quotas`, empty on a fresh
-    /// account: scripts are client-created, so there is nothing to seed.
+    /// `SieveScript` objects (RFC 9661 §2.1), empty until tests create them.
     pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
-    /// Every accepted `EmailSubmission` — what a real server would hand to
-    /// its SMTP queue. Tests assert against this.
+    /// Accepted `EmailSubmission` records, for test assertions.
     pub outbox: Vec<RecordedSubmission>,
-    /// Every iTIP scheduling message (RFC 5546) the server would have sent
-    /// for a `CalendarEvent/set` that asked for one
-    /// (draft-ietf-jmap-calendars-28 §5.9.2) — what a real server hands to
-    /// its iMIP transport. This mock has no SMTP path, so it records the
-    /// messages here and lets tests assert against them, exactly as
-    /// [`Self::outbox`] already does for accepted `EmailSubmission`s. The
-    /// iTIP payload itself is not built: what §5.9.2 specifies, and what a
-    /// client can get wrong, is which method goes to whom.
+    /// iTIP scheduling messages from `CalendarEvent/set` requests that send
+    /// mail. Like `outbox`, this mock records them for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
-    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3): the
-    /// calendar addresses that *are* this account when an event names
-    /// participants. Empty on a fresh account, like `sieve_scripts`; a test
-    /// seeds whichever identities the case needs.
+    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3),
+    /// empty until tests seed the identities they need.
     pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub calendars: Store<jmap_proto::calendars::Calendar>,
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
-    /// `ShareNotification` records (RFC 9670 §4), one per grant change. Kept
-    /// in the same account as the shared object itself rather than in a
-    /// separate per-recipient account, since this mock models one principal
-    /// per bearer token in a single account rather than a real server's
-    /// distinct account per principal — the recipient the notification is
-    /// for is carried alongside it (the `Id`) and used to filter
-    /// `ShareNotification/get`/`/query` to only the caller it belongs to.
+    /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
+    /// Stored in this account because the mock maps one principal per bearer
+    /// token inside one account, not per-principal accounts.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// `CalendarEventNotification` records (draft-ietf-jmap-calendars §8),
-    /// one per create/update/destroy of an event on a calendar shared with
-    /// someone other than the actor. Same per-recipient-tuple shape as
-    /// [`Self::share_notifications`] and for the same reason: this mock has
-    /// one principal per bearer token in a single account, not a real
-    /// server's distinct account per principal.
+    /// also keyed by recipient id for the same single-account model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
-    /// The principal that answers RFC 9670 §2.5's `currentUserPrincipalId` —
-    /// "which principal is *me* in this account". `None` until a test seeds
-    /// one; the session document then omits the property rather than naming a
-    /// principal that does not exist.
+    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
+    /// `None` omits the property from API responses.
     pub current_user_principal_id: Option<Id>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
@@ -413,7 +380,7 @@ pub struct RecordedSubmission {
     pub envelope: jmap_proto::mail::Envelope,
 }
 
-/// One scheduling message queued in [`AccountState::scheduling_outbox`].
+/// Scheduling message queued in [`AccountState::scheduling_outbox`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedSchedulingMessage {
     /// iTIP method from `jmap_proto::calendars::scheduling_method`.
@@ -438,8 +405,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes-log entry: object `id` changed in the transition *to*
-/// `state`.
+/// One changes-log entry: object `id` changed when state reached `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
@@ -447,8 +413,7 @@ pub struct Change {
     pub id: Id,
 }
 
-/// Typed object store with monotonic state and prefixed ids (`M1`, `M2`, ...)
-/// for local debugging.
+/// Typed object store with monotonic state and debug-friendly prefixed ids.
 pub struct Store<T> {
     prefix: &'static str,
     next_id: u64,
@@ -506,7 +471,7 @@ impl<T> Store<T> {
         self.objects.is_empty()
     }
 
-    /// Insert without touching state — for seeding fixtures.
+    /// Insert without a state bump, for fixture seeding.
     pub fn seed(&mut self, value: T) -> Id {
         let id = self.alloc_id();
         self.objects.insert(id.clone(), value);
@@ -518,12 +483,8 @@ impl<T> Store<T> {
         self.objects.insert(id, value);
     }
 
-    /// Apply a batch of mutations as one state transition (one `/set` call
-    /// bumps the state exactly once, however many objects it touched).
-    ///
-    /// The callback stages mutations through `Transaction`; if it stages at
-    /// least one change the state counter advances and the changes are
-    /// logged.
+    /// Apply staged mutations as one state transition.
+    /// If any change is staged, state increments once and changes are logged.
     pub fn transaction<R>(&mut self, f: impl FnOnce(&mut Transaction<'_, T>) -> R) -> R {
         let mut transaction = Transaction {
             store: self,
