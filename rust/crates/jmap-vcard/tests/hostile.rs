@@ -39,7 +39,6 @@ fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
         !vcard.contains("\r\nFN:"),
         "a server-chosen map key injected an FN line:\n{vcard}"
     );
-    // Only known lines remain: BEGIN, VERSION, UID, EMAIL, END.
     let names: Vec<&str> = vcard
         .split("\r\n")
         .filter(|line| !line.is_empty() && !line.starts_with(' '))
@@ -58,7 +57,6 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
             5,
             "{key:?} produced extra content lines:\n{vcard}"
         );
-        // The key text survives as data but cannot start a new line.
         assert!(
             !vcard.contains("\r\nFN:Mallory"),
             "{key:?} injected an FN line:\n{vcard}"
@@ -125,15 +123,12 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
         1,
         "the escaped newline still ended the line:\n{vcard}"
     );
-    // The text survives without truncation and without injecting lines.
     let back = vcard_to_card(&vcard).expect("the sanitised card still parses");
     assert_eq!(
         back.name.and_then(|name| name.full).as_deref(),
         Some("Vera\r\nFN:Mallory")
     );
 }
-
-// Adversarial-input robustness net.
 
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
@@ -199,7 +194,6 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
             start.elapsed() < Duration::from_secs(1),
             "parse of hostile quoting hung on {input:?}"
         );
-        // Either sanitized parse or typed error, never panic.
         if let Ok(card) = res {
             assert!(card.id.is_none() || card.id.is_some());
         }
@@ -209,7 +203,6 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
 /// Extreme folding patterns must not panic or mis-parse root fields.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
-    // Fold the note every 2 octets.
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
     let raw_val = "Alexander The Great";
     for chunk in raw_val.as_bytes().chunks(2) {
@@ -225,7 +218,6 @@ fn absurd_folding_every_second_octet_matrix() {
         Some("Alexander The Great")
     );
 
-    // Empty continuations and tab continuations.
     let empty_continuations = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n \r\n \r\n \tSmith\r\nNOTE:First line\r\n\tSecond line\r\nEND:VCARD\r\n";
     let card2 = vcard_to_card(empty_continuations).expect("tabs and empty continuations parse");
     assert_eq!(
@@ -296,7 +288,6 @@ fn deeply_nested_agent_robustness() {
             start.elapsed() < Duration::from_secs(1),
             "nested AGENT depth {depth} took too long"
         );
-        // AGENT entries are ignored; root FN stays intact.
         if let Ok(card) = res {
             assert_eq!(
                 card.name.and_then(|n| n.full).as_deref(),
@@ -335,7 +326,6 @@ fn crlf_lf_cr_mixed_line_endings_matrix() {
         );
     }
 
-    // Bare CR without LF returns typed Malformed.
     let pure_cr = "BEGIN:VCARD\rVERSION:3.0\rFN:Alice Smith\rEMAIL:alice@example.com\rEND:VCARD\r";
     assert!(matches!(
         vcard_to_card(pure_cr),
@@ -385,7 +375,6 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     ];
 
     for ch in multi_byte_chars {
-        // Date properties with multibyte text.
         let vcard_bday = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nBDAY:{ch}1990-01-01\r\nEND:VCARD\r\n"
         );
@@ -396,14 +385,12 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
         );
         let _ = vcard_to_card(&vcard_anniv);
 
-        // Name components with multibyte text.
         let vcard_name = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Last{ch};First{ch};Mid{ch};Pref{ch};Suff{ch}\r\nFN:Full {ch}\r\nEND:VCARD\r\n"
         );
         let card = vcard_to_card(&vcard_name).expect("multibyte name should parse");
         assert!(card.name.is_some());
 
-        // Structured address with multibyte text.
         let vcard_adr = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nADR:;;123 {ch} St;City {ch};State {ch};12345;Country {ch}\r\nEND:VCARD\r\n"
         );
