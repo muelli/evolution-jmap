@@ -73,19 +73,20 @@
 //! would remove only `locations/<key>/name` and keep the rest, the branch
 //! this increment's shape never reaches).
 //!
-//! Also covered: `alerts` (`diff_alerts`), restricted to the exact shape
-//! `read_alert` ever produces for an offset trigger relative to the start —
+//! Also covered: `alerts` (`diff_alerts`), restricted to the exact shapes
+//! `read_alert` ever produces for an offset trigger — relative to the start,
 //! `{"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": ...},
-//! "action": "display"}`, no `relativeTo`. Unlike the keyed maps above,
-//! `diff_alerts` replaces the whole property (like `keywords`), gated only by
-//! `maps_alerts` on `current`; the edited side needs no such check, since
-//! `read_alert` only ever produces a shape `drawn_alert` accepts. Restricted
-//! to that shape, every alert on both sides maps, so the patch is a literal
-//! round trip with `edited.alerts`, no third "expected" event needed. Scoped
-//! out, left for later: a `relativeTo: "end"` trigger, and an alert `current`
-//! holds that `maps_alerts` refuses (which drops the whole property rather
-//! than carrying the one entry forward, since there is no key to leave
-//! unnamed in a property replaced whole by this path).
+//! "action": "display"}`, and relative to the end, the same shape plus
+//! `"relativeTo": "end"`. Unlike the keyed maps above, `diff_alerts` replaces
+//! the whole property (like `keywords`), gated only by `maps_alerts` on
+//! `current`; the edited side needs no such check, since `read_alert` only
+//! ever produces a shape `drawn_alert` accepts. Restricted to those shapes,
+//! every alert on both sides maps, so the patch is a literal round trip with
+//! `edited.alerts`, no third "expected" event needed. Scoped out, left for
+//! later: an alert `current` holds that `maps_alerts` refuses (which drops
+//! the whole property rather than carrying the one entry forward, since
+//! there is no key to leave unnamed in a property replaced whole by this
+//! path).
 //!
 //! Also covered: `start` (`diff`'s plain compare against the baseline),
 //! restricted to a calendar-valid date and a time of day with seconds in
@@ -402,22 +403,41 @@ fn arb_offset() -> impl Strategy<Value = String> {
 /// trigger: an explicit `@type`, `action` and trigger `@type`, nothing a
 /// `relativeTo: "end"` or any other member would add.
 fn alert_value(offset: &str) -> Value {
-    json!({
+    alert_value_related(offset, None)
+}
+
+/// Like [`alert_value`], with an explicit `relativeTo` on the trigger: `None`
+/// for the start (the default, so no member at all), `Some("end")` for the
+/// one other value `drawn_trigger`/`read_alert` agree on.
+fn alert_value_related(offset: &str, related: Option<&str>) -> Value {
+    let mut value = json!({
         "@type": "Alert",
         "trigger": {"@type": "OffsetTrigger", "offset": offset},
         "action": "display",
-    })
+    });
+    if let Some(related) = related {
+        value["trigger"]["relativeTo"] = json!(related);
+    }
+    value
 }
 
-/// An `alerts` map of 0 to 4 keyed reminders, every one an `arb_offset`
-/// wrapped in `alert_value`.
+/// `None` (relative to the start) or `Some("end")`, the only two values
+/// `drawn_trigger` reads a `relativeTo` member back as.
+fn arb_related() -> impl Strategy<Value = Option<&'static str>> {
+    prop::option::of(Just("end"))
+}
+
+/// An `alerts` map of 0 to 4 keyed reminders, every one an `arb_offset` and
+/// `arb_related` pair wrapped in `alert_value_related`.
 fn arb_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
-    prop::collection::btree_map(arb_key(), arb_offset(), 0..4).prop_map(|entries| {
-        entries
-            .into_iter()
-            .map(|(k, o)| (k, alert_value(&o)))
-            .collect()
-    })
+    prop::collection::btree_map(arb_key(), (arb_offset(), arb_related()), 0..4).prop_map(
+        |entries| {
+            entries
+                .into_iter()
+                .map(|(k, (o, r))| (k, alert_value_related(&o, r)))
+                .collect()
+        },
+    )
 }
 
 /// A VirtualLocation entry: a `uri` (required, held across old/new so the
