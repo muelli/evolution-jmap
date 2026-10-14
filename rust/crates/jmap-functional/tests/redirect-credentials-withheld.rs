@@ -15,6 +15,17 @@
 //! through the scenario, against a real `evolution-source-registry` and a
 //! real `evolution-addressbook-factory`.
 //!
+//! Driving that connect end to end surfaced the actual mechanism: EDS's
+//! `ensure_connected_sync` (`e-book-meta-backend.c`) schedules the
+//! interactive `credentials-required` consent for *every*
+//! `ESourceAuthenticationResult` except `UNKNOWN`, regardless of what this
+//! project's own `is_wrong_password` says, so merely keeping
+//! `RedirectCredentialsWithheld` out of that check never stopped the
+//! escalation `jmap_backend_core::connect::ConnectError::auth_result` was
+//! still classifying it as `ERROR`. `auth_result` now maps it to `UNKNOWN`
+//! instead, which is also the one case `ensure_connected_sync` propagates a
+//! real `GError` for rather than clearing it into a bogus success.
+//!
 //! The fixture needs a redirect to a genuinely different *origin*, not just
 //! a different path: `jmap_client::url::same_origin` differs on port alone,
 //! so two loopback mocks on two different ports already qualify, with no
@@ -122,34 +133,50 @@ fn a_cross_origin_redirect_that_drops_credentials_fails_without_escalating() {
         "the client failed with {}\n{report}",
         output.status
     );
+    // The first connect runs before EDS ever consults the secret store
+    // (`jmap_backend_core::connect::credentials`'s own doc), so it always
+    // fails with `CredentialsRequired` and schedules the one, expected
+    // consent request: this is the fixture reaching its starting point, not
+    // the bug under test. EDS then retries internally with the now-stored
+    // password before this client does anything else, which is the first of
+    // the two redirect-withheld network attempts below.
     assert_eq!(
-        seen.get("connect-ok"),
-        Some(&"0"),
-        "the connect through a credentials-dropping redirect should fail, not succeed\n{report}"
+        seen.get("credentials-required-after-connect"),
+        Some(&"1"),
+        "the first connect has no password to try yet and should ask for one exactly once\n\
+         {report}"
+    );
+    // A credentials prompter answering that one request with the password
+    // explicitly drives the second, independent redirect-withheld attempt.
+    // Answering it schedules one further request of its own (EDS's own
+    // registry-side bookkeeping for having been asked to authenticate
+    // again) but neither attempt's actual 401 may add another: that repeat,
+    // without anything here asking again, is the endless OAuth2 popup loop
+    // item 101 reports.
+    assert_eq!(
+        seen.get("credentials-required-after-reauthenticate"),
+        Some(&"2"),
+        "answering the one expected consent request should schedule at most one more, not an \
+         escalation from the redirect-withheld 401 itself\n{report}"
     );
     assert_eq!(
         seen.get("credentials-required"),
-        Some(&"0"),
-        "a redirect-withheld 401 must not escalate to interactive consent — this is exactly \
-         the endless OAuth2 popup loop item 101 reports\n{report}"
-    );
-    let connect_error = seen
-        .get("connect-error")
-        .unwrap_or_else(|| panic!("no connect-error observation\n{report}"));
-    assert!(
-        connect_error.contains("redirect") && connect_error.contains("withheld"),
-        "expected the redirect-credentials-withheld message, got {connect_error:?}\n{report}"
+        Some(&"2"),
+        "with nothing here asking again, the count must not keep climbing on its own: that is \
+         exactly the endless OAuth2 popup loop item 101 reports\n{report}"
     );
 
     assert_eq!(
         front_door_hits.load(Ordering::SeqCst),
-        1,
-        "the front door should see exactly one request: a backend that retried after the \
-         redirect-withheld failure would be the same retry storm item 101 reports\n{report}"
+        2,
+        "two independent attempts reach the network (EDS's own retry once the password is \
+         stored, then the explicit reauthenticate); a backend that retried within either \
+         would be the same retry storm item 101 reports\n{report}"
     );
     assert_eq!(
         server.unauthorized_responses(),
-        1,
-        "the real server should see exactly one credentials-stripped request, not a loop\n{report}"
+        2,
+        "the real server should see exactly one credentials-stripped request per attempt, \
+         not a loop\n{report}"
     );
 }
