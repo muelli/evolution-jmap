@@ -208,9 +208,8 @@ pub enum Asked {
     /// credentials-required instead routes an OAuth 2.0 source straight to the
     /// consent window: EDS's OAuth2 credentials provider cannot look a token
     /// up on that path, only prompt (e-source-credentials-provider-impl-
-    /// oauth2.c: can_store FALSE, can_prompt TRUE) — observed live 2026-08-26
-    /// as a consent window looping at every populate while every silent path
-    /// could fetch the token fine.
+    /// oauth2.c: can_store FALSE, can_prompt TRUE) — a consent window loops at
+    /// every populate while every silent path fetches the token fine.
     Silently,
 }
 
