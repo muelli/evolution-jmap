@@ -201,6 +201,14 @@
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
 //! and line folding are a separate question from the baseline-compare shape
 //! this increment covers.
+//!
+//! Also covered: `links`' key add/drop. `diff_links` only ever patches an
+//! existing key's `href`, by design (a resource the server does not hold is
+//! not created, and one the component stopped naming is left where it is), so
+//! a key `edited` adds that `current` lacks must never appear in the patch,
+//! and a key `edited` drops must survive applying the patch unchanged. This
+//! needs a check against the unpatched property rather than a round trip to
+//! `edited`, unlike `links_round_trip` above.
 
 use std::collections::BTreeMap;
 
@@ -942,6 +950,66 @@ proptest! {
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn links_key_add_and_drop_left_alone(
+        key_kept in arb_key(),
+        key_dropped in arb_key(),
+        key_added in arb_key(),
+        old_href in arb_href(),
+        new_href in arb_href(),
+        dropped_href in arb_href(),
+        added_href in arb_href(),
+    ) {
+        prop_assume!(key_kept != key_dropped && key_kept != key_added && key_dropped != key_added);
+
+        let mut old_event = base();
+        old_event.links = Some(
+            [
+                (key_kept.clone(), link_value(&old_href, &None)),
+                (key_dropped.clone(), link_value(&dropped_href, &None)),
+            ]
+            .into(),
+        );
+        let mut new_event = base();
+        new_event.links = Some(
+            [
+                (key_kept.clone(), link_value(&new_href, &None)),
+                (key_added.clone(), link_value(&added_href, &None)),
+            ]
+            .into(),
+        );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+
+        prop_assert!(diff(&current, &current).is_empty());
+        let patch = diff(&current, &edited);
+
+        // Only the retained key's href may move; the dropped and added keys
+        // are left entirely alone, per diff_links's no-create, no-remove design.
+        let mut expected = Map::new();
+        if old_href != new_href {
+            expected.insert(
+                format!("links/{key_kept}/href"),
+                Value::String(new_href.clone()),
+            );
+        }
+        prop_assert_eq!(&patch, &expected);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        let applied_links = applied.links.expect("links still present");
+        let current_links = current.links.expect("current carried links");
+
+        prop_assert_eq!(applied_links.get(&key_dropped), current_links.get(&key_dropped));
+        prop_assert!(!applied_links.contains_key(&key_added));
+        prop_assert_eq!(
+            applied_links.get(&key_kept).and_then(|entry| entry.get("href")),
+            Some(&Value::String(new_href)),
+        );
     }
 
     #[test]
