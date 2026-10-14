@@ -1606,8 +1606,7 @@ fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
 
 #[test]
 fn maps_a_birthday_onto_the_bday_line() {
-    // RFC 9553 §2.8.1 keeps every memorable date in one map, told apart by
-    // `kind`; RFC 2426 §3.1.5's BDAY states the birthday and nothing else.
+    // RFC 9553 maps memorable dates by `kind`; BDAY carries only the birthday.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1964-03-27");
 
@@ -1622,10 +1621,8 @@ fn maps_a_birthday_onto_the_bday_line() {
 
 #[test]
 fn maps_a_wedding_day_onto_the_line_evolution_reads_as_the_anniversary() {
-    // vCard 3.0 has no property for it — RFC 6474's ANNIVERSARY is vCard 4.0
-    // — and EDS reads E_CONTACT_ANNIVERSARY, the field Evolution's contact
-    // editor labels "Anniversary", off X-EVOLUTION-ANNIVERSARY. Writing the
-    // date anywhere else would keep it out of the only field that shows it.
+    // vCard 3.0 has no ANNIVERSARY property, so Evolution's anniversary field
+    // is fed through X-EVOLUTION-ANNIVERSARY.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
@@ -1655,8 +1652,7 @@ fn an_anniversary_of_a_kind_vcard_has_no_property_for_is_dropped() {
 
 #[test]
 fn a_date_that_names_no_single_day_gets_no_line() {
-    // Partial dates can omit year or month-day pieces.
-    // EDS treats those as missing and can surface a wrong fallback date, so no line is written.
+    // Incomplete PartialDate values do not name one day, so no line is written.
     for date in [
         json!({"year": 1964}),
         json!({"month": 3, "day": 27}),
@@ -1669,8 +1665,7 @@ fn a_date_that_names_no_single_day_gets_no_line() {
 
 #[test]
 fn a_date_before_the_year_eds_can_write_gets_no_line() {
-    // `e_contact_date_to_string()` clamps years to 1000..=9999 (measured in `eds-sys/tests/contacts.rs`).
-    // Writing older years would shift them on first user edit, so this side emits no line for them.
+    // `e_contact_date_to_string()` clamps years to 1000..=9999, so older years emit no line.
     for date in [
         json!({"year": 800, "month": 6, "day": 21}),
         json!({"year": 999, "month": 12, "day": 31}),
