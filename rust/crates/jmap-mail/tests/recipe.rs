@@ -25,7 +25,8 @@
 // needs neither a bus nor a daemon. What comes out is then read the way the
 // provider reads it: `e_source_camel_get_settings` for the `CamelSettings` an
 // `e_source_camel_configure_service` would hand a `CamelJmapStore`, and
-// `ServerConfig::from_settings` — the call `connect_sync` makes — on top of it.
+// `ServerConfig::from_settings` — the call `authenticate_sync` makes — on top
+// of it.
 //
 // The difference from `jmap-backend-collection`'s `tests/recipe.rs` is the
 // whole point of this recipe: there, the account's server is written onto the
@@ -245,7 +246,7 @@ impl RegistrySource {
     }
 
     /// The server the provider reads off those settings — the last thing
-    /// `connect_sync` needs before it builds a client.
+    /// `authenticate_sync` needs before it builds a client.
     fn server(&self) -> Result<ServerConfig, SourceError> {
         // SAFETY: the settings object of a live source, only read from.
         unsafe { ServerConfig::from_settings(self.camel_settings()) }
