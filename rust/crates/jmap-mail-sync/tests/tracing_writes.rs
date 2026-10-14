@@ -7,16 +7,13 @@
 //! the folder's/message's name/id, the Track B1 slice after
 //! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
 
-use std::sync::{Arc, Mutex};
-
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync, Outgoing};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
 struct Fixture {
     server: MockServer,
@@ -72,106 +69,6 @@ impl Fixture {
     }
 }
 
-/// Records every event this crate emits (level + fields), duplicated from
-/// `jmap-book-sync/tests/tracing_writes.rs` for the same reason: this crate
-/// depends on `tracing`, not `tracing-subscriber`.
-struct CapturingSubscriber {
-    captured: Arc<Mutex<Vec<(Level, String, String)>>>,
-}
-
-struct Recorder<'a> {
-    level: Level,
-    sink: &'a Mutex<Vec<(Level, String, String)>>,
-}
-
-impl Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_owned()));
-    }
-}
-
-impl Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Recorder {
-            level: *event.metadata().level(),
-            sink: &self.captured,
-        });
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
-
-/// Serializes `capture()` within this test binary, and forces a fresh
-/// callsite-interest rebuild once this subscriber is the thread's default.
-/// Both guard against the same underlying fact: `tracing-core` caches each
-/// macro call site's `Interest` (never/sometimes/always) *once*, process-
-/// wide, the first time that call site fires, based on whichever
-/// `Dispatch`es were alive at that moment — not on which `Dispatch` is
-/// current on a given call. A cached decision from before this subscriber
-/// existed (or from a concurrently-running test's own `capture()` racing
-/// this one) can otherwise survive and apply to *this* call, which is how
-/// this harness previously (a) panicked in `Arc::try_unwrap` on a
-/// transiently-elevated strong count from another thread's `Dispatch`, and
-/// (b) silently dropped one crate's own event while sibling call sites
-/// (from `jmap-client`, already registered under a live subscriber deeper
-/// in the same process) kept firing. `rebuild_interest_cache` re-evaluates
-/// every known call site against whatever is current *right now*, so it
-/// must run after `with_default` has installed this subscriber, not before.
-static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-
-fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run();
-    });
-    std::mem::take(&mut *captured.lock().unwrap())
-}
-
-/// Like `capture`, but for fixture setup that happens to call a traced
-/// function and must not run unguarded (see `capture`'s own doc): an
-/// unguarded call is this exact call site's *first-ever* invocation in the
-/// process often enough to matter, which would otherwise cache its
-/// `Interest` as "never" before any subscriber has had a say.
-fn untraced<T>(run: impl FnOnce() -> T) -> T {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let subscriber = CapturingSubscriber {
-        captured: Arc::new(Mutex::new(Vec::new())),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run()
-    })
-}
-
 fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
     captured
         .iter()
@@ -183,7 +80,7 @@ fn creating_a_folder_traces_the_account_and_name_on_success() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.create_folder(None, "Projects").unwrap();
     });
 
@@ -212,7 +109,7 @@ fn creating_a_folder_with_a_name_a_sibling_already_has_traces_the_failure() {
     fixture.seed_mailbox("Projects");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.create_folder(None, "Projects");
     });
 
@@ -230,7 +127,7 @@ fn deleting_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let doomed = fixture.seed_mailbox("Projects");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.delete_folder(&doomed).unwrap();
     });
 
@@ -258,7 +155,7 @@ fn deleting_a_nonexistent_folder_traces_the_failure() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.delete_folder(&Id::new("M404"));
     });
 
@@ -276,7 +173,7 @@ fn subscribing_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let mailbox = fixture.seed_mailbox("Projects");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.set_subscribed(&mailbox, true).unwrap();
     });
 
@@ -304,7 +201,7 @@ fn subscribing_a_nonexistent_folder_traces_the_failure() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.set_subscribed(&Id::new("M404"), true);
     });
 
@@ -322,7 +219,7 @@ fn renaming_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let folder = fixture.seed_mailbox("Projects");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.rename_folder(&folder, None, "Archive").unwrap();
     });
 
@@ -350,7 +247,7 @@ fn renaming_a_nonexistent_folder_traces_the_failure() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.rename_folder(&Id::new("M404"), None, "Archive");
     });
 
@@ -378,7 +275,7 @@ fn setting_keywords_traces_the_account_and_uid_on_success() {
     );
     let change = KeywordChange::between(&before, &after);
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.set_keywords(&uid, &change).unwrap();
     });
 
@@ -415,7 +312,7 @@ fn setting_keywords_on_a_nonexistent_message_traces_the_failure() {
     );
     let change = KeywordChange::between(&before, &after);
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.set_keywords(&Id::new("E404"), &change);
     });
 
@@ -437,7 +334,7 @@ fn setting_an_empty_keyword_change_traces_nothing_at_all() {
     let change = KeywordChange::between(&same, &same);
     assert!(change.is_empty());
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.set_keywords(&uid, &change).unwrap();
     });
 
@@ -455,7 +352,7 @@ fn filing_a_message_traces_the_account_and_uid_on_success() {
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.file_message(&uid, &Filing::copied_into(archive.clone()))
             .unwrap();
     });
@@ -485,7 +382,7 @@ fn filing_a_nonexistent_message_traces_the_failure() {
     let archive = fixture.seed_mailbox("Archive");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.file_message(&Id::new("E404"), &Filing::copied_into(archive));
     });
 
@@ -506,7 +403,7 @@ fn filing_a_message_into_the_mailbox_it_is_already_in_traces_nothing_at_all() {
     let filing = Filing::moved(inbox.clone(), inbox);
     assert!(filing.is_empty());
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.file_message(&uid, &filing).unwrap();
     });
 
@@ -523,7 +420,7 @@ fn expunging_a_message_this_mailbox_is_the_last_home_of_traces_the_account_uid_a
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.expunge_message(&uid, &inbox).unwrap();
     });
 
@@ -557,12 +454,12 @@ fn expunging_a_message_filed_elsewhere_too_traces_the_account_uid_and_mailbox() 
     let archive = fixture.seed_mailbox("Archive");
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
-    untraced(|| {
+    capture(|| {
         sync.file_message(&uid, &Filing::copied_into(archive))
             .unwrap()
     });
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.expunge_message(&uid, &inbox).unwrap();
     });
 
@@ -601,7 +498,7 @@ fn expunging_a_message_that_is_not_in_this_mailbox_traces_no_write() {
     let uid = fixture.seed_message(&archive);
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.expunge_message(&uid, &inbox).unwrap();
     });
 
@@ -621,7 +518,7 @@ fn expunging_a_nonexistent_message_traces_the_failure() {
     let inbox = fixture.seed_mailbox("Inbox");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.expunge_message(&Id::new("E404"), &inbox);
     });
 
@@ -647,7 +544,7 @@ fn importing_a_message_traces_the_account_and_mailbox_id_on_success() {
     let inbox = fixture.seed_mailbox("Inbox");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.import_message(&inbox, MESSAGE.to_vec(), &Keywords::default(), None)
             .unwrap();
     });
@@ -677,7 +574,7 @@ fn importing_bytes_that_are_not_a_message_traces_the_failure() {
     let inbox = fixture.seed_mailbox("Inbox");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.import_message(
             &inbox,
             b"\x00\x01 not a message at all".to_vec(),
@@ -700,7 +597,7 @@ fn importing_a_message_over_the_accounts_upload_limit_traces_the_failure() {
     let inbox = fixture.seed_mailbox("Inbox");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.import_message(&inbox, vec![b'x'; 4096], &Keywords::default(), None);
     });
 
@@ -719,7 +616,7 @@ fn sending_a_message_traces_the_account_and_identity_on_success() {
     let identity = fixture.seed_identity("Alice", "alice@example.com");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         sync.send_message(Outgoing {
             source: MESSAGE.to_vec(),
             identity: identity.clone(),
@@ -758,7 +655,7 @@ fn sending_a_message_through_no_identity_traces_the_failure() {
     let drafts = fixture.seed_mailbox("Drafts");
     let sync = fixture.sync();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = sync.send_message(Outgoing {
             source: MESSAGE.to_vec(),
             identity: Id::new("I404"),
