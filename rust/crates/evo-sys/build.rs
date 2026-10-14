@@ -10,26 +10,18 @@
 use std::env;
 use std::path::PathBuf;
 
-/// Evolution 3.52 is the target, as it is for EDS: the milestone note in the
-/// roadmap is that 3.56 replaced GtkUIManager, so a floor lower than this one
-/// would be claiming support for releases nothing here has been held against.
+/// Evolution 3.52 is the floor: 3.56 replaced GtkUIManager, so a lower floor
+/// would claim support for a release this crate was never held against.
 const MIN_EVO: &str = "3.52";
 
-/// Where GtkUIManager stopped being the answer: NEWS says the rewrite to
-/// EUIManager landed in 3.55.1, a 3.56 development release, so `>= 3.55` is
-/// the boundary between a system with `<gtk/gtk.h>`'s deprecated
-/// `GtkAction`/`GtkActionGroup`/`GtkUIManager` wired through Evolution's
-/// composer and mail-reader menus, and one with `e-util/e-ui-manager.h`'s
-/// `EUIAction`/`EUIActionGroup`/`EUIManager` instead. jmap-ui picks between
-/// the two at compile time, keyed off the `evolution_eui_manager` cfg this
-/// file emits (see `main`), rather than choosing a floor and dropping the
-/// other side of it: the two VMs this project is actually tested against sit
-/// one on each side.
+/// EUIManager replaced GtkUIManager in 3.55.1 (a 3.56 development release).
+/// `jmap-ui` picks between `GtkAction`/`GtkActionGroup`/`GtkUIManager` and
+/// `EUIAction`/`EUIActionGroup`/`EUIManager` at compile time via the
+/// `evolution_eui_manager` cfg this file emits (see `main`), since the two
+/// VMs this project targets sit one on each side of the boundary.
 const MIN_EVO_EUI_MANAGER: (u32, u32) = (3, 55);
 
-/// Parses a dotted version string's first two components, ignoring the rest —
-/// all this compares is "before or after the EUIManager rewrite", never a
-/// specific patch level.
+/// Parses a dotted version's major.minor; a patch level is never compared.
 fn version_major_minor(version: &str) -> (u32, u32) {
     let mut parts = version.split('.');
     let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -37,191 +29,114 @@ fn version_major_minor(version: &str) -> (u32, u32) {
     (major, minor)
 }
 
-/// The classes the setup module subclasses, and their accessors. Everything
-/// else in Evolution's headers — the pages, the assistant, the notebook — is
-/// reached through the vfuncs of these classes or not at all, so the surface
-/// this crate claims to have audited stays a header at a time.
+/// Classes this crate subclasses or reads fields of, so their layout must be
+/// generated rather than left opaque. `EMailConfigServiceBackend` backs the
+/// mail provider page; `ESourceConfigBackend` backs the *New Address Book*/
+/// *New Calendar* dialogs and is the more load-bearing of the two (four vfunc
+/// slots our `class_init` writes, each pinned by `tests/source_config.rs`).
+/// `ESourceConfig` itself stays a [`EVO_HANDLES`] entry instead: it is a
+/// `GtkBox`, and nothing here subclasses or allocates one.
 ///
-/// `ESourceConfigBackend` is the second, and it is the one Evolution's *New
-/// Address Book* and *New Calendar* dialogs are built out of:
-/// `ESourceConfig` walks every registered subclass of it and makes one
-/// candidate — one entry in the Type list, one page of widgets, one
-/// commit target — per subclass. Its class struct is generated for the same
-/// reason `EMailConfigServiceBackend`'s is, and it is the more load-bearing of
-/// the two: four vfunc slots, all four of them written by our `class_init`,
-/// and `tests/source_config.rs` pins each one's offset rather than only the
-/// struct's total size. `ESourceConfigBackendPrivate` comes with it under the
-/// same prefix, as the opaque type the instance's `priv` points at.
-///
-/// `ESourceConfig` itself does *not*: it is a `GtkBox`, so generating it means
-/// generating the GTK class structs [`BLOCKED_GTK_TYPES`] exists to keep out.
-/// It joins [`EVO_HANDLES`] instead, on the same argument as the mail config
-/// page — nothing here subclasses it, allocates one, or reads a field of it.
-///
-/// `EConfigLookupWorker` joins it for a different reason: not subclassed, but
-/// an *interface* this crate will implement (`jmap-config`'s OAuth 2.0
-/// setup-time discovery, following the same pattern
-/// `jmap-config/src/oauth2_service.rs` already uses for `EOAuth2Service`), so
-/// its vtable's layout matters the same way a subclassed struct's does.
-/// `EConfigLookup` itself — the object a worker is registered against and
-/// handed back in `run()` — is not: nothing here subclasses it or reads a
-/// field of it, so it joins [`EVO_HANDLES`] instead, the same call
-/// [`BLOCKED_EVO_TYPES`] already made for `EMailConfigServicePage`.
-///
-/// `EConfigLookupResult` and `EConfigLookupResultSimple` are the answer a
-/// worker's `run()` builds, read against `e-config-lookup-result-simple.c`
-/// (gitlab.gnome.org/GNOME/evolution-data-server, `master`) rather than
-/// assumed: `e_config_lookup_result_simple_new` is a plain `g_object_new`
-/// (transfer full to its caller), every `_add_*` copies the string/value it
-/// is given, and nothing here subclasses either type — `run()` only ever
-/// calls their constructor and setters — so, like `EConfigLookup`, their
-/// class structs are not generated, only their `GType`s and functions
-/// (below). `EConfigLookupResultKind` (the enum `_new`'s first argument
-/// takes) is generated by the same prefix.
+/// `EConfigLookupWorker` is an interface this crate implements (OAuth 2.0
+/// setup-time discovery, the same pattern `jmap-config/src/oauth2_service.rs`
+/// uses for `EOAuth2Service`), so its vtable layout matters too.
+/// `EConfigLookup` does not join it: nothing here subclasses it, so it is an
+/// [`EVO_HANDLES`] entry. `EConfigLookupResult(Simple)?` and
+/// `EConfigLookupResultKind` are the worker's plain-`g_object_new` result
+/// type and its constructor's enum argument; read against
+/// `e-config-lookup-result-simple.c` (EDS `master`) rather than assumed.
 const ALLOWED_TYPES: &[&str] = &[
     "EMailConfigServiceBackend.*",
     "EConfigLookupWorker.*",
     "EConfigLookupResult.*",
     "ESourceConfigBackend.*",
-    // The interface jmap-ui's vacation page implements: like
-    // `EConfigLookupWorker`'s vtable above, its layout matters the way a
-    // subclassed class struct's does, because `interface_init` writes
-    // `submit`/`submit_finish` (and the title and sort order) into its
-    // fields. The exact name, not a prefix: `EMailConfigPage` itself stays an
-    // opaque handle in [`EVO_HANDLES`], and [`BLOCKED_EVO_TYPES`]'s pattern
-    // is carved around this one name.
+    // jmap-ui's vacation page implements this interface; `interface_init`
+    // writes `submit`/`submit_finish` into its fields, so the layout matters.
+    // Exact name, not a prefix: `EMailConfigPage` itself stays opaque.
     "EMailConfigPageInterface",
-    // The enum `e_cal_source_config_get_source_type` answers with, and the only
-    // type generated here that belongs to EDS rather than Evolution: it is
-    // libecal's, but a plain C enum rather than an object, and `eds-sys` does
-    // not generate it (checked, not assumed — nothing in that crate's surface
-    // takes or returns one). A value type has no layout for two copies to
-    // disagree about, so generating it here does not repeat the mistake
-    // [`BLOCKED_TYPES`] exists to prevent.
+    // `e_cal_source_config_get_source_type`'s return type: a plain C enum, so
+    // (unlike an object) a second generated copy cannot disagree in layout.
     "ECalClientSourceType",
-    // The one EUIManager-era struct whose *layout* jmap-ui needs rather than
-    // just a pointer to: an array of these is built and handed to
-    // `e_ui_manager_add_actions_with_eui_data` by value, the way a
-    // `GtkActionEntry` array once was to `gtk_action_group_add_actions` (never
-    // called here — actions were built one at a time instead, per the note
-    // by `gtk_action_new` below). Present only when Evolution's headers
-    // define it (`>= 3.55`, `MIN_EVO_EUI_MANAGER`): `allowlist_type` matching
-    // nothing is not an error, and jmap-ui's own use of it is behind the same
-    // `evolution_eui_manager` cfg this file emits.
+    // The EUIManager-era struct jmap-ui builds an array of by value for
+    // `e_ui_manager_add_actions_with_eui_data`. Present only when Evolution's
+    // headers define it (`>= 3.55`, see `MIN_EVO_EUI_MANAGER`).
     "EUIActionEntry",
 ];
 
-/// String macros this crate reads rather than hand-copies: the parameter
-/// names `EConfigLookupWorker::run` finds its email address and server list
-/// under (`e-config-lookup.h`'s `#define`s), generated as `&CStr` constants
-/// by `generate_cstr(true)` below — the same treatment `eds-sys` gives
-/// `E_SOURCE_CREDENTIAL_PASSWORD`.
+/// `e-config-lookup.h`'s `#define`d parameter names `EConfigLookupWorker::run`
+/// reads its email address and server list under, generated as `&CStr`.
 const ALLOWED_VARS: &[&str] = &["E_CONFIG_LOOKUP_PARAM_.*"];
 
 /// The class's own accessors, and the one thing asked of the page it extends.
-///
-/// The prefix is the *backend*'s, because that is the class this module
-/// subclasses and every one of its accessors is a call its vfuncs may
-/// legitimately make. The page is not subclassed and not extended by anything
-/// here — it is only ever the object a backend hands back — so it is named a
-/// function at a time, the way the GTK calls below are: `setup_defaults` needs
-/// the address the user typed on the identity page and nothing else, and an
-/// `e_mail_config_service_page_.*` would take on the page's scratch sources, its
-/// backend lookup and its auto-configuration besides.
+/// The page is not subclassed, so it is named a function at a time rather
+/// than by prefix: `e_mail_config_service_page_.*` would also take on its
+/// scratch sources, backend lookup and auto-configuration.
 const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_mail_config_service_backend_.*",
     "e_mail_config_service_page_get_email_address",
-    // The one call `insert_widgets` needs back onto the page rather than the
-    // backend: telling the assistant an entry changed, so `check_complete` is
-    // asked again. See `EMailConfigPage` below on why the type it takes joins
-    // the handles rather than being generated.
+    // `insert_widgets`'s call back onto the page: an entry changed, so
+    // `check_complete` is asked again.
     "e_mail_config_page_changed",
-    // `EConfigLookupWorker`'s own wrappers — get_type, the display-name
-    // dispatch, and the one this crate exists to implement.
+    // `EConfigLookupWorker`'s own wrappers: get_type, display-name dispatch,
+    // and `run`.
     "e_config_lookup_worker_.*",
-    // `EConfigLookup`'s own calls `JmapConfigLookup` needs: registering
-    // itself in `constructed()`, and handing over a built result in `run()`.
-    // Not `_get_source`/`_run`/`_dup_results`/…, which nothing here calls.
+    // `EConfigLookup` calls `JmapConfigLookup` needs: register itself in
+    // `constructed()`, hand back a result in `run()`.
     "e_config_lookup_get_type",
     "e_config_lookup_register_worker",
     "e_config_lookup_add_result",
-    // `EConfigLookupResultSimple`'s constructor and the setters `run()` uses —
-    // a string value for every `[Collection]`/`[Authentication]`/`[Security]`/
-    // `[JMAP OAuth2]` field it writes, a boolean for the three `*-enabled`
-    // flags, and a uint for the one `servers` entry can name a non-default
-    // port on (`[Authentication] port`). Not `_add_int`/`_add_int64`/
-    // `_add_uint64`/`_add_double`/`_add_enum`/`_add_value`: this worker's
-    // result has no field of those shapes.
+    // `EConfigLookupResultSimple`'s constructor and the setters `run()` uses:
+    // a string per `[Collection]`/`[Authentication]`/`[Security]`/
+    // `[JMAP OAuth2]` field, a boolean for the three `*-enabled` flags, a
+    // uint for `[Authentication] port`. No field of this worker's result is
+    // an int, double, enum or arbitrary value, so those setters stay out.
     "e_config_lookup_result_simple_new",
     "e_config_lookup_result_simple_add_string",
     "e_config_lookup_result_simple_add_boolean",
     "e_config_lookup_result_simple_add_uint",
-    // `ESourceConfigBackend`'s own wrappers, by prefix for the same reason the
-    // mail config backend's are: it is a class this crate subclasses, so every
-    // one of its accessors is a call our vfuncs may legitimately make.
+    // `ESourceConfigBackend`'s own wrappers: the class this crate subclasses.
     "e_source_config_backend_.*",
-    // And exactly one call on the `ESourceConfig` those hand back. Not
-    // `e_source_config_.*`: that prefix would take on the dialog's page
-    // management, its candidate list and its async commit, none of which a
-    // backend touches. The rest of what an `insert_widgets` will need off it
-    // (`_insert_widget`, `_get_registry`, `_add_refresh_interval`, …) joins
-    // this list a line at a time with the code that calls it; `get_type` is
-    // here now because `tests/source_config.rs` asks the running type system
-    // whether the handle below really is the GtkBox this crate calls it.
+    // `get_type` only, so `tests/source_config.rs` can confirm the
+    // [`EVO_HANDLES`] entry really is this `GtkBox`; the rest of
+    // `ESourceConfig` joins this list as `insert_widgets` comes to need it.
     "e_source_config_get_type",
-    // The two derived config classes, named a function at a time rather than by
-    // prefix — a subclass declares itself an extension of one of these and
-    // never calls anything else on it. `e_book_source_config_get_type` and
-    // `e_cal_source_config_get_type` are what `class_init` writes into
-    // `EExtensionClass::extensible_type`; `_get_source_type` is the one call a
-    // vfunc makes, and it is `allow_creation`'s whole content on the calendar
-    // side. Deliberately not `e_cal_source_config_add_offline_toggle` or
-    // `e_book_source_config_add_autocomplete_check`: no vfunc here builds a
-    // widget, and none of Evolution's own cal modules calls the former either.
+    // The two derived config classes: the GType `class_init` writes into
+    // `EExtensionClass::extensible_type`, and the one vfunc call,
+    // `_get_source_type` (`allow_creation`'s whole content on the calendar
+    // side). Not `_add_offline_toggle`/`_add_autocomplete_check`: no vfunc
+    // here builds a widget.
     "e_book_source_config_get_type",
     "e_cal_source_config_get_type",
     "e_cal_source_config_get_source_type",
-    // The notebook, a function at a time like the derived configs above: the
-    // GType the vacation extension's `class_init` writes into
-    // `extensible_type`, the call that puts its page in, and the two sources
-    // the extension gates on (account: backend name) and connects with
-    // (collection: `[Authentication]`/`[Security]`). Deliberately not
-    // `_get_session`/`_get_identity_source`/`_commit` — nothing here calls
-    // them.
+    // The notebook: its GType, adding a page, and the two sources the
+    // vacation extension gates on (account) and connects with (collection).
     "e_mail_config_notebook_get_type",
     "e_mail_config_notebook_add_page",
     "e_mail_config_notebook_get_account_source",
     "e_mail_config_notebook_get_collection_source",
-    // The interface's GType, which is what `InterfaceDecl::filled_by` names
-    // when the vacation page registers as an implementer.
+    // The GType the vacation page registers as an implementer of.
     "e_mail_config_page_get_type",
-    // The composer, a function at a time, for jmap-ui's scheduled send: the
-    // extensible's GType, the editor the UI merge goes through, the header
-    // table the From gate reads (its `identity-uid`/`registry` are read as
-    // properties, so no further accessors), and the async pair that builds
-    // the message the way Send itself would. Deliberately not
-    // `e_msg_composer_.*`: that prefix is the whole composer.
+    // The composer, for jmap-ui's scheduled send: its GType, the editor the
+    // UI merge goes through, the header table the From gate reads, and the
+    // async pair that builds the message the way Send itself would.
     "e_msg_composer_get_type",
     "e_msg_composer_get_editor",
     "e_msg_composer_get_header_table",
     "e_msg_composer_get_message",
     "e_msg_composer_get_message_finish",
     "e_html_editor_get_ui_manager",
-    // 3.52's composer path only; see `gtk_action_new` below on the EUIManager
-    // era's own group story.
+    // 3.52's composer path only; see `gtk_action_new` below for 3.55+.
     "e_html_editor_get_action_group",
-    // The From gate's registry, by evolution-ews's own chain: the table hands
-    // out its From header, the header hands out the registry it was built
-    // with. (The table itself has no registry accessor or property — checked
-    // against e-composer-header-table.c, which keeps an EClientCache.)
+    // The From gate's registry, reached through the header table (which has
+    // no registry accessor of its own; checked against
+    // e-composer-header-table.c, which keeps an EClientCache instead).
     "e_composer_header_table_get_header",
     "e_composer_header_get_registry",
     // Which identity the From line stands at, re-read on every
     // `notify::identity-uid`.
     "e_composer_header_table_dup_identity_uid",
-    // The snooze surfaces, a function at a time. The shell view: its GType is
-    // the first extensible, its name is the "is this the mail view" gate, and
-    // — on 3.52 — the window is where the action/menu layer lives.
+    // The snooze surfaces. The shell view: GType, the "is this the mail
+    // view" name gate, and (3.52) the window the action/menu layer lives on.
     "e_shell_view_get_type",
     "e_shell_view_get_name",
     "e_shell_view_get_shell_content",
@@ -230,181 +145,134 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_shell_view_get_shell_window",
     "e_shell_window_get_ui_manager",
     "e_shell_window_get_action_group",
-    // 3.55+'s path to the same layer: the shell view answers for its own
-    // EUIManager directly (confirmed against a real in-tree extension on this
-    // exact type, `e-rss-shell-view-extension.c`, which merges in
-    // `constructed()` with no wait), so a snooze menu no longer needs the
-    // window in between at all.
+    // 3.55+'s path: the shell view answers for its own EUIManager directly
+    // (confirmed against `e-rss-shell-view-extension.c`'s own use of it).
     "e_shell_view_get_ui_manager",
     // The registry the snooze gate resolves the folder's account source
-    // against; the shell singleton is the one place a shell-view extension
-    // can be sure of one.
+    // against; the shell singleton is the one place to be sure of one.
     "e_shell_get_default",
     "e_shell_get_registry",
-    // The detached message window, the second extensible: it merges into a
-    // GtkUIManager of its own (3.52) and *is* its own EMailReader.
+    // The detached message window: its own GtkUIManager (3.52), and its own
+    // EMailReader.
     "e_mail_browser_get_type",
     "e_mail_browser_get_ui_manager",
     // The reader face both surfaces hand the snooze action: the selection,
-    // the folder it sits in, and (3.52 only, for the browser) the action
-    // group. 3.55+ answers `get_ui_manager` on the reader interface itself —
-    // one call shared by the shell's mail view and the detached browser
-    // alike, where 3.52 needed a different accessor on each.
+    // its folder, and (3.52, per-surface) or 3.55+ (one shared accessor) the
+    // action/UI group.
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
     "e_mail_reader_get_ui_manager",
-    // The EUIManager era's own way to add a batch of actions and merge the
-    // `.eui` XML that places them, in one call: no pre-existing action group
-    // to add into (`gtk_action_group_add_action`'s replacement creates and
-    // returns its own, named by `group_name`), and no separate merge step
-    // (`gtk_ui_manager_add_ui_from_string`'s replacement is the `eui`
-    // argument). `get_action_group`/`e_ui_action_group_get_action` are how the
-    // submenu's own action is found again afterwards, to gate its sensitivity
-    // and tooltip — the two menus (snooze's popup item, send-later's composer
-    // submenu) each register under their own group name rather than an
-    // existing Evolution one, matching how `mailing-list-actions.c` and
-    // `e-composer-to-meeting.c` do it upstream.
+    // EUIManager-era batch action registration plus `.eui` XML merge in one
+    // call (no pre-existing action group, no separate merge step), and
+    // finding the submenu's own action back afterwards to gate its
+    // sensitivity, tooltip and label.
     "e_ui_manager_add_actions_with_eui_data",
     "e_ui_manager_get_action_group",
     "e_ui_action_group_get_action",
     "e_ui_action_set_sensitive",
     "e_ui_action_set_tooltip",
     "e_ui_action_set_label",
-    // Evolution's date entry, for the vacation page's from/to fields. The
-    // "no date set" pair is the load-bearing part: it is how a nullable
-    // `fromDate`/`toDate` is expressed in the UI without the page parsing
-    // typed text. Not `e_date_edit_.*`: the class also carries a time half,
-    // a popup range, and a week-start setting, none of which a date-only
-    // field touches.
+    // The vacation page's from/to fields. "No date set" is the load-bearing
+    // part: how a nullable `fromDate`/`toDate` is expressed without the page
+    // parsing typed text. Not `e_date_edit_.*`: the class's time half, popup
+    // range and week-start setting are untouched by a date-only field.
     "e_date_edit_get_type",
     "e_date_edit_new",
     "e_date_edit_get_date",
     "e_date_edit_set_date",
     "e_date_edit_set_show_time",
     "e_date_edit_set_allow_no_date_set",
-    // Clearing a field back to "no date": there is no `_set_date_to_none`,
-    // the class spells it as the time_t -1 its own getter answers with.
+    // Clearing to "no date": spelled as the time_t -1 the getter answers with
+    // (there is no `_set_date_to_none`).
     "e_date_edit_set_time",
-    // The custom-time dialog reads the moment back as a time_t, the one
-    // form that carries date and time together.
+    // The custom-time dialog's moment, as a time_t (date and time together).
     "e_date_edit_get_time",
 ];
 
-/// The GTK calls, named one at a time rather than by prefix.
-///
-/// This is the whole of what M7's `insert_widgets` needs to build its page: a
-/// grid packed into the `GtkBox` Evolution hands it, and in the grid a
-/// right-aligned mnemonic label beside a horizontally-expanding entry, per
-/// setting. Nothing here is a *convenience*; every name absent from this list is
-/// a widget call the module cannot make.
-///
-/// One at a time and not `gtk_(grid|label|entry)_.*` because a prefix would take
-/// on the rest of those classes' APIs — several hundred functions, most of them
-/// touching a widget hierarchy that has to be realized, none of them exercised
-/// by anything here. A binding surface is a promise that what is in it was
-/// looked at, so it grows a line at a time with the code that calls it, and
-/// `tests/gtk.rs` names each one back.
-///
-/// The property *bindings* that give these widgets their values are deliberately
-/// not in here: they are `g_object_bind_property` on the `CamelSettings` object,
-/// which is `gobject-sys` and already available, so a `GtkEntry`'s `text` needs
-/// no GTK entry point of its own.
+/// The GTK calls, named one at a time rather than by prefix (e.g.
+/// `gtk_(grid|label|entry)_.*`, which would pull in several hundred
+/// functions nothing here exercises): the whole of what M7's
+/// `insert_widgets` needs to build its page, a grid in a box with a
+/// right-aligned mnemonic label beside an expanding entry per setting.
+/// `tests/gtk.rs` names each one back. Widget *property* bindings
+/// (`g_object_bind_property` on `CamelSettings`, already available from
+/// gobject-sys) are not here: a `GtkEntry`'s `text` needs no GTK call.
 const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
-    // The container Evolution hands `insert_widgets`, and the grid that goes in
-    // it.
+    // The container Evolution hands `insert_widgets`, and the grid in it.
     "gtk_box_pack_start",
     "gtk_grid_new",
     "gtk_grid_attach",
     "gtk_grid_set_row_spacing",
     "gtk_grid_set_column_spacing",
-    // A label per setting: `_with_mnemonic` because the underscore in a
-    // translated `_("_Server:")` is the keyboard shortcut, `set_mnemonic_widget`
-    // because that shortcut has to land in the entry beside it, and
-    // `set_xalign` to right-align it against the entry — the modern spelling of
-    // what Evolution's older pages do with the deprecated `gtk_misc_set_alignment`.
+    // A label per setting: `_with_mnemonic` for the translated `_("_Server:")`
+    // shortcut, `set_mnemonic_widget` to land it on the entry beside it,
+    // `set_xalign` to right-align.
     "gtk_label_new_with_mnemonic",
     "gtk_label_set_mnemonic_widget",
     "gtk_label_set_xalign",
-    // The entry, and the two calls that make a row of them look like a form.
     "gtk_entry_new",
     "gtk_widget_set_hexpand",
     "gtk_widget_show_all",
-    // The security toggle: one check button, bound (like the entries) through
-    // a plain property binding rather than a `gtk_toggle_button_.*` call, so
-    // this is the only entry point the toggle needs.
+    // The security toggle; bound via property binding like the entries, so
+    // no `gtk_toggle_button_.*` call is needed.
     "gtk_check_button_new_with_mnemonic",
-    // The status label: a plain (non-mnemonic) label, since `Incomplete`'s
-    // text is not the module's own to add a keyboard shortcut to, and the two
-    // calls that keep it in step with the account — filled once, then
-    // rewritten on every keystroke `on_extension_changed` reacts to, and
-    // hidden while there is nothing to say.
+    // The status label: filled once, then rewritten on every keystroke
+    // `on_extension_changed` reacts to, and hidden while there is nothing to
+    // say.
     "gtk_label_new",
     "gtk_label_set_text",
     "gtk_widget_set_visible",
-    // The authentication-method row: a plain combo, populated with the fixed
-    // choices `insert_widgets` offers (`ESourceAuthentication:method`'s
-    // `"none"` and this project's own `EOAuth2Service` name) rather than
-    // queried from the server, so `_append` is the only mutator this crate
-    // needs — no `_remove`/`_insert` a dynamic list would call for.
+    // The authentication-method combo: fixed choices (`"none"` and this
+    // project's `EOAuth2Service` name), so `_append` is the only mutator
+    // needed.
     "gtk_combo_box_text_new",
     "gtk_combo_box_text_append",
-    // The vacation page's own additions. The multi-line body is a text view;
-    // its content is read and written through the buffer's `text` *property*
-    // (plain `g_object_get`/`_set`, already available from gobject-sys), so
-    // no `GtkTextIter` — a caller-allocated sized struct this crate refuses
-    // to claim a layout for — ever crosses the boundary.
+    // The vacation page's multi-line body: content goes through the
+    // buffer's `text` property, so no `GtkTextIter` crosses the boundary.
     "gtk_text_view_new",
     "gtk_text_view_get_buffer",
-    // The page itself is a GtkScrolledWindow subclass — EMailConfigPage's
-    // prerequisite (G_DEFINE_INTERFACE's third argument upstream; the running
-    // 3.52 refuses anything less by exactly that name) — whose one child is a
-    // vertical box these two build and add. GTK3 wraps a non-scrollable child
-    // in a viewport on its own.
+    // The page is a GtkScrolledWindow subclass whose one child is the
+    // vertical box these two build and add; GTK3 wraps a non-scrollable
+    // child in a viewport on its own.
     "gtk_scrolled_window_get_type",
     "gtk_box_new",
     "gtk_container_add",
-    // Gating: a control whose server-side feature is absent or not yet known
-    // is desensitized, never hidden — stable geometry, and the tooltip can
-    // say why.
+    // A control for an absent or not-yet-known server feature is
+    // desensitized, never hidden, with a tooltip saying why.
     "gtk_widget_set_sensitive",
     "gtk_widget_set_tooltip_text",
-    // The body should take the page's spare height; everything else keeps
-    // its natural size.
+    // The body takes the page's spare height; everything else keeps its
+    // natural size.
     "gtk_widget_set_vexpand",
-    // The scheduled-send and snooze actions, on Evolution < 3.55: the
-    // GtkAction era, still what the composer and mail-reader menus merge
-    // through there (`evolution_eui_manager` picks the EUIManager-era
-    // functions above instead, on 3.55+). Actions are built one by one —
-    // `gtk_action_new` + a `g_signal_connect` on `activate` — rather than
-    // through `gtk_action_group_add_actions`, whose `GtkActionEntry` array is
-    // a struct layout the blocklist keeps out.
+    // Scheduled-send and snooze actions on Evolution < 3.55 (the GtkAction
+    // era; `evolution_eui_manager` picks the functions above on 3.55+).
+    // Built one at a time, not via `gtk_action_group_add_actions`'s
+    // `GtkActionEntry` array, a struct layout the blocklist keeps out.
     "gtk_action_new",
     "gtk_action_group_add_action",
     "gtk_action_set_sensitive",
     "gtk_ui_manager_add_ui_from_string",
     "gtk_ui_manager_ensure_update",
-    // The refusal dialog a failed scheduled send is reported through, and its
-    // teardown; also how a scheduled composer window is closed on success.
+    // The refusal dialog a failed scheduled send is reported through, and
+    // its teardown; also closes a scheduled composer window on success.
     "gtk_message_dialog_new",
     "gtk_dialog_run",
     "gtk_widget_destroy",
-    // The custom-time dialog, built rather than described: `gtk_dialog_new`
-    // plus `_add_button` instead of the variadic `_new_with_buttons`, whose
-    // NULL-terminated argument list has no safe spelling here.
+    // The custom-time dialog, built via `_add_button` rather than the
+    // variadic `_new_with_buttons`.
     "gtk_dialog_new",
     "gtk_dialog_add_button",
     "gtk_dialog_get_content_area",
     "gtk_window_set_title",
     "gtk_window_set_transient_for",
-    // One `activate` handler serves the whole submenu, so it has to ask the
-    // action which item it is; and the labels are re-filled per gate, which
-    // needs the action back out of its group by name.
+    // One `activate` handler serves the whole submenu, so it asks the
+    // action which item it is; labels are re-filled per gate, found back out
+    // of the group by name.
     "gtk_action_get_name",
     "gtk_action_group_get_action",
-    // Not called by the module: these are what `tests/gtk.rs` asks the running
-    // GTK to confirm the classes above are, since the opaque handles carry no
-    // layout to check the way `tests/layout.rs` checks the EDS structs.
+    // Not called by the module: `tests/gtk.rs` uses these to confirm the
+    // opaque handles above really are these classes.
     "gtk_widget_get_type",
     "gtk_container_get_type",
     "gtk_box_get_type",
@@ -417,24 +285,16 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_text_buffer_get_type",
 ];
 
-/// Types that already exist, and must not be minted a second time.
+/// Types that already exist in eds-sys and must not be minted a second time:
+/// a regenerated `GObject` has the right layout and the wrong identity. The
+/// `G*` spellings are eds-sys's own blocklist, re-exported from the gtk-rs
+/// sys crates; the `E*`/`Camel*` ones are `EMailConfigServiceBackend`'s own
+/// `ESource`/`CamelProvider`/`CamelSettings`, generated by eds-sys from the
+/// same headers and re-exported from there, so both crates share one type.
 ///
-/// Two lots of them, for the same reason with two different owners. The `G*`
-/// spellings are eds-sys's argument verbatim: a regenerated `GObject` has the
-/// right layout and the wrong identity, so it is blocked and re-exported from
-/// the gtk-rs sys crates. The `E*` and `Camel*` ones are the same argument
-/// against *this* crate: `EMailConfigServiceBackend` is an `EExtension` and
-/// hands out `ESource`s, `CamelProvider`s and `CamelSettings`, all of which
-/// eds-sys already generated from the very same headers. Blocked here and
-/// re-exported from there, they stay one type, which is what lets the module's
-/// vfuncs be written in terms of the crates that already read and write those
-/// objects.
-///
-/// `ESourceRegistry` and friends match the `ESource` prefix and would be
-/// blocked with it; that is correct — eds-sys has them too. The one name that
-/// starts `ESource` and is *not* EDS's is `ESourceConfigBackend`, which is why
-/// the `ESource` half of this list is built by [`blocked_source_types`] rather
-/// than written out here.
+/// `ESourceConfigBackend` is the one `ESource*` name that is *not* eds-sys's;
+/// its exemption is built by [`blocked_source_types`] rather than listed
+/// here.
 const BLOCKED_TYPES: &[&str] = &[
     "G[A-Z].*",
     "_G[A-Z].*",
@@ -444,45 +304,29 @@ const BLOCKED_TYPES: &[&str] = &[
     "_?EExtension[A-Za-z]*",
     "Camel.*",
     "_Camel.*",
-    // `EConfigLookupWorker::run`'s own parameters: eds-sys already generates
-    // this one (its `e_named_parameters_.*` functions are allowlisted there),
-    // so a second copy here would be a type bindgen minted twice rather than
-    // the one every EDS-facing crate in this workspace shares.
+    // eds-sys already generates this one (allowlisted there); a second copy
+    // here would disagree with every other EDS-facing crate's.
     "_?ENamedParameters",
 ];
 
-/// The one `ESource*` name in these headers that eds-sys does not have, and
-/// that this crate therefore has to generate rather than borrow: Evolution's
-/// own `ESourceConfigBackend`, which lives in `libevolution-util`.
-///
-/// A prefix, not an exact name: `ESourceConfigBackendClass` and
-/// `ESourceConfigBackendPrivate` are exempt with it.
+/// The one `ESource*` name eds-sys does not generate: Evolution's own
+/// `ESourceConfigBackend` (`libevolution-util`). A prefix, so
+/// `*Class`/`*Private` are exempt too.
 const EXEMPT_FROM_SOURCE_BLOCK: &str = "ESourceConfigBackend";
 
 /// `E(Extension|Source)[A-Za-z]*`'s `ESource` half, minus
 /// [`EXEMPT_FROM_SOURCE_BLOCK`].
 ///
-/// The exemption cannot be written as one more allowlist entry, because
-/// bindgen's blocklist beats its allowlist: a name in both is referenced by
-/// every generated signature and defined by nothing, which is a binding that
-/// does not compile (checked, before this function was written). And it cannot
-/// be written as a negative lookahead, because bindgen matches a whole type
-/// name against `regex`, which has none.
-///
-/// So it is spelled out the only way an anchored, lookahead-free regex can. For
-/// every proper prefix of the exempt name from `ESource` onwards, two
-/// alternatives: the prefix exactly, and the prefix followed by any character
-/// *other* than the one the exempt name continues with. Their union is every
-/// name beginning `ESource` except those beginning with the exempt name — so
-/// `ESourceCamel`, `ESourceRegistry` and the rest stay blocked and keep coming
-/// from eds-sys, while `ESourceConfigBackend` and its two companions are
-/// generated here.
-///
-/// Note what this deliberately does *not* exempt: `ESourceConfig` itself, and
-/// its `Class`/`Private`. They differ from the exempt name at the character
-/// after `ESourceConfig`, so the `ESourceConfig` + not-`B` alternative catches
-/// them, and they stay blocked — which is what sends them to [`EVO_HANDLES`],
-/// where a `GtkBox` subclass belongs.
+/// bindgen's blocklist beats its allowlist (a name in both compiles to
+/// nothing), and it matches a whole name against `regex`, which has no
+/// negative lookahead, so the exemption cannot be one more allowlist entry.
+/// Instead, for every proper prefix of the exempt name from `ESource`
+/// onwards, this emits two alternatives: the prefix exactly, and the prefix
+/// followed by any character *other* than the one the exempt name continues
+/// with. Their union is every `ESource*` name except ones beginning with the
+/// exempt name itself - `ESourceConfig` included, which differs at the next
+/// character and so stays blocked (and joins [`EVO_HANDLES`], being a
+/// `GtkBox`).
 fn blocked_source_types() -> Vec<String> {
     let exempt = EXEMPT_FROM_SOURCE_BLOCK;
     let mut out = Vec::new();
@@ -497,208 +341,122 @@ fn blocked_source_types() -> Vec<String> {
     out
 }
 
-/// GTK's *types*, which this crate does not generate even though it now calls
-/// GTK functions.
-///
-/// There is no gtk-rs `gtk-sys` this crate could re-export them from: GTK 3's
-/// sys crate is frozen at the 0.18 generation and depends on `glib-sys` 0.18,
-/// while this workspace is on 0.22. Depending on both would put two
-/// incompatible `GObject`s in one process — precisely the failure the blocklist
-/// above exists to prevent — so the widget calls in [`ALLOWED_GTK_FUNCTIONS`]
-/// are generated from these same headers rather than borrowed from a second
-/// ecosystem, and the classes they take are declared opaque by
-/// [`GTK_HANDLES`] instead of generated.
-///
-/// Opaque and not generated for two reasons. It keeps `GtkWidgetClass` and the
-/// hundred vfunc slots below it out of a binding surface nobody reads; and,
-/// more to the point, a generated layout for a GTK class is one nothing here
-/// cross-checks — `tests/layout.rs` holds the EDS structs against
-/// `g_type_query` because this crate *subclasses* them, whereas no GTK class is
-/// subclassed, extended or allocated here. A struct definition would be a claim
-/// about a layout for no reason to make one.
+/// GTK's *types*, not generated even though this crate now calls GTK
+/// functions: there is no gtk-rs `gtk-sys` compatible with this workspace's
+/// `glib-sys` 0.22 (GTK 3's sys crate is frozen at the 0.18 generation), so
+/// depending on both would put two incompatible `GObject`s in one process.
+/// The widget calls in [`ALLOWED_GTK_FUNCTIONS`] are instead generated from
+/// these same headers, with their classes declared opaque by [`GTK_HANDLES`]:
+/// no GTK class here is subclassed or allocated, so a generated layout would
+/// be a claim about a struct nothing reads a field of, and nothing (unlike
+/// the EDS structs `tests/layout.rs` cross-checks) would hold it accountable.
 const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
-/// Evolution's own classes that this crate reaches only as a pointer, blocked
-/// for the same underlying reason the GTK ones are: nothing here subclasses
-/// them, so a generated layout would be a claim about a struct nobody reads a
-/// field of.
-///
-/// `EMailConfigServicePage` is a `GtkScrolledWindow` two classes down
-/// (`EMailConfigPage` → `EMailConfigActivityPage` → this), so generating it
-/// means generating the GTK class structs the blocklist above exists to keep
-/// out — bindgen says so plainly, with a `parent: GtkScrolledWindow` field
-/// naming a type nothing here defines. It is also a class this crate has no
-/// business knowing the shape of: nothing subclasses it, nothing allocates one,
-/// and the single call made on it takes it as a pointer.
-///
-/// So the page joins [`EVO_HANDLES`] instead. The backend class next door is the
-/// opposite case and stays generated: it *is* subclassed here, its layout is
-/// what `class_init` writes vfunc pointers into, and `tests/layout.rs` holds
-/// that layout against `g_type_query`.
+/// Evolution's own classes reached only as a pointer: nothing here
+/// subclasses them, so a generated layout would be a claim about a struct
+/// nobody reads a field of. `EMailConfigServicePage` is the clearest case (a
+/// `GtkScrolledWindow` two classes down, so generating it would pull in the
+/// GTK structs [`BLOCKED_GTK_TYPES`] keeps out); the backend class next door
+/// stays generated instead, since it *is* subclassed here and
+/// `tests/layout.rs` holds its layout against `g_type_query`.
 const BLOCKED_EVO_TYPES: &[&str] = &[
-    // `EMailConfigPage` is spelled exactly (no `[A-Za-z]*` tail) so that
-    // `EMailConfigPageInterface` stays generatable — it is the one piece of
-    // the page this crate does read fields of, see ALLOWED_TYPES. The
-    // activity and service page families stay blocked whole.
+    // Spelled exactly (no wildcard tail) so `EMailConfigPageInterface` (the
+    // one piece of the page this crate reads fields of) stays generatable.
     "_?EMailConfigPage",
     "_?EMailConfig(ActivityPage|ServicePage)[A-Za-z]*",
-    // The account editor's notebook: reached only as a pointer (get the two
-    // sources, add a page), so its GtkNotebook-derived structs stay out for
-    // the same reason the service page's do.
+    // The account editor's notebook: a GtkNotebook two classes down.
     "_?EMailConfigNotebook[A-Za-z]*",
-    // The composer and what its accessors hand back: a GtkWindow subclass, a
-    // GtkGrid subclass and a GtkGrid subclass again — all reached only as
+    // The composer and what its accessors hand back, all reached only as
     // pointers by the scheduled-send extension.
     "_?EMsgComposer[A-Za-z]*",
     "_?EHTMLEditor[A-Za-z]*",
     "_?EComposerHeaderTable[A-Za-z]*",
-    // The header class itself, spelled without a tail so that
-    // `EComposerHeaderType` — the enum `e_composer_header_table_get_header`
-    // takes, a value type — stays generatable.
+    // Spelled without a tail so `EComposerHeaderType` (a value type) stays
+    // generatable.
     "_?EComposerHeader",
     "_?EComposerHeader(Class|Private)",
-    // The whole shell family (EShell itself included — a GtkApplication),
-    // and the two mail-window classes the snooze extensions reach only as
-    // pointers. `EMailReader` is spelled exactly, twice, so that
-    // `EMailReaderActionGroup` — the enum `e_mail_reader_get_action_group`
-    // takes — stays generatable.
+    // The shell family and the two mail-window classes the snooze extensions
+    // reach only as pointers. `EMailReader` spelled exactly, twice, so
+    // `EMailReaderActionGroup` stays generatable.
     "_?EShell[A-Za-z]*",
     "_?EMailBrowser[A-Za-z]*",
     "_?EMailReader",
     "_?EMailReaderInterface",
-    // The EUIManager era's own trio (3.55+, when they exist at all — see
-    // `MIN_EVO_EUI_MANAGER`): reached only as pointers, so [`EVO_HANDLES`]
-    // supplies them, exactly like the GTK-era classes above. Spelled exactly,
-    // with no wildcard tail, so `EUIActionEntry` — the one struct among them
-    // whose *fields* jmap-ui writes, see ALLOWED_TYPES — stays generatable;
-    // a `EUIAction[A-Za-z]*`-shaped pattern would catch that name too and
-    // leave nothing behind to build an array of.
+    // The EUIManager era's own trio (3.55+; see `MIN_EVO_EUI_MANAGER`),
+    // reached only as pointers. Spelled exactly so `EUIActionEntry`, whose
+    // fields jmap-ui writes, stays generatable.
     "_?EUIManager",
     "_?EUIAction",
     "_?EUIActionGroup",
-    // A GtkHBox subclass: generating its class struct would pull in the GTK
-    // ones BLOCKED_GTK_TYPES exists to keep out.
+    // A GtkHBox subclass.
     "_?EDateEdit[A-Za-z]*",
-    // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
-    // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
-    // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
-    // `[A-Za-z]*` so it matches only the exact name, the same way the page
-    // above is distinguished from `EMailConfigServiceBackend`.
+    // The object an `EConfigLookupWorker` is registered against. No
+    // wildcard tail, so `EConfigLookupWorker`/`EConfigLookupResult(Simple)?`
+    // stay generatable.
     "_?EConfigLookup",
-    // `EBookSourceConfig` and `ECalSourceConfig`, for the same reason
-    // `ESourceConfig` is blocked and handled: each leads with an `ESourceConfig`
-    // parent, which is itself a handle here — so a generated struct would put a
-    // zero-sized field where a `GtkBox` sits and mislocate everything after it.
-    // Neither is subclassed, allocated or read from; the calendar one is only
-    // ever the pointer `e_source_config_backend_get_config` handed back, cast
-    // the way C's `E_CAL_SOURCE_CONFIG()` casts it.
+    // `EBookSourceConfig`/`ECalSourceConfig`: each has an `ESourceConfig`
+    // (`GtkBox`) parent, so generating either would mislocate every field
+    // after it. The calendar one is only ever the pointer
+    // `e_source_config_backend_get_config` hands back.
     "_?E(Book|Cal)SourceConfig[A-Za-z]*",
 ];
 
-/// Evolution's classes reached only through a pointer, as opaque handles — the
-/// same zero-sized `#[repr(C)]` treatment, and the same claim, as [`GTK_HANDLES`].
-///
-/// The page a service backend extends, and the interface it implements.
-///
-/// `EMailConfigServicePage` is `tests/page.rs`'s subject: it stays zero-sized,
-/// and is the one type both `e_mail_config_service_backend_get_page` and
-/// `e_mail_config_service_page_get_email_address` speak of — the whole of what
-/// `setup_defaults` does with a page.
-///
-/// `EMailConfigPage` is the interface `insert_widgets` needs instead:
-/// `e_mail_config_page_changed` takes one, not a service page, because the
-/// "tell the assistant an entry changed" call is on the interface every config
-/// page implements, not on this provider's own subclass. Read against
-/// `e-mail-config-service-page.c` (tag 3.52.3) rather than assumed —
-/// `E_MAIL_CONFIG_SERVICE_PAGE_TYPE`'s `G_IMPLEMENT_INTERFACE (
-/// E_TYPE_MAIL_CONFIG_PAGE, …)` is where that relationship is actually stated —
-/// so the page handle `e_mail_config_service_backend_get_page` returns is one
-/// `insert_widgets` may cast straight to this handle and hand to the call, the
-/// same pointer-is-the-same-object cast `E_MAIL_CONFIG_PAGE()` is in C.
-/// `BLOCKED_EVO_TYPES`'s pattern already covers this name, so it joins the
-/// handle list rather than being bindgen's own guess at its layout — nothing
-/// here subclasses it or reads a field of it either.
-///
-/// `EConfigLookup` is the third: the object `EConfigLookupWorker::run`
-/// receives, used only to call back onto (`e_config_lookup_get_source`,
-/// `_add_result`, …) once a worker exists to make those calls — not a widget,
-/// but opaque for the identical reason, since nothing here subclasses it or
-/// reads a field of it.
-///
-/// `ESourceConfig` is the fourth, and the closest analogue of the first: it is
-/// what `e_source_config_backend_get_config` hands a backend's vfuncs, exactly
-/// as the page is what `e_mail_config_service_backend_get_page` hands the mail
-/// one, and it is a `GtkBox` — so generating it would pull in the GTK class
-/// structs, and would be a claim about a layout nothing here reads a field of.
-/// `tests/source_config.rs` asks the running type system for the one thing this
-/// treatment does assume, that the handle really is a `GtkBox`, rather than
-/// taking the header's word for it. Note the *backend* class beside it is the
-/// opposite case and is generated, for the same reason the mail one is.
+/// Evolution's classes reached only through a pointer, as opaque handles,
+/// the same zero-sized `#[repr(C)]` treatment as [`GTK_HANDLES`]: nothing
+/// here subclasses any of them or reads a field of one.
 const EVO_HANDLES: &[&str] = &[
+    // `tests/page.rs`'s subject: what `e_mail_config_service_backend_get_page`
+    // and `e_mail_config_service_page_get_email_address` speak of.
     "EMailConfigServicePage",
+    // The interface `insert_widgets` calls `e_mail_config_page_changed` on;
+    // every config page implements it, not just this provider's subclass
+    // (`e-mail-config-service-page.c`'s `G_IMPLEMENT_INTERFACE`, tag 3.52.3).
     "EMailConfigPage",
+    // What `EConfigLookupWorker::run` receives and calls back onto.
     "EConfigLookup",
+    // A `GtkBox`; `e_source_config_backend_get_config` hands it to a
+    // backend's vfuncs, the way the page is handed to the mail one.
+    // `tests/source_config.rs` confirms it against the running type system.
     "ESourceConfig",
-    // The account editor's page container — the extensible jmap-ui's vacation
-    // extension names and the object it hands its page to. Nothing here
-    // subclasses it or reads a field of it, and it is a GtkNotebook two
-    // classes down, which is [`BLOCKED_GTK_TYPES`]'s whole argument.
+    // The account editor's page container; a GtkNotebook two classes down.
     "EMailConfigNotebook",
-    // Its two derived classes, the fifth and sixth, on exactly the argument the
-    // fourth makes: both are `ESourceConfig`s and so `GtkBox`es, and the only
-    // thing done with either is to name its `GType` or hand its pointer back to
-    // Evolution. `tests/source_config.rs` asks the running type system whether
-    // they really do derive from `ESourceConfig`, which is the one thing the
-    // `E_CAL_SOURCE_CONFIG()`-shaped cast in `allow_creation` assumes.
+    // Both `ESourceConfig`s (so `GtkBox`es); `tests/source_config.rs`
+    // confirms they derive from it, the one thing `allow_creation`'s
+    // `E_CAL_SOURCE_CONFIG()`-shaped cast assumes.
     "EBookSourceConfig",
     "ECalSourceConfig",
     // The composer trio the scheduled-send extension reaches only as
-    // pointers: the extensible itself, its editor, and the header table whose
-    // `identity-uid`/`registry` are read as plain GObject properties.
+    // pointers; `identity-uid`/`registry` are read as plain properties.
     "EMsgComposer",
     "EHTMLEditor",
     "EComposerHeaderTable",
     "EComposerHeader",
-    // The snooze surfaces: the shell singleton and the mail window's view
-    // chain, plus the detached message window and the reader face both share.
+    // The snooze surfaces: the shell singleton, its view chain, the
+    // detached message window, and the reader face both share.
     "EShell",
     "EShellView",
     "EShellWindow",
     "EShellContent",
     "EMailBrowser",
     "EMailReader",
-    // The EUIManager era's own menu/action trio (3.55+), reached only as
-    // pointers — `EUIActionEntry` is the one struct among them whose layout
-    // jmap-ui needs, and is in ALLOWED_TYPES instead, generated for real when
-    // Evolution's headers define it. Harmless to list unconditionally on an
-    // older Evolution that never defines the real types: an opaque handle
-    // nothing here constructs on that side of `evolution_eui_manager`.
+    // The EUIManager-era menu/action trio (3.55+); harmless to list
+    // unconditionally, since nothing constructs one on an older Evolution.
     "EUIManager",
     "EUIAction",
     "EUIActionGroup",
-    // The vacation page's date fields; reached only as pointers.
+    // The vacation page's date fields.
     "EDateEdit",
 ];
 
-/// The GTK classes the calls above mention, as opaque handles.
+/// The GTK classes the calls above mention, as opaque handles: one
+/// `#[repr(C)]` zero-sized struct each, with a private field, so a pointer
+/// to any of these is only ever handed straight back to GTK. `tests/gtk.rs`
+/// confirms they stay zero-sized.
 ///
-/// One `#[repr(C)]` zero-sized struct each, with a private field, so that
-/// nothing outside this crate can construct one and nothing inside it can read
-/// through one: a pointer to any of these is only ever handed straight back to
-/// GTK. `tests/gtk.rs` asserts they all stay zero-sized, which is the
-/// machine-checkable form of "this crate does not know what a widget looks
-/// like".
-///
-/// Separate types rather than one alias for `c_void`, which is what `GtkBox`
-/// was while there were no calls to make with it. GTK's C API takes the same
-/// object as a `GtkGrid *` in one call and a `GtkWidget *` in the next, and with
-/// distinct types each of those crossings has to be written as a `.cast()` at
-/// the call site — the Rust spelling of C's `GTK_GRID()`. Aliasing them all to
-/// `c_void` would instead let a `GtkBox` be passed to `gtk_grid_attach`, which
-/// compiles, is undefined behaviour, and is a mistake this file can simply
-/// prevent. What licenses the casts that remain is that GTK really does relate
-/// the classes this way, which is the one thing `tests/gtk.rs` asks the running
-/// type system rather than assuming.
+/// Separate types rather than one `c_void` alias, so that passing a
+/// `GtkBox` where `gtk_grid_attach` wants a `GtkGrid` is a type error at the
+/// `.cast()` call site rather than undefined behaviour; `tests/gtk.rs`
+/// confirms GTK really does relate the classes the way those casts assume.
 const GTK_HANDLES: &[&str] = &[
     "GtkWidget",
     "GtkBox",
@@ -708,16 +466,13 @@ const GTK_HANDLES: &[&str] = &[
     "GtkComboBoxText",
     "GtkTextView",
     "GtkTextBuffer",
-    // What `gtk_container_add` takes; the cast at the call site is the C
-    // `GTK_CONTAINER()`.
     "GtkContainer",
     // The GtkAction era's trio, still what 3.52's composer merges through.
     "GtkAction",
     "GtkActionGroup",
     "GtkUIManager",
-    // The refusal dialog: constructed as a message dialog, run as a dialog,
-    // parented on a window — three names for the same pointer, each cast
-    // written down.
+    // The refusal dialog: constructed, run and parented through three names
+    // for the same pointer.
     "GtkMessageDialog",
     "GtkDialog",
     "GtkWindow",
@@ -749,36 +504,22 @@ fn main() {
                 .iter()
                 .map(|p| format!("-I{}", p.display())),
         );
-        // Evolution's libraries live in its own private directory
-        // (`/usr/lib/evolution`) rather than in the system one, so a binary
-        // that links them has to record where they were found or it will not
-        // start. Nothing here has to arrange that: both `.pc` files carry a
-        // `-Wl,-R<libdir>` in their `Libs:` for exactly this reason, and the
-        // `pkg_config` crate forwards it as a link argument — the test binaries
-        // come out with the directory in their `RUNPATH`, checked with
-        // `readelf -d`.
+        // Evolution's libraries live in `/usr/lib/evolution`, not a system
+        // directory, so a linking binary needs its RUNPATH recorded or it
+        // will not start; both `.pc` files carry `-Wl,-R<libdir>` for this,
+        // forwarded by `pkg_config` as a link argument.
         //
-        // That forwarding stops at this package, though: Cargo scopes
-        // `rustc-link-arg` to the crate whose build script emitted it, while
-        // the `-l` flags it also emits are passed on to everything that links
-        // this crate. A dependent therefore links fine and comes out with no
-        // `RUNPATH` at all, which is a binary that cannot start. So the
-        // directories are published as build-script metadata — reachable to a
-        // dependent as `DEP_EVOLUTION_SHELL_LIBDIRS`, by way of this crate's
-        // `links` key — and `jmap-config`'s own `build.rs` turns them back into
-        // an rpath for the binaries it produces.
+        // That forwarding stops at this crate: `rustc-link-arg` is scoped to
+        // the crate that emitted it, so a dependent links fine but gets no
+        // RUNPATH. The directories are republished as build-script metadata
+        // (`DEP_EVOLUTION_SHELL_LIBDIRS`, via this crate's `links` key), and
+        // `jmap-config`'s own `build.rs` turns them back into an rpath.
         //
-        // Read from `lib.ld_args` (the `-Wl,...` linker options the `.pc`
-        // files actually spell out), not `lib.link_paths` (every `-L` search
-        // directory pkg-config's recursive `Requires:` resolution turns up,
-        // most of it standard system dirs the two `.pc` files never asked to
-        // be rpathed at all) — `lib.link_paths` was tried first and made a
-        // lintian-clean `.deb` (cmake/tests/check-deb-lintian.cmake) impossible:
-        // the installed module came out with `/usr/lib` and
-        // `/usr/lib/x86_64-linux-gnu` in its `RUNPATH` alongside the one
-        // directory anything here is actually for, and lintian's
-        // `custom-library-search-path` flags a RUNPATH entry regardless of
-        // whether the directory is also a default one.
+        // Read from `lib.ld_args` (the actual `-Wl,...` the `.pc` files spell
+        // out), not `lib.link_paths` (every `-L` pkg-config's recursive
+        // `Requires:` resolution turns up): that came out with `/usr/lib` in
+        // the RUNPATH too, which lintian's `custom-library-search-path`
+        // flags regardless of whether the directory is also a default one.
         for arg in &lib.ld_args {
             let mut words = arg.iter();
             while let Some(word) = words.next() {
@@ -801,15 +542,12 @@ fn main() {
         }
     }
 
-    // A colon-separated list, as every other library path in the loader's world
-    // is; a directory with a colon in its name would break it, and would break
-    // `LD_LIBRARY_PATH` and `-Wl,-rpath` in exactly the same way.
+    // Colon-separated, as every other library path in the loader's world is.
     println!("cargo:libdirs={}", link_paths.join(":"));
 
-    // Which menu/action layer wrapper.h's `JMAP_EVO_EUI_MANAGER` picks
-    // between (see `MIN_EVO_EUI_MANAGER`) and what jmap-ui's own `#[cfg]`s key
-    // off. Both packages probed above share one Evolution release, so either
-    // version answers the question; the loop keeps whichever answered first.
+    // Which menu/action layer `wrapper.h`'s `JMAP_EVO_EUI_MANAGER` picks
+    // between (see `MIN_EVO_EUI_MANAGER`), and what jmap-ui's own `#[cfg]`s
+    // key off.
     let eui_manager = evo_version
         .as_deref()
         .map(version_major_minor)
@@ -818,12 +556,9 @@ fn main() {
     if eui_manager {
         println!("cargo:rustc-cfg=evolution_eui_manager");
     }
-    // `cargo:rustc-cfg` only reaches this crate's own compilation; jmap-ui's
-    // `#[cfg(evolution_eui_manager)]` needs the same answer for itself, and
-    // gets it the way it already gets `DEP_EVOLUTION_SHELL_LIBDIRS` — this
-    // crate's `links = "evolution-shell"` key, Cargo's own channel for a
-    // build script telling a dependent something (`cargo:eui_manager=1` here
-    // becomes `DEP_EVOLUTION_SHELL_EUI_MANAGER` there).
+    // `cargo:rustc-cfg` only reaches this crate's own compilation; jmap-ui
+    // gets the same answer via `DEP_EVOLUTION_SHELL_EUI_MANAGER`, the same
+    // `links` channel that carries `DEP_EVOLUTION_SHELL_LIBDIRS`.
     println!("cargo:eui_manager={}", u8::from(eui_manager));
 
     let mut builder = bindgen::Builder::default()
@@ -852,19 +587,16 @@ fn main() {
         ));
     }
 
-    // Two GTK *value* types the surface mentions, supplied rather than
-    // generated: `Gtk.*` is blocklisted wholesale, but a plain C enum has no
-    // layout for two copies to disagree about (`ECalClientSourceType`'s
-    // argument in ALLOWED_TYPES). `GtkAssistantPageType` is a field of the
-    // generated `EMailConfigPageInterface` — never written here, the
-    // interface's own default stands. `GtkOrientation` is what `gtk_box_new`
-    // takes; the one value anything here passes gets its GTK name back.
+    // Two GTK *value* types, supplied rather than generated (`Gtk.*` is
+    // blocklisted wholesale, but a plain C enum has no layout to disagree
+    // about). `GtkAssistantPageType` is a field of `EMailConfigPageInterface`,
+    // never written here. `GtkOrientation` is what `gtk_box_new` takes.
     builder = builder
         .raw_line("pub type GtkAssistantPageType = ::std::os::raw::c_uint;")
         .raw_line("pub type GtkOrientation = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_ORIENTATION_VERTICAL: GtkOrientation = 1;")
-        // `gtk_message_dialog_new`'s three enum arguments, same argument as
-        // the two above; only the values the refusal dialog passes are named.
+        // `gtk_message_dialog_new`'s three enum arguments; only the values
+        // the refusal dialog passes are named.
         .raw_line("pub type GtkDialogFlags = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_DIALOG_MODAL: GtkDialogFlags = 1;")
         .raw_line("pub const GTK_DIALOG_DESTROY_WITH_PARENT: GtkDialogFlags = 2;")
@@ -872,19 +604,14 @@ fn main() {
         .raw_line("pub const GTK_MESSAGE_ERROR: GtkMessageType = 3;")
         .raw_line("pub type GtkButtonsType = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_BUTTONS_CLOSE: GtkButtonsType = 2;")
-        // `gtk_dialog_run`'s answer, for the custom-time dialog. Negative
-        // values, as GtkResponseType's built-ins are.
+        // `gtk_dialog_run`'s answer, for the custom-time dialog.
         .raw_line("pub const GTK_RESPONSE_OK: ::std::os::raw::c_int = -5;")
         .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;");
 
-    // And Evolution's, which need the struct tag as well as the typedef: unlike
-    // the GTK ones, which bindgen writes into the signatures under their typedef
-    // name, a blocklisted `EMailConfigServicePage` comes through as
-    // `_EMailConfigServicePage` — the spelling the header's `typedef struct`
-    // introduces. So the handle is defined under the tag, which is what the
-    // generated declarations refer to, and aliased to the name the headers and
-    // the callers use; that is also how bindgen itself writes every Evolution
-    // class it does generate.
+    // Evolution's handles need the struct tag as well as the typedef: a
+    // blocklisted `EMailConfigServicePage` comes through as
+    // `_EMailConfigServicePage`, the header's own `typedef struct` spelling,
+    // so the handle is defined under the tag and aliased to the public name.
     for t in EVO_HANDLES {
         builder = builder.raw_line(format!(
             "#[repr(C)]\npub struct _{t} {{\n    _opaque: [u8; 0],\n}}\npub type {t} = _{t};"
