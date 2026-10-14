@@ -69,9 +69,14 @@
 //! create (absent then present) and no-op (absent on both, or present with
 //! the same name) by varying an `Option<String>` name independently on each
 //! side, with the key held constant where an entry exists on either side.
-//! Scoped out, left for later: an entry with more than a name (so a clear
-//! would remove only `locations/<key>/name` and keep the rest, the branch
-//! this increment's shape never reaches).
+//!
+//! Also covered: `locations` with a member besides `name`, held constant
+//! (a `description`, chosen only because `maps_locations` never looks at it)
+//! while `name` varies as before. The entry no longer holds nothing but the
+//! name, so a clear takes `diff_locations`'s other branch: only
+//! `locations/<key>/name` is removed, and `description` rides through the
+//! patch untouched on both sides, exactly the branch the increment above
+//! scoped out.
 //!
 //! Also covered: `alerts` (`diff_alerts`), restricted to the exact shapes
 //! `read_alert` ever produces for an offset trigger — relative to the start,
@@ -411,6 +416,18 @@ fn arb_features() -> impl Strategy<Value = Option<Value>> {
 /// produces, nothing a clear would need to reach past to delete.
 fn location_value(name: &str) -> Value {
     json!({"@type": "Location", "name": name})
+}
+
+/// A Location entry with a `description` beside the name, the one member
+/// `maps_locations` never inspects: present, a clear has something left to
+/// keep, so `diff_locations` removes only the name rather than the whole
+/// property.
+fn location_value_with_description(name: &Option<String>, description: &str) -> Value {
+    let mut place = json!({"@type": "Location", "description": description});
+    if let Some(name) = name {
+        place["name"] = Value::String(name.clone());
+    }
+    place
 }
 
 /// An offset `drawn_trigger` always draws back unchanged, relative to the
@@ -875,6 +892,24 @@ proptest! {
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn locations_with_extra_member_round_trip(
+        key in arb_key(),
+        description in arb_text(),
+        old_name in arb_place_name(),
+        new_name in arb_place_name(),
+    ) {
+        let mut old_event = stable(base());
+        old_event.locations = Some(
+            [(key.clone(), location_value_with_description(&old_name, &description))].into(),
+        );
+        let mut new_event = stable(base());
+        new_event.locations = Some(
+            [(key.clone(), location_value_with_description(&new_name, &description))].into(),
+        );
+        round_trips(&old_event, &new_event)?;
     }
 
     #[test]
