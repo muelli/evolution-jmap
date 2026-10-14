@@ -11,8 +11,8 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
 
 use eds_sys::{
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_REQUIRED,
@@ -43,108 +43,18 @@ use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, CollectionLayout, Doomed, Fanout, Parts, Requested};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
-
-struct CapturingSubscriber {
-    captured: Arc<Mutex<Vec<(Level, String, String)>>>,
-}
-
-struct Recorder<'a> {
-    level: Level,
-    sink: &'a Mutex<Vec<(Level, String, String)>>,
-}
-
-impl Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_owned()));
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-}
-
-impl Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Recorder {
-            level: *event.metadata().level(),
-            sink: &self.captured,
-        });
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
 
 mod common;
 use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run();
-    });
-    std::mem::take(&mut *captured.lock().unwrap())
-}
-
 fn untraced<T>(run: impl FnOnce() -> T) -> T {
-    let subscriber = CapturingSubscriber {
-        captured: Arc::new(Mutex::new(Vec::new())),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run()
-    })
+    capture(run).0
 }
 
 fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
@@ -388,7 +298,7 @@ fn authenticate_with_traces_structured_fields() {
             .secure(false);
 
         let mut error = ptr::null_mut();
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let result = unsafe {
                 authenticate_with(
                     source.0,
@@ -420,7 +330,7 @@ fn authenticate_with_no_parts_traces_fast_path() {
         let source = TestSource::new("acc-empty-parts").parts(Parts::NONE);
 
         let mut error = ptr::null_mut();
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let result = unsafe {
                 authenticate_with(
                     source.0,
@@ -453,7 +363,7 @@ fn create_on_server_traces_structured_fields() {
             display_name: "Personal Contacts".to_owned(),
         };
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let _ =
                 create_on_server(&target, false, Credentials::none(), &requested).expect("created");
         });
@@ -498,7 +408,7 @@ fn delete_on_server_traces_structured_fields() {
             collection_id: created.collection_id.clone(),
         };
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             delete_on_server(&target, false, Credentials::none(), &doomed).expect("deleted");
         });
 
@@ -539,7 +449,7 @@ fn fan_out_traces_structured_fields() {
 
         let collection = MockCollection::default();
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let _ = unsafe { fan_out(&collection, &login) }.expect("fanned out");
         });
 
@@ -572,7 +482,7 @@ fn adopt_created_traces_structured_fields() {
         };
         let conn = connection();
 
-        let captured = capture(|| unsafe {
+        let (_, captured) = capture(|| unsafe {
             adopt_created(scratch.source, &child, &conn, "account-123", None).expect("adopted");
         });
 
@@ -597,7 +507,7 @@ fn offer_deletion_traces_remote_deletable() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::new("regular-source");
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let offered = unsafe { offer_deletion(source.0) };
             assert!(!offered);
         });
@@ -615,7 +525,7 @@ fn stored_password_of_traces_structured_fields() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::new("account-uid-xyz");
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let password = unsafe {
                 stored_password_of(ptr::null_mut(), source.0, ptr::null_mut(), "test_context")
             };
@@ -643,7 +553,7 @@ fn populate_traces_structured_fields() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let populating = MockPopulating::default();
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let restored =
                 unsafe { populate(&populating, Parts::ALL, Some("vera@example.com"), false) };
             assert!(restored.is_some());
@@ -688,7 +598,7 @@ fn remove_obsolete_traces_obsolete_count() {
         };
         let sources: Vec<*mut ESource> = Vec::new();
 
-        let captured = capture(|| {
+        let (_, captured) = capture(|| {
             let not_removed = unsafe { remove_obsolete(&fanout, &sources) };
             assert!(not_removed.is_empty());
         });
