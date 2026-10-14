@@ -158,9 +158,18 @@
 //! the same code the series' own scalar properties use, already proven
 //! round-trip-safe by the increments above, so the per-field values reuse
 //! those same domains. Scoped out, left for later: `start`/`timeZone` (the
-//! id's own meaning) and `keywords`/`alerts` (whole-set restated fields,
-//! needing the same `maps_keyword`/`maps_alerts` gating their series-level
-//! counterparts use).
+//! id's own meaning).
+//!
+//! Also covered: `keywords` and `alerts` as restated override fields, the two
+//! whole-set members of `OVERRIDE_PROPERTIES`. `maps_override_field` gates
+//! each the same way its series-level counterpart does (one `maps_keyword`
+//! draws per tag, one `drawn_alert` draws per entry, and never empty: an
+//! empty object is written the same way as a removal), and `base()` carries
+//! neither, so a present value always differs from the series and
+//! `instance_patch` always restates it back, needing no "expected" event.
+//! Scoped out, left for later: an override holding a tag or alert the gate
+//! refuses, which the series-level increments already found needs the
+//! three-event "expected" shape.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -500,13 +509,38 @@ fn arb_exclusions() -> impl Strategy<Value = BTreeMap<String, Value>> {
     })
 }
 
+/// A non-empty `keywords` restated field: one or more `arb_tag`s, the shape
+/// `maps_override_field` accepts (every tag `maps_keyword` draws, never
+/// empty: an empty object is written the same way as a removal).
+fn arb_restated_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_set(arb_tag(), 1..4).prop_map(|tags| {
+        tags.into_iter()
+            .map(|tag| (tag, Value::Bool(true)))
+            .collect()
+    })
+}
+
+/// A non-empty `alerts` restated field: one or more keyed `arb_offset`
+/// reminders, the shape `maps_override_field` accepts (every entry
+/// `drawn_alert` draws, never empty, same reason as `arb_restated_keywords`).
+fn arb_restated_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_map(arb_key(), arb_offset(), 1..4).prop_map(|entries| {
+        entries
+            .into_iter()
+            .map(|(k, o)| (k, alert_value(&o)))
+            .collect()
+    })
+}
+
 /// One instance's restated fields: every plain scalar `OVERRIDE_PROPERTIES`
-/// member, independently present or absent. `duration` is drawn from 2..12
-/// hours rather than `duration_round_trip`'s 1..12, so a present value always
-/// differs from `base()`'s own `PT1H` and `instance_patch` always restates
-/// it; every other field differs from `base()`'s `None` regardless of value.
-/// At least one field is present, since an empty patch draws no instance at
-/// all (`modified_instance` returns `None`).
+/// member plus `keywords` and `alerts`, independently present or absent.
+/// `duration` is drawn from 2..12 hours rather than `duration_round_trip`'s
+/// 1..12, so a present value always differs from `base()`'s own `PT1H` and
+/// `instance_patch` always restates it; every other field differs from
+/// `base()`'s `None` regardless of value. At least one field is present,
+/// since an empty patch draws no instance at all (`modified_instance`
+/// returns `None`).
+#[allow(clippy::type_complexity)]
 fn arb_restated_override() -> impl Strategy<Value = Map<String, Value>> {
     (
         prop::option::of(arb_text()),
@@ -518,10 +552,22 @@ fn arb_restated_override() -> impl Strategy<Value = Map<String, Value>> {
         prop::option::of(prop::sample::select(&["free", "busy"][..])),
         prop::option::of(prop::sample::select(&["public", "private", "secret"][..])),
         prop::option::of(0i64..=9),
+        prop::option::of(arb_restated_keywords()),
+        prop::option::of(arb_restated_alerts()),
     )
         .prop_filter(
             "at least one field restated",
-            |(title, description, hours, status, free_busy_status, privacy, priority)| {
+            |(
+                title,
+                description,
+                hours,
+                status,
+                free_busy_status,
+                privacy,
+                priority,
+                keywords,
+                alerts,
+            )| {
                 title.is_some()
                     || description.is_some()
                     || hours.is_some()
@@ -529,10 +575,22 @@ fn arb_restated_override() -> impl Strategy<Value = Map<String, Value>> {
                     || free_busy_status.is_some()
                     || privacy.is_some()
                     || priority.is_some()
+                    || keywords.is_some()
+                    || alerts.is_some()
             },
         )
         .prop_map(
-            |(title, description, hours, status, free_busy_status, privacy, priority)| {
+            |(
+                title,
+                description,
+                hours,
+                status,
+                free_busy_status,
+                privacy,
+                priority,
+                keywords,
+                alerts,
+            )| {
                 let mut patch = Map::new();
                 if let Some(title) = title {
                     patch.insert("title".to_owned(), Value::String(title));
@@ -557,6 +615,22 @@ fn arb_restated_override() -> impl Strategy<Value = Map<String, Value>> {
                 }
                 if let Some(priority) = priority {
                     patch.insert("priority".to_owned(), Value::from(priority));
+                }
+                if let Some(keywords) = keywords {
+                    // Serialising a set this generator built cannot fail: it
+                    // holds strings and `true`.
+                    patch.insert(
+                        "keywords".to_owned(),
+                        serde_json::to_value(keywords).unwrap_or(Value::Null),
+                    );
+                }
+                if let Some(alerts) = alerts {
+                    // Serialising a map this generator built cannot fail: it
+                    // holds two objects of strings.
+                    patch.insert(
+                        "alerts".to_owned(),
+                        serde_json::to_value(alerts).unwrap_or(Value::Null),
+                    );
                 }
                 patch
             },
