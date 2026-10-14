@@ -209,6 +209,13 @@
 //! and a key `edited` drops must survive applying the patch unchanged. This
 //! needs a check against the unpatched property rather than a round trip to
 //! `edited`, unlike `links_round_trip` above.
+//!
+//! Also covered: `virtualLocations`' key add/drop, the same shape as
+//! `links`' above and for the same reason: `diff_virtual_locations` only
+//! ever patches an existing key's members, never creating one `edited` adds
+//! or removing one it drops. `name`/`features` are held absent throughout,
+//! since this increment is about the key set, not the member-level patch
+//! `virtual_locations_round_trip` already covers.
 
 use std::collections::BTreeMap;
 
@@ -1046,6 +1053,67 @@ proptest! {
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn virtual_locations_key_add_and_drop_left_alone(
+        key_kept in arb_key(),
+        key_dropped in arb_key(),
+        key_added in arb_key(),
+        old_uri in arb_href(),
+        new_uri in arb_href(),
+        dropped_uri in arb_href(),
+        added_uri in arb_href(),
+    ) {
+        prop_assume!(key_kept != key_dropped && key_kept != key_added && key_dropped != key_added);
+
+        let mut old_event = base();
+        old_event.virtual_locations = Some(
+            [
+                (key_kept.clone(), virtual_location_value(&old_uri, &None, &None)),
+                (key_dropped.clone(), virtual_location_value(&dropped_uri, &None, &None)),
+            ]
+            .into(),
+        );
+        let mut new_event = base();
+        new_event.virtual_locations = Some(
+            [
+                (key_kept.clone(), virtual_location_value(&new_uri, &None, &None)),
+                (key_added.clone(), virtual_location_value(&added_uri, &None, &None)),
+            ]
+            .into(),
+        );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+
+        prop_assert!(diff(&current, &current).is_empty());
+        let patch = diff(&current, &edited);
+
+        // Only the retained key's uri may move; the dropped and added keys
+        // are left entirely alone, per diff_virtual_locations's no-create,
+        // no-remove design.
+        let mut expected = Map::new();
+        if old_uri != new_uri {
+            expected.insert(
+                format!("virtualLocations/{key_kept}/uri"),
+                Value::String(new_uri.clone()),
+            );
+        }
+        prop_assert_eq!(&patch, &expected);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        let applied_places = applied.virtual_locations.expect("virtualLocations still present");
+        let current_places = current.virtual_locations.expect("current carried virtualLocations");
+
+        prop_assert_eq!(applied_places.get(&key_dropped), current_places.get(&key_dropped));
+        prop_assert!(!applied_places.contains_key(&key_added));
+        prop_assert_eq!(
+            applied_places.get(&key_kept).and_then(|entry| entry.get("uri")),
+            Some(&Value::String(new_uri)),
+        );
     }
 
     #[test]
