@@ -773,6 +773,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-collection-sync",
  "evolution-jmap-mock",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",

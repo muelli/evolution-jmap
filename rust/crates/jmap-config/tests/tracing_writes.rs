@@ -7,91 +7,16 @@
 //! discovery, client registration, protected-resource indicator probing,
 //! PKCE query / token form preparation, and JMAP config lookup.
 
-use std::sync::{Arc, Mutex};
-
 use jmap_client::resolver::{Resolver, SrvTarget};
 use jmap_client::transport::UreqTransport;
 use jmap_config::config_lookup::probe_host;
 use jmap_config::oauth2_setup::discover_and_register;
 use jmap_mock::MockServer;
+use jmap_tracing_capture::capture;
 use serde_json::json;
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use tracing::Level;
 
 const REDIRECT_URI: &str = "https://client.example.org/callback";
-
-struct CapturingSubscriber {
-    captured: Arc<Mutex<Vec<(Level, String, String)>>>,
-}
-
-struct Recorder<'a> {
-    level: Level,
-    sink: &'a Mutex<Vec<(Level, String, String)>>,
-}
-
-impl Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_owned()));
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-}
-
-impl Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Recorder {
-            level: *event.metadata().level(),
-            sink: &self.captured,
-        });
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
-
-static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-
-fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run();
-    });
-    std::mem::take(&mut *captured.lock().unwrap())
-}
 
 fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
     captured
@@ -128,7 +53,7 @@ fn discover_and_register_traces_issuer_and_client_id_on_success() {
         .start();
     let (host, port) = host_and_port(&server);
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = discover_and_register(
             &UreqTransport::default(),
             host,
@@ -160,7 +85,7 @@ fn discover_and_register_traces_warning_on_unsupported_grant() {
         .start();
     let (host, port) = host_and_port(&server);
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = discover_and_register(
             &UreqTransport::default(),
             host,
@@ -188,7 +113,7 @@ fn discover_and_register_traces_warning_on_missing_registration_endpoint() {
         .start();
     let (host, port) = host_and_port(&server);
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = discover_and_register(
             &UreqTransport::default(),
             host,
@@ -217,7 +142,7 @@ fn probe_host_traces_domain_and_srv_record() {
         }
     }
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let result = probe_host("user@example.com", None, &MockResolver);
         assert_eq!(result.as_deref(), Some("jmap.example.com:8443"));
     });
@@ -332,7 +257,7 @@ mod own_oauth2_service {
                 Some(g_free),
             );
 
-            let captured_query = capture(|| {
+            let (_, captured_query) = capture(|| {
                 e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
             });
 
@@ -358,7 +283,7 @@ mod own_oauth2_service {
                 Some(g_free),
             );
 
-            let captured_form = capture(|| {
+            let (_, captured_form) = capture(|| {
                 e_oauth2_service_prepare_get_token_form(
                     service,
                     source.0,
@@ -379,7 +304,7 @@ mod own_oauth2_service {
                 Some(g_free),
             );
 
-            let captured_refresh = capture(|| {
+            let (_, captured_refresh) = capture(|| {
                 e_oauth2_service_prepare_refresh_token_form(
                     service,
                     source.0,
