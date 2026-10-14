@@ -1,28 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! That the module registers `jmap_config::oauth2_service::Service` — the
-//! real-server-readiness half of the current roadmap priority, and last
-//! session's own "next session" note.
+//! That the module registers `jmap_config::oauth2_service::Service` with the
+//! real `evolution-source-registry` registry, the process where a JMAP
+//! account's OAuth2 token actually gets refreshed.
 //!
-//! `evolution-source-registry` is where a JMAP account's OAuth2 token
-//! actually gets refreshed, so this is where the service belongs. That
-//! module calls `e_oauth2_service_office365_type_register(type_module)`
-//! beside its backend/factory registrations — no `g_object_new`, no
-//! `e_oauth2_services_add` anywhere in that codebase, here or in
-//! evolution-ews.
-//!
-//! **Correction (2026-08-23, item 11's EWS-parity audit):** this comment
-//! used to add "and nothing more... and nowhere else," reading
-//! `module-ews-backend.c` as the *only* place evolution-ews registers
-//! `EOAuth2ServiceOffice365`. That was wrong, not just incomplete — item 12
-//! already found the registry-only registration insufficient for this
-//! project's own book/cal backends (an infinite consent loop), and
-//! re-reading evolution-ews's actual source confirms why: it registers the
-//! same service in `module-ews-configuration.c` (the shell process),
-//! `e-book-backend-ews-factory.c`, and `e-cal-backend-ews-factory.c` too —
-//! four modules, exactly matching this project's own four. See
-//! `docs/EWS-PARITY.md` for the full module-registration comparison.
+//! evolution-ews registers its own `EOAuth2ServiceOffice365` the same way,
+//! but not only there: it also registers it in the shell process and in its
+//! book/cal backend factories (`module-ews-configuration.c`,
+//! `e-book-backend-ews-factory.c`, `e-cal-backend-ews-factory.c`) — four
+//! modules, matching this project's own four. See `docs/EWS-PARITY.md` for
+//! the full module-registration comparison.
 //!
 //! The reason one call is enough: `EOAuth2ServiceBase` (`e-oauth2-service-base.c`,
 //! read rather than assumed) is itself an `EExtension` whose

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-backend-collection` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-backend-collection`.
 //!
 //! Asserts structured fields attached to `tracing` events during collection
 //! authentication, fan-out discovery, resource creation, resource deletion,

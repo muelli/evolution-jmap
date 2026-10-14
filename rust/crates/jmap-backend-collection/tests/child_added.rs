@@ -524,9 +524,9 @@ fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
 // compile-time constants. Ours lives in `[JMAP OAuth2]`, and when only the
 // account carried it, any child-context refresh ran with no client id, no
 // token endpoint and no scope — so the first expired access token turned into
-// a full re-consent instead of a silent refresh. Observed live 2026-08-26:
-// the registry prepared a refresh-token form for a memory-only calendar
-// child's uid, and the shell escalated to the consent window.
+// a full re-consent instead of a silent refresh: the registry prepared a
+// refresh-token form for a memory-only calendar child's uid, and the shell
+// escalated to the consent window.
 
 fn oauth2_config() -> jmap_config::oauth2::Config {
     jmap_config::oauth2::Config {
