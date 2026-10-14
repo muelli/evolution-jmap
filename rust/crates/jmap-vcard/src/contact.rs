@@ -3,15 +3,13 @@
 
 //! JSContact [`ContactCard`] to vCard 3.0 mapping used by the address book backend.
 //!
-//! The mapping is intentionally partial. It emits the properties Evolution can
-//! round-trip through EDS fields and leaves unsupported data to the save path,
-//! which patches only mapped properties.
+//! This mapping is intentionally partial. It emits fields Evolution can
+//! round-trip through EDS and leaves unsupported data to save-time patching.
+//! Helper predicates (`states_*`) define exactly what each emitted line states,
+//! so unseen data is preserved. `X_JMAP_UID` and `X_JMAP_KEY` keep stable
+//! identity where vCard has no keyed slot.
 //!
-//! Lossy areas are explicit and helper predicates (`states_*`) describe what an
-//! edited line actually states so unseen data is preserved. `X_JMAP_UID` and
-//! `X_JMAP_KEY` carry stable identity where vCard fields have no keyed slot.
-//!
-//! Key constraints are per-property:
+//! Main constraints:
 //! - `ORG` and `NICKNAME` shape keyed maps into vCard 3.0 value forms.
 //! - `TITLE` and `ROLE` map known title kinds only.
 //! - `ADR` and `LABEL` map address parts that have real vCard fields.
@@ -55,16 +53,15 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 
 /// JSContact `contexts` keys and their vCard `TYPE` spelling.
 ///
-/// A line states at most *one* of them — see [`context_slot`] — because EDS
-/// files a line by its `TYPE` into whichever per-context field matches, and
-/// matches more than one when the line carries more than one.
+/// A line states at most one context, see [`context_slot`], so EDS keeps each
+/// line in exactly one editable context slot.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
 /// JSContact phone `features` and their vCard `TYPE` spelling, **most
 /// specific first**.
 ///
-/// A line states at most *one* of them, for the reason [`CONTEXTS`] gives, and
-/// the order here is which one — see [`feature_slot`].
+/// A line states at most one feature, and this order controls which feature is
+/// emitted first, see [`feature_slot`].
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -75,8 +72,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
 
 /// The vCard `TYPE` parameter names recognized for each JSContact phone feature on inbound parsing.
 ///
-/// In addition to standard vCard 3.0 type names (e.g. `CELL`), recognizes common synonyms
-/// emitted by real-world vCard generators (e.g. `MOBILE`).
+/// Includes common synonyms emitted by real-world generators, for example
+/// `MOBILE` alongside vCard's standard `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -87,8 +84,7 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
 
 /// JSContact address component kinds, paired with their position in the
 /// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
-/// street, locality, region, postal code, country), listed in that order —
-/// which is the order a reader gives the components it finds.
+/// street, locality, region, postal code, country), in on-wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -221,8 +217,7 @@ const DEFAULT_TITLE_KIND: &str = "title";
 
 /// The kind of a JSContact title, with the default filled in.
 ///
-/// The save path has to agree with this side about what an unsaid kind
-/// means, or it will patch a `kind` onto every card that left it out.
+/// Save logic must use the same default to avoid adding `kind` spuriously.
 pub fn title_kind(kind: Option<&str>) -> &str {
     kind.unwrap_or(DEFAULT_TITLE_KIND)
 }
@@ -236,16 +231,9 @@ fn maps_title_kind(kind: Option<&str>) -> bool {
 
 /// Whether the `N` value written for a name states this component.
 ///
-/// Anything that saves a card back to the server has to know exactly which
-/// JSContact fields a vCard can carry, or it will overwrite the ones it
-/// silently dropped on the way in. The predicates below are that knowledge,
-/// kept next to the tables they answer for.
-///
-/// Two things keep a component off the line, and the question is the same for
-/// both: `N` has no field for its kind, or it says nothing to put in one.
-/// `name_fields` leaves an empty component out exactly as it leaves an empty
-/// entry off a card, so a save reading absence as a removal must ask about the
-/// value too — the same "was this stated" [`states_context`] asks of a `TYPE`.
+/// Save logic uses this to distinguish "not mappable" from "mappable but
+/// absent". A component is stated only when its kind maps to an `N` field and
+/// its value is non-empty.
 pub fn states_name_component(component: &NameComponent) -> bool {
     !component.value.is_empty() && name_field(&component.kind).is_some()
 }
@@ -495,9 +483,7 @@ fn names_a_uri(value: &str) -> bool {
 /// Whether a media entry reaches the user at all: it must be a photo, and the
 /// bytes or the URI it names must be something a `PHOTO` line can state.
 ///
-/// `photo` is where each of those is spelled out — the single point this and
-/// [`card_to_vcard`] agree through, so an entry cannot be called visible here
-/// and then left off the vCard.
+/// `photo` is the shared decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
@@ -506,17 +492,11 @@ pub fn states_media(media: &Media) -> bool {
 /// gets no line.
 ///
 /// An entry has no line when:
-/// - it is not a photo. RFC 9553 §2.6.4 keeps all three kinds of media in one
-///   map, and RFC 2426 §3.1.4's `PHOTO` is the picture *of the contact*; a
-///   `logo`, a `sound` or a vendor kind on that line would show the user the
-///   wrong image. An entry naming no kind at all is malformed — §2.6.4 makes
-///   `kind` mandatory — and is treated the same way rather than guessed at.
+/// - it is not a photo. `PHOTO` carries only contact photos, so other media
+///   kinds and missing kinds are ignored.
 /// - it points nowhere, which says no more than an `EMAIL:` with no address.
-/// - it carries its bytes as a `data:` URI (RFC 2397) that does not spell them
-///   as base64, or spells them as base64 this side cannot decode. `ENCODING=b`
-///   is the only encoding an EDS-bound vCard 3.0 `PHOTO` carries, and handing
-///   EDS a value it would decode into a broken image is worse than showing the
-///   user no picture: the save cannot repair what it never sends.
+/// - it uses `data:` bytes that are not decodable base64, so writing
+///   `ENCODING=b` would emit broken image data.
 fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
@@ -535,14 +515,8 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
 /// Whether two media entries state the same `PHOTO` line — the same picture,
 /// however each of them spells it.
 ///
-/// What the save compares, for the reason [`online_service_handle`] is what it
-/// compares for a handle: the line is what the user saw, and the entry read back
-/// off it is not the entry that produced it. A `data:` URI may leave its base64
-/// padding off (RFC 4648 §3.2) where the line carries the canonical spelling,
-/// and a media type the URI stated arrives as the entry's own `mediaType`, so
-/// comparing the members would call an untouched picture an edit and rewrite it
-/// on every save. The subtypes are compared case-insensitively, as RFC 2045 §5.1
-/// defines them.
+/// Save compares this rendered form, not raw JSContact members, so base64
+/// padding and media-type normalization do not trigger false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
     match (photo(one), photo(other)) {
         (None, None) => true,
@@ -581,13 +555,8 @@ enum Photo<'a> {
 /// The subtype of an `image/*` media type, which is all a `PHOTO` line's `TYPE`
 /// may state, or `None` for a media type the parameter cannot say.
 ///
-/// EDS builds the photo's mime type by putting `image/` in front of the `TYPE`:
-/// measured against libebook-contacts 3.52, `TYPE=JPEG` arrives as `image/JPEG`
-/// and `TYPE=image/jpeg` as `image/image/jpeg`, which names no format at all.
-/// So the parameter states the subtype alone — and for bytes whose media type is
-/// not an image, nothing: EDS accepts a line with no `TYPE` and reports no mime
-/// type for it, which is honest, where `TYPE=pdf` would tell the address book the
-/// bytes are an image format that does not exist.
+/// EDS reconstructs the mime type as `image/<TYPE>`, so this extracts only the
+/// subtype and omits `TYPE` for non-image media types.
 fn image_subtype(media_type: &str) -> Option<&str> {
     // The media type's own parameters (`;charset=…`) are no part of its name.
     let name = media_type.split(';').next().unwrap_or_default().trim();
@@ -596,11 +565,8 @@ fn image_subtype(media_type: &str) -> Option<&str> {
 
 /// A base64 payload as its bytes: the standard alphabet, padded or not.
 ///
-/// The bytes are decoded here and re-encoded by [`photo`] rather than copied
-/// across from the URI, so that the line carries the canonical spelling of what
-/// the URI meant. A `data:` URI is written by hand as often as by a library, and
-/// it is glib's base64 reader that decodes the line at the other end, not the one
-/// that wrote the URI.
+/// [`photo`] decodes then re-encodes to canonicalize spelling before writing
+/// `ENCODING=b`.
 fn decoded(payload: &str) -> Option<Vec<u8>> {
     BASE64
         .decode(payload)
@@ -609,8 +575,7 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
 }
 
 /// `value` without `prefix`, comparing it case-insensitively — for a URI scheme
-/// and a media type, both of which RFC 3986 §3.1 and RFC 2045 §5.1 define as
-/// case-insensitive.
+/// and a media type, both case-insensitive in RFC 3986 §3.1 and RFC 2045 §5.1.
 fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let start = value.get(..prefix.len())?;
     start
