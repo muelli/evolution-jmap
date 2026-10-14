@@ -40,6 +40,7 @@ libc = "0.2.189"
 # Self dev-dependency to enable `testing` for crate test targets.
 jmap-backend-cal = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
 # Error variant inspection and timezone resolution test assertions.
 evolution-jmap-ical = { workspace = true }
 # JSON test values for timeZones definitions.
