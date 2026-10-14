@@ -648,6 +648,54 @@ fn arb_restated_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
     })
 }
 
+/// An RFC 5545 §3.3.14 UTC-OFFSET `utc_offset` draws back byte-identical:
+/// already its own short `±hhmm` form, and never the negative zero the
+/// grammar forbids.
+fn arb_utc_offset() -> impl Strategy<Value = String> {
+    (proptest::bool::ANY, 0u32..24, 0u32..60).prop_filter_map(
+        "not -0000",
+        |(negative, hour, minute)| {
+            if negative && hour == 0 && minute == 0 {
+                return None;
+            }
+            Some(format!(
+                "{}{hour:02}{minute:02}",
+                if negative { "-" } else { "+" }
+            ))
+        },
+    )
+}
+
+/// A custom `TimeZoneId` (RFC 8984 §1.4.9's solidus-prefixed second form)
+/// paired with the one-observance `TimeZone` definition that names it.
+///
+/// `vtimezone_of` draws the single `standard` rule whole (RFC 5545 §3.6.5's
+/// minimum, one subcomponent), and with no `recurrenceRules` or `names`
+/// member, `read_time_zones` reads it back as exactly this shape, `tzId`
+/// included: the round trip the test below depends on.
+fn arb_custom_zone() -> impl Strategy<Value = (String, Value)> {
+    (
+        "[a-zA-Z0-9]{1,10}",
+        arb_start(),
+        arb_utc_offset(),
+        arb_utc_offset(),
+    )
+        .prop_map(|(suffix, start, offset_from, offset_to)| {
+            let tzid = format!("/example.com/{suffix}");
+            let definition = json!({
+                "@type": "TimeZone",
+                "tzId": tzid,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": start,
+                    "offsetFrom": offset_from,
+                    "offsetTo": offset_to,
+                }],
+            });
+            (tzid, definition)
+        })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -856,6 +904,18 @@ proptest! {
         let mut new_event = base();
         new_event.recurrence_overrides = (!new.is_empty()).then_some(new);
         let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn custom_time_zone_definition_is_added_when_moved_into(
+        (tzid, definition) in arb_custom_zone(),
+    ) {
+        let current = stable(base());
+        let mut new_event = base();
+        new_event.time_zone = Some(tzid.clone());
+        new_event.time_zones = Some([(tzid, definition)].into());
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
     }
