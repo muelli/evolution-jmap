@@ -216,6 +216,15 @@
 //! or removing one it drops. `name`/`features` are held absent throughout,
 //! since this increment is about the key set, not the member-level patch
 //! `virtual_locations_round_trip` already covers.
+//!
+//! Also covered: a `virtualLocations` entry whose `uri` stops being one
+//! `names_a_uri` accepts. `drawn_conference` refuses to write a `CONFERENCE`
+//! line for such a value, so the entry never comes back from the
+//! `event_to_ical`/`ical_to_event` round trip at all — a different code path
+//! from the key-drop case above, which never puts the entry in the input
+//! event to begin with. The end state `diff_virtual_locations` reaches is the
+//! same (the key is left entirely alone), but this increment exercises the
+//! write-side filter that gets it there.
 
 use std::collections::BTreeMap;
 
@@ -1110,6 +1119,72 @@ proptest! {
 
         prop_assert_eq!(applied_places.get(&key_dropped), current_places.get(&key_dropped));
         prop_assert!(!applied_places.contains_key(&key_added));
+        prop_assert_eq!(
+            applied_places.get(&key_kept).and_then(|entry| entry.get("uri")),
+            Some(&Value::String(new_uri)),
+        );
+    }
+
+    #[test]
+    fn virtual_locations_uri_stops_naming_a_place_left_alone(
+        key_kept in arb_key(),
+        key_vanishing in arb_key(),
+        old_uri in arb_href(),
+        new_uri in arb_href(),
+        kept_uri in arb_href(),
+        not_a_uri in arb_text(),
+    ) {
+        prop_assume!(key_kept != key_vanishing);
+
+        let mut old_event = base();
+        old_event.virtual_locations = Some(
+            [
+                (key_kept.clone(), virtual_location_value(&old_uri, &None, &None)),
+                (key_vanishing.clone(), virtual_location_value(&kept_uri, &None, &None)),
+            ]
+            .into(),
+        );
+        let mut new_event = base();
+        new_event.virtual_locations = Some(
+            [
+                (key_kept.clone(), virtual_location_value(&new_uri, &None, &None)),
+                (key_vanishing.clone(), virtual_location_value(&not_a_uri, &None, &None)),
+            ]
+            .into(),
+        );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+
+        // drawn_conference refuses to write a CONFERENCE line for a value
+        // names_a_uri rejects, so the vanishing key never comes back from the
+        // round trip at all, unlike the retained one.
+        let edited_places = edited.virtual_locations.clone().unwrap_or_default();
+        prop_assert!(!edited_places.contains_key(&key_vanishing));
+        prop_assert!(edited_places.contains_key(&key_kept));
+
+        prop_assert!(diff(&current, &current).is_empty());
+        let patch = diff(&current, &edited);
+
+        // Same no-create, no-remove shape as the key-drop case: only the
+        // retained key's uri may move, the vanished one is left entirely
+        // alone.
+        let mut expected = Map::new();
+        if old_uri != new_uri {
+            expected.insert(
+                format!("virtualLocations/{key_kept}/uri"),
+                Value::String(new_uri.clone()),
+            );
+        }
+        prop_assert_eq!(&patch, &expected);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        let applied_places = applied.virtual_locations.expect("virtualLocations still present");
+        let current_places = current.virtual_locations.expect("current carried virtualLocations");
+
+        prop_assert_eq!(applied_places.get(&key_vanishing), current_places.get(&key_vanishing));
         prop_assert_eq!(
             applied_places.get(&key_kept).and_then(|entry| entry.get("uri")),
             Some(&Value::String(new_uri)),
