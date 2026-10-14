@@ -252,6 +252,19 @@
 //! event to begin with. The end state `diff_virtual_locations` reaches is the
 //! same (the key is left entirely alone), but this increment exercises the
 //! write-side filter that gets it there.
+//!
+//! Also covered: the `keywords` and `alerts` refusal cases the two paragraphs
+//! above scope out. A `keywords` tag `current` holds with a non-bool value
+//! (`maps_keyword` refuses it regardless of the tag name) is carried forward
+//! by `diff_keywords` beside whatever `edited` states for the tags that do
+//! map, so this needs the three-event "expected" shape the book-sync
+//! anniversaries/media/online_services increments used. An `alerts` entry
+//! `current` holds with an `AbsoluteTrigger` (`drawn_trigger` maps neither
+//! direction) makes `maps_alerts(current)` false, so `diff_alerts` drops the
+//! whole property instead of carrying the one entry forward: there is no key
+//! to leave unnamed in a property replaced whole, so the check is that the
+//! patch states no `alerts` member at all and the applied event's `alerts`
+//! is `current`'s own, unchanged.
 
 use std::collections::BTreeMap;
 
@@ -591,6 +604,16 @@ fn alert_value_related(offset: &str, related: Option<&str>) -> Value {
 /// `drawn_trigger` reads a `relativeTo` member back as.
 fn arb_related() -> impl Strategy<Value = Option<&'static str>> {
     prop::option::of(Just("end"))
+}
+
+/// An Alert shape `drawn_trigger` never maps either direction: an
+/// `AbsoluteTrigger` (RFC 8984 §4.5.4), which only `OffsetTrigger` does.
+fn unmappable_alert_value() -> Value {
+    json!({
+        "@type": "Alert",
+        "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T12:00:00Z"},
+        "action": "display",
+    })
 }
 
 /// An `alerts` map of 0 to 4 keyed reminders, every one an `arb_offset` and
@@ -1125,6 +1148,30 @@ proptest! {
     }
 
     #[test]
+    fn keywords_carry_forward_tag_maps_keyword_refuses(
+        carried_tag in arb_tag(),
+        tags in arb_keywords(),
+    ) {
+        prop_assume!(!tags.contains_key(&carried_tag));
+
+        let mut current = base();
+        current.keywords = Some([(carried_tag.clone(), Value::Bool(false))].into());
+        let mut new_event = base();
+        new_event.keywords = Some(tags.clone());
+        let edited = stable(new_event);
+
+        let patch = diff(&current, &edited);
+
+        let mut wanted = tags;
+        wanted.insert(carried_tag, Value::Bool(false));
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        prop_assert_eq!(applied.keywords, Some(wanted), "patch was: {:?}", patch);
+    }
+
+    #[test]
     fn locations_round_trip(
         key in arb_key(),
         old_name in arb_place_name(),
@@ -1170,6 +1217,28 @@ proptest! {
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn alerts_left_alone_when_current_holds_one_maps_alerts_refuses(
+        mut alerts in arb_alerts(),
+        new in arb_alerts(),
+    ) {
+        alerts.insert("unmappable".to_owned(), unmappable_alert_value());
+        let mut current = base();
+        current.alerts = Some(alerts);
+        let mut new_event = base();
+        new_event.alerts = (!new.is_empty()).then_some(new);
+        let edited = stable(new_event);
+
+        let patch = diff(&current, &edited);
+        prop_assert!(!patch.contains_key("alerts"), "patch was: {:?}", patch);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        prop_assert_eq!(applied.alerts, current.alerts);
     }
 
     #[test]
