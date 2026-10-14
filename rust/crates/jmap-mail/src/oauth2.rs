@@ -170,10 +170,10 @@ unsafe fn trace_failure(error: *const GError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
-    use std::sync::{Arc, Mutex};
 
     use gio_sys::{G_DBUS_ERROR_SERVICE_UNKNOWN, g_dbus_error_quark, g_io_error_quark};
     use glib_sys::g_error_new_literal;
+    use jmap_tracing_capture::capture;
 
     use super::*;
 
@@ -187,74 +187,11 @@ mod tests {
         unsafe { g_error_new_literal(domain, code, message.as_ptr()) }
     }
 
-    /// Records every event's field name to value, duplicated from
-    /// `jmap_mail::service`'s own harness for the same reason that one gives:
-    /// this crate depends on `tracing`, not `tracing-subscriber`.
-    struct CapturingSubscriber {
-        captured: Arc<Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a> {
-        sink: &'a Mutex<Vec<(String, String)>>,
-    }
-
-    impl tracing::field::Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.sink
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-            self.sink
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_string()));
-        }
-
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.sink
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_owned()));
-        }
-    }
-
-    impl tracing::Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            event.record(&mut Recorder {
-                sink: &self.captured,
-            });
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
-    fn run_captured(error: *const GError) -> (Option<String>, Vec<(String, String)>) {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
+    fn run_captured(
+        error: *const GError,
+    ) -> (Option<String>, Vec<(tracing::Level, String, String)>) {
         // SAFETY: every caller passes NULL or a live GError it owns and frees.
-        let message =
-            tracing::subscriber::with_default(subscriber, || unsafe { trace_failure(error) });
-        let captured = captured.lock().unwrap().clone();
-        (message, captured)
+        capture(|| unsafe { trace_failure(error) })
     }
 
     /// A dead D-Bus peer behind the OAuth 2.0 token fetch: traced as
@@ -285,11 +222,15 @@ mod tests {
             Some("The name :1.4 was not provided by any .service files")
         );
         assert!(
-            captured.contains(&("reason".to_owned(), "service_gone".to_owned())),
+            captured
+                .iter()
+                .any(|(_, name, value)| name == "reason" && value == "service_gone"),
             "expected reason=service_gone, got {captured:?}"
         );
         assert!(
-            captured.contains(&("escalates_to_consent".to_owned(), "false".to_owned())),
+            captured
+                .iter()
+                .any(|(_, name, value)| name == "escalates_to_consent" && value == "false"),
             "expected escalates_to_consent=false, got {captured:?}"
         );
     }
@@ -311,7 +252,9 @@ mod tests {
 
         assert_eq!(message.as_deref(), Some("no registered OAuth2 service"));
         assert!(
-            captured.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            captured
+                .iter()
+                .any(|(_, name, value)| name == "escalates_to_consent" && value == "true"),
             "expected escalates_to_consent=true, got {captured:?}"
         );
     }
@@ -323,7 +266,9 @@ mod tests {
         let (message, captured) = run_captured(std::ptr::null());
         assert_eq!(message, None);
         assert!(
-            captured.contains(&("reason".to_owned(), "null_error".to_owned())),
+            captured
+                .iter()
+                .any(|(_, name, value)| name == "reason" && value == "null_error"),
             "expected reason=null_error, got {captured:?}"
         );
     }
