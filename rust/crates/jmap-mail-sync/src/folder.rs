@@ -682,7 +682,7 @@ mod tests {
         assert!(before.same_shape(&after));
     }
 
-    /// A new mailbox is a shape change: the roadmap's "created" case.
+    /// A new mailbox is a shape change.
     #[test]
     fn same_shape_notices_a_new_mailbox() {
         let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
