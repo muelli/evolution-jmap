@@ -1005,25 +1005,17 @@ fn rekey_keyless<T: Clone>(
 /// The component list a save writes: what the `ADR` line now states, with
 /// everything it had no field for left where it was.
 ///
-/// Like [`merge_units`] this is a list with no keys to patch by, so it is
-/// [`merge_named`] that does the merging — a component is recognised by what it
-/// says, same kind and same value, and one that still says it keeps the members
-/// the line could not carry, its `phonetic` spelling above all.
+/// Like [`merge_units`], a list has no keys to patch by, so [`merge_named`]
+/// merges by kind and value, keeping a surviving component's unmapped
+/// members, its `phonetic` spelling above all. [`restore_address_components`]
+/// runs first, splitting back apart what a single `ADR` field concatenated
+/// (a street name and its house number), so the merge does not read both
+/// halves as deleted and replaced by their own join.
 ///
-/// What is this side's own is the step before: matching by value only works
-/// once the components a single `ADR` field was
-/// built from have been told apart again, which is
-/// [`restore_address_components`]' job: a street name and its house number
-/// come back from the vCard as one street, and would otherwise both read as
-/// deleted and be replaced by their own concatenation.
-///
-/// An address with *no* components on the edited side is merged all the same,
-/// rather than being taken for the user having emptied the address. It is a
-/// reachable state and it does not mean that: an address whose components are
-/// all of kinds `ADR` has no field for is shown on its `LABEL` alone, and an
-/// `ADR` whose every field the user cleared states nothing either. Both come
-/// back with nothing in them, and in both the components that were never on
-/// the line are still not the user's to have deleted.
+/// An edited side with *no* components is still merged rather than read as
+/// the address being cleared: an `ADR` whose every field the user cleared,
+/// and an address shown on `LABEL` alone (all its components of kinds `ADR`
+/// has no field for), both arrive here empty without meaning that.
 fn merge_components(
     current: Option<&[AddressComponent]>,
     edited: Option<&[AddressComponent]>,
