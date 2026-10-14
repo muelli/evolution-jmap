@@ -166,8 +166,17 @@
 //! actually written" rule, so the generator always carries a `byDay` beside
 //! it: a weekday is valid at every frequency drawn here, so it is always
 //! one of the parts `rule_to_rrule` writes, and `bySetPos` is therefore
-//! always writable when present. `until` stays scoped out, a separate
-//! zone-dependent conversion.
+//! always writable when present. `until` stays scoped out here, covered
+//! below.
+//!
+//! Also covered: `recurrenceRule`'s `until`, a rule restricted to frequency
+//! plus `until` alone, round tripped under both a UTC and a non-UTC named
+//! zone (`zoned_base`). `rule_to_rrule` writes a `Z` suffix only for `Ends::
+//! In` a zone `is_utc` names, and `read_until` only reverses that suffix for
+//! the same zone identity check (no `VTIMEZONE` observance is involved for a
+//! plain named zone, matching the `timeZone` increment above), so the two
+//! zones exercise both of `until`'s write/read branches. `until` is drawn
+//! from `arb_start`'s format, which `writable` always accepts.
 //!
 //! Also covered: `recurrenceOverrides` (`diff_overrides`), restricted to the
 //! bare `{"excluded": true}` shape (an `EXDATE`). `override_maps_by` accepts
@@ -289,6 +298,12 @@ fn base() -> CalendarEvent {
         .with_start("2026-01-15T13:00:00")
         .with_time_zone("Europe/Berlin")
         .with_duration("PT1H")
+}
+
+/// `base()` with its own zone replaced: the zone `until` states against
+/// (RFC 5545 §3.3.10, [`jmap_ical::event::Ends::In`]).
+fn zoned_base(zone: &str) -> CalendarEvent {
+    base().with_time_zone(zone)
 }
 
 /// A midnight start, a whole-day duration and no time zone: the three
@@ -763,6 +778,19 @@ fn arb_recurrence_rule_by_parts() -> impl Strategy<Value = RecurrenceRule> {
                 },
             )
     })
+}
+
+/// A `RecurrenceRule` restricted to frequency plus `until`, no other part: a
+/// shape [`maps_recurrence_rule`] always accepts (`writable`, since `until`
+/// is `arb_start`'s format and always has a `to_ical_date_time` reading; no
+/// `BYxxx`, `extra`, `rscale` or `skip`). Isolates `until`'s own
+/// zone-dependent conversion from the frequency/interval/count shape
+/// `arb_recurrence_rule` already covers.
+///
+/// [`maps_recurrence_rule`]: jmap_ical::maps_recurrence_rule
+fn arb_recurrence_rule_with_until() -> impl Strategy<Value = RecurrenceRule> {
+    (arb_frequency(), arb_start())
+        .prop_map(|(frequency, until)| RecurrenceRule::new(frequency).with_until(until))
 }
 
 /// A `recurrenceOverrides` map restricted to the bare `{"excluded": true}`
@@ -1434,6 +1462,21 @@ proptest! {
         let mut old_event = base();
         old_event.recurrence_rule = Some(old);
         let mut new_event = base();
+        new_event.recurrence_rule = Some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_rule_until_round_trip(
+        zone in prop_oneof![Just("Etc/UTC"), Just("America/New_York")],
+        old in arb_recurrence_rule_with_until(),
+        new in arb_recurrence_rule_with_until(),
+    ) {
+        let mut old_event = zoned_base(zone);
+        old_event.recurrence_rule = Some(old);
+        let mut new_event = zoned_base(zone);
         new_event.recurrence_rule = Some(new);
         let current = stable(old_event);
         let edited = stable(new_event);
