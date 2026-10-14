@@ -488,15 +488,9 @@ pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
 
-/// What a `PHOTO` line states for one media entry, or `None` for an entry that
-/// gets no line.
+/// Renders one media entry as `PHOTO` content, or `None` when it cannot be emitted.
 ///
-/// An entry has no line when:
-/// - it is not a photo. `PHOTO` carries only contact photos, so other media
-///   kinds and missing kinds are ignored.
-/// - it points nowhere, which says no more than an `EMAIL:` with no address.
-/// - it uses `data:` bytes that are not decodable base64, so writing
-///   `ENCODING=b` would emit broken image data.
+/// Returns `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
 fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
@@ -512,11 +506,10 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
     })
 }
 
-/// Whether two media entries state the same `PHOTO` line — the same picture,
-/// however each of them spells it.
+/// Whether two media entries render to the same `PHOTO` line.
 ///
-/// Save compares this rendered form, not raw JSContact members, so base64
-/// padding and media-type normalization do not trigger false edits.
+/// Comparison uses rendered form so base64 padding and media-type case do not
+/// trigger false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
     match (photo(one), photo(other)) {
         (None, None) => true,
@@ -542,31 +535,25 @@ pub fn same_photo(one: &Media, other: &Media) -> bool {
 
 /// What a `PHOTO` line states: the bytes, or where to fetch them.
 enum Photo<'a> {
-    /// The picture itself, base64 as `ENCODING=b` wants it, and the subtype
-    /// [`image_subtype`] read off its media type.
+    /// Inline image bytes plus optional subtype for `TYPE`.
     Inline {
         subtype: Option<&'a str>,
         base64: String,
     },
-    /// A URI to fetch the picture from, for a card that only points at one.
+    /// URI form for cards that reference, not embed, a picture.
     Uri(&'a str),
 }
 
-/// The subtype of an `image/*` media type, which is all a `PHOTO` line's `TYPE`
-/// may state, or `None` for a media type the parameter cannot say.
+/// Returns the subtype from an `image/*` media type for `PHOTO` `TYPE`.
 ///
-/// EDS reconstructs the mime type as `image/<TYPE>`, so this extracts only the
-/// subtype and omits `TYPE` for non-image media types.
+/// Non-image types return `None` because EDS reconstructs `image/<TYPE>`.
 fn image_subtype(media_type: &str) -> Option<&str> {
     // The media type's own parameters (`;charset=…`) are no part of its name.
     let name = media_type.split(';').next().unwrap_or_default().trim();
     strip_prefix_ci(name, IMAGE_PREFIX).filter(|subtype| !subtype.is_empty())
 }
 
-/// A base64 payload as its bytes: the standard alphabet, padded or not.
-///
-/// [`photo`] decodes then re-encodes to canonicalize spelling before writing
-/// `ENCODING=b`.
+/// Decodes base64 payload bytes, accepting padded and unpadded forms.
 fn decoded(payload: &str) -> Option<Vec<u8>> {
     BASE64
         .decode(payload)
@@ -574,8 +561,7 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// `value` without `prefix`, comparing it case-insensitively — for a URI scheme
-/// and a media type, both case-insensitive in RFC 3986 §3.1 and RFC 2045 §5.1.
+/// Case-insensitive prefix strip used for URI schemes and media types.
 fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let start = value.get(..prefix.len())?;
     start
@@ -590,17 +576,12 @@ fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
     end.eq_ignore_ascii_case(suffix).then(|| &value[..split])
 }
 
-/// Whether a handle at an online service reaches the user at all.
-///
-/// Delegates to [`drawn_service`], which checks mapping and round-trip safety.
+/// Whether an online-service entry can be emitted as a visible handle.
 pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
 
-/// The mapped property and handle for a drawable service entry.
-///
-/// Returns `None` when service is unmapped, no handle can be extracted, or the
-/// handle would not round-trip unchanged through EDS.
+/// Returns mapped property and handle for an emit-ready service entry.
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
     let handle = online_service_handle(service)?;
@@ -608,9 +589,7 @@ fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     drawable.then_some((property, handle))
 }
 
-/// The emitted handle for a service entry.
-///
-/// Prefers `user`; falls back to extracting a plain handle from `uri`.
+/// Emits `user` when present, else extracts a plain handle from `uri`.
 pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     match service.user.as_deref() {
         Some(user) => Some(user),
@@ -630,29 +609,17 @@ fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
     (matches && plain_handle(handle)).then_some(handle)
 }
 
-/// The URI a service would state a handle under, or `None` when there is no
-/// scheme for the service or no URI that would say just this handle.
+/// Returns `<scheme>:<handle>` for services with a known plain-handle URI form.
 ///
-/// The save path's other half: the entry the server stated as a URI is patched
-/// as one, rather than answered with a `user` it never had. `None` is not a
-/// failure — it means the rename has to change the entry's shape, which is
-/// always allowed and never wrong, only less faithful.
+/// `None` means no compatible scheme exists or the handle is not URI-safe.
 pub fn online_service_uri(service: &str, handle: &str) -> Option<String> {
     let scheme = service_scheme(service)?;
     plain_handle(handle).then(|| format!("{scheme}:{handle}"))
 }
 
-/// Whether a URI's scheme-specific part is a bare handle.
+/// Whether a URI tail is a bare handle safe for read and write paths.
 ///
-/// A path, a query, a fragment or a percent-encoding means the URI says more
-/// than who the contact is — `skype:echo123?call` names an action, and
-/// `xmpp:vera%40jabber.example` states a handle this side would have to decode
-/// and the next save would have to re-encode. Whitespace is out for the reason
-/// it is out of a `user`: a URI cannot hold it, so a handle carrying one has no
-/// URI to go back into.
-///
-/// Used in both directions, so that a handle read out of a URI is exactly a
-/// handle that can be written back into one.
+/// Rejects paths, queries, fragments, percent-encoding, and whitespace.
 fn plain_handle(handle: &str) -> bool {
     !handle.is_empty()
         && !handle.contains(['/', '?', '#', '%'])
