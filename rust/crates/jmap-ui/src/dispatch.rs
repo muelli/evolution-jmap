@@ -5,14 +5,14 @@
 //!
 //! Every feature in this crate has the same shape: a callback fires on the
 //! main loop, the JMAP round trip must not block it, and the answer has to
-//! land back on the main loop — where widgets may be touched — but only if
+//! land back on the main loop (where widgets may be touched) but only if
 //! the widget still exists. jmap-backend-core has both halves
 //! ([`WeakBackend`], [`guard`]); what it never needed is the bridge between
 //! them, because EDS backends are driven *by* worker threads while a UI is
 //! driven by the main loop. This is that bridge.
 //!
 //! "Main loop" here is the global default `GMainContext`, which in Evolution
-//! is owned by GTK's main loop. In a process where nothing owns it — a test —
+//! is owned by GTK's main loop. In a process where nothing owns it (a test),
 //! GLib runs an invoked function on whichever thread called, so the tests
 //! below acquire the context first to get the queueing the shell provides for
 //! free.
@@ -41,7 +41,7 @@ where
         if let Some(f) = payload.take() {
             guard("jmap-ui main-loop dispatch", (), f);
         }
-        GFALSE // one shot — G_SOURCE_REMOVE
+        GFALSE // one shot, G_SOURCE_REMOVE
     }
     unsafe extern "C" fn drop_payload(data: gpointer) {
         // SAFETY: reclaiming the box `on_main` leaked, exactly once: GLib
@@ -65,7 +65,7 @@ where
 }
 
 /// Run `work` on its own thread, then `finish(object, answer)` on the global
-/// main context — or not at all, when `object` died in the meantime. The weak
+/// main context, or not at all, when `object` died in the meantime. The weak
 /// reference is what makes a closed composer or settings page unreachable
 /// rather than dangling.
 ///

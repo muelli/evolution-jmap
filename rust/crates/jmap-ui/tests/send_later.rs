@@ -97,9 +97,11 @@ fn a_server_without_a_drafts_mailbox_refuses_before_uploading() {
     );
 }
 
-/// The gate the composer reads: a deployment without FUTURERELEASE answers
-/// `max_hold: None`, which is what keeps the menu insensitive — and the
-/// server refuses a hold anyway if something submits regardless.
+/// The gate the composer reads: `max_hold` comes from `maxDelayedSend` alone
+/// (see `AccountFeatures`), so a deployment advertising neither it nor
+/// FUTURERELEASE, as this mock defaults to, answers `max_hold: None`, which
+/// keeps the menu insensitive; the server refuses a hold anyway if something
+/// submits regardless.
 #[test]
 fn a_server_without_futurerelease_gates_the_feature_off() {
     let server = MockServer::builder().start();

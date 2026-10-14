@@ -24,8 +24,9 @@ use std::fmt;
 use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_DBUS_ERROR, E_CLIENT_ERROR_INVALID_ARG,
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_ERROR,
-    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED, EClientError,
-    ENamedParameters, ESource, ESourceAuthenticationResult, e_client_error_create,
+    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED,
+    E_SOURCE_AUTHENTICATION_UNKNOWN, EClientError, ENamedParameters, ESource,
+    ESourceAuthenticationResult, e_client_error_create,
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
@@ -173,9 +174,20 @@ impl ConnectError {
     /// the server said the credentials were wrong. A 403 is *not* that case —
     /// the credentials were accepted and the account is not allowed — and a
     /// server that is down is not either.
+    ///
+    /// `UNKNOWN` is reserved for
+    /// [`Error::is_redirect_credentials_withheld`][jmap_client::Error::is_redirect_credentials_withheld]:
+    /// every other value, `ERROR` included, makes EDS's own
+    /// `ensure_connected_sync` schedule interactive consent regardless of
+    /// what this method returns, and a redirect that withheld credentials is
+    /// not a rejected password re-prompting could fix, only a connection
+    /// failure that would hit the exact same redirect again.
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
+            Self::Client(error) if error.is_redirect_credentials_withheld() => {
+                E_SOURCE_AUTHENTICATION_UNKNOWN
+            }
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
             // Every other case, `SecretStore` and `ServiceGone` included:
             // deliberately not `REQUIRED` for those two — a dead secret store
@@ -634,6 +646,26 @@ mod tests {
         assert_eq!(
             ConnectError::OAuth2("consent required".to_owned()).auth_result(),
             E_SOURCE_AUTHENTICATION_REQUIRED
+        );
+    }
+
+    /// `ensure_connected_sync` (EDS 3.52.3 `e-book-meta-backend.c:3598-3630`)
+    /// calls `e_backend_schedule_credentials_required`, the interactive
+    /// consent escalation, for every `auth_result` except `UNKNOWN`, which is
+    /// also the only one it propagates a real `GError` for rather than
+    /// clearing it into a bogus success. A redirect that withheld credentials
+    /// is not fixed by asking the user to consent again, only by asking again
+    /// and again against the same redirect: the endless OAuth2 popup loop
+    /// item 101 reports.
+    #[test]
+    fn a_redirect_that_withheld_credentials_is_unknown_not_an_escalation() {
+        assert_eq!(
+            ConnectError::Client(Error::RedirectCredentialsWithheld {
+                requested: "https://a.example/.well-known/jmap".to_owned(),
+                followed: "https://b.example/.well-known/jmap".to_owned(),
+            })
+            .auth_result(),
+            E_SOURCE_AUTHENTICATION_UNKNOWN
         );
     }
 

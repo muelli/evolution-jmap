@@ -432,7 +432,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_sasl_get_type",
     "camel_sasl_xoauth2_get_type",
     // Upstream's own dynamically-configured XOAUTH2 mechanism (SASL name
-    // "OAuth2Dynamic"), e-d-s `bf6e074`, item 91's replacement for this
+    // "OAuth2Dynamic"), e-d-s `bf6e074`, a built-in alternative to this
     // provider's `CamelSaslXOAuth2Jmap` on a host whose EDS has it. Only the
     // type accessor, not the type itself: like `CamelSaslXOAuth2Google` and
     // its two siblings, this is one of EDS's own built-in subclasses that

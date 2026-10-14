@@ -322,6 +322,25 @@ pub struct CalendarEvent {
     /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_origin: Option<bool>,
+    /// End time zone if different from event start time zone (jscalendarbis §4.1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_time_zone: Option<String>,
+    /// Identifies the main physical location for iCalendar LOCATION interoperability
+    /// (jscalendarbis §3.2.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_location_id: Option<Id>,
+    /// Sequence number of the scheduling status (draft-ietf-jmap-calendars §5.2.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_sequence: Option<u32>,
+    /// When the scheduling status was last updated (draft-ietf-jmap-calendars §5.2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_updated: Option<UtcDate>,
+    /// Whether the user may add themselves as a participant (draft §5.1.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_invite_self: Option<bool>,
+    /// Whether the user may invite other participants (draft §5.1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_invite_others: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -434,6 +453,36 @@ impl CalendarEvent {
             status: Some("confirmed".to_owned()),
             ..Self::default()
         }
+    }
+
+    pub fn with_end_time_zone(mut self, end_time_zone: impl Into<String>) -> Self {
+        self.end_time_zone = Some(end_time_zone.into());
+        self
+    }
+
+    pub fn with_main_location_id(mut self, main_location_id: impl Into<Id>) -> Self {
+        self.main_location_id = Some(main_location_id.into());
+        self
+    }
+
+    pub fn with_schedule_sequence(mut self, sequence: u32) -> Self {
+        self.schedule_sequence = Some(sequence);
+        self
+    }
+
+    pub fn with_schedule_updated(mut self, updated: UtcDate) -> Self {
+        self.schedule_updated = Some(updated);
+        self
+    }
+
+    pub fn may_invite_self(mut self, may_invite_self: bool) -> Self {
+        self.may_invite_self = Some(may_invite_self);
+        self
+    }
+
+    pub fn may_invite_others(mut self, may_invite_others: bool) -> Self {
+        self.may_invite_others = Some(may_invite_others);
+        self
     }
 
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
@@ -719,10 +768,11 @@ pub mod privacy {
     pub const SECRET: &str = "secret";
 }
 
-/// Standard JSCalendar (RFC 8984 §4.4.6) participant roles.
+/// Standard JSCalendar (RFC 8984 §4.4.6 / jscalendarbis §3.4.6) participant roles.
 pub mod participant_role {
     pub const OWNER: &str = "owner";
     pub const ADMIN: &str = "admin";
+    pub const REQUIRED: &str = "required";
     pub const ATTENDEE: &str = "attendee";
     pub const OPTIONAL: &str = "optional";
     pub const INFORMATIONAL: &str = "informational";
@@ -779,54 +829,183 @@ pub mod participant_attendance {
     pub const INFORMATIONAL: &str = "informational";
 }
 
-/// JSCalendar Participant (RFC 8984 §4.4.6): an attendee or organizer of the event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+/// JSCalendar Participant (jscalendarbis §3.4.6 / RFC 8984 §4.4.6): an attendee
+/// or organizer of the event.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Participant {
-    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub participant_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_content_type: Option<String>,
+    /// The URI that represents this participant for calendar invitations and scheduling
+    /// (jscalendarbis §3.4.6). Replaces RFC 8984's reserved `sendTo` property.
+    pub calendar_address: Option<String>,
+    /// Legacy RFC 8984 addressing methods. Tolerated on input; never emitted on output.
     pub send_to: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roles: Option<BTreeMap<String, bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participation_status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participation_comment: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attendance: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_reply: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_sequence: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_status: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_updated: Option<UtcDate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_to: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_from: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member_of: Option<BTreeMap<String, bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_updated: Option<UtcDate>,
-    #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParticipantHelper {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    participant_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description_content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calendar_address: Option<String>,
+    #[serde(default, skip_serializing)]
+    send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    roles: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    location_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    participation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    participation_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attendance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expect_reply: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_sequence: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_status: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule_updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegated_to: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegated_from: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member_of: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress_updated: Option<UtcDate>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+impl<'de> serde::Deserialize<'de> for Participant {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let helper = ParticipantHelper::deserialize(deserializer)?;
+        let calendar_address = helper.calendar_address.or_else(|| {
+            helper.send_to.as_ref().and_then(|send_to| {
+                send_to
+                    .get("imip")
+                    .or_else(|| send_to.values().next())
+                    .cloned()
+            })
+        });
+        let send_to = helper.send_to.or_else(|| {
+            calendar_address.as_ref().map(|addr| {
+                let mut map = BTreeMap::new();
+                map.insert("imip".to_owned(), addr.clone());
+                map
+            })
+        });
+        Ok(Participant {
+            participant_type: helper.participant_type,
+            name: helper.name,
+            email: helper.email,
+            description: helper.description,
+            description_content_type: helper.description_content_type,
+            calendar_address,
+            send_to,
+            kind: helper.kind,
+            roles: helper.roles,
+            location_id: helper.location_id,
+            participation_status: helper.participation_status,
+            participation_comment: helper.participation_comment,
+            attendance: helper.attendance,
+            expect_reply: helper.expect_reply,
+            schedule_agent: helper.schedule_agent,
+            schedule_sequence: helper.schedule_sequence,
+            schedule_status: helper.schedule_status,
+            schedule_updated: helper.schedule_updated,
+            delegated_to: helper.delegated_to,
+            delegated_from: helper.delegated_from,
+            member_of: helper.member_of,
+            progress: helper.progress,
+            progress_updated: helper.progress_updated,
+            extra: helper.extra,
+        })
+    }
+}
+
+impl serde::Serialize for Participant {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let calendar_address = self.calendar_address.clone().or_else(|| {
+            self.send_to.as_ref().and_then(|send_to| {
+                send_to
+                    .get("imip")
+                    .or_else(|| send_to.values().next())
+                    .cloned()
+            })
+        });
+        let helper = ParticipantHelper {
+            participant_type: self.participant_type.clone(),
+            name: self.name.clone(),
+            email: self.email.clone(),
+            description: self.description.clone(),
+            description_content_type: self.description_content_type.clone(),
+            calendar_address,
+            send_to: None,
+            kind: self.kind.clone(),
+            roles: self.roles.clone(),
+            location_id: self.location_id.clone(),
+            participation_status: self.participation_status.clone(),
+            participation_comment: self.participation_comment.clone(),
+            attendance: self.attendance.clone(),
+            expect_reply: self.expect_reply,
+            schedule_agent: self.schedule_agent.clone(),
+            schedule_sequence: self.schedule_sequence,
+            schedule_status: self.schedule_status.clone(),
+            schedule_updated: self.schedule_updated.clone(),
+            delegated_to: self.delegated_to.clone(),
+            delegated_from: self.delegated_from.clone(),
+            member_of: self.member_of.clone(),
+            progress: self.progress.clone(),
+            progress_updated: self.progress_updated.clone(),
+            extra: self.extra.clone(),
+        };
+        helper.serialize(serializer)
+    }
 }
 
 impl Participant {
@@ -866,6 +1045,35 @@ impl Participant {
 
     pub fn with_schedule_agent(mut self, schedule_agent: impl Into<String>) -> Self {
         self.schedule_agent = Some(schedule_agent.into());
+        self
+    }
+
+    pub fn with_calendar_address(mut self, address: impl Into<String>) -> Self {
+        let addr = address.into();
+        self.calendar_address = Some(addr.clone());
+        let mut map = self.send_to.unwrap_or_default();
+        map.insert("imip".to_owned(), addr);
+        self.send_to = Some(map);
+        self
+    }
+
+    pub fn with_description_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.description_content_type = Some(content_type.into());
+        self
+    }
+
+    pub fn with_send_to_method(
+        mut self,
+        method: impl Into<String>,
+        address: impl Into<String>,
+    ) -> Self {
+        let addr = address.into();
+        if self.calendar_address.is_none() {
+            self.calendar_address = Some(addr.clone());
+        }
+        let mut map = self.send_to.unwrap_or_default();
+        map.insert(method.into(), addr);
+        self.send_to = Some(map);
         self
     }
 

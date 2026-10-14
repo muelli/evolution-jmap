@@ -115,7 +115,7 @@ fn the_secret_keys_are_the_names_eds_stores_a_token_under() {
 
 // ---------------------------------------------------------------------------
 // Feature detection, not vtable dispatch: whether this EDS has upstream's
-// OAuth2Dynamic pieces at all (item 91, e-d-s `bf6e074`).
+// OAuth2Dynamic pieces at all (e-d-s `bf6e074`).
 
 /// `e_source_oauth2_client_get_type` is the marker `eds-sys/build.rs` probes
 /// for the `eds_oauth2_dynamic` cfg. No header this crate has ever built

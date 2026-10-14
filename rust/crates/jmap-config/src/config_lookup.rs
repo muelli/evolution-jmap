@@ -39,8 +39,7 @@
 //!
 //! ## The redirect URI, and a wrong guess corrected before it shipped
 //!
-//! An earlier session's plan (the three-hundred-and-fourth) was to fix
-//! `redirect_uri` to the RFC 8252 out-of-band URN,
+//! An earlier plan was to fix `redirect_uri` to the RFC 8252 out-of-band URN,
 //! `"urn:ietf:wg:oauth:2.0:oob"`. Checking that against EDS's actual
 //! `libedataserverui`/`libedataserver` source (fetched from
 //! `gitlab.gnome.org/GNOME/evolution-data-server`, `master` — this VM has no
@@ -73,7 +72,8 @@
 //! coverage `evo-sys/tests/config_lookup.rs` names as the next increment when
 //! it was written, since landed.
 //!
-//! The 307th session hand-drove this dispatch once, outside the test suite: a scratch C program linking `evolution-shell-3.0`
+//! This dispatch was also hand-driven once, outside the test suite: a
+//! scratch C program linking `evolution-shell-3.0`
 //! (which is where `EConfigLookup` actually lives — `e-util`, not any EDS
 //! library), loading this module via `e_module_load_all_in_directory`,
 //! constructing a real `ESourceRegistry`/`EConfigLookup` under

@@ -5558,6 +5558,106 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
 }
 
+/// Batch 37 Item 3: prove against the oracle that a CalendarEvent created with
+/// JSCalendar-bis participant properties (calendarAddress rather than reserved
+/// sendTo) is persisted and returned intact by Stalwart.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_set_preserves_jscalendar_bis_participants_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let suffix = unique_suffix();
+    let title = format!("agent-bis-participants-{suffix}");
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T10:00:00", "PT1H");
+    event.organizer_calendar_address = Some("mailto:admin@example.internal".to_owned());
+
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "attendee-1".to_owned(),
+        serde_json::to_value(
+            Participant::new("Alice Bis", "alice.bis@example.internal")
+                .with_calendar_address("mailto:alice.bis@example.internal")
+                .with_roles([("required".to_owned(), true)].into())
+                .with_participation_status("needs-action"),
+        )
+        .unwrap(),
+    );
+    event.participants = Some(participants);
+
+    // 1. Create event with bis participant on real server
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create with bis participant failed against the real server");
+    let event_id = created.id.clone().expect("the server named the new event");
+
+    // 2. Fetch the event back, explicitly requesting participants
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/get",
+            &GetRequest::ids(account_id.clone(), [event_id.clone()]).properties([
+                "participants",
+                "title",
+                "organizerCalendarAddress",
+            ]),
+        )
+        .expect("raw CalendarEvent/get succeeds");
+    let fetched = raw_args
+        .get("list")
+        .and_then(|list| list.as_array())
+        .and_then(|list| list.first())
+        .expect("CalendarEvent/get must return the created event");
+
+    let fetched_participants = fetched
+        .get("participants")
+        .and_then(|p| p.as_object())
+        .expect("Stalwart must preserve participants for bis calendarAddress shape");
+    assert!(
+        fetched_participants.contains_key("attendee-1"),
+        "participants must contain attendee-1, got: {fetched_participants:?}"
+    );
+    let attendee = &fetched_participants["attendee-1"];
+    assert_eq!(
+        attendee.get("calendarAddress").and_then(|v| v.as_str()),
+        Some("mailto:alice.bis@example.internal")
+    );
+
+    // 3. Client round-trip path
+    let reloaded = client
+        .event_get(&account_id, std::slice::from_ref(&event_id))
+        .expect("CalendarEvent/get failed against the real server");
+    let reloaded_event = reloaded
+        .list
+        .first()
+        .expect("CalendarEvent/get must return the created event");
+    let reloaded_participants = reloaded_event
+        .participants
+        .as_ref()
+        .expect("Client::event_get must observe preserved participants");
+    assert!(
+        reloaded_participants.contains_key("attendee-1"),
+        "reloaded participants must hold attendee-1"
+    );
+
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
 /// `VacationResponse` (RFC 8621 section 8.1) against a real server.
 /// `jmap-ui`'s vacation autoresponder page (`rust/crates/jmap-ui/src/
 /// vacation/`, Evolution's account-editor Out of Office tab) is the only

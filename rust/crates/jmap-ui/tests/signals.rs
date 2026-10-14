@@ -8,14 +8,14 @@
 //! and `g_cclosure_marshal_VOID__UINT` (`e-mail-reader.c:5374-5382`,
 //! Evolution 3.52.4), unlike `EShellView::update-actions`, which is
 //! `VOID__VOID` (`e-shell-view.c:1090-1097`). Two signals of the same name,
-//! two different handler signatures — and `jmap-ui` connects to both.
+//! two different handler signatures, and `jmap-ui` connects to both.
 //!
 //! Every `g_signal_connect_data` in this crate transmutes a handler to
 //! `unsafe extern "C" fn()`, which is what C does too and what makes the
 //! arity a thing only a reader can check. This test is the check: it builds a
 //! signal shaped exactly like the reader's and shows the marshaller calling a
-//! handler with three arguments — instance, the signal's own `guint`, then
-//! the user data — so a two-argument handler connected to it would be reading
+//! handler with three arguments (instance, the signal's own `guint`, then
+//! the user data), so a two-argument handler connected to it would be reading
 //! the signal's argument where it believes its user data is.
 
 use std::ffi::c_void;

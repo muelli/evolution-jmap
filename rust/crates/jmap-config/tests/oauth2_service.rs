@@ -690,7 +690,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
     }
 }
 
-/// F17 of the 2026-08-28 re-audit: a code exchange prepared with no stashed
+/// `docs/AUDIT-FFI-20260828.md`'s F17: a code exchange prepared with no stashed
 /// PKCE verifier is exactly the failure mode that turns into a repeating,
 /// unattributable consent window, so it must be logged loudly enough to find
 /// in the journal: `warn!`, not `debug!`. A verifier goes missing here only

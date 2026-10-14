@@ -5,9 +5,10 @@
 //! message window, which has a menu layer of its own (3.52: a GtkUIManager;
 //! 3.55+: an EUIManager, reached the same way the shell case's mail view now
 //! is, through the shared `EMailReader` interface) and *is* its own
-//! `EMailReader` — the duplication 3.52's design asks of every module
-//! (there is no shared reader-actions extension point; worth an upstream
-//! issue, tracked in the project plan).
+//! `EMailReader`. A separate extension from `snooze::shell_ext`'s for now;
+//! `src/modules/mdn/evolution-mdn.c` shows a single extension registered
+//! against `E_TYPE_MAIL_READER` covers both this window and the shell's mail
+//! view, which this crate's two could plausibly merge into.
 
 use std::ffi::CStr;
 
@@ -84,7 +85,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             e_mail_reader_get_action_group(browser.cast(), E_MAIL_READER_ACTION_GROUP_STANDARD),
         );
         // 3.55+: the browser answers for its own EUIManager through the same
-        // EMailReader accessor the shell case's mail view now uses too — one
+        // EMailReader accessor the shell case's mail view now uses too: one
         // call shared by both windows, where 3.52 needed a different one on
         // each.
         #[cfg(evolution_eui_manager)]
@@ -116,7 +117,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
 /// `EShellView`'s same-named signal is `VOID__VOID`. The `state` is the
 /// `EMailReaderActionGroup` bitmask the shell suggests updating; this
 /// extension owns one submenu and re-reads the selection either way, so it
-/// is ignored — but it has to be *declared*, or the user-data slot is the
+/// is ignored, but it has to be *declared*, or the user-data slot is the
 /// one the bitmask lands in. `tests/signals.rs` pins that shape.
 ///
 /// # Safety

@@ -5,7 +5,7 @@
 //!
 //! There is no `.so` of its own: `jmap-config-module`'s `e_module_load` calls
 //! [`load`] beside `jmap_config::module::load`, so both crates' types ride in
-//! `module-jmap-configuration.so` — one module, the EWS precedent. The
+//! `module-jmap-configuration.so`, one module, the EWS precedent. The
 //! reasoning about extension timing is jmap-config's (its `module` docs,
 //! "nothing is registered *with* anything"): putting a type in the type
 //! system before Evolution constructs the extensible *is* the wiring.

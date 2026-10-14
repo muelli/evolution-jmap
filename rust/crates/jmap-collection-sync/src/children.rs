@@ -429,10 +429,10 @@ mod tests {
 
     #[test]
     fn a_collections_own_my_rights_decides_whether_it_is_remote_deletable() {
-        // Item 40: `myRights.mayDelete` has no account-wide bit to narrow
-        // against — it is per-collection to begin with — so `false` and
-        // `true` both read straight through, and an absent `myRights` stays
-        // deletable, matching every child's state before this field existed.
+        // `myRights.mayDelete` has no account-wide bit to narrow against: it
+        // is per-collection to begin with, so `false` and `true` both read
+        // straight through, and an absent `myRights` stays deletable,
+        // matching every child's state before this field existed.
         let mut undeletable = resource("AB1", "Locked share");
         undeletable.deletable = Some(false);
         let fanout = fanout(vec![undeletable, resource("AB2", "Personal")], Vec::new());

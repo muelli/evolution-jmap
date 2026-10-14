@@ -60,9 +60,9 @@
 //!
 //! So seven vfuncs are filled, all of them either a `'static` constant or a
 //! borrow of [`oauth2`]'s own storage — none compute a string that would need
-//! freeing, which is the condition the previous session's storage work
-//! existed to reach. Three more, the `prepare_*` trio, are filled as
-//! *additive hooks*, per the next section.
+//! freeing, which is exactly the ownership shape [`oauth2`]'s module docs say
+//! that storage exists to reach. Three more, the `prepare_*` trio, are filled
+//! as *additive hooks*, per the next section.
 //!
 //! ## An additive hook, not a chain link
 //!
@@ -165,12 +165,12 @@ pub const NAME: &CStr = jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
 /// passed, alive for the duration of the call.
 pub unsafe fn register(type_module: *mut gobject_sys::GTypeModule) {
     if jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2 {
-        // No migration, by decision (Tobias, 2026-10-07): an account set up
-        // against an older EDS keeps the method "JMAP" and its `[JMAP
-        // OAuth2]` group, neither of which a build that takes this branch
-        // looks at, so it stops working and has to be set up again. Do not
-        // add migration code here. The stored tokens could not be carried
-        // over in any case: the keyring key is
+        // No migration, by design: an account set up against an older EDS
+        // keeps the method "JMAP" and its `[JMAP OAuth2]` group, neither of
+        // which a build that takes this branch looks at, so it stops working
+        // and has to be set up again. Do not add migration code here. The
+        // stored tokens could not be carried over in any case: the keyring
+        // key is
         // `OAuth2::<service name>[user][credential-store-id]`, so the old
         // ones are not visible to the new service to begin with.
         return;

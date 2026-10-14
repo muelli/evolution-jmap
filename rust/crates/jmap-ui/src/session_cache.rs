@@ -7,7 +7,7 @@
 //! Gating happens twice. Whether an account is ours at all is a synchronous
 //! `ESource`/`CamelProvider` question and stays with the widgets. This module
 //! is the second level: the server-side facts, which cost a session fetch and
-//! are therefore cached per account — one settings page, any number of
+//! are therefore cached per account: one settings page, any number of
 //! composers and shell views, one cache.
 
 use std::collections::HashMap;
@@ -30,9 +30,9 @@ pub struct AccountFeatures {
     /// `maxDelayedSend`, which RFC 8621 §7.1 defines as *the* scheduled-send
     /// gate ("0 if this feature is not supported"). Deliberately not also
     /// FUTURERELEASE among the `submissionExtensions`: Fastmail advertises
-    /// `maxDelayedSend: 44236800` beside an *empty* extensions map (checked
-    /// live, 2026-09-02) and accepts `HOLDFOR` all the same, so the stricter
-    /// reading would gate the feature off exactly where it works.
+    /// `maxDelayedSend: 44236800` beside an *empty* extensions map and
+    /// accepts `HOLDFOR` all the same, so the stricter reading would gate the
+    /// feature off exactly where it works.
     pub max_hold: Option<u64>,
     /// `Email.snoozed` is on offer: the Cyrus vendor extension
     /// ([`jmap_proto::mail::SnoozeDetails`]). Without it there is no server
@@ -44,7 +44,7 @@ pub struct AccountFeatures {
 impl AccountFeatures {
     /// Read the gates out of a session document.
     ///
-    /// `None` when no account there can be resolved for the mail capability —
+    /// `None` when no account there can be resolved for the mail capability:
     /// an account that cannot hold mail has nothing here to gate.
     pub fn from_session(session: &Session) -> Option<Self> {
         let account_id = session.resolve_primary_account(CAPABILITY_MAIL)?.clone();

@@ -84,53 +84,27 @@ cargo deny check
 cd ..
 
 echo "== CMake/CTest suite, if EDS dev headers/cmake/ninja are present =="
-# Everything CI's `build` job's own `ctest --test-dir build` runs (no -R
-# filter there), except the plain `rust-test`, already covered by the
-# `cargo test --locked` above. This used to be narrowed to just the
-# package-deb*/debian-copyright-in-sync tests, which are pure packaging/
-# doc-sync checks that need nothing beyond a CMake configure + build, unlike
-# the functional/gui-smoke legs, which need a live D-Bus/Xvfb registry this
-# script has never assumed. That narrower filter is what let `d5d3ee96` sit
-# red in CI for a day: it silently skipped `rust-test-eds` (the ctest that
-# runs `cargo test` on the EDS-gated crates `rust/Cargo.toml` keeps out of
-# default-members, `jmap-backend-core` among them) on a machine, like this
-# one, with real EDS dev headers natively, so a stale translation catalogue
-# never failed locally even though `cargo test -p jmap-backend-core` would
-# have caught it directly. The same narrow filter also missed `translations`,
-# `release-workflow` and the `install-*-backend` staging tests, none of which
-# need anything beyond what the EDS-header check below already confirms is
-# present. package-deb* is what would have caught `ac00396`'s
-# lintian-clean-.deb regression before it sat red in CI for days;
-# debian-copyright-in-sync is what would have caught
-# `docs/packaging/third-party-notices` drifting from a `Cargo.lock` bump
-# before that sat red in CI for 31+ hours (2026-09-20).
+# Runs everything the build job's own `ctest --test-dir build` runs except
+# plain `rust-test` (already covered by `cargo test --locked` above):
+# rust-test-eds (the EDS-gated crates default-members excludes), the
+# translations/release-workflow/install-*-backend staging tests, and the
+# packaging checks below. Narrowing this to just the packaging tests has
+# let real regressions in the other legs sit red in CI unnoticed; don't.
 if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
     # -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules's own configure line:
-    # without it CMAKE_INSTALL_PREFIX defaults to /usr/local, which
-    # LANGUAGE_SUPPORT_DIRECTORY (CMakeLists.txt) bakes both into the
-    # translation catalogue's install destination and into the
-    # EVOLUTION_JMAP_LOCALEDIR compiled into the Rust modules. Every other
-    # installed path in this tree either comes from pkg-config directly
-    # (the EDS/Evolution module directories, untouched unless
-    # FORCE_INSTALL_PREFIX is on) or is hardcoded to /usr
-    # (cmake/Packaging.cmake's doc/lintian-override installs), so the
-    # locale catalogue was the one install() whose destination silently
-    # tracked the CMake default instead of where this package actually
-    # ships. Invisible while po/LINGUAS had no languages in it and so
-    # installed no catalogue at all; the first language added
-    # (po/de.po) is what surfaced it, as a real lintian
-    # dir-in-usr-local/file-in-usr-local failure in package-deb-lintian.
+    # without it, CMAKE_INSTALL_PREFIX defaults to /usr/local, which
+    # LANGUAGE_SUPPORT_DIRECTORY (CMakeLists.txt) bakes into both the
+    # translation catalogue's install destination and the
+    # EVOLUTION_JMAP_LOCALEDIR compiled into the Rust modules — the one
+    # installed path in this tree that doesn't come from pkg-config or a
+    # hardcoded /usr (cmake/Packaging.cmake's doc/lintian-override installs).
     cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr >/dev/null
     ninja -C build
-    # package-deb-lintian is only registered by cmake/Packaging.cmake when
-    # `find_program(lintian)` succeeds, so on a machine without lintian the
-    # ctest filter below runs the other packaging tests, reports success, and
-    # never touches lintian at all. That silent gap is exactly what let
-    # `3930b24e` (item 80 stage 1, a RUNPATH with no matching override) pass
-    # every local pre-push run while real CI, which `ci/install-deps.sh`
-    # guarantees has lintian, sat red for 30 pushes and 24+ hours. Fail loudly
-    # instead of silently proceeding; CI_CHECKS_ALLOW_MISSING_LINTIAN=1 is the
-    # explicit, visible escape hatch for a deliberately bare machine.
+    # package-deb-lintian only registers when `find_program(lintian)`
+    # succeeds, so a machine without lintian would otherwise run the other
+    # packaging tests, report success, and never touch lintian at all.
+    # Fail loudly instead; CI_CHECKS_ALLOW_MISSING_LINTIAN=1 is the explicit
+    # escape hatch for a deliberately bare machine.
     if ! have lintian && [ -z "${CI_CHECKS_ALLOW_MISSING_LINTIAN:-}" ]; then
         echo "FAIL: lintian is not installed, so package-deb-lintian would silently" >&2
         echo "not run, the exact check CI enforces. Install lintian, or set" >&2
@@ -141,12 +115,8 @@ if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution
     if ! have lintian; then
         echo "!! CI_CHECKS_ALLOW_MISSING_LINTIAN set: package-deb-lintian will NOT run here !!" >&2
     fi
-    # debian-copyright-in-sync is gated by cmake/Packaging.cmake's own
-    # `find_program(python3)` the exact same way package-deb-lintian is gated
-    # on lintian, but it went without a loud-fail escape hatch until now.
-    # Same reasoning as the lintian case above: a bare machine should say so
-    # explicitly rather than silently report success on a filter that never
-    # touched the check at all.
+    # debian-copyright-in-sync is gated on `find_program(python3)` the same
+    # way package-deb-lintian is gated on lintian; same reasoning applies.
     if ! have python3 && [ -z "${CI_CHECKS_ALLOW_MISSING_PYTHON3:-}" ]; then
         echo "FAIL: python3 is not installed, so debian-copyright-in-sync would silently" >&2
         echo "not run, the exact check CI enforces. Install python3, or set" >&2
@@ -163,12 +133,10 @@ else
 fi
 
 echo "== repository-split boundary lint =="
-# The infrastructure split moved NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/
-# BACKLOG.md/MILESTONES.md to a private harness repository and rewrote this
-# repository's ROADMAP.md down to a thin, human-facing file with no item
-# numbers. The sweep that cleared every existing mention reached zero on
-# 2026-08-31; this now hard-fails on any new mention of those files, or of a
-# ROADMAP.md item number, in the product tree.
+# NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/BACKLOG.md/MILESTONES.md live in a
+# private harness repository; this repository's own ROADMAP.md is a thin,
+# human-facing file with no item numbers. Hard-fails on any new mention of
+# those files, or of a ROADMAP.md item number, in the product tree.
 boundary_lint_paths=(rust cmake ci debian docs)
 boundary_lint_exclude=(
     --exclude=NIGHT-LOG.md --exclude=NIGHT-LOG-archive.md
@@ -176,14 +144,8 @@ boundary_lint_exclude=(
     --exclude=BACKLOG.md --exclude=MILESTONES.md
     --exclude=ROADMAP.md --exclude=checks.sh
 )
-# NOTE 2026-08-30: the first version of this pattern required a literal space
-# in "ROADMAP.md item 23", but the form this repository actually uses is
-# `docs/ROADMAP.md` item 23, with a closing backtick in between. It therefore
-# matched 15 of the 89 real references and the sweep stopped four times
-# believing it was finished. Every ROADMAP.md mention now counts: the thin
-# roadmap that survives the split carries no item numbers, no Track headings
-# and no CURRENT PRIORITY section, so each existing citation needs a decision
-# rather than an assumption.
+# Matches any mention of these filenames, not just a "<name> item N" shape:
+# a narrower pattern silently undercounts real references.
 boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md'
 boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null || true; } | wc -l)
 if [ "$boundary_lint_count" -gt 0 ]; then

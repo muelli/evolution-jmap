@@ -141,17 +141,21 @@ pub const MAX_LINE_OCTETS: usize = 75;
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
 ///
-/// Folding is calcard's job, and its writer does it: except that a
-/// structured value's `;` separators are written *after* its fold check, and
-/// that check is skipped when the component coming next is empty text. A
-/// value whose text folds to exactly 75 octets therefore keeps every empty
-/// trailing slot on the same physical line. Additionally, calcard emits
-/// recurrence rules (`ICalendarValue::RecurrenceRule`) without line folding.
-/// Folding is defined on the octet layer: unfolding restores the same
-/// stream wherever a cut lands, so any cut is *correct*; cutting at
-/// character boundaries, and never between a `\` and the octet it escapes,
-/// additionally keeps every physical line valid UTF-8 and every escape pair
-/// whole for line-oriented readers (reported upstream as
+/// Folding is calcard's job, and its writer does it. Before calcard 0.3.13, a
+/// structured value's `;` separators were written *after* its fold check, and
+/// that check was skipped when the component coming next was empty text, so a
+/// value whose text folded to exactly 75 octets kept every empty trailing
+/// slot on the same physical line (fixed upstream in 0.3.13). Before 0.3.14,
+/// calcard also emitted recurrence rules (`ICalendarValue::RecurrenceRule`)
+/// without line folding (fixed upstream in 0.3.14). This pass is now
+/// insurance rather than an active workaround, kept because it is a single
+/// scan and it is the guarantee
+/// `prop_emitted_ical_lines_target_75_octets_and_are_valid_utf8` rests on.
+/// Folding is defined on the octet layer: unfolding restores the same stream
+/// wherever a cut lands, so any cut is *correct*; cutting at character
+/// boundaries, and never between a `\` and the octet it escapes, additionally
+/// keeps every physical line valid UTF-8 and every escape pair whole for
+/// line-oriented readers (reported upstream as
 /// <https://github.com/stalwartlabs/calcard/issues/25>).
 pub fn fold_overlong_lines(ics: String) -> String {
     if ics.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
@@ -362,10 +366,11 @@ pub const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
 ///
 /// `owner` is not here: it is the [`ORGANIZER`](OWNER_ROLE) line rather than a
 /// role on the guest list.
-pub const PARTICIPANT_ROLES: [(&str, &str); 4] = [
+pub const PARTICIPANT_ROLES: [(&str, &str); 5] = [
     ("chair", "CHAIR"),
     ("informational", "NON-PARTICIPANT"),
     ("optional", "OPT-PARTICIPANT"),
+    ("required", "REQ-PARTICIPANT"),
     ("attendee", "REQ-PARTICIPANT"),
 ];
 
@@ -929,10 +934,14 @@ pub fn stated_size(link: &Value) -> Option<String> {
 /// `read_vevent`, where `participants` stays `None`.
 pub fn calendar_address(participant: &Value) -> Option<&str> {
     participant
-        .get("sendTo")
-        .and_then(|send_to| send_to.get(IMIP))
+        .get("calendarAddress")
         .and_then(Value::as_str)
-        .or_else(|| participant.get("calendarAddress").and_then(Value::as_str))
+        .or_else(|| {
+            participant
+                .get("sendTo")
+                .and_then(|send_to| send_to.get(IMIP))
+                .and_then(Value::as_str)
+        })
         .filter(|address| names_a_uri(address))
 }
 

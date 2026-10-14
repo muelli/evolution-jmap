@@ -161,8 +161,13 @@ pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<Stri
         Some(q) => &current_url[..q],
         None => current_url,
     };
-    let last_slash = url_without_query[path_start..]
-        .rfind('/')
+    // `url_without_query` can be shorter than `path_start` when the query
+    // marker precedes the scheme (a hostile or prior-hop `current_url`), so
+    // `get` rather than index: no path region there reads the same as none
+    // found.
+    let last_slash = url_without_query
+        .get(path_start..)
+        .and_then(|rest| rest.rfind('/'))
         .map(|idx| path_start + idx);
     match last_slash {
         Some(idx) => Ok(format!("{}{location}", &current_url[..=idx])),
@@ -347,6 +352,14 @@ mod tests {
             resolve_redirect("https://example.com/foo", "//cdn.example.com/bar").unwrap(),
             "https://cdn.example.com/bar"
         );
+    }
+
+    #[test]
+    fn resolve_redirect_does_not_panic_when_the_query_marker_precedes_the_scheme() {
+        // `current_url` can be a prior hop's own resolved redirect, so it is
+        // not guaranteed to be a well-formed URL: a `?` before the `://` made
+        // `url_without_query` shorter than `path_start`, indexing past its end.
+        let _ = resolve_redirect("?://", "");
     }
 
     proptest! {

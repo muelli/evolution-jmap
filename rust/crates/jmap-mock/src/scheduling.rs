@@ -520,9 +520,12 @@ fn unescape(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
-/// Return the participant's `sendTo.imip` address.
+/// The participant's `calendarAddress`, falling back to RFC 8984 `sendTo.imip`.
 fn calendar_address(participant: &Value) -> Option<&str> {
-    participant.get("sendTo")?.get("imip")?.as_str()
+    participant
+        .get("calendarAddress")
+        .and_then(Value::as_str)
+        .or_else(|| participant.get("sendTo")?.get("imip")?.as_str())
 }
 
 fn participation_status(participant: &Value) -> Option<&str> {

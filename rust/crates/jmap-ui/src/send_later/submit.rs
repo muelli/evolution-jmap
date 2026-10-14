@@ -16,19 +16,18 @@
 //! RFC 9979 registers a `scheduled` role for exactly "composed but not yet
 //! sent", so filing a held message there instead reads like the better
 //! answer, and it is the obvious thing to try. It was tried, against
-//! Fastmail, which has such a mailbox (2026-09-04): the message sat in
-//! `scheduled` while held, was delivered on time — and then *stayed in
-//! `scheduled`*, never appearing in Sent. That folder is driven by
-//! Fastmail's own scheduled-send feature; a generic RFC 8621 submission is
-//! not wired into it, and nothing moves the copy out.
+//! Fastmail, which has such a mailbox: the message sat in `scheduled` while
+//! held, was delivered on time, and then *stayed in `scheduled`*, never
+//! appearing in Sent. That folder is driven by Fastmail's own scheduled-send
+//! feature; a generic RFC 8621 submission is not wired into it, and nothing
+//! moves the copy out.
 //!
 //! Nor can this code move it afterwards. `onSuccessUpdateEmail` fires once,
 //! when the server *accepts* the submission; JMAP has no hook at release,
-//! and the submission record is purged once delivered (watched happen), so
-//! there is not even a marker to reconcile against later. Doing it properly
-//! would mean Evolution keeping its own timer and being running at release
-//! time — the bookkeeping this project keeps refusing, for snooze and here
-//! alike.
+//! and the submission record is purged once delivered, so there is not even
+//! a marker to reconcile against later. Doing it properly would mean
+//! Evolution keeping its own timer and being running at release time: the
+//! bookkeeping this project keeps refusing, for snooze and here alike.
 //!
 //! So the message goes to Sent on acceptance. It appears there slightly
 //! before it truly goes out, which is a smaller lie than a sent message that
@@ -87,7 +86,7 @@ pub fn schedule_send(
         .ok_or_else(|| translate(c"the server imported the message without naming its id"))?;
 
     // Applied when the submission is accepted (RFC 8621 §7.5): no longer a
-    // draft, filed where sent mail goes — exactly what pressing Send leaves
+    // draft, filed where sent mail goes, exactly what pressing Send leaves
     // behind. Without a sent-role mailbox the message simply stays in Drafts,
     // un-drafted.
     let mut on_success = serde_json::Map::new();

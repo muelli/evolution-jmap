@@ -156,9 +156,9 @@ impl std::error::Error for Incomplete {
 /// The one caller with anywhere to put a message — `check_complete` itself
 /// answers a boolean and has nowhere to show one; `insert_widgets`'s status
 /// label does, and this is the whole of what it displays. Translated rather
-/// than [`Incomplete`]'s own `Display`, per the roadmap's standing directive
-/// that account-setup text is user-facing from the moment it is shown: the
-/// two identity messages are this crate's own wording and are marked here;
+/// than [`Incomplete`]'s own `Display`, since account-setup text is
+/// user-facing from the moment it is shown: the two identity messages are
+/// this crate's own wording and are marked here;
 /// [`SourceError`]'s own [`Display`](fmt::Display) is relied on unwrapped
 /// for the `Server` case, and is translated too: `SourceError` carries its
 /// own `translate`/`translate_with` calls (`jmap-backend-core/src/source.rs`),

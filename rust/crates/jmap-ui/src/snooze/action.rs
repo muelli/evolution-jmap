@@ -9,7 +9,7 @@
 //! `evo-sys/build.rs`): Evolution < 3.55 merges through `GtkUIManager` and a
 //! `GtkActionGroup` the caller already has (the window's "mail" group, or the
 //! browser's standard one); >= 3.55 merges through `EUIManager`, which needs
-//! no pre-existing group — `install` creates and names its own — and takes
+//! no pre-existing group (`install` creates and names its own) and takes
 //! the whole action-plus-menu-placement in one call,
 //! `e_ui_manager_add_actions_with_eui_data`. Both sides fill the same
 //! [`SnoozeState`] and drive the same selection/gate/activation logic below;
@@ -90,7 +90,7 @@ type MenuAction = *mut EUIAction;
 /// One reader window's snooze state, boxed as qdata on the extensible.
 struct SnoozeState {
     /// The reader whose selection and folder the actions read: the mail view
-    /// (shell case) or the browser itself — a child, or the object itself,
+    /// (shell case) or the browser itself: a child, or the object itself,
     /// alive as long as the owner is.
     reader: *mut EMailReader,
     /// The submenu's action, the gate's visible half.
@@ -146,21 +146,21 @@ const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
 /// This extension's own group name under `EUIManager`: not one of
 /// Evolution's own (the way `mailing-list-actions.c` and
 /// `e-composer-to-meeting.c` upstream each register their own group rather
-/// than joining an existing one — action references inside the merged `.eui`
+/// than joining an existing one; action references inside the merged `.eui`
 /// resolve across the whole manager, not just this group, so nothing about
 /// placement depends on the name).
 #[cfg(evolution_eui_manager)]
 const GROUP_NAME: &CStr = c"jmap-snooze";
 
 /// Appended straight to the popup: `/mail-message-popup` (3.52's
-/// `<popup name='mail-message-popup'>`, 3.55+'s `<menu id='mail-message-popup'>`)
-/// has no third-party placeholder in either era (the similarly named one
-/// belongs to the preview pane's popup — confirmed against 3.56's own
-/// `evolution-mail-reader.eui`, which still only reserves
-/// `mail-message-popup-common-actions` for itself there), so a direct child
-/// is the only seat at this table on either side of `evolution_eui_manager`.
-/// `mail-to-task.c` merges a new submenu into the same popup the same way,
-/// with no `is-popup` restated on the merge fragment.
+/// `<popup name='mail-message-popup'>`, 3.55+'s `<menu id='mail-message-popup'>`).
+/// That popup does carry a `mail-message-popup-common-actions` placeholder
+/// (confirmed against the installed 3.52.3 `evolution-mail.ui`/
+/// `evolution-mail-reader.ui`); the similarly named placeholder that really
+/// is absent there, `mail-message-popup-actions`, belongs to the separate
+/// `mail-preview-popup`. `mail-to-task.c` merges a new submenu into this
+/// popup the same way, as a direct child rather than through the
+/// placeholder, with no `is-popup` restated on the merge fragment.
 #[cfg(not(evolution_eui_manager))]
 const UI: &CStr = c"<popup name='mail-message-popup'>\
 <menu action='jmap-snooze-menu'>\
@@ -371,7 +371,7 @@ unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
 }
 
 /// The `update-actions` half: sensitivity from the selection, the folder's
-/// provider, and the cached server answer — kicking the fetch on a miss.
+/// provider, and the cached server answer, kicking the fetch on a miss.
 ///
 /// # Safety
 ///
@@ -580,7 +580,7 @@ unsafe impl Send for SendSource {}
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::hour", (), || unsafe {
-        // SAFETY: the owner is alive — its own menu emitted.
+        // SAFETY: the owner is alive, its own menu emitted.
         activate(owner.cast(), Preset::InOneHour);
     });
 }
