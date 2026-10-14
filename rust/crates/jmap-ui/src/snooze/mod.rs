@@ -12,7 +12,7 @@
 //! insensitive everywhere but the mock: Stalwart implements the mailbox role
 //! and nothing else, and Fastmail's public JMAP rejects the capability even
 //! though its web UI snoozes (the probe is recorded in
-//! `jmap_client::snooze`). That is the honest state of the feature — written
+//! `jmap_client::snooze`). That is the honest state of the feature, written
 //! to the extension, ready for a Cyrus install with nonstandard extensions
 //! on. The alternative, a snooze only this machine remembers, would strand
 //! messages in a folder nothing empties; GNOME/evolution#374 is the upstream
@@ -20,11 +20,11 @@
 //!
 //! Two `EExtension`s share one implementation ([`action`]): the mail shell
 //! view and the detached message window (`EMailBrowser`), each merging the
-//! same submenu into its own GtkUIManager's `/mail-message-popup` — appended
-//! directly, since 3.52 offers no third-party placeholder there — and each
-//! handing the actions its own `EMailReader` for the selection and folder.
-//! Presets rather than a picker, like scheduled send and for the same
-//! reasons ([`crate::send_later::schedule`]).
+//! same submenu into its own GtkUIManager's `/mail-message-popup` as a direct
+//! child rather than through the placeholder it carries (see [`action`] for
+//! why), and each handing the actions its own `EMailReader` for the
+//! selection and folder. Presets rather than a picker, like scheduled send
+//! and for the same reasons ([`crate::send_later::schedule`]).
 
 pub mod action;
 pub mod browser_ext;

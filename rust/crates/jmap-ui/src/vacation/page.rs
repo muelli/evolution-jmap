@@ -7,13 +7,13 @@
 //! The first widget subclass in this workspace, and deliberately the smallest
 //! possible one: the parent's sizes come from the running type system
 //! ([`TypeSizes::of_parent`]), the subclass adds no inline fields, and all of
-//! its state lives in one qdata box ([`UiState`]) — so there is no struct
+//! its state lives in one qdata box ([`UiState`]), so there is no struct
 //! layout here for a GTK release to disagree with.
 //!
 //! Lifecycle: [`create`] instantiates the registered type, and
 //! `instance_init` has already built the widgets (they need no
-//! configuration); `create` then kicks the async load — connect, fetch the
-//! `VacationResponse` — through [`crate::dispatch::spawn_for`], and
+//! configuration); `create` then kicks the async load (connect, fetch the
+//! `VacationResponse`) through [`crate::dispatch::spawn_for`], and
 //! [`apply_outcome`] fills the widgets or explains itself in the status
 //! label. Saving is the `EMailConfigPage` contract: the account editor's OK
 //! button calls the interface's async `submit`, which here snapshots the
@@ -115,8 +115,8 @@ unsafe impl ObjectSubclass for VacationPage {
     type Class = GObjectClass;
 
     fn parent_type() -> GType {
-        // GtkScrolledWindow, because that is `EMailConfigPage`'s prerequisite
-        // — the running 3.52 refuses the interface on anything less (a GtkBox
+        // GtkScrolledWindow, because that is `EMailConfigPage`'s prerequisite:
+        // the running 3.52 refuses the interface on anything less (a GtkBox
         // and a GtkBin parent were each tried and answered with exactly that
         // CRITICAL, naming the first unmet ancestor).
         // SAFETY: no arguments, and the type initialises itself.
@@ -159,7 +159,7 @@ unsafe impl InterfaceImpl for PageInterface {
         let vtable = unsafe { &mut *vtable };
         vtable.title = translate_static(N_(c"Vacation Responder"));
         // After every page Evolution builds for the account itself (identity,
-        // receiving, sending, security all sort below 500 or at it) — a
+        // receiving, sending, security all sort below 500 or at it): a
         // server-side extra belongs at the tail, same neighbourhood as
         // evolution-ews's Out of Office.
         vtable.sort_order = 550;
@@ -188,7 +188,7 @@ unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut
     }
 }
 
-/// Builds the page's one child — a vertical box with the widgets — and
+/// Builds the page's one child, a vertical box with the widgets, and
 /// stores the [`UiState`]. Everything starts insensitive: sensitivity is the
 /// load's to grant.
 ///
@@ -197,7 +197,7 @@ unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut
 /// `page` must be a freshly initialised `JmapVacationPage` instance.
 unsafe fn build_widgets(page: *mut GObject) {
     // SAFETY: the instance is a GtkScrolledWindow (parent-initialised), which
-    // is what the container cast says — GTK3 wraps the box in a viewport on
+    // is what the container cast says; GTK3 wraps the box in a viewport on
     // its own; every widget below is freshly constructed and owned by the
     // container it is packed into.
     unsafe {
@@ -226,7 +226,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         // Evolution's own date entry rather than a bare GtkEntry: it brings a
         // calendar popup and, more to the point, an explicit "no date set"
         // state, which is exactly RFC 8621 §8's nullable `fromDate`/`toDate`.
-        // Date only — the vacation object's bounds are days, not instants.
+        // Date only: the vacation object's bounds are days, not instants.
         let from_date = new_date_field();
         attach_row(grid, 0, N_(c"_First day:"), from_date);
         let to_date = new_date_field();
@@ -299,7 +299,7 @@ unsafe extern "C" fn on_toggled(_button: *mut GObject, page: gpointer) {
 
 /// A ref to `source` that may cross onto the worker thread: `GObject`
 /// reference counting is thread-safe, and `ESource` getters take the
-/// source's own property lock — the same grounds the EDS backends read
+/// source's own property lock, the same grounds the EDS backends read
 /// sources off their worker threads on.
 struct SendSource(*mut ESource);
 // SAFETY: see above; the wrapper only hands the pointer to code that treats
@@ -308,7 +308,7 @@ unsafe impl Send for SendSource {}
 
 /// Instantiate the (registered) page for the account `connect_source`
 /// configures and start its load. NULL when the type is missing, which means
-/// [`crate::module::load`] never ran — reported, since a silently absent page
+/// [`crate::module::load`] never ran: reported, since a silently absent page
 /// is indistinguishable from the gate refusing.
 ///
 /// # Safety
@@ -358,7 +358,7 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
     page.cast()
 }
 
-/// Fill the widgets from what the load found, or say why not — on the main
+/// Fill the widgets from what the load found, or say why not, on the main
 /// loop, with the page alive (dispatch's weak reference saw to both).
 ///
 /// # Safety
@@ -377,7 +377,7 @@ unsafe fn apply_outcome(
             // borrow and release it before touching any widget.
             // `set_bool` on `enabled` calls GTK's own toggle setter, which
             // emits `"toggled"` synchronously whenever the value actually
-            // changes (an already-enabled responder does exactly that) —
+            // changes (an already-enabled responder does exactly that), and
             // that reenters `on_toggled`, which itself borrows this same
             // `RefCell`. Holding a borrow across the call is a panic
             // ("already mutably borrowed"), not a maybe.
@@ -564,7 +564,7 @@ unsafe fn snapshot(ui: &UiState) -> VacationForm {
     }
 }
 
-/// A date-only [`EDateEdit`] that may be left unset — the widget shape RFC
+/// A date-only [`EDateEdit`] that may be left unset: the widget shape RFC
 /// 8621 §8's nullable date bounds ask for.
 ///
 /// # Safety
@@ -617,7 +617,7 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
         }
     };
     // SAFETY: a live field per the contract. `set_time(-1)` is how this class
-    // spells "no date set" — there is no `_set_date_to_none`.
+    // spells "no date set"; there is no `_set_date_to_none`.
     unsafe {
         match parsed {
             Some((year, month, day)) => e_date_edit_set_date(field.cast(), year, month, day),

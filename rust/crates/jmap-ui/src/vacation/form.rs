@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 /// What the widgets hold: dates as the entry text (`YYYY-MM-DD` or empty),
 /// subject and body as typed. Comparing a snapshot against the loaded
-/// baseline is the dirty check — no signal bookkeeping.
+/// baseline is the dirty check: no signal bookkeeping.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VacationForm {
     pub enabled: bool,
@@ -46,8 +46,8 @@ impl VacationForm {
 
     /// The `VacationResponse/set` update patch this form asks for, every
     /// field written: the page edits the whole object, so what the widgets
-    /// show is what the server should hold. Empty subject/body are `null` —
-    /// "let the server pick" — rather than empty strings.
+    /// show is what the server should hold. Empty subject/body are `null`,
+    /// "let the server pick", rather than empty strings.
     pub fn patch(&self) -> Result<Value, &'static CStr> {
         let from = date_value(&self.from_date)?;
         let to = date_value(&self.to_date)?;
@@ -153,8 +153,8 @@ mod tests {
         assert_eq!(patch["textBody"], Value::Null);
     }
 
-    /// A range that runs backwards is refused, and the equal-day case — a
-    /// one-day absence — is not: that is a legitimate thing to ask for.
+    /// A range that runs backwards is refused, and the equal-day case (a
+    /// one-day absence) is not: that is a legitimate thing to ask for.
     #[test]
     fn a_backwards_range_is_refused_but_a_single_day_is_not() {
         let backwards = VacationForm {

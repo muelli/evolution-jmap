@@ -11,18 +11,18 @@
 //!   module's pattern): only then is the window's `"mail"` action group
 //!   guaranteed to exist, and only the mail view ever emits it for this
 //!   extension's purposes.
-//! - 3.55+ has no `"toggled"` signal on `EShellView` at all — confirmed live,
+//! - 3.55+ has no `"toggled"` signal on `EShellView` at all, confirmed live,
 //!   not assumed: connecting it the old way logs a GLib-CRITICAL
 //!   ("signal 'toggled' is invalid for instance ... EMailShellView") and never
 //!   fires, because the whole GtkToggleAction-based view switcher it belonged
 //!   to went with the rest of the GtkAction era. `e-rss-shell-view-extension.c`
 //!   proves merging the menu in `constructed()` itself is safe there (its own
 //!   `EUIManager` merge runs there, unconditionally), but proves nothing about
-//!   the *reader* (the `"mail-view"` property) being populated that early —
+//!   the *reader* (the `"mail-view"` property) being populated that early:
 //!   nothing upstream needed it at construction the way this extension does.
 //!   So the merge is attempted in `constructed()` (cheap, and normally enough)
-//!   and retried, idempotently, on the first `"update-actions"` — the one
-//!   signal both eras keep — if the reader was not there yet.
+//!   and retried, idempotently, on the first `"update-actions"` (the one
+//!   signal both eras keep) if the reader was not there yet.
 //!
 //! Sensitivity always follows `EShellView::update-actions`, which the shell
 //! emits on every selection and folder change.

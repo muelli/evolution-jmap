@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! From an account's `ESource` to a connected client — the piece every
-//! feature shares: the vacation page connects from the editor's collection
+//! From an account's `ESource` to a connected client: the piece every
+//! feature shares. The vacation page connects from the editor's collection
 //! source, scheduled send from the transport's parent. Everything here blocks
 //! on the network or on libsecret, so it runs on worker threads only
 //! ([`crate::dispatch`], or a `GTask` thread for a page submit).
@@ -10,7 +10,7 @@
 //! The connection recipe is the backends' own, reused: `SourceConfig` reads
 //! `[Authentication]`/`[Security]` off the source, and the credentials branch
 //! three ways on the authentication method exactly as
-//! `jmap-backend-core::connect` describes — OAuth 2.0 through
+//! `jmap-backend-core::connect` describes: OAuth 2.0 through
 //! `e_source_get_oauth2_access_token_sync` (which works in Evolution's shell
 //! because `jmap_config::module::load` registers the `EOAuth2Service` there),
 //! an API token or a password out of the stored secret. What is *not* reused
@@ -35,7 +35,7 @@ use crate::session_cache::AccountFeatures;
 
 /// A [`jmap_client::Error`] as something worth putting in front of a person.
 ///
-/// `Error`'s own `Display` is written for a log — "HTTP 401" is accurate and
+/// `Error`'s own `Display` is written for a log: "HTTP 401" is accurate and
 /// tells a user nothing, which is exactly what one of them reported. The
 /// cases split out here are the ones a user can act on; everything else falls
 /// back to the underlying text, which at least names the layer that failed.
@@ -75,14 +75,14 @@ pub fn describe(error: &jmap_client::Error) -> String {
     }
 }
 
-/// A connected client and what the session said about its account — the
+/// A connected client and what the session said about its account: the
 /// page's handle on the server, shared between the load and every later
 /// submit through an `Arc`.
 pub struct AccountLink {
     pub client: Client,
     pub features: AccountFeatures,
     /// The source this connected as, kept alive so an expired OAuth 2.0
-    /// access token can be refreshed and reinstalled — see
+    /// access token can be refreshed and reinstalled, see
     /// [`AccountLink::call`]. `None` for a method whose credential does not
     /// expire (a stored password, an API token), where a 401 means the
     /// credential is wrong rather than old.
@@ -96,7 +96,7 @@ pub struct AccountLink {
 /// backends read their sources on from worker threads.
 struct RefreshableSource(*mut ESource);
 
-// SAFETY: see the type's own doc — refcounting is thread-safe and every call
+// SAFETY: see the type's own doc: refcounting is thread-safe and every call
 // made through the pointer is one EDS itself makes off its worker threads.
 unsafe impl Send for RefreshableSource {}
 unsafe impl Sync for RefreshableSource {}
@@ -109,7 +109,7 @@ impl Drop for RefreshableSource {
 }
 
 impl AccountLink {
-    /// A link over an already-connected client, with nothing to refresh —
+    /// A link over an already-connected client, with nothing to refresh:
     /// what a test against the mock has (no `ESource`, no OAuth 2.0), and
     /// deliberately the only way to build one without [`connect_account`].
     pub fn without_refresh(client: Client, features: AccountFeatures) -> Self {
@@ -128,7 +128,7 @@ impl AccountLink {
     /// survive a session outliving its token: Fastmail's access tokens last
     /// about an hour, an account editor or composer can sit open far longer,
     /// and the stored refresh token is still perfectly good. Without this a
-    /// save an hour into the session fails with a bare 401 — which is exactly
+    /// save an hour into the session fails with a bare 401, which is exactly
     /// what it did before this existed.
     ///
     /// Every server call in this crate goes through here; a bare

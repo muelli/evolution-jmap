@@ -6,7 +6,7 @@
 //!
 //! The menu is deliberately *not* a fixed list of relative offsets. What a
 //! person wants is "this evening" or "first thing tomorrow", and those are
-//! calendar facts — 18:00 is a different number of seconds away at every
+//! calendar facts: 18:00 is a different number of seconds away at every
 //! moment of the day, and "tomorrow 08:00" is not `now + 24h` across a DST
 //! boundary. So each entry names a time of day (or the next working day) and
 //! is resolved to seconds-from-now at the instant it is clicked, which also
@@ -34,7 +34,7 @@ use jmap_backend_core::marshal::read_string;
 /// One offered moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
-    /// A flat hour from now — the one genuinely relative choice, and the one
+    /// A flat hour from now: the one genuinely relative choice, and the one
     /// people reach for to mean "not right this second".
     InOneHour,
     /// The next time the local clock reads this hour, today or tomorrow.
@@ -58,7 +58,7 @@ pub fn offered() -> Vec<Preset> {
     presets
 }
 
-/// The stable action-name suffix for `preset` — what the menu item is known
+/// The stable action-name suffix for `preset`: what the menu item is known
 /// by, so one `activate` handler can recover which moment was clicked
 /// instead of needing a trampoline each.
 pub fn slug(preset: Preset) -> String {
@@ -88,7 +88,7 @@ pub struct Occurrence {
     /// Seconds from now, which is what RFC 4865's `HOLDFOR` takes.
     pub hold: u64,
     /// The menu label, e.g. `Today, 18:00`, `Tomorrow, 08:00`, `Monday,
-    /// 09:00` — or `In One _Hour` for the relative one.
+    /// 09:00`, or `In One _Hour` for the relative one.
     pub label: String,
 }
 
@@ -130,7 +130,7 @@ pub fn resolve(preset: Preset) -> Option<Occurrence> {
     }
 }
 
-/// The next moment the clock reads `hour`:00 — today if that is still
+/// The next moment the clock reads `hour`:00: today if that is still
 /// ahead, else tomorrow.
 ///
 /// # Safety
@@ -263,7 +263,7 @@ unsafe fn day_number(moment: *mut GDateTime) -> i64 {
 }
 
 /// Now plus `seconds`, as the RFC 8620 `UTCDate` string a JMAP property
-/// takes — what snooze writes into `snoozed.until`.
+/// takes: what snooze writes into `snoozed.until`.
 pub fn utc_in(seconds: u64) -> Option<String> {
     // SAFETY: plain GLib calendar calls; every object and string released.
     unsafe {
