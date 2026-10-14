@@ -25,11 +25,11 @@
 //!   falls back to opening *every* message in it and scanning the body
 //!   locally.
 //!
-//! The fallback is correct rather than broken, which corrects the premise this
-//! item was queued under ("silently finds nothing"): what an unfilled slot
-//! costs is a folder-sized download per body search, plus the messages that
-//! are not cached and cannot be fetched, which do silently fail to match.
-//! Answering from `Email/query` is one round trip instead.
+//! The fallback is correct rather than broken: an unfilled slot does not
+//! silently find nothing. What it costs is a folder-sized download per body
+//! search, plus the messages that are not cached and cannot be fetched, which
+//! do silently fail to match. Answering from `Email/query` is one round trip
+//! instead.
 //!
 //! ## Which words match
 //!

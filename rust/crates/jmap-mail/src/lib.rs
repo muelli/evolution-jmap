@@ -99,17 +99,17 @@
 //!   mailbox is a member of a set rather than a place, so a copy adds one and a
 //!   move adds one and takes another away — and the work around it is the rows
 //!   a move leaves the source folder holding.
-//! - [`mime`] is the step every message this account uploads goes through: the
-//!   `CamelMimeMessage` as the RFC 5322 octets a blob is made of, written by
-//!   Camel's own emitter and line-ended the way a message on the wire has to
-//!   be. Its own module because two unrelated objects need it — a folder taking
-//!   a message in and a transport sending one out — and a second emitter is
-//!   where the two would start to disagree.
+//! - [`jmap_backend_core::mime`] is the step every message this account
+//!   uploads goes through: the `CamelMimeMessage` as the RFC 5322 octets a
+//!   blob is made of, written by Camel's own emitter and line-ended the way a
+//!   message on the wire has to be. It lives in `jmap-backend-core` rather
+//!   than here because `jmap-ui`'s scheduled send needs it too and cannot
+//!   link this crate's rlib.
 //! - [`append`] is the arrival [`transfer`] cannot serve: `append_message_sync`,
 //!   the vfunc that takes a `CamelMimeMessage` the account has never seen — one
 //!   dragged out of another account, one the composer just built — writes it out
-//!   through [`mime`] and puts it on the server as an `Email/import` over an
-//!   uploaded blob.
+//!   through [`jmap_backend_core::mime`] and puts it on the server as an
+//!   `Email/import` over an uploaded blob.
 //! - [`manage`] is the pair that changes which folders there are:
 //!   `create_folder_sync` and `delete_folder_sync`, the vfuncs behind the
 //!   folder the user adds to an account and the one they take away — one
@@ -129,8 +129,9 @@
 //!   server, opened by the same [`service`] vfuncs, and the account-side half of
 //!   a send held under one lock of it.
 //! - [`send`] is the slot that object exists for: `send_to_sync`, the vfunc a
-//!   message leaves the account through. It joins [`envelope`] and [`mime`] to
-//!   the identity, the two mailboxes and the import-and-submit — refusing
+//!   message leaves the account through. It joins [`envelope`] and
+//!   [`jmap_backend_core::mime`] to the identity, the two mailboxes and the
+//!   import-and-submit — refusing
 //!   everything it can before the upload, so that a send the user is told did
 //!   not happen has left nothing behind — and answers Camel's
 //!   `out_sent_message_saved`, which decides whether Evolution keeps a second

@@ -316,7 +316,7 @@ impl StoreError {
     /// `OAuth2` failure a failed *fetch* of that token already gets.
     ///
     /// Call only where the credentials just tried were themselves an OAuth
-    /// 2.0 access token — [`crate::service::attempt`] is the one caller, and
+    /// 2.0 access token — `service::attempt` is the one caller, and
     /// it already knows that from the same account field [`oauth2::uses_oauth2`]
     /// reads. A 401 on a Basic or API-token attempt is left alone: there,
     /// [`is_wrong_password`] correctly means the password was wrong, and
