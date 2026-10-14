@@ -77,10 +77,10 @@ pub struct MailService {
 
 /// The children one JMAP login warrants.
 ///
-/// Each field is `None` when the login offers that service at all — not when
-/// the user switched it off. Whether a source the user disabled is created is
-/// EDS's business (`ESourceCollection:mail-enabled` and its two siblings); what
-/// is here is what *exists* to enable.
+/// Each field is `None` when the login does not offer that service at all,
+/// not when the user switched it off. Whether a source the user disabled is
+/// created is EDS's business (`ESourceCollection:mail-enabled` and its two
+/// siblings); what is here is what *exists* to enable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectionLayout {
     pub mail: Option<MailService>,
