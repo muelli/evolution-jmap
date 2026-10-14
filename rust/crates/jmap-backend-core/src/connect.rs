@@ -655,8 +655,7 @@ mod tests {
     /// also the only one it propagates a real `GError` for rather than
     /// clearing it into a bogus success. A redirect that withheld credentials
     /// is not fixed by asking the user to consent again, only by asking again
-    /// and again against the same redirect: the endless OAuth2 popup loop
-    /// item 101 reports.
+    /// and again against the same redirect: an endless OAuth2 popup loop.
     #[test]
     fn a_redirect_that_withheld_credentials_is_unknown_not_an_escalation() {
         assert_eq!(
@@ -669,10 +668,10 @@ mod tests {
         );
     }
 
-    /// Item 17's own concern, pinned directly: a secret-store failure must
-    /// not come back `REQUIRED` — that is exactly the "try harder and harder
-    /// to acquire a token" loop it exists to stop — and its message reaches
-    /// the user rather than being swallowed.
+    /// A secret-store failure must not come back `REQUIRED`: that is exactly
+    /// the "try harder and harder to acquire a token" loop this guards
+    /// against, and its message reaches the user rather than being
+    /// swallowed.
     #[test]
     fn a_secret_store_failure_does_not_reopen_consent() {
         let error = ConnectError::SecretStore("the login keyring is locked".to_owned());
@@ -766,7 +765,7 @@ mod tests {
         assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
     }
 
-    /// Item 22's sibling of the test above: a dead D-Bus peer survives
+    /// The sibling of the test above: a dead D-Bus peer survives
     /// `finish_connect` on an OAuth 2.0 account as `ServiceGone`, so it stays
     /// `ERROR` and never turns into the consent window the captured trace
     /// showed. The reclassification only ever touches a 401 — this pins that

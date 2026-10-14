@@ -322,9 +322,9 @@ mod tests {
 
     #[test]
     fn a_repeated_401_after_a_successful_refresh_is_reported_rather_than_retried_again() {
-        // Item 23's own "only a 401 on the freshly refreshed token may
-        // escalate": the second 401 is the one EDS is allowed to turn into a
-        // consent window, so it must arrive, and exactly once.
+        // Only a 401 on the freshly refreshed token may escalate: the second
+        // 401 is the one EDS is allowed to turn into a consent window, so it
+        // must arrive, and exactly once.
         let attempts = Cell::new(0);
         let refreshes = Cell::new(0);
         let mut reported: *mut GError = ptr::null_mut();
@@ -475,8 +475,7 @@ mod tests {
 
     #[test]
     fn a_401_on_the_freshly_refreshed_token_is_returned_as_is() {
-        // The retried attempt's own failure is what item 23's own text says
-        // "may escalate" — this pins that it is returned unchanged, not
+        // A failure on the retried attempt is returned unchanged, not
         // retried again or swallowed.
         let attempts = Cell::new(0);
 

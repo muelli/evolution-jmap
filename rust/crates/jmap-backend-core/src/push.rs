@@ -552,8 +552,8 @@ mod tests {
     /// The pump-level counterpart of the `concerns` unit tests above: a
     /// server pushing the same state string twice must produce exactly one
     /// refresh, and a state string that genuinely differs must still
-    /// produce its own (item 37 — RFC 8620 §7.1's `StateChange` carries a
-    /// state string per (account, type), and nothing compared it before).
+    /// produce its own. RFC 8620 §7.1's `StateChange` carries a state string
+    /// per (account, type), compared against the last one seen.
     #[test]
     fn a_repeated_push_state_does_not_refresh_twice_but_a_new_one_does() {
         let server = jmap_mock::MockServer::builder().start();
@@ -606,8 +606,8 @@ mod tests {
         );
     }
 
-    /// The header-refresh piece of item 28: a `PushRefresh` started with a
-    /// stale `Authorization` header keeps being refused until
+    /// A `PushRefresh` started with a stale `Authorization` header keeps
+    /// being refused until
     /// [`PushRefresh::set_headers`] installs the fresh one, at which point
     /// the pump's own reconnect loop — already retrying with backoff — picks
     /// it up on its next attempt and the refresh action starts running.

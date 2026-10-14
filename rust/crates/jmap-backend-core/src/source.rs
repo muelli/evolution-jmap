@@ -540,9 +540,8 @@ mod tests {
     /// `_jmap._tcp` SRV record names port 443 explicitly while its
     /// authorization-server metadata says `"issuer": "https://api.fastmail.com"`
     /// (no port), so an origin that keeps `:443` can never pass the issuer
-    /// check and OAuth autodiscovery silently surfaces nothing (observed live
-    /// 2026-08-23). Non-default ports must stay, or nothing plaintext-local is
-    /// reachable.
+    /// check and OAuth autodiscovery silently surfaces nothing. Non-default
+    /// ports must stay, or nothing plaintext-local is reachable.
     #[test]
     fn a_default_port_serializes_out_of_the_origin() {
         assert_eq!(
@@ -628,7 +627,7 @@ mod tests {
         // name the same DNS entry (RFC 1035 §3.1); concatenating the dotted
         // form unchanged into a URL sends `https://api.fastmail.com./...`,
         // which Fastmail answers with a redirect to the dotless host that
-        // drops the bearer token (observed live, evo-test, 2026-10-13).
+        // drops the bearer token.
         assert_eq!(
             connect_target(Some("api.fastmail.com."), 0, true),
             Ok(ConnectTarget::Domain("api.fastmail.com".into()))
