@@ -220,10 +220,14 @@
 //! refuses, which the series-level increments already found needs the
 //! three-event "expected" shape.
 //!
-//! `title`/`description` are restricted to plain alphanumeric text with no
-//! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
-//! and line folding are a separate question from the baseline-compare shape
-//! this increment covers.
+//! `title`/`description`'s plain-text round trip above is restricted to
+//! alphanumeric text with no punctuation at all. `title_round_trip_with_
+//! escapes_and_folding`/`description_round_trip_with_escapes_and_folding`
+//! cover the rest: text mixing a comma, a semicolon, a backslash and an
+//! embedded newline (the four characters RFC 5545 §3.3.11 TEXT escaping
+//! must round trip) at a length that forces
+//! [`jmap_ical::event::fold_overlong_lines`] to fold the `SUMMARY`/
+//! `DESCRIPTION` line at least once.
 //!
 //! Also covered: `links`' key add/drop. `diff_links` only ever patches an
 //! existing key's `href`, by design (a resource the server does not hold is
@@ -336,6 +340,25 @@ fn round_trips(current: &CalendarEvent, edited: &CalendarEvent) -> Result<(), Te
 
 fn arb_text() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9]{1,20}"
+}
+
+/// Text that exercises RFC 5545 §3.3.11 TEXT escaping (a comma, a semicolon,
+/// a backslash and an embedded newline, any of which the writer must escape
+/// and the reader must reverse) at a length that forces
+/// [`jmap_ical::event::fold_overlong_lines`] to fold at least one physical
+/// line once the `SUMMARY:`/`DESCRIPTION:` name is prepended.
+fn arb_text_with_escapes_and_folding() -> impl Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            "[a-zA-Z0-9 ]",
+            Just(",".to_owned()),
+            Just(";".to_owned()),
+            Just("\\".to_owned()),
+            Just("\n".to_owned()),
+        ],
+        100..200,
+    )
+    .prop_map(|chars| chars.concat())
 }
 
 /// A LocalDateTime `to_local_date_time`/`to_ical_date_time` always draws back
@@ -1003,6 +1026,16 @@ proptest! {
     }
 
     #[test]
+    fn title_round_trip_with_escapes_and_folding(
+        old in arb_text_with_escapes_and_folding(),
+        new in arb_text_with_escapes_and_folding(),
+    ) {
+        let current = stable(base().with_title(old));
+        let edited = stable(base().with_title(new));
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
     fn start_round_trip(old in arb_start(), new in arb_start()) {
         let current = stable(base().with_start(old));
         let edited = stable(base().with_start(new));
@@ -1018,6 +1051,16 @@ proptest! {
 
     #[test]
     fn description_round_trip(old in arb_text(), new in arb_text()) {
+        let current = stable(base().with_description(old));
+        let edited = stable(base().with_description(new));
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn description_round_trip_with_escapes_and_folding(
+        old in arb_text_with_escapes_and_folding(),
+        new in arb_text_with_escapes_and_folding(),
+    ) {
         let current = stable(base().with_description(old));
         let edited = stable(base().with_description(new));
         round_trips(&current, &edited)?;
