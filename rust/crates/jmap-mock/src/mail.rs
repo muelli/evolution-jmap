@@ -1211,18 +1211,8 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
 
 /// Whether `email` is in at least one mailbox this account has.
 ///
-/// RFC 8621 §4.6: an `Email` in the mail store belongs to one or more
-/// `Mailbox`es, and `mailboxIds` names them. Both halves of that are checked
-/// here — a set with nothing in it, and a set naming a mailbox that is not
-/// there — because both describe a message the store cannot hold, and a mock
-/// that accepted either would be teaching a client that a move it botched
-/// worked. It is what makes a client's move one patch rather than a removal
-/// followed by an addition.
-///
-/// Applied to a creation and to the result of an update alike: the rule is an
-/// invariant of the store rather than a property of one request, so an update
-/// that would break it is refused with the same `invalidProperties` a creation
-/// gets.
+/// RFC 8621 §4.6: `mailboxIds` must contain at least one `true` entry and each
+/// such id must exist. The same invariant is enforced for create and update.
 fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError> {
     let Some(mailbox_ids) = email
         .mailbox_ids
@@ -1250,32 +1240,16 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
 /// `Email/import` (RFC 8621 §4.8): a message that is already a message, filed
 /// into the account from a blob.
 ///
-/// The one method here that runs the mock's usual direction backwards. Every
-/// other message in this server starts as an `Email` and gets a message written
-/// out of it by [`rfc5322`]; an import starts with the bytes and derives the
-/// `Email`, which is what a real server always does. [`crate::message`] is the
-/// reading half and says what little of RFC 5322 it takes on.
+/// This reverses the mock's normal flow: parse RFC 5322 bytes into an `Email`
+/// with [`crate::message::Message`] instead of rendering bytes from an `Email`.
 ///
-/// Three decisions worth naming, because each is a branch the RFC leaves open:
+/// Behavior choices kept explicit here:
+/// - the uploaded blob bytes are preserved as-is;
+/// - duplicates are allowed;
+/// - `receivedAt` uses the request value, or falls back to [`MOCK_NOW`].
 ///
-/// - **The blob is kept as it arrived**, so the `blobId` answered is the one that
-///   was handed in and a download of the imported message returns the uploaded
-///   octets byte for byte. RFC 8621 §4.8 allows a server to repair a message
-///   instead and answer with a blob of its own; a mock that rewrote what it was
-///   given would make it impossible to test that what a client appended is what
-///   it later opens.
-/// - **Duplicates are allowed.** Forbidding two copies of one message with an
-///   `alreadyExists` is a MAY, and the account this mock stands in for is a test
-///   account into which the same fixture is imported twice on purpose.
-/// - **`receivedAt` is the one given, or the mock's fixed clock.** The RFC's
-///   default is the most recent `Received` header's date, which is a zone offset
-///   away from a `UtcDate` and therefore calendar arithmetic this crate does not
-///   do. The provider that will drive this has the date parsed already — Camel
-///   hands it over as a `time_t` — so it sends `receivedAt` rather than leaving
-///   it to be guessed at.
-///
-/// Keyword *grammar* (RFC 8621 §4.1.1) is not checked, exactly as `Email/set`
-/// does not check it: a keyword is a map key here as it is there.
+/// Keyword grammar (RFC 8621 §4.1.1) is intentionally not validated here, the
+/// same as `Email/set`.
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
