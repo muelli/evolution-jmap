@@ -265,6 +265,28 @@
 //! to leave unnamed in a property replaced whole, so the check is that the
 //! patch states no `alerts` member at all and the applied event's `alerts`
 //! is `current`'s own, unchanged.
+//!
+//! Also covered: the restated-field override's `start` and `timeZone`
+//! members, the two `OVERRIDE_PROPERTIES` the increment above scoped out
+//! because neither compares against a `None` baseline the way the other
+//! seven do. `start` restates only when it differs from the override's own
+//! id (RFC 8984 §4.3.4: the key *is* the instance's start unless the patch
+//! says otherwise), so the generator draws it away from the id rather than
+//! from `None`. `timeZone` restates against the *series'* own zone rather
+//! than absence, since `base()` always carries one, so the generator draws
+//! it away from `base()`'s own `"Europe/Berlin"`, the same move `duration`
+//! needed above. Each is independently present or absent, at least one
+//! present.
+//!
+//! Also covered: a `recurrenceOverrides` id no `EXDATE` can spell (no `T`
+//! separator at all, so `to_ical_date_time` refuses it before any digit
+//! check). `override_maps_by` checks the id before the patch, so
+//! `sends_recurrence_override` refuses such an entry regardless of what it
+//! says, and `diff_overrides` leaves the whole property alone rather than
+//! carrying the one entry forward: the same "no key to leave unnamed in a
+//! property replaced whole" shape the `alerts` refusal case above needed, so
+//! this checks the patch states no `recurrenceOverrides` member at all and
+//! the applied event's overrides equal `current`'s own, unchanged.
 
 use std::collections::BTreeMap;
 
@@ -990,6 +1012,54 @@ fn arb_restated_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
     })
 }
 
+/// One instance's `start` and `timeZone` restated fields, independently
+/// present or absent. `start` is filtered away from the id, since
+/// `instance_patch` only restates it when it differs from the key (the key
+/// *is* the instance's start otherwise); `timeZone` is filtered away from
+/// `base()`'s own zone, since unlike every other restated field its baseline
+/// is not `None`, the same reason `arb_restated_override`'s `duration` is
+/// drawn away from `base()`'s own `PT1H`. A rejected draw (both filtered away
+/// and neither present) is resampled rather than kept, so every entry this
+/// produces restates at least one of the two.
+fn arb_restated_start_and_time_zone_entry() -> impl Strategy<Value = (String, Value)> {
+    (
+        arb_start(),
+        prop::option::of(arb_start()),
+        prop::option::of(arb_time_zone()),
+    )
+        .prop_filter_map(
+            "start differs from id, timeZone differs from base(), at least one present",
+            |(id, start, zone)| {
+                let start = start.filter(|start| start != &id);
+                let zone = zone.filter(|zone| *zone != "Europe/Berlin");
+                if start.is_none() && zone.is_none() {
+                    return None;
+                }
+                let mut patch = Map::new();
+                if let Some(start) = start {
+                    patch.insert("start".to_owned(), Value::String(start));
+                }
+                if let Some(zone) = zone {
+                    patch.insert("timeZone".to_owned(), Value::String(zone.to_owned()));
+                }
+                Some((id, Value::Object(patch)))
+            },
+        )
+}
+
+/// A `recurrenceOverrides` map of 0 to 3 instances, each an
+/// `arb_restated_start_and_time_zone_entry`.
+fn arb_restated_start_and_time_zone_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::vec(arb_restated_start_and_time_zone_entry(), 0..3)
+        .prop_map(|entries| entries.into_iter().collect())
+}
+
+/// A `recurrenceOverrides` id no `EXDATE` can spell: no `T` separator at all,
+/// which `to_ical_date_time` refuses before any digit check even runs.
+fn unspellable_override_id() -> String {
+    "2026-01-15".to_owned()
+}
+
 /// An RFC 5545 §3.3.14 UTC-OFFSET `utc_offset` draws back byte-identical:
 /// already its own short `±hhmm` form, and never the negative zero the
 /// grammar forbids.
@@ -1618,6 +1688,42 @@ proptest! {
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_overrides_restated_start_and_time_zone_round_trip(
+        old in arb_restated_start_and_time_zone_overrides(),
+        new in arb_restated_start_and_time_zone_overrides(),
+    ) {
+        let mut old_event = base();
+        old_event.recurrence_overrides = (!old.is_empty()).then_some(old);
+        let mut new_event = base();
+        new_event.recurrence_overrides = (!new.is_empty()).then_some(new);
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_overrides_left_alone_when_id_unspellable(
+        mut overrides in arb_exclusions(),
+        new in arb_exclusions(),
+    ) {
+        overrides.insert(unspellable_override_id(), json!({"excluded": true}));
+        let mut current = base();
+        current.recurrence_overrides = Some(overrides);
+        let mut new_event = base();
+        new_event.recurrence_overrides = (!new.is_empty()).then_some(new);
+        let edited = stable(new_event);
+
+        let patch = diff(&current, &edited);
+        prop_assert!(!patch.contains_key("recurrenceOverrides"), "patch was: {:?}", patch);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        prop_assert_eq!(applied.recurrence_overrides, current.recurrence_overrides);
     }
 
     #[test]
