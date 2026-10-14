@@ -139,10 +139,16 @@
 //! accepts (an hour, minute or second within RFC 5545 §3.3.10's range, a
 //! month `"1"`..`"12"` with no leading zero), so the round trip needs no
 //! "expected" event, the same as the frequency/interval/count shape above.
-//! Scoped out, left for later: `byDay`, `byMonthDay`, `byYearDay`,
-//! `byWeekNo` and `bySetPos` (each frequency-gated or interacting with
-//! another part), `until` (a zone-dependent conversion) and
-//! `firstDayOfWeek` (Monday is omitted rather than written).
+//!
+//! Also covered: `recurrenceRule`'s `firstDayOfWeek`
+//! ([`jmap_ical::first_day_of_week_part`]), which likewise has no frequency
+//! gate and interacts with no other part. `Some("mo")` collapses to `None`
+//! after `stable()`, the same shape `timeZone`'s named-zone increment above
+//! already handles, since `WKST=MO` is RFC 5545's default and is never
+//! written; the other six weekdays round-trip literally. Scoped out, left
+//! for later: `byDay`, `byMonthDay`, `byYearDay`, `byWeekNo` and `bySetPos`
+//! (each frequency-gated or interacting with another part) and `until` (a
+//! zone-dependent conversion).
 //!
 //! Also covered: `recurrenceOverrides` (`diff_overrides`), restricted to the
 //! bare `{"excluded": true}` shape (an `EXDATE`). `override_maps_by` accepts
@@ -505,14 +511,21 @@ fn arb_frequency() -> impl Strategy<Value = &'static str> {
     prop::sample::select(&["daily", "weekly", "monthly", "yearly"][..])
 }
 
+/// A weekday `weekday_token` always accepts (RFC 8984 §4.3.3's lowercase
+/// spelling), the domain `first_day_of_week_part` reads a rule's
+/// `firstDayOfWeek` from.
+fn arb_weekday() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(&["mo", "tu", "we", "th", "fr", "sa", "su"][..])
+}
+
 /// A `RecurrenceRule` restricted to frequency plus an optional interval,
-/// count, `byMonth`, `byHour`, `byMinute` and `bySecond`: no `until` and none
-/// of the frequency-gated or part-interacting `BYxxx` parts, a shape
-/// [`maps_recurrence_rule`] always accepts, since every other gate is vacuous
-/// when its part is absent, `writable` needs only the non-empty frequency
-/// this always has, and each of the four `BYxxx` parts here is drawn only
-/// from values its own `by_*_part` function always accepts (non-empty, every
-/// value within range).
+/// count, `byMonth`, `byHour`, `byMinute`, `bySecond` and `firstDayOfWeek`:
+/// no `until` and none of the frequency-gated or part-interacting `BYxxx`
+/// parts, a shape [`maps_recurrence_rule`] always accepts, since every other
+/// gate is vacuous when its part is absent, `writable` needs only the
+/// non-empty frequency this always has, and each of the five parts here is
+/// drawn only from values its own `by_*_part`/`first_day_of_week_part`
+/// function always accepts (non-empty, every value within range).
 ///
 /// [`maps_recurrence_rule`]: jmap_ical::maps_recurrence_rule
 fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
@@ -525,9 +538,19 @@ fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
             prop::option::of(prop::collection::vec(0u32..=23, 1..4)),
             prop::option::of(prop::collection::vec(0u32..=59, 1..4)),
             prop::option::of(prop::collection::vec(0u32..=60, 1..4)),
+            prop::option::of(arb_weekday()),
         )
             .prop_map(
-                |(frequency, interval, count, by_month, by_hour, by_minute, by_second)| {
+                |(
+                    frequency,
+                    interval,
+                    count,
+                    by_month,
+                    by_hour,
+                    by_minute,
+                    by_second,
+                    first_day_of_week,
+                )| {
                     let mut rule = RecurrenceRule::new(frequency);
                     if let Some(interval) = interval {
                         rule = rule.with_interval(interval);
@@ -535,6 +558,7 @@ fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
                     if let Some(count) = count {
                         rule = rule.with_count(count);
                     }
+                    rule.first_day_of_week = first_day_of_week.map(str::to_owned);
                     rule.by_month =
                         by_month.map(|months| months.into_iter().map(|m| m.to_string()).collect());
                     rule.by_hour = by_hour;
