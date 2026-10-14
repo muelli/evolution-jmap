@@ -129,11 +129,22 @@
 //! `rrule_to_rule` never restores `RecurrenceRule::rule_type`, so both sides
 //! are run through `stable()` first, the same as every other property here.
 //!
-//! Scoped out, left for later: `recurrenceOverrides`, the module doc's last
-//! remaining property, needing its own generator. `timeZones` itself is not
-//! diffed at all (the module doc: "added to", never compared or replaced),
-//! so it has no round-trip property to state beyond what the `timeZone`
-//! increment above already confirms stays empty for a named zone.
+//! Also covered: `recurrenceOverrides` (`diff_overrides`), restricted to the
+//! bare `{"excluded": true}` shape (an `EXDATE`). `override_maps_by` accepts
+//! that shape unconditionally regardless of `recurrence_rule` — an `EXDATE`
+//! or `RDATE` line is written whether or not the event carries an `RRULE` —
+//! so the generator needs no recurrence rule at all, only a set of
+//! `LocalDateTime` ids (`arb_start`'s format). The whole property replaces
+//! like `keywords`/`alerts`, so the patch is a literal round trip with
+//! `edited.recurrence_overrides`, no third "expected" event needed. Scoped
+//! out, left for later: the restated-field shape (`OVERRIDE_PROPERTIES`:
+//! `title`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`,
+//! `priority`, `privacy`, `keywords`, `alerts` on a `RECURRENCE-ID`
+//! instance), which needs its own per-field generator, and an id a bare
+//! `EXDATE` cannot spell. `timeZones` itself is not diffed at all (the
+//! module doc: "added to", never compared or replaced), so it has no
+//! round-trip property to state beyond what the `timeZone` increment above
+//! already confirms stays empty for a named zone.
 //!
 //! `title`/`description` are restricted to plain alphanumeric text with no
 //! leading, trailing or interior punctuation: `SUMMARY`/`SSCRIPTION` escaping
@@ -461,6 +472,18 @@ fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
     )
 }
 
+/// A `recurrenceOverrides` map restricted to the bare `{"excluded": true}`
+/// shape: `override_maps_by` accepts an `EXDATE` id unconditionally, so the
+/// only constraint on a key is that `arb_start`'s format is one
+/// `to_ical_date_time` reads.
+fn arb_exclusions() -> impl Strategy<Value = BTreeMap<String, Value>> {
+    prop::collection::btree_set(arb_start(), 0..5).prop_map(|ids| {
+        ids.into_iter()
+            .map(|id| (id, json!({"excluded": true})))
+            .collect()
+    })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -643,6 +666,17 @@ proptest! {
         old_event.recurrence_rule = old;
         let mut new_event = base();
         new_event.recurrence_rule = new;
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_overrides_excluded_round_trip(old in arb_exclusions(), new in arb_exclusions()) {
+        let mut old_event = base();
+        old_event.recurrence_overrides = (!old.is_empty()).then_some(old);
+        let mut new_event = base();
+        new_event.recurrence_overrides = (!new.is_empty()).then_some(new);
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
