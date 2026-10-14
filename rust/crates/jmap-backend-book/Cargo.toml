@@ -38,6 +38,7 @@ tracing = { workspace = true }
 # Self dev-dependency to enable `testing` for crate test targets.
 jmap-backend-book = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
 # Only to name a VCardError variant when checking the error mapping; the
 # backend itself never sees one that jmap-book-sync has not already wrapped.
 evolution-jmap-vcard = { workspace = true }
