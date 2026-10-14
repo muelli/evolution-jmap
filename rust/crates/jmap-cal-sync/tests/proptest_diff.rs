@@ -34,17 +34,16 @@
 //! value, a `\r`), which needs the three-event "expected" shape the book-sync
 //! anniversaries/media/online_services increments used.
 //!
-//! Also covered: `links` (`diff_links`), restricted to plain `ATTACH`-shaped
-//! entries (an `https:` `href` and an optional `contentType`, never the
-//! `rel: "display"` `IMAGE` shape). `diff_links` only ever patches an
-//! existing key's `href` — it neither adds a key `edited` states that
-//! `current` does not, nor removes one `edited` drops — so the generator
-//! keeps the same key set on both sides and only varies `href`, with
-//! `contentType` held constant per key (never patched, so it would fail the
-//! round trip if it varied). Scoped out, left for later: `size` (`ATTACH`
-//! only), the `IMAGE`/`rel`/`display` shape, and a key `edited` adds or
-//! drops, which `diff_links` leaves alone by design and so needs a check
-//! against the unpatched property rather than a round trip to `edited`.
+//! Also covered: `links` (`diff_links`). `links_round_trip` covers plain
+//! `ATTACH`-shaped entries (an `https:` `href` and an optional `contentType`);
+//! `links_image_shape_round_trip` covers the `rel: "icon"` `IMAGE` shape (an
+//! optional `display`); both vary only `href` per key, holding
+//! `contentType`/`display` constant, since `diff_links` never patches either.
+//! `links_size_change_left_alone` varies an `ATTACH` entry's `size`
+//! independently of `href` and checks the unpatched property directly, since
+//! `size` is never patched either. `links_key_add_and_drop_left_alone` covers
+//! a key one side adds or drops, which `diff_links` leaves alone by design,
+//! checked the same way.
 //!
 //! Also covered: `virtualLocations` (`diff_virtual_locations`), restricted to
 //! entries with a plain `https:` `uri` on both sides (so every entry survives
@@ -378,8 +377,7 @@ fn arb_content_type() -> impl Strategy<Value = Option<String>> {
 }
 
 /// A plain `ATTACH`-shaped Link entry: an `href` and an optional
-/// `contentType`, never the `rel`/`display`/`size` members this increment
-/// scopes out.
+/// `contentType`.
 fn link_value(href: &str, content_type: &Option<String>) -> Value {
     let mut link = json!({"@type": "Link", "href": href});
     if let Some(content_type) = content_type {
@@ -398,6 +396,60 @@ fn arb_links() -> impl Strategy<Value = BTreeMap<String, (String, String, Option
         (arb_href(), arb_href(), arb_content_type()),
         1..4,
     )
+}
+
+/// A `display` `spelled` always draws back unchanged, or none at all: one of
+/// the four names `LINK_DISPLAYS` shares between RFC 8984 §1.4.11 and RFC
+/// 7986 §6.1, or absent (the `DISPLAY` parameter is never required).
+fn arb_display() -> impl Strategy<Value = Option<String>> {
+    prop::option::of(prop::sample::select(
+        &["badge", "graphic", "fullsize", "thumbnail"][..],
+    ))
+    .prop_map(|display| display.map(str::to_owned))
+}
+
+/// An `IMAGE`-shaped Link entry: `rel: "icon"` is what sends `drawn_link` to
+/// RFC 7986 §5.10's `IMAGE` rather than `ATTACH`, with an optional `display`
+/// and `contentType`, never the `size` member `read_links` only ever puts on
+/// an `ATTACH`.
+fn image_link_value(href: &str, display: &Option<String>, content_type: &Option<String>) -> Value {
+    let mut link = json!({"@type": "Link", "href": href, "rel": "icon"});
+    if let Some(display) = display {
+        link["display"] = Value::String(display.clone());
+    }
+    if let Some(content_type) = content_type {
+        link["contentType"] = Value::String(content_type.clone());
+    }
+    link
+}
+
+/// A set of 1 to 4 keys, each carrying an old `href`, a new one, and a
+/// `display`/`contentType` pair held constant across both, for the same
+/// reason `arb_links` holds `contentType` constant: `diff_links` patches
+/// `href` alone.
+fn arb_image_links()
+-> impl Strategy<Value = BTreeMap<String, (String, String, Option<String>, Option<String>)>> {
+    prop::collection::btree_map(
+        arb_key(),
+        (arb_href(), arb_href(), arb_display(), arb_content_type()),
+        1..4,
+    )
+}
+
+/// A `size` `stated_size` always draws back unchanged: an `UnsignedInt` RFC
+/// 8607 §4.1's `1*DIGIT` can state.
+fn arb_size() -> impl Strategy<Value = Option<u64>> {
+    prop::option::of(0u64..1_000_000)
+}
+
+/// A plain `ATTACH`-shaped Link entry with a `size`, never a `contentType`:
+/// this is only ever used to isolate `size`'s own effect on the diff.
+fn attach_link_value(href: &str, size: Option<u64>) -> Value {
+    let mut link = json!({"@type": "Link", "href": href});
+    if let Some(size) = size {
+        link["size"] = Value::from(size);
+    }
+    link
 }
 
 /// A `name` `stated_name` draws back unchanged, or none at all: plain
@@ -1025,6 +1077,76 @@ proptest! {
         prop_assert_eq!(
             applied_links.get(&key_kept).and_then(|entry| entry.get("href")),
             Some(&Value::String(new_href)),
+        );
+    }
+
+    #[test]
+    fn links_image_shape_round_trip(entries in arb_image_links()) {
+        let mut old_event = base();
+        old_event.links = Some(
+            entries
+                .iter()
+                .map(|(key, (old, _, display, content_type))| {
+                    (key.clone(), image_link_value(old, display, content_type))
+                })
+                .collect(),
+        );
+        let mut new_event = base();
+        new_event.links = Some(
+            entries
+                .iter()
+                .map(|(key, (_, new, display, content_type))| {
+                    (key.clone(), image_link_value(new, display, content_type))
+                })
+                .collect(),
+        );
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn links_size_change_left_alone(
+        key in arb_key(),
+        old_href in arb_href(),
+        new_href in arb_href(),
+        old_size in arb_size(),
+        new_size in arb_size(),
+    ) {
+        let mut old_event = base();
+        old_event.links = Some([(key.clone(), attach_link_value(&old_href, old_size))].into());
+        let mut new_event = base();
+        new_event.links = Some([(key.clone(), attach_link_value(&new_href, new_size))].into());
+        let current = stable(old_event);
+        let edited = stable(new_event);
+
+        prop_assert!(diff(&current, &current).is_empty());
+        let patch = diff(&current, &edited);
+
+        // `size` is never patched, whatever the generated change, so the
+        // patch can only ever name `href`.
+        let mut expected = Map::new();
+        if old_href != new_href {
+            expected.insert(format!("links/{key}/href"), Value::String(new_href.clone()));
+        }
+        prop_assert_eq!(&patch, &expected);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        let applied_entry = applied.links.as_ref().and_then(|links| links.get(&key));
+        let current_entry = current.links.as_ref().and_then(|links| links.get(&key));
+
+        prop_assert_eq!(
+            applied_entry.and_then(|entry| entry.get("href")),
+            Some(&Value::String(new_href)),
+        );
+        // The size the save carries forward is current's own, not edited's:
+        // diff_links never writes it, whether it changed or not.
+        prop_assert_eq!(
+            applied_entry.and_then(|entry| entry.get("size")),
+            current_entry.and_then(|entry| entry.get("size")),
         );
     }
 
