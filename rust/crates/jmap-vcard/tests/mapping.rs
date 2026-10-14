@@ -2601,16 +2601,10 @@ fn tagged(tags: &[&str]) -> ContactCard {
 
 #[test]
 fn maps_keywords_onto_one_categories_line() {
-    // RFC 9553 §2.8.2's `keywords` is a Set — the tags are the keys — and RFC
-    // 2426 §3.7.1's `CATEGORIES` is a list of them on one line, which EDS reads
-    // as `E_CONTACT_CATEGORY_LIST`: the Categories field of Evolution's contact
-    // editor. There is no key to carry, so no `X-JMAP-KEY`; the tag is its own
-    // identity.
-    //
-    // One line rather than one per tag, unlike `NICKNAME` and `NOTE`, because
-    // that is all EDS reads: measured against libebook-contacts 3.52, a second
-    // `CATEGORIES` line is left standing in the vCard but contributes nothing to
-    // the field the user sees.
+    // `keywords` is a set and `CATEGORIES` is a comma list, so one line carries
+    // all tags and no `X-JMAP-KEY` is needed.
+    // EDS reads one user-visible categories field, so emitting one line avoids
+    // hidden duplicates on extra `CATEGORIES` lines.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:hiking");
     assert_eq!(vcard.matches("\r\nCATEGORIES").count(), 1, "{vcard}");
@@ -2625,21 +2619,15 @@ fn maps_keywords_onto_one_categories_line() {
 
 #[test]
 fn every_tag_goes_on_the_one_line_in_sorted_order() {
-    // A set has no order of its own, so the line states the tags in the order
-    // the map holds them — sorted — which makes the vCard stable across
-    // renderings. The save reads an edit off a difference from what was shown,
-    // and a reordering would look like one.
+    // Set members serialize in sorted map order so repeated renders stay stable.
     let vcard = card_to_vcard(&tagged(&["Work", "Friends", "hiking"]));
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:Friends,Work,hiking");
 }
 
 #[test]
 fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
-    // A JMAP keyword is any string, and both the comma and the semicolon are
-    // separators in this value — the comma to RFC 2426 and this reader, the
-    // semicolon to EDS as well, measured against libebook-contacts 3.52, which
-    // splits a raw one and honours the escape. Unescaped, one tag would arrive
-    // at the server as two.
+    // Comma and semicolon split category items unless escaped, so both must be
+    // escaped to preserve one keyword round trip.
     let vcard = card_to_vcard(&tagged(&["back, in Berlin", "a;b"]));
     assert_eq!(
         line(&vcard, "CATEGORIES"),
@@ -2658,21 +2646,10 @@ fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
 
 #[test]
 fn a_tag_no_categories_line_can_carry_gets_no_line() {
-    // The same partial visibility every keyed map has, one type over: the set
-    // is drawn *whole*, so a tag the line cannot state is a tag the next save
-    // would delete — which is why `states_keyword` exists and why these tags are
-    // left off rather than mangled onto the line.
-    //
-    // The empty tag, because an empty item reads back as no tag at all. A tag
-    // holding a carriage return, because `syntax::write` drops it — a security
-    // property, not tidiness — so the tag would come back spelled differently.
-    // And a tag whose ends are ASCII whitespace, because EDS trims them:
-    // measured against libebook-contacts 3.52, a leading space, tab, form feed
-    // or newline is gone by the time the user sees the tag, so the next save
-    // would rename it on the server. The vertical tab is in this list without
-    // having been measured to need it — EDS keeps that one — because refusing to
-    // draw a tag costs nothing but the sight of it, while drawing one that comes
-    // back renamed costs the tag.
+    // Skip tags that cannot round trip through one `CATEGORIES` item. Emitting
+    // them would make later saves rename or delete data the user never saw.
+    // Empty items vanish on parse, `\r` is removed by `syntax::write`, and EDS
+    // trims leading or trailing ASCII whitespace from category text.
     for tag in [
         "",
         "two\rlines",
@@ -2750,15 +2727,10 @@ fn a_card_with_no_tags_states_none() {
 
 #[test]
 fn reads_the_tags_of_every_categories_line() {
-    // EDS shows the user the first line only, and rewrites that one when the
-    // Categories field is edited — a second line is left exactly as it was,
-    // measured against libebook-contacts 3.52. Reading both is what keeps the
-    // tags on it from being deleted by a save: they were never shown, so the
-    // user never asked for them to go.
-    //
-    // A tag named twice is one member either way, because a set is what both
-    // sides mean, and an empty item is dropped rather than carried as a tag
-    // whose name is nothing.
+    // EDS exposes only the first categories line in UI but can preserve others,
+    // so read all lines to avoid deleting hidden tags on save.
+    // Duplicate names still collapse to one set member, and empty items are
+    // ignored.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CATEGORIES:Friends,Work,\r\n",
@@ -2793,16 +2765,8 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
-    // RFC 9553 §2.3.2's `onlineServices` names the contact as one service knows
-    // them. vCard 3.0 has no property for that at all — RFC 4770's `IMPP` is
-    // 4.0, which is not the format `e_contact_new_from_vcard()` is handed — so
-    // the line is the `X-` one EDS itself keeps a handle on: measured against
-    // libebook-contacts 3.52, `X-JABBER` is what `E_CONTACT_IM_JABBER` and the
-    // per-slot fields Evolution's contact editor shows are read out of.
-    //
-    // The `TYPE` is not optional decoration: a line without one reaches none of
-    // the `E_CONTACT_IM_JABBER_HOME_1`…`_WORK_3` fields, so the handle would be
-    // in the vCard and nowhere the user can see it.
+    // vCard 3.0 has no `IMPP`, so online services map to EDS `X-*` IM lines.
+    // `TYPE` is required so the handle lands in one HOME or WORK editor slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -2816,19 +2780,15 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
-    // Read back as a handle, never as a URI: the line states the one EDS field
-    // that holds free text, so there is nothing here to call an RFC 3986 URI.
+    // EDS stores this as a handle text field, not as a URI.
     assert_eq!(services["s1"].uri, None);
 }
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // The ten services libebook-contacts 3.52 gives HOME/WORK slots to. A
-    // service name is matched case-insensitively as RFC 9553 §2.3.2 requires,
-    // and a little wider than that — the punctuation inside it is ignored too —
-    // because `Gadu-Gadu`, `GaduGadu` and `gadu gadu` are one service under
-    // three spellings and only a normalising match keeps a save from renaming
-    // whichever one the server chose.
+    // Services with EDS HOME or WORK slots get dedicated lines.
+    // Matching is case-insensitive and punctuation-insensitive to keep save
+    // behavior stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
         ("aim", "X-AIM"),
@@ -2855,15 +2815,10 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
-    // An `X-SIGNAL` line would reach no field of EDS's and no field of
-    // Evolution's, so it would say nothing to the user while making the save
-    // believe the entry had been shown. `Twitter` is the same case for a less
-    // obvious reason: libebook-contacts 3.52 knows `X-TWITTER` as a
-    // multi-valued field but gives it no HOME/WORK slot, so a handle on it is
-    // not one the contact editor can put anywhere.
-    //
-    // An entry naming no service at all cannot be drawn either: the property is
-    // what states the service, so there would be no line to choose.
+    // Skip services without an editable EDS slot. Emitting a hidden line would
+    // mislead save logic into treating unseen data as user-visible.
+    // Missing service names are also skipped because there is no property line
+    // to select.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
