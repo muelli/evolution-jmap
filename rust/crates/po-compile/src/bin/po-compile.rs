@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Build helper: `po-compile <catalogue.po> <catalogue.mo>`.
-//! Keeps a two-argument interface for direct build-system use.
+//! Build helper for `po-compile <catalogue.po> <catalogue.mo>`.
 
 use std::process::ExitCode;
 

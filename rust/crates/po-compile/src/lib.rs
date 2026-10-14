@@ -191,7 +191,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     }
 }
 
-/// Stores a finished entry unless it should be ignored.
+/// Stores a finished entry unless it is empty or fuzzy.
 fn take(
     pending: &mut Option<Pending>,
     entries: &mut BTreeMap<String, String>,
@@ -281,7 +281,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Header, two `(length, offset)` tables, then the NUL-terminated string blob.
+    // Header, two `(length, offset)` tables, then a NUL-terminated string blob.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -320,7 +320,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Length excludes this terminator, but gettext still reads C-string data.
+    // Length excludes this terminator, but gettext still reads C strings.
     blob.push(0);
     Ok(())
 }

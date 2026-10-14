@@ -108,6 +108,5 @@ fn glibc_reads_what_this_compiler_wrote() {
         }
     }
 
-    // Best effort cleanup.
     let _ = fs::remove_dir_all(&root);
 }
