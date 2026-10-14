@@ -130,6 +130,20 @@
 //! `rrule_to_rule` never restores `RecurrenceRule::rule_type`, so both sides
 //! are run through `stable()` first, the same as every other property here.
 //!
+//! Also covered: `recurrenceRule`'s `byMonth`, `byHour`, `byMinute` and
+//! `bySecond`, the four `BYxxx` parts [`jmap_ical::by_month_part`],
+//! [`jmap_ical::by_hour_part`], [`jmap_ical::by_minute_part`] and
+//! [`jmap_ical::by_second_part`] write at every frequency with no
+//! interaction between parts, unlike `byDay`'s ordinal or `bySetPos`'s
+//! "beside another part" rule. Restricted to values each part always
+//! accepts (an hour, minute or second within RFC 5545 §3.3.10's range, a
+//! month `"1"`..`"12"` with no leading zero), so the round trip needs no
+//! "expected" event, the same as the frequency/interval/count shape above.
+//! Scoped out, left for later: `byDay`, `byMonthDay`, `byYearDay`,
+//! `byWeekNo` and `bySetPos` (each frequency-gated or interacting with
+//! another part), `until` (a zone-dependent conversion) and
+//! `firstDayOfWeek` (Monday is omitted rather than written).
+//!
 //! Also covered: `recurrenceOverrides` (`diff_overrides`), restricted to the
 //! bare `{"excluded": true}` shape (an `EXDATE`). `override_maps_by` accepts
 //! that shape unconditionally regardless of `recurrence_rule` — an `EXDATE`
@@ -491,10 +505,14 @@ fn arb_frequency() -> impl Strategy<Value = &'static str> {
     prop::sample::select(&["daily", "weekly", "monthly", "yearly"][..])
 }
 
-/// A `RecurrenceRule` restricted to frequency plus an optional interval and
-/// count, no `until` and no `BYxxx` part: a shape [`maps_recurrence_rule`]
-/// always accepts, since every `BYxxx` gate is vacuous when the part is
-/// absent and `writable` needs only the non-empty frequency this always has.
+/// A `RecurrenceRule` restricted to frequency plus an optional interval,
+/// count, `byMonth`, `byHour`, `byMinute` and `bySecond`: no `until` and none
+/// of the frequency-gated or part-interacting `BYxxx` parts, a shape
+/// [`maps_recurrence_rule`] always accepts, since every other gate is vacuous
+/// when its part is absent, `writable` needs only the non-empty frequency
+/// this always has, and each of the four `BYxxx` parts here is drawn only
+/// from values its own `by_*_part` function always accepts (non-empty, every
+/// value within range).
 ///
 /// [`maps_recurrence_rule`]: jmap_ical::maps_recurrence_rule
 fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
@@ -503,17 +521,28 @@ fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
             arb_frequency(),
             prop::option::of(1u32..5),
             prop::option::of(1u32..20),
+            prop::option::of(prop::collection::vec(1i32..=12, 1..4)),
+            prop::option::of(prop::collection::vec(0u32..=23, 1..4)),
+            prop::option::of(prop::collection::vec(0u32..=59, 1..4)),
+            prop::option::of(prop::collection::vec(0u32..=60, 1..4)),
         )
-            .prop_map(|(frequency, interval, count)| {
-                let mut rule = RecurrenceRule::new(frequency);
-                if let Some(interval) = interval {
-                    rule = rule.with_interval(interval);
-                }
-                if let Some(count) = count {
-                    rule = rule.with_count(count);
-                }
-                rule
-            }),
+            .prop_map(
+                |(frequency, interval, count, by_month, by_hour, by_minute, by_second)| {
+                    let mut rule = RecurrenceRule::new(frequency);
+                    if let Some(interval) = interval {
+                        rule = rule.with_interval(interval);
+                    }
+                    if let Some(count) = count {
+                        rule = rule.with_count(count);
+                    }
+                    rule.by_month =
+                        by_month.map(|months| months.into_iter().map(|m| m.to_string()).collect());
+                    rule.by_hour = by_hour;
+                    rule.by_minute = by_minute;
+                    rule.by_second = by_second;
+                    rule
+                },
+            ),
     )
 }
 
