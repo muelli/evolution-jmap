@@ -154,6 +154,21 @@
 //! (each frequency-gated or interacting with another part) and `until` (a
 //! zone-dependent conversion).
 //!
+//! Also covered: `byDay`, `byMonthDay`, `byYearDay`, `byWeekNo` and
+//! `bySetPos`, the remaining `BYxxx` parts from the paragraph above.
+//! `by_day_part`/`by_month_day_part`/`by_year_day_part`/`by_week_no_part`
+//! each gate their part on the rule's own frequency (an ordinal in `byDay`
+//! needs `MONTHLY`/`YEARLY`; `byMonthDay` is refused under `WEEKLY`;
+//! `byYearDay` needs a frequency that holds a year; `byWeekNo` needs
+//! `YEARLY` alone), so the generator draws each part's values only from the
+//! frequencies its own gate accepts. `bySetPos` has no frequency gate of its
+//! own, only `by_set_position_part`'s "beside another `BYxxx` part that was
+//! actually written" rule, so the generator always carries a `byDay` beside
+//! it: a weekday is valid at every frequency drawn here, so it is always
+//! one of the parts `rule_to_rrule` writes, and `bySetPos` is therefore
+//! always writable when present. `until` stays scoped out, a separate
+//! zone-dependent conversion.
+//!
 //! Also covered: `recurrenceOverrides` (`diff_overrides`), restricted to the
 //! bare `{"excluded": true}` shape (an `EXDATE`). `override_maps_by` accepts
 //! that shape unconditionally regardless of `recurrence_rule` — an `EXDATE`
@@ -229,7 +244,7 @@ use std::collections::BTreeMap;
 
 use jmap_cal_sync::patch::diff;
 use jmap_ical::{event_to_ical, ical_to_event};
-use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
 
@@ -661,6 +676,93 @@ fn arb_recurrence_rule() -> impl Strategy<Value = Option<RecurrenceRule>> {
                 },
             ),
     )
+}
+
+/// A `RecurrenceRule` covering the five frequency-gated, interacting `BYxxx`
+/// parts `arb_recurrence_rule` leaves out: `byDay`, `byMonthDay`,
+/// `byYearDay`, `byWeekNo` and `bySetPos`. Each part is drawn only from the
+/// frequency this rule actually carries, matching the gate
+/// `by_day_part`/`by_month_day_part`/`by_year_day_part`/`by_week_no_part`
+/// enforces, so every value here clears `maps_recurrence_rule`. `byDay` is
+/// always present (a plain weekday, valid at every frequency drawn), so
+/// `bySetPos`, whenever drawn, always has another written `BYxxx` part to
+/// select from: see [`jmap_ical::event::by_set_position_part`]'s doc.
+///
+/// `nthOfPeriod` is restricted to a small range (`-5..=-1`, `1..=5`): a
+/// realistic "nth weekday of the month/year", not every value
+/// [`jmap_ical::event::by_day_token`] happens to accept unchecked.
+fn arb_recurrence_rule_by_parts() -> impl Strategy<Value = RecurrenceRule> {
+    arb_frequency().prop_flat_map(|frequency| {
+        let counts_within_a_period = matches!(frequency, "monthly" | "yearly");
+        let nth = if counts_within_a_period {
+            prop::option::of(prop_oneof![-5i32..0, 1i32..6]).boxed()
+        } else {
+            Just(None).boxed()
+        };
+        let by_day = prop::collection::vec((arb_weekday(), nth), 1..4).prop_map(|days| {
+            days.into_iter()
+                .map(|(day, nth)| match nth {
+                    Some(nth) => NDay::new(day).with_nth_of_period(nth),
+                    None => NDay::new(day),
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let by_month_day = if frequency == "weekly" {
+            Just(None).boxed()
+        } else {
+            prop::option::of(prop::collection::vec(
+                prop_oneof![-31i32..0, 1i32..32],
+                1..4,
+            ))
+            .boxed()
+        };
+
+        let holds_a_year = !matches!(frequency, "daily" | "weekly" | "monthly");
+        let by_year_day = if holds_a_year {
+            prop::option::of(prop::collection::vec(
+                prop_oneof![-366i32..0, 1i32..367],
+                1..4,
+            ))
+            .boxed()
+        } else {
+            Just(None).boxed()
+        };
+
+        let by_week_no = if frequency == "yearly" {
+            prop::option::of(prop::collection::vec(
+                prop_oneof![-53i32..0, 1i32..54],
+                1..4,
+            ))
+            .boxed()
+        } else {
+            Just(None).boxed()
+        };
+
+        let by_set_position = prop::option::of(prop::collection::vec(
+            prop_oneof![-366i32..0, 1i32..367],
+            1..4,
+        ));
+
+        (
+            by_day,
+            by_month_day,
+            by_year_day,
+            by_week_no,
+            by_set_position,
+        )
+            .prop_map(
+                move |(by_day, by_month_day, by_year_day, by_week_no, by_set_position)| {
+                    let mut rule = RecurrenceRule::new(frequency);
+                    rule.by_day = Some(by_day);
+                    rule.by_month_day = by_month_day;
+                    rule.by_year_day = by_year_day;
+                    rule.by_week_no = by_week_no;
+                    rule.by_set_position = by_set_position;
+                    rule
+                },
+            )
+    })
 }
 
 /// A `recurrenceOverrides` map restricted to the bare `{"excluded": true}`
@@ -1319,6 +1421,20 @@ proptest! {
         old_event.recurrence_rule = old;
         let mut new_event = base();
         new_event.recurrence_rule = new;
+        let current = stable(old_event);
+        let edited = stable(new_event);
+        round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn recurrence_rule_by_parts_round_trip(
+        old in arb_recurrence_rule_by_parts(),
+        new in arb_recurrence_rule_by_parts(),
+    ) {
+        let mut old_event = base();
+        old_event.recurrence_rule = Some(old);
+        let mut new_event = base();
+        new_event.recurrence_rule = Some(new);
         let current = stable(old_event);
         let edited = stable(new_event);
         round_trips(&current, &edited)?;
