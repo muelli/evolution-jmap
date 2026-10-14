@@ -102,16 +102,15 @@
 //!
 //! So those came first and are tested, then the `EMailConfigServiceBackend`
 //! subclass that calls them ([`backend`]), and only then the module that
-//! registers it. The roadmap's rule about this milestone is the reason for the
-//! order: GUI code cannot be verified on the machine this is developed on, so
-//! the smaller the part of M7 that is GUI, the more of M7 is actually *checked*
-//! rather than merely compiled. It is also why the two writers above are as
-//! complete as they are — an account this crate commits is one a store can open
-//! and a transport can send through, with no step left for the caller to
-//! remember — and why [`complete`] is a function rather than a vfunc:
-//! everything the subclass has to *decide* is decided here, so what is left for
-//! it is the widgets and the plumbing, which is the part no test on this
-//! machine could cover anyway.
+//! registers it. GUI code cannot be verified on the machine this is
+//! developed on, so the smaller the part of M7 that is GUI, the more of M7
+//! is actually *checked* rather than merely compiled. It is also why the two
+//! writers above are as complete as they are — an account this crate commits
+//! is one a store can open and a transport can send through, with no step
+//! left for the caller to remember — and why [`complete`] is a function
+//! rather than a vfunc: everything the subclass has to *decide* is decided
+//! here, so what is left for it is the widgets and the plumbing, which is
+//! the part no test on this machine could cover anyway.
 //!
 //! ## What is not here yet
 //!

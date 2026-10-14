@@ -633,8 +633,7 @@ fn a_finished_account_is_one_the_setup_may_commit() {
 
 #[test]
 fn oauth2_picked_by_hand_with_no_registered_client_is_refused() {
-    // The gap session 313 found and session 314 confirmed fixable: the
-    // Authentication combo (`backend.rs`'s `AUTH_CHOICES`) writes
+    // The Authentication combo (`backend.rs`'s `AUTH_CHOICES`) writes
     // `[Authentication] Method` straight to `OAUTH2_AUTH_METHOD` with
     // nothing else — `discover_and_register` only ever runs from "Look Up
     // Account Details" (`config_lookup.rs`). An account that names OAuth
