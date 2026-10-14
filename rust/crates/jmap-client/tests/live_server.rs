@@ -5658,6 +5658,135 @@ fn calendar_event_set_preserves_jscalendar_bis_participants_through_the_real_api
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
 }
 
+/// Batch 38 Item 1: prove on live Stalwart oracle that CalendarEvent/parse emits
+/// Link.display as a set (String[Boolean] conforming to draft-ietf-calext-jscalendarbis-22
+/// Section 1.5.11), matching jmap-ical's inbound output, and that CalendarEvent/set
+/// strictly requires the set form and roundtrips it via CalendarEvent/get.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_link_display_set_matches_jscalendar_bis_on_live_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    // 1. CalendarEvent/parse proof on live server:
+    // Upload an iCalendar stream containing IMAGE with DISPLAY=BADGE.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:live-link-display-probe\r\n\
+DTSTART:20261015T120000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Link Display Bis Probe\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:https://example.com/logo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let upload_res = client
+        .blob_upload(
+            &BlobUploadRequest::new(account_id.clone())
+                .create_blob("b_link", UploadBlob::from_text(ics, "text/calendar")),
+        )
+        .expect("blob_upload succeeds")
+        .created
+        .expect("blob created map present");
+    let blob_id = upload_res.get("b_link").expect("b_link created").id.clone();
+
+    let parse_req = CalendarEventParseRequest::new(account_id.clone(), vec![blob_id.clone()]);
+    let parse_res = client
+        .event_parse(&parse_req)
+        .expect("event_parse succeeds on Stalwart");
+    let parsed_map = parse_res
+        .parsed
+        .expect("parsed map must be present in response");
+    let server_ev = parsed_map
+        .get(&blob_id)
+        .expect("parsed event must be present for blob ID");
+
+    let server_links = server_ev
+        .links
+        .as_ref()
+        .expect("server parse returned links");
+    let server_img = server_links
+        .values()
+        .find(|l| l.get("href") == Some(&json!("https://example.com/logo.png")))
+        .expect("server link with matching href found");
+    assert_eq!(server_img.get("rel"), Some(&json!("icon")));
+    assert_eq!(
+        server_img.get("display"),
+        Some(&json!({"badge": true})),
+        "live server CalendarEvent/parse must emit display as set matching JSCalendar-bis"
+    );
+
+    // Verify local jmap_ical::ical_to_event produces identical Link representation
+    let local_ev = jmap_ical::ical_to_event(ics).expect("local ical_to_event succeeds");
+    let local_links = local_ev.links.as_ref().expect("local parse returned links");
+    let local_img = local_links
+        .values()
+        .find(|l| l.get("href") == Some(&json!("https://example.com/logo.png")))
+        .expect("local link with matching href found");
+    assert_eq!(
+        server_img.get("display"),
+        local_img.get("display"),
+        "live server parse display must match local jmap-ical parse display"
+    );
+
+    // 2. CalendarEvent/set write-path proof:
+    // Create an event with Link having display: {"badge": true}.
+    let suffix = unique_suffix();
+    let title = format!("agent-link-display-{suffix}");
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-10-15T12:00:00Z", "PT1H");
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "k_icon".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/badge.png",
+            "rel": "icon",
+            "display": { "badge": true },
+            "contentType": "image/png"
+        }),
+    );
+    event.links = Some(links);
+
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create with bis link display succeeded");
+    let event_id = created.id.clone().expect("server assigned event id");
+
+    // Fetch back and assert display was preserved as set
+    let fetched = client
+        .event_get(&account_id, std::slice::from_ref(&event_id))
+        .expect("event_get succeeds");
+    let fetched_ev = fetched.list.first().expect("created event returned");
+    let fetched_links = fetched_ev.links.as_ref().expect("fetched event has links");
+    let fetched_icon = &fetched_links["k_icon"];
+    assert_eq!(
+        fetched_icon.get("display"),
+        Some(&json!({"badge": true})),
+        "fetched event preserves display set"
+    );
+
+    // Clean up
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("event_destroy cleanup succeeds");
+}
+
 /// `VacationResponse` (RFC 8621 section 8.1) against a real server.
 /// `jmap-ui`'s vacation autoresponder page (`rust/crates/jmap-ui/src/
 /// vacation/`, Evolution's account-editor Out of Office tab) is the only

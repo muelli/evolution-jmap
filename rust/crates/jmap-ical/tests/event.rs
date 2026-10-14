@@ -7902,7 +7902,9 @@ fn a_component_that_names_resources_reads_them_back_under_the_servers_keys() {
                 "@type": "Link",
                 "href": "https://files.example.com/party.png",
                 "rel": "icon",
-                "display": "badge",
+                "display": {
+                    "badge": true
+                },
                 "contentType": "image/png",
             },
         }),
@@ -8088,7 +8090,7 @@ END:VCALENDAR\r\n";
         json!("https://files.example.com/logo.png")
     );
     assert_eq!(links["img1"]["rel"], json!("icon"));
-    assert_eq!(links["img1"]["display"], json!("badge"));
+    assert_eq!(links["img1"]["display"], json!({"badge": true}));
 
     let rendered = event_to_ical(&event);
     assert_eq!(
@@ -8123,7 +8125,7 @@ END:VCALENDAR\r\n";
     assert_eq!(links.len(), 2, "{links:?}");
     assert!(links.contains_key("l1"));
     assert!(links.contains_key("img1"));
-    assert_eq!(links["img1"]["display"], json!("graphic"));
+    assert_eq!(links["img1"]["display"], json!({"graphic": true}));
 }
 
 #[test]
@@ -8791,7 +8793,7 @@ fn reads_an_icalendar_with_mixed_case_properties_and_parameters_and_parses_faith
         Some("https://example.com/badge.png")
     );
     assert_eq!(links["k2"]["rel"].as_str(), Some("icon"));
-    assert_eq!(links["k2"]["display"].as_str(), Some("badge"));
+    assert_eq!(links["k2"]["display"], json!({"badge": true}));
 
     let alerts = event.alerts.as_ref().expect("alerts");
     assert_eq!(alerts["alert-1"]["action"].as_str(), Some("display"));
@@ -10644,7 +10646,7 @@ fn real_exporter_fixture_outlook_modern_m365_detailed_roundtrip() {
     assert!(
         links
             .values()
-            .any(|l| l["display"] == "badge" && l["rel"] == "icon")
+            .any(|l| l["display"] == json!({"badge": true}) && l["rel"] == "icon")
     );
 
     // 4. Validate monthly 3rd Sunday recurrence
@@ -10996,7 +10998,7 @@ fn real_exporter_fixture_sogo_caldav_detailed_roundtrip() {
     assert!(
         links
             .values()
-            .any(|l| l["display"] == "badge" && l["contentType"] == "image/png")
+            .any(|l| l["display"] == json!({"badge": true}) && l["contentType"] == "image/png")
     );
 
     // 5. Validate monthly 1st Thursday recurrence
@@ -11168,7 +11170,7 @@ fn real_exporter_fixture_cyrus_caldav_detailed_roundtrip() {
     assert!(
         links
             .values()
-            .any(|l| l["display"] == "badge" && l["contentType"] == "image/png")
+            .any(|l| l["display"] == json!({"badge": true}) && l["contentType"] == "image/png")
     );
 
     // 4. Validate virtual location and conference
@@ -18566,7 +18568,7 @@ END:VCALENDAR\r\n";
         Some("image/png")
     );
     assert_eq!(k2.get("rel").and_then(Value::as_str), Some("icon"));
-    assert_eq!(k2.get("display").and_then(Value::as_str), Some("badge"));
+    assert_eq!(k2.get("display"), Some(&json!({"badge": true})));
 
     let k3 = links.get("k3").expect("image link k3");
     assert_eq!(
@@ -18578,7 +18580,7 @@ END:VCALENDAR\r\n";
         Some("image/jpeg")
     );
     assert_eq!(k3.get("rel").and_then(Value::as_str), Some("icon"));
-    assert_eq!(k3.get("display").and_then(Value::as_str), Some("thumbnail"));
+    assert_eq!(k3.get("display"), Some(&json!({"thumbnail": true})));
     assert!(ev.extra.is_empty());
 
     let out = event_to_ical(&ev);
@@ -25893,7 +25895,7 @@ fn differential_oracle_drawn_link_and_read_links_image_vs_attach_parameter_disjo
 
     let img = links.get("k1").expect("k1 link present");
     assert_eq!(img.get("rel").and_then(Value::as_str), Some("icon"));
-    assert_eq!(img.get("display").and_then(Value::as_str), Some("badge"));
+    assert_eq!(img.get("display"), Some(&json!({"badge": true})));
     assert_eq!(
         img.get("contentType").and_then(Value::as_str),
         Some("image/png")
@@ -29225,7 +29227,7 @@ fn differential_oracle_drawn_links_image_attach_media_type_and_size() {
     let roundtrip_event = ical_to_event(&ics).expect("parse emitted ics with links");
     let rt_links = roundtrip_event.links.expect("links preserved in roundtrip");
     assert_eq!(rt_links["icon1"]["rel"], "icon");
-    assert_eq!(rt_links["icon1"]["display"], "badge");
+    assert_eq!(rt_links["icon1"]["display"], json!({"badge": true}));
     assert_eq!(rt_links["icon1"]["contentType"], "image/png");
     assert_eq!(rt_links["att1"]["size"], 1048576);
     assert_eq!(rt_links["att1"]["contentType"], "application/pdf");
@@ -31341,10 +31343,7 @@ fn differential_oracle_links_mime_attachments_and_category_whitespace_trimming()
     let img_links = ev_image.links.expect("links present");
     let img_entry = img_links.values().next().expect("image link entry");
     assert_eq!(img_entry.get("rel").and_then(Value::as_str), Some("icon"));
-    assert_eq!(
-        img_entry.get("display").and_then(Value::as_str),
-        Some("badge")
-    );
+    assert_eq!(img_entry.get("display"), Some(&json!({"badge": true})));
 
     // 3. Local file URI rejection: file: scheme is dropped
     let ics_local = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:link-3\r\nDTSTART:20260905T100000Z\r\nATTACH:file:///home/user/document.pdf\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -33805,13 +33804,13 @@ END:VCALENDAR\r\n";
     assert_eq!(links["doc1"]["contentType"], "application/pdf");
     assert_eq!(links["doc1"]["size"], 1048576);
 
-    // IMAGE gets rel: "icon", display: "badge", contentType: "image/png":
+    // IMAGE gets rel: "icon", display: {"badge": true}, contentType: "image/png":
     let img_link = links
         .values()
         .find(|link| link["href"] == "https://files.example.com/logo.png")
         .expect("image link");
     assert_eq!(img_link["rel"], "icon");
-    assert_eq!(img_link["display"], "badge");
+    assert_eq!(img_link["display"], json!({"badge": true}));
     assert_eq!(img_link["contentType"], "image/png");
 }
 
@@ -37003,7 +37002,7 @@ END:VCALENDAR\r\n";
     assert_eq!(img["@type"], "Link");
     assert_eq!(img["href"], "https://example.com/banner.png");
     assert_eq!(img["rel"], "icon");
-    assert_eq!(img["display"], "badge");
+    assert_eq!(img["display"], json!({"badge": true}));
 
     // 2. Local file path security isolation (fetched_locally)
     assert!(jmap_ical::event::fetched_locally("file:///tmp/secret.doc"));
@@ -38772,7 +38771,7 @@ fn differential_oracle_inbound_map_entry_id_validation_and_invented_keys() {
     assert_eq!(links["remote_file"]["size"], json!(1024));
     assert!(links.contains_key("icon_1"));
     assert_eq!(links["icon_1"]["rel"], json!("icon"));
-    assert_eq!(links["icon_1"]["display"], json!("badge"));
+    assert_eq!(links["icon_1"]["display"], json!({"badge": true}));
 
     // 4. read_keywords parses CATEGORIES with comma splitting and trimming
     let ics_keywords = concat!(
@@ -41867,7 +41866,7 @@ fn differential_oracle_read_links_fetched_locally_and_size_parsing() {
     assert_eq!(logo_link["@type"], "Link");
     assert_eq!(logo_link["href"], "https://example.com/logo.png");
     assert_eq!(logo_link["rel"], "icon");
-    assert_eq!(logo_link["display"], "badge");
+    assert_eq!(logo_link["display"], json!({"badge": true}));
 
     // 3. Local file: URI is strictly filtered out to prevent privacy leaks
     assert!(jmap_ical::event::fetched_locally(
@@ -43161,7 +43160,7 @@ fn differential_oracle_links_attachment_image_parameters_and_default_elision() {
     let image_link = &links["brand-logo"];
     assert_eq!(image_link["href"], "https://example.com/badge.png");
     assert_eq!(image_link["rel"], "icon");
-    assert_eq!(image_link["display"], "badge");
+    assert_eq!(image_link["display"], json!({"badge": true}));
     assert_eq!(image_link["contentType"], "image/png");
 
     // 3. Outbound serialization renders ATTACH and IMAGE with X-JMAP-KEY
@@ -44388,35 +44387,35 @@ fn differential_oracle_links_display_scalar_token_and_defensive_set_deserializat
     let links = ev.links.as_ref().expect("links present");
     let link = links.values().next().expect("link present");
     assert_eq!(link["rel"], "icon");
-    assert_eq!(link["display"], "badge");
+    assert_eq!(link["display"], json!({"badge": true}));
     assert_eq!(link["contentType"], "image/png");
 
-    // 2. Outbound serialization renders DISPLAY=BADGE from scalar String
-    let out_scalar = event_to_ical(&ev);
-    assert!(out_scalar.contains("IMAGE;"));
-    assert!(out_scalar.contains("DISPLAY=BADGE"));
+    // 2. Outbound serialization renders DISPLAY=BADGE from set format
+    let out_set = event_to_ical(&ev);
+    assert!(out_set.contains("IMAGE;"));
+    assert!(out_set.contains("DISPLAY=BADGE"));
 
-    // 3. Outbound serialization also defensively tolerates Stalwart boolean Set format
-    let mut links_set = BTreeMap::new();
-    links_set.insert(
+    // 3. Outbound serialization also tolerates scalar string format
+    let mut links_scalar = BTreeMap::new();
+    links_scalar.insert(
         "k1".to_string(),
         json!({
             "@type": "Link",
             "href": "https://example.com/badge.png",
             "rel": "icon",
-            "display": { "badge": true },
+            "display": "badge",
             "contentType": "image/png"
         }),
     );
-    let ev_set = CalendarEvent {
+    let ev_scalar = CalendarEvent {
         id: Some("link-display-test-2".into()),
         start: Some("2026-10-15T10:00:00Z".to_string()),
-        links: Some(links_set),
+        links: Some(links_scalar),
         ..CalendarEvent::default()
     };
-    let out_set = event_to_ical(&ev_set);
-    assert!(out_set.contains("IMAGE;"));
-    assert!(out_set.contains("DISPLAY=BADGE"));
+    let out_scalar = event_to_ical(&ev_scalar);
+    assert!(out_scalar.contains("IMAGE;"));
+    assert!(out_scalar.contains("DISPLAY=BADGE"));
 }
 
 #[test]
@@ -46461,8 +46460,8 @@ fn differential_oracle_image_link_display_badge_and_scalar_representation() {
         .expect("finds icon image link");
     assert_eq!(
         image_link.get("display"),
-        Some(&serde_json::json!("badge")),
-        "display must be scalar string badge conforming to RFC 8984 Section 4.2.7"
+        Some(&serde_json::json!({"badge": true})),
+        "display must be set badge conforming to draft-ietf-calext-jscalendarbis-22 Section 1.5.11"
     );
     assert_eq!(
         image_link.get("contentType"),
@@ -46486,8 +46485,8 @@ fn differential_oracle_image_link_display_badge_and_scalar_representation() {
         .expect("finds evo icon link");
     assert_eq!(
         evo_image.get("display"),
-        Some(&serde_json::json!("badge")),
-        "evo image display must be scalar string badge"
+        Some(&serde_json::json!({"badge": true})),
+        "evo image display must be set badge"
     );
 
     // 2. Outbound serialization: serializing an event with rel: icon and display: badge
@@ -48012,7 +48011,7 @@ END:VCALENDAR\r\n";
         link.get("contentType").and_then(Value::as_str),
         Some("image/png")
     );
-    assert_eq!(link.get("display").and_then(Value::as_str), Some("badge"));
+    assert_eq!(link.get("display"), Some(&json!({"badge": true})));
 }
 
 #[test]
@@ -48322,5 +48321,67 @@ fn jscalendar_bis_participant_required_role_and_calendar_address() {
     assert!(
         out.contains("mailto:alice@example.com"),
         "must use calendarAddress, got: {out}"
+    );
+}
+
+#[test]
+fn jscalendar_bis_link_display_is_emitted_as_set_and_read_as_scalar_or_set() {
+    // draft-ietf-calext-jscalendarbis-22 Section 1.5.11:
+    // display: String[Boolean] (optional).
+    // This is a set of intended purposes of a link to an image.
+    // If set, the "rel" property MUST be set to "icon".
+    // The keys MUST be one of: badge, graphic, fullsize, thumbnail.
+    // The value for each key in the map MUST be true.
+
+    // 1. Inbound iCalendar parsing with DISPLAY=BADGE emits the bis set format:
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:test-bis-display\r\n\
+DTSTART:20261015T120000Z\r\n\
+SUMMARY:Display Set Test\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE:https://example.com/badge.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parses ical with image display");
+    let links = ev.links.as_ref().expect("links present");
+    let link = links.values().next().expect("link present");
+    assert_eq!(link.get("rel"), Some(&json!("icon")));
+    assert_eq!(
+        link.get("display"),
+        Some(&json!({"badge": true})),
+        "inbound iCalendar parse must emit display as a JSCalendar-bis set"
+    );
+
+    // 2. Outbound serialization reads the bis set form and renders DISPLAY=BADGE:
+    let out_bis = event_to_ical(&ev);
+    assert!(
+        out_bis.contains("IMAGE;"),
+        "must emit IMAGE property, got: {out_bis}"
+    );
+    assert!(
+        out_bis.contains("DISPLAY=BADGE"),
+        "must render DISPLAY=BADGE from set form, got: {out_bis}"
+    );
+
+    // 3. Outbound serialization also accepts legacy RFC 8984 scalar string form:
+    let mut legacy_links = std::collections::BTreeMap::new();
+    legacy_links.insert(
+        "l1".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/badge.png",
+            "rel": "icon",
+            "display": "badge"
+        }),
+    );
+    let mut legacy_event = CalendarEvent::new();
+    legacy_event.links = Some(legacy_links);
+    let out_legacy = event_to_ical(&legacy_event);
+    assert!(
+        out_legacy.contains("DISPLAY=BADGE"),
+        "must render DISPLAY=BADGE from legacy scalar string, got: {out_legacy}"
     );
 }

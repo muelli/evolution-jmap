@@ -468,10 +468,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         participation_status: Some("accepted".to_owned()),
         attendance: Some(participant_attendance::REQUIRED.to_owned()),
         expect_reply: Some(false),
-        schedule_agent: Some(schedule_agent::SERVER.to_owned()),
-        schedule_sequence: Some(1),
         progress: Some(participant_progress::IN_PROCESS.to_owned()),
-        progress_updated: Some(UtcDate::new("2026-09-01T12:00:00Z")),
         ..Participant::default()
     };
 
@@ -482,6 +479,8 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     assert_eq!(p_val["roles"]["owner"], true);
     assert_eq!(p_val["attendance"], "required");
     assert_eq!(p_val["progress"], "in-process");
+    assert_eq!(p_val["calendarAddress"], "mailto:alice@example.com");
+    assert!(p_val.get("sendTo").is_none());
 
     let p_round_tripped: Participant = serde_json::from_value(p_val).unwrap();
     assert_eq!(p_round_tripped, participant);
@@ -489,8 +488,6 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let location = Location {
         location_type: Some("Location".to_owned()),
         name: Some("Conference Room A".to_owned()),
-        description: Some("Building 2, Floor 3".to_owned()),
-        time_zone: Some("Europe/London".to_owned()),
         coordinates: Some("geo:51.5074,-0.1278".to_owned()),
         location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
         ..Location::default()
@@ -498,7 +495,6 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let loc_val = serde_json::to_value(&location).unwrap();
     assert_eq!(loc_val["@type"], "Location");
     assert_eq!(loc_val["name"], "Conference Room A");
-    assert_eq!(loc_val["timeZone"], "Europe/London");
     assert_eq!(
         serde_json::from_value::<Location>(loc_val).unwrap(),
         location
@@ -507,10 +503,10 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let vloc = VirtualLocation {
         virtual_location_type: Some("VirtualLocation".to_owned()),
         name: Some("Video Bridge".to_owned()),
-        description: Some("Passcode: 1234".to_owned()),
         uri: "https://meet.example.com/bridge".to_owned(),
         features: Some(BTreeMap::from([("video".to_owned(), true)])),
         extra: BTreeMap::new(),
+        description: None,
     };
     let vloc_val = serde_json::to_value(&vloc).unwrap();
     assert_eq!(vloc_val["@type"], "VirtualLocation");
@@ -748,7 +744,6 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
 #[test]
 fn calendar_and_event_spec_properties_roundtrip() {
     use jmap_proto::calendars::{Calendar, CalendarEvent};
-    use std::collections::BTreeMap;
 
     let cal = Calendar {
         id: Some("cal_spec".into()),
@@ -768,23 +763,29 @@ fn calendar_and_event_spec_properties_roundtrip() {
         use_default_alerts: Some(true),
         color: Some("#ff5500".to_owned()),
         locale: Some("en-GB".to_owned()),
-        localizations: Some(BTreeMap::from([(
-            "de".to_owned(),
-            serde_json::json!({"title": "Internationale Konferenz"}),
-        )])),
         ..CalendarEvent::default()
     };
     let e_val = serde_json::to_value(&event).unwrap();
     assert_eq!(e_val["useDefaultAlerts"], true);
     assert_eq!(e_val["color"], "#ff5500");
     assert_eq!(e_val["locale"], "en-GB");
-    assert_eq!(
-        e_val["localizations"]["de"]["title"],
-        "Internationale Konferenz"
-    );
 
     let round_event: CalendarEvent = serde_json::from_value(e_val).unwrap();
     assert_eq!(round_event, event);
+
+    // Deserialization of legacy JSON with localizations is still supported:
+    let legacy_json = serde_json::json!({
+        "id": "evt_spec_legacy",
+        "title": "International Conference",
+        "localizations": {
+            "de": {"title": "Internationale Konferenz"}
+        }
+    });
+    let legacy_ev: CalendarEvent = serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(
+        legacy_ev.localizations.as_ref().unwrap()["de"]["title"],
+        "Internationale Konferenz"
+    );
 }
 
 #[test]
@@ -1140,14 +1141,22 @@ fn participant_participation_comment_roundtrip() {
     let p = Participant::new("Alice", "alice@example.com")
         .with_participation_comment("Will arrive 10 minutes late");
 
+    // In JSCalendar-bis, participationComment is reserved and omitted on serialization:
     let json = serde_json::to_value(&p).unwrap();
     assert_eq!(json["name"], "Alice");
     assert_eq!(json["email"], "alice@example.com");
-    assert_eq!(json["participationComment"], "Will arrive 10 minutes late");
+    assert!(json.get("participationComment").is_none());
 
-    let round_tripped: Participant = serde_json::from_value(json).unwrap();
+    // Legacy JSON with participationComment is read on deserialization:
+    let legacy_json = serde_json::json!({
+        "@type": "Participant",
+        "name": "Alice",
+        "email": "alice@example.com",
+        "participationComment": "Will arrive 10 minutes late"
+    });
+    let deserialized: Participant = serde_json::from_value(legacy_json).unwrap();
     assert_eq!(
-        round_tripped.participation_comment.as_deref(),
+        deserialized.participation_comment.as_deref(),
         Some("Will arrive 10 minutes late")
     );
 }

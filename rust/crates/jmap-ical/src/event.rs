@@ -3464,7 +3464,7 @@ pub fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>
                     .iter()
                     .find(|(_, ical)| ical.eq_ignore_ascii_case(&display))
             }) {
-                link["display"] = Value::String(display.0.to_owned());
+                link["display"] = json!({display.0: true});
             }
         } else if let Some(size) =
             entry_param(line, "SIZE").and_then(|size| size.parse::<u64>().ok())

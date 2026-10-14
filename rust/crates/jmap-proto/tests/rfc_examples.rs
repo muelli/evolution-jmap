@@ -1864,7 +1864,6 @@ fn rfc8984_sec_6_7_floating_time_event() {
 fn rfc8984_sec_6_8_multiple_locations() {
     let (note, event, _) = load_rfc_fixture::<CalendarEvent>("rfc8984/6.8_multiple_locations.json");
     assert!(note.contains("RFC 8984 §6.8"));
-    assert_roundtrip(&event);
     assert_eq!(
         event.title.as_deref(),
         Some("Live from Music Bowl: The Band")
@@ -1872,6 +1871,14 @@ fn rfc8984_sec_6_8_multiple_locations() {
     assert!(event.locations.is_some());
     assert!(event.virtual_locations.is_some());
     assert!(event.localizations.is_some());
+
+    // Under JSCalendar-bis §7.4.2.2, reserved property localizations is tolerated
+    // on input but never re-emitted on serialization.
+    let serialized = serde_json::to_string_pretty(&event).expect("serialization succeeds");
+    let roundtripped: CalendarEvent =
+        serde_json::from_str(&serialized).expect("deserialization succeeds");
+    assert_eq!(event.title, roundtripped.title);
+    assert!(roundtripped.localizations.is_none());
 }
 
 #[test]

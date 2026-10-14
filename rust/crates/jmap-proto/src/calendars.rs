@@ -307,7 +307,8 @@ pub struct CalendarEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_overrides: Option<BTreeMap<String, Value>>,
     /// Custom time zone definitions (RFC 8984 §4.7.2), keyed by time zone id.
-    /// Kept as JSON for lossless preservation.
+    /// Kept as JSON for lossless preservation. Intentional interop deviation
+    /// (ICAL-MAPPING Section 17 Divergence 437) for custom /... timezones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zones: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,7 +317,8 @@ pub struct CalendarEvent {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Reserved in JSCalendar-bis §7.4.2.2; tolerated on deserialization, never emitted.
+    #[serde(default, skip_serializing)]
     pub localizations: Option<BTreeMap<String, Value>>,
     /// Whether this account is the event's origin (JMAP Calendars §5.6, §10.9.5).
     /// Server-set.
@@ -883,23 +885,23 @@ struct ParticipantHelper {
     kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     roles: Option<BTreeMap<String, bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     location_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     participation_status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     participation_comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attendance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expect_reply: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     schedule_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     schedule_sequence: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     schedule_status: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     schedule_updated: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delegated_to: Option<Vec<String>>,
@@ -909,7 +911,7 @@ struct ParticipantHelper {
     member_of: Option<BTreeMap<String, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     progress: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     progress_updated: Option<UtcDate>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
@@ -988,20 +990,20 @@ impl serde::Serialize for Participant {
             send_to: None,
             kind: self.kind.clone(),
             roles: self.roles.clone(),
-            location_id: self.location_id.clone(),
+            location_id: None,
             participation_status: self.participation_status.clone(),
-            participation_comment: self.participation_comment.clone(),
+            participation_comment: None,
             attendance: self.attendance.clone(),
             expect_reply: self.expect_reply,
-            schedule_agent: self.schedule_agent.clone(),
-            schedule_sequence: self.schedule_sequence,
-            schedule_status: self.schedule_status.clone(),
-            schedule_updated: self.schedule_updated.clone(),
+            schedule_agent: None,
+            schedule_sequence: None,
+            schedule_status: None,
+            schedule_updated: None,
             delegated_to: self.delegated_to.clone(),
             delegated_from: self.delegated_from.clone(),
             member_of: self.member_of.clone(),
             progress: self.progress.clone(),
-            progress_updated: self.progress_updated.clone(),
+            progress_updated: None,
             extra: self.extra.clone(),
         };
         helper.serialize(serializer)
@@ -1091,11 +1093,11 @@ pub struct Location {
     pub location_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub relative_to: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub time_zone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinates: Option<String>,
@@ -1143,7 +1145,7 @@ pub struct VirtualLocation {
     pub virtual_location_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub description: Option<String>,
     #[serde(default)]
     pub uri: String,
@@ -1177,6 +1179,66 @@ impl VirtualLocation {
 
     pub fn with_features(mut self, features: BTreeMap<String, bool>) -> Self {
         self.features = Some(features);
+        self
+    }
+}
+
+/// JSCalendar Link (draft-ietf-calext-jscalendarbis-22 §1.5.11): external resource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub link_type: Option<String>,
+    #[serde(default)]
+    pub href: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Obsoleted RFC 8984 property; tolerated on deserialization, never emitted on serialization.
+    #[serde(default, skip_serializing)]
+    pub cid: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Link {
+    pub fn new(href: impl Into<String>) -> Self {
+        Self {
+            link_type: Some("Link".to_owned()),
+            href: href.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.content_type = Some(content_type.into());
+        self
+    }
+
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    pub fn with_rel(mut self, rel: impl Into<String>) -> Self {
+        self.rel = Some(rel.into());
+        self
+    }
+
+    pub fn with_display(mut self, display: BTreeMap<String, bool>) -> Self {
+        self.display = Some(display);
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
         self
     }
 }

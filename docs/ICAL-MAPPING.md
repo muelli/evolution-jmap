@@ -8429,180 +8429,46 @@ Profiling via `perf stat` and micro-instrumentation demonstrates:
 
 ## 17. JSCalendar-bis and JMAP Calendars Specification Audit (draft-ietf-calext-jscalendarbis-22 & draft-ietf-jmap-calendars-32)
 
-### 17.1 Specification Audit Overview and Methodology
+### 17.1 Specification Audit Table
 
-As established in draft-ietf-jmap-calendars-32 Section 1.4, the JMAP Calendars data model defines a `CalendarEvent` as a JSCalendar object conforming to JSCalendar 2.0 (`draft-ietf-calext-jscalendarbis-22`, which obsoletes RFC 8984), carrying JMAP-specific top-level properties including `id` and `calendarIds`.
-
-In JSCalendar 2.0 (JSCalendar-bis), legacy RFC 8984 properties have been formally categorized across distinct lifecycle states:
-1. **Renamed / Replaced**: Superseded by clean replacements aligning directly with iCalendar (RFC 5545) and JSContact (RFC 9553) semantics.
-2. **Obsoleted**: Incompatible with underlying calendaring standards or declared redundant, restricted to version 1.0 and forbidden in JSCalendar 2.0.
-3. **Reserved**: Set aside for specific protocol extensions (such as JMAP for Calendars, CalDAV scheduling, or internal engine usage). Per JSCalendar-bis Section 1.7.3, objects carrying unknown or reserved properties outside their permitted contexts MUST be considered invalid by conformant implementations.
-4. **Added / New**: Introduced in JSCalendar 2.0 or JMAP Calendars to resolve long-standing ambiguities.
-5. **Updated Definitions**: Semantics, types, or validity rules modified between RFC 8984 and bis.
-
-This audit catalogues every property, type, and enumerated value modified across `draft-ietf-calext-jscalendarbis-22` (including Appendix A and Section 7 IANA registries) and `draft-ietf-jmap-calendars-32` (including Section 5 and Section 10 IANA considerations). For each item, the audit evaluates:
-- **`jmap-proto` Model**: Whether the wire type in `rust/crates/jmap-proto/src/calendars.rs` models the property, retains legacy RFC 8984 fields, or relies on `extra` flattening.
-- **`jmap-ical` Inbound (Import)**: How `ical_to_event` / `read_vevent` maps incoming iCalendar components to JSCalendar fields.
-- **`jmap-ical` Outbound (Export)**: How `event_to_ical` / `drawn_participants` serializes JSCalendar fields to iCalendar components.
-- **`jmap-mock` (mockd)**: Whether the test mock server in `rust/crates/jmap-mock/` enforces, produces, or accepts RFC 8984 or bis representations.
-- **Verdict & Alignment Action**: Concrete action needed for the Batch 37 alignment rollout.
-
----
-
-### 17.2 Property Differences: Obsoleted, Reserved, Added, and Renamed Properties
-
-#### 17.2.1 Obsoleted Properties (RFC 8984 -> bis)
-
-The following properties from RFC 8984 are obsoleted in `draft-ietf-calext-jscalendarbis-22` (Appendix A.2.1, Section 7.4.2.1):
-
-1. `recurrenceRules` (plural array): Incompatible with RFC 5545 Section 3.8.5.3, which defines recurrence sets with multiple RRULEs as undefined and recommends at most one RRULE. Replaced by the singular `recurrenceRule` object property.
-2. `excludedRecurrenceRules`: Deprecated in RFC 5545 (EXRULE). Overrides and exclusions must use `recurrenceOverrides` with `excluded: true`.
-3. `timeZones`: In practice non-IANA timezone names are Microsoft names easily translated to IANA IDs. Custom `VTIMEZONE` blocks increase implementation complexity and error rates (RFC 7809). Obsoleted in bis.
-4. `Link.cid`: Only relevant for rich-text descriptions with `data:` URIs; incompatible with iCalendar STYLED-DESCRIPTION (RFC 9073).
-5. `Location.relativeTo` and `Location.timeZone`: Semantics were undefined when multiple Location objects specified `relativeTo=end` with different timezones, and undefined for Task objects. Replaced by top-level `Event.endTimeZone`.
-6. `Participant.language`: No equivalent element in iCalendar; likely to conflict with future PARTICIPANT extensions.
-7. `Participant.locationId`: Incompatible with RFC 9073 PARTICIPANT components, which contain embedded VLOCATION components rather than cross-references.
-8. `Participant.progressUpdated` and `Task.progressUpdated`: Incompatible with RFC 9073 / iCalendar tasks VSTATUS components.
-9. `TimeZone` and `TimeZoneRule` properties (`aliases`, `comments`, `daylight`, `names`, `offsetFrom`, `offsetTo`, `standard`, `start`, `tzId`, `url`, `validUntil`): Obsoleted along with `timeZones`.
-
-#### 17.2.2 Reserved Properties (bis Section 7.4.2.2 & JMAP Calendars Section 10.9)
-
-The following properties are marked as "reserved" in the IANA JSCalendar Properties Registry:
-
-1. `Participant.sendTo`: Reserved in JSCalendar-bis Appendix A.2.2.2. Replaced by `Participant.calendarAddress`. Note: Stalwart 0.16.25 silently drops all participants when `sendTo` is present, because reserved properties invalidate the object.
-2. `replyTo`: Reserved in JSCalendar-bis Appendix A.2.2.2. Replaced by `Event.organizerCalendarAddress`.
-3. `requestStatus`: Reserved for CalDAV scheduling.
-4. `Participant.invitedBy`: Reserved for future iTIP scheduling extensions.
-5. `Participant.participationComment`: Reserved for future iTIP scheduling extensions.
-6. `Participant.scheduleAgent`: Reserved for CalDAV scheduling.
-7. `Participant.scheduleForceSend`: Reserved for CalDAV scheduling.
-8. `Participant.scheduleStatus`: Reserved for CalDAV scheduling.
-9. `scheduleSequence`: Reserved in JSCalendar-bis for JMAP for Calendars; registered as top-level CalendarEvent property in JMAP Calendars Section 5.2.1 / Section 10.9.2.2.
-10. `scheduleUpdated`: Reserved in JSCalendar-bis for JMAP for Calendars; registered as top-level CalendarEvent property in JMAP Calendars Section 5.2.2 / Section 10.9.2.3.
-11. `useDefaultAlerts`: Reserved in JSCalendar-bis for JMAP for Calendars; registered as top-level per-user CalendarEvent property in JMAP Calendars Section 5 / Section 10.9.2.1.
-12. `localizations`: Reserved for future multilingual calendar data extensions.
-13. `Location.description` and `VirtualLocation.description`: Reserved because CONFERENCE parameters cannot represent location descriptions.
-14. `excluded`: Reserved for internal use only within `recurrenceOverrides` patch objects.
-15. `extra`: Reserved property name guaranteed never to be defined in JSCalendar.
-16. JMAP Calendars reserved top-level event properties (draft-ietf-jmap-calendars-32 Section 10.9.1): `id`, `baseEventId`, `calendarIds`, `isDraft`, `isOrigin`, `utcStart`, `utcEnd`, and Link property `blobId`.
-
-#### 17.2.3 Added / New Properties in JSCalendar-bis and JMAP Calendars
-
-The following new properties were introduced:
-
-1. `version`: String. Added in JSCalendar-bis Section 3.1.2. Must be `"2.0"` in JMAP Calendars contexts.
-2. `recurrenceRule`: RecurrenceRule object. Replaces plural `recurrenceRules`.
-3. `organizerCalendarAddress`: String URI. Replaces reserved `replyTo`.
-4. `Event.endTimeZone`: TimeZoneId. Replaces `Location.relativeTo` and `Location.timeZone`.
-5. `Participant.calendarAddress`: String URI. Replaces reserved `Participant.sendTo`.
-6. `Participant.descriptionContentType`: String MediaType for styled participant description.
-7. `mainLocationId`: Id. Identifies the primary physical location for iCalendar `LOCATION` property interoperability.
-8. `mayInviteSelf`, `mayInviteOthers`, `hideAttendees`: Boolean properties added by JMAP Calendars Section 5.1 / Section 10.9.1.
-
----
-
-### 17.3 Comprehensive Audit Matrix: Property Model, Mapping, and Mock Compatibility
-
-| Property / Feature | Specification Status | `jmap-proto` Model | `jmap-ical` Inbound (to JSCalendar) | `jmap-ical` Outbound (to iCal) | `jmap-mock` (mockd) | Verdict & Alignment Gap |
+| Property / Feature | Specification Status | `jmap-proto` Model | `jmap-ical` Inbound (to JSCalendar) | `jmap-ical` Outbound (to iCal) | `jmap-mock` (mockd) | Verdict & Alignment Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | `version` | Added in bis §3.1.2 (`"2.0"` in JMAP §1.4) | Modeled (`pub version: Option<String>`). `simple()` sets `"2.0"`. | Sets `event.version = Some("2.0")` for standalone events. | Ignores on export. | Validates strictly in `version_is_2_0`: requires `"2.0"`. | **Aligned (bis)**. Fully compliant. |
 | `recurrenceRule` (singular) | Added in bis §3.3.3; replaces plural | Modeled (`pub recurrence_rule: Option<RecurrenceRule>`). | Emits `recurrence_rule: Option<RecurrenceRule>` on `CalendarEvent`. | Serializes to single `RRULE` line; validates in `maps_recurrence_rule`. | Stores and serves singular `recurrence_rule`. | **Aligned (bis)**. Fully compliant. |
-| `recurrenceRules` (plural) | Obsoleted in bis App A.2.1 | Not modeled on `CalendarEvent` (rides in `extra`). | Does not emit on `CalendarEvent`. Note: Still emitted on `TimeZoneRule` in `read_observance`. | Accepts plural in test fixtures; converts to single `RRULE`. | Does not process plural. | **Tolerant Inbound / Emits bis on Event**. Minor: `TimeZoneRule` still emits plural for RFC 8984 zones. |
-| `Participant.calendarAddress` | Added in bis §3.4.6; replaces `sendTo` | **GAP: Not modeled!** Only models legacy `send_to: Option<BTreeMap<String, String>>`. | Does not write `participants` on import (`participants: None`). | Reads `sendTo.imip` with fallback to `calendarAddress`. | **GAP: Only reads `sendTo.imip`!** Does not inspect `calendarAddress`. | **CRITICAL GAP**. Must model `calendarAddress` on `Participant`, accept both on read, emit `calendarAddress`, and update mock. |
-| `Participant.sendTo` | Reserved in bis App A.2.2.2 / §7.4.2.2 | Modeled as `send_to: Option<BTreeMap<String, String>>`. | Does not write `participants` on import. | Reads `sendTo.imip` first, then falls back to `calendarAddress`. | Reads only `sendTo.imip` in `scheduling::calendar_address`. | **Legacy RFC 8984**. Must be deprecated to fallback reader on input; never emitted in bis output. |
-| `organizerCalendarAddress` | Added in bis §3.4.4; replaces `replyTo` | Modeled (`pub organizer_calendar_address: Option<String>`). | Does not write on import. | Does not read on export; draws `ORGANIZER` from `owner` participant. | Does not inspect for scheduling. | **Modeled (bis)**. Outbound mapping could optionally fall back to `organizerCalendarAddress`. |
+| `recurrenceRules` (plural) | Obsoleted in bis App A.2.1 | Not modeled on `CalendarEvent` (rides in `extra`). | Does not emit on `CalendarEvent`. | Accepts plural in test fixtures; converts to single `RRULE`. | Does not process plural. | **Aligned (bis)**. Obsoleted plural omitted on Event. |
+| `Participant.calendarAddress` | Added in bis §3.4.6; replaces `sendTo` | Modeled (`pub calendar_address: Option<String>`). | Does not write `participants` on import (`participants: None`). | Reads `calendarAddress` with fallback to `sendTo.imip`. | Reads `calendarAddress` first, falling back to `sendTo.imip`. | **Aligned (bis)**. Closed in Batch 37. |
+| `Participant.sendTo` | Reserved in bis App A.2.2.2 / §7.4.2.2 | Modeled with `#[serde(default, skip_serializing)]`. | Does not write `participants` on import. | Reads `calendarAddress` with fallback to `sendTo.imip`. | Reads `calendarAddress` first, falling back to `sendTo.imip`. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `organizerCalendarAddress` | Added in bis §3.4.4; replaces `replyTo` | Modeled (`pub organizer_calendar_address: Option<String>`). | Does not write on import. | Draws `ORGANIZER` from `owner` participant or `organizerCalendarAddress`. | Does not inspect for scheduling. | **Aligned (bis)**. Modeled on `CalendarEvent`. |
 | `replyTo` | Reserved in bis App A.2.2.2 / §7.4.2.2 | Not modeled (rides in `extra`). | Does not read or write. | Does not read or write. | Does not inspect. | **Aligned (bis)**. Unmodeled reserved field. |
-| `Event.endTimeZone` | Added in bis §4.1.3; replaces `Location.timeZone` | Not modeled explicitly on struct (rides in `extra`). | Does not emit on import. | Does not read on export. | Passthrough in `extra`. | **GAP**. Add explicit `end_time_zone: Option<String>` to `CalendarEvent`. |
-| `mainLocationId` | Added in bis §3.2.6 | Not modeled explicitly on struct (rides in `extra`). | Does not emit on import. | Does not read on export; selects first location entry. | Passthrough in `extra`. | **GAP**. Add explicit `main_location_id: Option<Id>` to `CalendarEvent`. |
-| `Location.relativeTo` & `Location.timeZone` | Obsoleted in bis App A.2.1 | Modeled on `Location` struct (`relative_to`, `time_zone`). | Does not emit on import (`read_locations` emits only `@type` and `name`). | Does not read on export. | Passthrough in location values. | **Tolerant (bis on output)**. Struct retains fields for backwards compatibility; output omits them. |
-| `Location.description` & `VirtualLocation.description` | Reserved in bis App A.2.2.4 | Modeled on `Location` and `VirtualLocation` structs. | Does not emit on import (`read_locations` and `read_virtual_locations` omit it). | Does not read on export. | Passthrough in location values. | **Tolerant (bis on output)**. Neither read nor written in mapping. |
-| `Link.display` | Updated in bis §1.5.11: set `String[Boolean]` | Modeled inside generic `links: Option<BTreeMap<String, Value>>`. | **GAP: Emits single string** `link["display"] = Value::String(...)` (RFC 8984). | `spelled()` accepts both String and Set/Map! | Passthrough in `links`. | **GAP on Inbound Import**. `read_links` must emit bis set `{"<display>": true}` while export path already tolerates both. |
-| `Link.cid` | Obsoleted in bis App A.2.1 | Generic `links` map. | Does not emit on import. | Does not read on export (`event.rs:3386`). | Passthrough in `links`. | **Aligned (bis)**. Never written or read. |
-| `Participant.roles` | Updated in bis §3.4.6: adds `required`, obsoletes `attendee`, removes `contact` | `participant_role` module has `OWNER`, `ADMIN`, `ATTENDEE`, `OPTIONAL`, `INFORMATIONAL`. Missing `REQUIRED`! | Does not write `participants`. | `PARTICIPANT_ROLES` checks `owner`, `attendee`, `optional`, `informational`. | Checks `owner` role for origin. | **GAP in Constants**. Add `participant_role::REQUIRED = "required"`. Retain `ATTENDEE` for input tolerance. |
-| `Participant.progress` | Updated in bis §3.4.6: restricted to `in-process`, `completed`, `failed` | `participant_progress` module lists `NEEDS_ACTION`, `IN_PROCESS`, `COMPLETED`, `FAILED`. | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **GAP in Constants**. `NEEDS_ACTION` belongs only to Task progress, not Participant progress. |
-| `Participant.progressUpdated` | Obsoleted in bis App A.2.1 | Modeled on `Participant` struct (`pub progress_updated: Option<UtcDate>`). | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **Tolerant on Input**. Should remain optional on struct for input compatibility. |
-| `Participant.locationId` | Obsoleted in bis App A.2.1 | Modeled on `Participant` struct (`pub location_id: Option<String>`). | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **Tolerant on Input**. Should remain optional on struct for input compatibility. |
-| `Participant.descriptionContentType` | Added in bis §3.4.6 | Not modeled on `Participant` (rides in `extra`). | Does not write `participants`. | Does not read on export. | Passthrough in `extra`. | **Minor Gap**. Add `pub description_content_type: Option<String>` to `Participant`. |
-| `Participant.delegatedTo`, `delegatedFrom`, `memberOf` | Updated in bis §3.4.6: values are calendar addresses, not IDs | Modeled as `Vec<String>` and `BTreeMap<String, bool>`. | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **Aligned wire type**. Types already accept address strings. |
-| `timeZones` & `TimeZone` / `TimeZoneRule` | Obsoleted in bis App A.2.1 / App A.3.1 | Modeled on `CalendarEvent` (`pub time_zones: Option<BTreeMap<String, Value>>`). | Reads `VTIMEZONE` into `time_zones` for custom zones. | Emits `VTIMEZONE` from `time_zones`. | Passthrough on `CalendarEvent`. | **Intentional Interop Deviation**. Needed for offline round-trip fidelity with non-standard zones (Divergence 437). |
-| `excludedRecurrenceRules` | Obsoleted in bis App A.2.1 | Not modeled (rides in `extra`). | Does not read or write. | Does not read or write. | Passthrough in `extra`. | **Aligned (bis)**. |
-| `useDefaultAlerts` | Reserved in bis §7.4.2.2; defined in JMAP §10.9.2.1 | Modeled (`pub use_default_alerts: Option<bool>`). | Checked in `maps_alerts`. Does not read from iCal. | Does not emit to iCal (`VALARM` has no default alarm concept). | Modeled in `PER_USER_PROPERTIES` and stored. | **Aligned (JMAP Calendars)**. |
-| `scheduleSequence` & `scheduleUpdated` | Reserved in bis §7.4.2.2; defined in JMAP §10.9.2.2-3 | Modeled on `Participant` struct (legacy). **GAP: Not modeled top-level on `CalendarEvent`**. | Does not read or write. | Does not read or write. | Passthrough in `extra`. | **GAP**. Add `schedule_sequence: Option<u32>` and `schedule_updated: Option<UtcDate>` to `CalendarEvent`. |
-| `mayInviteSelf`, `mayInviteOthers`, `hideAttendees` | Defined in JMAP §10.9.1.8-10 | Models `hide_attendees`. Does not model `may_invite_self` or `may_invite_others`. | Does not read or write. | Does not read or write. | Evaluates `hideAttendees` filtering in scheduling. | **GAP**. Add `may_invite_self: Option<bool>` and `may_invite_others: Option<bool>` to `CalendarEvent`. |
-| `id`, `calendarIds`, `isDraft`, `isOrigin` | Reserved in bis; defined in JMAP §10.9.1 | Modeled on `CalendarEvent`. | Sets `calendar_ids` and `id` when wrapping. | Omits JMAP metadata from iCal lines. | Tracks and manages natively. | **Aligned (JMAP Calendars)**. |
-| `Alert.relatedTo` (`snooze`) | Updated in bis §3.5.1, §7.6.13 | Modeled on `Alert` (`pub related_to: Option<String>`). | Does not map `relatedTo`. | Does not emit `relatedTo`. | Passthrough in `alerts`. | **Aligned**. |
-| `color` | Updated in bis §3.2.12 (6-digit hex `#RRGGBB` only) | Modeled as `Option<String>`. | Neither read nor written. | Neither read nor written. | Stored per-user. | **Aligned**. |
-| `privacy` | Updated in bis §3.4.3 (unknown handled as `private`) | Modeled as `Option<String>`. | Maps `CLASS` to `privacy` (`PUBLIC`, `PRIVATE`, `SECRET`). | Maps `privacy` to `CLASS`. | Validates uniformity across recurrences. | **Aligned**. |
+| `Event.endTimeZone` | Added in bis §4.1.3; replaces `Location.timeZone` | Modeled (`pub end_time_zone: Option<String>`). | Does not emit on import. | Does not read on export. | Passthrough in `CalendarEvent`. | **Aligned (bis)**. Closed in Batch 37. |
+| `mainLocationId` | Added in bis §3.2.6 | Modeled (`pub main_location_id: Option<Id>`). | Does not emit on import. | Does not read on export; selects first location entry. | Passthrough in `CalendarEvent`. | **Aligned (bis)**. Closed in Batch 37. |
+| `Location.relativeTo` & `Location.timeZone` | Obsoleted in bis App A.2.1 | Modeled on `Location` struct with `skip_serializing`. | Does not emit on import (`read_locations` emits only `@type` and `name`). | Does not read on export. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `Location.description` & `VirtualLocation.description` | Reserved in bis App A.2.2.4 | Modeled on `Location` and `VirtualLocation` structs with `skip_serializing`. | Does not emit on import (`read_locations` and `read_virtual_locations` omit it). | Does not read on export. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `Link.display` | Updated in bis §1.5.11: set `String[Boolean]` | Modeled on `Link` (`pub display: Option<BTreeMap<String, bool>>`). | `read_links` emits bis set `{"<display>": true}`. | `spelled()` accepts both String and Set/Map. | Passthrough in `links`. | **Aligned (bis)**. Closed in Batch 38 Item 1. |
+| `Link.cid` | Obsoleted in bis App A.2.1 | Modeled on `Link` with `skip_serializing`. | Does not emit on import. | Does not read on export. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `Participant.roles` | Updated in bis §3.4.6: adds `required`, obsoletes `attendee`, removes `contact` | `participant_role::REQUIRED = "required"`, `ATTENDEE` kept as legacy alias. | Does not write `participants`. | `PARTICIPANT_ROLES` checks `required`, `owner`, `attendee`, `optional`, `informational`. | Checks `owner` role for origin. | **Aligned (bis)**. Closed in Batch 37. |
+| `Participant.progress` | Updated in bis §3.4.6: restricted to `in-process`, `completed`, `failed` | `participant_progress` module lists `IN_PROCESS`, `COMPLETED`, `FAILED`. | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **Aligned (bis)**. Aligned constants. |
+| `Participant.progressUpdated` | Obsoleted in bis App A.2.1 | Modeled on `Participant` struct with `skip_serializing`. | Does not write `participants`. | Does not read on export. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `Participant.locationId` | Obsoleted in bis App A.2.1 | Modeled on `Participant` struct with `skip_serializing`. | Does not write `participants`. | Does not read on export. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `Participant.descriptionContentType` | Added in bis §3.4.6 | Modeled on `Participant` (`pub description_content_type: Option<String>`). | Does not write `participants`. | Does not read on export. | Passthrough in `extra`. | **Aligned (bis)**. Closed in Batch 37. |
+| `Participant.delegatedTo`, `delegatedFrom`, `memberOf` | Updated in bis §3.4.6: values are calendar addresses, not IDs | Modeled as `Vec<String>` and `BTreeMap<String, bool>`. | Does not write `participants`. | Does not read on export. | Passthrough in `participants`. | **Aligned (bis)**. Aligned wire types. |
+| `timeZones` & `TimeZone` / `TimeZoneRule` | Obsoleted in bis App A.2.1 / App A.3.1 | Modeled on `CalendarEvent` with `skip_serializing`. | Reads `VTIMEZONE` into `time_zones` for custom zones. | Emits `VTIMEZONE` from `time_zones`. | Tolerated on input; skipped on output. | **Aligned (bis)**. Tolerated on read, skipped on write. |
+| `excludedRecurrenceRules` | Obsoleted in bis App A.2.1 | Not modeled (rides in `extra`). | Does not read or write. | Does not read or write. | Passthrough in `extra`. | **Aligned (bis)**. Unmodeled obsoleted field. |
+| `useDefaultAlerts` | Reserved in bis §7.4.2.2; defined in JMAP §10.9.2.1 | Modeled (`pub use_default_alerts: Option<bool>`). | Checked in `maps_alerts`. Does not read from iCal. | Does not emit to iCal (`VALARM` has no default alarm concept). | Modeled in `PER_USER_PROPERTIES` and stored. | **Aligned (JMAP Calendars)**. Modeled top-level. |
+| `scheduleSequence` & `scheduleUpdated` | Reserved in bis §7.4.2.2; defined in JMAP §10.9.2.2-3 | Modeled top-level on `CalendarEvent`; skipped on `Participant`. | Does not read or write. | Does not read or write. | Passthrough on `CalendarEvent`. | **Aligned (JMAP Calendars)**. Closed in Batch 37. |
+| `mayInviteSelf`, `mayInviteOthers`, `hideAttendees` | Defined in JMAP §10.9.1.8-10 | Modeled on `CalendarEvent`. | Does not read or write. | Does not read or write. | Evaluates `hideAttendees` filtering in scheduling. | **Aligned (JMAP Calendars)**. Closed in Batch 37. |
+| `id`, `calendarIds`, `isDraft`, `isOrigin` | Reserved in bis; defined in JMAP §10.9.1 | Modeled on `CalendarEvent`. | Sets `calendar_ids` and `id` when wrapping. | Omits JMAP metadata from iCal lines. | Tracks and manages natively. | **Aligned (JMAP Calendars)**. Fully compliant. |
+| `Alert.relatedTo` (`snooze`) | Updated in bis §3.5.1, §7.6.13 | Modeled on `Alert` (`pub related_to: Option<String>`). | Does not map `relatedTo`. | Does not emit `relatedTo`. | Passthrough in `alerts`. | **Aligned (bis)**. Modeled on `Alert`. |
+| `color` | Updated in bis §3.2.12 (6-digit hex `#RRGGBB` only) | Modeled as `Option<String>`. | Neither read nor written. | Neither read nor written. | Stored per-user. | **Aligned (bis)**. Modeled on `CalendarEvent`. |
+| `privacy` | Updated in bis §3.4.3 (unknown handled as `private`) | Modeled as `Option<String>`. | Maps `CLASS` to `privacy` (`PUBLIC`, `PRIVATE`, `SECRET`). | Maps `privacy` to `CLASS`. | Validates uniformity across recurrences. | **Aligned (bis)**. Fully compliant. |
 
----
+### 17.2 Open Gaps
 
-### 17.4 Type Definition and Schema Changes
+None. All implementation gaps identified in the original audit were addressed and verified across Batches 37 and 38:
+1. `Participant.calendarAddress` modeled, emitted, and preferred over legacy `sendTo` (Batch 37).
+2. Top-level `CalendarEvent` properties (`end_time_zone`, `main_location_id`, `schedule_sequence`, `schedule_updated`, `may_invite_self`, `may_invite_others`) added (Batch 37).
+3. `Participant` auxiliary properties (`description_content_type`) modeled, and obsolete/reserved fields skipped on write (Batches 37 and 38).
+4. `participant_role::REQUIRED` added and mapped to `REQ-PARTICIPANT` (Batch 37).
+5. `Link.display` set format `String[Boolean]` emitted by `read_links` and verified on live Stalwart oracle (Batch 38 Item 1).
+6. Reserved and obsoleted property emission prevention verified across all calendar types and iCalendar output (Batch 38 Item 2).
 
-1. **Top-Level Type Objects**:
-   - `Event`, `Task`, and `Group` are explicitly defined as types in JSCalendar-bis Section 2 and Section 7.5.2.3.
-   - `jmap-proto` models `CalendarEvent` (Event), `Task` in `src/tasks.rs` (Task), and `CalendarGroup` in `src/calendars.rs` (Group).
-2. **Trigger Variants**:
-   - JSCalendar-bis Section 3.5.1 defines `OffsetTrigger`, `AbsoluteTrigger`, and `UnknownTrigger`. The default trigger type for `Alert.trigger` is `OffsetTrigger`.
-   - `jmap-proto` models `OffsetTrigger` explicitly; `Alert.trigger` accepts arbitrary `serde_json::Value` to allow polymorphic triggers without strict type union tagging.
-3. **PatchObject Array Indexing**:
-   - RFC 8984 Section 1.5.9 forbade JSON Pointer paths reaching inside arrays. JSCalendar-bis Section 1.5.9 aligns with JSContact (RFC 9553 Section 1.5.9) by allowing numeric array indices in patch paths to mutate existing array elements (without inserting or removing elements).
-   - In this codebase, `jmap-mock/src/patch.rs` implements RFC 6901 pointer traversal and already supports array index dereferencing.
-4. **Disallowance of Fractional Seconds**:
-   - JSCalendar-bis Section 1.5.4 (`UTCDateTime`), Section 1.5.5 (`LocalDateTime`), and Section 1.5.6 (`Duration`) explicitly disallow fractional seconds for strict compatibility with iCalendar RFC 5545 DATE-TIME and DURATION types.
-   - `jmap-ical`'s duration and timestamp parsers already normalize all durations and instants to whole seconds.
-
----
-
-### 17.5 Enumerated Value Subregistry Differences
-
-| Subregistry Context | RFC 8984 Enums | JSCalendar-bis Enums | `jmap-proto` Status | Alignment Action Needed |
-| :--- | :--- | :--- | :--- | :--- |
-| `roles` (Context: `Participant`) | `owner`, `admin`, `attendee`, `optional`, `informational`, `contact` | `owner`, `admin`, `required`, `optional`, `informational` (`attendee` obsoleted; `contact` removed; `required` added) | Has `OWNER`, `ADMIN`, `ATTENDEE`, `OPTIONAL`, `INFORMATIONAL` | Add `REQUIRED = "required"`. Retain `ATTENDEE` as deprecated constant for inbound compatibility. |
-| `progress` (Context: `Participant`) | Shared with Task: `needs-action`, `in-process`, `completed`, `failed`, `cancelled` | Dedicated subregistry: `in-process`, `completed`, `failed` (`needs-action` and `cancelled` removed) | Lists `NEEDS_ACTION`, `IN_PROCESS`, `COMPLETED`, `FAILED` in `participant_progress` | Deprecate `NEEDS_ACTION` in `participant_progress` or document as legacy. |
-| `display` (Context: `Link`) | Single enum: `badge`, `graphic`, `fullsize`, `thumbnail` | Multi-valued set `String[Boolean]` over same keys | Handled as `serde_json::Value` | `jmap-ical::read_links` must emit `{"<display>": true}` rather than string. |
-| `relation` (Context: `Relation`) | `first`, `next`, `parent`, `child` | Added `snooze` (for Alert); default is `parent` | Not modeled as enum | Add `snooze` to relation constants if modeled. |
-| `relativeTo` (Context: `OffsetTrigger`) | Shared with Location: `start`, `end` | Restricted to `OffsetTrigger` (`start`, `end`); Location context removed | `relative_to` module has `START`, `END` | **Aligned**. |
-
----
-
-### 17.6 Implementation Gap Analysis and Alignment Roadmap
-
-The audit identifies six concrete discrepancies between current codebase implementations and the `jscalendarbis-22` / `jmap-calendars-32` specifications:
-
-1. **`Participant.calendarAddress` vs `sendTo` (Primary Blocker)**:
-   - `jmap-proto::calendars::Participant` does not model `calendar_address: Option<String>`, only `send_to: Option<BTreeMap<String, String>>`.
-   - `jmap-mock::scheduling::calendar_address` only inspects `participant.get("sendTo")?.get("imip")?.as_str()`, ignoring `calendarAddress`.
-   - Stalwart 0.16.25 silently drops all participants when the reserved `sendTo` property is sent on `CalendarEvent/set`.
-   - **Resolution (Batch 37 Item 2 & 4)**:
-     - Update `Participant`: add `pub calendar_address: Option<String>`.
-     - In serde deserialization: accept `calendarAddress`, or derive from `sendTo["imip"]` if missing.
-     - In serde serialization: emit only `calendarAddress`; omit `sendTo` unless legacy compatibility is explicitly requested.
-     - In `jmap-mock::scheduling::calendar_address`: read `calendarAddress` first, falling back to `sendTo.imip`.
-
-2. **Top-Level `CalendarEvent` Properties**:
-   - `CalendarEvent` is missing explicit struct fields for:
-     - `end_time_zone: Option<String>` (replaces `Location.timeZone`)
-     - `main_location_id: Option<Id>` (RFC 5545 `LOCATION` interop)
-     - `schedule_sequence: Option<u32>` (top-level JMAP Calendars §5.2.1)
-     - `schedule_updated: Option<UtcDate>` (top-level JMAP Calendars §5.2.2)
-     - `may_invite_self: Option<bool>` (JMAP Calendars §5.1.1)
-     - `may_invite_others: Option<bool>` (JMAP Calendars §5.1.2)
-   - **Resolution**: Add these fields with `#[serde(default, skip_serializing_if = "Option::is_none")]` to `CalendarEvent` in `jmap-proto`.
-
-3. **`Participant` Auxiliary Properties**:
-   - Missing `description_content_type: Option<String>`.
-   - `location_id`, `schedule_agent`, `schedule_sequence`, `schedule_status`, `schedule_updated`, and `progress_updated` are legacy RFC 8984 or CalDAV-specific properties that should be retained on `Participant` for lenient deserialization but skipped from output when empty.
-
-4. **Participant Role Constants**:
-   - Add `participant_role::REQUIRED = "required"`.
-   - Mark `participant_role::ATTENDEE` as legacy RFC 8984 alias.
-   - Update `jmap-ical::event::drawn_participants` to recognize `required` as mapping to `ROLE=REQ-PARTICIPANT`.
-
-5. **`Link.display` Representation in `jmap-ical`**:
-   - In `rust/crates/jmap-ical/src/event.rs::read_links`, `link["display"]` is currently written as a scalar String: `link["display"] = Value::String(display.0.to_owned())`.
-   - In JSCalendar-bis, `Link.display` is typed as `String[Boolean]` (e.g. `{"badge": true}`).
-   - Update `read_links` to emit `link["display"] = json!({display.0: true})`. Note: `spelled()` on outbound export already supports both scalar String and Map/Set, so outbound serialization will remain 100% backwards compatible.
-
-6. **`jmap-mock` Verification (Item 4)**:
-   - Ensure the mock serves `CalendarEvent` objects with `calendarAddress` on participants.
-   - Verify `scheduling::calendar_address` routes invitations and cancellations properly when `calendarAddress` is used without `sendTo`.
