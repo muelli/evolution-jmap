@@ -11428,19 +11428,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
-    // Audit of standard vCard 3.0 properties that Evolution/EDS has no E_CONTACT_*
-    // field or active editor UI for: GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
-    //
-    // Contract & Rationale:
-    // 1. Inbound vCards containing these standard RFC 2426 properties parse safely without errors.
-    // 2. Standard mapped properties (FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE, NOTE, URL, PHOTO, etc.)
-    //    are extracted with 100% fidelity.
-    // 3. Unmodeled standard properties are NOT synthesized into JSContact models or extra maps,
-    //    preventing pollution of standard JMAP JSON schemas.
-    // 4. Outbound serialization emits clean standard vCard 3.0 without unmapped property lines.
-    // 5. Exporter-owned metadata (PRODID, REV) and client-owned flags (MAILER, CLASS) are not preserved
-    //    across saves, ensuring server-side updated timestamps and generator integrity remain authoritative.
-    // 6. Roundtrip operations achieve fixed-point convergence (card2 == card and vcard2 == vcard3).
+    // Unsupported standard properties parse safely and are dropped on emission:
+    // GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11467,7 +11456,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1903-01-06\r\n",
         "X-EVOLUTION-SPOUSE:Mileva Marić\r\n",
         "X-JABBER;TYPE=WORK;X-JMAP-KEY=s1:einstein@jabber.ias.edu\r\n",
-        // Standard unmapped properties to audit:
+        // Unsupported standard properties under audit.
         "GEO:40.331575;-74.667232\r\n",
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
@@ -11485,7 +11474,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     let parsed =
         vcard_to_card(vcard_full).expect("parse vcard containing standard unmapped properties");
 
-    // Mapped properties are 100% intact
+    // Mapped properties stay intact.
     assert_eq!(parsed.id.as_ref().unwrap().as_str(), "std-prop-contact-001");
     assert_eq!(
         parsed.uid.as_deref(),
@@ -11541,7 +11530,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         Some("Jabber")
     );
 
-    // Media contains ONLY the PHOTO — SOUND and LOGO lines are safely ignored
+    // Only PHOTO enters media; SOUND and LOGO are ignored.
     let media = parsed.media.as_ref().expect("media map present");
     assert_eq!(media.len(), 1, "Only PHOTO is read into media map");
     let photo = &media["m1"];
@@ -11552,7 +11541,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "data:image/JPEG;base64,/9j/4AAQSkZJRg=="
     );
 
-    // Outbound vCard contains all mapped lines and none of the unmapped standard lines
+    // Outbound vCard keeps mapped lines and omits unsupported ones.
     let emitted = card_to_vcard(&parsed);
     assert!(emitted.contains("FN:Dr. Albert Einstein\r\n"));
     assert!(emitted.contains("PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==\r\n"));
@@ -11569,7 +11558,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("SOUND"), "SOUND must not be emitted");
     assert!(!emitted.contains("LOGO"), "LOGO must not be emitted");
 
-    // Fixed-point convergence
+    // Fixed-point convergence.
     let parsed2 = vcard_to_card(&emitted).expect("second parse");
     let emitted2 = card_to_vcard(&parsed2);
     let parsed3 = vcard_to_card(&emitted2).expect("third parse");
@@ -11586,10 +11575,9 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
 
 #[test]
 fn standard_properties_individual_variations_and_parameters() {
-    // Verify parsing tolerance and safe omission across individual standard properties:
-    // GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO with parameters.
+    // Each unsupported standard property parses safely and is omitted on emit.
 
-    // 1. GEO variations: lat;lon, signed floats, precision, custom parameters
+    // GEO variants.
     for geo_val in [
         "GEO:37.386013;-122.082932",
         "GEO:-33.8688;151.2093",
@@ -11611,7 +11599,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 2. TZ variations: UTC offsets, IANA text names, abbreviations, lowercase
+    // TZ variants.
     for tz_val in [
         "TZ:-05:00",
         "TZ:+01:00",
@@ -11636,7 +11624,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 3. MAILER variations: client identifiers and version strings
+    // MAILER variants.
     for mailer_val in [
         "MAILER:Evolution 3.52.0",
         "MAILER:Mozilla Thunderbird 128.0",
@@ -11659,7 +11647,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 4. PRODID variations: FPI strings and application identifiers
+    // PRODID variants.
     for prodid_val in [
         "PRODID:-//Apple Inc.//macOS 14.5//EN",
         "PRODID:-//Google Inc.//Google Contacts//EN",
@@ -11682,7 +11670,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 5. REV variations: ISO-8601 timestamps, basic and extended formats
+    // REV variants.
     for rev_val in [
         "REV:2026-08-22T00:07:47Z",
         "REV:20260822T000747Z",
@@ -11704,7 +11692,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 6. SORT-STRING variations: simple strings, non-ASCII, spaces, escaped delimiters
+    // SORT-STRING variants.
     for sort_val in [
         "SORT-STRING:Einstein",
         "SORT-STRING:Mueller",
@@ -11726,7 +11714,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 7. CLASS variations: access classifications
+    // CLASS variants.
     for class_val in [
         "CLASS:PUBLIC",
         "CLASS:PRIVATE",
@@ -11748,7 +11736,7 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
-    // 8. SOUND variations: inline binary audio and remote URIs
+    // SOUND variants.
     for sound_val in [
         "SOUND;TYPE=BASIC;ENCODING=b:AQIDBA==",
         "SOUND;TYPE=WAV;ENCODING=b:UklGRg==",
@@ -11768,7 +11756,7 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(!emitted.contains("SOUND"), "SOUND must not be emitted");
     }
 
-    // 9. LOGO variations: inline binary image and remote URIs
+    // LOGO variants.
     for logo_val in [
         "LOGO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==",
         "LOGO;TYPE=PNG;ENCODING=b:iVBORw0KGgo==",
