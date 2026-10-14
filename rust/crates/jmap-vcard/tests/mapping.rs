@@ -5924,17 +5924,7 @@ fn group_card_with_parameter_variations_and_empty_values() {
 
 #[test]
 fn vcard_altid_and_language_singleton_properties_deterministic_selection() {
-    // Characterizes vCards carrying multiple `FN` and `N` representations in
-    // several languages grouped by `ALTID` and marked with `LANGUAGE` / `SCRIPT`.
-    //
-    // In JSContact (RFC 9553 §2.2.1), `Name` models a single display name (`full`)
-    // and component list for the default card language, while alternate
-    // language representations live in the server-level `localizations` map.
-    //
-    // In `jmap-vcard`, `read_name` evaluates `card.entries` in document order
-    // and deterministically selects the FIRST `FN` and `N` properties encountered,
-    // safely ignoring secondary language alternates. Outbound serialization
-    // generates clean, non-duplicate `FN` and `N` lines matching the selected primary.
+    // JSContact keeps one primary `Name`, so this parser keeps the first `FN` and `N`.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:altid-singleton-01\r\n",
@@ -5976,7 +5966,7 @@ fn vcard_altid_and_language_singleton_properties_deterministic_selection() {
         "Dr."
     );
 
-    // Outbound serialization emits standard FN and N lines without duplicating
+    // Serialization emits exactly one primary `FN` and `N` pair.
     let emitted = card_to_vcard(&card);
     assert_eq!(line(&emitted, "FN:"), "FN:Dr. Alexander Mueller");
     assert_eq!(line(&emitted, "N:"), "N:Mueller;Alexander;;Dr.;");
@@ -5991,7 +5981,7 @@ fn vcard_altid_and_language_singleton_properties_deterministic_selection() {
         "exactly one N line must be emitted"
     );
 
-    // Fixed-point roundtrip stability
+    // Round-trip converges after one pass.
     let back = vcard_to_card(&emitted).expect("roundtrip parse");
     assert_eq!(back.name, card.name);
     let re_emitted = card_to_vcard(&back);
@@ -6000,19 +5990,7 @@ fn vcard_altid_and_language_singleton_properties_deterministic_selection() {
 
 #[test]
 fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() {
-    // Characterizes vCards carrying multiple alternate representations grouped
-    // by `ALTID` and `LANGUAGE` across all supported multi-valued property types:
-    // `NOTE`, `TITLE`, `ROLE`, `ORG`, `NICKNAME`, `URL`, `EMAIL`, `TEL`.
-    //
-    // In `jmap-vcard`, all multi-valued properties are stored in keyed JSContact
-    // maps (`notes`, `titles`, `organizations`, `nicknames`, `links`, `emails`,
-    // `phones`). Every incoming alternate representation line is preserved as a
-    // distinct keyed entry (keyed via `X-JMAP-KEY` or sequentially allocated
-    // `n1`, `n2`, `t1`, `t2`, etc.) rather than being dropped or overwriting
-    // preceding entries.
-    //
-    // Outbound serialization writes each entry with an `X-JMAP-KEY` parameter,
-    // guaranteeing lossless round-trip stability.
+    // ALTID/LANGUAGE variants stay as distinct keyed JSContact entries and round-trip.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:altid-multivalue-01\r\n",
@@ -6040,7 +6018,7 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
 
     let card = vcard_to_card(vcard).expect("parse multi-valued ALTID vcard");
 
-    // 1. NOTES: all 3 language variants preserved
+    // NOTE alternates are preserved.
     let notes = card.notes.as_ref().expect("notes");
     assert_eq!(notes.len(), 3, "all 3 NOTE alternates must be preserved");
     let note_texts: Vec<&str> = notes.values().map(|n| n.note.as_str()).collect();
@@ -6048,7 +6026,7 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
     assert!(note_texts.contains(&"Hauptverantwortliche Projektleiterin"));
     assert!(note_texts.contains(&"Responsable principale du projet"));
 
-    // 2. TITLES & ROLES: all 4 alternates preserved
+    // TITLE and ROLE alternates are preserved.
     let titles = card.titles.as_ref().expect("titles");
     assert_eq!(
         titles.len(),
@@ -6061,7 +6039,7 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
     assert!(title_names.contains(&"Technical Steering Committee Member"));
     assert!(title_names.contains(&"Mitglied des Technischen Lenkungsausschusses"));
 
-    // 3. ORGANIZATIONS: both 3-component orgs preserved
+    // ORG alternates keep all units.
     let orgs = card.organizations.as_ref().expect("organizations");
     assert_eq!(orgs.len(), 2, "both ORG alternates must be preserved");
     let org_en = orgs
@@ -6090,27 +6068,27 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
         .collect();
     assert_eq!(units_de, vec!["Ingenieurwesen", "Kernarchitektur"]);
 
-    // 4. NICKNAMES: both Latin and Cyrillic nicknames preserved
+    // NICKNAME alternates are preserved.
     let nicks = card.nicknames.as_ref().expect("nicknames");
     assert_eq!(nicks.len(), 2, "both NICKNAME alternates must be preserved");
     let nick_names: Vec<&str> = nicks.values().map(|n| n.name.as_str()).collect();
     assert!(nick_names.contains(&"Lena"));
     assert!(nick_names.contains(&"Лена"));
 
-    // 5. LINKS: both URLs preserved
+    // URL alternates are preserved.
     let links = card.links.as_ref().expect("links");
     assert_eq!(links.len(), 2, "both URL alternates must be preserved");
     let uris: Vec<&str> = links.values().map(|l| l.uri.as_str()).collect();
     assert!(uris.contains(&"https://example.org/en/elena"));
     assert!(uris.contains(&"https://example.org/de/elena"));
 
-    // 6. EMAILS & PHONES: both language-specific emails and phone numbers preserved
+    // EMAIL and TEL alternates are preserved.
     let emails = card.emails.as_ref().expect("emails");
     assert_eq!(emails.len(), 2, "both EMAIL alternates must be preserved");
     let phones = card.phones.as_ref().expect("phones");
     assert_eq!(phones.len(), 2, "both TEL alternates must be preserved");
 
-    // Outbound serialization emits all preserved alternates with X-JMAP-KEY
+    // Serialization keeps the assigned keys.
     let emitted = card_to_vcard(&card);
     let unfolded_vcard = unfolded(&emitted);
     assert!(unfolded_vcard.contains("NOTE;X-JMAP-KEY=n1:Primary project maintainer"));
@@ -6134,7 +6112,7 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
     assert!(unfolded_vcard.contains("URL;X-JMAP-KEY=l1:https://example.org/en/elena"));
     assert!(unfolded_vcard.contains("URL;X-JMAP-KEY=l2:https://example.org/de/elena"));
 
-    // Fixed-point roundtrip stability across repeated passes
+    // Round-trip converges to a fixed point.
     let back = vcard_to_card(&emitted).expect("second parse");
     let re_emitted = card_to_vcard(&back);
     assert_eq!(
@@ -6145,14 +6123,7 @@ fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() 
 
 #[test]
 fn vcard_altid_and_language_multilingual_structured_address_and_label_pairing() {
-    // Tests structured addresses and written-out labels carrying `ALTID` and
-    // `LANGUAGE` parameters in English, Spanish, and German with work and home contexts.
-    //
-    // Verifies that:
-    // 1. Each `ADR` line maps into a distinct `Address` entry in `addresses` (`a1`, `a2`, `a3`).
-    // 2. `label_entry` accurately pairs each `LABEL` with its corresponding unlabelled
-    //    address of matching context, setting `full` on each address accurately.
-    // 3. Round-trip serialization emits both `ADR` and `LABEL` with matching `X-JMAP-KEY`.
+    // `ADR` and `LABEL` alternates pair by context and serialize with stable keys.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:altid-adr-01\r\n",
