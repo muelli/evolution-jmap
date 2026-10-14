@@ -108,10 +108,13 @@
 //! value at its word with no embedded `VTIMEZONE` needed, so the round trip
 //! holds independently of tzdata resolution. `timeZone` is never cleared, the
 //! same as `start`, so the round trip only exercises a change and a no-op.
-//! Scoped out, left for later: a custom (solidus-prefixed) identifier, which
-//! needs `diff_time_zones`' own `timeZones` entry to be sendable at all, and a
-//! `TZID` that is neither a name nor sendable, which `maps_time_zone` refuses
-//! and `diff` leaves alone regardless of what `edited` states.
+//! Also covered: a custom (solidus-prefixed) identifier moved into, in
+//! `custom_time_zone_definition_is_added_when_moved_into` (`diff_time_zones`
+//! adding a `timeZones` entry to make it sendable at all), and a `TZID` that
+//! is neither a name nor sendable, in
+//! `time_zone_left_alone_when_edited_holds_one_maps_time_zone_refuses`:
+//! `maps_time_zone` refuses it and `diff` leaves `timeZone` alone regardless
+//! of what `edited` states.
 //!
 //! Also covered: `showWithoutTime` (`diff`'s plain compare, writing `null`
 //! rather than `false` to clear), using its own base event — a midnight
@@ -1108,6 +1111,14 @@ fn arb_custom_zone() -> impl Strategy<Value = (String, Value)> {
         })
 }
 
+/// A `TZID` `maps_time_zone` refuses: it neither names a zone
+/// (`names_time_zone`) nor begins with a solidus, so it describes nothing a
+/// server could resolve (a Windows zone name arriving unconverted is the one
+/// that shows up in practice).
+fn unmappable_time_zone() -> &'static str {
+    "W. Europe Standard Time"
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -1140,6 +1151,21 @@ proptest! {
         let current = stable(base().with_time_zone(old));
         let edited = stable(base().with_time_zone(new));
         round_trips(&current, &edited)?;
+    }
+
+    #[test]
+    fn time_zone_left_alone_when_edited_holds_one_maps_time_zone_refuses(old in arb_time_zone()) {
+        let current = stable(base().with_time_zone(old));
+        let edited = base().with_time_zone(unmappable_time_zone());
+
+        let patch = diff(&current, &edited);
+        prop_assert!(!patch.contains_key("timeZone"), "patch was: {:?}", patch);
+
+        let mut value = serde_json::to_value(&current).expect("CalendarEvent always serializes");
+        apply_patch(&mut value, &patch);
+        let applied: CalendarEvent =
+            serde_json::from_value(value).expect("a patched CalendarEvent always parses");
+        prop_assert_eq!(applied.time_zone, current.time_zone);
     }
 
     #[test]
