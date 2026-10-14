@@ -1148,9 +1148,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Regression for fixed-point stability: `full: Some("")` with only `given`
-// round-trips once to no `full` (`FN:` empty is read as absent), then
-// re-synthesizes `full` from components on the next pass.
+// Regression: empty stated full name with only `given` must not oscillate.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1174,8 +1172,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression for empty-organization-name normalization: keep the leading unit
-// slot semicolon, normalize `name: Some("")` to `None`, and reach a fixed point.
+// Regression: empty organization names with units keep their leading slot semicolon.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1240,9 +1237,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression for the 75-octet fold boundary check. In calcard, empty trailing
-// structured slots can bypass the fold pass and push an `ADR` line past 75.
-// This input is the minimized boundary case from the failing seed.
+// Regression: minimized failing seed must keep ADR lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1325,15 +1320,14 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Enforce RFC 2426 §2.6 exactly at 75 octets so the refold pass
-            // still catches boundary overshoots from structured values.
+            // Enforce RFC 2426 §2.6 with a hard 75-octet physical line cap.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
             );
-            // Multi-byte UTF-8 code points must never be split across a fold
+            // Folding must preserve UTF-8 code point boundaries.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",
@@ -1631,7 +1625,7 @@ proptest! {
             ..ContactCard::default()
         };
         let vcard1 = card_to_vcard(&card);
-        // Non-spouse/manager/assistant relations (agent, child, colleague, emergency) must never emit AGENT properties
+        // vCard 3.0 output never emits AGENT for relations.
         prop_assert!(!vcard1.contains("AGENT:"));
         prop_assert!(!vcard1.contains("AGENT;"));
 
@@ -1818,7 +1812,7 @@ proptest! {
         };
 
         let vcard1 = card_to_vcard(&card);
-        // Neither KEY, LOGO, nor SOUND should be emitted into vCard 3.0 stream
+        // vCard 3.0 output must not emit KEY, LOGO, or SOUND.
         prop_assert!(!vcard1.contains("KEY:"));
         prop_assert!(!vcard1.contains("KEY;"));
         prop_assert!(!vcard1.contains("LOGO:"));
@@ -1948,7 +1942,7 @@ proptest! {
 
         if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
             let vcard1 = card_to_vcard(&parsed1);
-            // Neither AGENT nor SOUND should be emitted into outbound vCard 3.0 stream
+            // vCard 3.0 output must not emit AGENT or SOUND.
             prop_assert!(!vcard1.contains("AGENT:"));
             prop_assert!(!vcard1.contains("AGENT;"));
             prop_assert!(!vcard1.contains("SOUND:"));
