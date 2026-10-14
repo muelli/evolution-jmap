@@ -362,10 +362,11 @@ pub const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
 ///
 /// `owner` is not here: it is the [`ORGANIZER`](OWNER_ROLE) line rather than a
 /// role on the guest list.
-pub const PARTICIPANT_ROLES: [(&str, &str); 4] = [
+pub const PARTICIPANT_ROLES: [(&str, &str); 5] = [
     ("chair", "CHAIR"),
     ("informational", "NON-PARTICIPANT"),
     ("optional", "OPT-PARTICIPANT"),
+    ("required", "REQ-PARTICIPANT"),
     ("attendee", "REQ-PARTICIPANT"),
 ];
 
@@ -929,10 +930,14 @@ pub fn stated_size(link: &Value) -> Option<String> {
 /// `read_vevent`, where `participants` stays `None`.
 pub fn calendar_address(participant: &Value) -> Option<&str> {
     participant
-        .get("sendTo")
-        .and_then(|send_to| send_to.get(IMIP))
+        .get("calendarAddress")
         .and_then(Value::as_str)
-        .or_else(|| participant.get("calendarAddress").and_then(Value::as_str))
+        .or_else(|| {
+            participant
+                .get("sendTo")
+                .and_then(|send_to| send_to.get(IMIP))
+                .and_then(Value::as_str)
+        })
         .filter(|address| names_a_uri(address))
 }
 

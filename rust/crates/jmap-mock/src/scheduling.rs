@@ -645,14 +645,13 @@ fn unescape(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
-/// RFC 8984 §4.4.6: a `Participant` has no `calendarAddress` property of its
-/// own, only a `sendTo` map of addressing methods; `imip` is the one iTIP
-/// scheduling (RFC 5546) sends to. This is the same property
-/// `jmap_ical::event`'s own `drawn_participants` draws an `ATTENDEE`/
-/// `ORGANIZER` line from, so a message this module decides to send and the
-/// payload `build_ical` draws for it agree on who that is.
+/// The address to reach one participant at (jscalendarbis §3.4.6
+/// `calendarAddress`, with fallback to RFC 8984 `sendTo["imip"]`).
 fn calendar_address(participant: &Value) -> Option<&str> {
-    participant.get("sendTo")?.get("imip")?.as_str()
+    participant
+        .get("calendarAddress")
+        .and_then(Value::as_str)
+        .or_else(|| participant.get("sendTo")?.get("imip")?.as_str())
 }
 
 fn participation_status(participant: &Value) -> Option<&str> {

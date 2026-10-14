@@ -48271,3 +48271,56 @@ fn differential_oracle_dst_transition_spanning_event_duration_and_roundtrip_stab
     assert_eq!(roundtrip.status, parsed.status);
     assert_eq!(roundtrip.free_busy_status, parsed.free_busy_status);
 }
+
+#[test]
+fn jscalendar_bis_participant_required_role_and_calendar_address() {
+    use jmap_ical::event::{PARTICIPANT_ROLES, calendar_address};
+    use jmap_proto::calendars::CalendarEvent;
+    use serde_json::json;
+
+    assert!(
+        PARTICIPANT_ROLES
+            .iter()
+            .any(|(role, ical)| *role == "required" && *ical == "REQ-PARTICIPANT"),
+        "PARTICIPANT_ROLES must map bis 'required' to REQ-PARTICIPANT"
+    );
+
+    let participant_bis = json!({
+        "@type": "Participant",
+        "name": "Bob",
+        "calendarAddress": "mailto:bob@example.com",
+        "sendTo": {
+            "imip": "mailto:fallback@example.com"
+        }
+    });
+    assert_eq!(
+        calendar_address(&participant_bis),
+        Some("mailto:bob@example.com")
+    );
+
+    let mut event = CalendarEvent::new();
+    let mut participants = std::collections::BTreeMap::new();
+    participants.insert(
+        "p1".to_owned(),
+        json!({
+            "@type": "Participant",
+            "name": "Alice Required",
+            "calendarAddress": "mailto:alice@example.com",
+            "roles": { "required": true }
+        }),
+    );
+    event.participants = Some(participants);
+    let out = event_to_ical(&event);
+    assert!(
+        out.contains("ATTENDEE"),
+        "must emit ATTENDEE line, got: {out}"
+    );
+    assert!(
+        out.contains("ROLE=REQ-PARTICIPANT"),
+        "must map required role to ROLE=REQ-PARTICIPANT, got: {out}"
+    );
+    assert!(
+        out.contains("mailto:alice@example.com"),
+        "must use calendarAddress, got: {out}"
+    );
+}

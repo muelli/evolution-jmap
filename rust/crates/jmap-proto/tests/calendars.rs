@@ -458,6 +458,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         name: Some("Alice Example".to_owned()),
         email: Some("alice@example.com".to_owned()),
         description: Some("Project Lead".to_owned()),
+        calendar_address: Some("mailto:alice@example.com".to_owned()),
         send_to: Some(BTreeMap::from([(
             "imip".to_owned(),
             "mailto:alice@example.com".to_owned(),
@@ -1425,4 +1426,111 @@ fn participant_identity_roundtrip_and_builders() {
 
     let deserialized: ParticipantIdentity = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, identity);
+}
+
+#[test]
+fn participant_deserializes_rfc8984_send_to_into_calendar_address() {
+    use jmap_proto::calendars::Participant;
+    use serde_json::json;
+
+    let wire_rfc8984 = json!({
+        "@type": "Participant",
+        "name": "Bob Smith",
+        "email": "bob@example.com",
+        "sendTo": {
+            "imip": "mailto:bob@example.com"
+        }
+    });
+
+    let participant: Participant = serde_json::from_value(wire_rfc8984).unwrap();
+    assert_eq!(
+        participant.calendar_address.as_deref(),
+        Some("mailto:bob@example.com")
+    );
+    assert_eq!(
+        participant
+            .send_to
+            .as_ref()
+            .and_then(|st| st.get("imip"))
+            .map(String::as_str),
+        Some("mailto:bob@example.com")
+    );
+}
+
+#[test]
+fn participant_deserializes_jscalendar_bis_calendar_address() {
+    use jmap_proto::calendars::Participant;
+    use serde_json::json;
+
+    let wire_bis = json!({
+        "@type": "Participant",
+        "name": "Alice Vance",
+        "email": "alice@example.com",
+        "calendarAddress": "mailto:alice@example.com"
+    });
+
+    let participant: Participant = serde_json::from_value(wire_bis).unwrap();
+    assert_eq!(
+        participant.calendar_address.as_deref(),
+        Some("mailto:alice@example.com")
+    );
+}
+
+#[test]
+fn participant_serialization_emits_calendar_address_and_never_send_to() {
+    use jmap_proto::calendars::Participant;
+
+    let p = Participant::new("Alice", "alice@example.com")
+        .with_calendar_address("mailto:alice@example.com");
+    let val = serde_json::to_value(&p).unwrap();
+    assert_eq!(val["calendarAddress"], "mailto:alice@example.com");
+    assert!(val.get("sendTo").is_none());
+
+    let mut p_legacy = Participant::new("Bob", "bob@example.com");
+    p_legacy.send_to = Some([("imip".to_owned(), "mailto:bob@example.com".to_owned())].into());
+    let val_legacy = serde_json::to_value(&p_legacy).unwrap();
+    assert_eq!(val_legacy["calendarAddress"], "mailto:bob@example.com");
+    assert!(val_legacy.get("sendTo").is_none());
+}
+
+#[test]
+fn participant_role_required_constant_exists() {
+    use jmap_proto::calendars::participant_role;
+    assert_eq!(participant_role::REQUIRED, "required");
+    assert_eq!(participant_role::ATTENDEE, "attendee");
+}
+
+#[test]
+fn calendar_event_top_level_bis_fields_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::calendars::CalendarEvent;
+
+    let event = CalendarEvent::new()
+        .with_end_time_zone("Europe/Berlin")
+        .with_main_location_id("loc-1")
+        .with_schedule_sequence(3)
+        .with_schedule_updated(UtcDate::new("2026-10-14T03:00:00Z"))
+        .may_invite_self(true)
+        .may_invite_others(false);
+
+    assert_eq!(event.end_time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.main_location_id.as_ref().unwrap().as_str(), "loc-1");
+    assert_eq!(event.schedule_sequence, Some(3));
+    assert_eq!(
+        event.schedule_updated.as_ref().unwrap().as_str(),
+        "2026-10-14T03:00:00Z"
+    );
+    assert_eq!(event.may_invite_self, Some(true));
+    assert_eq!(event.may_invite_others, Some(false));
+
+    let val = serde_json::to_value(&event).unwrap();
+    assert_eq!(val["endTimeZone"], "Europe/Berlin");
+    assert_eq!(val["mainLocationId"], "loc-1");
+    assert_eq!(val["scheduleSequence"], 3);
+    assert_eq!(val["scheduleUpdated"], "2026-10-14T03:00:00Z");
+    assert_eq!(val["mayInviteSelf"], true);
+    assert_eq!(val["mayInviteOthers"], false);
+
+    let round_tripped: CalendarEvent = serde_json::from_value(val).unwrap();
+    assert_eq!(round_tripped, event);
 }
