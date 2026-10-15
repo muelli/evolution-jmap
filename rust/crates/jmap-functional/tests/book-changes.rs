@@ -6,7 +6,7 @@
 //! not just through `jmap-backend-book`'s own tests, which link the crate
 //! directly and call `ops::get_changes` as a plain function.
 //!
-//! `address-book.rs`'s eleven legs each open a book exactly once, so every one
+//! `address-book.rs`'s twelve legs each open a book exactly once, so every one
 //! of them drives `list_existing_sync` (a fresh meta-backend cache has no
 //! stored revision to diff from) and none reaches `get_changes_sync` at all —
 //! confirmed by reading every phase in `book-client.c` before writing this
