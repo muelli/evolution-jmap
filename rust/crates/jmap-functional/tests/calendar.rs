@@ -83,7 +83,7 @@ const PRIVACY: &str = "secret";
 /// a JSCalendar `alerts` map (RFC 8984 §4.5.2). The one mapped property that is a
 /// child *component*, so this is the leg that says `ECalMetaBackend`'s cache
 /// keeps a component nested inside the one it was handed — and that the key of
-/// the entry, which rides on the alarm's RFC 9074 §6 `UID`, is the one the client
+/// the entry, which rides on the alarm's RFC 9074 §4 `UID`, is the one the client
 /// wrote rather than the one `jmap-ical` invents for an alarm that names none.
 const ALARM_UID: &str = "k1";
 const ALARM_TRIGGER: &str = "-PT15M";
@@ -157,7 +157,7 @@ const RECURRING_EDITED_KEYWORDS: [&str; 2] = ["cancelled", "offsite"];
 /// thing this leg asks EDS's cache to keep: a child component of the child
 /// component the instance itself is.
 ///
-/// Keyed by the alarm's RFC 9074 §6 `UID`, because that is what the entry is named
+/// Keyed by the alarm's RFC 9074 §4 `UID`, because that is what the entry is named
 /// by: an alarm EDS handed back without it would arrive under a positional key
 /// this mapping invented, which is the same reminder saved under a name nobody
 /// chose. The offset is negative and stated as text at both ends, since a reminder

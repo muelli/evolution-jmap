@@ -64,7 +64,7 @@
 #define TEST_CLASS "CONFIDENTIAL"
 
 /* When the user is reminded of it — a VALARM, a JSCalendar `alerts` entry
- * (RFC 8984 §4.5.2) keyed by the alarm's RFC 9074 §6 UID. A negative offset,
+ * (RFC 8984 §4.5.2) keyed by the alarm's RFC 9074 §4 UID. A negative offset,
  * since a reminder is normally before the event. */
 #define TEST_ALARM_UID "k1"
 #define TEST_ALARM_TRIGGER "-PT15M"
