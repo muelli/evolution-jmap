@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Upload limit behavior for `maxSizeUpload` (RFC 8620 §6.1).
-//! Uses a raw socket because `jmap-client` blocks oversize uploads locally.
+//! Uses a raw socket because `jmap-client` rejects oversize uploads locally.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -55,7 +55,7 @@ fn an_upload_over_the_advertised_limit_is_refused_with_the_limit_it_broke() {
     // RFC 8620 §3.6.1: the error names the specific broken limit.
     assert_eq!(problem["limit"], "maxSizeUpload");
 
-    // Refused uploads are not stored.
+    // Refused uploads do not create blobs.
     let state = server.state();
     let state = state.lock().unwrap();
     assert!(

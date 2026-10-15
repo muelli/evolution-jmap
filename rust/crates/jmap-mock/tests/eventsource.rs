@@ -124,7 +124,6 @@ fn a_second_subscriber_also_receives_the_push() {
         response
     });
 
-    // Wait until both subscribers are registered before pushing.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let count = {
@@ -189,7 +188,6 @@ fn closeafter_no_keeps_the_connection_open_past_one_push() {
         BTreeMap::from([("Mailbox".to_owned(), State::new("1"))]),
     )])));
 
-    // After the first push, the stream remains open for another push.
     let mut line = String::new();
     loop {
         line.clear();

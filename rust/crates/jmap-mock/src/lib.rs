@@ -4,9 +4,8 @@
 #![forbid(unsafe_code)]
 
 //! Stateful in-memory mock JMAP server.
-//!
 //! Covers the JMAP surface this tree needs for integration tests.
-//! State is kept in memory behind `Arc<Mutex<..>>` and can be inspected by tests.
+//! State lives behind `Arc<Mutex<..>>` and can be inspected by tests.
 //! Uses plain HTTP on `127.0.0.1` and `tiny_http`; `/eventsource` runs on its own thread.
 
 mod auth;

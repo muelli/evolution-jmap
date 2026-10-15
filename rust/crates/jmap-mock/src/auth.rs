@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Request authentication: configurable HTTP Basic and Bearer.
+//! Request authentication with optional HTTP Basic and Bearer checks.
 
 use std::collections::BTreeMap;
 
@@ -12,11 +12,9 @@ use jmap_proto::Id;
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
     accepted: Vec<String>,
-    /// Optional principal identity for a bearer token.
-    /// `None` means authorization without identity scoping.
+    /// Principal identity for an accepted bearer token, if scoped.
     identities: BTreeMap<String, Id>,
-    /// Remaining accepted requests for the current bearer token.
-    /// `None` means no forced expiry.
+    /// Remaining accepted requests for bearer authorization, if bounded.
     remaining_uses: Option<usize>,
 }
 
@@ -43,14 +41,14 @@ impl AuthConfig {
         authorization.and_then(|value| self.identities.get(value).cloned())
     }
 
-    /// Replace accepted bearer tokens with `token`; keep Basic credentials.
+    /// Replace accepted bearer tokens with `token`, keeping Basic credentials.
     pub fn replace_bearer(&mut self, token: &str) {
         self.accepted.retain(|value| !value.starts_with("Bearer "));
         self.allow_bearer(token);
         self.remaining_uses = None;
     }
 
-    /// Expire accepted bearer token(s) after `remaining` successful requests.
+    /// Expire accepted bearer token(s) after `remaining` successful matches.
     pub fn expire_after(&mut self, remaining: usize) {
         self.remaining_uses = Some(remaining);
     }
