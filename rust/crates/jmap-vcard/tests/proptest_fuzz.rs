@@ -1,12 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structure-aware fuzzing of the JSContact ↔ vCard 3.0 mapping using `proptest`.
-//!
-//! Asserts:
-//! 1. `card_to_vcard` never panics on arbitrary `ContactCard` instances.
-//! 2. `vcard_to_card` never panics on arbitrary strings or arbitrary vCard envelopes.
-//! 3. Round-trip stability: Emitting a card, parsing it back, and re-emitting reaches a fixed point.
+//! Structure-aware property tests for JSContact and vCard 3.0 mapping.
+//! Asserts panic-free conversion and round-trip fixed-point stability.
 
 use std::collections::BTreeMap;
 

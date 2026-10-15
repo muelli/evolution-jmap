@@ -4,9 +4,7 @@
 //! Parse failures.
 
 /// Why a string could not be read as a vCard.
-///
-/// Only syntax errors are fatal. Unknown semantic fields are treated as
-/// absent so partially mapped contacts still load.
+/// Unknown semantic fields are treated as absent, so partially mapped contacts still load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VCardError {
     /// The input does not start with `BEGIN:VCARD`.

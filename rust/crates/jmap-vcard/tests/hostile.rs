@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Hostile-input tests for server-controlled ContactCard data.
-//!
-//! Map keys are rendered as `X-JMAP-KEY` parameter text and must not inject properties.
+//! Map keys render as `X-JMAP-KEY` parameter text and must not inject properties.
 
 use std::collections::BTreeMap;
 
