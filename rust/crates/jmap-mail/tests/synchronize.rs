@@ -585,13 +585,14 @@ fn blank_message(uid: &str) -> MessageSummary {
     }
 }
 
-/// `push_row`'s own doc says a uid Camel cannot read back as text is "left
-/// queued rather than reported, because the row is not one this provider put
-/// there" — a corrupted or foreign summary database, never one this provider
-/// writes itself, but Camel's own storage does not enforce UTF-8 on a uid. The
-/// generic settling step used to run for it anyway, because an unreadable uid
-/// produced the very same `Ok(())` a nothing-to-send row does: the row was
-/// marked as if the write had happened when no request was ever sent.
+/// A uid Camel stored that cannot be read back as text is not one the server
+/// can be asked about either, so `push_row` leaves it queued rather than
+/// settling a row nothing was sent for. That is a corrupted or foreign
+/// summary database, never one this provider writes itself, but Camel's own
+/// storage does not enforce UTF-8 on a uid. The generic settling step used to
+/// run for it anyway, because an unreadable uid produced the very same
+/// `Ok(())` a nothing-to-send row does: the row was marked as if the write
+/// had happened when no request was ever sent.
 #[test]
 fn a_row_whose_uid_is_not_text_stays_queued() {
     let fixture = Fixture::start(&[]);
