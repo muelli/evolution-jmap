@@ -32,6 +32,32 @@ CI is green on `a2e57762` (the merged tip): `checks`, `reproducible`, `build`
 all `success`; the GUI-smoke/EDS-matrix/functional jobs show `skipped`, matching
 this project's normal job gating, not a failure.
 
+**Refreshed 2026-10-14 (release cut), tip `ec791729` plus this checklist
+commit.** `master` merged again (`17f6c666`, no conflicts), bringing in the
+item 101 consent-loop completion (`ea7e61c3`), the `resolve_redirect` panic
+fix (`621b075c`) and the rustls security bump (`296c2de8`); workspace
+`Cargo.lock` entries refreshed separately (`3aaefedd`, master's new
+`jmap-tracing-capture` at 0.4.1 broke `--locked`); `NEWS.md` and the
+changelog grew the three matching user-visible bullets and the changelog
+entry flipped UNRELEASED to unstable (`ec791729`). CI green on `ec791729`
+via draft PR #1, run 38668054657: `checks`, `build`, `reproducible` all
+`success`, gated jobs skipped as normal. Gates re-run on the evo-test VM
+(real git clone of the pushed tip): `cargo test --locked` 190 suites green
+with ONE test skipped (`consumer_check_script_fails_loudly_when_tools_
+missing`, unportable: it assumes `PATH=/usr/bin` lacks cargo, but apt's
+cargo lives exactly there; CI runs it green in its rustup layout);
+`cargo deny` green; the 13-leg ctest suite green including
+`rust-test-eds` (one timezone-sensitive assertion in `eds-sys`'s
+`camel_folder_search_utilities_in_eds` fails under Europe/Berlin and
+passes under TZ=UTC, proven A-B; CI and the runners are UTC), lintian,
+`package-deb-reproducible`, `release-workflow` and
+`debian-copyright-in-sync`; boundary lint clean. Both environment
+findings are queued in the harness, neither is a product defect. Release
+job dry run on this tip: `.deb` 11050036 bytes, cacheless `jmap-mockd`,
+source tarball, SBOM byte-identical across two runs, SHA256SUMS written.
+The pinned release container digest answers HTTP 200 to an anonymous
+GHCR manifest probe, so the tag run's pull is verified reachable.
+
 ## Before tagging
 
 - [ ] Confirm `release/0.5.0` is the branch to release from and `ci/checks.sh`
