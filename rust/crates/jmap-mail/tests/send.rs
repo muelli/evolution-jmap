@@ -286,10 +286,11 @@ fn only(messages: Vec<MessageSummary>) -> MessageSummary {
 // ---------------------------------------------------------------------------
 // the slot
 
-/// Camel dispatches `send_to_sync` through the class, and
-/// `camel_transport_send_to_sync` is a `g_return_val_if_fail
-/// (class->send_to_sync != NULL, FALSE)`: a transport that installed none would
-/// be an account that offers to send and answers a GLib critical.
+/// Camel dispatches `send_to_sync` through the class, from the worker thread
+/// `camel_transport_send_to_sync` waits on; that thread's own helper is a
+/// `g_return_if_fail (class->send_to_sync != NULL)`, not the synchronous
+/// wrapper itself: a transport that installed none would be an account that
+/// offers to send and answers a GLib critical.
 #[test]
 fn the_transport_installs_the_send_vfunc() {
     // SAFETY: a live GType of a class that has one; the reference is given back.

@@ -5,19 +5,21 @@
 //! context that is what makes listening work at all.
 //!
 //! Camel does not emit its notifications where they are reported. A folder's
-//! `changed` and all five of a store's folder signals are *queued* — the folder
-//! onto the context that was thread-default when `camel_folder_changed` was
-//! called, the store onto the one its `CamelSession` captured when the session
-//! was constructed — and delivered from a main loop. Nothing arrives on a thread
-//! that never iterates one, which a Rust test thread does not. A test that
-//! connected a handler and read what it recorded would therefore observe
-//! silence, every time, and call it a pass.
+//! `changed` and all five of a store's folder signals are *queued*, both onto
+//! the context the folder's or store's `CamelSession` captured when the
+//! session was constructed (`camel_folder_changed` and the store's signals
+//! both schedule through `camel_session_idle_add`, which always attaches to
+//! that context, never to whatever is thread-default when the signal fires),
+//! and delivered from a main loop. Nothing arrives on a thread that never
+//! iterates one, which a Rust test thread does not. A test that connected a
+//! handler and read what it recorded would therefore observe silence, every
+//! time, and call it a pass.
 //!
 //! So every test here holds a [`Context`] and reads through [`emissions`] or
 //! [`events`], which pump before they read. This started in `tests/refresh.rs`
 //! for the folder's `changed` signal alone and lives here because the store's
-//! five have exactly the same problem — and, in the store's case, a sharper
-//! version of [`Context`]'s ordering rule: see that type.
+//! five have exactly the same problem, and the same ordering rule: see
+//! [`Context`].
 
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -47,12 +49,13 @@ use gobject_sys::g_signal_connect_data;
 /// from. A context per test is a queue per test.
 ///
 /// **Push it before anything else the test does.** What matters is which context
-/// is current when Camel *queues*, not when the test reads, and for the store's
-/// signals that moment is earlier than it looks: `camel_store_folder_created`
-/// and its four siblings queue onto the context the store's `CamelSession`
-/// captured — `camel_session_ref_main_context`, taken once at construction. A
-/// test that opened its account first and pushed afterwards would put its
-/// session's queue on the context every other test is also using.
+/// is current when Camel *queues*, not when the test reads, and that moment is
+/// earlier than it looks for both groups of signals: `camel_folder_changed`,
+/// `camel_store_folder_created` and its four siblings all queue onto the
+/// context the relevant `CamelSession` captured — `camel_session_ref_main_context`,
+/// taken once at construction. A test that opened its account first and pushed
+/// afterwards would put its session's queue on the context every other test is
+/// also using.
 pub struct Context(*mut GMainContext);
 
 impl Context {
