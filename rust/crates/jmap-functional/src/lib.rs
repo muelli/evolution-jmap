@@ -217,7 +217,7 @@ impl Session {
     /// one [`Self::stage_collection_backend`] staged.
     ///
     /// Needed because `EDS_REGISTRY_MODULES` *replaces* EDS's module directory
-    /// rather than adding to it (`e-source-registry-server.c:1073` assigns it
+    /// rather than adding to it (`e-source-registry-server.c:1073-1076` assigns it
     /// over `MODULE_DIRECTORY`), so a session that stages only our own module
     /// runs a registry with none of EDS's. That is the right default — every
     /// other functional test here wants exactly one backend in play — but it
@@ -287,12 +287,7 @@ impl Session {
     /// `build.rs` records `/usr/lib/evolution` in the built module's
     /// `RUNPATH`, the same way every real Evolution module has it, so
     /// `dlopen`ing the module resolves its transitive `libevolution-mail.so`
-    /// dependency on its own. That was not always so: the 307th session's
-    /// hand-driven spike found the module missing that `RUNPATH` and worked
-    /// around it here with `LD_LIBRARY_PATH`, without tracing why the
-    /// `RUNPATH` itself was absent; a later session found and fixed the
-    /// actual cause and removed the workaround, since a passing test that
-    /// still carried it would not prove the fix.
+    /// dependency on its own.
     pub fn stage_config_lookup_module(&mut self, built_module: &Path) -> PathBuf {
         let directory = self.root.join("config-lookup-module");
         fs::create_dir_all(&directory).expect("create the config-lookup module directory");
