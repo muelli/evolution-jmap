@@ -11,8 +11,8 @@
 //! it to the account is two hops of uid indirection through a third —
 //! `[Mail Account] IdentityUid` names an identity, and that identity's
 //! `[Mail Submission] TransportUid` names the transport. Nothing in Camel walks
-//! that chain; Evolution does, out of `libedataserver`, and so does the client
-//! program here.
+//! that chain; `EMailSession` does, out of `libemail-engine`, and so does the
+//! client program here.
 //!
 //! That chain is the whole reason this leg exists rather than being three more
 //! assertions in `mail.rs`. Every link in it is a string in a file that no
