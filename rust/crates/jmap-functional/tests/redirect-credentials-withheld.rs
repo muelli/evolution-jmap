@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 101(b)'s acceptance test, made headless: the endless OAuth2 consent
-//! loop the operator hit on 0.5.0 came from a 401 that only arrived after a
+//! A headless acceptance test for the endless OAuth2 consent loop the
+//! operator hit on 0.5.0: it came from a 401 that only arrived after a
 //! redirect to a different origin had dropped
 //! the `Authorization` header, treated as a rejected credential and
 //! escalated to a fresh interactive consent — forever, since the fresh
@@ -31,8 +31,8 @@
 //! so two loopback mocks on two different ports already qualify, with no
 //! need to involve a second hostname. `jmap_mock::MockServer`'s own
 //! `session_via_redirect` mode redirects `/.well-known/jmap` to a second
-//! path on the *same* origin — built for a different bug (item 61) — so it
-//! cannot stand in here; extending it would also cross into `jmap-mock`,
+//! path on the *same* origin — built for a same-origin redirect scenario —
+//! so it cannot stand in here; extending it would also cross into `jmap-mock`,
 //! which is codex's turf. Instead this test runs its own tiny front door: a
 //! raw `TcpListener` that answers every request with a 302 to the real mock
 //! on a different port, which requires Basic auth and so 401s the
@@ -152,7 +152,7 @@ fn a_cross_origin_redirect_that_drops_credentials_fails_without_escalating() {
     // registry-side bookkeeping for having been asked to authenticate
     // again) but neither attempt's actual 401 may add another: that repeat,
     // without anything here asking again, is the endless OAuth2 popup loop
-    // item 101 reports.
+    // this test exists to catch.
     assert_eq!(
         seen.get("credentials-required-after-reauthenticate"),
         Some(&"2"),
@@ -163,7 +163,7 @@ fn a_cross_origin_redirect_that_drops_credentials_fails_without_escalating() {
         seen.get("credentials-required"),
         Some(&"2"),
         "with nothing here asking again, the count must not keep climbing on its own: that is \
-         exactly the endless OAuth2 popup loop item 101 reports\n{report}"
+         exactly the endless OAuth2 popup loop this test exists to catch\n{report}"
     );
 
     assert_eq!(
@@ -171,7 +171,7 @@ fn a_cross_origin_redirect_that_drops_credentials_fails_without_escalating() {
         2,
         "two independent attempts reach the network (EDS's own retry once the password is \
          stored, then the explicit reauthenticate); a backend that retried within either \
-         would be the same retry storm item 101 reports\n{report}"
+         would be the same retry storm this test exists to catch\n{report}"
     );
     assert_eq!(
         server.unauthorized_responses(),

@@ -11,7 +11,7 @@
 //! them drives `list_existing_sync` (a fresh meta-backend cache has no
 //! stored revision to diff from) and none reaches `get_changes_sync` at
 //! all — the same gap `book-changes.rs` closed for the address book,
-//! explicitly left as a calendar-side follow-up there. This test opens the
+//! closed here for the calendar. This test opens the
 //! same calendar *twice*, reusing one [`Session`]'s on-disk cache across two
 //! separate `session.run()` calls (each its own process, its own private
 //! bus, its own freshly started factory): the first connect has nothing

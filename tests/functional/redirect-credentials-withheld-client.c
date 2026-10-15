@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 101(b)'s acceptance test: a 401 that arrives only after a redirect
+ * An acceptance test: a 401 that arrives only after a redirect
  * dropped the `Authorization` header must not look like a rejected
  * password. `jmap_client::Error::RedirectCredentialsWithheld`
  * (`rust/crates/jmap-client/src/error.rs`) already keeps that case out of
@@ -16,9 +16,10 @@
  * port counts: see `jmap_client::url::same_origin`) that then 401s the
  * request the redirect stripped credentials from.
  *
- * `source::credentials`'s own doc explains the first connect: EDS calls
- * `connect_sync` once with no credentials at all before ever consulting the
- * secret store, so this attempt always fails with `CredentialsRequired`
+ * `jmap_backend_core::connect::credentials`'s own doc explains the first
+ * connect: EDS calls `connect_sync` once with no credentials at all before
+ * ever consulting the secret store, so this attempt always fails with
+ * `CredentialsRequired`
  * (`E_SOURCE_AUTHENTICATION_REQUIRED`) without making any network request:
  * the front door is not hit yet. A real credentials prompter answers the
  * `credentials-required` signal that failure schedules by calling
@@ -190,8 +191,8 @@ main (int argc,
 	/* No further prompting from this client from here on: settled again
 	 * with nothing else asked, to tell a one-time signal from the
 	 * reauthenticate call above apart from the backend re-escalating on its
-	 * own without being asked again, which is the retry storm item 101
-	 * reports. */
+	 * own without being asked again, which is the retry storm this test
+	 * exists to catch. */
 	settle (SETTLE_MILLISECONDS);
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");
