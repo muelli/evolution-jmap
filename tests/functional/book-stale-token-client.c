@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of `docs/ROADMAP.md` item 25's ADDRESS-BOOK leg: item 23's
- * hourly re-consent, driven through a real `evolution-addressbook-factory`
- * and a real `evolution-source-registry` rather than through the operator
- * leaving Evolution open for an afternoon.
+ * The client half of the ADDRESS-BOOK leg of the stale-access-token
+ * acceptance test: the hourly re-consent, driven through a real
+ * `evolution-addressbook-factory` and a real `evolution-source-registry`
+ * rather than through the operator leaving Evolution open for an afternoon.
  *
  * An ordinary libebook consumer. It opens a book — which is what makes the
  * factory dlopen `libebookbackendjmap.so` and keep a live, connected
@@ -227,8 +227,8 @@ main (int argc,
 
 	/* Activates evolution-addressbook-factory and keeps a live backend
 	 * instance for the rest of this process's life. This is where the
-	 * pooled connection item 23 is about is built, and the access token it
-	 * carries is fetched here, once. */
+	 * pooled connection whose token the test later rotates out from under
+	 * it is built, and the access token it carries is fetched here, once. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);

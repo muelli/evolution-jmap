@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The ADDRESS-BOOK leg: item 23's acceptance test, made headless for
-//! `jmap-backend-book`.
+//! The ADDRESS-BOOK leg of the stale-access-token acceptance test, made
+//! headless for `jmap-backend-book`.
 //!
 //! This is `cal-stale-token.rs` with the calendar pair swapped for the
 //! address-book one — `jmap_backend_core::oauth2::source_uses_oauth2` is the
@@ -292,8 +292,9 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     assert_eq!(
         seen.get("credentials-required"),
         Some(&"0"),
-        "a merely stale access token reached EDS's credentials prompter — in the \
-         running application that is the hourly consent window item 23 is about\n{report}"
+        "a merely stale access token reached EDS's credentials prompter, which in \
+         the running application is the hourly consent window this test exists to \
+         avoid\n{report}"
     );
 }
 
