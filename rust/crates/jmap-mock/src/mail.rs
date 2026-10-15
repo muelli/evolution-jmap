@@ -138,9 +138,8 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5), kept custom instead of
-/// [`crate::setops::simple_set`] because validation depends on sibling,
-/// ancestor, and message state, including earlier operations in the request.
+/// `Mailbox/set` (RFC 8621 §2.5), kept custom because validation depends on
+/// sibling, ancestor, and message state across the whole request.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -299,9 +298,8 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Validate mailbox placement rules from RFC 8621 §2.
-/// `of` is the mailbox being changed, or `None` for create.
-/// Checks sibling name uniqueness, non-cyclic `parentId`, and role uniqueness.
+/// Validate RFC 8621 §2 placement rules for `of` (`None` on create): sibling
+/// name uniqueness, non-cyclic `parentId`, and role uniqueness.
 fn placeable(
     tree: &BTreeMap<Id, Mailbox>,
     of: Option<&Id>,
@@ -365,7 +363,6 @@ fn counted_empty(mailbox: &Mailbox) -> Mailbox {
 }
 
 /// Whether `email` is filed in mailbox `id`.
-///
 /// RFC 8621 §4.1 models `mailboxIds` as a set encoded as a map to `true`.
 fn filed_in(email: &Email, id: &Id) -> bool {
     email
@@ -684,7 +681,6 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
 }
 
 /// Evaluate a `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5).
-///
 /// NOT matches only when all nested conditions are false.
 fn filter_matches(email: &Email, filter: &Filter<EmailQueryFilter>) -> bool {
     match filter {
@@ -822,9 +818,8 @@ fn body_contains(email: &Email, needle: &str) -> bool {
         .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
 }
 
-/// `header` (RFC 8621 §4.4.1): `[name]` matches header presence;
-/// `[name, value]` also requires `value` substring match.
-/// Header names are case-insensitive per RFC 5322 §1.2.2.
+/// `header` (RFC 8621 §4.4.1): `[name]` matches presence; `[name, value]`
+/// also requires `value` substring match. Names are case-insensitive.
 fn header_matches(email: &Email, header: &[String]) -> bool {
     let Some(name) = header.first() else {
         return false;
@@ -1198,9 +1193,8 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
 }
 
 /// Whether `email` is in at least one mailbox this account has.
-///
-/// RFC 8621 §4.6: `mailboxIds` must contain at least one `true` entry and each
-/// such id must exist. The same invariant is enforced for create and update.
+/// RFC 8621 §4.6 requires at least one `mailboxIds` entry set to `true`, and
+/// each such id must exist. This is enforced for create and update.
 fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError> {
     let Some(mailbox_ids) = email
         .mailbox_ids
@@ -1225,13 +1219,10 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
     }
 }
 
-/// `Email/import` (RFC 8621 §4.8): import RFC 5322 bytes from an uploaded
-/// blob.
-/// Unlike this mock's seeding path, this parses bytes into `Email` with
-/// [`crate::message::Message`].
-/// Behavior stays explicit: preserve uploaded blob bytes, allow duplicates,
-/// use request `receivedAt` or [`MOCK_NOW`], and skip keyword grammar
-/// validation like `Email/set` (RFC 8621 §4.1.1).
+/// `Email/import` (RFC 8621 §4.8): import RFC 5322 bytes from an uploaded blob.
+/// This parses with [`crate::message::Message`], preserves uploaded blob bytes,
+/// allows duplicates, uses request `receivedAt` or [`MOCK_NOW`], and skips
+/// keyword grammar validation unlike `Email/set` (RFC 8621 §4.1.1).
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1302,9 +1293,7 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
 }
 
 /// `Email/parse` (RFC 8621 §4.8): parse an uploaded RFC 5322 blob without
-/// storing it.
-/// Reuses [`crate::message::Message`], so MIME-tree fields stay unset, like
-/// the reduced-fidelity import path.
+/// storing it. MIME-tree fields stay unset like the reduced-fidelity import path.
 pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1349,7 +1338,6 @@ pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, M
 }
 
 /// Build an `Email` for one `EmailImport`, or return the refusal.
-///
 /// Allocation and storage happen only after all validations pass.
 fn imported(
     account: &mut AccountState,
@@ -1401,9 +1389,7 @@ fn imported(
 }
 
 /// Parse FUTURERELEASE hold delay from envelope parameters (RFC 4865).
-///
-/// Accepts `HOLDFOR` directly or derives from `HOLDUNTIL` relative to
-/// `MOCK_NOW`.
+/// Accepts `HOLDFOR` directly or derives from `HOLDUNTIL` relative to `MOCK_NOW`.
 fn hold_seconds(envelope: Option<&Envelope>) -> Result<Option<i64>, String> {
     let Some(Value::Object(parameters)) =
         envelope.and_then(|envelope| envelope.mail_from.parameters.as_ref())
@@ -1864,8 +1850,7 @@ impl EmailSeed {
 }
 
 /// Build the RFC 5322 bytes for a seeded message's `message/rfc822` blob.
-///
-/// Output stays single-part. Attachment behavior is modeled through `Email`
+/// Output stays single-part; attachment behavior is modeled through `Email`
 /// body parts and blob fetches.
 fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     let mut message = String::new();
@@ -1900,7 +1885,6 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
 }
 
 /// One address in message-header form.
-///
 /// Seeds use plain ASCII display names and do not model RFC 2047 encoding.
 fn address(address: &EmailAddress) -> String {
     match &address.name {
@@ -1910,9 +1894,7 @@ fn address(address: &EmailAddress) -> String {
 }
 
 /// Convert a JMAP `UtcDate` to an RFC 5322 date.
-///
-/// Returns `None` for non-JMAP timestamps. Weekday is omitted, which RFC 5322
-/// allows.
+/// Returns `None` for non-JMAP timestamps. Weekday is omitted, which RFC 5322 allows.
 fn rfc5322_date(utc: &str) -> Option<String> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -1975,10 +1957,8 @@ impl AccountState {
         id
     }
 
-    /// Create a mailbox as a state transition, like another client's
-    /// `Mailbox/set`.
-    /// Unlike [`AccountState::seed_mailbox`], this bumps state and appears in
-    /// `/changes`.
+    /// Create a mailbox as a state transition like another client's `Mailbox/set`.
+    /// Unlike [`AccountState::seed_mailbox`], this bumps state and appears in `/changes`.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
         let mailbox = Mailbox {
@@ -1995,8 +1975,7 @@ impl AccountState {
         id
     }
 
-    /// Rename a mailbox as a state transition. False if there is no such
-    /// mailbox.
+    /// Rename a mailbox as a state transition. False if there is no such mailbox.
     pub fn rename_mailbox(&mut self, id: &Id, name: &str) -> bool {
         self.mailboxes.transaction(|transaction| {
             let Some(mailbox) = transaction.get(id) else {
@@ -2011,15 +1990,13 @@ impl AccountState {
     }
 
     /// Destroy a mailbox as a state transition. False if missing.
-    ///
     /// This helper does not cascade to children or mail.
     pub fn destroy_mailbox(&mut self, id: &Id) -> bool {
         self.mailboxes
             .transaction(|transaction| transaction.destroy(id))
     }
 
-    /// Seed one email with text body and optional attachments. Does not bump
-    /// state.
+    /// Seed one email with text body and optional attachments. Does not bump state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -2030,9 +2007,7 @@ impl AccountState {
     }
 
     /// Deliver an email as a state transition.
-    ///
-    /// Unlike [`AccountState::seed_email`], this bumps state and appears in
-    /// `Email/changes`.
+    /// Unlike [`AccountState::seed_email`], this bumps state and appears in `Email/changes`.
     pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -2045,7 +2020,6 @@ impl AccountState {
     }
 
     /// Destroy a message as a state transition. False if missing.
-    ///
     /// Blob cleanup is intentionally skipped in this helper.
     pub fn destroy_email(&mut self, id: &Id) -> bool {
         let thread_id = self
