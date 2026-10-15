@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 82 batches 1 to 4: the mail leg driven against a real Stalwart
-//! instead of the in-process mock -- its receive half, the flag and expunge
-//! writes, the transfer between folders, and the `EmailSubmission` send.
+//! The mail leg driven against a real Stalwart instead of the in-process
+//! mock -- its receive half, the flag and expunge writes, the transfer
+//! between folders, and the `EmailSubmission` send.
 //!
 //! The fourth live-server leg, after the address book, the calendar and the
 //! collection account, and the one the other three cannot stand in for: a
@@ -31,7 +31,7 @@
 //! identity to transport, through two uids) is the mock leg's
 //! `transport-client.c` chain, not `mail-live-client.c`'s store preamble.
 //!
-//! ## Item 90: the password prompt, against real Camel
+//! ## The password prompt, against real Camel
 //!
 //! `jmap-mail/src/connect.rs`'s `StoreError::Unauthenticated` (finding 12 in
 //! `STALWART-RFC-FINDINGS.md`: real Stalwart answers an unauthenticated
@@ -336,7 +336,7 @@ fn camel_opens_the_store_and_serves_a_real_inbox() {
 
     // Not an equality: unlike the mock, which `mail.rs` starts fresh every
     // run, a throwaway account outlives the run that seeded it, and a later
-    // batch of item 82 will leave folders of its own behind. The claim is
+    // run of this suite will leave folders of its own behind. The claim is
     // that a real account's five defaults are all there -- same reasoning as
     // `live-stalwart-calendar.rs`'s own `events-after` check.
     let folders = seen
@@ -502,12 +502,12 @@ fn camel_writes_flags_and_expunges_through_the_real_server() {
         "clearing the important mark never reached the real server\n{report}"
     );
 
-    // Item 82 names the folder-summary counts after an expunge as one of the
-    // divergences worth hunting, so both counters are read: the uid listing
-    // the message list is drawn from, and `camel_folder_summary_count`, which
-    // is what the folder tree's unread/total column asks. A provider that
-    // dropped the row from one and not the other leaves a folder claiming a
-    // message nobody can open.
+    // The folder-summary counts after an expunge are a divergence worth
+    // hunting, so both counters are read: the uid listing the message list
+    // is drawn from, and `camel_folder_summary_count`, which is what the
+    // folder tree's unread/total column asks. A provider that dropped the
+    // row from one and not the other leaves a folder claiming a message
+    // nobody can open.
     let listed_before = parsed(&seen, "inbox-count-before-expunge", &report);
     let listed_after = parsed(&seen, "inbox-count-after-expunge", &report);
     let summary_before = parsed(&seen, "inbox-summary-before-expunge", &report);
