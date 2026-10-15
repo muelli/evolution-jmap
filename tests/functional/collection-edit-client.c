@@ -16,7 +16,7 @@
  * registry re-emits "changed" on its own in-process copy of the source
  * either way, which is what `source_changed`'s handler listens for. So this
  * is a faithful, deterministic stand-in for the AT-SPI session
- * `ci/gui-smoke-test.md`'s harness would otherwise need, for a question that
+ * `docs/gui-smoke-test.md`'s harness would otherwise need, for a question that
  * is about the registry and the backend, not about the account editor's
  * widget tree.
  *
