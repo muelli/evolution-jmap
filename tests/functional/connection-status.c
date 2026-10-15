@@ -26,7 +26,7 @@
  *     ESourceRegistry was constructed (e-source-registry.c:1726, :683) —
  *     here, this program's default context, on this thread.
  *   - e_client_wait_for_connected_sync() blocks that same thread on an EFlag
- *     until notify::connection-status fires (e-client.c:1732). The signal
+ *     until notify::connection-status fires (e-client.c:1935). The signal
  *     comes from the idle. The idle needs the context iterated. The thread
  *     that would iterate it is the one blocked on the EFlag.
  *
