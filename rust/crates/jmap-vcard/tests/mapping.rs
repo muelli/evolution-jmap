@@ -18359,7 +18359,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
         ..ContactCard::default()
     };
 
-    // 2. Assert outbound vCard 3.0 emission strictly excludes unmodeled server fields, agent, sound, logo, keys
+    // 2. Outbound vCard 3.0 excludes unmodeled fields and AGENT/SOUND/LOGO/KEY payloads.
     let vcard1 = card_to_vcard(&card);
     assert!(vcard1.contains("X-EVOLUTION-FILE-AS:Sync\\, Fuzz (Name Extra)"));
     assert!(vcard1.contains("X-EVOLUTION-SPOUSE:Alice Spouse"));
@@ -18927,9 +18927,8 @@ fn tel_type_work_voice_fax_evolution_contact_editor_dual_field_aliasing_and_slot
 
 #[test]
 fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_visibility() {
-    // 1. Home / Private context with voice + fax:
-    // `TEL;TYPE=HOME,VOICE,FAX` narrows outbound to `HOME,FAX` to avoid aliasing `E_CONTACT_PHONE_HOME`
-    // and `E_CONTACT_PHONE_HOME_FAX` in Evolution's editor.
+    // 1. `TEL;TYPE=HOME,VOICE,FAX` narrows to `HOME,FAX` to avoid
+    // aliasing `E_CONTACT_PHONE_HOME` and `E_CONTACT_PHONE_HOME_FAX`.
     let mut phones = BTreeMap::new();
     phones.insert(
         "p1".to_owned(),
@@ -18953,10 +18952,8 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
     assert!(states_phone_feature(home_p.features.as_ref(), "fax"));
     assert!(!states_phone_feature(home_p.features.as_ref(), "voice"));
 
-    // 2. Unqualified (no context) voice + fax:
-    // In EDS, bare `TEL;TYPE=VOICE,FAX` matches neither `E_CONTACT_PHONE_OTHER` (`VOICE`) nor
-    // `E_CONTACT_PHONE_OTHER_FAX` (`FAX`) because they are mutually exclusive in libebook (0 fields reached).
-    // `jmap-vcard` narrows to `FAX`, ensuring the number reaches Evolution's "Other Fax" field rather than being lost.
+    // 2. Bare `TEL;TYPE=VOICE,FAX` narrows to `FAX` so Evolution maps it to
+    // "Other Fax" instead of dropping it as an ambiguous match.
     let mut bare_phones = BTreeMap::new();
     bare_phones.insert(
         "p2".to_owned(),
@@ -18983,8 +18980,7 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
 
 #[test]
 fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
-    // Tests all pairwise combinations and composite feature sets according to the
-    // precedence hierarchy: `CELL`/`MOBILE` (1) > `PAGER` (2) > `FAX` (3) > `VOICE` (4) > `VIDEO` (5).
+    // Pairwise and composite sets follow: `CELL`/`MOBILE` > `PAGER` > `FAX` > `VOICE` > `VIDEO`.
     let cases = [
         // (features, expected_emitted_type, winning_feature, suppressed_features)
         (
