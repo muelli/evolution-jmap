@@ -796,19 +796,19 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(card_kind::DEVICE, "device");
     assert_eq!(card_kind::APPLICATION, "application");
 
-    // Calendar statuses (RFC 8984 §4.1.1)
+    // Calendar statuses (RFC 8984 §5.1.3)
     assert_eq!(event_status::CONFIRMED, "confirmed");
     assert_eq!(event_status::TENTATIVE, "tentative");
     assert_eq!(event_status::CANCELLED, "cancelled");
 
-    // Task statuses (RFC 8984 §5.1, draft-ietf-jmap-tasks §4.1)
+    // Task statuses (draft-ietf-jmap-tasks §4.1)
     assert_eq!(task_status::NEEDS_ACTION, "needs-action");
     assert_eq!(task_status::COMPLETED, "completed");
     assert_eq!(task_status::IN_PROCESS, "in-process");
     assert_eq!(task_status::CANCELLED, "cancelled");
     assert_eq!(task_status::FAILED, "failed");
 
-    // Task progress (RFC 8984 §5.1)
+    // Task progress (RFC 8984 §5.2.5)
     assert_eq!(task_progress::NEEDS_ACTION, "needs-action");
     assert_eq!(task_progress::COMPLETED, "completed");
     assert_eq!(task_progress::IN_PROCESS, "in-process");
@@ -822,7 +822,7 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     // Sieve set errors (RFC 9661 §2.4)
     assert_eq!(sieve_set_error::INVALID_SIEVE, "invalidSieve");
 
-    // Calendar free/busy (RFC 8984 §4.1.2)
+    // Calendar free/busy (RFC 8984 §4.4.2)
     assert_eq!(free_busy_status::FREE, "free");
     assert_eq!(free_busy_status::BUSY, "busy");
 

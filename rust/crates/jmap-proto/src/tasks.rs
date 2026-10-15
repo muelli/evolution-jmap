@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP for Tasks (draft-ietf-jmap-tasks) and JSCalendar Task (RFC 8984 §5):
+//! JMAP for Tasks (draft-ietf-jmap-tasks) and JSCalendar Task (RFC 8984 §2.2 / §5.2):
 //! `Task`, `TaskList`, `TaskListRights`, `TasksCapability`, `TaskQueryFilter`,
 //! and standard constants.
 
@@ -200,7 +200,7 @@ impl TaskListRights {
     }
 }
 
-/// A Task object (draft-ietf-jmap-tasks §4, RFC 8984 §5).
+/// A Task object (draft-ietf-jmap-tasks §4, RFC 8984 §2.2 / §5.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -463,7 +463,7 @@ impl TaskQueryFilter {
     }
 }
 
-/// Standard task status values (RFC 8984 §5.1, draft-ietf-jmap-tasks §4.1).
+/// Standard task status values (draft-ietf-jmap-tasks §4.1).
 pub mod task_status {
     pub const NEEDS_ACTION: &str = "needs-action";
     pub const COMPLETED: &str = "completed";
@@ -472,7 +472,7 @@ pub mod task_status {
     pub const FAILED: &str = "failed";
 }
 
-/// Standard task progress values (RFC 8984 §5.1, draft-ietf-jmap-tasks §4.1).
+/// Standard task progress values (RFC 8984 §5.2.5, draft-ietf-jmap-tasks §4.1).
 pub mod task_progress {
     pub const NEEDS_ACTION: &str = "needs-action";
     pub const COMPLETED: &str = "completed";

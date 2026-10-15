@@ -64,7 +64,7 @@ fn calendar_event_roundtrip() {
             "coordinates": "geo:52.520008,13.404954",
         }))
     );
-    // `keywords` is an RFC 8984 §1.4.3 Set: keys are tags, values are `true`.
+    // `keywords` is an RFC 8984 §4.2.9 Set: keys are tags, values are `true`.
     // Held as JSON to tolerate non-boolean values.
     let keywords = event.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["offsite", "planning"]);
@@ -595,7 +595,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     );
 }
 
-/// CalendarsCapability, AbsoluteTrigger, and EventRelation cover draft-ietf-jmap-calendars-28 §1.3 and RFC 8984 §4.4.5, §4.5.2.
+/// CalendarsCapability, AbsoluteTrigger, and EventRelation cover draft-ietf-jmap-calendars-28 §1.3 and RFC 8984 §1.4.10, §4.5.2.
 #[test]
 fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_draft_jmap_calendars()
  {

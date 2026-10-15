@@ -652,7 +652,7 @@ pub fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Co
 /// When one alert fires, as the value of a `TRIGGER` and the `RELATED` parameter
 /// it needs: none for the start, which both formats default to.
 ///
-/// Only RFC 8984 §4.5.3's OffsetTrigger. §4.5.4's AbsoluteTrigger states a
+/// Only RFC 8984 §4.5.2's OffsetTrigger. AbsoluteTrigger (§4.5.2) states a
 /// `when` as a UTCDateTime, which iCalendar spells as a `TRIGGER;VALUE=DATE-TIME`
 /// and this mapping does not write in either direction yet; it is refused rather
 /// than approximated, since an offset guessed from an instant would move the
@@ -807,7 +807,7 @@ pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
 }
 
 /// The ways of taking part this place offers, in [`CONFERENCE_FEATURES`] order.
-/// The values of a set are `true` (RFC 8984 §1.4.3); anything else says nothing
+/// The values of a set are `true` (RFC 8984 §4.2.9); anything else says nothing
 /// was set.
 pub fn joining_features(location: &Value) -> Vec<&'static str> {
     let features = location.get("features");
@@ -976,7 +976,7 @@ pub fn stated_name(value: &Value) -> Option<&str> {
 }
 
 /// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
-/// are `true` (RFC 8984 §1.4.3); anything else says nothing was set.
+/// are `true` (RFC 8984 §4.4.6); anything else says nothing was set.
 pub fn holds_role(participant: &Value, role: &str) -> bool {
     participant
         .get("roles")
@@ -1370,7 +1370,7 @@ pub fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) ->
         // one entry the server rejects costs every edit in the save.
         //
         // Which is why a custom identifier is refused here and *not* on the way
-        // to the component: RFC 8984 §1.4.9 admits one only beside the
+        // to the component: RFC 8984 §1.4.8 admits one only beside the
         // `timeZones` entry defining it, and this property's own patch has no way
         // to carry that entry along. A save willing to patch `timeZones` in the
         // same request asks [`sends_recurrence_override`] instead, which is
@@ -1416,7 +1416,7 @@ pub fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -
 /// [`recurrence_dates`].
 ///
 /// Anything that is not literally `"excluded": true` counts as an instance that
-/// happens, including the `false` RFC 8984 §4.3.4 defaults to and a value of the
+/// happens, including the `false` RFC 8984 §4.3.6 defaults to and a value of the
 /// wrong type. That is the reading that cannot make an appointment disappear:
 /// [`maps_recurrence_override`] refuses the malformed shape separately, so the
 /// mistake cannot be written back to the server either way.
@@ -1623,8 +1623,8 @@ fn drawn_time_zones(
 /// The entry of a `timeZones` map that defines `tzid`, under either spelling of
 /// its key.
 ///
-/// RFC 8984 §4.7.2 types the map as `Id[TimeZone]` while §1.4.9 puts the solidus
-/// on the identifier and §1.4.4's `Id` grammar has no solidus in it, so where
+/// RFC 8984 §4.7.2 types the map as `Id[TimeZone]` while §1.4.8 puts the solidus
+/// on the identifier and §1.4.1's `Id` grammar has no solidus in it, so where
 /// the prefix lives is genuinely ambiguous and both readings are in the wild.
 /// Asking for either costs nothing, and a zone left undefined because the server
 /// chose the other one is a silent hour.
@@ -1653,10 +1653,10 @@ pub fn time_zone_definition<'a>(event: &'a CalendarEvent, tzid: &str) -> Option<
 /// Whether the zone `event` is in is one a save may state to a server.
 ///
 /// Three shapes are sendable and one is not. No zone at all is a floating event,
-/// which is a real thing to save. An IANA name is RFC 8984 §1.4.9's first form
+/// which is a real thing to save. An IANA name is RFC 8984 §1.4.8's first form
 /// of a `TimeZoneId` and needs nothing beside it. A custom identifier: the
 /// solidus-prefixed second form: is sendable exactly when the event *defines*
-/// it, because §1.4.9 admits it only alongside the `timeZones` entry that says
+/// it, because §1.4.8 admits it only alongside the `timeZones` entry that says
 /// which zone it is.
 ///
 /// Everything else is not: a `TZID` off a document that neither names a zone nor
@@ -1677,7 +1677,7 @@ pub fn maps_time_zone(event: &CalendarEvent) -> bool {
     names_time_zone(tzid) || defines_time_zone(event, tzid)
 }
 
-/// Whether `event` says what the zone `tzid` is: RFC 8984 §1.4.9's second form
+/// Whether `event` says what the zone `tzid` is: RFC 8984 §1.4.8's second form
 /// of a `TimeZoneId`, the solidus-prefixed identifier that resolves nowhere but
 /// the object carrying it.
 ///
@@ -2052,7 +2052,7 @@ fn modified_instances(event: &CalendarEvent) -> Vec<(String, CalendarEvent)> {
 /// a `VEVENT` of its own would show.
 ///
 /// The instance starts as the series with its recurrence dropped and its start
-/// moved to the occurrence's own: RFC 8984 §4.3.4's rule that an override's key
+/// moved to the occurrence's own: RFC 8984 §4.3.5's rule that an override's key
 /// *is* the instance's start unless the patch says otherwise. Then the patch is
 /// applied, one property at a time, and a key or a value outside what
 /// [`draws_override_field`] accepts is skipped rather than fatal: the instance is
@@ -2069,7 +2069,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
     let mut instance = CalendarEvent {
         id: event.id.clone(),
         uid: event.uid.clone(),
-        // Inherited like everything else RFC 8984 §4.3.4 does not let an override
+        // Inherited like everything else RFC 8984 §4.3.5 does not let an override
         // restate, and neither timestamp is restatable: they are the server's
         // record of the event, not of one of its occurrences. RFC 5545 asks for
         // the `DTSTAMP` on the instance's own component all the same.
@@ -2085,7 +2085,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         free_busy_status: event.free_busy_status.clone(),
         priority: event.priority,
         privacy: event.privacy.clone(),
-        // Inherited: RFC 8984 §4.3.4 has an instance hold every property its
+        // Inherited: RFC 8984 §4.3.5 has an instance hold every property its
         // override does not restate. Leaving them off would draw an occurrence of
         // a meeting as happening nowhere and belonging to nothing, and, since
         // both are drawn on the instance's own component, would read back as the
@@ -2642,7 +2642,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     Ok(event)
 }
 
-/// Whether a value is a time zone JSCalendar can carry: an RFC 8984 §1.4.9
+/// Whether a value is a time zone JSCalendar can carry: an RFC 8984 §1.4.8
 /// `TimeZoneId`.
 ///
 /// That type is a name in the IANA Time Zone Database, or a custom identifier
@@ -2932,14 +2932,14 @@ fn stated_zones<'a>(components: &'a [ICalendarComponent]) -> Zones<'a> {
 /// its own: RFC 5545 §3.2.19 puts the zone on the property, so a detached
 /// instance states its own `TZID` and need not share the series'. Looking for the
 /// series' alone sent the server an occurrence naming a zone nothing defined :
-/// a dangling `TimeZoneId` §1.4.9 does not admit, which a server may reject
+/// a dangling `TimeZoneId` §1.4.8 does not admit, which a server may reject
 /// outright and which a server that keeps it shows as one floating occurrence.
 ///
 /// Only a custom identifier gets one, and only when the document defines it.
 /// Which is the whole of the case: an IANA name resolves out of any zone
 /// database, so a definition beside it is the reader's copy and not ours to
 /// carry: see `zone_of`, which translates what it can *into* a name and so
-/// never reaches here. What is left is RFC 8984 §1.4.9's other form, the
+/// never reaches here. What is left is RFC 8984 §1.4.8's other form, the
 /// solidus-prefixed identifier that resolves nowhere but the object it came in,
 /// and there the definition is the zone: without it the identifier dangles and
 /// the appointment is a wall clock time in no particular zone.
@@ -3017,7 +3017,7 @@ pub fn referred_zones(event: &CalendarEvent) -> impl Iterator<Item = &str> {
 /// [`CalendarEvent::time_zone`] (see [`maps_time_zone`], and `jmap_cal_sync`'s
 /// create path, which is the one caller) used to clear the map with it; that
 /// took the definition of a zone one *occurrence* had been moved into, leaving
-/// the override naming a `TimeZoneId` nothing resolved. RFC 8984 §1.4.9 does not
+/// the override naming a `TimeZoneId` nothing resolved. RFC 8984 §1.4.8 does not
 /// admit that identifier without its definition, and a server is entitled to
 /// refuse the whole `CalendarEvent/set` over it: costing the user the
 /// appointment rather than the series' zone.
@@ -3289,7 +3289,7 @@ fn read_vevent(
 /// carries none, which is what Evolution's appointment editor writes and what
 /// any other client's component looks like.
 ///
-/// A key that is not an RFC 8984 §1.4.4 `Id`: up to 255 octets of letters,
+/// A key that is not an RFC 8984 §1.4.1 `Id`: up to 255 octets of letters,
 /// digits, `-` and `_`: is treated as absent, because this is the one direction
 /// where the key may be *created* server-side: a component whose event has no
 /// place yet is saved with the property written whole, under the key read here.
@@ -3327,7 +3327,7 @@ pub fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Va
 /// reaches the server's own entry, or an invented one for a line carrying
 /// none, which is what another client's component looks like. Invented keys
 /// avoid the ones the document already named, because two conferences that
-/// collided on a key would become one. A key that is not an RFC 8984 §1.4.4
+/// collided on a key would become one. A key that is not an RFC 8984 §1.4.1
 /// `Id` is treated as absent, for the reason [`read_locations`] gives: on a
 /// create the key is what the server is asked to file the entry under, and a
 /// key it rejects costs the whole `CalendarEvent/set`.
@@ -3399,7 +3399,7 @@ pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<St
 /// The key is the one the line came out with (`X_JMAP_KEY`) or an invented
 /// one for a line carrying none, under the same rules
 /// [`read_virtual_locations`] gives: invented keys avoid the ones the document
-/// already named, and a key that is not an RFC 8984 §1.4.4 `Id` is treated as
+/// already named, and a key that is not an RFC 8984 §1.4.1 `Id` is treated as
 /// absent, because on a create the key is what the server is asked to file the
 /// entry under.
 ///
@@ -3527,7 +3527,7 @@ pub fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Val
     (!tags.is_empty()).then_some(tags)
 }
 
-/// Whether a value is an RFC 8984 §1.4.4 `Id`: 1 to 255 octets of letters,
+/// Whether a value is an RFC 8984 §1.4.1 `Id`: 1 to 255 octets of letters,
 /// digits, `-` and `_`.
 pub fn names_map_entry(value: &str) -> bool {
     (1..=255).contains(&value.len())
@@ -3763,7 +3763,7 @@ pub fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str
 /// and RFC 5545 §3.6.1 makes `DTEND` and `DURATION` mutually exclusive, so an
 /// event a user just created says how long it is only through its end. Reading
 /// `DURATION` alone left every such event with no duration at all, which is
-/// `P0D` by RFC 8984 §4.2.2: a zero-length blip in place of the meeting.
+/// `PT0S` by RFC 8984 §5.1.2: a zero-length blip in place of the meeting.
 ///
 /// The difference is taken on the wall clock, which is also how JSCalendar
 /// reads the answer: its `P1D` is a nominal day, the same time on the next
@@ -3897,7 +3897,7 @@ pub fn stated_duration(value: &str) -> Option<String> {
 ///
 /// A duration stated as zero is *not* caught, because catching it would mean
 /// parsing the value rather than passing it through: `PT0S`, `P0D` and
-/// `PT0H0M0S` all spell it. It comes back as written, which RFC 8984 §4.2.2
+/// `PT0H0M0S` all spell it. It comes back as written, which RFC 8984 §5.1.2
 /// reads as the same zero length the `None` answer leaves behind; the two
 /// spellings differ on paper and not in the calendar.
 pub fn period_length(start: &str, end: &str) -> Option<String> {
@@ -3969,12 +3969,10 @@ pub fn to_duration(seconds: i64) -> Option<String> {
 /// Whether this event can be written the way iCalendar writes an all-day one:
 /// a `DTSTART` of `VALUE=DATE`, with no time anywhere on the component.
 ///
-/// `showWithoutTime` asks for it, but cannot on its own get it. RFC 8984 §4.1.5
-/// says an event shown without a time starts at midnight and lasts whole days;
-/// a server is free to send otherwise, and RFC 5545 has no way to write the
-/// result: a DATE value has no time to hold 09:00, takes no `TZID`
-/// (§3.2.19), and stands only beside a duration of whole days (§3.6.1) and an
-/// `UNTIL` that is itself a DATE (§3.3.10). So each of those is a condition
+/// `showWithoutTime` (RFC 8984 §4.2.4) asks for it, but cannot on its own get it:
+/// RFC 5545 has no way to write a DATE value that has a time such as 09:00, takes
+/// no `TZID` (§3.2.19), and stands only beside a duration of whole days (§3.6.1) and
+/// an `UNTIL` that is itself a DATE (§3.3.10). So each of those is a condition
 /// here, and an event failing any of them is written as the timed event it
 /// half is: wrong about its day-ness, right about when it happens, and: since
 /// the save path diffs against this same rendering: not read back as the user
@@ -4084,7 +4082,7 @@ pub fn is_utc(zone: &str) -> bool {
 /// `2026-01-15T13:00:00Z` → `20260115T130000Z`, or `None` for a value that names
 /// no instant.
 ///
-/// The UTC-only sibling of [`to_ical_date_time`]: RFC 8984 §1.4.5's UTCDateTime
+/// The UTC-only sibling of [`to_ical_date_time`]: RFC 8984 §1.4.4's UTCDateTime
 /// and the UTC form of RFC 5545 §3.3.5's DATE-TIME are the same instant written
 /// two ways, and the `Z` is what makes each of them one, so a value without it
 /// is a local time, which these properties have no zone to resolve against and

@@ -327,7 +327,7 @@ fn a_save_with_no_instances_at_all_is_refused() {
 /// sets a start with the zone *object*, and the `TZID` libical then writes is
 /// this: a form RFC 5545 §3.2.19 allows only because the `VTIMEZONE` that
 /// defines it is meant to travel in the same object. Nothing outside libical
-/// resolves it, and it is not an RFC 8984 §1.4.9 `TimeZoneId` either, so an
+/// resolves it, and it is not an RFC 8984 §1.4.8 `TimeZoneId` either, so an
 /// envelope that names it and defines nothing says "some zone" and no more.
 const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
 
@@ -566,7 +566,7 @@ fn utc_is_a_zone_with_nothing_to_define() {
     }
 }
 
-/// An RFC 8984 §1.4.9 custom identifier: no zone database holds it, and the
+/// An RFC 8984 §1.4.8 custom identifier: no zone database holds it, and the
 /// solidus is what makes it the *other* legal form of a `TimeZoneId` rather than
 /// a misspelled IANA name. This is the shape a `VTIMEZONE` written by another
 /// client: an Exchange invitation, an exported `.ics`: arrives under.

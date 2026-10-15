@@ -349,7 +349,7 @@ fn arb_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid Location maps (RFC 8984 §4.4.1 / RFC 5545 LOCATION with X-JMAP-KEY).
+/// Generates valid Location maps (RFC 8984 §4.2.5 / RFC 5545 LOCATION with X-JMAP-KEY).
 fn arb_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         Just("l1".to_string()),
@@ -363,7 +363,7 @@ fn arb_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid VirtualLocation maps (RFC 8984 §4.4.2 / RFC 7986 CONFERENCE with X-JMAP-KEY).
+/// Generates valid VirtualLocation maps (RFC 8984 §4.2.6 / RFC 7986 CONFERENCE with X-JMAP-KEY).
 fn arb_virtual_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![Just("v1".to_string()), Just("v2".to_string())],
@@ -433,7 +433,7 @@ fn arb_links() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid Keywords maps (RFC 8984 §4.1.4 / RFC 5545 CATEGORIES).
+/// Generates valid Keywords maps (RFC 8984 §4.2.9 / RFC 5545 CATEGORIES).
 fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![
@@ -447,7 +447,7 @@ fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid recurrence overrides (RFC 8984 §4.3.4 / RFC 5545 EXDATE and detached VEVENT).
+/// Generates valid recurrence overrides (RFC 8984 §4.3.5 / RFC 5545 EXDATE and detached VEVENT).
 /// Override patches specify properties that differ from the series baseline.
 fn arb_recurrence_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
