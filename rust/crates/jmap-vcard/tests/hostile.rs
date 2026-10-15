@@ -3,10 +3,7 @@
 
 //! Hostile-input tests for server-controlled ContactCard data.
 //!
-//! Map keys become `X-JMAP-KEY` parameter text in rendered vCards.
-//! Keys that can terminate a content line must not inject properties.
-//!
-//! See `docs/AUDIT-FFI.md`, finding F1.
+//! Map keys are rendered as `X-JMAP-KEY` parameter text and must not inject properties.
 
 use std::collections::BTreeMap;
 
