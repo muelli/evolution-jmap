@@ -2248,14 +2248,11 @@ pub fn restore_address_components(
     )
 }
 
-/// The components an edited `N` value states, with every field that still says
-/// exactly what the server built it from given those parts back.
+/// Restores `N` components when an edited field still equals the server-joined
+/// value.
 ///
-/// The `N` value has one field per component kind, so what shares a field here
-/// is two components of the *same* kind: RFC 9553 §2.2.1 states a
-/// double-barrelled given name as two `given` components, and `N`'s second
-/// field holds them both. The treatment is `restore_shared_fields`, the same
-/// one an address's street gets.
+/// RFC 9553 §2.2.1 allows repeated `given` parts that share one `N` slot, so
+/// save re-splits unchanged joined text through `restore_shared_fields`.
 pub fn restore_name_components(
     current: &[NameComponent],
     edited: &[NameComponent],
@@ -2269,23 +2266,17 @@ pub fn restore_name_components(
     )
 }
 
-/// The parts a vCard field was built from, told apart again where the field
-/// still reads as those parts joined.
+/// Restores split components for fields that still equal their original joined
+/// text.
 ///
-/// Several components can share one field — a street name and the house number
-/// standing on it, both halves of a double-barrelled given name — and come back
-/// from the vCard as the single component that field's text was written into.
-/// Left at that, opening a contact and closing it again would flatten the parts
-/// the server had stated separately, so a save asks this first: if the field
-/// still reads as the parts joined, it *is* those parts, unedited, and they are
-/// put back in the order and shape they went out in. If it does not, the user
-/// retyped the field, and it stays the one component they typed — the parts it
-/// was built from cannot be recovered, and keeping the old ones would leave a
-/// house number standing on a street that is no longer there, or half an old
-/// first name beside the new one.
+/// If multiple source parts shared one field, such as street plus house number
+/// or repeated `given` parts, a round trip through vCard returns one merged
+/// component. When edited text still matches the joined source parts, this
+/// restores the original part sequence. Otherwise the field was user-edited
+/// and stays merged.
 ///
-/// `fields` names the positions to look at, `field` says which one a component
-/// is written into, and `value` reads the text a component contributes.
+/// `fields` lists candidate positions, `field` maps a component to a position,
+/// and `value` reads the text each component contributes.
 fn restore_shared_fields<T: Clone>(
     current: &[T],
     edited: &[T],
@@ -2425,19 +2416,12 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
     })
 }
 
-/// The `addresses` entry a `LABEL` line states: the one it names, the one it
-/// matches, or a new one of its own.
+/// Picks the `addresses` key a `LABEL` line belongs to.
 ///
-/// An address stated only in `full` has no `ADR` line, so its key crosses on
-/// the `LABEL` and nowhere else — which is why a key naming no address yet is
-/// taken at its word rather than being replaced by an invented one.
-///
-/// Failing a key there is the `TYPE`, which is how RFC 2426 §3.2.2 has a
-/// `LABEL` say which `ADR` it is the written-out form of. That fallback is
-/// not decoration: `E_CONTACT_ADDRESS_LABEL_HOME` is one of EDS's synthetic
-/// fields, so EDS rebuilds the line from the text alone and the `X-JMAP-KEY`
-/// this side wrote does not survive the trip through Evolution. Without the
-/// fallback every save would then file the label as a second address.
+/// Prefer explicit `X-JMAP-KEY` when it names no conflicting address.
+/// Otherwise match by context and label text, then create a new key. This
+/// fallback is required because EDS synthetic label fields can rebuild `LABEL`
+/// without preserving `X-JMAP-KEY`.
 fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
