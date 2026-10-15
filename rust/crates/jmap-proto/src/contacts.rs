@@ -37,7 +37,7 @@ pub struct AddressBook {
     /// Rights granted to other principals (RFC 9610 §2), keyed by principal id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -157,14 +157,19 @@ impl AddressBookRights {
 
 /// A contact card (RFC 9610 §3): JSContact Card plus JMAP `id` and
 /// `addressBookIds`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address_book_ids: Option<BTreeMap<Id, bool>>,
-    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@type",
+        default = "default_contact_card_type",
+        serialize_with = "serialize_contact_card_type",
+        deserialize_with = "deserialize_contact_card_type"
+    )]
     pub card_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -282,9 +287,55 @@ pub struct ContactCard {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Default for ContactCard {
+    fn default() -> Self {
+        Self {
+            id: None,
+            address_book_ids: None,
+            card_type: Some("Card".to_owned()),
+            kind: None,
+            version: None,
+            language: None,
+            members: None,
+            prod_id: None,
+            uid: None,
+            created: None,
+            updated: None,
+            name: None,
+            nicknames: None,
+            emails: None,
+            phones: None,
+            organizations: None,
+            titles: None,
+            addresses: None,
+            notes: None,
+            anniversaries: None,
+            links: None,
+            calendars: None,
+            scheduling_addresses: None,
+            media: None,
+            online_services: None,
+            keywords: None,
+            related_to: None,
+            crypto_keys: None,
+            directories: None,
+            personal_info: None,
+            speak_to_as: None,
+            preferred_languages: None,
+            localizations: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
 impl ContactCard {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_type(mut self, card_type: impl Into<String>) -> Self {
+        self.card_type = Some(card_type.into());
+        self
     }
 
     pub fn with_id(mut self, id: impl Into<Id>) -> Self {
@@ -408,6 +459,29 @@ impl ContactCard {
     }
 }
 
+fn default_contact_card_type() -> Option<String> {
+    Some("Card".to_owned())
+}
+
+fn serialize_contact_card_type<S>(_value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("Card")
+}
+
+fn deserialize_contact_card_type<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt.as_deref() {
+        Some("Card") | Some("ContactCard") => Ok(Some("Card".to_owned())),
+        Some(other) => Ok(Some(other.to_owned())),
+        None => Ok(Some("Card".to_owned())),
+    }
+}
+
 /// JSContact Name (RFC 9553 §2.2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -420,6 +494,8 @@ pub struct Name {
     pub is_ordered: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_as: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_separator: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -444,6 +520,11 @@ impl Name {
 
     pub fn with_sort_as(mut self, sort_as: BTreeMap<String, String>) -> Self {
         self.sort_as = Some(sort_as);
+        self
+    }
+
+    pub fn with_default_separator(mut self, separator: impl Into<String>) -> Self {
+        self.default_separator = Some(separator.into());
         self
     }
 }
@@ -528,6 +609,10 @@ impl ContactEmail {
         self
     }
 
+    pub fn label(&self) -> Option<&str> {
+        self.extra.get("label").and_then(|v| v.as_str())
+    }
+
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.extra
             .insert("label".to_owned(), Value::String(label.into()));
@@ -572,6 +657,10 @@ impl ContactPhone {
     pub fn with_pref(mut self, pref: u32) -> Self {
         self.pref = Some(pref);
         self
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        self.extra.get("label").and_then(|v| v.as_str())
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -703,6 +792,8 @@ pub struct Address {
     pub time_zone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_separator: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -754,6 +845,11 @@ impl Address {
         self.contexts = Some(contexts);
         self
     }
+
+    pub fn with_default_separator(mut self, separator: impl Into<String>) -> Self {
+        self.default_separator = Some(separator.into());
+        self
+    }
 }
 
 /// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
@@ -789,6 +885,44 @@ impl AddressComponent {
     }
 }
 
+/// An author of a note (RFC 9553 §2.8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Author {
+    #[serde(
+        rename = "@type",
+        default = "default_author_type",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub author_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+fn default_author_type() -> Option<String> {
+    Some("Author".to_owned())
+}
+
+impl Author {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            author_type: Some("Author".to_owned()),
+            name: Some(name.into()),
+            uri: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+}
+
 /// JSContact Note (RFC 9553 §2.8.3): one free-text note about the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -799,10 +933,28 @@ pub struct Note {
     pub note: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<UtcDate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_note_author"
+    )]
     pub author: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn serialize_note_author<S>(value: &Option<Value>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(Value::String(s)) => {
+            let author = Author::new(s);
+            author.serialize(serializer)
+        }
+        Some(v) => v.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 impl Note {
@@ -817,6 +969,98 @@ impl Note {
         self.created = Some(created.into());
         self
     }
+
+    pub fn with_author(mut self, author: Author) -> Self {
+        self.author = Some(serde_json::to_value(author).unwrap_or(Value::Null));
+        self
+    }
+
+    pub fn with_author_name(mut self, name: impl Into<String>) -> Self {
+        self.author = Some(serde_json::json!({
+            "@type": "Author",
+            "name": name.into(),
+        }));
+        self
+    }
+
+    pub fn author_name(&self) -> Option<&str> {
+        let val = self.author.as_ref()?;
+        if let Some(s) = val.as_str() {
+            Some(s)
+        } else {
+            val.get("name").and_then(Value::as_str)
+        }
+    }
+
+    pub fn author(&self) -> Option<Author> {
+        let val = self.author.as_ref()?;
+        if val.is_object() {
+            serde_json::from_value(val.clone()).ok()
+        } else {
+            val.as_str().map(Author::new)
+        }
+    }
+}
+
+/// A partial date (RFC 9553 §2.8.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialDate {
+    #[serde(rename = "@type", default = "default_partial_date_type")]
+    pub date_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub month: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_scale: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+fn default_partial_date_type() -> String {
+    "PartialDate".to_owned()
+}
+
+impl Default for PartialDate {
+    fn default() -> Self {
+        Self {
+            date_type: "PartialDate".to_owned(),
+            year: None,
+            month: None,
+            day: None,
+            calendar_scale: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+impl PartialDate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_year(mut self, year: i32) -> Self {
+        self.year = Some(year);
+        self
+    }
+
+    pub fn with_month(mut self, month: u32) -> Self {
+        self.month = Some(month);
+        self
+    }
+
+    pub fn with_day(mut self, day: u32) -> Self {
+        self.day = Some(day);
+        self
+    }
+
+    pub fn with_calendar_scale(mut self, scale: impl Into<String>) -> Self {
+        self.calendar_scale = Some(scale.into());
+        self
+    }
 }
 
 /// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
@@ -828,10 +1072,55 @@ pub struct Anniversary {
     pub kind: String,
     /// The date itself, kept as it arrived rather than parsed into a shape
     /// of our own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_anniversary_date"
+    )]
     pub date: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn serialize_anniversary_date<S>(value: &Option<Value>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(Value::String(s)) => {
+            if let Some(partial) = parse_iso_partial_date(s) {
+                partial.serialize(serializer)
+            } else {
+                value.serialize(serializer)
+            }
+        }
+        Some(v) => v.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn parse_iso_partial_date(s: &str) -> Option<PartialDate> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() == 3 {
+        let year: i32 = parts[0].parse().ok()?;
+        let month: u32 = parts[1].parse().ok()?;
+        let day: u32 = parts[2].parse().ok()?;
+        Some(
+            PartialDate::new()
+                .with_year(year)
+                .with_month(month)
+                .with_day(day),
+        )
+    } else if parts.len() == 2 {
+        let year: i32 = parts[0].parse().ok()?;
+        let month: u32 = parts[1].parse().ok()?;
+        Some(PartialDate::new().with_year(year).with_month(month))
+    } else if parts.len() == 1 && s.len() == 4 {
+        let year: i32 = s.parse().ok()?;
+        Some(PartialDate::new().with_year(year))
+    } else {
+        None
+    }
 }
 
 impl Anniversary {
@@ -847,12 +1136,60 @@ impl Anniversary {
         self
     }
 
+    pub fn with_partial_date(
+        mut self,
+        year: Option<i32>,
+        month: Option<u32>,
+        day: Option<u32>,
+    ) -> Self {
+        let mut pd = PartialDate::new();
+        pd.year = year;
+        pd.month = month;
+        pd.day = day;
+        self.date = Some(serde_json::to_value(pd).unwrap_or(Value::Null));
+        self
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        self.extra.get("label").and_then(|v| v.as_str())
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.extra
+            .insert("label".to_owned(), Value::String(label.into()));
+        self
+    }
+
+    pub fn pref(&self) -> Option<u32> {
+        self.extra
+            .get("pref")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.extra
+            .insert("pref".to_owned(), Value::Number(pref.into()));
+        self
+    }
+
     pub fn with_place(mut self, place: Address) -> Self {
         self.extra.insert(
             "place".to_owned(),
             serde_json::to_value(place).unwrap_or(Value::Null),
         );
         self
+    }
+
+    pub fn partial_date(&self) -> Option<PartialDate> {
+        let val = self.date.as_ref()?;
+        if val.is_object() {
+            serde_json::from_value(val.clone()).ok()
+        } else if let Some(s) = val.as_str() {
+            parse_iso_partial_date(s)
+        } else {
+            None
+        }
     }
 }
 
@@ -953,10 +1290,15 @@ impl Calendar {
 }
 
 /// JSContact SchedulingAddress (RFC 9553 §2.4.2): one scheduling address of the contact.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchedulingAddress {
-    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@type",
+        default = "default_scheduling_address_type",
+        serialize_with = "serialize_scheduling_address_type",
+        deserialize_with = "deserialize_scheduling_address_type"
+    )]
     pub scheduling_address_type: Option<String>,
     #[serde(default)]
     pub uri: String,
@@ -970,12 +1312,56 @@ pub struct SchedulingAddress {
     pub extra: BTreeMap<String, Value>,
 }
 
+fn default_scheduling_address_type() -> Option<String> {
+    Some("SchedulingAddress".to_owned())
+}
+
+fn serialize_scheduling_address_type<S>(
+    _value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("SchedulingAddress")
+}
+
+fn deserialize_scheduling_address_type<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt.as_deref() {
+        Some("SchedulingAddress") => Ok(Some("SchedulingAddress".to_owned())),
+        Some(other) => Ok(Some(other.to_owned())),
+        None => Ok(Some("SchedulingAddress".to_owned())),
+    }
+}
+
+impl Default for SchedulingAddress {
+    fn default() -> Self {
+        Self {
+            scheduling_address_type: Some("SchedulingAddress".to_owned()),
+            uri: String::new(),
+            contexts: None,
+            pref: None,
+            label: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
 impl SchedulingAddress {
     pub fn new(uri: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
             ..Self::default()
         }
+    }
+
+    pub fn with_type(mut self, address_type: impl Into<String>) -> Self {
+        self.scheduling_address_type = Some(address_type.into());
+        self
     }
 
     pub fn with_pref(mut self, pref: u32) -> Self {
@@ -1324,19 +1710,75 @@ pub mod crypto_key_kind {
 }
 
 /// JSContact Directory (RFC 9553 §2.6.2): a directory service for the contact.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Directory {
+    #[serde(
+        rename = "@type",
+        default = "default_directory_type",
+        serialize_with = "serialize_directory_type",
+        deserialize_with = "deserialize_directory_type"
+    )]
+    pub directory_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default)]
     pub uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_u32"
+    )]
+    pub list_as: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn default_directory_type() -> Option<String> {
+    Some("Directory".to_owned())
+}
+
+fn serialize_directory_type<S>(_value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("Directory")
+}
+
+fn deserialize_directory_type<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt.as_deref() {
+        Some("Directory") => Ok(Some("Directory".to_owned())),
+        Some(other) => Ok(Some(other.to_owned())),
+        None => Ok(Some("Directory".to_owned())),
+    }
+}
+
+impl Default for Directory {
+    fn default() -> Self {
+        Self {
+            directory_type: Some("Directory".to_owned()),
+            kind: None,
+            uri: String::new(),
+            media_type: None,
+            list_as: None,
+            pref: None,
+            label: None,
+            contexts: None,
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 impl Directory {
@@ -1344,10 +1786,13 @@ impl Directory {
         Self {
             kind: Some(kind.into()),
             uri: uri.into(),
-            media_type: None,
-            pref: None,
-            extra: BTreeMap::new(),
+            ..Self::default()
         }
+    }
+
+    pub fn with_type(mut self, directory_type: impl Into<String>) -> Self {
+        self.directory_type = Some(directory_type.into());
+        self
     }
 
     pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
@@ -1355,8 +1800,23 @@ impl Directory {
         self
     }
 
+    pub fn with_list_as(mut self, list_as: u32) -> Self {
+        self.list_as = Some(list_as);
+        self
+    }
+
     pub fn with_pref(mut self, pref: u32) -> Self {
         self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
         self
     }
 }
@@ -1364,6 +1824,63 @@ impl Directory {
 /// Standard RFC 9553 §2.6.2 directory kinds.
 pub mod directory_kind {
     pub const DIRECTORY: &str = "directory";
+    pub const ENTRY: &str = "entry";
+}
+
+fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalU32Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptionalU32Visitor {
+        type Value = Option<u32>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("an unsigned integer or string containing an unsigned integer")
+        }
+
+        fn visit_none<E>(self) -> Result<Option<u32>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Option<u32>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(OptionalU32Visitor)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Option<u32>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(value as u32))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Option<u32>, E>
+        where
+            E: serde::de::Error,
+        {
+            if value >= 0 {
+                Ok(Some(value as u32))
+            } else {
+                Err(E::custom("expected non-negative integer"))
+            }
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Option<u32>, E>
+        where
+            E: serde::de::Error,
+        {
+            value.parse::<u32>().map(Some).map_err(E::custom)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalU32Visitor)
 }
 
 /// JSContact PersonalInfo (RFC 9553 §2.8.4): personal information about the contact.
@@ -1374,8 +1891,14 @@ pub struct PersonalInfo {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_as: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub personal_info_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_u32"
+    )]
+    pub list_as: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -1385,13 +1908,19 @@ impl PersonalInfo {
         Self {
             kind: kind.into(),
             value: Some(value.into()),
+            personal_info_type: None,
             list_as: None,
             extra: BTreeMap::new(),
         }
     }
 
-    pub fn with_list_as(mut self, list_as: impl Into<String>) -> Self {
-        self.list_as = Some(list_as.into());
+    pub fn with_type(mut self, info_type: impl Into<String>) -> Self {
+        self.personal_info_type = Some(info_type.into());
+        self
+    }
+
+    pub fn with_list_as(mut self, list_as: u32) -> Self {
+        self.list_as = Some(list_as);
         self
     }
 }
@@ -1405,12 +1934,17 @@ pub mod personal_info_kind {
 }
 
 /// JSContact CardGroup (RFC 9553 §2.1.2): a group of contact cards.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
-    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@type",
+        default = "default_card_group_type",
+        serialize_with = "serialize_card_group_type",
+        deserialize_with = "deserialize_card_group_type"
+    )]
     pub card_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -1420,14 +1954,52 @@ pub struct CardGroup {
     pub extra: BTreeMap<String, Value>,
 }
 
+fn default_card_group_type() -> Option<String> {
+    Some("CardGroup".to_owned())
+}
+
+fn serialize_card_group_type<S>(_value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("CardGroup")
+}
+
+fn deserialize_card_group_type<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt.as_deref() {
+        Some("CardGroup") | Some("Group") | Some("Card") => Ok(Some("CardGroup".to_owned())),
+        Some(other) => Ok(Some(other.to_owned())),
+        None => Ok(Some("CardGroup".to_owned())),
+    }
+}
+
+impl Default for CardGroup {
+    fn default() -> Self {
+        Self {
+            id: None,
+            card_type: Some("CardGroup".to_owned()),
+            name: None,
+            members: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
 impl CardGroup {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
-            card_type: Some("Group".to_owned()),
             name: Some(name.into()),
-            members: None,
             ..Self::default()
         }
+    }
+
+    pub fn with_type(mut self, card_type: impl Into<String>) -> Self {
+        self.card_type = Some(card_type.into());
+        self
     }
 
     pub fn with_members(mut self, members: BTreeMap<String, bool>) -> Self {

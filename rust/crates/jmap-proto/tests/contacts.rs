@@ -327,22 +327,14 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
         )])),
         directories: Some(BTreeMap::from([(
             "d1".to_owned(),
-            Directory {
-                kind: Some(directory_kind::DIRECTORY.to_owned()),
-                uri: "ldap://ldap.example.com/ou=people".to_owned(),
-                media_type: None,
-                pref: None,
-                extra: BTreeMap::new(),
-            },
+            Directory::new(
+                directory_kind::DIRECTORY,
+                "ldap://ldap.example.com/ou=people",
+            ),
         )])),
         personal_info: Some(BTreeMap::from([(
             "pi1".to_owned(),
-            PersonalInfo {
-                kind: personal_info_kind::EXPERTISE.to_owned(),
-                value: Some("Rust Programming".to_owned()),
-                list_as: Some("Developer".to_owned()),
-                extra: BTreeMap::new(),
-            },
+            PersonalInfo::new(personal_info_kind::EXPERTISE, "Rust Programming").with_list_as(1),
         )])),
         ..ContactCard::default()
     };
@@ -363,7 +355,7 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
 
     let group = CardGroup {
         id: Some("G1".into()),
-        card_type: Some("Group".to_owned()),
+        card_type: Some("CardGroup".to_owned()),
         name: Some("Core Team".to_owned()),
         members: Some(BTreeMap::from([
             ("urn:uuid:c1".to_owned(), true),
@@ -372,7 +364,7 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
         extra: BTreeMap::new(),
     };
     let g_val = serde_json::to_value(&group).unwrap();
-    assert_eq!(g_val["@type"], "Group");
+    assert_eq!(g_val["@type"], "CardGroup");
     assert_eq!(g_val["name"], "Core Team");
     assert_eq!(g_val["members"]["urn:uuid:c1"], true);
 
@@ -534,8 +526,8 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
 #[test]
 fn jscontact_spec_properties_roundtrip() {
     use jmap_proto::contacts::{
-        Address, AddressBook, Calendar, ContactCard, Link, Media, Name, Nickname, Note,
-        OnlineService, OrgUnit, Organization, Title,
+        Address, AddressBook, AddressBookRights, Author, Calendar, ContactCard, Link, Media, Name,
+        Nickname, Note, OnlineService, OrgUnit, Organization, Title,
     };
     use jmap_proto::state::UtcDate;
     use std::collections::BTreeMap;
@@ -543,11 +535,11 @@ fn jscontact_spec_properties_roundtrip() {
     let book = AddressBook {
         id: Some("ab_custom".into()),
         name: "Custom Book".to_owned(),
-        may_delete: Some(true),
+        my_rights: Some(AddressBookRights::all()),
         ..AddressBook::default()
     };
     let b_json = serde_json::to_value(&book).unwrap();
-    assert_eq!(b_json["mayDelete"], true);
+    assert_eq!(b_json["myRights"]["mayDelete"], true);
     assert_eq!(serde_json::from_value::<AddressBook>(b_json).unwrap(), book);
 
     let created_date = UtcDate::new("2026-08-29T12:00:00Z");
@@ -612,12 +604,9 @@ fn jscontact_spec_properties_roundtrip() {
         )])),
         notes: Some(BTreeMap::from([(
             "n1".to_owned(),
-            Note {
-                note: "First computer programmer".to_owned(),
-                created: Some(created_date.clone()),
-                author: Some(serde_json::json!("Charles Babbage")),
-                ..Note::default()
-            },
+            Note::new("First computer programmer")
+                .with_created(created_date.clone())
+                .with_author(Author::new("Charles Babbage")),
         )])),
         links: Some(BTreeMap::from([(
             "l1".to_owned(),
@@ -685,7 +674,8 @@ fn jscontact_spec_properties_roundtrip() {
         c_json["addresses"]["a1"]["coordinates"],
         "geo:51.5074,-0.1364"
     );
-    assert_eq!(c_json["notes"]["n1"]["author"], "Charles Babbage");
+    assert_eq!(c_json["notes"]["n1"]["author"]["@type"], "Author");
+    assert_eq!(c_json["notes"]["n1"]["author"]["name"], "Charles Babbage");
     assert_eq!(c_json["links"]["l1"]["mediaType"], "text/html");
     assert_eq!(c_json["links"]["l1"]["label"], "Personal Website");
     assert_eq!(c_json["calendars"]["c1"]["mediaType"], "text/calendar");
@@ -843,10 +833,7 @@ fn contact_card_parse_response_and_domain_builders() {
         .with_label("Direct");
     assert_eq!(email.address, "alice@example.com");
     assert_eq!(email.pref, Some(1));
-    assert_eq!(
-        email.extra.get("label").and_then(|v| v.as_str()),
-        Some("Direct")
-    );
+    assert_eq!(email.label(), Some("Direct"));
 
     let phone = ContactPhone::new("+123456789")
         .with_contexts(serde_json::json!({"work": true}))
@@ -855,10 +842,7 @@ fn contact_card_parse_response_and_domain_builders() {
         .with_label("Mobile");
     assert_eq!(phone.number, "+123456789");
     assert_eq!(phone.pref, Some(1));
-    assert_eq!(
-        phone.extra.get("label").and_then(|v| v.as_str()),
-        Some("Mobile")
-    );
+    assert_eq!(phone.label(), Some("Mobile"));
 
     let org = Organization::new("Acme Corp")
         .with_units([OrgUnit::new("Engineering").with_sort_as("Eng")])
@@ -926,8 +910,9 @@ fn contact_card_parse_response_and_domain_builders() {
         .with_pref(1);
     assert_eq!(dir.kind.as_deref(), Some("directory"));
 
-    let info = PersonalInfo::new("hobby", "Photography").with_list_as("Photo");
+    let info = PersonalInfo::new("hobby", "Photography").with_list_as(1);
     assert_eq!(info.kind, "hobby");
+    assert_eq!(info.list_as, Some(1));
 
     let group =
         CardGroup::new("Team Alpha").with_members(BTreeMap::from([("c1".to_string(), true)]));
@@ -1059,4 +1044,219 @@ fn name_component_and_address_component_phonetic_and_builders() {
     assert_eq!(address_component_kind::COUNTRY_CODE, "countryCode");
     assert_eq!(address_component_kind::POST_OFFICE_BOX, "postOfficeBox");
     assert_eq!(address_component_kind::SUBDISTRICT, "subdistrict");
+}
+
+#[test]
+fn card_group_type_must_be_card_group() {
+    use jmap_proto::contacts::CardGroup;
+
+    let group = CardGroup::new("Engineering Team");
+    let json = serde_json::to_value(&group).expect("serialize card group");
+    assert_eq!(
+        json["@type"], "CardGroup",
+        "RFC 9553 Section 3 requires @type to be CardGroup"
+    );
+
+    // Deserialization tolerates legacy Group and Card forms
+    let legacy_group: CardGroup = serde_json::from_value(serde_json::json!({
+        "@type": "Group",
+        "name": "Legacy Group"
+    }))
+    .expect("deserialize legacy group");
+    assert_eq!(legacy_group.card_type.as_deref(), Some("CardGroup"));
+
+    let card_group: CardGroup = serde_json::from_value(serde_json::json!({
+        "@type": "Card",
+        "name": "Normalized Group"
+    }))
+    .expect("deserialize normalized group");
+    assert_eq!(card_group.card_type.as_deref(), Some("CardGroup"));
+}
+
+#[test]
+fn contact_card_always_serializes_type_card() {
+    let card = ContactCard::new();
+    let json = serde_json::to_value(&card).expect("serialize default contact card");
+    assert_eq!(
+        json["@type"], "Card",
+        "RFC 9553 Section 2.1.1 requires @type to be Card on root"
+    );
+
+    // Deserialization without @type defaults to Some("Card")
+    let deserialized: ContactCard = serde_json::from_value(serde_json::json!({
+        "name": {"full": "Alice"}
+    }))
+    .expect("deserialize card without type");
+    assert_eq!(deserialized.card_type.as_deref(), Some("Card"));
+}
+
+#[test]
+fn address_book_may_delete_omitted_on_root_serialization() {
+    // Tolerant on input: accepts mayDelete at root if server sends it
+    let book: AddressBook = serde_json::from_value(serde_json::json!({
+        "name": "Test Book",
+        "mayDelete": true
+    }))
+    .expect("deserialize book with root mayDelete");
+    assert_eq!(book.may_delete, Some(true));
+
+    // Strict on output: RFC 9610 Section 2 defines mayDelete only on myRights, never on AddressBook root
+    let json = serde_json::to_value(&book).expect("serialize address book");
+    assert!(
+        json.get("mayDelete").is_none(),
+        "RFC 9610 Section 2 forbids mayDelete on AddressBook root"
+    );
+}
+
+#[test]
+fn anniversary_partial_date_and_string_normalization() {
+    use jmap_proto::contacts::{Anniversary, PartialDate, anniversary_kind};
+
+    // 1. PartialDate model and builder
+    let partial = PartialDate::new()
+        .with_year(1990)
+        .with_month(5)
+        .with_day(12);
+    let json_partial = serde_json::to_value(&partial).expect("serialize partial date");
+    assert_eq!(json_partial["@type"], "PartialDate");
+    assert_eq!(json_partial["year"], 1990);
+    assert_eq!(json_partial["month"], 5);
+    assert_eq!(json_partial["day"], 12);
+
+    let ann = Anniversary::new(anniversary_kind::BIRTH)
+        .with_partial_date(Some(1990), Some(5), Some(12))
+        .with_label("Birthday")
+        .with_pref(1);
+    let json_ann = serde_json::to_value(&ann).expect("serialize anniversary");
+    assert_eq!(json_ann["kind"], "birth");
+    assert_eq!(json_ann["label"], "Birthday");
+    assert_eq!(json_ann["pref"], 1);
+    assert_eq!(json_ann["date"]["@type"], "PartialDate");
+    assert_eq!(json_ann["date"]["year"], 1990);
+
+    // 2. String date on write is normalized to RFC 9553 PartialDate
+    let ann_str = Anniversary::new(anniversary_kind::WEDDING)
+        .with_date(serde_json::Value::String("2015-09-20".to_owned()));
+    let json_ann_str = serde_json::to_value(&ann_str).expect("serialize string anniversary");
+    assert_eq!(json_ann_str["date"]["@type"], "PartialDate");
+    assert_eq!(json_ann_str["date"]["year"], 2015);
+    assert_eq!(json_ann_str["date"]["month"], 9);
+    assert_eq!(json_ann_str["date"]["day"], 20);
+
+    // 3. Deserialization accepts both PartialDate object and plain string date
+    let from_obj: Anniversary = serde_json::from_value(json_ann).expect("deserialize from obj");
+    assert!(from_obj.date.is_some());
+    assert_eq!(from_obj.label(), Some("Birthday"));
+    assert_eq!(from_obj.pref(), Some(1));
+
+    let from_str: Anniversary = serde_json::from_value(serde_json::json!({
+        "kind": "birth",
+        "date": "1990-05-12"
+    }))
+    .expect("deserialize from string");
+    assert!(from_str.date.is_some());
+}
+
+#[test]
+fn note_author_object_and_string_tolerance() {
+    use jmap_proto::contacts::{Author, Note};
+
+    let author = Author::new("Alice Reviewer").with_uri("mailto:alice@example.org");
+    let note = Note::new("Meeting minutes").with_author(author);
+    let json = serde_json::to_value(&note).expect("serialize note");
+    assert_eq!(json["author"]["@type"], "Author");
+    assert_eq!(json["author"]["name"], "Alice Reviewer");
+    assert_eq!(json["author"]["uri"], "mailto:alice@example.org");
+
+    // Deserialization accepts Author object
+    let from_obj: Note = serde_json::from_value(json).expect("deserialize note from obj");
+    assert_eq!(from_obj.author_name(), Some("Alice Reviewer"));
+
+    // Deserialization accepts plain string author and serializes to Author object
+    let from_str: Note = serde_json::from_value(serde_json::json!({
+        "note": "Quick note",
+        "author": "Bob"
+    }))
+    .expect("deserialize note from string");
+    assert_eq!(from_str.author_name(), Some("Bob"));
+    let json_from_str = serde_json::to_value(&from_str).expect("serialize string note");
+    assert_eq!(json_from_str["author"]["@type"], "Author");
+    assert_eq!(json_from_str["author"]["name"], "Bob");
+}
+
+#[test]
+fn rfc9553_sub_type_properties_roundtrip() {
+    use jmap_proto::contacts::{
+        Address, ContactEmail, ContactPhone, Directory, Name, PersonalInfo, SchedulingAddress,
+    };
+
+    // Name defaultSeparator
+    let name = Name::new("Alice Smith").with_default_separator(" ");
+    let json_name = serde_json::to_value(&name).expect("serialize name");
+    assert_eq!(json_name["defaultSeparator"], " ");
+    let de_name: Name = serde_json::from_value(json_name).expect("deserialize name");
+    assert_eq!(de_name.default_separator.as_deref(), Some(" "));
+
+    // Address defaultSeparator
+    let addr = Address::new()
+        .with_full("123 Main St")
+        .with_default_separator("\n");
+    let json_addr = serde_json::to_value(&addr).expect("serialize address");
+    assert_eq!(json_addr["defaultSeparator"], "\n");
+    let de_addr: Address = serde_json::from_value(json_addr).expect("deserialize address");
+    assert_eq!(de_addr.default_separator.as_deref(), Some("\n"));
+
+    // ContactEmail label
+    let email = ContactEmail::new("alice@example.org").with_label("Work Inbox");
+    let json_email = serde_json::to_value(&email).expect("serialize email");
+    assert_eq!(json_email["label"], "Work Inbox");
+    let de_email: ContactEmail = serde_json::from_value(json_email).expect("deserialize email");
+    assert_eq!(de_email.label(), Some("Work Inbox"));
+
+    // ContactPhone label
+    let phone = ContactPhone::new("+123456789").with_label("Personal Mobile");
+    let json_phone = serde_json::to_value(&phone).expect("serialize phone");
+    assert_eq!(json_phone["label"], "Personal Mobile");
+    let de_phone: ContactPhone = serde_json::from_value(json_phone).expect("deserialize phone");
+    assert_eq!(de_phone.label(), Some("Personal Mobile"));
+
+    // SchedulingAddress @type and label
+    let sched = SchedulingAddress::new("mailto:sched@example.org")
+        .with_type("SchedulingAddress")
+        .with_label("Office Calendar");
+    let json_sched = serde_json::to_value(&sched).expect("serialize scheduling address");
+    assert_eq!(json_sched["@type"], "SchedulingAddress");
+    assert_eq!(json_sched["label"], "Office Calendar");
+    let de_sched: SchedulingAddress =
+        serde_json::from_value(json_sched).expect("deserialize sched");
+    assert_eq!(
+        de_sched.scheduling_address_type.as_deref(),
+        Some("SchedulingAddress")
+    );
+    assert_eq!(de_sched.label.as_deref(), Some("Office Calendar"));
+
+    // PersonalInfo type and listAs
+    let info = PersonalInfo::new("hobby", "Woodworking")
+        .with_type("craft")
+        .with_list_as(2);
+    let json_info = serde_json::to_value(&info).expect("serialize personal info");
+    assert_eq!(json_info["type"], "craft");
+    assert_eq!(json_info["listAs"], 2);
+    let de_info: PersonalInfo =
+        serde_json::from_value(json_info).expect("deserialize personal info");
+    assert_eq!(de_info.personal_info_type.as_deref(), Some("craft"));
+    assert_eq!(de_info.list_as, Some(2));
+
+    // Directory listAs, label, contexts
+    let dir = Directory::new("directory", "https://dir.example.org")
+        .with_list_as(1)
+        .with_label("Public Staff Directory")
+        .with_contexts(serde_json::json!({"work": true}));
+    let json_dir = serde_json::to_value(&dir).expect("serialize directory");
+    assert_eq!(json_dir["listAs"], 1);
+    assert_eq!(json_dir["label"], "Public Staff Directory");
+    assert_eq!(json_dir["@type"], "Directory");
+    let de_dir: Directory = serde_json::from_value(json_dir).expect("deserialize directory");
+    assert_eq!(de_dir.list_as, Some(1));
+    assert_eq!(de_dir.label.as_deref(), Some("Public Staff Directory"));
 }

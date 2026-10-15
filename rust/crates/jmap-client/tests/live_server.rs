@@ -73,7 +73,9 @@ use jmap_proto::calendars::{
     CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
 };
 use jmap_proto::contacts::{
-    AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter, OnlineService,
+    Address, AddressBook, AddressComponent, Anniversary, Author, ContactCard,
+    ContactCardParseRequest, ContactCardQueryFilter, ContactEmail, ContactPhone, Directory, Name,
+    NameComponent, Note, OnlineService, PersonalInfo, SchedulingAddress,
 };
 use jmap_proto::error::method;
 use jmap_proto::mail::{
@@ -5217,6 +5219,239 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
     );
 
     // 3. Clean up created contact:
+    client
+        .contact_destroy(&account_id, &card_id)
+        .expect("contact_destroy must succeed on Stalwart");
+}
+
+/// `ContactCard/set` create and subsequent `ContactCard/get` against a real server,
+/// verifying round-trip fidelity for JSContact RFC 9553 and JMAP RFC 9610 shapes.
+///
+/// Documents Stalwart behavior on each changed shape:
+/// 1. `Name.defaultSeparator`: preserved on storage.
+/// 2. `Address.defaultSeparator`: preserved when `components` and `isOrdered: true` are present.
+/// 3. `anniversaries`: `PartialDate` object, `label`, and `pref` preserved on storage.
+/// 4. `emails` and `phones`: `label` preserved on storage.
+/// 5. `notes`: `Author` object (`@type: "Author"`, `name`, `uri`) preserved on storage.
+/// 6. `schedulingAddresses`: `label` and `@type` preserved on storage.
+/// 7. `personalInfo`: `type` and `listAs` preserved on storage.
+/// 8. `Directory`: Stalwart accepts create and preserves `listAs`, but drops `label` upon
+///    storage (Finding 26).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping live contact card shapes test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+
+    let books = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server");
+    let book_id = books
+        .iter()
+        .find(|b| b.is_default == Some(true))
+        .or_else(|| books.first())
+        .and_then(|b| b.id.clone())
+        .expect("no address book available for contact card create");
+
+    let suffix = unique_suffix();
+    let full_name = format!("RFC9553 Test-{}", suffix);
+
+    let mut card = ContactCard::simple(book_id, &full_name, "rfc9553@example.org");
+
+    // 1. Name defaultSeparator and components
+    card.name = Some(
+        Name::new(&full_name)
+            .with_default_separator(" ")
+            .with_components([
+                NameComponent::new("given", "RFC9553"),
+                NameComponent::new("surname", format!("Test-{}", suffix)),
+            ]),
+    );
+
+    // 2. Address defaultSeparator with components and isOrdered
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a1".to_string(),
+        Address::new()
+            .with_full("100 Innovation Way\nTech City, CA 94000")
+            .with_default_separator("\n")
+            .is_ordered(true)
+            .with_components([
+                AddressComponent::new("name", "100 Innovation Way"),
+                AddressComponent::new("locality", "Tech City"),
+                AddressComponent::new("region", "CA"),
+                AddressComponent::new("postcode", "94000"),
+            ]),
+    );
+    card.addresses = Some(addresses);
+
+    // 3. Anniversaries PartialDate, label, and pref
+    let mut anniversaries = BTreeMap::new();
+    anniversaries.insert(
+        "y1".to_string(),
+        Anniversary::new("birth")
+            .with_partial_date(Some(1990), Some(5), Some(12))
+            .with_label("Birthday")
+            .with_pref(1),
+    );
+    card.anniversaries = Some(anniversaries);
+
+    // 4. ContactEmail and ContactPhone label
+    let mut emails = BTreeMap::new();
+    emails.insert(
+        "e1".to_string(),
+        ContactEmail::new("rfc9553@example.org").with_label("Direct"),
+    );
+    card.emails = Some(emails);
+
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_string(),
+        ContactPhone::new("+15551234567").with_label("Mobile"),
+    );
+    card.phones = Some(phones);
+
+    // 5. Notes Author object
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_string(),
+        Note::new("RFC 9553 conformance verification")
+            .with_author(Author::new("Test Runner").with_uri("mailto:runner@example.org")),
+    );
+    card.notes = Some(notes);
+
+    // 6. SchedulingAddress label
+    let mut scheds = BTreeMap::new();
+    scheds.insert(
+        "s1".to_string(),
+        SchedulingAddress::new("mailto:sched@example.org")
+            .with_type("SchedulingAddress")
+            .with_label("Office Calendar"),
+    );
+    card.scheduling_addresses = Some(scheds);
+
+    // 7. PersonalInfo type and listAs
+    let mut personal_info = BTreeMap::new();
+    personal_info.insert(
+        "pi1".to_string(),
+        PersonalInfo::new("hobby", "Woodworking")
+            .with_type("craft")
+            .with_list_as(2),
+    );
+    card.personal_info = Some(personal_info);
+
+    // 8. Directory listAs and label
+    let mut directories = BTreeMap::new();
+    directories.insert(
+        "d1".to_string(),
+        Directory::new("directory", "https://dir.example.org")
+            .with_list_as(1)
+            .with_label("Public Staff Directory"),
+    );
+    card.directories = Some(directories);
+
+    // Create card on Stalwart:
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("contact_create with RFC 9553 shapes must succeed on Stalwart");
+    let card_id = created.id.expect("created card must have an id");
+
+    // Fetch the card back:
+    let fetched = client
+        .contact_get(&account_id, std::slice::from_ref(&card_id))
+        .expect("contact_get must succeed on Stalwart");
+    assert_eq!(fetched.list.len(), 1);
+    let fetched_card = &fetched.list[0];
+
+    // Verify Name defaultSeparator:
+    assert_eq!(
+        fetched_card
+            .name
+            .as_ref()
+            .and_then(|n| n.default_separator.as_deref()),
+        Some(" ")
+    );
+
+    // Verify Address defaultSeparator:
+    let fetched_addr = fetched_card
+        .addresses
+        .as_ref()
+        .and_then(|m| m.get("a1"))
+        .expect("address a1 must be present");
+    assert_eq!(fetched_addr.default_separator.as_deref(), Some("\n"));
+
+    // Verify Anniversaries:
+    let fetched_ann = fetched_card
+        .anniversaries
+        .as_ref()
+        .and_then(|m| m.get("y1"))
+        .expect("anniversary y1 must be present");
+    assert_eq!(fetched_ann.label(), Some("Birthday"));
+    assert_eq!(fetched_ann.pref(), Some(1));
+    assert!(fetched_ann.partial_date().is_some());
+
+    // Verify Emails label:
+    let fetched_email = fetched_card
+        .emails
+        .as_ref()
+        .and_then(|m| m.get("e1"))
+        .expect("email e1 must be present");
+    assert_eq!(fetched_email.label(), Some("Direct"));
+
+    // Verify Phones label:
+    let fetched_phone = fetched_card
+        .phones
+        .as_ref()
+        .and_then(|m| m.get("p1"))
+        .expect("phone p1 must be present");
+    assert_eq!(fetched_phone.label(), Some("Mobile"));
+
+    // Verify Notes Author object:
+    let fetched_note = fetched_card
+        .notes
+        .as_ref()
+        .and_then(|m| m.get("n1"))
+        .expect("note n1 must be present");
+    assert_eq!(fetched_note.author_name(), Some("Test Runner"));
+
+    // Verify SchedulingAddress:
+    let fetched_sched = fetched_card
+        .scheduling_addresses
+        .as_ref()
+        .and_then(|m| m.get("s1"))
+        .expect("scheduling address s1 must be present");
+    assert_eq!(fetched_sched.label.as_deref(), Some("Office Calendar"));
+
+    // Verify PersonalInfo:
+    let fetched_info = fetched_card
+        .personal_info
+        .as_ref()
+        .and_then(|m| m.get("pi1"))
+        .expect("personalInfo pi1 must be present");
+    assert_eq!(fetched_info.personal_info_type.as_deref(), Some("craft"));
+    assert_eq!(fetched_info.list_as, Some(2));
+
+    // Verify Directory: listAs is preserved; label is dropped by Stalwart (Finding 26)
+    let fetched_dir = fetched_card
+        .directories
+        .as_ref()
+        .and_then(|m| m.get("d1"))
+        .expect("directory d1 must be present");
+    assert_eq!(fetched_dir.list_as, Some(1));
+    assert!(
+        fetched_dir.label.is_none(),
+        "Stalwart v1.0.0 drops Directory.label on storage (Finding 26)"
+    );
+
+    // Clean up created contact:
     client
         .contact_destroy(&account_id, &card_id)
         .expect("contact_destroy must succeed on Stalwart");
