@@ -646,9 +646,7 @@ fn service_property(service: &str) -> Option<&'static str> {
         .map(|(_, property)| *property)
 }
 
-/// The service a vCard property states handles for, spelled as
-/// [`ONLINE_SERVICES`] spells it — which is what a handle the user has just
-/// typed is filed under, since the line EDS wrote names no service but itself.
+/// The service name for a mapped IM property, using [`ONLINE_SERVICES`] spelling.
 fn service_of(property: &str) -> Option<&'static str> {
     ONLINE_SERVICES
         .iter()
@@ -656,14 +654,9 @@ fn service_of(property: &str) -> Option<&'static str> {
         .map(|(name, _)| *name)
 }
 
-/// Whether two service names name the same service.
+/// Whether two service names are equivalent for mapping lookups.
 ///
-/// RFC 9553 §2.3.2 requires case-insensitive equality; this is wider, ignoring
-/// the punctuation and spacing inside the name as well, because `Gadu-Gadu`,
-/// `GaduGadu` and `gadu gadu` are one service under three spellings. Being wide
-/// here is the safe direction: the mapping uses this to decide *not* to write,
-/// so a match the RFC does not demand leaves the server's own spelling alone,
-/// while a miss would rename it.
+/// Compares case-insensitively and ignores punctuation and spacing aliases.
 pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     match (one, other) {
         (Some(one), Some(other)) => normalised_service(one) == normalised_service(other),
@@ -681,16 +674,9 @@ fn normalised_service(name: &str) -> String {
         .collect()
 }
 
-/// The slot a handle goes in: the `TYPE` value EDS reads to decide which of
-/// Evolution's per-context fields shows it.
+/// The EDS IM slot for this handle.
 ///
-/// Chosen from the entry's `contexts`, which is as far as that member crosses:
-/// nothing is read back off the parameter, because every line has to carry one
-/// to be visible at all and reading it would put a context on every entry that
-/// stated none. Exactly one slot per line — a handle wearing both `TYPE`s shows
-/// up in two fields the user can edit independently, and nothing would say which
-/// edit wins — so a service used at work *and* privately, or in a context vCard
-/// 3.0 cannot spell, lands in [`DEFAULT_SLOT`], where the user looks first.
+/// Uses JSContact `contexts`; ambiguous or unsupported contexts fall back to [`DEFAULT_SLOT`].
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
         service
@@ -708,13 +694,7 @@ fn service_slot(service: &OnlineService) -> &'static str {
 
 /// Whether one `keywords` entry can be emitted on `CATEGORIES`.
 ///
-/// `CATEGORIES` is a set line, so this predicate is the shared gate for both
-/// what we draw and what the save path treats as "stated". Refused tags are
-/// restored by save logic instead of being treated as user removals.
-///
-/// A tag is renderable only when its set value is `true`, the name is not
-/// empty, it has no carriage return (the writer strips it), and it has no edge
-/// whitespace that EDS would trim.
+/// Accepts only `true` set members with non-empty, trim-stable names and no carriage return.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
@@ -741,17 +721,10 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
         .collect()
 }
 
-/// The tags the card is filed under, as a JSContact `keywords` Set.
+/// Tags from all `CATEGORIES` lines as a JSContact `keywords` Set.
 ///
-/// Reads every `CATEGORIES` line. EDS edits only the first one, so retaining
-/// later lines avoids deleting unseen tags on the next save.
-///
-/// A duplicate tag is kept once because this is a set. Empty items are dropped:
-/// the tag whose name is nothing: `CATEGORIES:` and `CATEGORIES:a,,b` state
-/// nothing between their separators.
-///
-/// Returns `None` instead of an empty map so "no CATEGORIES line" stays
-/// distinct from "explicitly untagged" in save comparisons.
+/// Returns `None` when no non-empty tags are present, so absence stays distinct
+/// from an explicit empty set in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
@@ -763,8 +736,7 @@ fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     (!tags.is_empty()).then_some(tags)
 }
 
-/// Whether an email address reaches the user at all. An entry with no
-/// address states nothing, so it gets no `EMAIL` line.
+/// Whether an email address reaches the user at all.
 pub fn states_email(email: &ContactEmail) -> bool {
     !email.address.is_empty()
 }
@@ -774,49 +746,35 @@ pub fn states_phone(phone: &ContactPhone) -> bool {
     !phone.number.is_empty()
 }
 
-/// Whether a title reaches the user at all: the mapping must have a property
-/// for its `kind` *and* the entry must name something.
+/// Whether a title reaches the user at all.
 ///
-/// The kind alone is not the question. A title of kind `title` that names
-/// nothing has no `TITLE` line either, and asking only `maps_title_kind`
-/// would call it visible and let a save delete it.
+/// The title must have a mapped `kind` and a non-empty `name`.
 pub fn states_title(title: &Title) -> bool {
     !title.name.is_empty() && maps_title_kind(title.kind.as_deref())
 }
 
-/// Whether an organisation reaches the user at all — whether the `ORG` line
-/// has a name or a unit to state. An entry holding only a `sortAs` has
-/// neither.
+/// Whether an organisation reaches the user at all.
 pub fn states_organization(organization: &Organization) -> bool {
     organization_components(organization).is_some()
 }
 
 /// Whether the `ORG` line written for an organisation states this unit.
 ///
-/// [`states_name_component`]' question one property over, and the reason a
-/// save has to ask it is the same: `organization_components` leaves out a
-/// unit that names nothing, so reading its absence from the edited line as a
-/// removal deletes a unit the user was never shown. Unlike a component there
-/// is no second half to the question — every unit that *has* a name is
-/// written, however many of them there are, because `ORG` takes as many
-/// components as the entry has units.
+/// Units with empty names are not emitted and are therefore invisible to edits.
 pub fn states_org_unit(unit: &OrgUnit) -> bool {
     !unit.name.is_empty()
 }
 
-/// Whether an anniversary reaches the user at all: the mapping must have a
-/// property for its `kind` *and* its date must name one calendar day.
+/// Whether an anniversary reaches the user at all.
+///
+/// The anniversary must have a mapped `kind` and a value that resolves to one day.
 pub fn states_anniversary(anniversary: &Anniversary) -> bool {
     anniversary_property(&anniversary.kind).is_some() && anniversary_date(anniversary).is_some()
 }
 
-/// The date a vCard line states for an anniversary, or `None` for a date no
-/// single day can be read out of.
+/// The day a vCard anniversary line states, if one can be read.
 ///
-/// This is what the save compares by, rather than the JSON: the two shapes
-/// RFC 9553 §2.8.1 allows can name the same day, so a card whose birthday is
-/// a `Timestamp` must not look edited merely because it came back as the day
-/// the user was shown.
+/// Save compares this canonical day so equivalent JSContact day shapes stay equal.
 pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     let date = anniversary.date.as_ref()?;
     // A `Timestamp` states a point in time. The day it falls on is read in
@@ -834,13 +792,9 @@ pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     day.survives_the_field_it_lands_in().then(|| day.text())
 }
 
-/// Whether an anniversary is dated by a point in time (RFC 9553 §2.8.1's
-/// `Timestamp`) rather than by a calendar day (its `PartialDate`).
+/// Whether an anniversary value is a point-in-time `Timestamp`.
 ///
-/// The save asks because the two are patched differently: a day's members can
-/// be reached into one at a time, leaving whatever else the object carries in
-/// place, while a point in time the user has retyped as a day is a different
-/// kind of object and has to be written whole.
+/// Save logic patches timestamps differently from calendar-day objects.
 pub fn states_a_point_in_time(anniversary: &Anniversary) -> bool {
     anniversary
         .date
@@ -868,15 +822,14 @@ struct Day {
 }
 
 impl Day {
-    /// The day as RFC 2426 §3.1.5 asks for it — ISO 8601's extended form,
-    /// which is also the one `e_contact_date_to_string()` writes back.
+    /// The day in RFC 2426 §3.1.5 form (`YYYY-MM-DD`).
     fn text(&self) -> String {
         format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
     }
 
-    /// Whether the numbers name a day of a kind the calendar has. Which
-    /// months are 30 days long is left to the server that stated the date;
-    /// what is refused here is a date no month could have.
+    /// Whether the numbers describe a calendar day.
+    ///
+    /// Rejects impossible month/day combinations.
     fn is_a_date(&self) -> bool {
         (1..=9999).contains(&self.year)
             && (1..=12).contains(&self.month)
