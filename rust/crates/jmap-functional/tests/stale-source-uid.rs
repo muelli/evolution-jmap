@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The headless answer to the operator's 2026-08-29 observation —
+//! The headless answer to an operator observation:
 //! `evolution-source-registry` logging
 //!
 //! ```text
@@ -160,9 +160,8 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
     assert_eq!(
         seen.get("dangling-uid-in-registry"),
         Some(&"0"),
-        "the registry has a source for a UID that exists only in dconf. That \
-         would be the mechanism item 26 asks about, and it would mean EDS \
-         fabricates sources from GSettings\n{report}"
+        "the registry has a source for a UID that exists only in dconf, which \
+         would mean EDS fabricates sources from GSettings\n{report}"
     );
     let default_mail_account = seen
         .get("default-mail-account-uid")
@@ -261,8 +260,8 @@ fn run_collection_child(name: &str, password: Option<&str>) -> (String, String, 
         !configured.exists(),
         "a collection child has a keyfile at {configured:?}. If EDS has started \
          writing children to the config directory, then 'this UID matches no \
-         configured source' really would be evidence of debris and item 26's \
-         premise needs revisiting\n{report}"
+         configured source' really would be evidence of debris, overturning \
+         the premise this test rests on\n{report}"
     );
     assert!(
         cached.exists(),
@@ -333,9 +332,9 @@ fn a_live_collection_child_has_no_configured_keyfile_and_a_failed_lookup_for_it_
     );
 
     // And the operator's own line, for the operator's own UID shape, naming a
-    // source that has no keyfile in the config directory — which is the whole
-    // of item 26's puzzle, reproduced from an account set up thirty seconds
-    // earlier rather than from debris.
+    // source that has no keyfile in the config directory: the puzzle this
+    // file answers, reproduced from an account set up thirty seconds earlier
+    // rather than from debris.
     let expected = format!(
         "server_side_source_credentials_lookup_cb: Failed to lookup password for source {child_uid}"
     );
@@ -386,9 +385,9 @@ fn and_the_same_request_is_answered_silently_when_the_password_is_in_the_store()
     );
 
     // The corollary an operator can act on: no failure line either. The log
-    // message item 26 starts from is emitted only on the failing branch, so
-    // seeing it always means the store had nothing for that source — never
-    // that the source is unknown or stale.
+    // message this file starts from is emitted only on the failing branch,
+    // so seeing it always means the store had nothing for that source,
+    // never that the source is unknown or stale.
     assert!(
         !stdout.contains(&format!("Failed to lookup password for source {child_uid}")),
         "the registry logged a lookup failure for a source whose password it \

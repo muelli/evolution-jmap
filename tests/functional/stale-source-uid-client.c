@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of `docs/ROADMAP.md` item 26: does a source UID that exists
- * only in dconf/GSettings drive `evolution-source-registry` into a credential
- * lookup, and thence into a consent window?
+ * The client half of the stale-source-uid question: does a source UID that
+ * exists only in dconf/GSettings drive `evolution-source-registry` into a
+ * credential lookup, and thence into a consent window?
  *
- * What the operator saw on 2026-08-29, twice, with `ESR_DEBUG=1` set:
+ * What the operator saw, twice, with `ESR_DEBUG=1` set:
  *
  *   server_side_source_credentials_lookup_cb: Failed to lookup password for
  *   source d06b56726065b3531de05498dd3519c2bd6efcb3
@@ -274,8 +274,8 @@ run_dconf_only (const gchar *dangling_uid)
 	 * is the one getter that reads a dconf UID and is documented to fall back:
 	 * `e_source_registry_ref_source` on the UID, then the built-in account if
 	 * that came back NULL. What it answers here is the whole dconf-side
-	 * question — a getter that fabricated a source would be the mechanism item
-	 * 26 asks about. */
+	 * question: a getter that fabricated a source would mean EDS turns dconf
+	 * debris into a live source. */
 	default_mail_account = e_source_registry_ref_default_mail_account (registry);
 	observe ("default-mail-account-uid",
 		 default_mail_account ? e_source_get_uid (default_mail_account) : "(none)");
@@ -421,8 +421,8 @@ run_collection_child (const gchar *account_uid,
 	g_signal_connect (child, "authenticate",
 			  G_CALLBACK (authenticate_cb), &authenticate);
 
-	/* WHICH source actually holds this child's credentials — and a finding of
-	 * item 26's in its own right. `source_credential_provider_ref_impl_for_
+	/* WHICH source actually holds this child's credentials: a finding in its
+	 * own right. `source_credential_provider_ref_impl_for_
 	 * source` (`e-source-credentials-provider.c:216-237`) does not look the
 	 * secret up under the source it was asked about: it first calls
 	 * `e_source_credentials_provider_ref_credentials_source`, which walks up
