@@ -13,8 +13,8 @@
 //! `collection.rs` (this crate's sibling) proves the read direction —
 //! populate/fan-out discovering what the server already holds. This proves
 //! the write direction, against the same kind of real registry. Scoped to
-//! address books; a calendar create/delete is the same sequence against
-//! `E_SOURCE_EXTENSION_CALENDAR`, left as a follow-up.
+//! address books; `collection-create-calendar.rs` runs the same sequence
+//! against `E_SOURCE_EXTENSION_CALENDAR`.
 
 use jmap_functional::{Session, observations, required_path};
 
