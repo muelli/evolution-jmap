@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of `docs/ROADMAP.md` item 25's CALENDAR leg: item 23's
- * hourly re-consent, driven through a real `evolution-calendar-factory` and a
- * real `evolution-source-registry` rather than through the operator leaving
- * Evolution open for an afternoon.
+ * The client half of the CALENDAR leg of the stale-access-token acceptance
+ * test: the hourly re-consent, driven through a real `evolution-calendar-
+ * factory` and a real `evolution-source-registry` rather than through the
+ * operator leaving Evolution open for an afternoon.
  *
  * An ordinary libecal consumer. It opens a calendar — which is what makes the
  * factory dlopen `libecalbackendjmap.so` and keep a live, connected
@@ -17,8 +17,8 @@
  * runs this program and reads the `key=value` observations it writes to
  * stdout.
  *
- * WHY THE MAIL LEG'S SHORTCUT IS NOT AVAILABLE HERE (EDS 3.52.3, read
- * 2026-08-29). `tests/functional/mail-stale-token-client.c` subclasses
+ * WHY THE MAIL LEG'S SHORTCUT IS NOT AVAILABLE HERE (EDS 3.52.3).
+ * `tests/functional/mail-stale-token-client.c` subclasses
  * `CamelSession` and answers `get_oauth2_access_token_sync` out of a file the
  * harness rewrites, because `jmap_mail::oauth2::uses_oauth2` reads Camel's own
  * `auth-mechanism` field and the generic `[Authentication] Method=OAuth2`
@@ -26,7 +26,7 @@
  * `jmap_backend_core::oauth2::source_uses_oauth2` goes through
  * `e_oauth2_services_is_oauth2_alias`, which matches only a `Method` naming an
  * `EOAuth2Service` actually registered in the asking process. So the account
- * must say `Method=JMAP`, and per item 22's finding that is exactly the
+ * must say `Method=JMAP`, and that is exactly the
  * condition under which EDS's own `module-oauth2-services.so` exports
  * `Source.OAuth2Support` for the source — which routes the factory's
  * `e_source_get_oauth2_access_token_sync` over D-Bus to the registry
@@ -118,8 +118,8 @@ fail (const gchar *step,
 
 /* Counted rather than acted on: in the running application this signal is
  * what puts the credentials prompter — and, for an OAuth2-method source, the
- * consent window — in front of the user. Item 23 is the claim that a merely
- * stale access token must never reach it. */
+ * consent window — in front of the user. The claim under test is that a
+ * merely stale access token must never reach it. */
 static void
 credentials_required_cb (ESource *source,
                          ESourceCredentialsReason reason,
@@ -134,8 +134,8 @@ credentials_required_cb (ESource *source,
 }
 
 /* Whether the registry exported `Source.OAuth2Support` for this source. The
- * load-bearing precondition, asserted by the Rust side for the reason item
- * 22's own test asserts it: without the interface the token fetch takes
+ * load-bearing precondition, asserted by the Rust side for the same reason:
+ * without the interface the token fetch takes
  * `e-source.c`'s in-process fallback, which in a calendar factory finds no
  * `[JMAP OAuth2]` extension type registered at all (`jmap-backend-cal`'s
  * module registers the OAuth2 *service* but never calls
@@ -319,8 +319,8 @@ main (int argc,
 
 	/* Activates evolution-calendar-factory and keeps a live backend instance
 	 * for the rest of this process's life. This is where the pooled
-	 * connection item 23 is about is built, and the access token it carries
-	 * is fetched here, once. */
+	 * connection the hourly re-consent fix concerns is built, and the
+	 * access token it carries is fetched here, once. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)

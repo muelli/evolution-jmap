@@ -1,16 +1,16 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * docs/ROADMAP.md item 25: item 23's acceptance test, made headless.
+ * The hourly-re-consent acceptance test, made headless.
  *
- * Item 23 is the hourly re-consent — a pooled connection keeps an access
- * token past its expiry, gets a 401, and escalates that to a consent window
- * instead of refreshing. The fix is wired into all four call sites; what it
- * did not have is a test that drives it through a *real* `CamelService` in
- * the process Camel dlopens the provider into. Item 23's own parting note
- * says such a test cannot be built headlessly, "because the refresh path
- * needs a real CamelService registered on a real CamelSession
- * (EMailSession)". This program is the disproof.
+ * The hourly re-consent fix: a pooled connection that keeps an access token
+ * past its expiry, gets a 401, and escalates that to a consent window
+ * instead of refreshing, now fixed at all four call sites. What it did not
+ * have is a test that drives it through a *real* `CamelService` in the
+ * process Camel dlopens the provider into. An earlier attempt concluded such
+ * a test could not be built headlessly, "because the refresh path needs a
+ * real CamelService registered on a real CamelSession (EMailSession)". This
+ * program is the disproof.
  *
  * `functional-mail-client` already builds the real `CamelService` half: it is
  * an ordinary libcamel consumer, and the store it opens is the one Camel
@@ -22,7 +22,7 @@
  * sync`). Where that one looks the service's `ESource` up in the registry and
  * forwards to `e_source_get_oauth2_access_token_sync`, this one reads a file
  * the harness writes. That substitution is the whole point rather than a
- * shortcut: what item 23 is about is whether *this provider* asks its session
+ * shortcut: what matters here is whether *this provider* asks its session
  * for a fresh token and retries, not whether EDS's own OAuth 2.0 machinery can
  * mint one — which `functional-oauth2-stale-proxy` and
  * `functional-secret-store-lock` already cover from the registry side.
@@ -113,10 +113,10 @@ test_session_get_oauth2_access_token_sync (CamelSession *session,
 }
 
 /* Counted, then handed to the base class unchanged: this is the escalation
- * item 23 is about. A 401 that the provider answered by re-authenticating
- * from scratch — rather than by refreshing the token on the connection it
- * already has — is what puts a consent window in front of the user, and it
- * would show up here as a second call. */
+ * this test exists to catch. A 401 that the provider answered by
+ * re-authenticating from scratch — rather than by refreshing the token on
+ * the connection it already has — is what puts a consent window in front of
+ * the user, and it would show up here as a second call. */
 static gboolean
 test_session_authenticate_sync (CamelSession *session,
 				CamelService *service,

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 23's acceptance test, made headless.
+//! The hourly-re-consent acceptance test, made headless.
 //!
-//! Item 23 — the hourly re-consent — is code-complete at all four call sites,
-//! and its acceptance test was "the operator leaves Evolution open for hours
-//! and sees no consent window": slow, unrepeatable, and silently invalid if
-//! the host suspends. Its parting note says a real test cannot be built,
+//! The hourly re-consent fix is code-complete at all four call sites, but its
+//! acceptance test was "the operator leaves Evolution open for hours and sees
+//! no consent window": slow, unrepeatable, and silently invalid if the host
+//! suspends. An earlier attempt concluded a real test could not be built,
 //! "because the refresh path needs a real `CamelService` registered on a real
 //! `CamelSession` (`EMailSession`), which no headless test on this VM can
 //! build".
@@ -29,7 +29,7 @@
 //! The interesting assertion in both is a *count*, not a success. A provider
 //! that answered the second listing by tearing the connection down and going
 //! back to the session for credentials would also produce a folder tree, and
-//! would be exactly the bug item 23 is about.
+//! would be exactly the bug this test exists to catch.
 //!
 //! `camel_session_authenticate_sync` is where that shows. `jmap-mail`'s
 //! `connect_sync` (`service.rs`) names [`jmap_mail::sasl::MECHANISM`] and
@@ -232,8 +232,8 @@ fn rotate(
     std::fs::write(go_path, "go").expect("write the harness's go file");
 }
 
-/// The positive case, and the one item 23 is about: a stored refresh token
-/// that still works. The operation the user asked for must simply happen.
+/// The positive case: a stored refresh token that still works. The
+/// operation the user asked for must simply happen.
 #[test]
 fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     let Run {
@@ -307,8 +307,8 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     // How it succeeded, not merely that it did. One extra token fetch is a
     // refresh; a call *beyond* the one already counted before rotation would
     // be the provider going back to the session for credentials a second
-    // time, which in the running application is the consent window item 23
-    // exists to stop.
+    // time, which in the running application is the hourly re-consent window
+    // this test exists to stop.
     assert_eq!(
         seen.get("token-fetches"),
         Some(&"2"),
@@ -317,8 +317,8 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     assert_eq!(
         seen.get("authenticate-calls"),
         Some(&"1"),
-        "the 401 reached the session's interactive authentication a second time — in the \
-         running application that is the consent window item 23 is about\n{report}"
+        "the 401 reached the session's interactive authentication a second time: in the \
+         running application that is the hourly re-consent window this test exists to avoid\n{report}"
     );
 
     // From the server's own side of the wire, and the assertion that makes
@@ -335,8 +335,8 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
 /// The negative case: the refresh produces a token the server also refuses —
 /// a revoked account, or a refresh token that has itself expired. That has to
 /// fail, and it has to fail after exactly one attempt at refreshing. A retry
-/// loop here is worse than no retry at all: it is the consent window item 23
-/// is about, arriving repeatedly.
+/// loop here is worse than no retry at all: it is the hourly re-consent
+/// window arriving repeatedly.
 #[test]
 fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
     let Run {

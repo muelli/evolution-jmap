@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The CALENDAR leg: item 23's acceptance test, made headless for the
+//! The CALENDAR leg of the stale-access-token acceptance test, made headless for the
 //! backend that refreshes through an `ESource` rather than through a
 //! `CamelSession`.
 //!
@@ -14,14 +14,14 @@
 //! `e_oauth2_services_is_oauth2_alias`, which matches only a `Method` naming
 //! an `EOAuth2Service` registered in the asking process — so the account must
 //! say `Method=JMAP`, and that is precisely the condition under which EDS's
-//! own `module-oauth2-services.so` exports `Source.OAuth2Support` (item 22).
+//! own `module-oauth2-services.so` exports `Source.OAuth2Support`.
 //! The refresh therefore runs for real, in the registry, through this
 //! project's own `EOAuth2Service` and against a real token endpoint. There is
 //! no stand-in anywhere in the chain.
 //!
 //! ## What makes the refresh happen, without a wall clock
 //!
-//! N+90's trace expected this to hinge on a seeded `expires_after` falling due
+//! An earlier approach expected this to hinge on a seeded `expires_after` falling due
 //! between two fetches — real timing, and fragile. It does not.
 //! `e_oauth2_service_get_access_token_sync` refreshes whenever the token it
 //! looked up has `expires_in <= TOKEN_VALIDITY_GAP_SECS` (**10**,
@@ -385,9 +385,8 @@ fn assert_preconditions(run: &Run, seen: &BTreeMap<&str, &str>) {
     );
 }
 
-/// The positive case, and the one item 23 is about: a stored refresh token
-/// that still buys a working access token. The operation the user asked for
-/// must simply happen.
+/// The positive case: a stored refresh token that still buys a working
+/// access token. The operation the user asked for must simply happen.
 #[test]
 fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     let run = run(
@@ -426,14 +425,15 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
         run.unauthorized_responses
     );
 
-    // The user-visible half of item 23: no consent window. In the running
-    // application this signal is what raises the credentials prompter, and for
-    // a `Method=JMAP` source that is the consent window itself.
+    // The user-visible half of the stale-access-token acceptance test: no
+    // consent window. In the running application this signal is what raises
+    // the credentials prompter, and for a `Method=JMAP` source that is the
+    // consent window itself.
     assert_eq!(
         seen.get("credentials-required"),
         Some(&"0"),
-        "a merely stale access token reached EDS's credentials prompter — in the \
-         running application that is the hourly consent window item 23 is about\n{report}"
+        "a merely stale access token reached EDS's credentials prompter: in the \
+         running application that is the hourly re-consent window this test exists to avoid\n{report}"
     );
 }
 
@@ -441,7 +441,7 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
 /// refuses — a revoked account, or credentials that have been withdrawn behind
 /// the client's back. That has to fail, and to fail after exactly one attempt
 /// at refreshing. A retry loop here is worse than no retry at all: it is the
-/// consent window item 23 is about, arriving repeatedly.
+/// hourly re-consent window arriving repeatedly.
 #[test]
 fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
     let run = run(
