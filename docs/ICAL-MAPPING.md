@@ -455,7 +455,7 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 - **RFC 9074 `UID`**: Named `VALARM` components with valid IDs preserve their server-assigned key (`UID:k1` → `"k1"`).
 - **Nameless & Evolution Alarms**: Exporters omitting RFC 9074 `UID` (such as Evolution's internal `X-EVOLUTION-ALARM-UID` or Apple Calendar) are assigned deterministic positional keys (`"a1"`, `"a2"`, …).
 - **Collision Avoidance**: Invented positional keys automatically skip keys already claimed by explicit `UID` lines, guaranteeing 100% uniqueness without entry collapsing.
-- **Duplicate UIDs**: If an incoming stream contains duplicate UIDs, RFC 9074 §6 uniqueness rules apply and duplicate entries collapse into a single map entry.
+- **Duplicate UIDs**: If an incoming stream contains duplicate UIDs, RFC 9074 §4 uniqueness rules apply and duplicate entries collapse into a single map entry.
 
 ### 7.4 Safety and Whole-Property Replacement
 
@@ -520,7 +520,7 @@ Multi-alarm sequences across diverse real-world clients exhibit distinct structu
 2. **Identical Offset Multiplicity**: Multiple alarms sharing identical trigger offsets (whether named with explicit UIDs or nameless) remain distinct and non-collapsing. Both named entries (`UID:k1` and `UID:k2`) and synthesized entries (`a1` and `a2`) preserve separate alerts and roundtrip stably.
 3. **High Multiplicity Scaling**: Events carrying 10, 15, or more alarms scale cleanly. Positional key allocation increments through multi-digit keys (`a10`, `a11`, ...), maintaining unique non-conflicting map IDs.
 4. **Key Synthesis for Non-Standard UIDs**: Exporter UIDs violating RFC 8984 §1.4.4 `Id` syntax (such as Outlook 94-octet composite binary UIDs, Apple `{GUID}` braces, URIs with colons `urn:uuid:...`, email format UIDs `alarm@domain.com`, or UIDs exceeding 255 octets) are recognized by `names_map_entry` as unmappable to JSCalendar map keys. The parser smoothly falls back to positional synthesized keys (`a1`, `a2`, ...), emitting valid RFC 9074 `UID` values on outbound serialization.
-5. **Duplicate Explicit UIDs**: If an incoming stream contains duplicate explicit UIDs, RFC 9074 §6 uniqueness rules apply, and subsequent duplicates overwrite earlier entries rather than corrupting map state.
+5. **Duplicate Explicit UIDs**: If an incoming stream contains duplicate explicit UIDs, RFC 9074 §4 uniqueness rules apply, and subsequent duplicates overwrite earlier entries rather than corrupting map state.
 6. **Recurrence Overrides with Multiple Alarms**: Master series alarms are inherited on unmodified instances. Overrides specifying custom alarms replace the entire alarm set for that instance. Overrides setting `"alerts": null` cancel all alarms for that instance. Overrides containing even one unmappable alert are refused by `maps_recurrence_override`, preserving the series alarms.
 
 ### 7.8 ACKNOWLEDGED Formats and Whole-Property Replacement Safety (RFC 9074 §6.1)
@@ -3276,11 +3276,11 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   RFC 5545 §3.6.6 and RFC 9074 §6 specify `VALARM` subcomponents, while RFC 8984 §4.5 models reminders as an `alerts` map. In `jmap-ical`:
   1. Strict action filtering: `read_alert` compares `ACTION` against `DISPLAY` case-insensitively (`action.eq_ignore_ascii_case("DISPLAY")`). Audio (`ACTION:AUDIO`), email (`ACTION:EMAIL`), and procedural alarms are discarded cleanly, conforming to RFC 8984's display-only reminder architecture.
   2. Relative offset trigger parsing: Ingests `TRIGGER` values via `stated_offset`. Negative durations (e.g. `-PT15M` for reminders before start) map to `@type: "OffsetTrigger"` with a negative duration string. `RELATED=START` (or parameter omission) defaults to start-relative reminders (omitting `relativeTo`). `RELATED=END` sets `"relativeTo": "end"`. Non-standard or non-offset triggers return `None` and are discarded.
-  3. Stable map key preservation and synthesis: If a `VALARM` carries an RFC 9074 §6 `UID` conforming to RFC 8984 `Id` grammar via `names_map_entry`, that UID is preserved as the alert map key. For nameless alarms (such as those emitted with `X-EVOLUTION-ALARM-UID` or legacy CalDAV clients), `read_alerts` synthesizes deterministic positional keys (`a1`, `a2`, ...), actively skipping any keys already claimed by explicit UIDs to prevent key collisions.
+  3. Stable map key preservation and synthesis: If a `VALARM` carries an RFC 9074 §4 `UID` conforming to RFC 8984 `Id` grammar via `names_map_entry`, that UID is preserved as the alert map key. For nameless alarms (such as those emitted with `X-EVOLUTION-ALARM-UID` or legacy CalDAV clients), `read_alerts` synthesizes deterministic positional keys (`a1`, `a2`, ...), actively skipping any keys already claimed by explicit UIDs to prevent key collisions.
   4. Empty map suppression: If a `VEVENT` contains no readable display alarms (e.g. only audio alarms or malformed triggers), `read_alerts` returns `None` rather than an empty map (`{}`), preventing spurious patch generation during round-trip synchronization.
   5. In contrast, differential oracles or permissive parsers often ingest non-display alarms with invalid `@type` actions, approximate absolute triggers as floating offsets, or generate non-deterministic random UUID map keys that invalidate sync caches on every pass.
 - **Specification and Architectural Context**:
-  1. RFC 8984 §4.5 restricts alerts to display notifications. RFC 9074 §6 establishes `UID` as the stable identifier for `VALARM` components.
+  1. RFC 8984 §4.5 restricts alerts to display notifications. RFC 9074 §4 establishes `UID` as the stable identifier for `VALARM` components.
   2. Positional key synthesis (`a1`, `a2`, ...) ensures that appointments edited across Evolution sessions maintain deterministic alert identities without churning JMAP object patches.
 - **Adjudication**:
   Conforming specification boundary and alert ingestion robustness. Enforces DISPLAY action filtering, validates relative offset triggers, preserves explicit UIDs while synthesizing collision-free positional keys for nameless alarms, and suppresses empty alert maps.
@@ -3902,18 +3902,18 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
-### 13.190 Divergence 190: `maps_alerts`, `uses_default_alerts`, `drawn_alert`, `drawn_trigger`, and `drawn_alarms`: Alert and Alarm Outbound Serialization: RFC 8984 Section 4.5.1 Default Alert Masking (`useDefaultAlerts`), RFC 9074 Section 6 Stable `UID` Preservation, RFC 8984 Section 4.5.3 `OffsetTrigger` Mapping with Canonical `RELATED` (`START` vs `END`), Absolute Trigger Rejection, and Summary-Derived `DESCRIPTION` Generation
+### 13.190 Divergence 190: `maps_alerts`, `uses_default_alerts`, `drawn_alert`, `drawn_trigger`, and `drawn_alarms`: Alert and Alarm Outbound Serialization: RFC 8984 Section 4.5.1 Default Alert Masking (`useDefaultAlerts`), RFC 9074 Section 4 Stable `UID` Preservation, RFC 8984 Section 4.5.3 `OffsetTrigger` Mapping with Canonical `RELATED` (`START` vs `END`), Absolute Trigger Rejection, and Summary-Derived `DESCRIPTION` Generation
 
 - **Observed Behavior**:
   Mapping JSCalendar alerts to iCalendar `VALARM` components requires preserving alarm identity and timing while isolating unrepresentable reminder forms. In `jmap-ical`:
   1. Default alert masking (`uses_default_alerts`, `maps_alerts`): If `event.use_default_alerts` is `Some(true)` or `extra["useDefaultAlerts"]` is `true`, `uses_default_alerts` returns `true`. In this case, `maps_alerts` returns `false` and `drawn_alarms` emits no `VALARM` components. This preserves user-level default reminder preferences without overwriting them with explicit alarms during round-trips.
   2. OffsetTrigger serialization and canonical `RELATED` (`drawn_trigger`): Supports RFC 8984 §4.5.3 `OffsetTrigger`. Validates `offset` duration syntax via `stated_offset`. If `relativeTo` is `"end"`, emits `RELATED=END`. If `relativeTo` is `"start"` or absent, `RELATED` is omitted because `START` is the RFC 5545 default. Unknown `relativeTo` values or extra properties are refused.
   3. Absolute trigger rejection: RFC 8984 §4.5.4 `AbsoluteTrigger` (`when`) is refused (`drawn_trigger` returns `None`). An absolute instant cannot be mapped to a relative duration without shifting if the event time changes.
-  4. Stable alarm `UID` preservation: RFC 9074 §6 assigns each `VALARM` a `UID` matching the JSCalendar alert map key (`names_map_entry`), allowing server stores to correlate alarms across round-trips.
+  4. Stable alarm `UID` preservation: RFC 9074 §4 assigns each `VALARM` a `UID` matching the JSCalendar alert map key (`names_map_entry`), allowing server stores to correlate alarms across round-trips.
   5. Action and description mapping: Only `action: "display"` (RFC 5545 `ACTION:DISPLAY`) is supported. Emits `DESCRIPTION` derived from the event title (`summary`) per RFC 5545 §3.6.6; if the event has no title, `DESCRIPTION` is omitted.
   6. In contrast, differential oracles or legacy parsers convert absolute triggers into drifting relative triggers, omit alarm UIDs (causing alarm duplication on updates), or fail to mask server default alerts.
 - **Specification and Architectural Context**:
-  1. RFC 8984 §4.5 defines JSCalendar alert objects, `useDefaultAlerts`, and trigger types. RFC 5545 §3.6.6 and RFC 9074 §6 define `VALARM` structure and `UID` semantics.
+  1. RFC 8984 §4.5 defines JSCalendar alert objects, `useDefaultAlerts`, and trigger types. RFC 5545 §3.6.6 and RFC 9074 §4 define `VALARM` structure and `UID` semantics.
   2. Isolating default alerts and refusing absolute triggers ensures alarm triggers remain synchronized with event start times.
 - **Adjudication**:
   Conforming specification boundary and alert serialization fidelity. Masks default alerts, preserves stable alarm UIDs, maps `OffsetTrigger` with canonical `RELATED` handling, rejects absolute triggers, and synthesizes `DESCRIPTION` from event titles.
@@ -4118,10 +4118,10 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   1. Action filtering (`read_alert`, `DISPLAY_ALERT`): Enforces `ACTION:DISPLAY` case-insensitively. Unsupported iCalendar alarm actions (`ACTION:AUDIO`, `ACTION:EMAIL`, `ACTION:PROCEDURE`) return `None`, as RFC 8984 Section 4.5 only models display reminders.
   2. OffsetTrigger parsing (`stated_offset`): Validates and normalizes relative duration offsets. Absolute triggers (`TRIGGER;VALUE=DATE-TIME`) are unrepresentable as relative offsets and return `None`.
   3. Canonical `RELATED` parameter handling: Inspects the `RELATED` parameter. If `START` or omitted, `relativeTo` is omitted in JSCalendar because start is the canonical default. If `END`, sets `relativeTo: "end"`. Any unrecognized `RELATED` value (such as `MIDDLE` or unsupported tokens) causes the alarm to be rejected.
-  4. Stable alarm identifier preservation and collision-free synthesis: Preserves RFC 9074 Section 6 `UID` parameter when conforming to `names_map_entry`. For alarms lacking valid UIDs, synthesizes sequential keys (`a1`, `a2`, ...) via `INVENTED_ALERT_KEY`, avoiding collision with existing keys.
+  4. Stable alarm identifier preservation and collision-free synthesis: Preserves RFC 9074 Section 4 `UID` parameter when conforming to `names_map_entry`. For alarms lacking valid UIDs, synthesizes sequential keys (`a1`, `a2`, ...) via `INVENTED_ALERT_KEY`, avoiding collision with existing keys.
   5. In contrast, differential oracles or permissive parsers invent drifting relative triggers from absolute alarms, retain non-display actions, emit redundant default `relativeTo: "start"` tokens, or drop alarms lacking UIDs.
 - **Specification and Architectural Context**:
-  1. RFC 5545 Section 3.6.6 and Section 3.8.6 govern `VALARM`, `ACTION`, `TRIGGER`, and `RELATED`. RFC 9074 Section 6 defines `VALARM` `UID` parameters. RFC 8984 Section 4.5 defines JSCalendar `Alert` and `OffsetTrigger` models.
+  1. RFC 5545 Section 3.6.6 and Section 3.8.6 govern `VALARM`, `ACTION`, `TRIGGER`, and `RELATED`. RFC 9074 Section 4 defines `VALARM` `UID` parameters. RFC 8984 Section 4.5 defines JSCalendar `Alert` and `OffsetTrigger` models.
   2. Restricting alarms to display actions and eliding default `relativeTo` properties prevents synthetic diff noise during incremental synchronizations.
 - **Adjudication**:
   Conforming specification boundary and reminder alarm ingestion fidelity. Gates on `ACTION:DISPLAY`, parses offset triggers, elides default `relativeTo: start` while recording `end`, preserves RFC 9074 UIDs, and allocates non-colliding fallback keys.
@@ -4672,10 +4672,10 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   1. User default alert masking (`uses_default_alerts`): RFC 8984 Section 4.5.1 provides `useDefaultAlerts`. When `useDefaultAlerts: true`, explicit `alerts` are ignored and the user's client preferences fire instead. `maps_alerts` checks `uses_default_alerts(event)`: if true, `maps_alerts` returns `false` and `drawn_alarms` suppresses all `VALARM` components, preventing the generation of redundant alarms that the user never intended to set.
   2. Closed action vocabulary (`action: "display"`): RFC 5545 Section 3.6.6 defines `DISPLAY`, `AUDIO`, and `EMAIL` alarms. RFC 8984 Section 4.5.2 restricts Alert actions to `display`. `drawn_alert` verifies that an alert's action is `display` (or omitted, which defaults to display). Other actions (such as email or audio) are rejected because they require additional parameters (like `SUMMARY` and `ATTENDEE` on email alarms) not modeled in JSCalendar.
   3. Offset trigger normalization (`drawn_trigger`): Only RFC 8984 Section 4.5.3 `OffsetTrigger` is admitted; absolute triggers (`AbsoluteTrigger`, Section 4.5.4) are rejected because guessing an offset from a fixed instant would cause the alarm to drift whenever the event is rescheduled. `drawn_trigger` parses signed durations via `stated_offset`. For `relativeTo: "end"`, it attaches `RELATED=END`. For default `relativeTo: "start"`, it omits the parameter, matching RFC 5545 Section 3.2.14 defaults.
-  4. RFC 9074 stable alert `UID` ingestion and invented key generation (`read_alerts`): When reading `VALARM` components, `read_alerts` extracts RFC 9074 Section 6 `UID` properties. If a `UID` is present, it is used directly as the map key in `alerts`. For alarms lacking a `UID` (such as those generated by Evolution with `X-EVOLUTION-ALARM-UID`), `read_alerts` synthesizes positional invented keys (`a1`, `a2`, ...) in a loop that explicitly checks for and avoids colliding with any existing keys in the map.
+  4. RFC 9074 stable alert `UID` ingestion and invented key generation (`read_alerts`): When reading `VALARM` components, `read_alerts` extracts RFC 9074 Section 4 `UID` properties. If a `UID` is present, it is used directly as the map key in `alerts`. For alarms lacking a `UID` (such as those generated by Evolution with `X-EVOLUTION-ALARM-UID`), `read_alerts` synthesizes positional invented keys (`a1`, `a2`, ...) in a loop that explicitly checks for and avoids colliding with any existing keys in the map.
   5. In contrast, differential oracles or naive parsers attempt to map unsupported email/audio alarms, approximate absolute triggers as fixed offsets, omit mandatory RFC 9074 `UID` lines on serialization, or assign colliding map keys on import.
 - **Specification and Architectural Context**:
-  1. RFC 5545 Section 3.6.6 (`VALARM`), Section 3.8.6.1 (`ACTION`), Section 3.8.6.3 (`TRIGGER`), and Section 3.2.14 (`RELATED`) define alarm component syntax. RFC 9074 Section 6 defines `UID` on `VALARM`.
+  1. RFC 5545 Section 3.6.6 (`VALARM`), Section 3.8.6.1 (`ACTION`), Section 3.8.6.3 (`TRIGGER`), and Section 3.2.14 (`RELATED`) define alarm component syntax. RFC 9074 Section 4 defines `UID` on `VALARM`.
   2. RFC 8984 Section 4.5.1 (`useDefaultAlerts`), Section 4.5.2 (`alerts`), Section 4.5.3 (`OffsetTrigger`), and Section 4.5.4 (`AbsoluteTrigger`) define JSCalendar reminder models.
 - **Adjudication**:
   Conforming specification boundary and reminder alarm translation fidelity. Enforces `useDefaultAlerts` masking, validates closed `display` action vocabulary, normalizes offset triggers with canonical `RELATED` parameters, preserves RFC 9074 `UID` identifiers, and generates collision-free synthetic keys.
@@ -5483,12 +5483,12 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   3. OffsetTrigger signed duration formatting (`stated_offset`): Alerts must use `OffsetTrigger`. Absolute triggers and non-duration offsets are refused. Negative offsets (reminders before the event) serialize as `-PT...`.
   4. Trigger relationship parameter gating: RFC 5545 Section 3.2.14 and RFC 8984 Section 4.5.3 both default trigger relationship to the start of the event. When `relativeTo == "end"`, `drawn_alert` attaches parameter `RELATED=END`. When start-relative, the parameter is omitted to adhere to RFC defaults.
   5. Title description fallback: RFC 5545 Section 3.6.6 makes `DESCRIPTION` mandatory on `ACTION:DISPLAY` alarms. `drawn_alert` uses the event's `title` as `DESCRIPTION`, or omits the line if the title is empty.
-  6. Stable UID key preservation: RFC 9074 Section 6 specifies that `VALARM` components may have `UID` properties. `drawn_alert` emits `UID=<key>` on the `VALARM`, preserving the map key across round trips so updates do not re-key existing alarms.
+  6. Stable UID key preservation: RFC 9074 Section 4 specifies that `VALARM` components may have `UID` properties. `drawn_alert` emits `UID=<key>` on the `VALARM`, preserving the map key across round trips so updates do not re-key existing alarms.
   7. In contrast, differential oracles or permissive converters emit `VALARM` components even when `useDefaultAlerts` is true, serialize unmodeled email alarms without required recipient fields, or omit `UID` properties on alarms.
 - **Specification and Architectural Context**:
   1. RFC 5545 Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), and Section 3.8.6.3 (`Trigger`).
   2. RFC 8984 Section 4.5.1 (`useDefaultAlerts`), Section 4.5.2 (`Alert`), and Section 4.5.3 (`OffsetTrigger`).
-  3. RFC 9074 Section 6 (`VALARM UID Property`).
+  3. RFC 9074 Section 4 (`VALARM UID Property`).
 - **Adjudication**:
   Conforming specification boundary and alarm component serialization integrity. Suppresses alarms when default alerts are active, enforces display action scope, formats signed trigger offsets, attaches `RELATED=END` conditionally, and preserves alarm keys via `UID`.
 - **Status**:
@@ -5726,7 +5726,7 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   6. In contrast, differential oracles or permissive converters admit non-display alarms, fail to parse negative duration triggers, emit explicit `relativeTo: "start"` schema noise, generate colliding keys, or serialize empty `alerts: {}` maps.
 - **Specification and Architectural Context**:
   1. RFC 5545 Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), Section 3.8.6.3 (`Trigger`), and Section 3.2.14 (`Alarm Trigger Relationship`).
-  2. RFC 9074 Section 6 (`VALARM` UID).
+  2. RFC 9074 Section 4 (`VALARM` UID).
   3. RFC 8984 Section 4.5.3 (`Alert`) and Section 4.5.4 (`OffsetTrigger`).
 - **Adjudication**:
   Conforming specification boundary and reminder alarm ingestion robustness. Filters display actions, validates signed trigger offsets, coordinates default trigger relationship omission, allocates collision-free positional keys, and eliminates empty alert maps.
@@ -6103,12 +6103,12 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   2. Single action scope (`ACTION:DISPLAY`): RFC 5545 Section 3.6.6 defines `DISPLAY`, `AUDIO`, and `EMAIL` alarms. RFC 8984 Section 4.5.2 restricts Alert actions to `display`. `drawn_alert` verifies that `action` is either absent or `"display"`. Non-display actions (such as `audio` or `email`, which require binary sound payloads or full email participant bodies not modeled in JSCalendar) return `None` and fail gating.
   3. Offset trigger parameterization (`drawn_trigger`): Evaluates `OffsetTrigger` durations via `stated_offset`. Negative offsets (e.g. `-PT15M` for 15 minutes prior) and positive offsets (`PT5M` for 5 minutes after) are parsed. When `relativeTo == "end"`, parameter `RELATED=END` is attached. When start-relative (or omitted), `RELATED` is omitted, adhering to RFC 5545 Section 3.2.14 defaults. Absolute triggers (`AbsoluteTrigger`) return `None` to prevent alarms from falling out of sync when events are rescheduled.
   4. Mandatory title description fallback: RFC 5545 Section 3.6.6 makes `DESCRIPTION` mandatory on `ACTION:DISPLAY` alarms. `drawn_alert` populates `DESCRIPTION` with `event.title`, or omits the line if title is empty.
-  5. Stable UID key preservation: RFC 9074 Section 6 assigns `UID` properties to `VALARM` components. `drawn_alert` emits `UID=<key>` using the map key from `event.alerts`, preserving identifier associations across round trips.
+  5. Stable UID key preservation: RFC 9074 Section 4 assigns `UID` properties to `VALARM` components. `drawn_alert` emits `UID=<key>` using the map key from `event.alerts`, preserving identifier associations across round trips.
   6. In contrast, differential oracles omit `VALARM` `UID` tracking, emit redundant `RELATED=START` parameters, fail to suppress alarms when `useDefaultAlerts: true`, or emit unmodeled alarm actions.
 - **Specification and Architectural Context**:
   1. RFC 5545 Section 3.2.14 (`Alarm Trigger Relationship`), Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), Section 3.8.6.2 (`Description`), and Section 3.8.6.3 (`Trigger`).
   2. RFC 8984 Section 4.5.1 (`useDefaultAlerts`), Section 4.5.2 (`action`), and Section 4.5.3 (`OffsetTrigger`).
-  3. RFC 9074 Section 6 (`UID Property in VALARM`).
+  3. RFC 9074 Section 4 (`UID Property in VALARM`).
 - **Adjudication**:
   Conforming specification boundary and alarm notification fidelity. Suppresses document-wide alarms when default alerts are active, enforces display action scope, parameterizes offset triggers strictly, injects title descriptions, and preserves alarm UID keys.
 - **Status**:
@@ -6644,7 +6644,7 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 
 - **Observed Behavior**:
   Translating reminder alarms between RFC 5545 / RFC 9074 (`VALARM`) and JSCalendar RFC 8984 Section 4.5 (`alerts`, `Alert`) requires scoping action types, validating trigger offsets, preserving stable identifiers, and respecting document-wide default preferences:
-  1. Stable key preservation: RFC 9074 Section 5 defines `UID` for `VALARM` components. In `read_alerts`, when a `VALARM` carries a `UID`, it is preserved directly as the map key in `alerts`. If a `VALARM` lacks a `UID`, `read_alerts` synthesizes deterministic fallback keys (`a1`, `a2`). Outbound `drawn_alert` writes `UID: <key>` on the `VALARM` component. In contrast, Stalwart synthesizes arbitrary `k1`..`k5` keys on parse and ignores incoming `UID` parameters.
+  1. Stable key preservation: RFC 9074 Section 4 defines `UID` for `VALARM` components. In `read_alerts`, when a `VALARM` carries a `UID`, it is preserved directly as the map key in `alerts`. If a `VALARM` lacks a `UID`, `read_alerts` synthesizes deterministic fallback keys (`a1`, `a2`). Outbound `drawn_alert` writes `UID: <key>` on the `VALARM` component. In contrast, Stalwart synthesizes arbitrary `k1`..`k5` keys on parse and ignores incoming `UID` parameters.
   2. Display-only action scope filtering: `read_alert` checks `ACTION`: only `ACTION:DISPLAY` is mapped. Vendor sound alarms (`ACTION:AUDIO`) and email notifications (`ACTION:EMAIL`) are silently dropped on import. Evolution/EDS relies on the local desktop notification system for display alerts; unmodeled audio or email actions have no local handler and are omitted to avoid schema pollution.
   3. Relative trigger validation: `read_alert` ingests relative offsets via `stated_offset`, populating `@type: "OffsetTrigger"` with ISO 8601 durations (such as `-PT15M` or `-P1D`). Absolute date-time triggers (`TRIGGER;VALUE=DATE-TIME`) are dropped on import, ensuring alarm schedules remain relative to moving events.
   4. Document-wide default alert suppression: RFC 8984 Section 4.5.1 defines `useDefaultAlerts`. When `useDefaultAlerts: true` is set, `drawn_alarms` returns an empty vector, suppressing explicit `VALARM` components so the receiving store or client applies its own default alarm preferences.
@@ -6652,7 +6652,7 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Specification and Architectural Context**:
   1. RFC 5545 Section 3.6.6 (`Alarm Component`).
   2. RFC 8984 Section 4.5 (`Alerts`).
-  3. RFC 9074 Section 5 (`UID Property in VALARM`).
+  3. RFC 9074 Section 4 (`UID Property in VALARM`).
 - **Adjudication**:
   Conforming specification boundary and client reminder architecture. Preserves RFC 9074 `UID` map keys across round-trips, restricts reminder actions to `ACTION:DISPLAY` for desktop notification safety, enforces relative `OffsetTrigger` semantics, and honors `useDefaultAlerts` document-wide suppression.
 - **Status**:
@@ -7287,7 +7287,7 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
-### 13.381 Divergence 381: `alerts`, `VALARM`, RFC 9074 `UID` Key Retention (`UID:...`), and Positional Key Inventing (`a1`, `a2`) vs Random / Opaque Key Allocation (`k1`, `k2`, `k3`): RFC 5545 Section 3.6.6 `VALARM` and RFC 9074 Section 6 `UID` vs RFC 8984 Section 4.5 `alerts`
+### 13.381 Divergence 381: `alerts`, `VALARM`, RFC 9074 `UID` Key Retention (`UID:...`), and Positional Key Inventing (`a1`, `a2`) vs Random / Opaque Key Allocation (`k1`, `k2`, `k3`): RFC 5545 Section 3.6.6 `VALARM` and RFC 9074 Section 4 `UID` vs RFC 8984 Section 4.5 `alerts`
 
 - **Observed Behavior**:
   Preserving alarm identifiers and map key stability between RFC 5545 (`VALARM`), RFC 9074 (`UID`), and JSCalendar RFC 8984 Section 4.5 (`alerts`):
@@ -7296,7 +7296,7 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   3. Oracle key allocation divergence: Stalwart's `CalendarEvent/parse` strips or disregards producer `UID` lines from the map keys, allocating synthetic sequential keys (`"k1"`, `"k2"`, `"k3"`), and moves the original `uid` into its `iCalendar.properties` AST table.
 - **Specification and Architectural Context**:
   1. RFC 5545 Section 3.6.6 (`Alarm Component`).
-  2. RFC 9074 Section 6 (`VALARM UID Property`).
+  2. RFC 9074 Section 4 (`VALARM UID Property`).
   3. RFC 8984 Section 4.5 (`Alert`).
 - **Adjudication**:
   Conforming specification adaptation and key stability. Retaining producer RFC 9074 `UID` keys and allocating deterministic positional fallback keys (`a1`, `a2`) prevents map key churn and ensures reliable round-trip synchronization with desktop clients.
