@@ -31,7 +31,7 @@ pub struct ServerState {
     pub calls_in_request: Option<u64>,
     /// Optional max ids per `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
-    /// Whether invalid `/changes` `sinceState` uses Stalwart-style `invalidArguments`.
+    /// Whether invalid `/changes` `sinceState` uses Stalwart-like `invalidArguments`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
     /// Optional `Email/get` ids limit; `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
@@ -43,31 +43,31 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
-    /// Whether `/.well-known/jmap` redirects to `/jmap/session` for auth-sensitive redirect tests.
+    /// Whether `/.well-known/jmap` redirects to the discovery endpoint.
     pub session_via_redirect: bool,
-    /// Optional origin override for session `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
+    /// Optional origin override for advertised URLs.
     pub advertise_origin: Option<String>,
     /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
-    /// Whether `GET /download/...` with `Accept: application/json` is rejected as `406`.
+    /// Whether `GET /download/...` with `Accept: application/json` returns `406`.
     pub reject_download_accept_json: bool,
     /// Whether `EmailSubmission/set` create omits echoed `identityId` and `emailId`.
     pub terse_submission_create: bool,
     /// Whether `ContactCard/set` create returns only `id` in `created`.
     pub terse_contact_create: bool,
-    /// Whether new `AddressBook` and `Calendar` objects default to `isSubscribed: false`.
+    /// Whether new `AddressBook` and `Calendar` objects default to unsubscribed.
     pub new_collections_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
-    /// Whether collection create omits echoed `name` while keeping server-computed fields.
+    /// Whether collection create omits echoed `name`.
     pub terse_collection_create: bool,
-    /// Whether collection create omits `id` to model an RFC-violating server.
+    /// Whether collection create omits `id`.
     pub id_omitting_collection_create: bool,
     /// Whether collection creates fail with `notCreated/forbidden`.
     pub reject_collection_create: bool,
     /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
-    /// Whether the Cyrus snooze extension is advertised and `Email.snoozed` is accepted.
+    /// Whether the Cyrus snooze extension is advertised.
     pub snooze_extension: bool,
     /// Connected `/eventsource` subscribers for push delivery.
     pub event_source: EventSourceHub,
@@ -126,7 +126,7 @@ impl ServerState {
         State::new(self.session_state.to_string())
     }
 
-    /// Current per-account state counters for pushed types and `/changes`.
+    /// Current per-account state counters used by push and `/changes`.
     pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
         self.accounts
             .iter()
@@ -157,7 +157,7 @@ impl ServerState {
             .collect()
     }
 
-    /// Effective `maxObjectsInGet` shared by session advertisement and request enforcement.
+    /// Effective `maxObjectsInGet` for advertisement and request checks.
     pub fn objects_in_get(&self) -> u64 {
         self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
@@ -186,7 +186,7 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Registers a subscriber and returns its SSE byte receiver; `None` means all types.
+    /// Registers a subscriber and returns its SSE byte receiver.
     pub fn subscribe(
         &mut self,
         types: Option<BTreeSet<String>>,
@@ -196,8 +196,7 @@ impl EventSourceHub {
         receiver
     }
 
-    /// Send `change` to each subscriber after optional type filtering.
-    /// Drop disconnected subscribers, but keep connected subscribers with no matching type.
+    /// Send `change` after optional type filtering, dropping disconnected subscribers.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -257,7 +256,7 @@ pub struct AccountState {
     pub outbox: Vec<RecordedSubmission>,
     /// iTIP scheduling messages from `CalendarEvent/set`, recorded for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
-    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3), seeded by tests.
+    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3).
     pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
@@ -265,11 +264,10 @@ pub struct AccountState {
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
-    /// Stored per account because this mock maps bearer tokens into one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
-    /// `CalendarEventNotification` records keyed by recipient id in the same single-account model.
+    /// `CalendarEventNotification` records keyed by recipient id.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
-    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5); `None` omits it.
+    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
     pub current_user_principal_id: Option<Id>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
