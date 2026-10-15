@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Verifies glibc gettext can read this crate's compiled `.mo` output.
-//! Locale and domain bindings are process-global, so this runs in its own binary.
+//! Verifies glibc gettext can read this crate's `.mo` output in an isolated binary.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -16,13 +15,10 @@ unsafe extern "C" {
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
 }
 
-/// glibc's `LC_MESSAGES` value.
 const LC_MESSAGES: c_int = 5;
 
-/// A test-only gettext domain.
 const DOMAIN: &CStr = c"po-compile-test";
 
-/// Synthetic language tag used through `LANGUAGE`.
 const LANGUAGE: &str = "xx";
 
 const MSGID: &CStr = c"For reading and storing mail on JMAP servers.";

@@ -1,14 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Validates `.po` to `.mo` output and refusal behavior.
-//! It parses generated `.mo` bytes locally so encoder and decoder stay independent.
+//! Validates `.po` to `.mo` output and refusal behavior with local `.mo` parsing.
 
 use std::collections::BTreeMap;
 
 use po_compile::{Error, compile};
 
-/// Header entry required by this compiler.
 const HEADER: &str = "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n";
 
 /// Returns compiled catalogue entries in on-disk order.
@@ -44,7 +42,6 @@ fn read_mo(mo: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Returns compiled entries as a map for order-independent assertions.
 fn entries(po: &str) -> BTreeMap<String, String> {
     read_mo(&compile(po).expect("a catalogue"))
         .into_iter()
