@@ -52,16 +52,12 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 ];
 
 /// JSContact `contexts` keys and their vCard `TYPE` spelling.
-///
-/// A line states at most one context, see [`context_slot`], so EDS keeps each
-/// line in exactly one editable context slot.
+/// A line states at most one context so EDS keeps one editable slot.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
 /// JSContact phone `features` and their vCard `TYPE` spelling, **most
 /// specific first**.
-///
-/// A line states at most one feature, and this order controls which feature is
-/// emitted first, see [`feature_slot`].
+/// A line states at most one feature, and this order picks that feature.
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -70,10 +66,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
-/// The vCard `TYPE` parameter names recognized for each JSContact phone feature on inbound parsing.
-///
-/// Includes common synonyms emitted by real-world generators, for example
-/// `MOBILE` alongside vCard's standard `CELL`.
+/// Accepted inbound `TYPE` spellings for each JSContact phone feature.
+/// Includes common synonyms, for example `MOBILE` beside standard `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -84,7 +78,7 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
 
 /// JSContact address component kinds, paired with their position in the
 /// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
-/// street, locality, region, postal code, country), in on-wire order.
+/// street, locality, region, postal code, country), in wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -149,9 +143,8 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ];
 
 /// URI schemes accepted as bare handles for each online service.
-///
-/// This table lets URI-only entries map to EDS handle fields without guessing.
-/// [`plain_handle`] rejects action/query URIs and non-bare path forms.
+/// This maps URI-only entries to EDS handle fields without guessing.
+/// [`plain_handle`] rejects action or query URIs and non-bare paths.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -177,12 +170,10 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
 const DEFAULT_SLOT: &str = "HOME";
 
 /// Vendor anniversary property used by EDS 3.52 compatibility path.
-///
-/// We emit this and standard `ANNIVERSARY` so EDS 3.52 and 3.60+ both round-trip.
+/// Emitted together with standard `ANNIVERSARY` so EDS 3.52 and 3.60+ round-trip.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
 /// JSContact anniversary kinds that map to vCard/EDS lines.
-///
 /// `death` is omitted because vCard 3.0 and EDS expose no matching field.
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
@@ -208,7 +199,6 @@ const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
 /// JSContact calendar kinds mapped to vCard lines EDS preserves.
-///
 /// `ICSCALENDAR` is excluded because JSContact has no distinct kind for it.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
@@ -216,7 +206,6 @@ const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", 
 const DEFAULT_TITLE_KIND: &str = "title";
 
 /// The kind of a JSContact title, with the default filled in.
-///
 /// Save logic must use the same default to avoid adding `kind` spuriously.
 pub fn title_kind(kind: Option<&str>) -> &str {
     kind.unwrap_or(DEFAULT_TITLE_KIND)
@@ -655,7 +644,6 @@ fn service_of(property: &str) -> Option<&'static str> {
 }
 
 /// Whether two service names are equivalent for mapping lookups.
-///
 /// Compares case-insensitively and ignores punctuation and spacing aliases.
 pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     match (one, other) {
@@ -675,7 +663,6 @@ fn normalised_service(name: &str) -> String {
 }
 
 /// The EDS IM slot for this handle.
-///
 /// Uses JSContact `contexts`; ambiguous or unsupported contexts fall back to [`DEFAULT_SLOT`].
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
@@ -693,7 +680,6 @@ fn service_slot(service: &OnlineService) -> &'static str {
 }
 
 /// Whether one `keywords` entry can be emitted on `CATEGORIES`.
-///
 /// Accepts only `true` set members with non-empty, trim-stable names and no carriage return.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
@@ -703,9 +689,7 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
 }
 
 /// Whether a tag has leading or trailing ASCII whitespace.
-///
-/// This superset avoids writing tags that EDS may trim and then rename on the
-/// next save.
+/// This superset avoids tags EDS may trim and rename on the next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
@@ -722,7 +706,6 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
 }
 
 /// Tags from all `CATEGORIES` lines as a JSContact `keywords` Set.
-///
 /// Returns `None` when no non-empty tags are present, so absence stays distinct
 /// from an explicit empty set in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
