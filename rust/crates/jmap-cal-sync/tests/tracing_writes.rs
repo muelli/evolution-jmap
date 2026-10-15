@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `CalSync::save_component`/`remove_component` trace their writes with
-//! `account_id`/`calendar_id`, the next Track B1 slice after `set_color`
-//! (`tests/color.rs`).
+//! `account_id`/`calendar_id`.
 
 mod common;
 

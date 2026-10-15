@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-config` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-config`.
 //!
 //! Asserts structured fields attached to `tracing` events during OAuth 2.0
 //! discovery, client registration, protected-resource indicator probing,
