@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 82 batch 4: the send path against a real server, and the delivery the
- * mock structurally cannot answer for.
+ * The send path against a real server, and the delivery the mock
+ * structurally cannot answer for.
  *
  * transport-client.c beside this file is the mock leg: it walks the chain
  * from the account through the identity to the transport, sends once, and

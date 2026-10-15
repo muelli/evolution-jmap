@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 82 batches 1 to 3: the mail leg's own client against a real server,
- * the fourth of the live-server clients after book-client.c's `write` phase,
- * cal-live-client.c and collection-client.c.
+ * The mail leg's own client against a real server, the fourth of the
+ * live-server clients after book-client.c's `write` phase, cal-live-client.c
+ * and collection-client.c.
  *
  * `mail-client.c` beside this file is the mock-based suite's client, and it
  * deliberately stays untouched. One run of it subscribes and unsubscribes two
@@ -24,8 +24,8 @@
  *   - `transfer` creates a folder of its own, moves the appended message into
  *     it, copies it back to the inbox, and then puts everything away again:
  *     the folder emptied and deleted, the message expunged.
- *   - `password-prompt` is item 90: it skips the shared preamble entirely and
- *     opens the account's own store twice instead, first with no password
+ *   - `password-prompt` skips the shared preamble entirely and opens the
+ *     account's own store twice instead, first with no password
  *     seeded at all (the state a freshly created account is in) and then with
  *     the real one, to confirm with real Camel, not the mock, that the first
  *     attempt ends in the authentication-required state the base class's own
@@ -155,11 +155,12 @@ test_session_get_password (CamelSession *session,
  * example ... not intended to be used as is": it retries
  * `camel_service_authenticate_sync` forever on `CAMEL_AUTHENTICATION_REJECTED`
  * without ever consulting `get_password` at all, which is a busy-loop here,
- * not the credentials-required state item 90 exists to prove real Camel
- * reaches. A real session (`EMailSession`) overrides this slot with the
- * genuine prompt loop; this is this file's own minimal stand-in: one
- * attempt, and on `REJECTED` exactly one offer of whatever `get_password`
- * has -- which is nothing, for `PHASE_PASSWORD_PROMPT`'s first attempt. */
+ * not the credentials-required state this file's `password-prompt` phase
+ * proves real Camel reaches. A real session (`EMailSession`) overrides this
+ * slot with the genuine prompt loop; this is this file's own minimal
+ * stand-in: one attempt, and on `REJECTED` exactly one offer of whatever
+ * `get_password` has -- which is nothing, for `PHASE_PASSWORD_PROMPT`'s
+ * first attempt. */
 static gboolean
 test_session_authenticate_sync (CamelSession *session,
 				CamelService *service,
@@ -351,7 +352,7 @@ open_store (const gchar *data_dir,
 	return CAMEL_STORE (service);
 }
 
-/* Item 90: finding 12's fix (jmap-mail/src/connect.rs's `StoreError::
+/* Finding 12's fix (jmap-mail/src/connect.rs's `StoreError::
  * Unauthenticated`) has only ever been proven against the mock, which checks
  * no password at all. This drives the real thing: `open_store` first with no
  * password seeded anywhere, which is the state a freshly created account is
