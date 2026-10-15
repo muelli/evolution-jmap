@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles translator `.po` input into runtime `.mo` catalogues.
-//! It implements a small `msgfmt` subset so builds do not depend on gettext tools.
+//! Compiles translator `.po` input into runtime `.mo` catalogues with a small `msgfmt` subset.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -25,7 +24,7 @@ pub enum Error {
     Unsupported { construct: String, line: usize },
     /// A line that is not a comment, keyword, or string continuation.
     Unparsed { line: usize, text: String },
-    /// A backslash escape that is not one of the ones a catalogue uses.
+    /// A backslash escape this parser does not accept.
     UnknownEscape { line: usize, escape: char },
     /// A `msgid` whose entry ended before its `msgstr`.
     NoMsgstr { line: usize, msgid: String },
@@ -207,7 +206,7 @@ fn take(
         });
     };
 
-    // Keep fuzzy headers because they carry the charset declaration.
+    // Keep fuzzy headers so the charset declaration stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -264,7 +263,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // `.po` also allows octal and hex escapes, which this parser rejects.
+            // `.po` allows octal and hex escapes, but this parser rejects them.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
