@@ -895,7 +895,7 @@ fn a_title_of_a_vendor_kind_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
     // vCard 3.0 has TITLE and ROLE and nothing else, so an entry of a kind
-    // outside RFC 9553 §2.2.4's two is dropped on the way out — and must not
+    // outside RFC 9553 §2.2.5's two is dropped on the way out — and must not
     // then be deleted by a save that never showed it.
     fixture.patch(
         &id,
