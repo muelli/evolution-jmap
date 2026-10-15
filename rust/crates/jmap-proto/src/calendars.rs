@@ -302,7 +302,7 @@ pub struct CalendarEvent {
     /// Single recurrence rule (jscalendarbis §3.3.3 replaces RFC 8984 array).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rule: Option<RecurrenceRule>,
-    /// Recurrence overrides (RFC 8984 §4.3.4): map from start `LocalDateTime`
+    /// Recurrence overrides (RFC 8984 §4.3.5): map from start `LocalDateTime`
     /// to patch object. Kept as JSON to preserve arbitrary patch properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_overrides: Option<BTreeMap<String, Value>>,
@@ -750,7 +750,7 @@ pub mod include_in_availability {
     pub const NONE: &str = "none";
 }
 
-/// Standard JSCalendar (RFC 8984 §4.4.4) / jscalendarbis event status values.
+/// Standard JSCalendar (RFC 8984 §5.1.3 / jscalendarbis §4.1.4) event status values.
 pub mod event_status {
     pub const CONFIRMED: &str = "confirmed";
     pub const TENTATIVE: &str = "tentative";
@@ -1530,7 +1530,7 @@ impl CalendarsCapability {
     }
 }
 
-/// Standard RFC 8984 §4.4.5 event relation types.
+/// Standard RFC 8984 §1.4.10 event relation types.
 pub mod event_relation_type {
     pub const FIRST: &str = "first";
     pub const NEXT: &str = "next";
@@ -1567,7 +1567,7 @@ impl AbsoluteTrigger {
     }
 }
 
-/// JSCalendar Relation (RFC 8984 §4.4.5): how this event relates to another.
+/// JSCalendar Relation (RFC 8984 §1.4.10): how this event relates to another.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EventRelation {
@@ -1726,7 +1726,7 @@ impl From<BTreeMap<String, Value>> for GroupEntries {
     }
 }
 
-/// JSCalendar Group (RFC 8984 §6): a collection of calendar objects.
+/// JSCalendar Group (RFC 8984 §2.3 / §5.3): a collection of calendar objects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarGroup {
@@ -2257,7 +2257,7 @@ impl ParticipantReply {
     }
 }
 
-/// Standard participation status values for participants and replies (draft-ietf-jmap-calendars-28 §10, RFC 8984 §4.4.5).
+/// Standard participation status values for participants and replies (draft-ietf-jmap-calendars-28 §10, RFC 8984 §4.4.6).
 pub mod participant_participation_status {
     pub const NEEDS_ACTION: &str = "needs-action";
     pub const ACCEPTED: &str = "accepted";

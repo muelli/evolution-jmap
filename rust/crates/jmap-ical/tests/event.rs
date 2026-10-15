@@ -1431,7 +1431,7 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
 }
 
 /// An event tagged the way a server tags it: RFC 8984 §4.2.9's `keywords` is an
-/// RFC 8984 §1.4.3 Set, so the keys are the tags and every value is `true`.
+/// RFC 8984 §4.2.9 Set, so the keys are the tags and every value is `true`.
 fn tagged<const N: usize>(keywords: [(&str, Value); N]) -> CalendarEvent {
     CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
@@ -1521,7 +1521,7 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
 
 #[test]
 fn a_tag_the_component_cannot_show_is_flagged_rather_than_drawn() {
-    // RFC 8984 §1.4.3 has every value of a Set be `true`. Anything else is an
+    // RFC 8984 §4.2.9 has every value of a Set be `true`. Anything else is an
     // entry this mapping will not put on the line: writing it would say the tag
     // is set when the server said it is not, and drawing nothing at all would
     // have a save replacing the property delete it.
@@ -1806,7 +1806,7 @@ fn a_reminder_is_a_valarm_of_its_own() {
     assert_eq!(content_line(&ics, "ACTION"), "ACTION:DISPLAY");
     // RFC 5545 §3.8.6.3 spells the offset as a signed duration, negative for a
     // reminder before the event, and defaults it to relating to the start :
-    // which is what RFC 8984 §4.5.3's `relativeTo` defaults to as well, so there
+    // which is what RFC 8984 §4.5.2's `relativeTo` defaults to as well, so there
     // is nothing to state.
     assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER:-PT15M");
     // RFC 9074 §6 gives a VALARM a UID, which is where the key of the `alerts`
@@ -1829,7 +1829,7 @@ fn a_reminder_is_a_valarm_of_its_own() {
 
 #[test]
 fn a_reminder_after_the_end_states_what_it_is_relative_to() {
-    // RFC 8984 §4.5.3's `relativeTo` is `start` or `end`, and RFC 5545 §3.2.14's
+    // RFC 8984 §4.5.2's `relativeTo` is `start` or `end`, and RFC 5545 §3.2.14's
     // `RELATED` parameter is the same choice with the same default, so only the
     // end has to be written.
     let event = reminded([(
@@ -1888,7 +1888,7 @@ fn a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn() {
         // An action iCalendar can spell only with an ATTENDEE and a SUMMARY this
         // mapping has nothing to fill in from.
         json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "action": "email"}),
-        // A trigger at an absolute instant (RFC 8984 §4.5.4), which is not the
+        // A trigger at an absolute instant (RFC 8984 §4.5.2), which is not the
         // duration this mapping writes.
         json!({"@type": "Alert", "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T12:45:00Z"}}),
         // A reminder the user has already dismissed or snoozed (RFC 9074 §6.1),
@@ -1904,7 +1904,7 @@ fn a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn() {
         // An offset that is no duration, and one iCalendar cannot carry.
         json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "quarter of an hour"}}),
         json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": 900}}),
-        // A `relativeTo` outside the two RFC 8984 §4.5.3 admits: a `RELATED` this
+        // A `relativeTo` outside the two RFC 8984 §4.5.2 admits: a `RELATED` this
         // mapping guessed at would move the reminder.
         json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M", "relativeTo": "middle"}}),
         // And a trigger with something on it this mapping does not draw.
@@ -6047,7 +6047,7 @@ fn a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with() {
 }
 
 /// And the *definition* survives it too, which is what makes the identifier
-/// worth anything: RFC 8984 §1.4.9 admits a custom `TimeZoneId` only beside the
+/// worth anything: RFC 8984 §1.4.8 admits a custom `TimeZoneId` only beside the
 /// `timeZones` entry that says what zone it is, so an event carrying the one
 /// without the other names a zone nothing can resolve. A server is entitled to
 /// refuse it, and a reader that does not floats the appointment hours from where
@@ -6639,7 +6639,7 @@ fn an_occurrence_moved_into_a_custom_zone_is_drawn_in_that_zone() {
 ///
 /// `ical_to_event` used to look for one definition (the series') so an
 /// occurrence's own custom identifier reached the server with nothing to resolve
-/// it. That is a dangling `TimeZoneId`, which RFC 8984 §1.4.9 does not admit and
+/// it. That is a dangling `TimeZoneId`, which RFC 8984 §1.4.8 does not admit and
 /// a server is entitled to reject; and a server that keeps it has one occurrence
 /// floating.
 #[test]
@@ -7191,7 +7191,7 @@ fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
             "roles": {"x-cameo": true},
             "participationStatus": "asleep",
             "kind": "hologram",
-            // RFC 8984 §1.4.3 has every value of a Set be true; anything else
+            // RFC 8984 §4.4.6 has every value of a Set be true; anything else
             // says nothing was set.
             "expectReply": "yes",
         })),
@@ -7338,7 +7338,7 @@ fn a_way_of_joining_outside_the_shared_vocabulary_is_left_off() {
         "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
             "features": {
                 "hologram": true,
-                // RFC 8984 §1.4.3 has every value of a Set be true; anything
+                // RFC 8984 §4.2.9 has every value of a Set be true; anything
                 // else says nothing was set.
                 "video": "yes",
                 "screen": true,
@@ -16557,7 +16557,7 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
 #[test]
 fn differential_oracle_recurrence_rule_singular_fidelity_and_jscalendar_bis_conformance() {
     // Audit divergence 1 against live Stalwart oracle:
-    // RFC 8984 §4.3.1 specified recurrenceRules as a plural array.
+    // RFC 8984 §4.3.3 specified recurrenceRules as a plural array.
     // draft-ietf-calext-jscalendarbis §3.3.3 restructured recurrenceRule as a
     // singular object, and draft-ietf-jmap-calendars-28 §1.4 mandates this.
     // Stalwart v1.0.0 emits recurrenceRule (singular object).
@@ -17134,7 +17134,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_valarm_absolute_triggers_dropped_on_import_and_refused_on_export() {
     // Divergence 13 against Stalwart differential oracle:
     // RFC 5545 section 3.8.6.3 defines TRIGGER;VALUE=DATE-TIME. Stalwart v1.0.0
-    // maps absolute date-time triggers to JSCalendar AbsoluteTrigger (RFC 8984 section 4.5.4).
+    // maps absolute date-time triggers to JSCalendar AbsoluteTrigger (RFC 8984 section 4.5.2).
     // In contrast, jmap-ical only supports relative OffsetTrigger, dropping
     // absolute triggers on import without polluting extra.
     // Outbound safety: maps_alerts returns false for AbsoluteTrigger objects,
@@ -17808,7 +17808,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_status_mapping_omission_and_task_status_rejection() {
     // Divergence 24 against Stalwart differential oracle:
     // RFC 5545 section 3.8.1.11 defines STATUS for VEVENT: TENTATIVE, CONFIRMED, CANCELLED.
-    // RFC 8984 section 4.4.5 defines status: String (default: "confirmed").
+    // RFC 8984 section 5.1.3 defines status: String (default: "confirmed").
     // Stalwart v1.0.0 defaults an omitted STATUS to "confirmed" during CalendarEvent/parse.
     // In contrast, jmap-ical:
     // 1. Maps CONFIRMED to "confirmed", CANCELLED to "cancelled", and TENTATIVE to "tentative" (case-insensitive).
@@ -17944,7 +17944,7 @@ END:VCALENDAR\r\n",
 fn differential_oracle_show_without_time_all_day_representation_and_defensive_fallback() {
     // Divergence 26 against Stalwart differential oracle:
     // RFC 5545 section 3.8.2.4 defines all-day events using DTSTART;VALUE=DATE:YYYYMMDD.
-    // RFC 8984 section 4.1.5 models all-day events as showWithoutTime: Boolean (default: false),
+    // RFC 8984 section 4.2.4 models all-day events as showWithoutTime: Boolean (default: false),
     // with start at midnight (00:00:00) and timeZone: null.
     // Stalwart v1.0.0 parses VALUE=DATE into showWithoutTime: true and timeZone: null.
     // In contrast, jmap-ical:
@@ -18005,7 +18005,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_recurrence_overrides_exdate_rdate_and_thisandfuture_boundary() {
     // Divergence 27 against Stalwart differential oracle:
     // RFC 5545 specifies EXDATE (exceptions), RDATE (additions), and RECURRENCE-ID;RANGE=THISANDFUTURE.
-    // RFC 8984 section 4.3.4 models all instance exceptions within recurrenceOverrides.
+    // RFC 8984 section 4.3.5 models all instance exceptions within recurrenceOverrides.
     // Stalwart v1.0.0 maps EXDATE to {"excluded": true} and RDATE to {}.
     // In contrast, jmap-ical's read_overrides:
     // 1. Maps EXDATE to {"excluded": true} and RDATE to {}.
@@ -18345,7 +18345,7 @@ fn differential_oracle_resources_equipment_room_lists_dropped_on_import() {
     // Divergence 32 against Stalwart differential oracle:
     // RFC 5545 section 3.8.1.10 defines RESOURCES as a comma-separated list of equipment or resource names
     // (e.g. RESOURCES:EASEL,PROJECTOR,CONFERENCE ROOM A).
-    // In RFC 8984 / jscalendarbis section 4.4, resources can be represented in participants with kind: "resource",
+    // In RFC 8984 §4.4.6 / jscalendarbis §3.4.6, resources can be represented in participants with kind: "resource",
     // or in locations with locationTypes: ["resource"].
     // Stalwart v1.0.0 parses RESOURCES into participant or location resource records, or preserves them
     // in tracking dictionaries.
@@ -18907,7 +18907,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_rrule_until_timezone_conversion_and_all_day_date_formatting() {
     // Divergence 42 against Stalwart differential oracle:
     // RFC 5545 section 3.3.10 requires UNTIL to be UTC when DTSTART carries a TZID, and date-only
-    // when DTSTART is a DATE. RFC 8984 section 4.3.1 models until as a LocalDateTime without offset or Z.
+    // when DTSTART is a DATE. RFC 8984 section 4.3.3 models until as a LocalDateTime without offset or Z.
     // Stalwart v1.0.0 parses UNTIL into local LocalDateTime.
     // In contrast, jmap-ical's read_until converts UTC UNTIL into local time using the observance offset
     // when VTIMEZONE definitions are in scope, and rule_to_rrule formats date-only UNTIL for all-day events
@@ -18968,7 +18968,7 @@ END:VCALENDAR\r\n";
         .recurrence_rule
         .as_ref()
         .expect("allday rule present");
-    // In JSCalendar RFC 8984 section 4.3.1, until is always a LocalDateTime ("YYYY-MM-DDTHH:MM:SS")
+    // In JSCalendar RFC 8984 section 4.3.3, until is always a LocalDateTime ("YYYY-MM-DDTHH:MM:SS")
     assert_eq!(allday_rule.until.as_deref(), Some("2026-08-31T00:00:00"));
 
     let out_allday = event_to_ical(&allday_ev);
@@ -19365,7 +19365,7 @@ fn differential_oracle_rrule_endpoint_count_and_until_mutual_exclusivity_handlin
     // Divergence 49 against Stalwart differential oracle:
     // RFC 5545 section 3.3.10 explicitly specifies: "The UNTIL or COUNT rule parts are optional,
     // but UNTIL and COUNT rule parts MUST NOT occur in the same 'recurrence-rule'."
-    // RFC 8984 section 4.3.1 specifies: "Both MUST NOT be present in the same RecurrenceRule;
+    // RFC 8984 section 4.3.3 specifies: "Both MUST NOT be present in the same RecurrenceRule;
     // if both are present, the until rule part MUST be ignored."
     // Stalwart v1.0.0 enforces RFC 8984 preference or rejects conflicting rules.
     // In jmap-ical: standard bounded events specify either count or until, or neither (unbounded).
@@ -19859,8 +19859,8 @@ fn differential_oracle_recurrence_override_instance_key_local_datetime_and_recur
 {
     // Divergence 56 against Stalwart differential oracle:
     // RFC 5545 section 3.8.4.4 specifies RECURRENCE-ID identifying an instance of a recurrence.
-    // RFC 8984 section 4.3.4 models recurrenceOverrides: Map<LocalDateTime, PatchObject>.
-    // RFC 8984 section 1.4.3 specifies LocalDateTime MUST NOT include a timezone offset or 'Z'.
+    // RFC 8984 section 4.3.5 models recurrenceOverrides: Map<LocalDateTime, PatchObject>.
+    // RFC 8984 section 1.4.5 specifies LocalDateTime MUST NOT include a timezone offset or 'Z'.
     // Stalwart v1.0.0 keys recurrenceOverrides using local date-time strings.
     // In jmap-ical: read_overrides converts RECURRENCE-ID to local date-time strings without Z;
     // event_to_ical serializes overrides as detached VEVENT blocks with matching RECURRENCE-ID;
@@ -20196,7 +20196,7 @@ fn differential_oracle_recurrence_override_timezone_scoping_and_custom_zone_defi
 fn differential_oracle_recurrence_override_null_property_removal_and_detached_component_roundtrip()
 {
     // Divergence 60 against Stalwart differential oracle:
-    // RFC 8984 section 4.3.4 models per-instance modifications as a PatchObject, where setting
+    // RFC 8984 section 4.3.5 models per-instance modifications as a PatchObject, where setting
     // a property to null removes or unsets that property on the instance.
     // In RFC 5545, a detached VEVENT component simply omits the corresponding content line.
     // In jmap-ical:
@@ -20335,7 +20335,7 @@ fn differential_oracle_recurrence_override_rescheduled_start_time_and_recurrence
     // RFC 5545 section 3.8.4.4 models recurring instances using RECURRENCE-ID, which identifies
     // the original recurrence occurrence slot. When an instance is rescheduled, DTSTART specifies
     // the new time while RECURRENCE-ID retains the original slot.
-    // RFC 8984 section 4.3.4 keys recurrenceOverrides by the original slot (id), and includes
+    // RFC 8984 section 4.3.5 keys recurrenceOverrides by the original slot (id), and includes
     // "start" in the PatchObject only when rescheduled to a different time.
     // In jmap-ical:
     // 1. Inbound instance_patch suppresses "start" when DTSTART == id, avoiding redundant fields.
@@ -20409,7 +20409,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_recurrence_override_duration_modification_and_rdate_period_calculation() {
     // Divergence 63 against Stalwart differential oracle:
     // RFC 5545 section 3.8.5.2 permits RDATE values to be discrete dates or periods (start/end).
-    // RFC 8984 section 4.3.4 models extra instances added via RDATE as recurrenceOverrides entries.
+    // RFC 8984 section 4.3.5 models extra instances added via RDATE as recurrenceOverrides entries.
     // If an instance shares the series duration, duration is omitted; if it differs, duration
     // is explicitly stated.
     // In jmap-ical:
@@ -20486,9 +20486,9 @@ END:VCALENDAR\r\n";
 fn differential_oracle_recurrence_override_status_mapping_and_cancellation_semantics() {
     // Divergence 64 against Stalwart differential oracle:
     // In RFC 5545 section 3.8.1.11, STATUS on a recurring detached VEVENT takes CONFIRMED,
-    // CANCELLED, or TENTATIVE. In RFC 8984 section 4.4.4, status takes "confirmed", "cancelled",
+    // CANCELLED, or TENTATIVE. In RFC 8984 section 5.1.3, status takes "confirmed", "cancelled",
     // or "tentative".
-    // RFC 8984 section 4.3.4 distinguishes "excluded": true (an occurrence completely dropped via
+    // RFC 8984 section 4.3.6 distinguishes "excluded": true (an occurrence completely dropped via
     // EXDATE) from "status": "cancelled" (an occurrence retained in the schedule as cancelled).
     // In jmap-ical:
     // 1. instance_patch records "status": "cancelled" or "tentative" when differing from series.
@@ -20868,7 +20868,7 @@ END:VCALENDAR\r\n";
 fn differential_oracle_recurrence_override_keywords_categories_mapping_and_null_removal() {
     // Divergence 68 against Stalwart differential oracle:
     // RFC 5545 section 3.8.1.2 defines CATEGORIES (comma-separated tags).
-    // RFC 8984 section 4.4.5 defines keywords: Map<String, Boolean>.
+    // RFC 8984 section 4.2.9 defines keywords: Map<String, Boolean>.
     // In jmap-ical:
     // 1. instance_patch records keywords when differing from series, or null when cleared.
     // 2. maps_recurrence_override admits non-empty maps with valid boolean true tags, and null.
@@ -22393,7 +22393,7 @@ fn differential_oracle_vtimezone_transition_day_modeling_and_bounded_search() {
 fn differential_oracle_zoned_until_unresolvable_z_preservation_and_refusal() {
     // Divergence 94 against Stalwart differential oracle:
     // RFC 5545 section 3.3.10 requires UNTIL in a zoned event to be stated in UTC ('Z').
-    // RFC 8984 section 4.3.1 requires JSCalendar until to be local LocalDateTime (no 'Z').
+    // RFC 8984 section 4.3.3 requires JSCalendar until to be local LocalDateTime (no 'Z').
     // In jmap-ical:
     // 1. If DTSTART names a non-UTC time zone and the document provides no VTIMEZONE definition
     //    (or an unresolvable definition), read_until preserves the trailing 'Z' marker.
@@ -22506,7 +22506,7 @@ fn differential_oracle_timezone_identifier_translation_precedence_and_peeling() 
 #[test]
 fn differential_oracle_custom_solidus_timezone_definition_ingestion_and_sendability() {
     // Divergence 96 against Stalwart differential oracle:
-    // RFC 8984 section 1.4.9 admits two forms of TimeZoneId: standard IANA names and solidus-prefixed custom IDs.
+    // RFC 8984 section 1.4.8 admits two forms of TimeZoneId: standard IANA names and solidus-prefixed custom IDs.
     // RFC 8984 section 4.7.2 requires custom solidus IDs to be defined in timeZones.
     // In jmap-ical:
     // 1. Inbound: standard IANA zones (Europe/Berlin) with inline VTIMEZONE are pruned (time_zones: None),
@@ -25018,7 +25018,7 @@ fn differential_oracle_recurrence_dates_unexcluded_non_drawable_override_preserv
 #[test]
 fn differential_oracle_names_map_entry_id_syntax_validation_and_invented_key_fallback() {
     // Divergence 127 against Stalwart differential oracle:
-    // names_map_entry RFC 8984 section 1.4.4 Id syntax validation and key sanitization.
+    // names_map_entry RFC 8984 section 1.4.1 Id syntax validation and key sanitization.
     // In jmap-ical:
     // 1. Valid RFC 8984 Id keys (1..=255 octets of alphanumeric, '-', '_') in X-JMAP-KEY
     //    or UID are preserved directly into map keys.
@@ -27586,7 +27586,7 @@ fn differential_oracle_drawn_participants_single_organizer_and_dual_role_attenda
 #[test]
 fn differential_oracle_instance_patch_cleared_properties_nullification_and_relative_start() {
     // Divergence 157 against Stalwart differential oracle:
-    // instance_patch, read_overrides, and OVERRIDE_PROPERTIES: Detached Instance RFC 8984 section 4.3.4
+    // instance_patch, read_overrides, and OVERRIDE_PROPERTIES: Detached Instance RFC 8984 section 4.3.5
     // PatchObject Minimal Delta Generation: Nullification of Cleared Series Properties,
     // Minimal Recurrence-ID Relative Start Comparison, and Unsupported Field Shielding.
 
@@ -28312,7 +28312,7 @@ fn differential_oracle_read_vevent_series_identification_and_version_gating() {
     // Divergence 164 against Stalwart differential oracle:
     // read_vevent, ical_to_event, and ICalError::NoEvent:
     // Inbound Series Identification via RECURRENCE-ID Absence, Fallback on All-Detached Streams,
-    // and Standalone vs Embedded version: "2.0" Gating (RFC 8984 section 3.1.2).
+    // and Standalone vs Embedded version: "2.0" Gating (jscalendarbis section 3.1.2).
 
     // 1. Inbound stream where detached VEVENT appears FIRST and master series appears SECOND
     let ics_unordered = concat!(
@@ -30609,7 +30609,7 @@ fn differential_oracle_alert_masking_and_trigger_serialization() {
     // Divergence 190 against Stalwart differential oracle:
     // maps_alerts, uses_default_alerts, drawn_alert, drawn_trigger, and drawn_alarms:
     // Alert and Alarm Outbound Serialization: RFC 8984 Section 4.5.1 Default Alert Masking (useDefaultAlerts),
-    // RFC 9074 Section 6 Stable UID Preservation, RFC 8984 Section 4.5.3 OffsetTrigger Mapping with Canonical RELATED (START vs END),
+    // RFC 9074 Section 6 Stable UID Preservation, RFC 8984 Section 4.5.2 OffsetTrigger Mapping with Canonical RELATED (START vs END),
     // Absolute Trigger Rejection, and Summary-Derived DESCRIPTION Generation.
 
     // 1. uses_default_alerts: masks alarms when defaults are active
@@ -38700,7 +38700,7 @@ fn differential_oracle_all_day_dtstart_midnight_and_subday_rrule_gating() {
 
 #[test]
 fn differential_oracle_inbound_map_entry_id_validation_and_invented_keys() {
-    // 1. names_map_entry RFC 8984 Section 1.4.4 Id validation
+    // 1. names_map_entry RFC 8984 Section 1.4.1 Id validation
     assert!(jmap_ical::event::names_map_entry("a1"));
     assert!(jmap_ical::event::names_map_entry("loc_42"));
     assert!(jmap_ical::event::names_map_entry("uuid-123-abc"));
@@ -42851,7 +42851,7 @@ fn differential_oracle_start_date_disambiguation_show_without_time_and_boundarie
 fn differential_oracle_recurrence_overrides_exdate_rdate_and_patch_computation() {
     // Audit divergence 345: Recurrence override ingestion, difference computation, and property masking:
     // RFC 5545 EXDATE / RDATE precedence, RECURRENCE-ID detached instance ingestion,
-    // RFC 8984 Section 4.3.4 PatchObject difference resolution, and range boundary (RANGE=THISANDFUTURE rejection).
+    // RFC 8984 Section 4.3.5 / Section 1.4.9 PatchObject difference resolution, and range boundary (RANGE=THISANDFUTURE rejection).
 
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
@@ -43038,7 +43038,7 @@ fn differential_oracle_standalone_version_stamping_and_embedded_elision() {
 #[test]
 fn differential_oracle_sequence_revision_counter_handling_and_store_ownership() {
     // Audit divergence 349: Sequence revision counter management across recurrence series and overrides:
-    // RFC 5545 Section 3.8.7.4 SEQUENCE vs RFC 8984 Section 4.4.4 sequence, JMAP stateful store revision
+    // RFC 5545 Section 3.8.7.4 SEQUENCE vs RFC 8984 Section 4.1.7 sequence, JMAP stateful store revision
     // ownership, and omission of unmanaged sequence counters on import and export.
 
     let ics = concat!(
@@ -43664,7 +43664,7 @@ fn differential_oracle_check_structure_depth_bounding_and_nesting_integrity() {
 fn differential_oracle_keywords_categories_whitespace_normalization_and_override_nullification() {
     // Audit divergence 360: Category keywords delimiter parsing, whitespace normalization,
     // and override instance patch nullification: RFC 5545 Section 3.8.1.2 CATEGORIES vs
-    // RFC 8984 Section 4.1.8 keywords, lexicographical map key ordering, carriage return
+    // RFC 8984 Section 4.2.9 keywords, lexicographical map key ordering, carriage return
     // injection protection, and empty set filtering.
 
     // 1. Inbound parsing splits multiple CATEGORIES lines across commas and trims whitespace
@@ -44111,7 +44111,7 @@ fn differential_oracle_participants_roster_organizer_attendee_and_scheduling_iso
 #[test]
 fn differential_oracle_recurrence_rules_plurality_type_stamping_and_nday_offsets() {
     // Audit divergence 366: Recurrence rule plurality, type stamping, and frequency token alignment:
-    // RFC 5545 Section 3.8.5.3 RRULE vs RFC 8984 Section 4.3.1 recurrenceRules (plural array) vs
+    // RFC 5545 Section 3.8.5.3 RRULE vs RFC 8984 Section 4.3.3 recurrenceRules (plural array) vs
     // Stalwart recurrenceRule (singular object), RFC 8984 @type: "RecurrenceRule" and @type: "NDay"
     // enforcement, and signed ordinal day offset representation.
 
@@ -44519,7 +44519,7 @@ fn differential_oracle_sequence_default_value_omission_and_store_ownership() {
 #[test]
 fn differential_oracle_itip_method_transport_isolation_and_envelope_synthesis() {
     // Audit divergence 373: Transport envelope method isolation vs persistent calendar
-    // component entity state: RFC 5545 Section 3.7.2 METHOD vs RFC 8984 Section 4.4.4
+    // component entity state: RFC 5545 Section 3.7.2 METHOD vs RFC 8984 Section 4.1.8
     // and RFC 5546 iTIP transport envelopes.
 
     // 1. Inbound import ignores VCALENDAR METHOD:PUBLISH and isolates the persistent event entity
@@ -45400,7 +45400,7 @@ fn differential_oracle_participant_roster_and_organizer_dual_role_serialization(
 fn differential_oracle_recurrence_rule_and_nday_schema_typing() {
     // Audit divergence 389: recurrenceRule, RecurrenceRule, NDay, @type
     // annotation, and case-insensitive frequency tokens: RFC 5545 Section 3.8.5.3
-    // RRULE vs RFC 8984 Section 4.3.1 recurrenceRules / Section 4.3.2 NDay
+    // RRULE vs RFC 8984 Section 4.3.3 recurrenceRules / Section 4.3.3 NDay
     // vs draft-ietf-calext-jscalendarbis contextual @type elision.
 
     // 1. Inbound parsing explicitly sets @type: "RecurrenceRule" and @type: "NDay"
@@ -45850,7 +45850,7 @@ fn differential_oracle_recurrence_overrides_status_lifecycle_and_confirmation() 
 fn differential_oracle_recurrence_overrides_transparency_and_privacy_nullification() {
     // Audit divergence 397: recurrenceOverrides, freeBusyStatus, privacy, TRANSP, CLASS, and
     // explicit property nullification vs implicit server fallback: RFC 5545 Section 3.8.1.3 CLASS,
-    // Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.3.4 PatchObject.
+    // Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing writes explicit null for omitted TRANSP and CLASS properties
     // so that detached occurrences do not inherit the master series settings.
@@ -46805,7 +46805,7 @@ fn differential_oracle_recurrence_overrides_updated_timestamp_isolation() {
 #[test]
 fn differential_oracle_recurrence_overrides_show_without_time_document_wide_invariance() {
     // Audit divergence 414: Recurrence overrides showWithoutTime document-wide all-day invariance vs per-instance override exclusion:
-    // RFC 5545 Section 3.8.2.4 DTSTART;VALUE=DATE vs RFC 8984 Section 4.1.5 showWithoutTime, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+    // RFC 5545 Section 3.8.2.4 DTSTART;VALUE=DATE vs RFC 8984 Section 4.2.4 showWithoutTime, Section 4.3.5 PatchObject, and OVERRIDE_PROPERTIES.
 
     // 1. OVERRIDE_PROPERTIES strictly excludes showWithoutTime.
     assert!(
@@ -46952,7 +46952,7 @@ fn differential_oracle_recurrence_overrides_alerts_identical_restatement_elision
 #[test]
 fn differential_oracle_recurrence_overrides_duration_unchanged_restatement_elision() {
     // Audit divergence 417: Recurrence overrides duration unchanged occurrence duration restatement elision vs full component duplication:
-    // RFC 5545 Section 3.8.2.5 DURATION, Section 3.8.2.2 DTEND vs RFC 8984 Section 4.2.2 duration and Section 4.3.4 PatchObject.
+    // RFC 5545 Section 3.8.2.5 DURATION, Section 3.8.2.2 DTEND vs RFC 8984 Section 5.1.2 duration and Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing: thunderbird detached export master has duration PT1H30M (10:00 to 11:30).
     // Occurrence 2026-11-16T10:00:00 has DTSTART 10:00:00 and DTEND 11:30:00 (duration PT1H30M).
@@ -47231,7 +47231,7 @@ fn differential_oracle_recurrence_overrides_organizer_scheduling_isolation() {
 #[test]
 fn differential_oracle_recurrence_overrides_transparency_unchanged_elision() {
     // Audit divergence 422: Recurrence overrides freeBusyStatus TRANSP unchanged transparency restatement elision vs full component duplication:
-    // RFC 5545 Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.1.4 freeBusyStatus and Section 4.3.4 PatchObject.
+    // RFC 5545 Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.4.2 freeBusyStatus and Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify TRANSP:OPAQUE (freeBusyStatus: busy).
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
@@ -47283,7 +47283,7 @@ fn differential_oracle_recurrence_overrides_transparency_unchanged_elision() {
 #[test]
 fn differential_oracle_recurrence_overrides_privacy_unchanged_elision() {
     // Audit divergence 423: Recurrence overrides privacy CLASS unchanged classification restatement elision vs full component duplication:
-    // RFC 5545 Section 3.8.1.3 CLASS vs RFC 8984 Section 4.1.4 privacy and Section 4.3.4 PatchObject.
+    // RFC 5545 Section 3.8.1.3 CLASS vs RFC 8984 Section 4.4.3 privacy and Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify CLASS:PUBLIC (privacy: public).
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
@@ -47335,7 +47335,7 @@ fn differential_oracle_recurrence_overrides_privacy_unchanged_elision() {
 #[test]
 fn differential_oracle_recurrence_overrides_status_modification_and_elision() {
     // Audit divergence 424: Recurrence overrides status STATUS modification, confirmation restatement elision, and cancellation vs standalone component duplication:
-    // RFC 5545 Section 3.8.1.11 STATUS vs RFC 8984 Section 4.1.4 status and Section 4.3.4 PatchObject.
+    // RFC 5545 Section 3.8.1.11 STATUS vs RFC 8984 Section 5.1.3 status and Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify STATUS:CONFIRMED.
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
@@ -47402,7 +47402,7 @@ fn differential_oracle_recurrence_overrides_status_modification_and_elision() {
 #[test]
 fn differential_oracle_recurrence_overrides_keyword_modification_and_nullification() {
     // Audit divergence 425: Recurrence overrides keywords CATEGORIES modification, category map inheritance, and explicit category nullification vs standalone component dropping:
-    // RFC 5545 Section 3.8.1.2 CATEGORIES vs RFC 8984 Section 4.1.8 keywords and Section 4.3.4 PatchObject.
+    // RFC 5545 Section 3.8.1.2 CATEGORIES vs RFC 8984 Section 4.2.9 keywords and Section 4.3.5 PatchObject.
 
     // 1. Inbound parsing: in thunderbird_detached_export.ics, master has categories Mozilla,Engineering.
     // Occurrence 2026-10-19 modifies categories to Mozilla,Engineering,Benchmark.
@@ -47471,7 +47471,7 @@ fn differential_oracle_recurrence_overrides_keyword_modification_and_nullificati
 #[test]
 fn differential_oracle_recurrence_overrides_excluded_vs_cancelled_status() {
     // Audit divergence 426: Recurrence overrides excluded: true EXDATE vs STATUS:CANCELLED complete instance removal vs explicit meeting cancellation modeling:
-    // RFC 5545 Section 3.8.5.1 EXDATE, Section 3.8.1.11 STATUS:CANCELLED, Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.4 recurrenceOverrides and excluded.
+    // RFC 5545 Section 3.8.5.1 EXDATE, Section 3.8.1.11 STATUS:CANCELLED, Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.5 recurrenceOverrides and Section 4.3.6 excluded.
 
     // 1. Inbound parsing: EXDATE is mapped to {"excluded": true}, whereas detached VEVENT with STATUS:CANCELLED produces patch delta with status: cancelled.
     let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
@@ -47525,7 +47525,7 @@ fn differential_oracle_recurrence_overrides_excluded_vs_cancelled_status() {
 #[test]
 fn differential_oracle_recurrence_overrides_range_thisandfuture_isolation() {
     // Audit divergence 427: Recurrence overrides RECURRENCE-ID RANGE=THISANDFUTURE single-occurrence scope isolation vs series truncation skipping:
-    // RFC 5545 Section 3.2.13 RANGE and Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.4 recurrenceOverrides Instant-Based Keying.
+    // RFC 5545 Section 3.2.13 RANGE and Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.5 recurrenceOverrides Instant-Based Keying.
 
     // Inbound parsing: when a detached VEVENT carries RECURRENCE-ID;RANGE=THISANDFUTURE, read_overrides skips it
     // because JSCalendar recurrenceOverrides cannot express open-ended series truncation or future ranges.
@@ -47595,8 +47595,8 @@ fn differential_oracle_recurrence_overrides_range_thisandfuture_isolation() {
 #[test]
 fn differential_oracle_recurrence_rule_type_tagging_and_nday_serialization() {
     // Audit divergence 428: recurrenceRule @type: "RecurrenceRule", byDay @type: "NDay",
-    // explicit type tagging vs default omission: RFC 8984 Section 4.3.1 RecurrenceRule,
-    // Section 4.3.3 NDay, Section 1.4.3 @type vs stateless oracle type omission.
+    // explicit type tagging vs default omission: RFC 8984 Section 4.3.3 RecurrenceRule,
+    // Section 4.3.3 NDay, Section 4.1.1 @type vs stateless oracle type omission.
 
     // 1. Inbound parsing: jmap-ical produces explicit @type tags on RecurrenceRule and NDay.
     let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
@@ -47761,7 +47761,7 @@ fn differential_oracle_links_attach_default_relation_omission_and_outbound_handl
 #[test]
 fn differential_oracle_sub_entity_keys_x_jmap_key_preservation_vs_uuid_synthesis() {
     // Audit divergence 430: locations, virtualLocations, links inbound X-JMAP-KEY preservation
-    // vs random UUID key synthesis: RFC 8984 Section 1.4.4 Id vs stateless oracle UUID keying.
+    // vs random UUID key synthesis: RFC 8984 Section 1.4.1 Id vs stateless oracle UUID keying.
 
     // 1. Inbound parsing of evolution_calendar_export.ics preserves X-JMAP-KEY across sub-entity maps.
     let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
@@ -48093,7 +48093,7 @@ fn differential_oracle_caldav_prodid_and_container_roundtrip_stability() {
 #[test]
 fn differential_oracle_zero_duration_point_in_time_event_roundtrip_stability() {
     // Audit divergence 436: Zero-duration point-in-time event duration omission vs default synthesis:
-    // RFC 5545 Section 3.6.1 point-in-time event vs RFC 8984 Section 4.2.2 duration default omission.
+    // RFC 5545 Section 3.6.1 point-in-time event vs RFC 8984 Section 5.1.2 duration default omission.
 
     let fixture = include_str!("fixtures/point_in_time_milestone_export.ics");
 
@@ -48112,7 +48112,7 @@ fn differential_oracle_zero_duration_point_in_time_event_roundtrip_stability() {
     assert_eq!(parsed.status.as_deref(), Some("confirmed"));
     assert_eq!(parsed.priority, Some(1));
 
-    // 2. JSCalendar JSON serialization omits duration, relying on RFC 8984 Section 4.2.2 default (PT0S)
+    // 2. JSCalendar JSON serialization omits duration, relying on RFC 8984 Section 5.1.2 default (PT0S)
     let json_val = serde_json::to_value(&parsed).expect("serializes to JSON Value");
     assert!(
         json_val.get("duration").is_none(),
