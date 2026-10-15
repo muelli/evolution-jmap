@@ -6,7 +6,7 @@
 //! `jmap-backend-cal/tests/{backend,ops}.rs` stop at.
 //!
 //! `backend.rs` only proves the `get_free_busy_sync` vtable slot is
-//! installed on the right (`ECalBackendSyncClass`, two levels up from
+//! installed on the right (`ECalBackendSyncClass`, one level up from
 //! `ECalMetaBackend`) parent class; `ops.rs` only proves the pure
 //! attendee-answering decision (`ops::get_free_busy`) against a literal
 //! `CalSync::free_busy` stand-in, with no `ESource`/`ECalClient` involved.
