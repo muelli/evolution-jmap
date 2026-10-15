@@ -215,7 +215,7 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* 3.60 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
+/* 3.58 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
  * pair with `camel_folder_dup_uids`, an ordinary reference-counted
  * `GPtrArray` the caller owns. Repeated here as plain C for the reason
  * mail-client.c gives beside its own copy: this test client links no crate

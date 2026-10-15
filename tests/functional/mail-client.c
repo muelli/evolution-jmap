@@ -51,7 +51,7 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* 3.60 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
+/* 3.58 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
  * pair with `camel_folder_dup_uids`, an ordinary reference-counted
  * `GPtrArray` the caller owns (see `docs/eds-version-matrix.md`; the Rust
  * side has the same two names behind `eds-sys`'s `compat::folder_dup_uids`/
