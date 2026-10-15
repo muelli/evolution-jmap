@@ -4,24 +4,23 @@
 //! The headless reproduction of the stale `Source.OAuth2Support` interface
 //! proxy.
 //!
-//! What the item-20 tracing captured live on 2026-08-28 was a calendar factory
-//! asking for an access token and getting `"The name :1.4 was not provided by
-//! any .service files"`, which then escalated into a consent window. Sessions
-//! N+85 and N+86 established the mechanism from GLib/EDS source and N+86 fixed
-//! the classification (`jmap_backend_core::oauth2::is_service_gone`), but
-//! nothing had ever *run* the failure: what existed was a hand `dbus-send` to
-//! a made-up unique name, which proves D-Bus's semantics rather than EDS's
-//! behaviour. This test runs it against real daemons.
+//! A calendar factory asking for an access token got `"The name :1.4 was not
+//! provided by any .service files"`, which then escalated into a consent
+//! window. The mechanism was established from GLib/EDS source and the
+//! classification was fixed (`jmap_backend_core::oauth2::is_service_gone`),
+//! but nothing had ever *run* the failure: what existed was a hand
+//! `dbus-send` to a made-up unique name, which proves D-Bus's semantics
+//! rather than EDS's behaviour. This test runs it against real daemons.
 //!
 //! The whole reproduction is one client program (`tests/functional/
 //! oauth2-stale-proxy-client.c`, whose header carries the source citations)
 //! standing in for a long-lived backend factory: hold an `ESource`, kill the
 //! registry, ask the same `ESource` for a token.
 //!
-//! **The load-bearing assertion is `oauth2-support-exported`.** Session N+87
-//! concluded the opposite — that for our accounts the entire token path is
-//! D-Bus-free, so any harness of this shape would pass vacuously — on the
-//! premise that `e_server_side_source_set_oauth2_support` is called only by
+//! **The load-bearing assertion is `oauth2-support-exported`.** An earlier
+//! analysis concluded the opposite: that for our accounts the entire token
+//! path is D-Bus-free, so any harness of this shape would pass vacuously, on
+//! the premise that `e_server_side_source_set_oauth2_support` is called only by
 //! `module-google-backend.c` and `module-gnome-online-accounts.c`. There is a
 //! third caller: `module-oauth2-services.c:139`, an EDS module inside
 //! `evolution-source-registry`, which calls it for *every* server-side source
@@ -96,26 +95,27 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         "the registry never saw the account keyfile at all\n{report}"
     );
 
-    // (1) The precondition, and the fact N+87 doubted: our account really is
-    // one the registry exports Source.OAuth2Support for, so a client's token
-    // fetch goes over the bus instead of through e-source.c's in-process
-    // EOAuth2Services fallback. Everything below is vacuous without this.
+    // (1) The precondition, and the fact an earlier analysis doubted: our
+    // account really is one the registry exports Source.OAuth2Support for,
+    // so a client's token fetch goes over the bus instead of through
+    // e-source.c's in-process EOAuth2Services fallback. Everything below is
+    // vacuous without this.
     assert_eq!(
         seen.get("oauth2-support-exported"),
         Some(&"1"),
         "the registry did not export Source.OAuth2Support for an account whose \
          [Authentication] Method names our own EOAuth2Service. Either \
          module-oauth2-services.so was not loaded beside module-jmap-backend.so, \
-         or our service is no longer registered under the name the keyfile uses \
-         — in both cases a client's token fetch takes e-source.c's in-process \
-         fallback and item 22's failure cannot arise at all\n{report}"
+         or our service is no longer registered under the name the keyfile uses: \
+         in both cases a client's token fetch takes e-source.c's in-process \
+         fallback and this reproduction's failure cannot arise at all\n{report}"
     );
     assert_eq!(
         seen.get("oauth2-support-peer-is-unique-name"),
         Some(&"1"),
         "the interface proxy is not addressed to a unique name, so it would \
-         survive a restart by re-activation and item 22's mechanism (a proxy \
-         pinned to a name that can never come back) would not apply\n{report}"
+         survive a restart by re-activation and the mechanism under test (a \
+         proxy pinned to a name that can never come back) would not apply\n{report}"
     );
 
     // (2) The token path was live before the kill. Reported as "not a bus
@@ -146,14 +146,15 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         seen.get("oauth2-support-still-exported"),
         Some(&"1"),
         "the client dropped the interface when the registry died, which would \
-         mean EDS recovers on its own and item 22 has no client-side bug\n{report}"
+         mean EDS recovers on its own and this reproduction has no \
+         client-side bug\n{report}"
     );
     assert_eq!(
         seen.get("token-after-kill-succeeded"),
         Some(&"0"),
-        "the token fetch SUCCEEDED after the registry was killed — item 22's \
-         failure no longer reproduces, and this test has become a museum \
-         piece. Check whether EDS grew a recovery path before deleting it\n{report}"
+        "the token fetch SUCCEEDED after the registry was killed: the failure \
+         no longer reproduces, and this test has become a museum piece. \
+         Check whether EDS grew a recovery path before deleting it\n{report}"
     );
 
     // (4) And it fails as exactly the error the live capture recorded, in
@@ -165,8 +166,8 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         seen.get("token-after-kill-is-service-unknown"),
         Some(&"1"),
         "the failure was not G_DBUS_ERROR_SERVICE_UNKNOWN, so it is not the \
-         one jmap_backend_core::oauth2::is_service_gone carves out of item \
-         17's blanket secret-store classification\n{report}"
+         one jmap_backend_core::oauth2::is_service_gone carves out of the \
+         blanket secret-store classification\n{report}"
     );
     assert_eq!(
         seen.get("token-after-kill-error-domain"),
@@ -186,7 +187,7 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
          value jmap_backend_core::oauth2's own tests document it as\n{report}"
     );
 
-    // The message is the user-visible half of N+86's fix: it must name the
+    // The message is the user-visible half of the fix: it must name the
     // dead peer, because that is the thing an operator would go and restart.
     assert_eq!(
         seen.get("token-after-kill-names-dead-peer"),

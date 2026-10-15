@@ -13,9 +13,9 @@
 //!
 //! ## Why two mock servers, not a live Fastmail/Stalwart pair
 //!
-//! Item 41's own text describes reproducing this against the real Stalwart
-//! test server and a Fastmail account sharing an address. Neither is
-//! reachable headlessly from here: this runner holds no Fastmail
+//! The scenario this reproduces is a real Stalwart test server and a
+//! Fastmail account sharing an address. Neither is reachable headlessly
+//! from here: this runner holds no Fastmail
 //! credentials (the operator's real account is the only one that exists),
 //! and a literal two-real-server repro would need a GUI consent flow this
 //! VM has no display for. The defect itself is not about what either server
@@ -232,9 +232,9 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
     assert_eq!(
         seen_b.get("fetched"),
         Some(&"1"),
-        "account B, never consented to at all, could not fetch a token — which \
+        "account B, never consented to at all, could not fetch a token, which \
          would mean this reproduction failed to trigger the collision rather \
-         than that item 41 is wrong\n{report_b}"
+         than that the underlying bug is gone\n{report_b}"
     );
 
     // The collision itself, from two independent directions.
@@ -248,8 +248,8 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
     assert_eq!(
         seen_b.get("access-token"),
         Some(&SERVER_A_ACCESS_TOKEN),
-        "account B did not receive account A's own access token back — the \
+        "account B did not receive account A's own access token back: the \
          reproduction did not trigger the (service, user) secret-store \
-         collision item 41 describes\n{report_b}"
+         collision\n{report_b}"
     );
 }

@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of `docs/ROADMAP.md` item 22's Do(1): the headless
- * reproduction of the stale `Source.OAuth2Support` interface proxy that turns
- * a silent token fetch into `G_DBUS_ERROR_SERVICE_UNKNOWN` — the failure the
- * item-20 tracing captured live on 2026-08-28 ("The name :1.4 was not
- * provided by any .service files"), which then escalated to a consent window.
+ * The client half of the headless reproduction of the stale
+ * `Source.OAuth2Support` interface proxy that turns a silent token fetch
+ * into `G_DBUS_ERROR_SERVICE_UNKNOWN`, the failure a live capture recorded
+ * ("The name :1.4 was not provided by any .service files"), which then
+ * escalated to a consent window.
  *
  * This program is an ordinary `libedataserver` consumer standing in for a
  * calendar or address-book *factory* process: it holds an `ESource` across a
@@ -16,7 +16,7 @@
  * program and reads the `key=value` observations it writes to stdout.
  *
  * WHY THIS REPRODUCES THE REAL THING, and not merely D-Bus's own semantics
- * (EDS 3.52.3 / Evolution 3.52.4 source, read 2026-08-29):
+ * (EDS 3.52.3 / Evolution 3.52.4 source):
  *
  *   1. It is the *registry* that exports the interface, not Evolution's
  *      shell. `grep -rn OAuth2Support` over all of evolution-3.52.4 finds one

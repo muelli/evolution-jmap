@@ -1,10 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of `docs/ROADMAP.md` item 41's reproduction: two JMAP
- * accounts that share one `[Authentication] User` string collide on one
- * OAuth2 secret-store slot, because EDS derives that slot's key from
- * `(service name, user)` alone.
+ * The client half of the reproduction of two JMAP accounts that share one
+ * `[Authentication] User` string colliding on one OAuth2 secret-store slot,
+ * because EDS derives that slot's key from `(service name, user)` alone.
  *
  * `eos_generate_secret_uid` (evolution-data-server 3.52.3,
  * `src/libedataserver/e-oauth2-service.c:1086`, read rather than assumed) is:
@@ -21,11 +20,10 @@
  * by `rust/crates/jmap-functional/tests/oauth2-token-collision.rs` against
  * two accounts that share a `[Authentication] User` but point at two
  * different mock JMAP deployments (two independent `jmap_mock::MockServer`s,
- * standing in for two real, unrelated servers — Fastmail and a self-hosted
- * Stalwart, in the scenario `docs/ROADMAP.md` item 41 names). It knows
- * nothing about which run it is; the Rust side decides that by which source
- * UID and secret JSON it is handed, and reads every judgement off this
- * program's `key=value` stdout.
+ * standing in for two real, unrelated servers: Fastmail and a self-hosted
+ * Stalwart). It knows nothing about which run it is; the Rust side decides
+ * that by which source UID and secret JSON it is handed, and reads every
+ * judgement off this program's `key=value` stdout.
  *
  *   usage: functional-oauth2-token-collision-client <source-uid> \
  *              <secret-uid> <secret-json-or-empty>
