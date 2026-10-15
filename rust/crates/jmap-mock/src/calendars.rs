@@ -29,9 +29,8 @@ use crate::state::{AccountState, ServerState};
 /// Deterministic stand-in for "now". The mock has no clock.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
-/// `caller` is the request identity resolved from the credential.
-/// `None` means owner view, while foreign callers see only shared calendars.
-/// If nothing is shared with the caller, this returns `forbidden`.
+/// `caller` resolves request identity: `None` is owner view.
+/// Foreign callers see only shared calendars, else this returns `forbidden`.
 pub fn calendar_get(
     state: &mut ServerState,
     arguments: Value,
@@ -103,8 +102,7 @@ fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) ->
     Some(visible)
 }
 
-/// `Calendar/set` (draft-ietf-jmap-calendars §4).
-/// Unlike `Mailbox/set`, there is no hierarchy logic.
+/// `Calendar/set` (draft-ietf-jmap-calendars §4) with no mailbox-style hierarchy.
 /// Create rejects client-supplied `id` and empty `name`.
 pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Calendar> = parse_arguments(arguments)?;
@@ -167,9 +165,8 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
 
     let mut result = to_result(&response)?;
 
-    // RFC 8620 §5.3 allows omitting create properties the client already sent.
-    // In terse mode this strips only `name`.
-    // Keep `isDefault`, `myRights`, and `color` because this server computes them.
+    // RFC 8620 §5.3 allows omitting create properties already sent by the client.
+    // Terse mode strips only `name`, keeping computed `isDefault`, `myRights`, and `color`.
     if terse_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -250,8 +247,7 @@ fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
     Ok(())
 }
 
-/// draft §5.9.2: scheduling messages require reachable recipients.
-/// `event` is the object state affected by create, update, or destroy.
+/// Draft §5.9.2 requires reachable recipients for scheduling messages.
 fn schedulable(
     event: &CalendarEvent,
     own_addresses: &BTreeSet<String>,
@@ -341,9 +337,7 @@ pub fn calendar_event_set(
         |_id, existing| schedulable(existing, &own_addresses, send_scheduling_messages),
     )?;
 
-    // draft §8: notify all other principals sharing the affected calendars.
-    // `actor` is caller when present, otherwise the account owner.
-    // The actor does not receive their own notification.
+    // Draft §8 notifies other sharing principals; `actor` (caller or owner) is excluded.
     let actor = caller
         .or(account.current_user_principal_id.as_ref())
         .cloned();
@@ -526,8 +520,7 @@ pub fn calendar_event_query(
     })
 }
 
-/// Mock simplification: compare `after` and `before` textually against local `start`.
-/// This is correct for test data in `Etc/UTC`, not for arbitrary zones.
+/// Mock simplification: compare local `start` textually; correct for `Etc/UTC` test data.
 fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bool {
     if let Some(calendar_id) = &filter.in_calendar
         && !event
@@ -566,8 +559,7 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
     true
 }
 
-/// Record draft §8 notifications for owners and shared principals, excluding `actor`.
-/// Uses the same per-recipient tuple store as `record_share_changes`.
+/// Record draft §8 notifications for owners and shared principals except `actor`.
 /// `changed_by` stays unset, matching this mock's share-notification model.
 fn record_event_change_notifications(
     account: &mut AccountState,
@@ -659,8 +651,7 @@ pub fn calendar_event_notification_get(
     })
 }
 
-/// `CalendarEventNotification/query` (draft §8) with the same viewer filter as `get`.
-/// Applies `after`, `before`, and `types` using string comparisons.
+/// `CalendarEventNotification/query` (draft §8) uses the same viewer filter as `get` and compares `after`, `before`, and `types` as strings.
 pub fn calendar_event_notification_query(
     state: &mut ServerState,
     arguments: Value,
@@ -726,8 +717,7 @@ fn notification_matches(
     true
 }
 
-/// `CalendarEventNotification/set` (draft §8).
-/// Create and update are always `forbidden`; only destroy is handled.
+/// `CalendarEventNotification/set` (draft §8) always forbids create and update.
 /// Destroy applies only to notifications visible to `caller` or the owner fallback.
 pub fn calendar_event_notification_set(
     state: &mut ServerState,
@@ -862,9 +852,8 @@ pub fn participant_identity_get(
     })
 }
 
-/// `ParticipantIdentity/set` (draft-ietf-jmap-calendars-28 §3.2).
-/// `id` and `isDefault` are server-set, and default changes only via `onSuccessSetIsDefault`.
-/// Destroying the current default returns `cannotDestroyDefault`.
+/// `ParticipantIdentity/set` (draft-ietf-jmap-calendars-28 §3.2) keeps `id` and `isDefault` server-set.
+/// Default changes only through `onSuccessSetIsDefault`, and destroying the default returns `cannotDestroyDefault`.
 pub fn participant_identity_set(
     state: &mut ServerState,
     arguments: Value,
