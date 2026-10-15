@@ -4,12 +4,22 @@
 //! Reference count and allocation leak verification across libical-glib marshalling boundaries.
 
 use std::ffi::CString;
-use std::sync::Once;
+use std::sync::{Mutex, MutexGuard, Once};
 
 use eds_sys::i_cal_component_new_from_string;
 use glib_sys::{G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, g_log_set_always_fatal};
 use gobject_sys::{GObject, g_object_unref};
 use jmap_backend_cal::marshal;
+
+/// Every test below resolves a `TZID` through
+/// `i_cal_timezone_get_builtin_timezone`, which lazily builds and reads a
+/// process-global timezone table with no internal locking; running these
+/// tests concurrently (this file's default) segfaults inside libical's own
+/// `strcmp` on that table. Hold this for the lifetime of any such call.
+fn serialize_libical_timezone_access() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// An event in a zone libical knows, which is the path that walks the most:
 /// every property of the event is asked for a `TZID` parameter, the zone is
@@ -70,6 +80,7 @@ fn baseline_count(icalendar: &str) -> u32 {
 #[test]
 fn a_loaded_component_carries_exactly_the_callers_reference() {
     glib_complaints_are_failures();
+    let _lock = serialize_libical_timezone_access();
     for (name, icalendar) in [("zoned", ZONED), ("unzoned", UNZONED)] {
         let baseline = baseline_count(icalendar);
         let component = marshal::component_from_ical(icalendar);
@@ -92,6 +103,7 @@ fn a_loaded_component_carries_exactly_the_callers_reference() {
 #[test]
 fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
     glib_complaints_are_failures();
+    let _lock = serialize_libical_timezone_access();
     let component = marshal::component_from_ical(ZONED);
     assert!(!component.is_null());
     // SAFETY: a live component this scope owns.
@@ -110,6 +122,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
 #[test]
 fn loading_a_zoned_object_over_and_over_retains_nothing() {
     glib_complaints_are_failures();
+    let _lock = serialize_libical_timezone_access();
     // Verifies that repeatedly loading zoned objects does not leak heap memory across windows.
     const LOADS: u64 = 10_000;
     const WINDOWS: usize = 8;
