@@ -95,7 +95,7 @@
  * child *component* rather than a content line, which is what makes this leg
  * worth having: nothing below real EDS says whether `ECalMetaBackend`'s cache
  * keeps a component nested inside the one it was handed, nor whether the
- * RFC 9074 §6 UID the entry's key rides on survives beside the
+ * RFC 9074 §4 UID the entry's key rides on survives beside the
  * X-EVOLUTION-ALARM-UID libecal adds of its own.
  *
  * A negative offset, because a reminder is normally before the event and a sign
@@ -190,7 +190,7 @@
  * difference between them, and an occurrence whose alarm the cache dropped reads
  * back as one the user just cleared.
  *
- * The RFC 9074 §6 UID is written out because it is what the `alerts` entry is
+ * The RFC 9074 §4 UID is written out because it is what the `alerts` entry is
  * keyed by: an alarm that came back without it would be re-keyed, which is the
  * same reminder arriving at the server under a name nobody asked for. The same
  * literals are asserted from both ends; see `RECURRING_EDITED_ALERT` in
