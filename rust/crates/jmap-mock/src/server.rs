@@ -402,7 +402,7 @@ impl MockServer {
         }
     }
 
-    /// `http://127.0.0.1:<port>` — pass to `Client::connect`.
+    /// Origin URL (`http://127.0.0.1:<port>`) for `Client::connect`.
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -417,12 +417,10 @@ impl MockServer {
         Arc::clone(&self.state)
     }
 
-    /// Stop accepting whichever bearer token(s) this server started with —
-    /// or was most recently switched to — and accept only `token` from now
-    /// on. Simulates a real deployment where the client's access token has
-    /// expired and been refreshed: a request already in flight or reusing
-    /// the old token now gets a genuine 401, not a client-side stand-in for
-    /// one.
+    /// Replace accepted bearer tokens with only `token`.
+    ///
+    /// This simulates an access-token refresh where in-flight requests that
+    /// still use the old token now receive a real 401.
     pub fn set_bearer_token(&self, token: &str) {
         self.auth
             .lock()
@@ -430,9 +428,9 @@ impl MockServer {
             .replace_bearer(token);
     }
 
-    /// Honour the bearer token currently configured for only `remaining`
-    /// more requests, then refuse it as though it had just expired. See
-    /// [`crate::auth::AuthConfig::expire_after`] for what this is for.
+    /// Accept the current bearer token for `remaining` more requests.
+    ///
+    /// See [`crate::auth::AuthConfig::expire_after`] for why tests need this.
     pub fn expire_bearer_token_after(&self, remaining: usize) {
         self.auth
             .lock()
@@ -440,12 +438,9 @@ impl MockServer {
             .expire_after(remaining);
     }
 
-    /// The names of the method calls this server has answered so far, in
-    /// order — see [`ServerState::method_calls`].
+    /// Method call names seen so far, in request order.
     ///
-    /// A copy, because the alternative is a test holding the server's lock
-    /// while it asserts, and the server needs that lock to answer the next
-    /// request.
+    /// Returns a copy so tests can assert without holding the state lock.
     pub fn method_calls(&self) -> Vec<String> {
         let state = self
             .state
@@ -454,8 +449,7 @@ impl MockServer {
         state.method_calls.clone()
     }
 
-    /// How many requests this server has taken at the API endpoint — see
-    /// [`ServerState::api_requests`].
+    /// Number of API endpoint requests, from [`ServerState::api_requests`].
     pub fn api_requests(&self) -> usize {
         let state = self
             .state
@@ -464,8 +458,7 @@ impl MockServer {
         state.api_requests
     }
 
-    /// How many requests this server has refused with a 401 — see
-    /// [`ServerState::unauthorized_responses`].
+    /// Number of 401 responses, from [`ServerState::unauthorized_responses`].
     pub fn unauthorized_responses(&self) -> usize {
         let state = self
             .state
@@ -474,10 +467,9 @@ impl MockServer {
         state.unauthorized_responses
     }
 
-    /// Push `change` to every `/eventsource` client connected right now
-    /// (RFC 8620 §7.3) — the "test hook to push one on demand" that stands
-    /// in for a real server's own automatic emission on a state transition,
-    /// until something in this mock's dispatch path calls this itself.
+    /// Push `change` to every currently connected `/eventsource` client.
+    ///
+    /// This is a test hook for RFC 8620 state-change delivery.
     pub fn push_state_change(&self, change: &jmap_proto::push::StateChange) {
         let mut state = self
             .state
@@ -486,13 +478,10 @@ impl MockServer {
         state.event_source.broadcast(change);
     }
 
-    /// Block until at least one `/eventsource` client is connected, or panic
-    /// after `timeout`.
+    /// Wait until at least one `/eventsource` client is connected.
     ///
-    /// A test that pushes a `StateChange` right after opening the connection
-    /// would otherwise race the background thread that registers it — this
-    /// is what makes "push after the client is listening" deterministic
-    /// instead of a sleep.
+    /// Panics after `timeout`. This avoids racey sleep-based tests before
+    /// `push_state_change`.
     pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
