@@ -118,7 +118,7 @@ const ALL_DAY_DURATION: &str = "P1D";
 /// client shows it at the wrong hour.
 ///
 /// The start is the wall-clock time in that zone, which is what JSCalendar's
-/// `start` means beside a `timeZone` (RFC 8984 §4.1.1) — not the UTC instant.
+/// `start` means beside a `timeZone` (RFC 8984 §5.1.1) — not the UTC instant.
 const ZONED_SUMMARY: &str = "Berlin review";
 const ZONED_START: &str = "2026-01-15T16:00:00";
 const ZONED_TIME_ZONE: &str = "Europe/Berlin";
@@ -136,14 +136,14 @@ const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
 /// the backend a second `VEVENT` with the same `UID` and a `RECURRENCE-ID`
 /// naming the instance it replaces (RFC 5545 §3.8.4.4); JSCalendar says the
 /// same thing with a patch under that instant in `recurrenceOverrides`
-/// (RFC 8984 §4.3.4). Nothing below this file says the two ends agree about
+/// (RFC 8984 §4.3.5). Nothing below this file says the two ends agree about
 /// it through real EDS — the mapping's own tests stop at the component.
 const RECURRING_EDITED: &str = "2026-01-22T13:00:00";
 const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 
 /// And the tags that one occurrence carries — the `CATEGORIES` on the detached
 /// component in `tests/functional/cal-client.c`, which has to reach the server as
-/// a `keywords` patch in that instance's override (RFC 8984 §4.3.4). The series
+/// a `keywords` patch in that instance's override (RFC 8984 §4.3.5). The series
 /// carries none, so this set is the whole of the difference between them; an
 /// instance whose tags EDS's cache dropped reads back as one the user just
 /// unfiled, and the save after it would tell the server so. Sorted, since that is
@@ -217,7 +217,7 @@ const RECURRING_EXDATES: [&str; 2] = ["20260129T130000Z", "20260205T130000Z"];
 /// open: a series in one named zone with a single occurrence moved into
 /// another. RFC 5545 §3.2.19 puts a zone on the *property*, so a detached
 /// instance states its own `TZID` and need not share the series'; RFC 8984
-/// §4.4.3 says the same thing by letting a `recurrenceOverrides` patch carry
+/// §4.3.5 says the same thing by letting a `recurrenceOverrides` patch carry
 /// `timeZone`. The mapping learned both last, and its own tests supply the
 /// identifiers by hand — so nothing yet says that a second zone, named by one
 /// instance of a component Evolution actually hands over, is defined in the
@@ -1436,7 +1436,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         ),
         "the place the client named did not reach the server: {event:?}"
     );
-    // The tags, as the server holds them: an RFC 8984 §1.4.3 Set of both, not the
+    // The tags, as the server holds them: an RFC 8984 §4.2.9 Set of both, not the
     // first of a line libical split into two properties on the way here.
     assert_eq!(
         event
@@ -1511,10 +1511,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(ALL_DAY_DURATION),
         "the all-day event is not a day long: {all_day:?}"
     );
-    assert_eq!(
-        all_day.time_zone, None,
-        "a day has no zone (RFC 8984 §4.1.5): {all_day:?}"
-    );
+    assert_eq!(all_day.time_zone, None, "a day has no zone: {all_day:?}");
 
     // And the zoned one, which is the only assertion in this file that depends
     // on what the backend puts in the envelope *besides* the components EDS
@@ -2177,7 +2174,7 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
 ///
 /// The second leg answers that for an IANA name, where `jmap-ical` ships no
 /// definition and leans on libical's builtin table. This one answers it for the
-/// identifier that table cannot hold — RFC 8984 §1.4.9's custom `TimeZoneId`,
+/// identifier that table cannot hold — RFC 8984 §1.4.8's custom `TimeZoneId`,
 /// which only the event's own `timeZones` says anything about. Two things have to
 /// be true for such an event to be shown at the right hour: `jmap-ical` has to draw
 /// a `VTIMEZONE` libical accepts, and everything between it and the consumer —
@@ -2653,7 +2650,7 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
 
     // And the claim, on the only side that can make it. `timeZone` alone would
     // pass on a backend that sent the identifier and nothing else — which is the
-    // dangling reference RFC 8984 §1.4.9 forbids and a server may reject — so the
+    // dangling reference RFC 8984 §1.4.8 forbids and a server may reject — so the
     // definition is asserted beside it, whole, against the same description the
     // `VTIMEZONE` was written from.
     let state = server.state();
