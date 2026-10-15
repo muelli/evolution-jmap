@@ -95,8 +95,8 @@ impl std::error::Error for CreateFailure {}
 /// exception: `name` alone falls back to what was *requested*, not the id,
 /// when the response leaves it out — RFC 8620 §5.3 lets a `created` response
 /// omit any property the server did not itself set, and a name it accepted
-/// unchanged is exactly that (operator-found 2026-08-31, real Fastmail: a
-/// "testcal" calendar showed up in Evolution as its server-assigned id).
+/// unchanged is exactly that: a real server can leave `name` out entirely
+/// rather than echo the requested name back.
 ///
 /// The create explicitly asks for `isSubscribed: true`. Both specifications
 /// leave a freshly created collection's subscription state up to the server,
@@ -204,13 +204,13 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
 /// `server_name` is what the create's response stated, which may be blank: a
 /// `created` response need only carry properties the server itself set (RFC
 /// 8620 §5.3), and `name` is not one of those when the server accepted the
-/// requested name unchanged — a real server (Fastmail, operator-found
-/// 2026-08-31) leaves it out entirely rather than echoing it back. A blank
-/// `server_name` therefore means "accepted as asked", not "the server named
-/// it nothing", so it falls back to `requested_name` — never straight to the
-/// id — and only a `server_name` the response actually states (a genuine
-/// normalisation) overrides what was requested. The id is the last resort,
-/// for the one case neither name can cover: both blank.
+/// requested name unchanged, so a real server can leave it out entirely
+/// rather than echo it back. A blank `server_name` therefore means "accepted
+/// as asked", not "the server named it nothing", so it falls back to
+/// `requested_name`, never straight to the id, and only a `server_name` the
+/// response actually states (a genuine normalisation) overrides what was
+/// requested. The id is the last resort, for the one case neither name can
+/// cover: both blank.
 fn created_resource(
     id: Option<Id>,
     server_name: &str,
@@ -275,11 +275,11 @@ mod tests {
     fn a_created_collection_whose_response_omits_the_name_shows_the_requested_name() {
         // RFC 8620 §5.3: a `created` response need only carry properties the
         // server itself set. `name` is not one of those when the server
-        // accepted the requested name unchanged, so a real server (Fastmail,
-        // operator-found 2026-08-31) leaves it out — an absent name means
-        // "accepted as asked", not "the server named it nothing", and must
-        // not fall back to the id the way `created_resource`'s caller passes
-        // an empty string for "the response omitted this".
+        // accepted the requested name unchanged, so a real server can leave
+        // it out entirely: an absent name means "accepted as asked", not
+        // "the server named it nothing", and must not fall back to the id
+        // the way `created_resource`'s caller passes an empty string for
+        // "the response omitted this".
         let resource =
             created_resource(Some(Id::new("CiV")), "", "testcal", None, None, None, None)
                 .expect("the server named an id");
@@ -344,8 +344,8 @@ mod tests {
     #[test]
     fn the_servers_my_rights_reach_the_resource_as_deletable() {
         // The same pairing as `writable` above, for `mayDelete`: a create's
-        // response naming rights up front must reach the resource item 40's
-        // fix reads, or a freshly created undeletable share would show as
+        // response naming rights up front must reach the resource `created`
+        // reads, or a freshly created undeletable share would show as
         // deletable until the next populate corrected it.
         let resource = created_resource(
             Some(Id::new("AB9")),

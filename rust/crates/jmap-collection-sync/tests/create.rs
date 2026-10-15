@@ -133,11 +133,9 @@ fn a_created_collection_is_the_only_new_child_of_its_kind() {
     assert!(after.address_books.iter().any(|book| book.name == "Work"));
 }
 
-/// Operator-found on real Fastmail, 2026-08-31: a calendar created as
-/// "testcal" showed up in Evolution as "CiV", the server-assigned id.
 /// `Calendar/set`'s `created` response echoes only SERVER-set properties
 /// (RFC 8620 §5.3), so a server that accepted the requested name unchanged
-/// leaves `name` out entirely — an absent name means "accepted as asked",
+/// can leave `name` out entirely: an absent name means "accepted as asked",
 /// not "the server named it nothing", and must not fall back to the id the
 /// way a server-stated blank name would.
 #[test]
@@ -155,13 +153,12 @@ fn a_create_whose_response_omits_the_name_shows_the_requested_name_not_the_id() 
     }
 }
 
-/// Real-server-found, 2026-10-01: a raw probe against Stalwart showed that
 /// `AddressBook/set`/`Calendar/set` store a padded requested name exactly as
 /// sent, never trimming it server-side. But `shown_name` (used for both this
 /// fallback and discovery) matched on `name.trim()` and then bound the
 /// *trimmed* match arm's own name back as the display value, so a requested
-/// name with leading/trailing whitespace lost its padding purely client-side
-/// — even though nothing about the server's response justified it.
+/// name with leading/trailing whitespace lost its padding purely client-side,
+/// even though nothing about the server's response justified it.
 #[test]
 fn a_create_whose_response_omits_the_name_keeps_whitespace_padding() {
     let server = MockServer::builder().terse_collection_create().start();

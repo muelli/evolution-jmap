@@ -1,0 +1,11 @@
+// Source: draft-ietf-jmap-calendars-32 §8.4 (Figure 16: "methodCalls" Property of a JMAP Request), October 2026
+[
+  [
+    "Calendar/set",
+    {
+      "accountId": "a0x9",
+      "onSuccessSetIsDefault": "062adcfa-105d-455c-bc60-6db68b69c3f3"
+    },
+    "0"
+  ]
+]

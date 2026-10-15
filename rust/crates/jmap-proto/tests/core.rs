@@ -101,9 +101,7 @@ fn session_object_roundtrip() {
     assert!(!account.is_read_only);
 }
 
-/// The largest thing this server will take (RFC 8620 §6.1), read off the core
-/// capability — the number a client has to know *before* it sends a message,
-/// because the alternative to reading it is finding out by uploading.
+/// The largest upload the server accepts (RFC 8620 §6.1).
 #[test]
 fn the_session_names_the_largest_upload_the_server_takes() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
@@ -156,9 +154,7 @@ fn a_session_that_names_no_call_limit_says_so() {
     assert_eq!(session.max_calls_in_request(), None);
 }
 
-/// A server that does not name the limit is answered with `None` rather than a
-/// guess. RFC 8620 §2 requires the property, so this is a server out of spec —
-/// and inventing a limit for it would refuse uploads it would have taken.
+/// A server that does not name the upload limit is answered with `None` (RFC 8620 §2).
 #[test]
 fn a_session_that_names_no_upload_limit_says_so() {
     let mut value = fixture("core/session.json");
@@ -200,10 +196,7 @@ fn the_account_names_its_delayed_send_limit() {
     assert_eq!(account.max_delayed_send(), Some(44236800));
 }
 
-/// An account whose submission capability names no `maxDelayedSend` (the
-/// ordinary case today — most deployments do not support SMTP
-/// FUTURERELEASE) answers `None`, not an invented number: a caller must
-/// not offer scheduled send it has no evidence the server honours.
+/// An account whose submission capability names no `maxDelayedSend` answers `None`.
 #[test]
 fn an_account_with_no_delayed_send_limit_says_so() {
     let mut value = fixture("core/session.json");
@@ -300,9 +293,7 @@ fn resolve_primary_account_trusts_a_consistent_primary_accounts_entry() {
     );
 }
 
-/// A capability the session never mentions at all resolves to `None` — a
-/// `using` naming it would be answered `unknownCapability`, so nothing
-/// behind it is reachable.
+/// A capability the session never mentions resolves to `None`.
 #[test]
 fn resolve_primary_account_is_none_for_an_unnamed_capability() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
@@ -312,9 +303,7 @@ fn resolve_primary_account_is_none_for_an_unnamed_capability() {
     );
 }
 
-/// The fixture's `primaryAccounts` names "A13824" for `contacts`, but that
-/// account's own `accountCapabilities` never claims `contacts` — a
-/// contradiction in the document per the doc comment, and not believed.
+/// A `primaryAccounts` entry for an account that does not claim the capability is ignored.
 #[test]
 fn resolve_primary_account_rejects_a_primary_accounts_entry_the_account_does_not_claim() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
@@ -353,9 +342,7 @@ fn resolve_primary_account_falls_back_to_the_sole_personal_account() {
     );
 }
 
-/// The fallback requires *both* personal and capability-claiming — an
-/// account that is personal but does not claim the capability must not be
-/// inferred just because it is the only account around.
+/// The fallback requires both personal and capability-claiming.
 #[test]
 fn resolve_primary_account_fallback_requires_personal_and_the_capability_together() {
     let session: Session = serde_json::from_value(serde_json::json!({
@@ -401,9 +388,7 @@ fn query_request_omits_default_position_and_calculate_total() {
     assert!(value.get("calculateTotal").is_none());
 }
 
-/// A non-default position or an explicit `calculateTotal: true` must survive
-/// onto the wire — the omission above is specifically for the defaults, not
-/// for these fields generally.
+/// A non-default position or an explicit `calculateTotal: true` is preserved on the wire.
 #[test]
 fn query_request_keeps_a_nonzero_position_and_true_calculate_total() {
     let mut request = QueryRequest::<Value>::new(Id::from("A1"));
@@ -497,10 +482,7 @@ fn filter_operator_and_combines_multiple_conditions() {
     );
 }
 
-/// The fallback also excludes an account that claims the capability but is
-/// not personal (a shared account) — `isPersonal` is one of the two
-/// conditions the fallback requires, not a redundant one alongside the
-/// capability check `resolve_primary_account` does afterwards.
+/// The fallback excludes an account that claims the capability but is not personal.
 #[test]
 fn resolve_primary_account_fallback_excludes_a_non_personal_account() {
     let session: Session = serde_json::from_value(serde_json::json!({
@@ -894,13 +876,14 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     let sub = PushSubscription {
         id: Some(Id::new("sub_1")),
         device_client_id: "device_abc".to_owned(),
-        url: "https://push.example.com/endpoint".to_owned(),
+        url: Some("https://push.example.com/endpoint".to_owned()),
         keys: Some(PushSubscriptionKeys {
             p256dh: "key_p256dh".to_owned(),
             auth: "key_auth".to_owned(),
         }),
         expires: Some(UtcDate::new("2026-10-01T00:00:00Z")),
         types: Some(vec!["Email".to_owned(), "CalendarEvent".to_owned()]),
+        verification_code: None,
         extra: BTreeMap::new(),
     };
 
@@ -1105,7 +1088,7 @@ fn result_reference_and_push_builders_roundtrip() {
 
     assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_1");
     assert_eq!(sub.device_client_id, "dev_1");
-    assert_eq!(sub.url, "https://push.example.com/sub");
+    assert_eq!(sub.url.as_deref(), Some("https://push.example.com/sub"));
     assert_eq!(sub.keys.as_ref().unwrap().p256dh, "key_p256");
     assert_eq!(sub.keys.as_ref().unwrap().auth, "auth_secret");
     assert_eq!(

@@ -1,0 +1,22 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Creation Id Foreign Key Reference Request), July 2019
+[
+  [
+    "Todo/set",
+    {
+      "accountId": "x",
+      "create": {
+        "k15": {
+          "title": "Warm up with scales"
+        }
+      },
+      "update": {
+        "a": {
+          "subTodoIds": [
+            "#k15"
+          ]
+        }
+      }
+    },
+    "0"
+  ]
+]

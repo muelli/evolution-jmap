@@ -1,0 +1,50 @@
+// Source: RFC 9404 §4.1.2 (Blob/upload Complex Example Response), August 2023
+[
+  [
+    "Blob/upload",
+    {
+      "oldState": null,
+      "created": {
+        "b4": {
+          "id": "Gc0854fb9fb03c41cce3802cb0d220529e6eef94e",
+          "size": 45,
+          "type": "application/octet-stream"
+        }
+      },
+      "notCreated": null,
+      "accountId": "account1"
+    },
+    "S4"
+  ],
+  [
+    "Blob/upload",
+    {
+      "oldState": null,
+      "created": {
+        "cat": {
+          "id": "Gcc60576f036321ae6e8037ffc56bdee589bd3e23",
+          "size": 19,
+          "type": "application/octet-stream"
+        }
+      },
+      "notCreated": null,
+      "accountId": "account1"
+    },
+    "CAT"
+  ],
+  [
+    "Blob/get",
+    {
+      "list": [
+        {
+          "id": "Gcc60576f036321ae6e8037ffc56bdee589bd3e23",
+          "data:asText": "How quick was that?",
+          "size": 19
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "G4"
+  ]
+]

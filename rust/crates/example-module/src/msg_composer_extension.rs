@@ -1,8 +1,4 @@
-//! Message-composer extension — mirrors `m-msg-composer-extension.c`.
-//!
-//! `MMsgComposerExtension` is registered as an `EExtension` for every
-//! `EMsgComposer` instance.  When a composer window is created the extension
-//! adds a custom menu item and toolbar button to it.
+//! Message composer extension.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -10,15 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ffi;
 
-// ── Module-level state ────────────────────────────────────────────────────────
-
-/// The `GType` assigned to `MMsgComposerExtension` after `register_type`.
 static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// Pointer to the parent class (stored during `class_init` for chain-up).
 static PARENT_CLASS: AtomicUsize = AtomicUsize::new(0);
-
-// ── UI XML ────────────────────────────────────────────────────────────────────
 
 const COMPOSER_UI_DEF: &str = "\
 <menubar name='main-menu'>\
@@ -38,12 +28,8 @@ const COMPOSER_UI_DEF: &str = "\
 
 const GETTEXT_PACKAGE: &CStr = c"example-module";
 
-// ── Action callback ───────────────────────────────────────────────────────────
-
-/// Called when the user triggers "My Message Composer Action".
 unsafe extern "C" fn action_msg_composer_cb(_action: *mut ffi::GtkAction, extension: *mut c_void) {
     unsafe {
-        // Retrieve the composer window this extension is attached to.
         let composer = ffi::e_extension_get_extensible(extension) as *mut c_void;
         let title_ptr = ffi::gtk_window_get_title(composer);
 
@@ -60,9 +46,6 @@ unsafe extern "C" fn action_msg_composer_cb(_action: *mut ffi::GtkAction, extens
     }
 }
 
-// ── UI setup helper ───────────────────────────────────────────────────────────
-
-/// Add the plugin's actions and UI definition to `composer`.
 unsafe fn add_composer_ui(extension: *mut ffi::GObject, composer: *mut ffi::EMsgComposer) {
     unsafe {
         let html_editor = ffi::e_msg_composer_get_editor(composer);
@@ -102,13 +85,8 @@ unsafe fn add_composer_ui(extension: *mut ffi::GObject, composer: *mut ffi::EMsg
     }
 }
 
-// ── GObject virtual-method overrides ─────────────────────────────────────────
-
-/// `GObjectClass.constructed` override — adds the composer UI immediately after
-/// the `EMsgComposer` object is constructed.
 unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     unsafe {
-        // Chain up to the parent class.
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
         if let Some(f) = (*parent).constructed {
             f(object);
@@ -119,9 +97,6 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     }
 }
 
-// ── GTypeModule callbacks ─────────────────────────────────────────────────────
-
-/// Initialise the *class* struct.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     unsafe {
         PARENT_CLASS.store(
@@ -137,17 +112,10 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     }
 }
 
-/// Finalise the class struct when the module is unloaded.
 unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 
-/// Initialise a new *instance* struct (nothing to do for this extension).
 unsafe extern "C" fn instance_init(_instance: *mut c_void, _klass: *mut c_void) {}
 
-// ── Public: type registration ─────────────────────────────────────────────────
-
-/// Register `MMsgComposerExtension` into `type_module`.
-///
-/// Must be called from `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();

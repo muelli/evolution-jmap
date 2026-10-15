@@ -51,11 +51,7 @@ do_action_msg_composer (MMsgComposerExtension *msg_composer_ext)
 
 #if JMAP_EVO_EUI_MANAGER
 
-/* This extension's own group under EUIManager, not the editor's
- * pre-existing "core" one — the same choice jmap-ui's send_later extension
- * makes, matching how the in-tree e-composer-to-meeting.c registers its own
- * "composer" group for the same extensible rather than joining an existing
- * one. */
+/* Keep a dedicated group for this extension's composer actions. */
 #define GROUP_NAME "example-module-composer"
 
 static void
@@ -79,12 +75,7 @@ static void
 m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 				 EMsgComposer *composer)
 {
-	/* 3.52 merged the same item into the composer's own
-	 * <menubar name='main-menu'>'s 'pre-edit-menu'/'external-editor-holder'
-	 * placeholders and its 'main-toolbar'. 3.55+ split that one toolbar
-	 * into two (with/without a headerbar); everything else — the ids and
-	 * nesting — is unchanged, confirmed against this build's own
-	 * evolution-composer.eui. */
+	/* Keep the historical menu and toolbar IDs from evolution-composer.eui. */
 	const gchar *ui_def =
 		"<eui>"
 		"<menu id='main-menu'>"
@@ -171,7 +162,6 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 	ui_manager = e_html_editor_get_ui_manager (html_editor);
 	action_group = e_html_editor_get_action_group (html_editor, "core");
 
-	/* Add actions to the action group. */
 	e_action_group_add_actions_localized (
 		action_group, GETTEXT_PACKAGE,
 		msg_composer_entries, G_N_ELEMENTS (msg_composer_entries), msg_composer_ext);
@@ -194,7 +184,6 @@ m_msg_composer_extension_constructed (GObject *object)
 	EExtension *extension;
 	EExtensible *extensible;
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_msg_composer_extension_parent_class)->constructed (object);
 
 	extension = E_EXTENSION (object);
@@ -212,7 +201,6 @@ m_msg_composer_extension_class_init (MMsgComposerExtensionClass *class)
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = m_msg_composer_extension_constructed;
 
-	/* Set the type to extend, it's supposed to implement the EExtensible interface */
 	extension_class = E_EXTENSION_CLASS (class);
 	extension_class->extensible_type = E_TYPE_MSG_COMPOSER;
 }

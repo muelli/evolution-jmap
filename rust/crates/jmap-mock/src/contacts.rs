@@ -18,14 +18,9 @@ use crate::dispatch::{account_mut, parse_arguments, project_properties, to_resul
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
-/// `caller` is the identity `AddressBook/get`'s request carried, as resolved
-/// by [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound
-/// to the credential) reads as "this account's own owner", matching every
-/// test that predates sharing. A caller who *is* a distinct principal only
-/// sees books that principal's own `shareWith` entry grants, and gets
-/// `forbidden` outright if the account shares nothing with them at all
-/// (verified against a live Stalwart server: Track E Phase C step 1's
-/// findings, recorded in the work queue).
+/// `caller` is the identity resolved by [`crate::auth::AuthConfig::identity_for`].
+/// `None` means owner access. Non-owners only see books shared with them and
+/// get `forbidden` when the account shares no address books with them.
 pub fn address_book_get(
     state: &mut ServerState,
     arguments: Value,
@@ -79,8 +74,7 @@ pub fn address_book_get(
     })
 }
 
-/// The rights `book.share_with` grants `principal`, or `None` if it grants
-/// them nothing (including "not shared at all").
+/// Returns the rights `book.share_with` grants `principal`.
 fn book_rights_for(
     book: &AddressBook,
     principal: &Id,
@@ -88,10 +82,8 @@ fn book_rights_for(
     book.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// The owner sees every book unchanged, exactly as before sharing existed. A
-/// foreign caller sees a book only if it is shared with them, with
-/// `myRights` replaced by the grant itself rather than whatever the owner's
-/// own `myRights` happened to be.
+/// Owners see every book unchanged. Non-owners only see shared books, with
+/// `myRights` replaced by the caller-specific grant.
 fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Option<AddressBook> {
     if is_owner {
         return Some(book.clone());
@@ -103,12 +95,10 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
     Some(visible)
 }
 
-/// `AddressBook/set` (RFC 9610 §2): making and removing an address book.
-///
-/// No hierarchy and no cross-object placement rules the way `Mailbox/set`
-/// has, so [`simple_set`] is the whole of it — the only per-create check is
-/// the one every `/set` create shares (server-set `id` rejected) plus the one
-/// RFC 9610 states for `name`.
+/// `AddressBook/set` (RFC 9610 §2): create, update, and destroy address books.
+/// Unlike `Mailbox/set`, no hierarchy checks are needed. Only non-empty
+/// `name` validation is enforced here, plus the shared create rule that `id`
+/// is server-set.
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -118,9 +108,8 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
-    // Captured before `simple_set` consumes `request.update`, so a
-    // `shareWith` change can be diffed against what it was, for
-    // `ShareNotification` delivery (Track E Phase C step 2, RFC 9670 §4).
+    // Capture pre-update `shareWith` values so we can diff and emit
+    // `ShareNotification` updates after `simple_set`.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
         .update
         .iter()
@@ -172,15 +161,9 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 
     let mut result = to_result(&response)?;
 
-    // RFC 8620 §5.3: the `created` map need only carry properties the client
-    // did not already send. `name` was named by the client itself in a
-    // create, so it is not server-set — a server reading that literally
-    // (Fastmail among them) leaves it out. See
-    // `MockServerBuilder::terse_collection_create`'s doc for the finding
-    // this reproduces. Unlike `contact_card_set`'s identical-shaped stanza,
-    // only `name` is stripped: `isDefault`/`myRights` are genuinely
-    // server-computed here and every test relying on them must still see
-    // them.
+    // RFC 8620 §5.3 allows omitting client-supplied properties in `created`.
+    // With `terse_collection_create`, drop `name` but keep server-computed
+    // `isDefault` and `myRights`.
     if terse_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -191,9 +174,8 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
     }
 
-    // A server breaking RFC 8620 §5.3, which requires `id` in every
-    // successful create response — see
-    // `MockServerBuilder::id_omitting_collection_create`.
+    // Simulate a non-compliant server that omits `id` from `created`.
+    // Controlled by `MockServerBuilder::id_omitting_collection_create`.
     if id_omitting_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -210,11 +192,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Same `maxObjectsInGet` enforcement `email_get` documents as "the one
-    // limit this mock enforces" — no longer the only `/get` it bites in
-    // practice: scale-testing item 94 against real Stalwart found a
-    // 500-card `ContactCard/get` refused with exactly this error, which this
-    // mock stayed silent about until now.
+    // Enforce `maxObjectsInGet`, consistent with other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -253,8 +231,8 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let request: SetRequest<ContactCard> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
 
-    // Split the borrow: validation reads address_books while simple_set
-    // mutates contact_cards.
+    // Split borrows: validation reads address_books while `simple_set` mutates
+    // contact_cards.
     let AccountState {
         address_books,
         contact_cards,
@@ -262,10 +240,7 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     } = account;
 
     let response = simple_set(contact_cards, request, |id, card| {
-        // `id` is server-set (RFC 8620 §5.3): a client that names one in a
-        // create is confusing some other identifier for a JMAP id, which is
-        // exactly the mistake a backend makes with a vCard `UID` invented by
-        // the local cache. Silently overwriting it would hide that.
+        // RFC 8620 §5.3: `id` is server-set and must not appear in create.
         if card.id.is_some() {
             return Err(SetError::new(error::set::INVALID_PROPERTIES)
                 .with_description("id is set by the server and must not be given in a create"));
@@ -299,12 +274,8 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     })?;
     let mut result = to_result(&response)?;
 
-    // RFC 8620 §5.3: the `created` map need only carry properties the
-    // client did not already send. Every property but `id` was named by the
-    // client itself in a create, so none is server-set — a server reading
-    // that literally (Stalwart among them) leaves everything else out. See
-    // `MockServerBuilder::terse_contact_create`'s doc for the finding this
-    // reproduces.
+    // RFC 8620 §5.3 allows omitting client-supplied `created` properties.
+    // With `terse_contact_create`, keep only `id`.
     if state.terse_contact_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -349,11 +320,9 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// `ContactCard/parse` (RFC 9610 §3.4): reads an uploaded vCard blob into a
-/// `ContactCard`, without filing it into any address book. Building the
-/// response through `project_properties` lets `properties` drop fields
-/// before the typed `ContactCard` ever serializes, the same way
-/// `calendar_event_parse` and `email_parse` already do.
+/// `ContactCard/parse` (RFC 9610 §3.4): parse uploaded vCard blobs to
+/// `ContactCard` responses without storing cards, then project requested
+/// properties.
 pub fn contact_card_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: ContactCardParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;

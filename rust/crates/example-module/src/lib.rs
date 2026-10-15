@@ -2,14 +2,10 @@ mod ffi;
 mod msg_composer_extension;
 mod shell_view_extension;
 
-/// Called by Evolution when the module is loaded.
-///
-/// Registers every GObject extension type the plugin provides.
+/// Register this module's extension types.
 ///
 /// # Safety
-///
-/// `type_module` must be the valid `GTypeModule *` that Evolution passes to
-/// this symbol; it must remain alive for the duration of the call.
+/// `type_module` must be a valid pointer from Evolution.
 #[no_mangle]
 pub unsafe extern "C" fn e_module_load(type_module: *mut ffi::GTypeModule) {
     unsafe {
@@ -18,10 +14,9 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut ffi::GTypeModule) {
     }
 }
 
-/// Called by Evolution just before the module shared library is unloaded.
+/// Unload hook required by Evolution.
 ///
 /// # Safety
-///
-/// `type_module` must be the valid `GTypeModule *` provided by Evolution.
+/// `_type_module` must be a valid pointer from Evolution.
 #[no_mangle]
 pub unsafe extern "C" fn e_module_unload(_type_module: *mut ffi::GTypeModule) {}

@@ -357,6 +357,11 @@ pub fn connect_target(
     secure: bool,
 ) -> Result<ConnectTarget, SourceError> {
     let host = host.ok_or(SourceError::MissingHost)?;
+    // A fully qualified name (one trailing dot, RFC 1035 §3.1) and its
+    // relative form are the same DNS entry; concatenated unchanged into a
+    // URL it becomes a host the server's own redirect does not recognise as
+    // itself, which drops the bearer token credentials were withheld across.
+    let host = host.trim_end_matches('.');
     let authority = authority(host)?;
     if !secure && !is_loopback(host) {
         return Err(SourceError::InsecureTransport(host.to_owned()));
@@ -515,6 +520,8 @@ fn is_loopback(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use jmap_tracing_capture::capture;
+
     use super::*;
 
     #[test]
@@ -535,9 +542,8 @@ mod tests {
     /// `_jmap._tcp` SRV record names port 443 explicitly while its
     /// authorization-server metadata says `"issuer": "https://api.fastmail.com"`
     /// (no port), so an origin that keeps `:443` can never pass the issuer
-    /// check and OAuth autodiscovery silently surfaces nothing (observed live
-    /// 2026-08-23). Non-default ports must stay, or nothing plaintext-local is
-    /// reachable.
+    /// check and OAuth autodiscovery silently surfaces nothing. Non-default
+    /// ports must stay, or nothing plaintext-local is reachable.
     #[test]
     fn a_default_port_serializes_out_of_the_origin() {
         assert_eq!(
@@ -618,6 +624,29 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_dot_host_normalizes_to_the_same_domain() {
+        // A fully qualified name (one trailing dot) and its relative form
+        // name the same DNS entry (RFC 1035 §3.1); concatenating the dotted
+        // form unchanged into a URL sends `https://api.fastmail.com./...`,
+        // which Fastmail answers with a redirect to the dotless host that
+        // drops the bearer token.
+        assert_eq!(
+            connect_target(Some("api.fastmail.com."), 0, true),
+            Ok(ConnectTarget::Domain("api.fastmail.com".into()))
+        );
+        assert_eq!(
+            connect_target(Some("jmap.example.com."), 8443, true),
+            Ok(ConnectTarget::Origin(
+                "https://jmap.example.com:8443".into()
+            ))
+        );
+        assert_eq!(
+            origin(Some("api.fastmail.com."), 443, true).as_deref(),
+            Ok("https://api.fastmail.com")
+        );
+    }
+
+    #[test]
     fn insecure_and_missing_host_still_refuse_before_the_domain_decision() {
         assert_eq!(connect_target(None, 0, true), Err(SourceError::MissingHost));
         assert_eq!(
@@ -657,84 +686,28 @@ mod tests {
         }
     }
 
-    struct CapturingSubscriber {
-        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
-
-    impl tracing::field::Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_owned()));
-        }
-    }
-
-    impl tracing::Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            event.record(&mut Recorder(&self.captured));
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
     #[test]
     fn connect_traces_origin_field_when_connecting_to_origin() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
         let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
-        let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, false, jmap_client::Credentials::none())
-        });
+        let (_, entries) = capture(|| connect(&target, false, jmap_client::Credentials::none()));
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("origin".to_owned(), "http://127.0.0.1:1".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "origin" && value == "http://127.0.0.1:1"),
             "expected origin field, got {entries:?}"
         );
     }
 
     #[test]
     fn connect_traces_domain_field_when_connecting_to_domain() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
         let target = ConnectTarget::Domain("invalid.domain.invalid".to_owned());
-        let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, false, jmap_client::Credentials::none())
-        });
+        let (_, entries) = capture(|| connect(&target, false, jmap_client::Credentials::none()));
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("domain".to_owned(), "invalid.domain.invalid".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "domain" && value == "invalid.domain.invalid"),
             "expected domain field, got {entries:?}"
         );
     }
@@ -745,19 +718,13 @@ mod tests {
         // variable.
         unsafe { std::env::remove_var("JMAP_LIVE_SERVER_REBASE_URLS") };
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
         let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
-        let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, true, jmap_client::Credentials::none())
-        });
+        let (_, entries) = capture(|| connect(&target, true, jmap_client::Credentials::none()));
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("rebase".to_owned(), "true".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "rebase" && value == "true"),
             "expected the per-source opt-in to turn rebasing on, got {entries:?}"
         );
     }
@@ -767,19 +734,13 @@ mod tests {
         // SAFETY: as above.
         unsafe { std::env::remove_var("JMAP_LIVE_SERVER_REBASE_URLS") };
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
         let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
-        let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, false, jmap_client::Credentials::none())
-        });
+        let (_, entries) = capture(|| connect(&target, false, jmap_client::Credentials::none()));
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("rebase".to_owned(), "false".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "rebase" && value == "false"),
             "expected no opt-in and no env var to leave rebasing off, got {entries:?}"
         );
     }

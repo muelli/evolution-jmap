@@ -11,21 +11,21 @@
 //! editor's own "core" `GtkActionGroup`; >= 3.55 merges through `EUIManager`,
 //! registering under this extension's own group name rather than an existing
 //! one (matching how `e-composer-to-meeting.c` upstream registers its own
-//! "composer" group for exactly this extensible) — one call,
+//! "composer" group for exactly this extensible): one call,
 //! `e_ui_manager_add_actions_with_eui_data`, both builds the actions and
 //! places the `.eui` fragment that was two steps on the GTK side.
 //!
 //! The gate re-runs on every From switch (`EComposerHeaderTable`'s
 //! `notify::identity-uid`): level 1 is the identity's transport backend name
-//! — the evolution-ews chain, identity source → `[Mail Submission]`
-//! `TransportUid` → transport source's backend name — and level 2 is a
+//! (the evolution-ews chain, identity source to `[Mail Submission]`
+//! `TransportUid` to transport source's backend name), and level 2 is a
 //! session fetch off the main loop, whose answer lands back through
 //! [`crate::dispatch`] guarded by a generation counter, so a slow fetch for
 //! the previous account cannot sensitize the menu for the current one.
 //!
 //! On success the composer window is destroyed the way Evolution's own send
-//! path destroys it; on refusal a modal message dialog says why, and — since
-//! the draft-first shape can leave one behind — where a copy may remain.
+//! path destroys it; on refusal a modal message dialog says why, and, since
+//! the draft-first shape can leave one behind, where a copy may remain.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -115,7 +115,7 @@ type MenuAction = *mut GtkAction;
 type MenuAction = *mut EUIAction;
 
 /// The group the preset actions live in, so their labels can be brought up to
-/// date afterwards — "Today, 18:00" is only true until 18:00.
+/// date afterwards: "Today, 18:00" is only true until 18:00.
 #[cfg(not(evolution_eui_manager))]
 type MenuActionGroup = *mut GtkActionGroup;
 #[cfg(evolution_eui_manager)]
@@ -124,7 +124,7 @@ type MenuActionGroup = *mut EUIActionGroup;
 /// Per-composer state, boxed as qdata on the composer.
 struct SendState {
     /// The connected account behind the current From identity, once the
-    /// level-2 fetch answered — what a click submits through.
+    /// level-2 fetch answered: what a click submits through.
     link: Option<Arc<AccountLink>>,
     /// Guards a slow fetch against a From switch: only the newest wins.
     generation: u64,
@@ -132,7 +132,7 @@ struct SendState {
     /// visible half.
     menu_action: MenuAction,
     /// The group the preset actions live in, so their labels can be brought
-    /// up to date — "Today, 18:00" is only true until 18:00.
+    /// up to date: "Today, 18:00" is only true until 18:00.
     action_group: MenuActionGroup,
 }
 
@@ -200,14 +200,14 @@ fn action_name(preset: Preset) -> CString {
 }
 
 /// The submenu's own XML, with one item per offered moment plus the custom
-/// entry — built rather than a constant, because which moments are offered
+/// entry: built rather than a constant, because which moments are offered
 /// is [`schedule::offered`]'s to say.
 ///
 /// 3.52 merges into the `<menubar name='main-menu'>` root's own
 /// `pre-edit-menu`/`custom-actions-placeholder` placeholders (evolution-ews's
 /// own composer extensions use the same pair). 3.55+ merges the same way,
 /// under `<eui><menu id='main-menu'>`, `id`-addressed placeholders and
-/// `<item>` rather than `<menuitem>` — confirmed against a real in-tree
+/// `<item>` rather than `<menuitem>`, confirmed against a real in-tree
 /// composer extension on this exact structure, `e-composer-to-meeting.c`,
 /// whose own merge nests one `<item>` exactly where this one nests a whole
 /// `<submenu>`.
@@ -260,7 +260,7 @@ fn ui_definition() -> CString {
 const GROUP_NAME: &CStr = c"jmap-send-later";
 
 /// The submenu's own action and the group its presets live in, built through
-/// whichever menu layer is compiled in — 3.52's pre-existing "core" group and
+/// whichever menu layer is compiled in: 3.52's pre-existing "core" group and
 /// a `gtk_ui_manager_add_ui_from_string` merge, or 3.55+'s own new group and
 /// `e_ui_manager_add_actions_with_eui_data`'s one call for both.
 ///
@@ -394,7 +394,7 @@ unsafe fn build_menu(
             // an instant later, but `e_ui_action_group_add` (called
             // synchronously inside `e_ui_manager_add_actions_with_eui_data`,
             // before that has a chance to run) warns if an action's label is
-            // NULL at the moment it is added — a placeholder here silences
+            // NULL at the moment it is added; a placeholder here silences
             // that without changing what the menu ever actually shows.
             label: if is_custom {
                 translate_static(N_(c"_Custom Time…"))
@@ -510,7 +510,7 @@ unsafe extern "C" fn on_identity_changed(
     composer: gpointer,
 ) {
     guard("JmapSendLaterExtension::identity-changed", (), || {
-        // SAFETY: the composer is alive — its own header table emitted.
+        // SAFETY: the composer is alive, its own header table emitted.
         unsafe { gate(composer.cast()) };
     });
 }
@@ -625,7 +625,7 @@ unsafe fn gate(composer: *mut GObject) {
 }
 
 /// Level 1: the source to connect as, when the From identity sends through a
-/// JMAP transport — an owned reference to the transport's collection (or the
+/// JMAP transport: an owned reference to the transport's collection (or the
 /// transport itself without one). `None` refused the menu already.
 ///
 /// # Safety
@@ -694,7 +694,7 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
     }
 }
 
-/// The identity's transport source, an owned reference — the
+/// The identity's transport source, an owned reference: the
 /// `[Mail Submission] TransportUid` hop of the evolution-ews chain.
 ///
 /// # Safety
@@ -778,8 +778,8 @@ unsafe fn apply_gate(
 /// Re-label every preset item against the clock now.
 ///
 /// Called at build and on every re-gate. It cannot catch a composer left
-/// open across one of its own suggestions — GtkAction has no "about to be
-/// shown" hook — which is why [`schedule::resolve`] is asked again at click
+/// open across one of its own suggestions (GtkAction has no "about to be
+/// shown" hook), which is why [`schedule::resolve`] is asked again at click
 /// time: a stale *label* is cosmetic, a stale *target* would schedule into
 /// the past.
 ///
@@ -844,7 +844,7 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
 
 /// The *Custom Time…* entry: ask for a moment, then schedule to it.
 ///
-/// An `EDateEdit` with its time half shown is the whole dialog — the same
+/// An `EDateEdit` with its time half shown is the whole dialog: the same
 /// widget the vacation page uses for dates, which already knows how to parse
 /// what a person types and offers a calendar besides.
 ///
@@ -974,7 +974,7 @@ fn dispatch_activation(name: Option<&str>, composer: gpointer) {
         return;
     };
     tracing::trace!(slug, "send-later: menu item activated");
-    // SAFETY: the composer is alive — its own menu emitted.
+    // SAFETY: the composer is alive, its own menu emitted.
     unsafe {
         if slug == "custom" {
             activate_custom(composer.cast());
@@ -1162,7 +1162,7 @@ unsafe fn strip_evolution_headers(message: *mut CamelMimeMessage) {
 }
 
 /// The SMTP envelope off the message's own headers: From as `mailFrom`, every
-/// To/Cc/Bcc entry as a recipient — the same set the ordinary transport would
+/// To/Cc/Bcc entry as a recipient, the same set the ordinary transport would
 /// send to.
 ///
 /// # Safety

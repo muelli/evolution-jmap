@@ -4,7 +4,7 @@
 //! `CalendarEvent/get` naming more ids than `maxObjectsInGet` (RFC 8620 §2)
 //! must split across requests, mirroring `Client::contact_get`'s own
 //! chunking (`jmap-client/tests/contact_get_chunking.rs`), which was itself
-//! added the hard way scale-testing item 94's `jmap-book-sync` slice against
+//! added the hard way scale-testing sync slices against
 //! real Stalwart. `event_get` had the identical gap: `CalSync::classify`
 //! calls it with every created/updated id `CalendarEvent/changes` names,
 //! unbounded by anything this crate controls, so a calendar of real size hits
@@ -31,7 +31,7 @@ fn server_with_calendar() -> (MockServer, Id, Id) {
 }
 
 /// A server enforcing `maxObjectsInGet` would refuse a `CalendarEvent/get`
-/// naming every id at once with `requestTooLarge` — proven here by driving
+/// naming every id at once with `requestTooLarge`, proven here by driving
 /// the raw request past `event_get`, the same way
 /// `a_server_enforcing_max_objects_in_get_refuses_a_contact_card_get_exceeding_it`
 /// proves it for `ContactCard/get`. `event_get` itself must never let a
@@ -99,7 +99,7 @@ fn event_get_splits_across_max_objects_in_get() {
 
 /// `event_get` with no ids must still reach the server for a real state, not
 /// synthesize one locally just because the chunking loop saw nothing to
-/// chunk — same guarantee `contact_get` gives `Client::contact_state`.
+/// chunk: same guarantee `contact_get` gives `Client::contact_state`.
 #[test]
 fn event_get_with_no_ids_still_reaches_the_server_for_the_real_state() {
     let (server, account_id, calendar) = server_with_calendar();

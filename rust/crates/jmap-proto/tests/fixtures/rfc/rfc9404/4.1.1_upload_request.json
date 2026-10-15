@@ -1,0 +1,18 @@
+// Source: RFC 9404 §4.1.1 (Blob/upload Simple Example Request), August 2023
+[
+  "Blob/upload",
+  {
+    "accountId": "account1",
+    "create": {
+      "1": {
+        "data": [
+          {
+            "data:asBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlN/gFy0ywAAAApJREFUeJxjYgAAAAYAAzY3fKgAAAAASUVORK5CYII="
+          }
+        ],
+        "type": "image/png"
+      }
+    }
+  },
+  "R1"
+]

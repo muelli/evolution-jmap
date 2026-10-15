@@ -3,21 +3,16 @@
 
 #![forbid(unsafe_code)]
 
-//! JSContact ↔ vCard for the Evolution address book backend.
+//! JSContact ↔ vCard mapping for Evolution address-book contacts.
 //!
-//! `EBookMetaBackend` speaks `EContact`, which is built from and rendered to
-//! vCard text; JMAP speaks JSContact Cards ([RFC 9553]) wrapped in
-//! `ContactCard` ([RFC 9610]). This crate is the translation between the
-//! two, and nothing else — it has no dependency on GLib or the Evolution
-//! headers, so the mapping stays testable everywhere the workspace builds.
+//! Evolution stores contacts as vCard text, while JMAP uses JSContact
+//! `ContactCard` values ([RFC 9553], [RFC 9610]). This crate maps between
+//! them without GLib dependencies so mapping logic stays unit-testable.
 //!
-//! The mapped property set is the minimal useful one: UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL,
-//! PHOTO, CATEGORIES
-//! and the `X-` lines EDS keeps instant-messaging handles, spouse, manager, assistant,
-//! blog URL, and video URL on. See
-//! [`contact`]
-//! for what that costs and why it is safe.
+//! Supported round-trip fields include `UID`, `FN`, `N`, `NICKNAME`, `EMAIL`,
+//! `TEL`, `ADR`, `LABEL`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `BDAY`, `URL`,
+//! `CALURI`, `FBURL`, `PHOTO`, `CATEGORIES`, and selected `X-` lines.
+//! See [`contact`] for mapping constraints and preservation rules.
 //!
 //! [RFC 9553]: https://www.rfc-editor.org/rfc/rfc9553
 //! [RFC 9610]: https://www.rfc-editor.org/rfc/rfc9610

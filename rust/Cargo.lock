@@ -304,7 +304,9 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "evolution-jmap-vcard",
+ "proptest",
  "serde",
  "serde_json",
  "tracing",
@@ -318,6 +320,8 @@ dependencies = [
  "evolution-jmap-ical",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
+ "proptest",
  "serde_json",
  "tracing",
 ]
@@ -351,6 +355,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "serde_json",
  "tracing",
 ]
@@ -372,6 +377,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "serde_json",
  "tracing",
 ]
@@ -402,6 +408,13 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "evolution-jmap-tracing-capture"
+version = "0.4.1"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
@@ -653,6 +666,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "evolution-jmap-vcard",
  "gio-sys",
  "glib-sys",
@@ -682,6 +696,7 @@ dependencies = [
  "evolution-jmap-ical",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
@@ -711,6 +726,7 @@ dependencies = [
  "evolution-jmap-collection-sync",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
@@ -738,6 +754,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
@@ -758,6 +775,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-collection-sync",
  "evolution-jmap-mock",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
@@ -800,6 +818,7 @@ dependencies = [
  "evolution-jmap-mail-sync",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
@@ -1157,9 +1176,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",

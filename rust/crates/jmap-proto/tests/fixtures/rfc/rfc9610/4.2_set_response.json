@@ -1,0 +1,20 @@
+// Source: RFC 9610 §4.2 (Figure 4: 'methodResponses' Property of a JMAP Response), December 2024
+[
+  [
+    "AddressBook/set",
+    {
+      "accountId": "a0x9",
+      "updated": {
+        "cd40089d-35f9-4fd7-980b-ba3a9f1d74fe": {
+          "isDefault": true
+        },
+        "062adcfa-105d-455c-bc60-6db68b69c3f3": {
+          "isDefault": false
+        },
+        "oldState": "~4144",
+        "newState": "~4148"
+      }
+    },
+    "0"
+  ]
+]

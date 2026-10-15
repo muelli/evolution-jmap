@@ -19,13 +19,16 @@ pub struct PushSubscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
     pub device_client_id: String,
-    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<PushSubscriptionKeys>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_code: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -35,10 +38,11 @@ impl PushSubscription {
         Self {
             id: None,
             device_client_id: device_client_id.into(),
-            url: url.into(),
+            url: Some(url.into()),
             keys: None,
             expires: None,
             types: None,
+            verification_code: None,
             extra: BTreeMap::new(),
         }
     }
@@ -54,7 +58,7 @@ impl PushSubscription {
     }
 
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
-        self.url = url.into();
+        self.url = Some(url.into());
         self
     }
 
@@ -70,6 +74,11 @@ impl PushSubscription {
 
     pub fn with_types(mut self, types: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.types = Some(types.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_verification_code(mut self, verification_code: impl Into<String>) -> Self {
+        self.verification_code = Some(verification_code.into());
         self
     }
 
@@ -149,15 +158,7 @@ impl PushVerification {
 pub type TypeState = BTreeMap<String, State>;
 
 /// A server-pushed notification that something changed (RFC 8620 §7.1),
-/// delivered over the `text/event-stream` resource named by the session
-/// object's `eventSourceUrl` (§7.3).
-///
-/// Carries no more than *that* something changed and roughly *what* — a
-/// recipient compares each state string against what it already has and
-/// fetches only the accounts/types that moved, via the existing `/changes`
-/// methods. `@type` is required to be present and MUST be the literal string
-/// `"StateChange"`; nothing else is ever pushed on this channel to confuse
-/// it with.
+/// delivered over EventSource (§7.3). `@type` MUST be `"StateChange"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StateChange {
     #[serde(rename = "@type")]

@@ -7,8 +7,8 @@
 // Nothing here constructs a widget, and that is not an oversight. GTK 3 refuses
 // to: `gtk_grid_new()` reaches `GtkWidget`'s instance init, which wants a
 // `GtkStyleContext`, which aborts the process with "Can't create a
-// GtkStyleContext without a display connection" — checked on the machine this
-// was written on, which has no display. So the page itself can only be
+// GtkStyleContext without a display connection", checked on a machine with no
+// display. So the page itself can only be
 // exercised in a real Evolution session (M9's Xvfb tier seeds a pre-built
 // `.source` file instead of driving it), and this file checks the part that
 // *can* be checked without a display, which is also the part that goes wrong
@@ -19,7 +19,7 @@
 //   feature that vanishes with a line in a log nobody reads);
 // - the types those entry points take are the classes we believe they are, and
 //   stand in the inheritance relations that make the pointer casts between them
-//   legitimate — GTK's C API takes a `GtkGrid *` here and a `GtkWidget *` there
+//   legitimate: GTK's C API takes a `GtkGrid *` here and a `GtkWidget *` there
 //   for the same object, and on this side of the ABI those are separate opaque
 //   types precisely so the cast has to be written down;
 // - and that the opaque types stayed opaque: a handle with a size is a struct
@@ -42,12 +42,12 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     ("GtkComboBoxText", gtk_combo_box_text_get_type),
     ("GtkScrolledWindow", gtk_scrolled_window_get_type),
     ("GtkTextView", gtk_text_view_get_type),
-    // Not a widget — see the is-a test, which exempts it — but named here so
+    // Not a widget (see the is-a test, which exempts it), but named here so
     // the same once-guarded registration and name check cover it.
     ("GtkTextBuffer", gtk_text_buffer_get_type),
 ];
 
-/// The classes, registered exactly once — which has to be arranged, because on
+/// The classes, registered exactly once, which has to be arranged because on
 /// GTK 3 it is not safe to leave to chance.
 ///
 /// `gtk_container_get_type()` is hand-written rather than a `G_DEFINE_TYPE`
@@ -56,7 +56,7 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
 /// calling it at the same moment therefore both see zero and both register:
 /// caught here first time, as `cannot register existing type 'GtkContainer'`
 /// followed by a `<invalid>` type whose `get_type` then returns 0 forever, from
-/// two `#[test]`s that touched the type system in parallel — the default test
+/// two `#[test]`s that touched the type system in parallel: the default test
 /// harness runs them on separate threads.
 ///
 /// It is GTK behaving as documented (GTK 3 is to be called from one thread), not
@@ -92,7 +92,7 @@ fn type_name(gtype: GType) -> String {
     }
 }
 
-/// The classes are the ones we think they are — asserted by name rather than by
+/// The classes are the ones we think they are: asserted by name rather than by
 /// numeric `GType`, which is an address that differs every run.
 #[test]
 fn the_widget_types_are_the_classes_this_crate_names() {
@@ -113,8 +113,8 @@ fn the_widget_types_are_the_classes_this_crate_names() {
 /// `gtk_grid_attach` must be given as a `GtkGrid *`, and `gtk_grid_attach`'s
 /// child argument is a `GtkWidget *` that will be a label or an entry: three
 /// casts whose soundness is exactly the statement that GTK's type system relates
-/// the classes this way. If GTK ever reparented one of them — GtkLabel's parent
-/// really is the deprecated `GtkMisc` on 3.24, for instance — the cast that
+/// the classes this way. If GTK ever reparented one of them (GtkLabel's parent
+/// really is the deprecated `GtkMisc` on 3.24, for instance), the cast that
 /// crosses the changed edge is the one that starts reading the wrong offsets.
 #[test]
 fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
@@ -144,7 +144,7 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
 /// The handles are handles. Nothing in this crate knows what a `GtkWidget`
 /// looks like, and this is the assertion that keeps it that way: a non-zero size
 /// here means a layout was generated for a GTK class struct, which is the
-/// binding surface `build.rs` refuses to take on — and, unlike the EDS structs
+/// binding surface `build.rs` refuses to take on: unlike the EDS structs
 /// `tests/layout.rs` checks, one nothing cross-checks against `g_type_query`.
 #[test]
 fn the_widget_handles_carry_no_layout() {

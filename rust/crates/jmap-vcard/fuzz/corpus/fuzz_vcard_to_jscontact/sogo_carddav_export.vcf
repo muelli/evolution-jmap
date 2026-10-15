@@ -1,0 +1,35 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Inverse inc.//SOGo Connector 5.0//EN
+UID:sogo-contact-1a2b3c4d-5e6f-7890
+FN:Prof. Hélène Renée Dubois-Martin
+N:Dubois-Martin;Hélène;Renée;Prof.;
+NICKNAME:Helene
+EMAIL;TYPE=INTERNET,WORK:helene.dubois@sorbonne-universite.example
+EMAIL;TYPE=INTERNET,HOME:h.dubois@club-internet.example
+TEL;TYPE=WORK,VOICE:+33 1 44 27 00 00
+TEL;TYPE=CELL,VOICE:+33 6 12 34 56 78
+TEL;TYPE=HOME,VOICE:+33 1 43 20 00 00
+TEL;TYPE=WORK,FAX:+33 1 44 27 00 01
+ADR;TYPE=WORK:;;4 Place Jussieu;Paris;Île-de-France;75005;France
+LABEL;TYPE=WORK:4 Place Jussieu\n75005 Paris\nFrance
+ADR;TYPE=HOME:;;12 Rue de la Paix;Paris;Île-de-France;75002;France
+LABEL;TYPE=HOME:12 Rue de la Paix\n75002 Paris\nFrance
+ORG:Sorbonne Université;Faculté des Sciences et Ingénierie;Laboratoire d'Informatique
+TITLE:Professeure des Universités
+ROLE:Directrice de Recherche
+BDAY:19750422
+X-EVOLUTION-ANNIVERSARY:20030712
+X-EVOLUTION-SPOUSE:Jean-Pierre Martin
+X-EVOLUTION-MANAGER:Prof. Marcel Perrin
+X-EVOLUTION-ASSISTANT:Chantal Petit
+URL;TYPE=WORK:https://www-lip6.sorbonne-universite.fr/fr/recherche.html
+URL;TYPE=HOME:https://helenedubois.example.fr
+X-JABBER;TYPE=WORK:hdubois@jabber.sorbonne-universite.example
+X-MATRIX;TYPE=HOME:hdubois:matrix.org
+CATEGORIES:Sorbonne,Recherche,CNRS
+NOTE:Recherches en protocoles distribués et synchronisation JMAP/CalDAV.\nLaboratoire LIP6.
+PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+REV:20260825T110000Z
+X-RADICALE-NAME:contact-789.vcf
+END:VCARD

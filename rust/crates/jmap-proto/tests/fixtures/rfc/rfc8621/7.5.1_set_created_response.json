@@ -1,0 +1,29 @@
+// Source: RFC 8621 §7.5.1 (EmailSubmission/set Created and implicit Email/set Response), August 2019
+[
+  [
+    "EmailSubmission/set",
+    {
+      "accountId": "ue411d190",
+      "oldState": "012421s6-8nrq-4ps4-n0p4-9330r951ns21",
+      "newState": "355421f6-8aed-4cf4-a0c4-7377e951af36",
+      "created": {
+        "k1490": {
+          "id": "ES-3bab7f9a-623e-4acf-99a5-2e67facb02a0"
+        }
+      }
+    },
+    "0"
+  ],
+  [
+    "Email/set",
+    {
+      "accountId": "ue411d190",
+      "oldState": "778193",
+      "newState": "778197",
+      "updated": {
+        "M7f6ed5bcfd7e2604d1753f6c": null
+      }
+    },
+    "0"
+  ]
+]

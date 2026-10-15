@@ -1,0 +1,8 @@
+// Source: RFC 8621 §6.4 (Identity/get Request Invocation), August 2019
+[
+  "Identity/get",
+  {
+    "accountId": "acme"
+  },
+  "0"
+]

@@ -15,21 +15,11 @@ workspace = true
 
 [lib]
 name = "jmap_backend_book"
-# rlib only. What EDS dlopens (installed as libebookbackendjmap.so) is the
-# companion `jmap-backend-book-module` crate, which is a cdylib holding
-# nothing but the two `#[unsafe(no_mangle)]` entry points and delegating both
-# to `module::load`/`module::unload` here. The two cannot drift — the cdylib
-# has no behaviour of its own to drift with — and the tests link this rlib and
-# call the bodies directly.
+# rlib only. The companion cdylib `jmap-backend-book-module` exports the C entry points.
 crate-type = ["rlib"]
 
 [features]
-# Compiler-enforced (not just documented) test-only gate on `detached()`,
-# which builds an instance by zeroing memory outside the GObject type system —
-# see docs/UNSAFE-AUDIT.md Pattern A. Enabled for this crate's own test builds
-# via the self dev-dependency below; never on for a normal build. Reaches
-# through to jmap-backend-core's own `testing` gate on `instance::zeroed_box`,
-# the shared helper `detached()` is built on.
+# Test-only gate on `detached()`, which builds an instance outside the GObject type system.
 testing = ["jmap-backend-core/testing"]
 
 [dependencies]
@@ -45,10 +35,10 @@ gobject-sys = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# Self dev-dependency to turn on `testing` (and so `detached()`) for this
-# crate's own test builds only — see the `[features]` comment above.
+# Self dev-dependency to enable `testing` for crate test targets.
 jmap-backend-book = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
 # Only to name a VCardError variant when checking the error mapping; the
 # backend itself never sees one that jmap-book-sync has not already wrapped.
 evolution-jmap-vcard = { workspace = true }

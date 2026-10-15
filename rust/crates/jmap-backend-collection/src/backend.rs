@@ -1266,123 +1266,47 @@ fn debug_print_eds(message: &str) {
 
 #[cfg(test)]
 mod debug_print_tests {
-    use std::sync::{Arc, Mutex};
-
-    use tracing::field::{Field, Visit};
-    use tracing::span::{Attributes, Id, Record};
-    use tracing::{Event, Metadata, Subscriber};
+    use jmap_tracing_capture::capture;
 
     use super::*;
 
-    /// Records every field of every event it sees, as `(name, value)` pairs —
-    /// mirrors `jmap_backend_core::trampoline`'s own test-only subscriber,
-    /// which this crate cannot reuse directly (it is private to that crate),
-    /// and this crate has no `tracing-subscriber` dev-dependency either.
-    struct CapturingSubscriber {
-        captured: Arc<Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a>(&'a Mutex<Vec<(String, String)>>);
-
-    impl Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_owned()));
-        }
-    }
-
-    impl Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &Attributes<'_>) -> Id {
-            Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &Id, _values: &Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            event.record(&mut Recorder(&self.captured));
-        }
-
-        fn enter(&self, _span: &Id) {}
-
-        fn exit(&self, _span: &Id) {}
-    }
-
     #[test]
     fn debug_print_for_resource_attaches_the_resource_id_as_a_structured_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, entries) = capture(|| {
             debug_print_for_resource("addressbook-1", "created address book addressbook-1");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .contains(&("resource_id".to_owned(), "addressbook-1".to_owned())),
-            "expected a resource_id=addressbook-1 field, got {:?}",
-            captured.lock().unwrap()
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "resource_id" && value == "addressbook-1"),
+            "expected a resource_id=addressbook-1 field, got {entries:?}"
         );
     }
 
     #[test]
     fn debug_print_for_account_attaches_the_account_id_as_a_structured_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, entries) = capture(|| {
             debug_print_for_account("account-1", "3 cached children exported");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .contains(&("account_id".to_owned(), "account-1".to_owned())),
-            "expected an account_id=account-1 field, got {:?}",
-            captured.lock().unwrap()
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "account-1"),
+            "expected an account_id=account-1 field, got {entries:?}"
         );
     }
 
     #[test]
     fn debug_print_does_not_attach_a_resource_id_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, entries) = capture(|| {
             debug_print("no resource id in this one");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(name, _)| name != "resource_id"),
-            "did not expect a resource_id field, got {:?}",
-            captured.lock().unwrap()
+            entries.iter().all(|(_, name, _)| name != "resource_id"),
+            "did not expect a resource_id field, got {entries:?}"
         );
     }
 }

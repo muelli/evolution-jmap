@@ -1,23 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The module entry point and the `ECalBackendFactory` it registers — the last
-//! two pieces between `evolution-calendar-factory` and the backend.
-//!
-//! The path is the address book's, one library over: EDS scans its backend
-//! directory, `g_type_module_use`s an `EModule` per shared object it finds —
-//! which dlopens the module and calls `e_module_load` — and then looks for
-//! children of `ECalBackendFactory` among the types that appeared. So the test
-//! drives that path rather than the functions underneath it, with a
-//! `GTypeModule` subclass whose `load` calls our entry point standing in for
-//! the `EModule` that would dlopen the built `.so`.
-//!
-//! One thing here has no counterpart in `jmap-backend-book`'s version, and it
-//! is the reason this file is not a copy with the names changed:
-//! `ECalBackendFactoryClass` has a third field. A calendar factory says which
-//! *kind* of component it serves, EDS keys it by name **and** kind, and passes
-//! the kind on to the backend it builds — see
-//! [`the_factory_is_the_one_for_events`].
+//! Tests for the module entry point and `ECalBackendFactory` registration.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -82,13 +66,7 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// The one module in the process, used, unused, and used again.
-///
-/// One, because two `GTypeModule`s cannot register the same type name. Used
-/// twice around an unuse because that is the case that happens in the field:
-/// `g_type_module_unuse` marks every type the module registered as unloaded
-/// when the last user goes away, and GLib will not hand the module back until a
-/// second `e_module_load` has registered them again.
+/// Tracks module loading and re-use lifecycle.
 struct Loaded {
     module: *mut GTypeModule,
     first_use: gboolean,
@@ -112,8 +90,8 @@ fn loaded() -> &'static Loaded {
         assert!(!module.is_null(), "g_object_new returned NULL");
 
         // SAFETY: `module` is a GTypeModule, and the reference taken by the
-        // second use is never given back — the types stay usable for the rest
-        // of the process, which is what every test below relies on.
+        // second use is never given back: the types stay usable for the rest
+        // of the process.
         unsafe {
             let first_use = g_type_module_use(module);
             g_type_module_unuse(module);
@@ -189,13 +167,7 @@ fn the_entry_point_registers_a_cal_backend_factory() {
     );
 }
 
-/// The name is the contract with the `.source` file: EDS looks a calendar up by
-/// the `BackendName` in its `[Calendar]` group, and a factory that answers to
-/// anything else is an account that reports no available backend.
-///
-/// It is the same string the address book's factory uses, and that is not a
-/// clash: the two live in different factory processes, keyed in different hash
-/// tables.
+/// Verifies factory answers to the BackendName configured in the .source file.
 #[test]
 fn the_factory_answers_to_the_backend_name_a_source_file_asks_for() {
     let class = FactoryClass::get();
@@ -205,15 +177,7 @@ fn the_factory_answers_to_the_backend_name_a_source_file_asks_for() {
     assert_eq!(unsafe { CStr::from_ptr(name) }, c"jmap");
 }
 
-/// The field the address book has no counterpart for.
-///
-/// `ECalBackendFactory` keys itself by `factory_name` *and* `component_kind`, so
-/// this is half of what a `.source` naming `BackendName=jmap` in its
-/// `[Calendar]` group resolves through — a task list or a memo list asking for
-/// `jmap` finds no factory at all, which is the honest answer while
-/// `jmap-cal-sync` maps events and nothing else. It is also what EDS passes to
-/// the backend as its `kind` construct property, so getting it wrong is a
-/// backend that reports the wrong component type to every client.
+/// Verifies factory serves VEVENT components.
 #[test]
 fn the_factory_is_the_one_for_events() {
     let class = FactoryClass::get();
@@ -241,9 +205,7 @@ fn the_factory_builds_the_jmap_backend() {
     );
 }
 
-/// Registered against the module, not statically: a statically registered type
-/// keeps its class — and so pointers into this shared object — alive after EDS
-/// has unloaded the module underneath it.
+/// Verifies types are registered dynamically against the GTypeModule.
 #[test]
 fn the_types_belong_to_the_module_that_registered_them() {
     let loaded = loaded();
@@ -260,11 +222,7 @@ fn the_types_belong_to_the_module_that_registered_them() {
     }
 }
 
-/// EDS unuses a module when the last calendar it provided goes away, and uses
-/// it again when the next account wants one. The second use calls
-/// `e_module_load` a second time, and an entry point that treats "already
-/// registered" as "nothing to do" leaves every type marked unloaded — GLib then
-/// refuses the module and the calendar never opens again.
+/// Verifies re-loading an un-used module successfully registers its types.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
     let loaded = loaded();

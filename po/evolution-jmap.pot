@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-06 04:04+0000\n"
+"POT-Creation-Date: 2026-10-13 15:17+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,11 +17,8 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#. TRANSLATORS: shown when a new recurring appointment could not be
-#. saved. %1$s is the date and time the series ends, as it was
-#. written in the appointment; %2$s is a time zone identifier such
-#. as "Europe/Berlin".
-#: rust/crates/jmap-backend-cal/src/ops.rs:538
+#. TRANSLATORS: shown when a new recurring appointment could not be saved.
+#: rust/crates/jmap-backend-cal/src/ops.rs:420
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -30,10 +27,8 @@ msgid ""
 "works instead."
 msgstr ""
 
-#. TRANSLATORS: shown when a new recurring appointment could not be
-#. saved, and the reason is not something the user can be pointed
-#. at more precisely than this.
-#: rust/crates/jmap-backend-cal/src/ops.rs:547
+#. TRANSLATORS: shown when a new recurring appointment could not be saved.
+#: rust/crates/jmap-backend-cal/src/ops.rs:425
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -80,9 +75,9 @@ msgstr ""
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
 
-#: rust/crates/jmap-backend-core/src/oauth2.rs:706
-#: rust/crates/jmap-backend-core/src/oauth2.rs:833
-#: rust/crates/jmap-ui/src/link.rs:269 rust/crates/jmap-ui/src/link.rs:274
+#: rust/crates/jmap-backend-core/src/oauth2.rs:751
+#: rust/crates/jmap-backend-core/src/oauth2.rs:878
+#: rust/crates/jmap-ui/src/link.rs:278 rust/crates/jmap-ui/src/link.rs:283
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1071
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1074
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1095
@@ -92,7 +87,7 @@ msgstr ""
 #. TRANSLATORS: %1$s is the message bus's own text naming which service
 #. has no owner, e.g. "The name :1.4 was not provided by any .service
 #. files".
-#: rust/crates/jmap-backend-core/src/oauth2.rs:705
+#: rust/crates/jmap-backend-core/src/oauth2.rs:750
 #, c-format
 msgid ""
 "a service this account's sign-in needs is not running, so no access token "
@@ -101,7 +96,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is EDS's own message for why the
 #. account's secret store (keyring) could not be reached.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:832
+#: rust/crates/jmap-backend-core/src/oauth2.rs:877
 #, c-format
 msgid "the account's secret store (keyring) could not be reached: %1$s"
 msgstr ""
@@ -110,7 +105,7 @@ msgstr ""
 #. the account's stored token cannot be read because the
 #. system keyring is locked, which signing in again cannot
 #. fix.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:864
+#: rust/crates/jmap-backend-core/src/oauth2.rs:909
 msgid ""
 "the login keyring is locked, so this account's OAuth 2.0 token can be "
 "neither read nor stored; unlock the keyring and try again"
@@ -119,7 +114,7 @@ msgstr ""
 #. TRANSLATORS: shown instead of a fresh sign-in window when
 #. the system has no keyring service at all, so a token
 #. obtained by signing in could not be saved anywhere.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:892
+#: rust/crates/jmap-backend-core/src/oauth2.rs:937
 msgid ""
 "this system has no keyring service to store an OAuth 2.0 token in, so "
 "signing in again would not keep this account signed in; enable a keyring "
@@ -128,13 +123,13 @@ msgstr ""
 
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:903
+#: rust/crates/jmap-backend-core/src/oauth2.rs:948
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:934
+#: rust/crates/jmap-backend-core/src/oauth2.rs:979
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
@@ -276,7 +271,7 @@ msgstr ""
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:422
+#: rust/crates/jmap-config/src/oauth2_service.rs:461
 #: rust/crates/jmap-mail/src/provider.rs:60
 msgid "JMAP"
 msgstr ""
@@ -386,15 +381,11 @@ msgstr ""
 msgid "For reading and storing mail on JMAP servers."
 msgstr ""
 
-#. TRANSLATORS: the name of an authentication method, in the "Authentication
-#. type" list of a JMAP account's settings. "JMAP" is a protocol name — leave it
-#. as it is unless your language writes it in another script.
-#: rust/crates/jmap-mail/src/sasl.rs:151
+#: rust/crates/jmap-mail/src/sasl.rs:156
 msgid "OAuth2 (JMAP)"
 msgstr ""
 
-#. TRANSLATORS: the description of the "OAuth2 (JMAP)" authentication method.
-#: rust/crates/jmap-mail/src/sasl.rs:163
+#: rust/crates/jmap-mail/src/sasl.rs:169
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
 
@@ -420,7 +411,16 @@ msgstr ""
 msgid "the server rejected the change: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:212
+#. TRANSLATORS: %1$s and %2$s are the URLs the server redirected
+#. between; they differ in host.
+#: rust/crates/jmap-ui/src/link.rs:71
+#, c-format
+msgid ""
+"the server at %1$s redirected to %2$s, a different host, so its credentials "
+"were not sent there — check the account's host setting"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:221
 msgid "the session document names no usable mail account"
 msgstr ""
 

@@ -1,21 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `EBookMetaBackend` subclass: the type EDS registers, the vfunc slots it
-//! dispatches through, and what those slots do with the connection the
-//! instance holds.
-//!
-//! Every call here goes *through the class struct* rather than at the Rust
-//! functions directly, because that is the only thing EDS ever does: a vfunc
-//! that is correct but not installed is a backend that silently uses
-//! `EBookMetaBackend`'s own do-nothing defaults.
-//!
-//! What is not here is a real instance. Constructing one needs an
-//! `ESourceRegistry` and so a running `evolution-source-registry` on the
-//! session bus, which neither this VM nor CI has. [`JmapBookBackend::detached`]
-//! is the stand-in: the parent bytes are zeroed and nothing may touch them,
-//! which is exactly why `connect_sync` — the one vfunc that reads the parent's
-//! `ESource` — is tested one layer down, in `tests/connect.rs`.
+//! Tests for the `EBookMetaBackend` subclass and vfunc dispatch over `JmapBookBackend`.
 
 use std::ffi::{CStr, CString};
 use std::mem::{MaybeUninit, size_of};
@@ -67,10 +53,7 @@ impl Class {
         unsafe { &(*self.0).parent_class }
     }
 
-    /// The `EBackendClass` half, three levels up:
-    /// `EBookMetaBackendClass` -> `EBookBackendSyncClass` -> `EBookBackendClass`
-    /// -> `EBackendClass`. This is where `get_destination_address` lives, and
-    /// where `class_init` must write it to be reachable by EDS.
+    /// The `EBackendClass` half where `get_destination_address` lives.
     fn backend_vfuncs(&self) -> &EBackendClass {
         &self.vfuncs().parent_class.parent_class.parent_class
     }
@@ -83,8 +66,7 @@ impl Drop for Class {
     }
 }
 
-/// An instance the GObject type system knows nothing about — see the module
-/// comment. Only the session slot may be touched through it.
+/// Detached backend instance for test isolation.
 struct Detached(Box<JmapBookBackend>);
 
 impl Detached {
@@ -97,9 +79,7 @@ impl Detached {
     }
 }
 
-/// A mock server and the `BookSync` over its default address book, so a
-/// detached instance can be handed a connection without going through
-/// `connect_sync`.
+/// Mock server and `BookSync` test fixture.
 struct Fixture {
     server: MockServer,
     account_id: Id,
@@ -143,9 +123,7 @@ impl Fixture {
     }
 }
 
-/// Asserts that a failed call reported the account as offline, and frees the
-/// error. The code matters: it is what makes `EBookMetaBackend` serve its
-/// cache rather than show the user a broken address book.
+/// Asserts that a failed call set `E_CLIENT_ERROR_REPOSITORY_OFFLINE` and frees the error.
 unsafe fn assert_offline(error: &mut *mut GError) {
     unsafe {
         assert!(!error.is_null(), "the call failed without setting an error");
@@ -199,9 +177,7 @@ fn the_registered_sizes_are_the_rust_struct_sizes() {
     );
 }
 
-/// A vfunc that is implemented but not installed is the worst of both worlds:
-/// EDS falls back to `EBookMetaBackend`'s own defaults, which report an empty
-/// address book rather than an error.
+/// Ensures all expected `EBookMetaBackend` vfuncs are registered.
 #[test]
 fn class_init_installs_every_vfunc_the_meta_backend_dispatches_on() {
     let class = Class::get();
@@ -216,10 +192,7 @@ fn class_init_installs_every_vfunc_the_meta_backend_dispatches_on() {
     assert!(vfuncs.remove_contact_sync.is_some(), "remove_contact_sync");
 }
 
-/// `get_changes_sync` answers "list the whole book instead" by chaining up to
-/// the parent, which is the only implementation of a full diff against the
-/// cache there is. If the parent has no such slot the fallback is a silent
-/// no-op — an address book that stays empty forever.
+/// `get_changes_sync` falls back to parent class implementation for full cache diffing.
 #[test]
 fn the_parent_class_offers_a_get_changes_sync_to_chain_up_to() {
     let _class = Class::get();
@@ -233,11 +206,7 @@ fn the_parent_class_offers_a_get_changes_sync_to_chain_up_to() {
 // ---------------------------------------------------------------------------
 // dispatch without a connection
 
-/// EDS calls `connect_sync` before anything else, so reaching an operation
-/// without a connection means a disconnect raced it — which is what going
-/// offline looks like. Reporting that as offline is what makes the meta
-/// backend serve its cache; anything else is a visible failure for a state the
-/// user asked for.
+/// Operations without an active connection report offline.
 #[test]
 fn every_operation_without_a_connection_reports_offline_instead_of_crashing() {
     let class = Class::get();
@@ -410,9 +379,7 @@ fn a_connected_backend_dispatches_load_contact_to_the_sync_layer() {
     }
 }
 
-/// Going offline has to leave the backend in the state a fresh one is in, and
-/// EDS is entitled to say it twice — it disconnects on shutdown as well as on
-/// the offline transition.
+/// Disconnecting twice succeeds and leaves operations reporting offline.
 #[test]
 fn disconnect_drops_the_connection_and_saying_it_twice_is_still_success() {
     let fixture = Fixture::start();
@@ -454,9 +421,7 @@ fn disconnect_drops_the_connection_and_saying_it_twice_is_still_success() {
     }
 }
 
-/// GObject frees the instance struct without running a Rust destructor over
-/// it, so a connection the slot still holds at `finalize` is leaked — together
-/// with its socket.
+/// Finalize drops any active connection held by the instance.
 #[test]
 fn finalize_drops_the_connection_the_instance_still_holds() {
     let fixture = Fixture::start();
@@ -473,9 +438,7 @@ fn finalize_drops_the_connection_the_instance_still_holds() {
 // ---------------------------------------------------------------------------
 // push subscriptions: teardown and stale-header reconnect
 
-/// A live push subscription against the fixture's own mock, which needs no
-/// GObject — `PushRefresh` is deliberately given its refresh action rather
-/// than deriving it from a backend, so a detached instance can hold one.
+/// Live push subscription against the fixture mock server.
 fn subscription(fixture: &Fixture) -> PushRefresh {
     let url = expand_url(
         &format!("{}/eventsource", fixture.server.origin()),
@@ -492,10 +455,7 @@ fn subscription(fixture: &Fixture) -> PushRefresh {
     )
 }
 
-/// `disconnect_sync` has to end the push subscription as well as the
-/// connection. A subscription that outlived its connection would keep
-/// scheduling refreshes on a backend with nothing to refresh with — and, once
-/// EDS dropped the backend, on nothing at all.
+/// Disconnect stops the push subscription alongside the connection.
 #[test]
 fn disconnect_stops_the_push_subscription_with_the_connection() {
     let fixture = Fixture::start();
@@ -522,11 +482,7 @@ fn disconnect_stops_the_push_subscription_with_the_connection() {
     assert!(!backend.0.is_connected());
 }
 
-/// And `finalize` has to do it too, because EDS does not promise a
-/// `disconnect_sync` first: `ebmb_dispose` cancels its own refreshes and
-/// drops its own cache, but never asks the subclass to disconnect. A push
-/// thread that survived here would be holding a `GWeakRef` to freed instance
-/// memory.
+/// Finalize stops any push subscription that was not stopped by disconnect.
 #[test]
 fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
     let fixture = Fixture::start();
@@ -546,14 +502,7 @@ fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
     assert!(!backend.0.is_connected());
 }
 
-/// The header-refresh piece of item 28: a push subscription's `Authorization`
-/// header can go stale for the same reason the pooled connection's does — an
-/// OAuth 2.0 access token rotates. `refresh_credentials` cannot be driven
-/// end-to-end here since it needs a real `ESource`'s token exchange (see
-/// `tests/stale_token.rs`), but `JmapBookBackend::refresh_push_headers` is the
-/// half it hands off to, and is directly testable: a subscription started
-/// with a stale header is refused, reconnects, and resumes listening once the
-/// fresh header replaces it.
+/// A push subscription reconnects after credentials are refreshed.
 #[test]
 fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
     let server = MockServer::builder().bearer_token("fresh-token").start();
@@ -592,12 +541,7 @@ fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
 // ---------------------------------------------------------------------------
 // push subscription ordering on connect
 
-/// Starting push spawns a pump thread that can immediately receive a push
-/// and trigger `schedule_refresh`, reaching `get_changes_sync`. If push starts
-/// before the connection is installed into the session lock, that refresh
-/// finds no connection and reports the account offline for a change that
-/// already arrived. `install_connection` must install the connection into the
-/// session lock before invoking `start_push`.
+/// Installing a connection sets the session lock before starting push listening.
 #[test]
 fn install_connection_installs_connection_before_starting_push() {
     let fixture = Fixture::start();
@@ -635,12 +579,7 @@ fn install_connection_stores_push_subscription() {
 // ---------------------------------------------------------------------------
 // get_destination_address
 
-/// The `EBackendClass` EDS installed its own defaults into. `get_destination_address`
-/// is one of them: it reads the backend's "connectable" property via
-/// `e_backend_ref_connectable`, which nothing in this crate ever sets, so the
-/// inherited default always answers `FALSE`. That leaves EDS's host-specific
-/// reachability monitor seeing only generic network-up/down for a JMAP account
-/// rather than this account's actual host.
+/// Grandparent `EBackendClass` reference from type system.
 fn e_backend_class() -> *mut EBackendClass {
     // SAFETY: `e_backend_get_type()` is valid to call, and `g_type_class_peek`
     // is safe for any type whose class is already initialised (which any type
@@ -648,13 +587,7 @@ fn e_backend_class() -> *mut EBackendClass {
     unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
 }
 
-/// A vfunc that is installed but not overriding the parent's default is the
-/// silent wrong-answer case. `EBackendClass::get_destination_address` is the
-/// one here: left at EDS's own default it always answers `FALSE` because nothing
-/// in this crate ever sets the "connectable" property it reads, so EDS's
-/// host-specific reachability monitor sees only generic network-up/down for a
-/// JMAP account. The fix is overriding the slot. This test verifies that
-/// override is in place; it fails until `class_init` writes it.
+/// `class_init` overrides `get_destination_address` rather than leaving the parent default.
 #[test]
 fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
     let class = Class::get();

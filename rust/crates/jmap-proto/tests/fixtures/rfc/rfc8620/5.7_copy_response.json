@@ -1,0 +1,30 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Todo/copy and Implicit Todo/set Response), July 2019
+[
+  [
+    "Todo/copy",
+    {
+      "fromAccountId": "x",
+      "accountId": "y",
+      "created": {
+        "k5122": {
+          "id": "DAf97"
+        }
+      },
+      "oldState": "c1d64ecb038c",
+      "newState": "33844835152b"
+    },
+    "0"
+  ],
+  [
+    "Todo/set",
+    {
+      "accountId": "x",
+      "oldState": "871903",
+      "newState": "871909",
+      "destroyed": [
+        "a"
+      ]
+    },
+    "0"
+  ]
+]

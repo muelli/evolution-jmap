@@ -1,0 +1,11 @@
+// Source: RFC 8620 §4.1 (Core/echo Example Request), July 2019
+[
+  [
+    "Core/echo",
+    {
+      "hello": true,
+      "high": 5
+    },
+    "b3ff"
+  ]
+]

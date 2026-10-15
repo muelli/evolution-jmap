@@ -21,14 +21,12 @@ fn state_bumps_only_on_success() {
     let mut store: Store<String> = Store::new("X");
     let initial = store.state_counter();
 
-    // A transaction that stages nothing must not advance state.
     store.transaction(|transaction| {
         assert!(!transaction.destroy(&Id::new("X999")));
     });
     assert_eq!(store.state_counter(), initial);
 
-    // A transaction with one create advances state exactly once, however
-    // many objects it touches.
+    // A transaction with creates advances state exactly once.
     store.transaction(|transaction| {
         let a = transaction.alloc_id();
         transaction.create(a, "a".to_owned());
@@ -64,7 +62,6 @@ fn changes_log_matches_state_sequence() {
     assert_eq!(all[2].kind, ChangeKind::Destroyed);
     assert!(all.iter().all(|change| change.id == id));
 
-    // Slicing from a later state yields only later changes.
     let since_create: Vec<_> = store.changes_since(after_create).collect();
     assert_eq!(since_create.len(), 2);
     assert_eq!(since_create[0].kind, ChangeKind::Updated);

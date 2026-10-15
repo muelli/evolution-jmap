@@ -210,11 +210,7 @@ fn internal_error(message: &str) -> *mut GError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use tracing::field::{Field, Visit};
-    use tracing::span::{Attributes, Id, Record};
-    use tracing::{Event, Metadata, Subscriber};
+    use jmap_tracing_capture::capture;
 
     use super::*;
 
@@ -230,62 +226,9 @@ mod tests {
         assert_eq!(panic_message(&odd_payload), "unprintable panic payload");
     }
 
-    /// Records every field of every event it sees, as `(name, value)` pairs,
-    /// so a test can assert a call attached a structured field rather than
-    /// only a free-text message — nothing in this crate's own dependencies
-    /// (`tracing`, not `tracing-subscriber`) already provides one this small.
-    struct CapturingSubscriber {
-        captured: Arc<Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a>(&'a Mutex<Vec<(String, String)>>);
-
-    impl Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_owned()));
-        }
-    }
-
-    impl Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &Attributes<'_>) -> Id {
-            Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &Id, _values: &Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            event.record(&mut Recorder(&self.captured));
-        }
-
-        fn enter(&self, _span: &Id) {}
-
-        fn exit(&self, _span: &Id) {}
-    }
-
     #[test]
     fn log_critical_for_message_attaches_the_uid_as_a_structured_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical_for_message(
                 "uid-123",
                 "the cached copy was dropped: it has nothing in it",
@@ -294,44 +237,27 @@ mod tests {
 
         assert!(
             captured
-                .lock()
-                .unwrap()
-                .contains(&("message_uid".to_owned(), "uid-123".to_owned())),
-            "expected a message_uid=uid-123 field, got {:?}",
-            captured.lock().unwrap()
+                .iter()
+                .any(|(_, name, value)| name == "message_uid" && value == "uid-123"),
+            "expected a message_uid=uid-123 field, got {captured:?}"
         );
     }
 
     #[test]
     fn log_critical_does_not_attach_a_message_uid_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical("no uid in this one");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(name, _)| name != "message_uid"),
-            "did not expect a message_uid field, got {:?}",
-            captured.lock().unwrap()
+            captured.iter().all(|(_, name, _)| name != "message_uid"),
+            "did not expect a message_uid field, got {captured:?}"
         );
     }
 
     #[test]
     fn log_critical_for_resource_attaches_the_resource_id_as_a_structured_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical_for_resource(
                 "addressbook-1",
                 "EDS would not create a child source for it",
@@ -340,44 +266,27 @@ mod tests {
 
         assert!(
             captured
-                .lock()
-                .unwrap()
-                .contains(&("resource_id".to_owned(), "addressbook-1".to_owned())),
-            "expected a resource_id=addressbook-1 field, got {:?}",
-            captured.lock().unwrap()
+                .iter()
+                .any(|(_, name, value)| name == "resource_id" && value == "addressbook-1"),
+            "expected a resource_id=addressbook-1 field, got {captured:?}"
         );
     }
 
     #[test]
     fn log_critical_does_not_attach_a_resource_id_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical("no resource id in this one");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(name, _)| name != "resource_id"),
-            "did not expect a resource_id field, got {:?}",
-            captured.lock().unwrap()
+            captured.iter().all(|(_, name, _)| name != "resource_id"),
+            "did not expect a resource_id field, got {captured:?}"
         );
     }
 
     #[test]
     fn log_critical_for_account_attaches_the_account_id_as_a_structured_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical_for_account(
                 "account-1",
                 "the account's credentials could not be looked up",
@@ -386,33 +295,21 @@ mod tests {
 
         assert!(
             captured
-                .lock()
-                .unwrap()
-                .contains(&("account_id".to_owned(), "account-1".to_owned())),
-            "expected an account_id=account-1 field, got {:?}",
-            captured.lock().unwrap()
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "account-1"),
+            "expected an account_id=account-1 field, got {captured:?}"
         );
     }
 
     #[test]
     fn log_critical_does_not_attach_an_account_id_field() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
+        let (_, captured) = capture(|| {
             log_critical("no account id in this one");
         });
 
         assert!(
-            captured
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(name, _)| name != "account_id"),
-            "did not expect an account_id field, got {:?}",
-            captured.lock().unwrap()
+            captured.iter().all(|(_, name, _)| name != "account_id"),
+            "did not expect an account_id field, got {captured:?}"
         );
     }
 }

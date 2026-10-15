@@ -5,7 +5,7 @@
 // class M7's module subclasses: ask the running GObject type system what sizes
 // it allocates an `EMailConfigServiceBackend` and its class at, and hold them
 // against ours. A drift here writes an overridden vfunc pointer into the wrong
-// offset of Evolution's own class struct — inside the process the user is
+// offset of Evolution's own class struct, inside the process the user is
 // typing their password into.
 //
 // It also asserts the join this crate exists to make: the class our subclass
@@ -22,9 +22,9 @@ use std::sync::{Mutex, MutexGuard};
 /// initialisation through Evolution's page classes. From parallel harness
 /// threads that deadlocked, not raced: one thread parked in
 /// `g_once_init_enter` while the other, inside the same once-guard, blocked
-/// on the GObject type lock the first still held (observed 2026-09-02, both
-/// stacks through `gtk_scrolled_window_get_type`). Every test here goes
-/// through the type system under this lock.
+/// on the GObject type lock the first still held, both stacks through
+/// `gtk_scrolled_window_get_type`. Every test here goes through the type
+/// system under this lock.
 static TYPE_SYSTEM: Mutex<()> = Mutex::new(());
 
 fn type_lock() -> MutexGuard<'static, ()> {
@@ -34,7 +34,7 @@ fn type_lock() -> MutexGuard<'static, ()> {
 }
 
 /// `g_type_query()` fills nothing for a classed type whose class has never been
-/// referenced, so take a class ref first — the same dance as in `eds-sys`.
+/// referenced, so take a class ref first, the same dance as in `eds-sys`.
 fn query(gtype: GType) -> GTypeQuery {
     unsafe {
         let klass = g_type_class_ref(gtype);
@@ -64,7 +64,7 @@ fn service_backend_layout_matches_the_gtype_system() {
 }
 
 /// What the subclass will chain up to. The `EExtension` in the parent slot has
-/// to be the type EDS registered — which is what makes `jmap-backend-core`'s
+/// to be the type EDS registered, which is what makes `jmap-backend-core`'s
 /// registration helpers, written against `eds-sys`, usable for a class that
 /// lives in Evolution rather than in EDS.
 #[test]
@@ -85,7 +85,7 @@ fn the_parent_is_the_extension_eds_sys_names() {
 }
 
 /// The interface jmap-ui's vacation page fills (`submit`/`submit_finish`
-/// written into its slots), held against the running library — a slot
+/// written into its slots), held against the running library: a slot
 /// written at the wrong offset is a wrong vfunc called with the wrong
 /// arguments, inside Evolution's own process.
 ///
@@ -124,7 +124,7 @@ fn the_page_interface_defaults_read_correctly_through_our_layout() {
 /// The class field a service backend is *found* by. Evolution's config pages
 /// pick a backend out of every registered `EMailConfigServiceBackend` extension
 /// by comparing `backend_name` against a Camel provider's protocol, so it is
-/// the first thing M7's `class_init` has to fill in — and it has to land in the
+/// the first thing M7's `class_init` has to fill in, and it has to land in the
 /// first word after the inherited class, or the comparison reads a vfunc
 /// pointer as a string.
 #[test]

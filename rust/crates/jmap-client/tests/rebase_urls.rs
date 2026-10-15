@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `ClientBuilder::rebase_urls_to_origin` — real-server readiness for a
+//! `ClientBuilder::rebase_urls_to_origin`: real-server readiness for a
 //! deployment whose session document names a scheme/host the client cannot
 //! route to, even though the session document itself came from a reachable
 //! address.
@@ -20,7 +20,7 @@ use serde_json::json;
 
 /// Nothing listens here: loopback, so a connection attempt fails instantly
 /// (no DNS lookup, no timeout wait) rather than hanging until the client's
-/// connect timeout — port 1 is privileged and unassigned on Linux.
+/// connect timeout: port 1 is privileged and unassigned on Linux.
 const UNREACHABLE_ORIGIN: &str = "http://127.0.0.1:1";
 
 #[test]

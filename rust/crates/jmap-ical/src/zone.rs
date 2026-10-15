@@ -3,35 +3,10 @@
 
 //! What offset from UTC a `VTIMEZONE` puts in force at a given instant.
 //!
-//! The one question [`event`](crate::event) has to answer that iCalendar
-//! itself does not: RFC 5545 §3.3.10 states a recurrence's `UNTIL` as a UTC
-//! instant whenever `DTSTART` names a zone, while RFC 8984 §4.3.3 states it as
-//! a local time in that zone, and converting between them needs the offset in
-//! force *at* that instant.
-//!
-//! Which is normally a zone database's job, and this crate ships none. It does
-//! not have to: RFC 5545 §3.6.5 says a `TZID` is defined by the `VTIMEZONE` in
-//! the same object, so a document that names a zone carries the rules for it —
-//! Evolution writes one, and so does every invitation and every exported
-//! `.ics`. This module reads the answer out of the document rather than out of
-//! a database, and where the document does not answer it says so, which leaves
-//! the caller exactly where it was before.
-//!
-//! Deliberately narrow. Only the shapes a transition rule is actually written
-//! in are counted — a yearly rule naming one day of one month, in the four ways
-//! [`Day`] lists — and anything else, an unknown part included, is refused
-//! whole. A wrong offset moves the end of a series by an hour or by twelve with
-//! nothing downstream able to tell; refusing costs only the conversion.
-//!
-//! What "actually written" means is measured rather than guessed at, on both of
-//! the populations a definition can come from. On the save path the producer is
-//! libical, and `jmap-backend-cal/tests/zones.rs` drives every zone it ships —
-//! every zone an appointment saved from Evolution can be in — through this
-//! module and checks the answer against libical's own. On the receive path the
-//! producer is whatever wrote the invitation: the 83 distinct definitions in
-//! calcard 0.3.9's 301-file iCalendar corpus were run through this module once,
-//! by hand, and the parts they wrote that it did not read are the ones the
-//! tests named for Exchange, Zimbra and Lotus Notes now cover.
+//! Resolves recurrence `UNTIL` conversions between UTC instants (RFC 5545 §3.3.10)
+//! and zoned local times (RFC 8984 §4.3.3) by reading the document's own `VTIMEZONE`
+//! definitions (RFC 5545 §3.6.5) rather than relying on an external zone database.
+//! Refuses unmappable or ambiguous transition rules cleanly.
 
 use calcard::icalendar::ICalendarComponent;
 
@@ -40,27 +15,14 @@ use crate::event::{
     entry_texts, offset_seconds, to_local_date_time,
 };
 
-/// When the zone last changed its offset, and what that offset is — the
-/// `TZOFFSETTO` of the observance the transition belongs to, or, for the
-/// earliest transition of all, the `TZOFFSETFROM` it moved away from.
+/// When the zone last changed its offset, and what that offset is: the
+/// `TZOFFSETTO` of the observance, or `TZOFFSETFROM` for the earliest transition.
 type Transition = (i64, i64);
 
 /// The offset from UTC in force at `utc` in the zone `observances` describe, as
-/// a count of seconds east of UTC, or `None` for a definition whose
-/// transitions this cannot work out.
+/// seconds east of UTC, or `None` if transitions cannot be resolved.
 ///
-/// `utc` is a UTC instant spelled as a LocalDateTime — the digits of a `Z`
-/// value with the `Z` taken off, which is what [`to_local_date_time`] hands
-/// back.
-///
-/// The offset is the one the *latest* transition at or before that instant
-/// moved to. A transition happens on its own instant, so a value falling
-/// exactly on one gets the new offset: that is what an observance's `DTSTART`
-/// means, the first moment the new offset is in force.
-///
-/// An instant before every transition the definition states gets the
-/// `TZOFFSETFROM` of the earliest of them, which is the only thing the
-/// definition says about the zone before it started describing it.
+/// `utc` is a UTC instant spelled as a LocalDateTime (without trailing `Z`).
 pub(crate) fn offset_at(observances: &[&ICalendarComponent], utc: &str) -> Option<i64> {
     let (year, ..) = parts(utc)?;
     let target = seconds_at(utc)?;
@@ -84,14 +46,7 @@ pub(crate) fn offset_at(observances: &[&ICalendarComponent], utc: &str) -> Optio
     in_force.or(first).map(|(_, offset)| offset)
 }
 
-/// When one observance starts being in force, as UTC instants, taking in only
-/// the occurrences that could matter for a target in `year` — see
-/// [`rule_onsets`].
-///
-/// RFC 5545 §3.6.5 dates an observance in the zone it is defining, against the
-/// offset it is moving *from*, so that is what each local time here is resolved
-/// with. The `DTSTART` is itself the first occurrence, as it is for any
-/// recurrence.
+/// When one observance starts being in force, as UTC instants (see [`rule_onsets`]).
 fn onsets(observance: &ICalendarComponent, from: i64, year: i64) -> Option<Vec<i64>> {
     let start = to_local_date_time(&component_text(observance, "DTSTART")?)?;
     let mut onsets = vec![seconds_at(&start)? - from];
@@ -113,20 +68,8 @@ fn onsets(observance: &ICalendarComponent, from: i64, year: i64) -> Option<Vec<i
 /// The occurrences of one transition rule that could be the latest at or before
 /// an instant in `year`, as UTC instants.
 ///
-/// The years searched end at the last one the rule can still have an occurrence
-/// in at or before `year`, and run [`SEARCH`] years back from there. Every
-/// occurrence earlier than that is earlier than one of these, and the caller
-/// only ever takes a maximum at or before its target — so as long as the search
-/// found *something*, the answer it gives is the exact one. Where it found
-/// nothing and the rule could still have occurrences further back, the rule is
-/// refused rather than reported as having none, since a rule wrongly read as
-/// silent leaves the zone described by whichever other observance was latest.
-///
-/// The shape counted is the one a transition rule is written in: yearly, one
-/// day of one month — see [`Day`]. `FREQ` is asked of every rule and only
-/// `YEARLY` answers, an `INTERVAL` other than 1 is refused rather than aligned,
-/// and a part outside the handful below is refused too — a rule that says more
-/// than was understood is a rule that was not understood.
+/// Searches [`SEARCH`] years back from `year`. Transitions outside this window
+/// or in unsupported shapes are refused.
 fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>> {
     let (start_year, start_month, start_day, of_day) = parts(start)?;
     let mut frequency: Option<&str> = None;
@@ -157,14 +100,8 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
             "BYHOUR" => by_hour = Some(value),
             "BYMINUTE" => by_minute = Some(value),
             "BYSECOND" => by_second = Some(value),
-            // §3.3.10 gives `WKST` a meaning in two rules and no others: a
-            // `WEEKLY` one repeating at an interval, and a `YEARLY` one
-            // carrying a `BYWEEKNO`. This counts neither — an `INTERVAL` other
-            // than 1 is refused below, and a `BYWEEKNO` falls to the arm under
-            // this one — so no value of it can move a transition read here, and
-            // its value is not read for exactly that reason. Exchange and
-            // Zimbra both write it, and refusing it cost their invitations the
-            // whole definition.
+            // §3.3.10 gives `WKST` meaning only with `WEEKLY` interval or `BYWEEKNO`.
+            // Unsupported here, ignored for compatibility with Exchange and Zimbra.
             "WKST" => {}
             _ => return None,
         }
@@ -173,9 +110,7 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
         return None;
     }
 
-    // One occurrence a year, so a `COUNT` bounds the years directly, and an
-    // `UNTIL` bounds them by its own — the instant itself still decides, below,
-    // whether that year's occurrence is inside it.
+    // One occurrence a year, so `COUNT` and `UNTIL` bound the years directly.
     let last = [
         Some(year),
         count.map(|count| start_year + count - 1),
@@ -211,21 +146,11 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
     (!onsets.is_empty() || earliest == start_year).then_some(onsets)
 }
 
-/// The time of day a rule's occurrences happen at: the `DTSTART`'s own,
-/// `of_day` seconds after its midnight, with each field the rule restates
-/// replaced by what the rule says.
+/// The time of day a rule's occurrences happen at: `DTSTART`'s time of day,
+/// with each field the rule restates replaced by the rule's value.
 ///
-/// In a `YEARLY` rule §3.3.10 makes `BYHOUR`, `BYMINUTE` and `BYSECOND` expand,
-/// and a field expanded from one value to one value is a replacement. Lotus
-/// Notes writes all of its transition rules this way, restating the hour and
-/// the minute the `DTSTART` beside them already gives; where the two disagree
-/// the rule is the one §3.3.10 asks be taken.
-///
-/// `None` for a field stating more than one value, or a value outside the range
-/// §3.3.10 gives it: two hours is two transitions in the day, which this module
-/// refuses like any other set rather than choosing from. A `BYSECOND` of 60 —
-/// the leap second §3.3.10 admits — is refused with them, because placing it
-/// would mean pushing the onset into the minute after the one it names.
+/// Returns `None` if a field states multiple values, an out-of-range value,
+/// or a leap second (60).
 fn restated(
     of_day: i64,
     hour: Option<&str>,
@@ -246,48 +171,18 @@ fn restated(
     )
 }
 
-/// How far back [`rule_onsets`] searches for a rule's occurrences.
-///
-/// Two years is enough for a rule that happens every year, which is what a
-/// transition rule almost always is — the search is that wide only because a
-/// target in February is before that year's spring transition and after the
-/// previous autumn's. But the pair in [`Day::WeekdayAmong`] can state a year
-/// with no occurrence at all, and then the gap to the previous one is however
-/// long it takes the date to fall on the weekday again: eleven years within a
-/// century, twelve across one that is not a leap year, and up to forty for the
-/// 29th of February. Forty covers all of them, and being a fixed bound it
-/// cannot be made expensive by a document that states a rule spanning
-/// millennia.
+/// How far back [`rule_onsets`] searches for a rule's occurrences (up to 40 years).
 const SEARCH: i64 = 40;
 
-/// How a transition rule names the day of the month it happens on — the whole
-/// of what [`rule_onsets`] understands, read once from the rule so that a shape
-/// it cannot count is refused there and not confused, year by year, with a year
-/// the rule simply does not happen in.
+/// How a transition rule names the day of the month it happens on.
 enum Day {
-    /// `BYDAY` with an ordinal: `-1SU` is the month's last Sunday, `2SU` its
-    /// second. The ordinal is required, because a weekday without one is every
-    /// one of them in the month — a set of days, and not the one day a
-    /// transition happens on.
+    /// `BYDAY` with an ordinal: `-1SU` is the month's last Sunday, `2SU` its second.
     Nth(i64, i64),
-    /// A `BYDAY` weekday limiting the dates a `BYMONTHDAY` lists, which is how
-    /// tzdata's commonest idiom reaches iCalendar: "the first Sunday on or
-    /// after the 23rd" has no ordinal to state, so libical's renderer writes
-    /// the weekday beside the run of dates it can fall on,
-    /// `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29`.
-    ///
-    /// §3.3.10 makes `BYMONTHDAY` expand in a `YEARLY` rule and `BYDAY` limit
-    /// whenever it is there beside it, so the pair is the dates in the run that
-    /// fall on the weekday — one of them where the run is seven consecutive
-    /// dates, but this counts rather than assuming. A `BYDAY` carrying an
-    /// ordinal is refused instead: §3.3.10 forbids the combination, and reading
-    /// it as one part or the other would be inventing a meaning for it.
+    /// A `BYDAY` weekday limiting the dates a `BYMONTHDAY` lists (e.g. tzdata idioms).
     WeekdayAmong(i64, Vec<i64>),
-    /// A single `BYMONTHDAY`, §3.3.10's negative spelling — which counts back
-    /// from the end of the month — included. A list of them without a `BYDAY`
-    /// to limit it is a set of days, so it is refused.
+    /// A single `BYMONTHDAY`, including negative offsets from month end.
     OfMonth(i64),
-    /// No `BYxxx` for the day at all: §3.3.10 takes it from `DTSTART`.
+    /// No `BYxxx` for the day: takes it from `DTSTART`.
     OfStart(i64),
 }
 
@@ -349,32 +244,17 @@ impl Day {
 }
 
 /// What a transition rule states for one year.
-///
-/// A rule that does not happen every year is unusual but real: the run of dates
-/// in [`Day::WeekdayAmong`] need hold no occurrence of its weekday, and a fifth
-/// Sunday or a thirty-first is not in every month either. §3.3.10 reads all
-/// three as years without an occurrence rather than as a rule to throw out, and
-/// the caller's search back over the years is what makes that difference
-/// possible to act on.
-///
-/// [`Self::Set`] is the other thing a run can do, and is not a year without an
-/// occurrence but a rule with too many: how many of a month's dates fall on a
-/// weekday depends on the year, so the same pair can name one day in one year
-/// and two in the next, and the refusal has to be decided per year and not once
-/// per rule.
 enum Falls {
     /// This day of the month, the one transition the year holds.
     On(i64),
     /// No day: a year the rule does not happen in.
     Never,
-    /// More than one day, which is a set of transitions and not the single one
-    /// this module counts.
+    /// More than one day: a set of transitions rather than a single onset.
     Set,
 }
 
 /// The day of the week a two-letter `BYDAY` name states, numbered as
-/// [`WEEKDAYS`] is — `None` for anything that is not one of the seven, an
-/// ordinal still attached to it included.
+/// [`WEEKDAYS`] is: `None` for anything that is not one of the seven.
 fn weekday_named(name: &str) -> Option<i64> {
     i64::try_from(
         WEEKDAYS
@@ -410,7 +290,7 @@ fn parts(local: &str) -> Option<(i64, i64, i64, i64)> {
     ))
 }
 
-/// A LocalDateTime as seconds from 1970-01-01T00:00:00 on its own wall clock —
+/// A LocalDateTime as seconds from 1970-01-01T00:00:00 on its own wall clock:
 /// a number to compare and to shift, not an instant on any timeline until an
 /// offset has been taken off it.
 fn seconds_at(local: &str) -> Option<i64> {
@@ -418,8 +298,7 @@ fn seconds_at(local: &str) -> Option<i64> {
     seconds(year, month, day, of_day)
 }
 
-/// The same, from fields — refusing a date that does not exist, so that a rule
-/// naming the thirtieth of February is refused rather than counted as March.
+/// The same, from fields, refusing a date that does not exist.
 fn seconds(year: i64, month: i64, day: i64, of_day: i64) -> Option<i64> {
     (1..=length_of(year, month)?)
         .contains(&day)

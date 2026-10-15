@@ -1,0 +1,8 @@
+// Source: RFC 9553 §2.6.1 (Figure 34: Example of cryptoKeys with External Data), May 2024
+{
+  "cryptoKeys": {
+    "mykey1": {
+      "uri": "https://www.example.com/keys/jdoe.cer"
+    }
+  }
+}

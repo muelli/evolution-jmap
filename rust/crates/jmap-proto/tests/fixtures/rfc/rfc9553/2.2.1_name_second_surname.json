@@ -1,0 +1,20 @@
+// Source: RFC 9553 §2.2.1 (Figure 17: Example of a Second Surname), May 2024
+{
+  "name": {
+    "components": [
+      {
+        "kind": "given",
+        "value": "Diego"
+      },
+      {
+        "kind": "surname",
+        "value": "Rivera"
+      },
+      {
+        "kind": "surname2",
+        "value": "Barrientos"
+      }
+    ],
+    "isOrdered": true
+  }
+}

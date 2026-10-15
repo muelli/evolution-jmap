@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Deleting an address book or a calendar *from the server* —
-//! [`crate::create_resource`]'s mirror, and the destructive half of Track D1.
+//! [`crate::create_resource`]'s mirror, and the destructive half of it.
 //!
 //! Everything in this crate except the create mirrors what the server holds.
 //! The create makes the server hold something new; this makes it stop holding

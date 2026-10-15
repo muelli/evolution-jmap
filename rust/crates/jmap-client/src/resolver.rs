@@ -9,7 +9,7 @@
 //! record and answer nothing at the bare domain, so a client that only ever
 //! tries the bare domain gets a 404 for those.
 //!
-//! This crate does no DNS itself — deliberately: adding a DNS resolver crate
+//! This crate does no DNS itself deliberately: adding a DNS resolver crate
 //! here would cost every embedder a dependency most of them do not need.
 //! [`NoSrvResolver`] is the default and matches today's bare-domain-only
 //! behaviour; an embedder able to perform a real lookup (the EDS

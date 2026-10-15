@@ -1,9 +1,4 @@
-//! Shell-view extension — mirrors `m-shell-view-extension.c`.
-//!
-//! `MShellViewExtension` is registered as an `EExtension` for *every*
-//! `EShellView` (mail, calendar, …).  When a view is toggled active the
-//! extension adds view-specific menu/toolbar items; when it goes inactive they
-//! are removed again.
+//! Shell view extension.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -11,42 +6,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ffi;
 
-// ── Module-level state ────────────────────────────────────────────────────────
-
-/// The `GType` assigned to `MShellViewExtension` after `register_type`.
 static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// Pointer to the parent class (stored during `class_init` for chain-up).
 static PARENT_CLASS: AtomicUsize = AtomicUsize::new(0);
-
-// ── Per-instance private data ─────────────────────────────────────────────────
 
 const PRIV_KEY: &CStr = c"m-shell-view-ext-priv";
 
-/// Rust-managed per-instance data, attached via `g_object_set_data_full`.
 struct Private {
-    /// The UI-manager merge ID currently active, or 0 when no UI is merged.
     current_ui_id: c_uint,
-    /// Set to `true` after the first activation (prevents repeated action
-    /// registration).
     actions_initialized: bool,
-    /// The UI XML string for this view type.  `None` when the view type is
-    /// unknown (e.g., tasks or contacts — not handled by this template).
     view_ui_def: Option<&'static str>,
 }
 
-/// Destroy notifier called by GLib when the object is finalized.
 unsafe extern "C" fn free_private(ptr: *mut c_void) {
     unsafe {
         drop(Box::from_raw(ptr as *mut Private));
     }
 }
 
-/// Retrieve the `Private` data attached to a GObject instance.
+/// Return private instance state.
 ///
 /// # Safety
-/// `obj` must be a live `MShellViewExtension` instance with private data
-/// already attached.
+/// `obj` must be a live extension with attached private data.
 unsafe fn get_private(obj: *mut ffi::GObject) -> &'static mut Private {
     unsafe {
         let ptr = ffi::g_object_get_data(obj, PRIV_KEY.as_ptr());
@@ -55,10 +36,7 @@ unsafe fn get_private(obj: *mut ffi::GObject) -> &'static mut Private {
     }
 }
 
-// ── UI XML strings ────────────────────────────────────────────────────────────
-//
-// Each string is NUL-terminated so it can be passed to
-// `gtk_ui_manager_add_ui_from_string` with `length = -1`.
+// Strings are NUL-terminated for `gtk_ui_manager_add_ui_from_string`.
 
 const MAIL_UI_DEF: &str = "\
 <menubar name='main-menu'>\
@@ -96,14 +74,10 @@ const CALENDAR_UI_DEF: &str = "\
 
 const GETTEXT_PACKAGE: &CStr = c"example-module";
 
-// ── Action callbacks ──────────────────────────────────────────────────────────
-
-/// Triggered by the mail folder context-menu action.
 unsafe extern "C" fn action_mail_folder_cb(_action: *mut ffi::GtkAction, _shell_view: *mut c_void) {
     eprintln!("action_mail_folder_cb: My Maildir Folder Action executed");
 }
 
-/// Triggered by the mail message menu action.
 unsafe extern "C" fn action_mail_message_cb(
     _action: *mut ffi::GtkAction,
     _shell_view: *mut c_void,
@@ -111,7 +85,6 @@ unsafe extern "C" fn action_mail_message_cb(
     eprintln!("action_mail_message_cb: My Message Action executed");
 }
 
-/// Triggered by the calendar event context-menu action.
 unsafe extern "C" fn action_calendar_event_cb(
     _action: *mut ffi::GtkAction,
     _shell_view: *mut c_void,
@@ -119,7 +92,6 @@ unsafe extern "C" fn action_calendar_event_cb(
     eprintln!("action_calendar_event_cb: My Event Action executed");
 }
 
-/// Triggered by the calendar menu action.
 unsafe extern "C" fn action_calendar_menu_cb(
     _action: *mut ffi::GtkAction,
     _shell_view: *mut c_void,
@@ -127,20 +99,12 @@ unsafe extern "C" fn action_calendar_menu_cb(
     eprintln!("action_calendar_menu_cb: My Calendar Action executed");
 }
 
-// ── Helper: determine view type, register actions, return UI definition ───────
-
-/// Read the `GType` of a GObject instance by following the class pointer.
-///
-/// Equivalent to the C macro `G_TYPE_FROM_INSTANCE`.
+/// Read `G_TYPE_FROM_INSTANCE`.
 unsafe fn instance_gtype(instance: *mut c_void) -> ffi::GType {
     unsafe { (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type }
 }
 
-/// Called once per extension instance the first time its view is activated.
-///
-/// Determines which view type this extension is attached to, registers the
-/// appropriate `GtkAction` entries into the shell window's action group, and
-/// returns the matching UI XML definition (or `None` for unsupported views).
+/// Register per-view actions and return matching UI XML.
 unsafe fn init_view_ui(
     shell_view: *mut ffi::EShellView,
     shell_window: *mut ffi::EShellWindow,
@@ -149,7 +113,6 @@ unsafe fn init_view_ui(
         let view_gtype = instance_gtype(shell_view as *mut c_void);
 
         if ffi::g_type_is_a(view_gtype, ffi::e_mail_shell_view_get_type()) != 0 {
-            // ── Mail view ─────────────────────────────────────────────────────────
             let action_group = ffi::e_shell_window_get_action_group(shell_window, c"mail".as_ptr());
 
             let entries: [ffi::GtkActionEntry; 2] = [
@@ -181,7 +144,6 @@ unsafe fn init_view_ui(
 
             Some(MAIL_UI_DEF)
         } else if ffi::g_type_is_a(view_gtype, ffi::e_cal_shell_view_get_type()) != 0 {
-            // ── Calendar view ─────────────────────────────────────────────────────
             let action_group =
                 ffi::e_shell_window_get_action_group(shell_window, c"calendar".as_ptr());
 
@@ -214,18 +176,12 @@ unsafe fn init_view_ui(
 
             Some(CALENDAR_UI_DEF)
         } else {
-            // Tasks, memos, contacts, … are not handled by this template.
             None
         }
     }
 }
 
-// ── Signal callbacks ──────────────────────────────────────────────────────────
-
-/// Called whenever an `EShellView` is toggled active or inactive.
-///
-/// Signature matches the GObject "toggled" signal:
-/// `void (*toggled) (EShellView *shell_view, gpointer user_data)`
+/// Handle the `EShellView::toggled` signal.
 unsafe extern "C" fn shell_view_toggled_cb(
     shell_view: *mut ffi::EShellView,
     extension: *mut ffi::GObject,
@@ -235,7 +191,6 @@ unsafe extern "C" fn shell_view_toggled_cb(
         let ui_manager = ffi::e_shell_window_get_ui_manager(shell_window);
         let priv_ = get_private(extension);
 
-        // Remove any UI we merged during a previous activation.
         let need_update = priv_.current_ui_id != 0;
         if priv_.current_ui_id != 0 {
             ffi::gtk_ui_manager_remove_ui(ui_manager, priv_.current_ui_id);
@@ -250,13 +205,11 @@ unsafe extern "C" fn shell_view_toggled_cb(
             return;
         }
 
-        // On first activation: detect view type and register GtkActions.
         if !priv_.actions_initialized {
             priv_.view_ui_def = init_view_ui(shell_view, shell_window);
             priv_.actions_initialized = true;
         }
 
-        // Merge the UI definition (XML) into the UI manager.
         if let Some(ui_def) = priv_.view_ui_def {
             let mut error: *mut ffi::GError = std::ptr::null_mut();
             priv_.current_ui_id = ffi::gtk_ui_manager_add_ui_from_string(
@@ -275,23 +228,16 @@ unsafe extern "C" fn shell_view_toggled_cb(
     }
 }
 
-// ── GObject virtual-method overrides ─────────────────────────────────────────
-
-/// `GObjectClass.constructed` override.
-///
-/// Chains up, attaches private data, then connects to the shell view's
-/// "toggled" signal so we can add/remove UI whenever the view activates.
+/// Chain up and connect to the shell view toggled signal.
 unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     unsafe {
-        // Chain up to the parent class.
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
         if let Some(f) = (*parent).constructed {
             f(object);
         }
 
-        // Connect the "toggled" signal of the EShellView we are extending.
         let extensible = ffi::e_extension_get_extensible(object as *mut c_void);
-        // `GCallback` is `void (*)(void)` — transmute the concrete type to it.
+        // `GCallback` is `void (*)(void)`.
         let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) =
             shell_view_toggled_cb;
         ffi::g_signal_connect_data(
@@ -301,15 +247,14 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
                 unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject),
                 unsafe extern "C" fn(),
             >(cb)),
-            object as *mut c_void, // user_data = our extension instance
+            object as *mut c_void,
             None,
-            0, // G_CONNECT_DEFAULT
+            0,
         );
     }
 }
 
-/// `GObjectClass.finalize` override — chains up (private data is freed by the
-/// `g_object_set_data_full` destroy notifier).
+/// Chain up `GObjectClass.finalize`.
 unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     unsafe {
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
@@ -319,33 +264,26 @@ unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     }
 }
 
-// ── GTypeModule callbacks ─────────────────────────────────────────────────────
-
-/// Initialise the *class* struct.  Called once by GLib when the type is first
-/// used.
+/// Populate the dynamic class vtable.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     unsafe {
-        // Save the parent class pointer so we can chain-up from our overrides.
         PARENT_CLASS.store(
             ffi::g_type_class_peek_parent(klass) as usize,
             Ordering::Release,
         );
 
-        // Override GObjectClass virtual methods.
         let obj_class = &mut *(klass as *mut ffi::GObjectClass);
         obj_class.constructed = Some(instance_constructed);
         obj_class.finalize = Some(instance_finalize);
 
-        // Set the extensible type — the type of object this extension attaches to.
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
         ext_class.extensible_type = ffi::e_shell_view_get_type();
     }
 }
 
-/// Finalise the class struct when the module is unloaded.
 unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 
-/// Initialise a new *instance* struct.  Attaches the Rust private data.
+/// Allocate and attach private instance data.
 unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     unsafe {
         let obj = instance as *mut ffi::GObject;
@@ -363,17 +301,12 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     }
 }
 
-// ── Public: type registration ─────────────────────────────────────────────────
-
-/// Register `MShellViewExtension` into `type_module`.
-///
-/// Must be called from `e_module_load`.
+/// Register the dynamic type in `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
 
-        // Query the parent's class/instance sizes so we can use them verbatim
-        // (our type adds no extra inline fields).
+        // Reuse the parent class and instance size values.
         let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();
         ffi::g_type_query(parent_type, query.as_mut_ptr());
         let query = query.assume_init();
@@ -396,7 +329,7 @@ pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
             parent_type,
             c"MShellViewExtension".as_ptr(),
             &type_info,
-            0, // G_TYPE_FLAG_NONE
+            0,
         );
 
         TYPE_ID.store(type_id, Ordering::Release);

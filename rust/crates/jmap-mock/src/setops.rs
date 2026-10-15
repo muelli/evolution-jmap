@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Generic `/set` implementation over a [`Store`], shared by data types that
-//! need no per-create side effects beyond the store itself (contacts,
-//! calendar events).
+//! Shared `/set` and `/changes` helpers for [`Store`] backed JMAP data types
+//! that only need store-level create, update, and destroy behavior.
 
 use std::collections::BTreeMap;
 
@@ -14,22 +13,17 @@ use jmap_proto::methods::{SetRequest, SetResponse};
 use crate::patch::apply_patch;
 use crate::state::Store;
 
-/// Answer a standard `/changes` request from the store's changes log
-/// (RFC 8620 §5.2). An id appears in at most one list: objects created and
-/// destroyed inside the window appear in neither.
+/// Answers `/changes` from the store log per RFC 8620 §5.2.
 ///
-/// `page_size` is the server's own cap on how many ids one response may carry
-/// ([`crate::MockServerBuilder::changes_page_size`]); the client's
-/// `maxChanges` caps it further. Either way the answer is truncated at a state
-/// boundary — `newState` has to be a state the client can ask again from, and
-/// half of a transition is not one.
+/// Each id is reported in at most one list. If an object is created and
+/// destroyed within the served window, it appears in neither.
 ///
-/// `unrecognized_state_is_invalid_arguments` picks which of two answers an
-/// unparseable `sinceState` gets: RFC 8620 §5.2's own `cannotCalculateChanges`
-/// by default, or real Stalwart's own non-conformance
-/// ([`crate::MockServerBuilder::stalwart_shaped_unrecognized_changes_state`],
-/// `STALWART-RFC-FINDINGS.md` finding 17) when a test asks for that shape
-/// specifically.
+/// `page_size` and client `maxChanges` both cap the response, but truncation
+/// always happens at a whole state transition so `newState` is reusable.
+///
+/// `unrecognized_state_is_invalid_arguments` toggles between RFC-shaped
+/// `cannotCalculateChanges` and Stalwart-shaped `invalidArguments` for
+/// unparseable `sinceState` values.
 pub(crate) fn store_changes<T>(
     store: &Store<T>,
     request: jmap_proto::methods::ChangesRequest,
@@ -91,20 +85,17 @@ pub(crate) fn store_changes<T>(
     })
 }
 
-/// How far past `since` this response reaches, and whether anything is left
-/// beyond it.
+/// Returns the last state included in this window and whether more changes
+/// remain.
 ///
-/// The window ends at a state boundary, so it grows one whole transition at a
-/// time. The first transition is served however large it is: a cap that could
-/// withhold all of it would be a client that asks again from the same state
-/// forever.
+/// Windows grow by whole transitions. The first transition is always served so
+/// a tiny cap cannot trap the client at the same `sinceState` forever.
 fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
     let Some(cap) = cap else {
         return (store.state_counter(), false);
     };
 
-    // The log in transition order: one entry per state, with how many objects
-    // that transition touched.
+    // One entry per transition state, with the number of changed objects.
     let mut transitions: Vec<(u64, u64)> = Vec::new();
     for change in store.changes_since(since) {
         match transitions.last_mut() {
@@ -125,15 +116,12 @@ fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
     (end, false)
 }
 
-/// Apply a standard `/set` request to `store`.
+/// Applies `/set` to `store`.
 ///
-/// `prepare` validates a create and stamps server-set properties onto it
-/// (it receives the freshly allocated id). The created-response map echoes
-/// the full stored object — a superset of the server-set properties, which
-/// clients may rely on.
+/// `prepare` validates each create and can stamp server-set properties using
+/// the allocated id. Update and destroy are accepted as-is.
 ///
-/// Update and destroy are not validated: use [`simple_set_with_validation`]
-/// for a data type that needs to refuse one of those too.
+/// Use [`simple_set_with_validation`] when update or destroy also need checks.
 pub(crate) fn simple_set<T>(
     store: &mut Store<T>,
     request: SetRequest<T>,
@@ -145,9 +133,7 @@ where
     simple_set_with_validation(store, request, prepare, |_, _, _| Ok(()), |_, _| Ok(()))
 }
 
-/// Same as [`simple_set`], but also validates an update against the object
-/// both before and after the patch, and a destroy against the object about
-/// to be removed, refusing either before it is ever applied to the store.
+/// [`simple_set`] plus update and destroy validation before mutation.
 pub(crate) fn simple_set_with_validation<T>(
     store: &mut Store<T>,
     request: SetRequest<T>,

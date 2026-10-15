@@ -7,16 +7,13 @@
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //! ```
 //!
-//! Serves one account (`A1`, alice@example.com) pre-seeded with an inbox
-//! containing two messages, a sending identity, an address book, and a
-//! calendar.
+//! Serves one account (`A1`, alice@example.com) with seeded mail, identity,
+//! address book, and calendar data.
 
 use jmap_mock::{EmailSeed, MockServer};
 use serde_json::json;
 
-/// The fixed `client_id` `--oauth2`'s registration endpoint hands back —
-/// this binary has no accounts to distinguish clients by, so one constant is
-/// as good as a generated one and is easier to grep for in a log.
+/// Fixed `client_id` returned by `--oauth2` registration for this single-account binary.
 const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 
 fn main() {
@@ -54,13 +51,8 @@ fn main() {
         }
     }
 
-    // Off by default, matching every other opt-in behaviour here: a mock
-    // that always advertised OAuth 2.0 would leave a manual test with no way
-    // to check the "this deployment offers none" path. RFC 8414's document
-    // and RFC 7591 registration are both real network round trips a client
-    // can drive end to end against this one process — see
-    // `jmap_config::oauth2_setup::discover_and_register`, which this mirrors
-    // for a standalone run rather than an in-process `MockServer`.
+    // Off by default so manual tests can cover deployments with no OAuth 2.0 metadata endpoint.
+    // With the flag, this mirrors `jmap_config::oauth2_setup::discover_and_register`.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
@@ -79,7 +71,7 @@ fn main() {
 
     let server = builder.port(port).start();
 
-    // Demo data, so the server is interesting straight away.
+    // Seed demo data so manual runs start with visible state.
     {
         let state = server.state();
         let mut state = state.lock().expect("state lock");
@@ -112,7 +104,6 @@ fn main() {
     println!("session: {}/.well-known/jmap", server.origin());
     println!("account: A1 (alice@example.com) — Ctrl-C to stop");
 
-    // Serve until killed; the server thread does the work.
     loop {
         std::thread::park();
     }

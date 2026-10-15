@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `ShareNotification/get` delivery (RFC 9670 §4): Track E Phase C step 2's
+//! `ShareNotification/get` delivery (RFC 9670 §4): verify delivery of
 //! remaining slice. A `shareWith` grant, widen, narrow, or revoke on
 //! `AddressBook/set` or `Mailbox/set` produces a notification the recipient
 //! (never the owner) can read back.

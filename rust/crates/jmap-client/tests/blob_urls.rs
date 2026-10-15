@@ -10,7 +10,7 @@
 //! and out of `Email/get`, and `jmap_proto::Id` puts no grammar on either; the
 //! `name` is whatever the caller labels the download with. A value carrying
 //! `#`, `?`, `/` or a space that is pasted in verbatim does not name the blob
-//! it came from — it names a different URL.
+//! it came from: it names a different URL.
 
 use jmap_client::{Client, Credentials, limits};
 use jmap_mock::{AccountState, Blob, MockServer};
@@ -62,7 +62,7 @@ fn a_download_name_with_url_syntax_stays_one_path_segment() {
     let uploaded = client
         .upload_blob(&account_id, "application/octet-stream", data.clone())
         .unwrap();
-    // The name is decoration in the URL — a filename hint for the browser —
+    // The name is decoration in the URL (a filename hint for the browser),
     // but an unencoded one still reshapes the path it sits in.
     let downloaded = client
         .download_blob(

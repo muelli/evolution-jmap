@@ -5,7 +5,7 @@
 //! offers one, registering with it (RFC 7591), against the mock.
 //!
 //! The unit tests next to the code cover URL construction and the shapes of a
-//! hostile document; these cover the part only a server can show — that the
+//! hostile document; these cover the part only a server can show: that the
 //! document is fetched from the right place, that fetching it needs no
 //! credentials, and that a deployment offering no OAuth 2.0 (or no
 //! registration) says so.
@@ -87,7 +87,7 @@ fn the_metadata_document_is_served_without_credentials() {
 fn a_document_naming_another_issuer_is_refused() {
     // RFC 8414 §3.3: the `issuer` that comes back must be the one the
     // well-known URI was built from, or the document must not be used. This is
-    // the mix-up defence — without it, a deployment could hand the client
+    // the mix-up defence: without it, a deployment could hand the client
     // another authorization server's endpoints and collect the code.
     let server = MockServer::builder()
         .oauth_authorization_server(|origin| {
@@ -108,8 +108,8 @@ fn a_document_naming_another_issuer_is_refused() {
 
 #[test]
 fn a_deployment_that_offers_no_oauth2_says_so() {
-    // Not every JMAP server does OAuth 2.0 — the mock's own default is one
-    // that does not — and the caller has to be able to tell "no OAuth 2.0
+    // Not every JMAP server does OAuth 2.0 (the mock's own default is one
+    // that does not), and the caller has to be able to tell "no OAuth 2.0
     // here" from "the network is down".
     let server = MockServer::builder().start();
 
@@ -174,7 +174,7 @@ fn registration_reads_back_the_client_id() {
 #[test]
 fn registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadata() {
     // RFC 8252 §8.4: a native app registers as a public client (no secret it
-    // could keep confidential) and relies on PKCE instead — this is the one
+    // could keep confidential) and relies on PKCE instead; this is the one
     // thing only a server-side assertion on the actual request body can
     // prove, unlike the response shapes the unit tests already cover.
     let server = MockServer::builder()
@@ -209,10 +209,10 @@ fn registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadat
 
 #[test]
 fn a_named_scope_is_sent_as_the_registrations_default() {
-    // Confirmed against a real deployment (Fastmail, 2026-08-19): a
+    // Confirmed against a real deployment (Fastmail): a
     // registration naming no `scope` is issued an *empty* default scope, and
     // RFC 6749 §3.3 lets an authorization request that itself omits `scope`
-    // fall back to exactly that registered default — silently producing a
+    // fall back to exactly that registered default, silently producing a
     // token with no JMAP access at all. A caller that discovered a non-empty
     // `scopes_supported` must be able to ask for it here instead.
     let server = MockServer::builder()
@@ -236,7 +236,7 @@ fn a_named_scope_is_sent_as_the_registrations_default() {
 
 #[test]
 fn registration_is_served_without_credentials() {
-    // Registration is how a client obtains an identity in the first place —
+    // Registration is how a client obtains an identity in the first place:
     // sending credentials for it would be circular, the same reasoning
     // `the_metadata_document_is_served_without_credentials` establishes for
     // discovery.

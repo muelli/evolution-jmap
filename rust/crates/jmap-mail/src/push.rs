@@ -19,9 +19,9 @@
 //! is exactly what its name says — synchronous, per folder, and a network
 //! round trip.
 //!
-//! evolution-ews hit the same wall and its answer is the precedent item 28
-//! asks to be studied, so it was, before this was written. In
-//! `src/EWS/camel/camel-ews-store.c`, `camel_ews_store_server_notification_cb`
+//! evolution-ews hit the same wall, and its answer is the precedent this
+//! module follows. In `src/EWS/camel/camel-ews-store.c`,
+//! `camel_ews_store_server_notification_cb`
 //! does *not* refresh anything on the notification thread. It sorts the
 //! notification, then `schedule_folder_update` coalesces onto a low-priority
 //! one-second timeout (removing any pending one first, so a burst is one

@@ -1,0 +1,8 @@
+// Source: RFC 8620 §3.6.2 (Method-Level Errors), July 2019
+[
+  "error",
+  {
+    "type": "unknownMethod"
+  },
+  "call-id"
+]

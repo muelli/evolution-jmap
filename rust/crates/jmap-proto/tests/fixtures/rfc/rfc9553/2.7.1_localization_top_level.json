@@ -1,0 +1,47 @@
+// Source: RFC 9553 §2.7.1 (Figure 39: Example of Localizing a Top-Level Property), May 2024
+{
+  "name": {
+    "components": [
+      {
+        "kind": "title",
+        "value": "Mr."
+      },
+      {
+        "kind": "given",
+        "value": "Ivan"
+      },
+      {
+        "kind": "given2",
+        "value": "Petrovich"
+      },
+      {
+        "kind": "surname",
+        "value": "Vasiliev"
+      }
+    ]
+  },
+  "localizations": {
+    "uk-Cyrl": {
+      "name": {
+        "components": [
+          {
+            "kind": "title",
+            "value": "\u0433-\u043d"
+          },
+          {
+            "kind": "given",
+            "value": "\u0418\u0432\u0430\u043d"
+          },
+          {
+            "kind": "given2",
+            "value": "\u041f\u0435\u0442\u0440\u043e\u0432\u0438\u0447"
+          },
+          {
+            "kind": "surname",
+            "value": "\u0412\u0430\u0441\u0438\u043b\u044c\u0435\u0432"
+          }
+        ]
+      }
+    }
+  }
+}

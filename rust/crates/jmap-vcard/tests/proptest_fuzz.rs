@@ -1148,12 +1148,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Regression for a fixed-point failure `prop_card_roundtrip_reaches_fixed_point_stability`
-// found on a random seed, second occurrence: a `Name` with a stated-but-empty
-// `full` and only a `given` component round-tripped once (to `parsed1`) drops `full`
-// (an empty FN is indistinguishable from an absent one on read), but round-tripping that
-// result again (to `parsed2`) synthesizes a derived `full` from the components — so
-// `parsed1 != parsed2` and the property never reaches the fixed point it asserts.
+// Regression: empty stated full name with only `given` must not oscillate.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1177,10 +1172,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression for empty organisation name normalization (Batch 13 Item 8):
-// An organisation whose name is `Some("")` and has units must normalize to `name: None` on the
-// first parse, emit the leading semicolon to preserve the unit's department slot, and reach
-// immediate fixed-point stability.
+// Regression: empty organization names with units keep their leading slot semicolon.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1245,14 +1237,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression for `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8`
-// found on a random seed (CI run 32663971912): calcard's writer emits a
-// structured value's `;` separators *after* its fold check, and skips the fold
-// altogether when the component coming next is empty text — so an `ADR` whose
-// value folds to exactly 75 octets keeps all six empty trailing slots on the
-// same physical line, at 81. The value here is byte-for-byte the minimal case
-// proptest shrank to: 53 octets of multi-byte UTF-8 that land the 22-octet
-// prefix `ADR;X-JMAP-KEY=-AaaAa:` plus the value at exactly the edge.
+// Regression: minimized failing seed must keep ADR lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1335,20 +1320,14 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Exactly the RFC 2426 §2.6 width: calcard's own writer overshoots
-            // when empty structured slots trail a value at the boundary
-            // (stalwartlabs/calcard#25), and `card_to_vcard`'s refold pass
-            // exists to take that back to 75 — a looser bound here is what let
-            // that overshoot go unseen. The batch-5 branch independently hit
-            // the same overshoot with these richer generators and had loosened
-            // this to 90; the refold supersedes that.
+            // Enforce RFC 2426 §2.6 with a hard 75-octet physical line cap.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
             );
-            // Multi-byte UTF-8 code points must never be split across a fold
+            // Folding must preserve UTF-8 code point boundaries.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",
@@ -1395,7 +1374,7 @@ proptest! {
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("parse emitted escaped vcard");
         let parsed_note = &parsed1.notes.as_ref().unwrap()["n1"].note;
-        // Text must match original exactly (calcard preserves CRLF and escapes losslessly)
+        // Escaping must preserve exact text content across parse.
         prop_assert_eq!(parsed_note, &text);
 
         let vcard2 = card_to_vcard(&parsed1);
@@ -1646,7 +1625,7 @@ proptest! {
             ..ContactCard::default()
         };
         let vcard1 = card_to_vcard(&card);
-        // Non-spouse/manager/assistant relations (agent, child, colleague, emergency) must never emit AGENT properties
+        // vCard 3.0 output never emits AGENT for relations.
         prop_assert!(!vcard1.contains("AGENT:"));
         prop_assert!(!vcard1.contains("AGENT;"));
 
@@ -1833,7 +1812,7 @@ proptest! {
         };
 
         let vcard1 = card_to_vcard(&card);
-        // Neither KEY, LOGO, nor SOUND should be emitted into vCard 3.0 stream
+        // vCard 3.0 output must not emit KEY, LOGO, or SOUND.
         prop_assert!(!vcard1.contains("KEY:"));
         prop_assert!(!vcard1.contains("KEY;"));
         prop_assert!(!vcard1.contains("LOGO:"));
@@ -1963,7 +1942,7 @@ proptest! {
 
         if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
             let vcard1 = card_to_vcard(&parsed1);
-            // Neither AGENT nor SOUND should be emitted into outbound vCard 3.0 stream
+            // vCard 3.0 output must not emit AGENT or SOUND.
             prop_assert!(!vcard1.contains("AGENT:"));
             prop_assert!(!vcard1.contains("AGENT;"));
             prop_assert!(!vcard1.contains("SOUND:"));

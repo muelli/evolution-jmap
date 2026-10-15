@@ -3,22 +3,21 @@
 
 //! `CalSync` against a calendar of a size nothing else here has ever reached.
 //!
-//! Every other live-server test in `jmap-cal-sync` uses a single event; item
-//! 94(b) asks the same question of calendars that item 94(a) already asked
-//! of address books (`jmap-book-sync/tests/live_server_scale.rs`): cold
-//! listing time and incremental `get_changes` cost once the calendar is no
-//! longer tiny, with a third of the events recurring with an override so the
-//! mix is not all single-occurrence events.
+//! Every other live-server test in `jmap-cal-sync` uses a single event; this
+//! asks the same question of calendars that `jmap-book-sync/tests/
+//! live_server_scale.rs` already asks of address books: cold listing time and
+//! incremental `get_changes` cost once the calendar is no longer tiny, with a
+//! third of the events recurring with an override so the mix is not all
+//! single-occurrence events.
 //!
 //! This file covers the first slice, scoped down the same way
 //! `jmap-book-sync`'s equivalent was: that file found Stalwart's
 //! `Http.rateLimitAuthenticated` (1000 req/60s) well before 500
 //! `ContactCard/set` calls even at the default throwaway plan, so this starts
-//! at the same 500-event size rather than assuming the 1,000/3,000-event
-//! checkpoints the item names are reachable in one call budget. [`retrying`]
-//! absorbs a 429 the same way.
-//! The 1,000/3,000-event checkpoints and the real-EDS leg (item 80's
-//! live-Stalwart calendar factory) are still open.
+//! at the same 500-event size rather than assuming larger checkpoints are
+//! reachable in one call budget. [`retrying`] absorbs a 429 the same way.
+//! Larger checkpoints and a real-EDS leg against a live-Stalwart calendar
+//! factory are still open.
 //!
 //! ## Running it
 //!
@@ -144,10 +143,10 @@ fn date_plus_days(mut year: u32, mut month: u32, mut day: u32, offset: u32) -> (
 
 /// One event, as iCalendar: a plain one-hour `VEVENT` for most `i`, and every
 /// third one a daily series with one detached, overridden occurrence
-/// instead, the same "a third recurring with overrides" mix item 94(b) asks
-/// for. Each event starts a day later than the last (wrapped to stay inside
-/// 2026) so a calendar of this size is spread out rather than piled on one
-/// date, closer to what a real account looks like.
+/// instead, so the mix is a third recurring-with-overrides as the module doc
+/// describes. Each event starts a day later than the last (wrapped to stay
+/// inside 2026) so a calendar of this size is spread out rather than piled
+/// on one date, closer to what a real account looks like.
 fn icalendar(run: u128, label: &str, i: usize) -> String {
     let uid = format!("agent-scale-cal-{run}-{label}-{i}@localhost");
     let (year, month, day) = date_plus_days(2026, 1, 1, (i % 300) as u32);
@@ -331,7 +330,7 @@ fn deleting_from_a_real_sized_calendar_is_reported_correctly() {
         .list_existing()
         .expect("listing the calendar failed after the bulk import");
 
-    // "A few hundred", the same wording item 94 uses for both siblings,
+    // "A few hundred", the same scale this file's calendar events use,
     // capped at the batch size itself so a small manual run never tries to
     // delete more than exists.
     let delete_count = n.min(300);

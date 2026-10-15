@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-backend-book` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-backend-book`.
 //!
 //! Asserts structured fields attached to `tracing` events during address book
-//! connection, contact listing, change diffing, contact loading, saving, and removal.
+//! operations.
 
 use std::ffi::{CString, c_void};
 use std::ptr;
-use std::sync::{Arc, Mutex};
 
 use eds_sys::{
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_REJECTED,
@@ -24,9 +23,8 @@ use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
 const CONTACT_VCARD: &str = "BEGIN:VCARD\r\n\
 VERSION:3.0\r\n\
@@ -37,103 +35,6 @@ END:VCARD\r\n";
 
 unsafe extern "C" fn unref_object(ptr: *mut c_void) {
     unsafe { g_object_unref(ptr.cast()) };
-}
-
-struct CapturingSubscriber {
-    captured: Arc<Mutex<Vec<(Level, String, String)>>>,
-}
-
-struct Recorder<'a> {
-    level: Level,
-    sink: &'a Mutex<Vec<(Level, String, String)>>,
-}
-
-impl Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_owned()));
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-}
-
-impl Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Recorder {
-            level: *event.metadata().level(),
-            sink: &self.captured,
-        });
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
-
-static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-
-fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run();
-    });
-    std::mem::take(&mut *captured.lock().unwrap())
-}
-
-fn untraced<T>(run: impl FnOnce() -> T) -> T {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let subscriber = CapturingSubscriber {
-        captured: Arc::new(Mutex::new(Vec::new())),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run()
-    })
 }
 
 fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
@@ -170,7 +71,7 @@ impl Fixture {
     }
 
     fn sync(&self) -> jmap_book_sync::BookSync {
-        untraced(|| open_book(&self.config(), Credentials::none()).expect("connected"))
+        capture(|| open_book(&self.config(), Credentials::none()).expect("connected")).0
     }
 }
 
@@ -210,7 +111,7 @@ fn open_book_traces_account_id_and_address_book_id() {
     let fixture = Fixture::start();
     let config = fixture.config();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let _ = open_book(&config, Credentials::none()).expect("opened");
     });
 
@@ -243,7 +144,7 @@ fn list_existing_traces_structured_fields() {
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let result = unsafe { ops::list_existing(&sync, &mut sync_tag, &mut objects, &mut error) };
         assert_eq!(result, GTRUE);
     });
@@ -288,11 +189,11 @@ fn get_changes_traces_structured_fields() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    // First, list existing to get the state tag under untraced guard
+    // First, list existing to get the state tag under capture guard
     let mut sync_tag: *mut gchar = ptr::null_mut();
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
-    untraced(|| unsafe {
+    capture(|| unsafe {
         ops::list_existing(&sync, &mut sync_tag, &mut objects, &mut error);
         if !objects.is_null() {
             g_slist_free_full(objects, Some(unref_object));
@@ -306,7 +207,7 @@ fn get_changes_traces_structured_fields() {
     let mut modified: *mut GSList = ptr::null_mut();
     let mut removed: *mut GSList = ptr::null_mut();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let outcome = unsafe {
             ops::get_changes(
                 &sync,
@@ -374,7 +275,7 @@ fn save_load_and_remove_contact_trace_structured_fields() {
     let mut extra: *mut gchar = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
-    let captured_save = capture(|| {
+    let (_, captured_save) = capture(|| {
         let result = unsafe {
             ops::save_contact(&sync, GFALSE, contact, &mut new_uid, &mut extra, &mut error)
         };
@@ -408,7 +309,7 @@ fn save_load_and_remove_contact_trace_structured_fields() {
     let uid_str = unsafe { std::ffi::CStr::from_ptr(new_uid).to_str().unwrap() };
 
     let mut loaded_contact = ptr::null_mut();
-    let captured_load = capture(|| {
+    let (_, captured_load) = capture(|| {
         let result = unsafe {
             ops::load_contact(&sync, new_uid, &mut loaded_contact, &mut extra, &mut error)
         };
@@ -429,7 +330,7 @@ fn save_load_and_remove_contact_trace_structured_fields() {
         "expected uid in load_contact, got {captured_load:?}"
     );
 
-    let captured_remove = capture(|| {
+    let (_, captured_remove) = capture(|| {
         let result = unsafe { ops::remove_contact(&sync, new_uid, &mut error) };
         assert_eq!(result, GTRUE);
     });
@@ -464,7 +365,7 @@ fn connect_from_source_traces_structured_fields() {
     let mut auth_result = E_SOURCE_AUTHENTICATION_REJECTED;
     let mut error = ptr::null_mut();
 
-    let captured = capture(|| {
+    let (_, captured) = capture(|| {
         let sync = unsafe {
             connect::connect(
                 source.0,

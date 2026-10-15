@@ -1,0 +1,52 @@
+// Source: RFC 8621 §2.6 (Mailbox/changes and Backreferenced Mailbox/get Response), August 2019
+[
+  [
+    "Mailbox/changes",
+    {
+      "accountId": "u33084183",
+      "oldState": "78541",
+      "newState": "78542",
+      "hasMoreChanges": false,
+      "updatedProperties": [
+        "totalEmails",
+        "unreadEmails",
+        "totalThreads",
+        "unreadThreads"
+      ],
+      "created": [],
+      "updated": [
+        "MB23cfa8094c0f41e6"
+      ],
+      "destroyed": []
+    },
+    "0"
+  ],
+  [
+    "Mailbox/get",
+    {
+      "accountId": "u33084183",
+      "state": "78542",
+      "list": [],
+      "notFound": []
+    },
+    "1"
+  ],
+  [
+    "Mailbox/get",
+    {
+      "accountId": "u33084183",
+      "state": "78542",
+      "list": [
+        {
+          "id": "MB23cfa8094c0f41e6",
+          "totalEmails": 16307,
+          "unreadEmails": 13903,
+          "totalThreads": 5833,
+          "unreadThreads": 5127
+        }
+      ],
+      "notFound": []
+    },
+    "2"
+  ]
+]

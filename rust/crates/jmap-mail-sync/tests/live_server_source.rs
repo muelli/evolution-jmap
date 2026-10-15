@@ -5,16 +5,15 @@
 //! `jmap-mail`'s Camel folder calls to fetch a message's raw RFC 5322 bytes
 //! for the reading pane, exercised end to end for the first time.
 //!
-//! This is the exact sync-layer function behind item 9's Fastmail
-//! blob-download saga (redirect-auth, the `Accept` header, the
-//! `REBASE_URLS` cross-account-poisoning root cause) — everything that
-//! closed that item was either a raw `jmap-client`-level probe/example or
-//! the operator's own real Evolution session; no automated regression test
-//! has ever driven `MailSync::message_source` itself against a real server.
-//! Only `jmap-mockd` has ever exercised it (`jmap-mail-sync/tests/
-//! source.rs`); this file is its live-server counterpart, following the
-//! same recipe as `live_server.rs`'s `import_message`/`expunge_message`
-//! test.
+//! This is the exact sync-layer function behind a past Fastmail
+//! blob-download investigation (redirect-auth, the `Accept` header, the
+//! `REBASE_URLS` cross-account-poisoning root cause), which was diagnosed
+//! with raw `jmap-client`-level probes and a real Evolution session rather
+//! than an automated regression test driving `MailSync::message_source`
+//! itself against a real server. Only `jmap-mockd` has ever exercised it
+//! (`jmap-mail-sync/tests/source.rs`); this file is its live-server
+//! counterpart, following the same recipe as `live_server.rs`'s
+//! `import_message`/`expunge_message` test.
 //!
 //! ## Running it
 //!

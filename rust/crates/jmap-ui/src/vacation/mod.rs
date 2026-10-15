@@ -4,8 +4,8 @@
 //! The vacation autoresponder page in Evolution's account editor.
 //!
 //! JMAP has had this since RFC 8621 §8 (`VacationResponse`, one singleton
-//! object per account); Evolution has no concept of it and no backend hook —
-//! the survey that established that is EVOLUTION-GAP.md in the harness
+//! object per account); Evolution has no concept of it and no backend hook.
+//! The survey that established that is EVOLUTION-GAP.md in the harness
 //! repository, and the precedent for shipping it anyway is evolution-ews's
 //! Out of Office page: an out-of-tree module that talks to the server itself.
 //!
@@ -17,8 +17,8 @@
 //! [`extension`] is the `EExtension` on `EMailConfigNotebook` that gates on
 //! the account's backend name and adds the page.
 //!
-//! Only the account *editor* builds an `EMailConfigNotebook` — the
-//! new-account assistant composes its pages directly — so the page appears
+//! Only the account *editor* builds an `EMailConfigNotebook` (the
+//! new-account assistant composes its pages directly), so the page appears
 //! exactly where a server-side setting can be read: on an account that
 //! already exists.
 

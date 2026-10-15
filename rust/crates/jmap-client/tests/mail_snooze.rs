@@ -101,7 +101,7 @@ fn snoozing_without_the_extension_is_refused() {
     let account_id = server.account_id();
     let (client, _inbox, email_id) = seeded(&server);
 
-    // The role alone is an ordinary folder (RFC 9979 §8.1) — creating it
+    // The role alone is an ordinary folder (RFC 9979 §8.1): creating it
     // works on any server; only `snoozed` itself is gated.
     let snoozed_mailbox = client.snoozed_mailbox(&account_id).unwrap();
     let snoozed_id = snoozed_mailbox.id.expect("server assigned a mailbox id");

@@ -34,9 +34,7 @@ pub struct AddressBook {
     /// Server-computed permissions on this address book (RFC 9610 §2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<AddressBookRights>,
-    /// Rights granted to other principals (RFC 9610 §2), keyed by principal
-    /// id. Modeled but unread today — writing shares is Phase C, deliberately
-    /// separate from reading `myRights`.
+    /// Rights granted to other principals (RFC 9610 §2), keyed by principal id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +73,38 @@ impl AddressBook {
 
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
+        self
+    }
+}
+
+/// `AddressBook/set` request arguments (RFC 9610 §2.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBookSetRequest {
+    #[serde(flatten)]
+    pub set: crate::methods::SetRequest<AddressBook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_destroy_remove_contents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_set_is_default: Option<Id>,
+}
+
+impl AddressBookSetRequest {
+    pub fn new(set: crate::methods::SetRequest<AddressBook>) -> Self {
+        Self {
+            set,
+            on_destroy_remove_contents: None,
+            on_success_set_is_default: None,
+        }
+    }
+
+    pub fn with_on_destroy_remove_contents(mut self, on_destroy: bool) -> Self {
+        self.on_destroy_remove_contents = Some(on_destroy);
+        self
+    }
+
+    pub fn with_on_success_set_is_default(mut self, default_id: impl Into<Id>) -> Self {
+        self.on_success_set_is_default = Some(default_id.into());
         self
     }
 }
@@ -118,12 +148,8 @@ impl AddressBookRights {
         self
     }
 
-    /// Whether these rights let the holder write to the address book — the
-    /// one bit [`crate::calendars::Calendar`]'s sibling collection-sync layer
-    /// narrows a writable account down to. Absent `mayWrite` reads as `false`
-    /// (fail closed): a `myRights` object the server bothered to send but left
-    /// this field out of is not grounds to assume write access it never
-    /// stated.
+    /// Whether these rights let the holder write to the address book.
+    /// Absent `mayWrite` defaults to `false` (fail closed).
     pub fn is_writable(&self) -> bool {
         self.may_write.unwrap_or(false)
     }
@@ -145,6 +171,12 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prod_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<UtcDate>,
@@ -164,7 +196,7 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phones: Option<BTreeMap<String, ContactPhone>>,
     /// The organisations the contact belongs to (RFC 9553 §2.2.3), keyed by
-    /// an id of whoever wrote them — the employer and the department within
+    /// an id of whoever wrote them: the employer and the department within
     /// it, which vCard states in one `ORG` line each.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organizations: Option<BTreeMap<String, Organization>>,
@@ -199,15 +231,17 @@ pub struct ContactCard {
     /// which are the two Evolution shows as the contact's calendar addresses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendars: Option<BTreeMap<String, Calendar>>,
+    /// The scheduling addresses of the contact (RFC 9553 §2.4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduling_addresses: Option<BTreeMap<String, SchedulingAddress>>,
     /// The media the card carries (RFC 9553 §2.6.4), keyed like the other
     /// JSContact maps. vCard states a photo on a `PHOTO` line, which is what
     /// Evolution shows as the contact's picture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<BTreeMap<String, Media>>,
     /// The online services the contact is reachable on (RFC 9553 §2.3.2),
-    /// keyed like the other JSContact maps. vCard states each on the `X-` line
-    /// EDS keeps that service's handles on — `X-JABBER`, `X-MATRIX`, … — which
-    /// is what Evolution shows as an instant-messaging address.
+    /// keyed like the other JSContact maps. vCard states each on an `X-` line
+    /// (e.g. `X-JABBER`, `X-MATRIX`), which Evolution shows as an IM address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online_services: Option<BTreeMap<String, OnlineService>>,
     /// The tags the contact is filed under (RFC 9553 §2.8.2), an RFC 9553
@@ -222,11 +256,8 @@ pub struct ContactCard {
     /// write the property back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
-    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed — unlike
-    /// every other JSContact map here — by *who the related entity is* rather
-    /// than by an id of whoever wrote the entry. vCard 3.0 states none of the
-    /// relations; the one Evolution has a field for is the spouse, on the `X-`
-    /// line EDS keeps `E_CONTACT_SPOUSE` on.
+    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed, unlike
+    /// other JSContact maps, by *who the related entity is* rather than by an entry id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, Relation>>,
     /// The cryptographic keys for the contact (RFC 9553 §2.6.1).
@@ -340,6 +371,17 @@ impl ContactCard {
         self
     }
 
+    pub fn with_scheduling_address(
+        mut self,
+        key: impl Into<String>,
+        address: SchedulingAddress,
+    ) -> Self {
+        let mut map = self.scheduling_addresses.unwrap_or_default();
+        map.insert(key.into(), address);
+        self.scheduling_addresses = Some(map);
+        self
+    }
+
     /// A minimal card with a full name and one email address, ready for
     /// `ContactCard/set` create.
     pub fn simple(address_book_id: impl Into<Id>, full_name: &str, email: &str) -> Self {
@@ -406,12 +448,8 @@ impl Name {
     }
 }
 
-/// One name component: kind is `given`, `surname`, `title`, …
-///
-/// Like [`AddressComponent`] this keeps what it does not model — a component
-/// carries a `phonetic` spelling besides its value — because the save path
-/// writes the component list back whole, so a member dropped on the way in is
-/// a member deleted on the way out.
+/// One name component: kind is `given`, `surname`, `title`, etc.
+/// Unmodeled properties (such as phonetic spellings) are preserved in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameComponent {
@@ -550,7 +588,7 @@ pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The units within it, outermost first — the departments the `ORG` value
+    /// The units within it, outermost first: the departments the `ORG` value
     /// lists after the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<Vec<OrgUnit>>,
@@ -615,10 +653,7 @@ impl OrgUnit {
 pub struct Title {
     #[serde(default)]
     pub name: String,
-    /// `title` or `role`. Absent means `title`, RFC 9553 §2.2.4's default,
-    /// which this side leaves unsaid rather than writing out — so a card
-    /// that never named a kind is not rewritten by a save that changed
-    /// nothing.
+    /// `title` or `role`. Absent means `title` (RFC 9553 §2.2.4 default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -788,10 +823,7 @@ impl Note {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Anniversary {
-    /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which
-    /// gives it no default — an entry that names none says nothing about
-    /// what its date is the date *of*, and is treated here as a kind no
-    /// vCard property states.
+    /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which gives it no default.
     #[serde(default)]
     pub kind: String,
     /// The date itself, kept as it arrived rather than parsed into a shape
@@ -832,8 +864,8 @@ pub struct Link {
     /// part of a link a `URL` line has room for.
     #[serde(default)]
     pub uri: String,
-    /// What kind of link it is — `contact`, a URI for getting in touch, is
-    /// the one kind RFC 9553 §2.6.3 defines, and it has no default.
+    /// What kind of link it is: `contact` (a URI for getting in touch) is
+    /// the defined kind in RFC 9553 §2.6.3, with no default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -873,7 +905,7 @@ impl Link {
 }
 
 /// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
-/// contact — a calendar of theirs, or the free/busy data drawn from one.
+/// contact: a calendar of theirs, or the free/busy data drawn from one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
@@ -907,6 +939,43 @@ impl Calendar {
     pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
         self.kind = Some(kind.into());
         self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
+/// JSContact SchedulingAddress (RFC 9553 §2.4.2): one scheduling address of the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulingAddress {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub scheduling_address_type: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SchedulingAddress {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
     }
 
     pub fn with_pref(mut self, pref: u32) -> Self {
@@ -979,7 +1048,7 @@ impl Media {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OnlineService {
-    /// The name of the service or protocol — `Jabber`, `Matrix`, `Skype`.
+    /// The name of the service or protocol: `Jabber`, `Matrix`, `Skype`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
     /// The name the contact is known by at the service. Free text per RFC 9553
@@ -1034,24 +1103,14 @@ impl OnlineService {
 /// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
 /// the contact.
 ///
-/// The entity itself is the map key over in [`ContactCard::related_to`] — RFC
+/// The entity itself is the map key in [`ContactCard::related_to`]: RFC
 /// 9553 §2.1.8 makes it the related Card's `uid`, and RFC 9555 §2.9.5 puts free
-/// text there for a vCard `RELATED;VALUE=text`, which is the case that holds a
-/// name a user could read. So a Relation object carries no identity of its own
-/// and there is nothing else on it to model.
+/// text there for a vCard `RELATED;VALUE=text`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Relation {
-    /// The relation types the entity stands in, an RFC 9553 §1.4.3 Set: the
-    /// keys are the types — `spouse`, `child`, `colleague`, … — and every value
-    /// is `true`. An empty set, which RFC 9555 §2.9.5's example produces from a
-    /// `RELATED` line carrying no `TYPE`, means the relation is unspecified.
-    ///
-    /// The values are left as JSON rather than as `bool` for the reason
-    /// [`ContactCard::keywords`] gives: a whole `ContactCard/get` response is
-    /// deserialized at once, so a server answering `{"spouse": 1}` for one card
-    /// must not cost the user the whole address book. The odd entry stays
-    /// visible as itself and the vCard mapping refuses it.
+    /// Relation types the entity stands in (RFC 9553 §1.4.3 Set mapping types
+    /// such as `spouse`, `child`, `colleague` to boolean values).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relation: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
@@ -1435,14 +1494,82 @@ pub mod grammatical_gender {
     pub const COMMON: &str = "common";
 }
 
-/// JSContact SpeakToAs (RFC 9553 §2.2.5): how to address the contact.
+/// JSContact Pronouns (RFC 9553 §2.2.4): pronouns to use when addressing or speaking about the contact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Pronouns {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub pronouns_type: Option<String>,
+    #[serde(default)]
+    pub pronouns: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Pronouns {
+    pub fn new(pronouns: impl Into<String>) -> Self {
+        Self {
+            pronouns: pronouns.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
+/// JSContact pronouns value, supporting either an RFC 9553 §2.2.4 map of
+/// `Pronouns` or a shorthand plain string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PronounsValue {
+    Map(BTreeMap<String, Pronouns>),
+    Text(String),
+}
+
+impl std::ops::Deref for PronounsValue {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Text(s) => s.as_str(),
+            Self::Map(m) => m.values().next().map(|p| p.pronouns.as_str()).unwrap_or(""),
+        }
+    }
+}
+
+impl From<String> for PronounsValue {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for PronounsValue {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl From<BTreeMap<String, Pronouns>> for PronounsValue {
+    fn from(m: BTreeMap<String, Pronouns>) -> Self {
+        Self::Map(m)
+    }
+}
+
+/// JSContact SpeakToAs (RFC 9553 §2.2.4): how to address the contact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeakToAs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grammatical_gender: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pronouns: Option<String>,
+    pub pronouns: Option<PronounsValue>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -1457,8 +1584,23 @@ impl SpeakToAs {
         self
     }
 
-    pub fn with_pronouns(mut self, pronouns: impl Into<String>) -> Self {
+    pub fn with_pronouns(mut self, pronouns: impl Into<PronounsValue>) -> Self {
         self.pronouns = Some(pronouns.into());
+        self
+    }
+
+    pub fn with_pronouns_entry(mut self, key: impl Into<String>, pronouns: Pronouns) -> Self {
+        let mut map = match self.pronouns.take() {
+            Some(PronounsValue::Map(m)) => m,
+            Some(PronounsValue::Text(s)) => {
+                let mut m = BTreeMap::new();
+                m.insert("default".to_string(), Pronouns::new(s));
+                m
+            }
+            None => BTreeMap::new(),
+        };
+        map.insert(key.into(), pronouns);
+        self.pronouns = Some(PronounsValue::Map(map));
         self
     }
 }

@@ -64,10 +64,8 @@ fn calendar_event_roundtrip() {
             "coordinates": "geo:52.520008,13.404954",
         }))
     );
-    // `keywords` is an RFC 8984 §1.4.3 Set — the keys are the tags and every
-    // value is `true`. The values are held as JSON rather than as `bool` so that
-    // one server answering something else for one event cannot fail the whole
-    // `CalendarEvent/get` response and take the calendar with it.
+    // `keywords` is an RFC 8984 §1.4.3 Set: keys are tags, values are `true`.
+    // Held as JSON to tolerate non-boolean values.
     let keywords = event.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["offsite", "planning"]);
     assert!(keywords.values().all(|set| set == &Value::Bool(true)));
@@ -112,8 +110,8 @@ fn calendar_my_rights_and_share_with_roundtrip() {
     assert_eq!(rights.may_write_all, Some(false));
     assert_eq!(rights.may_write_own, Some(true));
     assert_eq!(rights.may_rsvp, Some(true));
-    // Neither field alone would be writable; together (own items, not all) the
-    // calendar as a whole counts as writable — EDS has no shade between the two.
+    // Neither field alone is writable. Together (own items, not all), the
+    // calendar as a whole counts as writable.
     assert!(rights.is_writable());
 
     let share_with = calendar.share_with.expect("shareWith");
@@ -132,8 +130,7 @@ fn recurrence_rule_roundtrip() {
     assert_eq!(rule.interval, Some(2));
     assert_eq!(rule.count, Some(10));
     // `byDay` is modeled rather than parked in `extra`: an `RRULE` spells it,
-    // so the mapping has to be able to see it — and to hand it back unchanged,
-    // `@type` and all, when a save replaces the property whole.
+    // so the mapping must see it and roundtrip it unchanged.
     let days = rule.by_day.as_deref().expect("byDay");
     assert_eq!(
         days,
@@ -163,10 +160,8 @@ fn recurrence_rule_days_of_the_month_roundtrip() {
 
 #[test]
 fn recurrence_rule_days_of_the_year_roundtrip() {
-    // `byYearDay` is iCalendar's `BYYEARDAY` — "the first and the last day of the
-    // year", the negative value counting back from 31 December as RFC 8984 §4.3.3
-    // has it. A number, unlike `byMonth`: a day of the year has no leap-month
-    // spelling to preserve.
+    // `byYearDay` corresponds to iCalendar's `BYYEARDAY`: positive counts from
+    // start of year, negative counts back from December 31 (RFC 8984 §4.3.3).
     let value = fixture("calendars/recurrence_rule_days_of_year.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -178,11 +173,8 @@ fn recurrence_rule_days_of_the_year_roundtrip() {
 
 #[test]
 fn recurrence_rule_weeks_of_the_year_roundtrip() {
-    // `byWeekNo` is iCalendar's `BYWEEKNO` — "the first and the last week of the
-    // year", the negative value counting back from the end of the year as RFC 8984
-    // §4.3.3 has it. Which dates those weeks hold depends on `firstDayOfWeek`, so
-    // the fixture states one: RFC 5545 §3.3.10 numbers weeks by ISO 8601, where a
-    // week belongs to the year holding most of its days, counted from `WKST`.
+    // `byWeekNo` corresponds to iCalendar's `BYWEEKNO`: positive counts from
+    // first week, negative counts back from last week (RFC 8984 §4.3.3).
     let value = fixture("calendars/recurrence_rule_weeks_of_year.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -195,10 +187,7 @@ fn recurrence_rule_weeks_of_the_year_roundtrip() {
 
 #[test]
 fn recurrence_rule_hours_roundtrip() {
-    // `byHour` is iCalendar's `BYHOUR` — "twice a day, at 09:00 and at 17:00".
-    // RFC 8984 §4.3.3 has it as `UnsignedInt[]`, so unlike the days of the month
-    // and the weeks of the year there is no backwards count to preserve: RFC 5545
-    // §3.3.10's `hour` gives no way to name an hour from the end of the day.
+    // `byHour` corresponds to iCalendar's `BYHOUR` (RFC 8984 §4.3.3 / RFC 5545 §3.3.10).
     let value = fixture("calendars/recurrence_rule_hours.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -210,14 +199,8 @@ fn recurrence_rule_hours_roundtrip() {
 
 #[test]
 fn recurrence_rule_minutes_and_seconds_roundtrip() {
-    // `byMinute` and `bySecond` are iCalendar's `BYMINUTE` and `BYSECOND` — "on
-    // the hour and the half hour, on the second". Unsigned like `byHour`, and
-    // with the same absence of a backwards count; the ranges differ, RFC 5545
-    // §3.3.10's `minutes` being 0 to 59 and its `seconds` 0 to 60, the sixtieth
-    // second being the leap second UTC occasionally inserts.
-    //
-    // With these two the rule is modeled to the bottom of RFC 8984 §4.3.3 but
-    // for `rscale` and `skip`, which name a non-Gregorian calendar.
+    // `byMinute` and `bySecond` correspond to iCalendar's `BYMINUTE` and `BYSECOND`
+    // (RFC 8984 §4.3.3 / RFC 5545 §3.3.10).
     let value = fixture("calendars/recurrence_rule_minutes_and_seconds.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -230,11 +213,8 @@ fn recurrence_rule_minutes_and_seconds_roundtrip() {
 
 #[test]
 fn recurrence_rule_set_position_roundtrip() {
-    // `bySetPosition` is iCalendar's `BYSETPOS` — "the last Friday of the
-    // month". It is the one part of RFC 8984 §4.3.3 that names no date of its
-    // own: it selects out of the set the other `by*` properties expand to, so
-    // the fixture states the `byDay` it selects from, which RFC 5545 §3.3.10
-    // also requires.
+    // `bySetPosition` corresponds to iCalendar's `BYSETPOS` (RFC 8984 §4.3.3).
+    // Filters occurrences produced by the other `by*` rules.
     let value = fixture("calendars/recurrence_rule_set_position.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -247,11 +227,8 @@ fn recurrence_rule_set_position_roundtrip() {
 
 #[test]
 fn recurrence_rule_months_roundtrip() {
-    // `byMonth` is the months of the year a rule repeats in — iCalendar's
-    // `BYMONTH`. RFC 8984 §4.3.3 holds each as a *string*, not a number, so
-    // that a leap month in a non-Gregorian calendar can be spelled `5L`; the
-    // model keeps the string it was given rather than a number it would have to
-    // spell back.
+    // `byMonth` corresponds to iCalendar's `BYMONTH` (RFC 8984 §4.3.3).
+    // Stored as strings to support non-Gregorian leap months (e.g. "5L").
     let value = fixture("calendars/recurrence_rule_months.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -266,11 +243,7 @@ fn recurrence_rule_months_roundtrip() {
 
 #[test]
 fn recurrence_rule_first_day_of_week_roundtrip() {
-    // `firstDayOfWeek` is iCalendar's `WKST` — the day a week is counted from,
-    // which RFC 5545 §3.3.10 says decides where a fortnightly series' second week
-    // begins. "Every other Tuesday, weeks starting on Sunday" is a different set
-    // of dates from the same rule counted from Monday, so the day has to be
-    // modeled rather than parked in `extra`.
+    // `firstDayOfWeek` corresponds to iCalendar's `WKST` (RFC 8984 §4.3.3 / RFC 5545 §3.3.10).
     let value = fixture("calendars/recurrence_rule_first_day_of_week.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 
@@ -485,6 +458,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         name: Some("Alice Example".to_owned()),
         email: Some("alice@example.com".to_owned()),
         description: Some("Project Lead".to_owned()),
+        calendar_address: Some("mailto:alice@example.com".to_owned()),
         send_to: Some(BTreeMap::from([(
             "imip".to_owned(),
             "mailto:alice@example.com".to_owned(),
@@ -494,10 +468,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         participation_status: Some("accepted".to_owned()),
         attendance: Some(participant_attendance::REQUIRED.to_owned()),
         expect_reply: Some(false),
-        schedule_agent: Some(schedule_agent::SERVER.to_owned()),
-        schedule_sequence: Some(1),
         progress: Some(participant_progress::IN_PROCESS.to_owned()),
-        progress_updated: Some(UtcDate::new("2026-09-01T12:00:00Z")),
         ..Participant::default()
     };
 
@@ -508,6 +479,8 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     assert_eq!(p_val["roles"]["owner"], true);
     assert_eq!(p_val["attendance"], "required");
     assert_eq!(p_val["progress"], "in-process");
+    assert_eq!(p_val["calendarAddress"], "mailto:alice@example.com");
+    assert!(p_val.get("sendTo").is_none());
 
     let p_round_tripped: Participant = serde_json::from_value(p_val).unwrap();
     assert_eq!(p_round_tripped, participant);
@@ -515,8 +488,6 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let location = Location {
         location_type: Some("Location".to_owned()),
         name: Some("Conference Room A".to_owned()),
-        description: Some("Building 2, Floor 3".to_owned()),
-        time_zone: Some("Europe/London".to_owned()),
         coordinates: Some("geo:51.5074,-0.1278".to_owned()),
         location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
         ..Location::default()
@@ -524,7 +495,6 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let loc_val = serde_json::to_value(&location).unwrap();
     assert_eq!(loc_val["@type"], "Location");
     assert_eq!(loc_val["name"], "Conference Room A");
-    assert_eq!(loc_val["timeZone"], "Europe/London");
     assert_eq!(
         serde_json::from_value::<Location>(loc_val).unwrap(),
         location
@@ -533,10 +503,10 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let vloc = VirtualLocation {
         virtual_location_type: Some("VirtualLocation".to_owned()),
         name: Some("Video Bridge".to_owned()),
-        description: Some("Passcode: 1234".to_owned()),
         uri: "https://meet.example.com/bridge".to_owned(),
         features: Some(BTreeMap::from([("video".to_owned(), true)])),
         extra: BTreeMap::new(),
+        description: None,
     };
     let vloc_val = serde_json::to_value(&vloc).unwrap();
     assert_eq!(vloc_val["@type"], "VirtualLocation");
@@ -774,7 +744,6 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
 #[test]
 fn calendar_and_event_spec_properties_roundtrip() {
     use jmap_proto::calendars::{Calendar, CalendarEvent};
-    use std::collections::BTreeMap;
 
     let cal = Calendar {
         id: Some("cal_spec".into()),
@@ -794,23 +763,29 @@ fn calendar_and_event_spec_properties_roundtrip() {
         use_default_alerts: Some(true),
         color: Some("#ff5500".to_owned()),
         locale: Some("en-GB".to_owned()),
-        localizations: Some(BTreeMap::from([(
-            "de".to_owned(),
-            serde_json::json!({"title": "Internationale Konferenz"}),
-        )])),
         ..CalendarEvent::default()
     };
     let e_val = serde_json::to_value(&event).unwrap();
     assert_eq!(e_val["useDefaultAlerts"], true);
     assert_eq!(e_val["color"], "#ff5500");
     assert_eq!(e_val["locale"], "en-GB");
-    assert_eq!(
-        e_val["localizations"]["de"]["title"],
-        "Internationale Konferenz"
-    );
 
     let round_event: CalendarEvent = serde_json::from_value(e_val).unwrap();
     assert_eq!(round_event, event);
+
+    // Deserialization of legacy JSON with localizations is still supported:
+    let legacy_json = serde_json::json!({
+        "id": "evt_spec_legacy",
+        "title": "International Conference",
+        "localizations": {
+            "de": {"title": "Internationale Konferenz"}
+        }
+    });
+    let legacy_ev: CalendarEvent = serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(
+        legacy_ev.localizations.as_ref().unwrap()["de"]["title"],
+        "Internationale Konferenz"
+    );
 }
 
 #[test]
@@ -1166,14 +1141,22 @@ fn participant_participation_comment_roundtrip() {
     let p = Participant::new("Alice", "alice@example.com")
         .with_participation_comment("Will arrive 10 minutes late");
 
+    // In JSCalendar-bis, participationComment is reserved and omitted on serialization:
     let json = serde_json::to_value(&p).unwrap();
     assert_eq!(json["name"], "Alice");
     assert_eq!(json["email"], "alice@example.com");
-    assert_eq!(json["participationComment"], "Will arrive 10 minutes late");
+    assert!(json.get("participationComment").is_none());
 
-    let round_tripped: Participant = serde_json::from_value(json).unwrap();
+    // Legacy JSON with participationComment is read on deserialization:
+    let legacy_json = serde_json::json!({
+        "@type": "Participant",
+        "name": "Alice",
+        "email": "alice@example.com",
+        "participationComment": "Will arrive 10 minutes late"
+    });
+    let deserialized: Participant = serde_json::from_value(legacy_json).unwrap();
     assert_eq!(
-        round_tripped.participation_comment.as_deref(),
+        deserialized.participation_comment.as_deref(),
         Some("Will arrive 10 minutes late")
     );
 }
@@ -1452,4 +1435,111 @@ fn participant_identity_roundtrip_and_builders() {
 
     let deserialized: ParticipantIdentity = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, identity);
+}
+
+#[test]
+fn participant_deserializes_rfc8984_send_to_into_calendar_address() {
+    use jmap_proto::calendars::Participant;
+    use serde_json::json;
+
+    let wire_rfc8984 = json!({
+        "@type": "Participant",
+        "name": "Bob Smith",
+        "email": "bob@example.com",
+        "sendTo": {
+            "imip": "mailto:bob@example.com"
+        }
+    });
+
+    let participant: Participant = serde_json::from_value(wire_rfc8984).unwrap();
+    assert_eq!(
+        participant.calendar_address.as_deref(),
+        Some("mailto:bob@example.com")
+    );
+    assert_eq!(
+        participant
+            .send_to
+            .as_ref()
+            .and_then(|st| st.get("imip"))
+            .map(String::as_str),
+        Some("mailto:bob@example.com")
+    );
+}
+
+#[test]
+fn participant_deserializes_jscalendar_bis_calendar_address() {
+    use jmap_proto::calendars::Participant;
+    use serde_json::json;
+
+    let wire_bis = json!({
+        "@type": "Participant",
+        "name": "Alice Vance",
+        "email": "alice@example.com",
+        "calendarAddress": "mailto:alice@example.com"
+    });
+
+    let participant: Participant = serde_json::from_value(wire_bis).unwrap();
+    assert_eq!(
+        participant.calendar_address.as_deref(),
+        Some("mailto:alice@example.com")
+    );
+}
+
+#[test]
+fn participant_serialization_emits_calendar_address_and_never_send_to() {
+    use jmap_proto::calendars::Participant;
+
+    let p = Participant::new("Alice", "alice@example.com")
+        .with_calendar_address("mailto:alice@example.com");
+    let val = serde_json::to_value(&p).unwrap();
+    assert_eq!(val["calendarAddress"], "mailto:alice@example.com");
+    assert!(val.get("sendTo").is_none());
+
+    let mut p_legacy = Participant::new("Bob", "bob@example.com");
+    p_legacy.send_to = Some([("imip".to_owned(), "mailto:bob@example.com".to_owned())].into());
+    let val_legacy = serde_json::to_value(&p_legacy).unwrap();
+    assert_eq!(val_legacy["calendarAddress"], "mailto:bob@example.com");
+    assert!(val_legacy.get("sendTo").is_none());
+}
+
+#[test]
+fn participant_role_required_constant_exists() {
+    use jmap_proto::calendars::participant_role;
+    assert_eq!(participant_role::REQUIRED, "required");
+    assert_eq!(participant_role::ATTENDEE, "attendee");
+}
+
+#[test]
+fn calendar_event_top_level_bis_fields_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::calendars::CalendarEvent;
+
+    let event = CalendarEvent::new()
+        .with_end_time_zone("Europe/Berlin")
+        .with_main_location_id("loc-1")
+        .with_schedule_sequence(3)
+        .with_schedule_updated(UtcDate::new("2026-10-14T03:00:00Z"))
+        .may_invite_self(true)
+        .may_invite_others(false);
+
+    assert_eq!(event.end_time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.main_location_id.as_ref().unwrap().as_str(), "loc-1");
+    assert_eq!(event.schedule_sequence, Some(3));
+    assert_eq!(
+        event.schedule_updated.as_ref().unwrap().as_str(),
+        "2026-10-14T03:00:00Z"
+    );
+    assert_eq!(event.may_invite_self, Some(true));
+    assert_eq!(event.may_invite_others, Some(false));
+
+    let val = serde_json::to_value(&event).unwrap();
+    assert_eq!(val["endTimeZone"], "Europe/Berlin");
+    assert_eq!(val["mainLocationId"], "loc-1");
+    assert_eq!(val["scheduleSequence"], 3);
+    assert_eq!(val["scheduleUpdated"], "2026-10-14T03:00:00Z");
+    assert_eq!(val["mayInviteSelf"], true);
+    assert_eq!(val["mayInviteOthers"], false);
+
+    let round_tripped: CalendarEvent = serde_json::from_value(val).unwrap();
+    assert_eq!(round_tripped, event);
 }

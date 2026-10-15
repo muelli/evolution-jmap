@@ -336,8 +336,7 @@ unsafe extern "C" fn connect_sync<T: Connected>(
             // own `authenticate_sync` once before any prompt — falling to the
             // consent window only if that attempt comes back REJECTED. A NULL
             // mechanism skips that branch entirely and prompts first, which is
-            // the consent-at-every-send the operator observed on 2026-08-26
-            // (GNOME/evolution#3382).
+            // the consent-at-every-send behaviour GNOME/evolution#3382 reports.
             //
             // The mechanism is the SASL's own name and not whatever the
             // account's `auth-mechanism` field happens to say, because
@@ -595,18 +594,18 @@ unsafe fn fail_internal(error: *mut *mut GError) -> CamelAuthenticationResult {
 #[cfg(test)]
 mod finish_authenticate_tests {
     use jmap_client::Error;
+    use jmap_tracing_capture::capture;
 
     use super::finish_authenticate;
     use crate::connect::StoreError;
 
     #[test]
     fn an_oauth2_401_is_reclassified() {
-        let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let error = StoreError::Client(Error::Http {
             status: 401,
             problem: None,
         });
-        let result = finish_authenticate(true, Err(error));
+        let (result, _) = capture(|| finish_authenticate(true, Err(error)));
         assert!(
             matches!(result, Err(StoreError::OAuth2(_))),
             "expected OAuth2, got {result:?}"
@@ -615,12 +614,11 @@ mod finish_authenticate_tests {
 
     #[test]
     fn the_same_401_is_left_alone_for_a_non_oauth2_attempt() {
-        let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let error = StoreError::Client(Error::Http {
             status: 401,
             problem: None,
         });
-        let result = finish_authenticate(false, Err(error));
+        let (result, _) = capture(|| finish_authenticate(false, Err(error)));
         assert!(
             matches!(result, Err(StoreError::Client(_))),
             "expected Client, got {result:?}"
@@ -629,115 +627,18 @@ mod finish_authenticate_tests {
 
     #[test]
     fn success_passes_through_unchanged_either_way() {
-        let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(finish_authenticate(true, Ok(())).is_ok());
-        assert!(finish_authenticate(false, Ok(())).is_ok());
-    }
-
-    /// Records every event this function emits (field name → value), so a
-    /// test can assert the credential method and the outcome were traced —
-    /// duplicated from `jmap_client::transport`'s own test harness for the
-    /// same reason that one gives: this crate depends on `tracing`, not
-    /// `tracing-subscriber`, so there is no ready-made capturing layer to
-    /// share across crates. This is what item 15's own investigation found
-    /// missing: a live send produced no trace to tell the operator which
-    /// branch ran, because nothing here emitted any.
-    struct CapturingSubscriber {
-        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a> {
-        sink: &'a std::sync::Mutex<Vec<(String, String)>>,
-    }
-
-    impl tracing::field::Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.sink
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-            self.sink
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_string()));
-        }
-    }
-
-    impl tracing::Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            event.record(&mut Recorder {
-                sink: &self.captured,
-            });
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
-    /// Serializes every test in this module that reaches `finish_authenticate`'s
-    /// own `tracing::debug!` call sites, whether or not it installs a
-    /// subscriber, and forces a fresh callsite-interest rebuild once this
-    /// subscriber is the thread's default. Mirrors
-    /// `jmap-backend-core/tests/oauth2.rs`'s own `CAPTURE_LOCK`/`capture`
-    /// exactly, for the same reason: `tracing-core` caches each macro call
-    /// site's `Interest` (never/sometimes/always) once, process-wide, the
-    /// first time that call site fires anywhere in the process, based on
-    /// whichever `Dispatch` is current *on the thread that happens to fire it
-    /// first*, not on which `Dispatch` is current on any later call.
-    /// `an_oauth2_401_is_reclassified`, `the_same_401_is_left_alone_for_a_non_
-    /// oauth2_attempt` and `success_passes_through_unchanged_either_way` reach
-    /// the exact same call sites with no subscriber installed at all; left
-    /// unsynchronized, one of them can win the race to register a call site
-    /// first, caching it `never` under its own absent subscriber, which then
-    /// silently drops that event even under a `run_captured` subscriber that
-    /// would otherwise have accepted it. `rebuild_interest_cache` re-evaluates
-    /// every *already-registered* call site against whatever is current right
-    /// now, which is why the lock alone is not enough: a call site neither
-    /// test has reached yet still registers itself, under whichever
-    /// subscriber is current, the first time any locked caller reaches it, so
-    /// it must run after `with_default` has installed this subscriber, not
-    /// before.
-    static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn run_captured(
-        uses_oauth2: bool,
-        outcome: Result<(), StoreError>,
-    ) -> (Result<(), StoreError>, Vec<(String, String)>) {
-        let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-        let result = tracing::subscriber::with_default(subscriber, || {
-            tracing::callsite::rebuild_interest_cache();
-            finish_authenticate(uses_oauth2, outcome)
-        });
-        let captured = captured.lock().unwrap().clone();
-        (result, captured)
+        assert!(capture(|| finish_authenticate(true, Ok(()))).0.is_ok());
+        assert!(capture(|| finish_authenticate(false, Ok(()))).0.is_ok());
     }
 
     #[test]
     fn a_successful_oauth2_attempt_traces_which_method_was_used() {
-        let (result, captured) = run_captured(true, Ok(()));
+        let (result, captured) = capture(|| finish_authenticate(true, Ok(())));
         assert!(result.is_ok());
         assert!(
-            captured.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            captured
+                .iter()
+                .any(|(_, name, value)| name == "uses_oauth2" && value == "true"),
             "expected a uses_oauth2=true field, got {captured:?}"
         );
     }
@@ -748,10 +649,10 @@ mod finish_authenticate_tests {
             status: 401,
             problem: None,
         });
-        let (result, captured) = run_captured(true, Err(error));
+        let (result, captured) = capture(|| finish_authenticate(true, Err(error)));
         assert!(matches!(result, Err(StoreError::OAuth2(_))));
         assert!(
-            captured.iter().any(|(name, _)| name == "error"),
+            captured.iter().any(|(_, name, _)| name == "error"),
             "expected an error field, got {captured:?}"
         );
     }

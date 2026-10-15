@@ -1,21 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// M3's last acceptance criterion is "a documented manual test recipe with a
-// hand-written `.source` keyfile", and a recipe is prose: nothing else in this
-// repository fails when a group name in it is wrong, or when the backend name
-// it tells the reader to write stops being the one the factory answers to. The
-// symptom is an address book Evolution never even tries to open, with no error
-// anywhere, and the reader concludes the backend is broken.
-//
-// So the keyfile is a file — `docs/examples/jmap-mock.source`, the one the
-// recipe says to copy — and these tests read it the way the registry does:
-// `e_server_side_source_new` on a GFile is exactly what
-// `evolution-source-registry` calls for every file in its sources directory,
-// and it needs neither a bus nor a running daemon. What the reader copies is
-// therefore parsed by EDS's own keyfile code, handed to the same
-// `SourceConfig::from_source` the backend calls, and compared against what the
-// recipe claims it means.
+// Verifies that the manual test recipe keyfile (`docs/examples/jmap-mock.source`)
+// is parseable by EDS registry code, consistent with `docs/manual-test-book-backend.md`,
+// and recognized by `SourceConfig`.
 
 use std::ffi::CStr;
 use std::fs;
@@ -55,11 +42,8 @@ struct RegistrySource {
 impl RegistrySource {
     /// Parses `path`.
     ///
-    /// `e_server_side_source_new` insists on a registry server — it is the
-    /// object a server-side source reports changes to — but constructing one
-    /// neither owns a bus name nor reads the user's sources; that only
-    /// happens when it is run. So this is the whole daemon-free part of the
-    /// daemon, and it is the part that turns a keyfile into an `ESource`.
+    /// `e_server_side_source_new` requires a registry server to report changes to.
+    /// Constructing one without running it parses keyfiles into an `ESource` without D-Bus.
     fn load(path: &Path) -> Self {
         let path_string =
             std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
@@ -167,13 +151,8 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 
 #[test]
 fn the_keyfile_spelling_that_turns_tls_on_is_method_not_secure() {
-    // `[Security] Method=none` is the one line in the recipe whose opposite
-    // is not a visible failure. `ESourceSecurity:secure` is a boolean *over*
-    // the `Method` string, so a keyfile saying `Secure=true` sets no property
-    // EDS knows and reads back as "no method", which is `none` — an account
-    // that looks like it asked for TLS and did not. This pins both spellings
-    // against a remote host, where the difference is refuse-to-connect rather
-    // than a scheme.
+    // Pins `Method=tls` vs invalid `Secure=true` against a remote host.
+    // Setting `Secure=true` sets no known EDS property, falling back to no TLS.
     let keyfile = fs::read_to_string(keyfile()).expect("the keyfile is in docs/examples/");
     let remote = keyfile.replace("Host=127.0.0.1", "Host=jmap.example.com");
 

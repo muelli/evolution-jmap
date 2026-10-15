@@ -1,15 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Opening the address book `connect_sync` needs.
-//!
-//! All that is left here is the part that is about *contacts*: which session
-//! capability the account is looked up under, and which list the source's
-//! `[Resource] Identity` is resolved against. The rest — the credentials, the
-//! `out_auth_result` classification EDS re-prompts on, the `ESource` and the
-//! two out-parameters — is [`jmap_backend_core::connect`], because the
-//! calendar backend answers those questions the same way and a rule about
-//! password prompts that exists twice is a rule that gets corrected once.
+//! Address book connection resolution for `connect_sync`.
 
 use eds_sys::{ENamedParameters, ESource, ESourceAuthenticationResult};
 use gio_sys::GCancellable;
@@ -22,19 +14,7 @@ use jmap_proto::session::CAPABILITY_CONTACTS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 
-/// Connects to the server `config` names and resolves which JMAP address book
-/// the source stands for.
-///
-/// `credentials` are already resolved: whether this account authenticates with
-/// a password out of libsecret or with an OAuth 2.0 bearer token is
-/// [`jmap_backend_core::connect::connect_with`]'s decision, taken once so that
-/// an address book and a calendar on one account cannot disagree about it.
-///
-/// The client is built with no cancellation of its own: what stops the connect
-/// is the scope `connect_sync` installed, and what stops every operation after
-/// it is the scope that operation's vfunc installs. See
-/// [`jmap_backend_core::connect::connect_with`] for why a flag on the client
-/// would be the wrong lifetime.
+/// Connects to the configured JMAP account and resolves the target address book.
 pub fn open_book(
     config: &SourceConfig,
     credentials: Credentials,
@@ -58,9 +38,7 @@ pub fn open_book(
     Ok(BookSync::new(client, account_id, address_book_id))
 }
 
-/// The whole of `connect_sync` except the instance: from the `ESource` EDS
-/// hands the backend to a [`BookSync`], with `out_auth_result` and `error`
-/// written the way the vfunc has to write them.
+/// Connects to the JMAP server for `source` and returns an active [`BookSync`].
 ///
 /// # Safety
 ///

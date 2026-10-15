@@ -1,0 +1,21 @@
+// Source: RFC 9661 §2.4.1 (Update Script Content Request), September 2024
+[
+  ["Blob/upload", {
+    "accountId": "ken",
+    "create": {
+      "B": {
+        "data": [ {
+          "data:asText": "redirect \"ken@example.com\"\r\n;"
+        } ],
+        "type": "application/sieve"
+      }
+    }
+  }, "1"],
+  ["SieveScript/set", {
+    "accountId": "ken",
+    "update": { "dd1b164f-8cdc-448c-9f54": {
+      "blobId": "#B"
+      }
+    }
+  }, "2"]
+]

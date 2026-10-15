@@ -368,7 +368,7 @@ fn destroying_a_mailbox_that_is_not_there_is_not_found() {
     assert_eq!(refusal(destroyed), "notFound");
 }
 
-/// Track E Phase C step 2: `shareWith` on `Mailbox/set` grants cross-account
+/// `shareWith` on `Mailbox/set` grants cross-account
 /// access in the mock, the same enforcement `AddressBook/get` already has,
 /// adapted to `MailboxRights` (matching the live Stalwart probe recorded in
 /// the work queue, not cited here per the boundary lint): before any grant a
@@ -432,11 +432,11 @@ fn mailbox_shared_with_a_principal_is_visible_only_to_them() {
     );
 }
 
-/// Track E Phase C step 2: a grant is not one-shot. Widening an existing
+/// A grant is not one-shot. Widening an existing
 /// `shareWith` entry changes `myRights` on the next `/get`, and revoking it
 /// entirely (patching the principal's key to `null`, RFC 8620 §5.3) returns
 /// the previously-shared principal to outright `forbidden`, matching the
-/// live Stalwart probe's own manual revoke check (Track E Phase C step 1's
+/// live Stalwart probe's own manual revoke check (earlier
 /// findings, recorded in the work queue). Mirrors
 /// `address_book_share_can_be_widened_then_revoked`.
 #[test]

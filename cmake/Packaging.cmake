@@ -125,8 +125,8 @@ install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/third-party-notices"
 	COMPONENT config-module
 )
 
-# Track C1/item 8: the one RUNPATH entry this package ships
-# (/usr/lib/evolution, item 2(a)'s fix for module-jmap-configuration.so) is
+# Track C1: the one RUNPATH entry this package ships
+# (/usr/lib/evolution, needed by module-jmap-configuration.so) is
 # deliberate — Evolution's own modules all carry it — so lintian's
 # custom-library-search-path is satisfied with a written justification
 # rather than by removing the RUNPATH the module needs to load. Debian

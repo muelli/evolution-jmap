@@ -12,10 +12,12 @@
 //! other extension `ECollectionBackendClass::create_resource_sync`/
 //! `delete_resource_sync` has to support, since a wrong guess at which
 //! `/set` call to make for a given child kind is exactly the bug
-//! `jmap-backend-collection/tests/delete.rs` already guards against for the
-//! read side (an address book and a calendar may share one resource id, RFC
-//! 8620 §1.2) — this is that same risk, checked from the write side, through
-//! a real registry rather than an in-process fixture.
+//! `jmap-backend-collection/tests/resource_id.rs`'s
+//! `the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id`
+//! already guards against for the read side (an address book and a
+//! calendar may share one resource id, RFC 8620 §1.2) — this is that same
+//! risk, checked from the write side, through a real registry rather than
+//! an in-process fixture.
 
 use jmap_functional::{Session, observations, required_path};
 

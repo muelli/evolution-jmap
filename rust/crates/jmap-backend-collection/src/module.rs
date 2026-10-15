@@ -31,7 +31,7 @@
 //! instantiates every service registered by then — no manual `g_object_new`
 //! or `e_oauth2_services_add` call needed here.
 //!
-//! **Correction (2026-08-23, item 11's EWS-parity audit):** an earlier
+//! **Correction:** an earlier
 //! version of this comment claimed evolution-ews registers
 //! `EOAuth2ServiceOffice365` "in exactly this module... and nowhere else,"
 //! and used that to argue registering our own service only in the registry

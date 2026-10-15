@@ -46,7 +46,7 @@ impl Transport for FuzzSessionTransport {
 }
 
 fuzz_target!(|data: &[u8]| {
-    // 1. Fuzz session connect response handling:
+    // Session connect response handling.
     let session_transport = FuzzSessionTransport {
         session_body: data.to_vec(),
     };
@@ -54,7 +54,7 @@ fuzz_target!(|data: &[u8]| {
         .transport(session_transport)
         .connect("https://mail.example.internal", Credentials::none());
 
-    // 2. Fuzz method call response handling with authenticated session:
+    // Authenticated method response handling.
     let transport = FuzzTransport {
         response_body: data.to_vec(),
     };

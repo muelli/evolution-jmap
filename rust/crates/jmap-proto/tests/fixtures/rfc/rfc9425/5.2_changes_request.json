@@ -1,0 +1,19 @@
+// Source: RFC 9425 §5.2 (Requesting Latest Quota Changes Request), June 2023
+[[ "Quota/changes", {
+  "accountId": "u33084183",
+  "sinceState": "78540",
+  "maxChanges": 20
+}, "0" ],
+[ "Quota/get", {
+  "accountId": "u33084183",
+  "#ids": {
+    "resultOf": "0",
+    "name": "Quota/changes",
+    "path": "/updated"
+  },
+  "#properties": {
+    "resultOf": "0",
+    "name": "Quota/changes",
+    "path": "/updatedProperties"
+  }
+}, "1" ]]

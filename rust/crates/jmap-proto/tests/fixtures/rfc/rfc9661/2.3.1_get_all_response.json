@@ -1,0 +1,20 @@
+// Source: RFC 9661 §2.3.1 (List All Scripts Response), September 2024
+[
+  [
+    "SieveScript/get",
+    {
+      "state": "1634915373.240633104-120",
+      "list": [
+        {
+          "id": "2d647053-dded-418d-917a-63eda3ac8f7b",
+          "name": "test1",
+          "isActive": true,
+          "blobId": "S7"
+        }
+      ],
+      "notFound": [],
+      "accountId": "ken"
+    },
+    "0"
+  ]
+]

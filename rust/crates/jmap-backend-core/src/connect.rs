@@ -24,8 +24,9 @@ use std::fmt;
 use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_DBUS_ERROR, E_CLIENT_ERROR_INVALID_ARG,
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_ERROR,
-    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED, EClientError,
-    ENamedParameters, ESource, ESourceAuthenticationResult, e_client_error_create,
+    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED,
+    E_SOURCE_AUTHENTICATION_UNKNOWN, EClientError, ENamedParameters, ESource,
+    ESourceAuthenticationResult, e_client_error_create,
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
@@ -173,9 +174,20 @@ impl ConnectError {
     /// the server said the credentials were wrong. A 403 is *not* that case —
     /// the credentials were accepted and the account is not allowed — and a
     /// server that is down is not either.
+    ///
+    /// `UNKNOWN` is reserved for
+    /// [`Error::is_redirect_credentials_withheld`][jmap_client::Error::is_redirect_credentials_withheld]:
+    /// every other value, `ERROR` included, makes EDS's own
+    /// `ensure_connected_sync` schedule interactive consent regardless of
+    /// what this method returns, and a redirect that withheld credentials is
+    /// not a rejected password re-prompting could fix, only a connection
+    /// failure that would hit the exact same redirect again.
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
+            Self::Client(error) if error.is_redirect_credentials_withheld() => {
+                E_SOURCE_AUTHENTICATION_UNKNOWN
+            }
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
             // Every other case, `SecretStore` and `ServiceGone` included:
             // deliberately not `REQUIRED` for those two — a dead secret store
@@ -592,6 +604,8 @@ pub unsafe fn write_auth_result(
 
 #[cfg(test)]
 mod tests {
+    use jmap_tracing_capture::capture;
+
     use super::*;
 
     fn id(s: &str) -> Id {
@@ -637,10 +651,29 @@ mod tests {
         );
     }
 
-    /// Item 17's own concern, pinned directly: a secret-store failure must
-    /// not come back `REQUIRED` — that is exactly the "try harder and harder
-    /// to acquire a token" loop it exists to stop — and its message reaches
-    /// the user rather than being swallowed.
+    /// `ensure_connected_sync` (EDS 3.52.3 `e-book-meta-backend.c:3598-3630`)
+    /// calls `e_backend_schedule_credentials_required`, the interactive
+    /// consent escalation, for every `auth_result` except `UNKNOWN`, which is
+    /// also the only one it propagates a real `GError` for rather than
+    /// clearing it into a bogus success. A redirect that withheld credentials
+    /// is not fixed by asking the user to consent again, only by asking again
+    /// and again against the same redirect: an endless OAuth2 popup loop.
+    #[test]
+    fn a_redirect_that_withheld_credentials_is_unknown_not_an_escalation() {
+        assert_eq!(
+            ConnectError::Client(Error::RedirectCredentialsWithheld {
+                requested: "https://a.example/.well-known/jmap".to_owned(),
+                followed: "https://b.example/.well-known/jmap".to_owned(),
+            })
+            .auth_result(),
+            E_SOURCE_AUTHENTICATION_UNKNOWN
+        );
+    }
+
+    /// A secret-store failure must not come back `REQUIRED`: that is exactly
+    /// the "try harder and harder to acquire a token" loop this guards
+    /// against, and its message reaches the user rather than being
+    /// swallowed.
     #[test]
     fn a_secret_store_failure_does_not_reopen_consent() {
         let error = ConnectError::SecretStore("the login keyring is locked".to_owned());
@@ -734,7 +767,7 @@ mod tests {
         assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
     }
 
-    /// Item 22's sibling of the test above: a dead D-Bus peer survives
+    /// The sibling of the test above: a dead D-Bus peer survives
     /// `finish_connect` on an OAuth 2.0 account as `ServiceGone`, so it stays
     /// `ERROR` and never turns into the consent window the captured trace
     /// showed. The reclassification only ever touches a 401 — this pins that
@@ -918,92 +951,35 @@ mod tests {
         ));
     }
 
-    struct CapturingSubscriber {
-        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    }
-
-    struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
-
-    impl tracing::field::Visit for Recorder<'_> {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), format!("{value:?}")));
-        }
-
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_owned()));
-        }
-
-        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((field.name().to_owned(), value.to_string()));
-        }
-    }
-
-    impl tracing::Subscriber for CapturingSubscriber {
-        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            event.record(&mut Recorder(&self.captured));
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
     #[test]
     fn finish_connect_traces_successful_connection_with_structured_fields() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        let result = tracing::subscriber::with_default(subscriber, || {
-            finish_connect(Collection::AddressBook, Some("account-abc"), true, Ok(()))
-        });
+        let (result, entries) =
+            capture(|| finish_connect(Collection::AddressBook, Some("account-abc"), true, Ok(())));
         assert!(result.is_ok());
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("collection".to_owned(), "address book".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "collection" && value == "address book"),
             "expected collection='address book', got {entries:?}"
         );
         assert!(
-            entries.contains(&("account_id".to_owned(), "Some(\"account-abc\")".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "Some(\"account-abc\")"),
             "expected account_id=Some(\"account-abc\"), got {entries:?}"
         );
         assert!(
-            entries.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "uses_oauth2" && value == "true"),
             "expected uses_oauth2=true, got {entries:?}"
         );
     }
 
     #[test]
     fn finish_connect_traces_failed_connection_with_error_and_structured_fields() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let (result, entries) = capture(|| {
             finish_connect(
                 Collection::Calendar,
                 Some("account-xyz"),
@@ -1013,40 +989,44 @@ mod tests {
         });
         assert!(result.is_err());
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("collection".to_owned(), "calendar".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "collection" && value == "calendar"),
             "expected collection='calendar', got {entries:?}"
         );
         assert!(
-            entries.contains(&("account_id".to_owned(), "Some(\"account-xyz\")".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "Some(\"account-xyz\")"),
             "expected account_id=Some(\"account-xyz\"), got {entries:?}"
         );
         assert!(
-            entries.contains(&("uses_oauth2".to_owned(), "false".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "uses_oauth2" && value == "false"),
             "expected uses_oauth2=false, got {entries:?}"
         );
         assert!(
-            entries.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "escalates_to_consent" && value == "true"),
             "expected escalates_to_consent=true, got {entries:?}"
         );
         assert!(
-            entries.contains(&("reason".to_owned(), "credentials_required".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "reason" && value == "credentials_required"),
             "expected reason='credentials_required', got {entries:?}"
         );
         assert!(
-            entries.iter().any(|(k, _)| k == "error"),
+            entries.iter().any(|(_, name, _)| name == "error"),
             "expected error field, got {entries:?}"
         );
     }
 
     #[test]
     fn finish_connect_traces_oauth2_reclassification_and_consent_escalation() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = CapturingSubscriber {
-            captured: captured.clone(),
-        };
-
         let unauthorized = || {
             Err::<(), _>(ConnectError::Client(Error::Http {
                 status: 401,
@@ -1054,7 +1034,7 @@ mod tests {
             }))
         };
 
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let (result, entries) = capture(|| {
             finish_connect(
                 Collection::AddressBook,
                 Some("oauth-acc"),
@@ -1064,25 +1044,34 @@ mod tests {
         });
         assert!(result.is_err());
 
-        let entries = captured.lock().unwrap();
         assert!(
-            entries.contains(&("collection".to_owned(), "address book".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "collection" && value == "address book"),
             "expected collection='address book', got {entries:?}"
         );
         assert!(
-            entries.contains(&("account_id".to_owned(), "Some(\"oauth-acc\")".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "Some(\"oauth-acc\")"),
             "expected account_id=Some(\"oauth-acc\"), got {entries:?}"
         );
         assert!(
-            entries.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "uses_oauth2" && value == "true"),
             "expected uses_oauth2=true, got {entries:?}"
         );
         assert!(
-            entries.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "escalates_to_consent" && value == "true"),
             "expected escalates_to_consent=true, got {entries:?}"
         );
         assert!(
-            entries.contains(&("reason".to_owned(), "oauth2_consent_required".to_owned())),
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "reason" && value == "oauth2_consent_required"),
             "expected reason='oauth2_consent_required', got {entries:?}"
         );
     }

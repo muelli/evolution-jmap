@@ -110,7 +110,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		target_link_directories(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 	endforeach()
 
-	# Item 80 stage 2 batch 2: the calendar leg's own live-server client, the
+	# The calendar leg's own live-server client, the
 	# twin of functional-book-client above. A single event only — see the
 	# file's own header for why it does not reuse functional-cal-client,
 	# whose one run also creates an all-day event, a zoned event, a
@@ -162,7 +162,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
-	# Item 63's live-edit reproduction: the same registry, but this client
+	# The live-edit reproduction client: the same registry, but this client
 	# edits the account's port and commits it with e_source_write_sync
 	# instead of only watching for children, to answer whether
 	# `source_changed`'s "changed" handler gets a broken account's next
@@ -195,7 +195,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
-	# Item 22's reproduction client. Another registry-only consumer like the
+	# Another registry-only consumer like the
 	# three above, but standing in for a long-lived backend *factory*: it
 	# holds an ESource across a registry restart and asks it for an OAuth 2.0
 	# access token afterwards. libedataserver alone, plus the platform's
@@ -206,7 +206,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
-	# Item 41's reproduction client. Another registry-only consumer, run
+	# Another registry-only consumer, run
 	# twice against two accounts that share an [Authentication] User but
 	# point at two different mock JMAP deployments, to reproduce the
 	# secret-store slot collision `eos_generate_secret_uid` causes by keying
@@ -281,6 +281,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-book-stale-token-client PRIVATE
 		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# A 401 that only arrives after a
+	# redirect dropped the Authorization header must not escalate to
+	# interactive consent. Another libebook consumer needing
+	# libedataserver for e_source_store_password_sync, like the stale-token
+	# client just above, but with no connection-status.c: a failed connect
+	# never reaches `connected` and this test does not wait for it to.
+	add_executable(functional-redirect-credentials-withheld-client
+		tests/functional/redirect-credentials-withheld-client.c)
+	target_include_directories(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-redirect-credentials-withheld-client PRIVATE
+		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# The stale-source-uid reproduction client. A registry-only
 	# libedataserver consumer like functional-collection-client, plus GSettings
 	# — which is not a separate dependency here: `gio-2.0` comes in with
@@ -321,12 +338,12 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# `get_oauth2_access_token_sync`, which the base `CamelSession` does not
 	# — see the file's own header.
 	#
-	# Item 82 batch 1 adds `mail-live`, the receive half pointed at a real
+	# `mail-live` is the receive half pointed at a real
 	# server rather than the mock. It subclasses `CamelSession` too, and for
 	# the neighbouring reason: a real server wants a password, and a session
 	# is the only object allowed to put one on a `CamelService`.
 	#
-	# Item 82 batch 4 adds `transport-live`, the send half pointed at a real
+	# `transport-live` is the send half pointed at a real
 	# server: transport-client.c's chain walk, mail-live's password
 	# discipline, and the delivery check into a second account that the
 	# mock leg has no counterpart for.
@@ -386,7 +403,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
-	# Item 80 stage 2: the same `functional-book-client` binary and module,
+	# The same `functional-book-client` binary and module,
 	# pointed at a real Stalwart instead of the in-process mock. `#[ignore]`d
 	# in the Rust source (needs `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/
 	# `_WRITE_PASSWORD`, set by hand from `live-server-env.sh` plus a
@@ -407,7 +424,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
-	# Item 94(c): the real-EDS leg of the book-sync scale checkpoint, seeding
+	# The real-EDS leg of the book-sync scale checkpoint, seeding
 	# a real-sized book directly over JMAP before EDS ever opens it, then
 	# measuring evolution-addressbook-factory's own first open. `#[ignore]`d
 	# for the same reason functional-book-live-stalwart is, so this
@@ -427,7 +444,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
-	# Item 83 batch 1: `functional-book-changes`'s own two-connects-one-cache
+	# `functional-book-changes`'s own two-connects-one-cache
 	# leg, pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason
 	# functional-book-live-stalwart is, so this registration only ever
@@ -445,7 +462,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
-	# Item 80 stage 2 batch 2: functional-cal-live-client, pointed at a real
+	# functional-cal-live-client, pointed at a real
 	# Stalwart instead of the in-process mock. `#[ignore]`d in the Rust
 	# source for the same reason functional-book-live-stalwart is, so this
 	# registration only ever reports "ignored" in the ordinary functional
@@ -463,7 +480,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_LIVE_CLIENT=$<TARGET_FILE:functional-cal-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# Item 94(c): the real-EDS leg of the cal-sync scale checkpoint, the
+	# The real-EDS leg of the cal-sync scale checkpoint, the
 	# calendar twin of functional-book-scale-live-stalwart above. Seeds a
 	# real-sized calendar directly over JMAP before EDS ever opens it, then
 	# measures evolution-calendar-factory's own first open, reusing
@@ -515,7 +532,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# Item 83 batch 2: `functional-cal-changes`'s own two-connects-one-cache
+	# `functional-cal-changes`'s own two-connects-one-cache
 	# leg, pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason
 	# functional-book-changes-live-stalwart is, so this registration only ever
@@ -570,7 +587,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_FREE_BUSY_CLIENT=$<TARGET_FILE:functional-cal-free-busy-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# Item 83 batch 3: `functional-cal-free-busy`'s own `get_free_busy_sync`
+	# `functional-cal-free-busy`'s own `get_free_busy_sync`
 	# leg, pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason
 	# functional-cal-changes-live-stalwart is, so this registration only ever
@@ -606,7 +623,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
-	# Item 63's live-edit reproduction: does editing a broken account's host
+	# Does editing a broken account's host
 	# while it is live get a fresh authenticate through, the way
 	# `source_changed.rs`'s "changed" handler intends?
 	add_test(
@@ -622,7 +639,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_EDIT_CLIENT=$<TARGET_FILE:functional-collection-edit-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
-	# Item 80 stage 2 batch 3: the same functional-collection-client binary
+	# The same functional-collection-client binary
 	# and module, pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason
 	# functional-book-live-stalwart is, so this registration only ever
@@ -688,7 +705,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CONFIG_LOOKUP_CLIENT=$<TARGET_FILE:functional-config-lookup-client>;JMAP_FUNCTIONAL_CONFIG_LOOKUP_MODULE=${CARGO_TARGET_DIR}/release/libjmap_config_module.so"
 	)
 
-	# Item 83 last batch: `functional-config-lookup`'s own discovery leg,
+	# `functional-config-lookup`'s own discovery leg,
 	# pointed at a real Stalwart instead of the in-process mock.
 	# `#[ignore]`d in the Rust source for the same reason
 	# functional-book-changes-live-stalwart is, so this registration only ever
@@ -722,14 +739,14 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
-	# Item 82 batch 1: functional-mail-live-client, pointed at a real
+	# functional-mail-live-client, pointed at a real
 	# Stalwart instead of the in-process mock. Stages the same module and the
 	# same `.urls` file as functional-mail above, under the same two variable
 	# names and for the reason the transport leg below gives: it is one
 	# provider. `#[ignore]`d in the Rust source the way the other three
 	# live-server registrations are, so this only ever reports "ignored" in
-	# the ordinary functional run. Batch 4 added the send half's own client,
-	# functional-transport-live-client, to the same test file: one
+	# the ordinary functional run. The send half's own client,
+	# functional-transport-live-client, is in the same test file: one
 	# registration, because the four legs share one throwaway account and
 	# serialise on one mutex.
 	add_test(
@@ -821,6 +838,25 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
+	# Does a real `EBookMetaBackend` connect
+	# through a cross-origin redirect that drops credentials fail cleanly,
+	# with no interactive-consent escalation and no retry storm, instead of
+	# the endless OAuth2 popup loop the operator hit on 0.5.0? No OAuth2
+	# modules needed — the account authenticates with plain Basic, so only
+	# the book backend itself is staged.
+	add_test(
+		NAME functional-redirect-credentials-withheld
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test redirect-credentials-withheld
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-redirect-credentials-withheld PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_REDIRECT_CREDENTIALS_WITHHELD_CLIENT=$<TARGET_FILE:functional-redirect-credentials-withheld-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# Whether a source UID reachable only from dconf/GSettings can drive the
 	# registry into a credential lookup and a
 	# consent window, and — since it cannot — what actually produces the
@@ -861,7 +897,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_OAUTH2_STALE_PROXY_CLIENT=$<TARGET_FILE:functional-oauth2-stale-proxy-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
-	# Item 41: two accounts sharing one [Authentication] User, pointed at two
+	# Two accounts sharing one [Authentication] User, pointed at two
 	# independent mock JMAP deployments, collide on one secret-store slot.
 	add_test(
 		NAME functional-oauth2-token-collision

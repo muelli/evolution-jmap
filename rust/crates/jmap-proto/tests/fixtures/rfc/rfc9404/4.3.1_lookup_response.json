@@ -1,0 +1,28 @@
+// Source: RFC 9404 §4.3.1 (Blob/lookup Example Response), August 2023
+[
+  "Blob/lookup",
+  {
+    "list": [
+      {
+        "id": "Gd2f81008cf07d2425418f7f02a3ca63a8bc82003",
+        "matchedIds": {
+          "Mailbox": [
+            "M54e97373",
+            "Mcbe6b662"
+          ],
+          "Thread": [
+            "T1530616e"
+          ],
+          "Email": [
+            "E16e70a73eb4",
+            "E84b0930cf16"
+          ]
+        }
+      }
+    ],
+    "notFound": [
+      "not-a-blob"
+    ]
+  },
+  "R1"
+]

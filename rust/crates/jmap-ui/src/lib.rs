@@ -6,7 +6,7 @@
 //! The Camel provider and the EDS backends give Evolution what its existing
 //! surfaces can show; this crate is for what they cannot: a vacation
 //! autoresponder page in the account editor, scheduled send in the composer,
-//! snooze in the message list — server features Evolution has no concept of
+//! snooze in the message list: server features Evolution has no concept of
 //! and no backend hook for (the survey is EVOLUTION-GAP.md in the harness
 //! repository; scheduled send and snooze are GNOME/evolution#411 and #374
 //! upstream).

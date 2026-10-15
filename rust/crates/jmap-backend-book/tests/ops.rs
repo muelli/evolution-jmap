@@ -101,11 +101,7 @@ struct ChangeOuts {
 }
 
 impl Default for ChangeOuts {
-    /// `repeat` starts TRUE, which is *not* what EDS does — it passes a
-    /// FALSE it initialised itself. Starting from the other value is what
-    /// makes "the answer is always no" an assertion rather than a
-    /// coincidence: a body that never writes the parameter would otherwise
-    /// look identical to one that answers correctly.
+    /// `repeat` starts TRUE to verify that `get_changes` explicitly clears it.
     fn default() -> Self {
         Self {
             tag: ptr::null_mut(),
@@ -226,9 +222,7 @@ fn an_empty_book_lists_as_a_null_list_with_a_sync_tag() {
     }
 }
 
-/// A NULL out-parameter is GLib's "the caller does not want this one". It has
-/// to be skipped rather than written through, and the list it would have held
-/// must not be built at all — there would be nobody to free it.
+/// Unrequested NULL out-parameters are skipped and not allocated.
 #[test]
 fn out_parameters_the_caller_did_not_ask_for_are_skipped() {
     let fixture = Fixture::start();
@@ -524,26 +518,12 @@ fn get_changes_reports_changed_cards_and_the_ones_that_are_gone() {
         assert_eq!(g_slist_length(outs.modified), 1);
         assert_eq!(nth_info(outs.modified, 0).0, created.to_string());
         assert_eq!(g_slist_length(outs.removed), 1);
-        // Read as an `EBookMetaBackendInfo`, which is what
-        // `e_book_meta_backend_process_changes_sync` does with this list —
-        // reading it as a bare string instead is the shape that crashed the
-        // address book factory in `sqlite3_vmprintf`.
+        // Read as an `EBookMetaBackendInfo`.
         assert_eq!(nth_info(outs.removed, 0).0, doomed.to_string());
     }
 }
 
-/// The first sync has no tag to go from. Answering it with an empty delta
-/// would leave the address book permanently empty, so the meta backend's own
-/// implementation — list the book and diff it against the cache — has to run.
-///
-/// The server is stopped first, which is what makes this an assertion rather
-/// than a coincidence: an absent tag sent on as an empty `sinceState` would
-/// come back a transport failure, and a server that happened to reject the
-/// empty state would otherwise produce the same fallback for the wrong reason.
-///
-/// Both spellings of "absent" are checked. The EDS cache writes NULL, but an
-/// empty string reaches the same place through a hand-edited cache — and `""`
-/// handed back as a `sinceState` is a state, not the absence of one.
+/// When called without a sync tag (NULL or empty string), `get_changes` returns `Outcome::ListInstead`.
 #[test]
 fn get_changes_without_a_sync_tag_asks_for_a_full_listing_without_asking_the_server() {
     let fixture = Fixture::start();
@@ -579,9 +559,7 @@ fn get_changes_without_a_sync_tag_asks_for_a_full_listing_without_asking_the_ser
     }
 }
 
-/// RFC 8620 §5.2: a server may refuse a state it can no longer diff from. That
-/// is not an error either — it is the same full listing, and reporting it as a
-/// failure would strand the account until someone deleted the cache.
+/// When the server rejects an expired state, `get_changes` falls back to `Outcome::ListInstead`.
 #[test]
 fn a_state_the_server_cannot_diff_from_falls_back_to_a_full_listing() {
     let fixture = Fixture::start();

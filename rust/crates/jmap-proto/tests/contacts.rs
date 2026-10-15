@@ -65,11 +65,8 @@ fn contact_card_roundtrip() {
     let components = name.components.as_ref().unwrap();
     assert_eq!(components[0].kind, "given");
     assert_eq!(components[0].value, "Vera");
-    // How a name is pronounced has no field in the vCard `N` value and no
-    // parameter beside it, and the save path writes the component list back
-    // whole — so, exactly as for an address component, it has to stay visible
-    // to the save rather than being deserialized away. The system that
-    // spelling is written in sits on the name itself and rides along there.
+    // How a name is pronounced has no field in the vCard `N` value:
+    // exactly as for an address component, it stays visible to the save path.
     assert!(components[0].extra.contains_key("phonetic"));
     assert!(name.extra.contains_key("phoneticSystem"));
     assert_eq!(
@@ -156,16 +153,12 @@ fn contact_card_roundtrip() {
     );
     assert!(services["s1"].contexts.is_some() || services["s1"].extra.contains_key("contexts"));
     assert!(services["s1"].pref.is_some() || services["s1"].extra.contains_key("pref"));
-    // `keywords` is an RFC 9553 §1.4.3 Set — the keys are the tags and every
-    // value is `true`. vCard states the whole set on one `CATEGORIES` line.
+    // `keywords` is an RFC 9553 §1.4.3 Set: keys are tags and values are `true`.
     let keywords = card.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["hiking"]);
     assert!(keywords.values().all(|set| set == &Value::Bool(true)));
-    // `relatedTo` is the one map keyed by the related entity rather than by an
-    // id of whoever wrote the entry: RFC 9553 §2.1.8 makes the key the related
-    // Card's `uid`, and RFC 9555 §2.9.5 puts free text there where the vCard
-    // stated `RELATED;VALUE=text` — which is the only case holding a name a
-    // user could read.
+    // `relatedTo` is keyed by related entity UID or free text (RFC 9553 §2.1.8,
+    // RFC 9555 §2.9.5 for vCard `RELATED;VALUE=text`).
     let related = card.related_to.as_ref().expect("relatedTo");
     let spouse = &related["Jean Paul Oldenburg"];
     let relation = spouse.relation.as_ref().expect("relation");
@@ -423,7 +416,7 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
 
     let speak = SpeakToAs {
         grammatical_gender: Some(grammatical_gender::NEUTER.to_owned()),
-        pronouns: Some("they/them".to_owned()),
+        pronouns: Some("they/them".into()),
         extra: BTreeMap::new(),
     };
     let s_val = serde_json::to_value(&speak).unwrap();
@@ -493,7 +486,7 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
         id: Some("card_ext".into()),
         speak_to_as: Some(SpeakToAs {
             grammatical_gender: Some(grammatical_gender::FEMININE.to_owned()),
-            pronouns: Some("she/her".to_owned()),
+            pronouns: Some("she/her".into()),
             extra: BTreeMap::new(),
         }),
         preferred_languages: Some(BTreeMap::from([(

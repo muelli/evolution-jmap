@@ -1,28 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What a translator's `.po` turns into, and what it refuses to turn into.
-//!
-//! The catalogue is read back here with a reader written for this test rather
-//! than with the crate's own code: a compiler checked against its own idea of
-//! the format agrees with itself no matter what the format is. The layout the
-//! reader assumes is the one in the GNU gettext manual, and the same layout
-//! `msgunfmt` reads — `tests/gettext.rs` closes that loop by handing the
-//! output to glibc.
+//! Validates `.po` to `.mo` output and refusal behavior.
+//! It parses generated `.mo` bytes locally so encoder and decoder stay independent.
 
 use std::collections::BTreeMap;
 
 use po_compile::{Error, compile};
 
-/// A header entry, which every `.po` this project compiles has to carry.
+/// Header entry required by this compiler.
 const HEADER: &str = "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n";
 
-/// The entries of a compiled catalogue, in the order the file stores them.
-///
-/// Order is not decoration: with no hash table gettext binary-searches the
-/// table of originals, so a catalogue whose entries are out of order is one
-/// where some lookups silently miss. Returning a `Vec` rather than a map is
-/// what lets the test say so.
+/// Returns compiled catalogue entries in on-disk order.
 fn read_mo(mo: &[u8]) -> Vec<(String, String)> {
     let word = |at: usize| -> u32 {
         u32::from_le_bytes(mo[at..at + 4].try_into().expect("four bytes for a word"))
@@ -55,8 +44,7 @@ fn read_mo(mo: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The compiled entries as a map, for the assertions that do not care about
-/// order.
+/// Returns compiled entries as a map for order-independent assertions.
 fn entries(po: &str) -> BTreeMap<String, String> {
     read_mo(&compile(po).expect("a catalogue"))
         .into_iter()

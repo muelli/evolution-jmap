@@ -10,227 +10,66 @@ use std::sync::mpsc::Sender;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// One [`ServerState::type_state_snapshot`] — every account's state counter
-/// per tracked type name, at one point in time.
+/// Snapshot of [`ServerState::type_state_snapshot`]: per-account type counters.
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
-/// Everything the mock server knows. Tests hold this behind
-/// `Arc<Mutex<..>>` (via `MockServer::state()`) to seed data and make
-/// white-box assertions.
+/// Global mock-server state for fixture seeding and assertions.
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// The name of every method call this server has answered, in the order it
-    /// answered them — `Mailbox/get`, `Email/query`, `Email/changes`.
-    ///
-    /// What it is for is the assertions no amount of reading the account's
-    /// objects can make: whether a client asked at all, and which question it
-    /// asked. A folder refresh that lists the whole mailbox and one that asks
-    /// for a delta leave the account in exactly the same place — the
-    /// difference between them is entirely in what went over the wire, and
-    /// cheapness that is not asserted is cheapness that quietly goes away.
+    /// Method names answered, in call order, for request-shape assertions.
     pub method_calls: Vec<String>,
-    /// How many requests this server has dispatched at the API endpoint —
-    /// that is, requests that got past authentication and were answered from
-    /// the account rather than refused. [`Self::unauthorized_responses`] is
-    /// the other half.
-    ///
-    /// [`Self::method_calls`] counts calls; this counts round trips, and the
-    /// two only differ where it matters — a client that chains `Email/query`
-    /// and `Email/get` through a back-reference makes the same two calls as
-    /// one that sends them separately, and pays one round trip instead of two.
-    /// Nothing about the account afterwards says which it did.
+    /// Authenticated API requests dispatched to method handlers.
     pub api_requests: usize,
-    /// How many requests this server has refused with a 401, at any endpoint.
-    ///
-    /// A refused request never reaches the dispatcher, so it leaves no trace
-    /// in [`Self::api_requests`] or [`Self::method_calls`] — which makes "how
-    /// many times did the client try, before it gave up or found a token that
-    /// worked" unanswerable without this. Token refresh-and-retry is
-    /// exactly a question of that count: a backend that
-    /// retried a 401 it had no fresher credentials for would double every
-    /// rejection the user's own wrong password caused, and nothing else the
-    /// server records would show it.
+    /// Requests refused with HTTP 401 before dispatch.
     pub unauthorized_responses: usize,
-    /// Capability URNs to leave out of the session document, as
-    /// [`crate::MockServerBuilder::without_capability`] asked. A real account
-    /// need not offer all four, and a client that resolves an account under
-    /// the wrong capability has to be able to notice.
+    /// Capability URNs omitted from the session document.
     pub omitted_capabilities: BTreeSet<String>,
-    /// Leave `primaryAccounts` out of the session document entirely, as
-    /// [`crate::MockServerBuilder::without_primary_accounts`] asked. RFC 8620
-    /// §2 permits a server to omit it outright ("a server that does not
-    /// support this concept MUST omit this property"), which is a different,
-    /// legal server shape from naming a capability with no primary account —
-    /// every capability still lists its accounts under
-    /// [`AccountState`]'s own capabilities, so a client is left to infer
-    /// which one is primary the way RFC 8620 allows.
+    /// Whether `primaryAccounts` is omitted from the session document.
     pub omit_primary_accounts: bool,
-    /// How many method calls one request may carry, as
-    /// [`crate::MockServerBuilder::calls_in_request`] asked — advertised as
-    /// `maxCallsInRequest` in the session document and enforced at the API
-    /// endpoint.
-    ///
-    /// `None` is the server that names no limit at all
-    /// ([`crate::MockServerBuilder::no_calls_in_request`]), which RFC 8620 §2
-    /// does not allow and which a client still has to have an answer for; it
-    /// takes a request of any length. The default is
-    /// [`crate::DEFAULT_CALLS_IN_REQUEST`], above anything this client chains,
-    /// so only a test about the limit meets it.
+    /// Optional `maxCallsInRequest` at `/api`; `None` means unlimited.
     pub calls_in_request: Option<u64>,
-    /// How many ids one `/changes` response may carry, as
-    /// [`crate::MockServerBuilder::changes_page_size`] asked. `None` answers
-    /// every change at once.
+    /// Optional max ids per `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
-    /// Whether an unparseable `/changes` `sinceState` is answered the way
-    /// real Stalwart answers it (`invalidArguments`) rather than RFC 8620
-    /// §5.2's own `cannotCalculateChanges`, as
-    /// [`crate::MockServerBuilder::stalwart_shaped_unrecognized_changes_state`]
-    /// asked (`STALWART-RFC-FINDINGS.md` finding 17). `false` answers with
-    /// the RFC's own error type, which is what every other client-facing
-    /// behaviour here still assumes.
+    /// Whether invalid `/changes` `sinceState` uses Stalwart-style `invalidArguments`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
-    /// How many ids one `Email/get` may name, as
-    /// [`crate::MockServerBuilder::objects_in_get`] asked — advertised in the
-    /// session document and enforced. `None` advertises
-    /// [`crate::DEFAULT_OBJECTS_IN_GET`] and enforces it just the same.
+    /// Optional `Email/get` ids limit; `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
-    /// How many ids one `Email/query` response may carry, as
-    /// [`crate::MockServerBuilder::query_page_size`] asked. `None` answers the
-    /// whole result at once.
+    /// Optional max ids per `Email/query` page. `None` returns all ids.
     pub query_page_size: Option<u64>,
-    /// Whether `Email/query` should keep answering a capped, non-empty page
-    /// forever instead of ever running out of ids, as
-    /// [`crate::MockServerBuilder::query_never_terminates`] asked — the
-    /// broken/hostile server a client's runaway-pagination guard exists for.
+    /// Whether `Email/query` keeps returning capped non-empty pages forever.
     pub query_never_terminates: bool,
-    /// The largest request this server takes at the API endpoint, in octets, as
-    /// [`crate::MockServerBuilder::size_request`] asked — advertised as
-    /// `maxSizeRequest` in the session document and enforced on the body before
-    /// it is parsed.
-    ///
-    /// `None` is the server that names no limit at all
-    /// ([`crate::MockServerBuilder::no_size_request`]), which RFC 8620 §2 does
-    /// not allow and which a client still has to have an answer for; it takes a
-    /// request of any size. The default is [`crate::DEFAULT_SIZE_REQUEST`], far
-    /// above anything this client builds, so only a test about the limit meets
-    /// it.
+    /// Optional `maxSizeRequest` in bytes; `None` means unlimited.
     pub size_request: Option<u64>,
-    /// The largest upload this server takes, as
-    /// [`crate::MockServerBuilder::size_upload`] asked — advertised as
-    /// `maxSizeUpload` in the session document and enforced on `/upload/`.
-    ///
-    /// `None` is the server that names no limit at all
-    /// ([`crate::MockServerBuilder::no_size_upload`]), which RFC 8620 §2 does
-    /// not allow and which a client still has to have an answer for; it takes
-    /// any size. The default is [`crate::DEFAULT_SIZE_UPLOAD`], far above what
-    /// any test uploads, so only a test about the limit meets it.
+    /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
-    /// Serve the session document via a 307 redirect from `/.well-known/jmap`
-    /// to `/jmap/session`, as [`crate::MockServerBuilder::session_via_redirect`]
-    /// asked — a real deployment (Stalwart among them) shaped exactly this
-    /// way is what first exposed `UreqTransport` dropping the `Authorization`
-    /// header across the hop. `/jmap/session` itself is never gated by the
-    /// usual 401: like the server this reproduces, it answers 200 either way
-    /// and simply reports zero accounts when the request arrived
-    /// unauthenticated, so the failure this exists to catch is "no primary
-    /// account", not a transport error.
+    /// Whether `/.well-known/jmap` redirects to `/jmap/session` for auth-sensitive redirect tests.
     pub session_via_redirect: bool,
-    /// State the session document's `apiUrl`/`downloadUrl`/`uploadUrl`/
-    /// `eventSourceUrl` on this origin instead of the one this server is
-    /// actually reachable on, as
-    /// [`crate::MockServerBuilder::advertise_origin`] asked — a real
-    /// deployment (Stalwart among them) can advertise a configured public
-    /// hostname/scheme that differs from the address a client actually
-    /// reached it through (a reverse proxy, NAT boundary, or a TLS listener
-    /// nothing routes to). `None` advertises the real origin, matching every
-    /// other test.
+    /// Optional origin override for session `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
-    /// Answer `GET /download/...` with a `302` to the same path on this
-    /// origin instead of serving the blob, as
-    /// [`crate::MockServerBuilder::download_via_redirect_to`] asked. `None`
-    /// serves the blob directly, matching every other test.
+    /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
-    /// Answer `GET /download/...` with a `406` instead of the blob when the
-    /// request's `Accept` header is exactly `application/json`, as
-    /// [`crate::MockServerBuilder::reject_download_accept_json`] asked —
-    /// reproducing a server doing RFC 7231 §5.3.2 content negotiation on a
-    /// download request that (wrongly) claims to accept only JSON for an
-    /// answer that never is JSON. `false` serves the blob regardless of
-    /// `Accept`, matching every other test.
+    /// Whether `GET /download/...` with `Accept: application/json` is rejected as `406`.
     pub reject_download_accept_json: bool,
-    /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as
-    /// [`crate::MockServerBuilder::terse_submission_create`] asked — RFC 8620
-    /// §5.3 says the `created` map need only contain properties "that were
-    /// not sent by the client", and a real server (Stalwart, confirmed
-    /// against the live deployment) takes this literally: since the client
-    /// supplies `identityId`/`emailId` itself when creating a submission,
-    /// neither is server-set and a spec-following server may leave both out.
-    /// `false` echoes them back in full, matching every other test and this
-    /// project's own prior assumption before that finding.
+    /// Whether `EmailSubmission/set` create omits echoed `identityId` and `emailId`.
     pub terse_submission_create: bool,
-    /// Answer a `ContactCard/set` create with only `id` in the `created`
-    /// map, as [`crate::MockServerBuilder::terse_contact_create`] asked —
-    /// every other property was already sent by the client, so a
-    /// spec-following server (RFC 8620 §5.3) may omit all of it, as a live
-    /// Stalwart deployment does. `false` echoes the full card back,
-    /// matching every other test and this project's own prior assumption
-    /// before that finding.
+    /// Whether `ContactCard/set` create returns only `id` in `created`.
     pub terse_contact_create: bool,
-    /// Default a freshly created `AddressBook`/`Calendar` to
-    /// `isSubscribed: false` unless the create explicitly asked for `true`,
-    /// as [`crate::MockServerBuilder::new_collections_default_unsubscribed`]
-    /// asked — a real server (Stalwart, confirmed against the live
-    /// deployment) does this even though both specifications leave a fresh
-    /// collection's subscription state unstated, and
-    /// `jmap_collection_sync::resources`'s own discovery drops
-    /// `isSubscribed == Some(false)` on purpose. `false` leaves the property
-    /// exactly as the client sent it (typically absent), matching every
-    /// other test and this project's own prior assumption before that
-    /// finding.
+    /// Whether new `AddressBook` and `Calendar` objects default to `isSubscribed: false`.
     pub new_collections_default_unsubscribed: bool,
-    /// Answer a `CalendarEvent/set` create with only `id` in the `created`
-    /// map, as [`crate::MockServerBuilder::terse_calendar_event_create`]
-    /// asked — every other property was already sent by the client, so a
-    /// spec-following server (RFC 8620 §5.3) may omit all of it, as a live
-    /// Stalwart deployment does. `false` echoes the full event back,
-    /// matching every other test and this project's own prior assumption
-    /// before that finding.
+    /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
-    /// Omit `name` from a created `AddressBook`/`Calendar`'s `created` entry,
-    /// as [`crate::MockServerBuilder::terse_collection_create`] asked — the
-    /// client supplied `name` itself and the server accepted it unchanged, so
-    /// a spec-following server (RFC 8620 §5.3) may leave it out, as a live
-    /// Fastmail deployment does. Unlike `terse_contact_create`/
-    /// `terse_calendar_event_create`, this strips only `name`: `isDefault`,
-    /// `myRights` and (for calendars) `color` are genuinely server-computed
-    /// here. `false` echoes `name` back, matching every other test and this
-    /// project's own prior assumption before that finding.
+    /// Whether collection create omits echoed `name` while keeping server-computed fields.
     pub terse_collection_create: bool,
-    /// Omit `id` from a created `AddressBook`/`Calendar`'s `created` entry,
-    /// as [`crate::MockServerBuilder::id_omitting_collection_create`] asked —
-    /// a server breaking RFC 8620 §5.3, which requires `id` in every
-    /// successful create response. `false` echoes `id` back, matching every
-    /// other test and a spec-following server.
+    /// Whether collection create omits `id` to model an RFC-violating server.
     pub id_omitting_collection_create: bool,
-    /// Refuse every `AddressBook`/`Calendar` create with a `notCreated`
-    /// `forbidden` `SetError`, as
-    /// [`crate::MockServerBuilder::reject_collection_create`] asked. `false`
-    /// creates the collection as usual, matching every other test.
+    /// Whether collection creates fail with `notCreated/forbidden`.
     pub reject_collection_create: bool,
-    /// `maxDelayedSend` to advertise on the submission account capability, as
-    /// [`crate::MockServerBuilder::max_delayed_send`] asked (RFC 8621 §7.1).
-    /// `None` advertises an empty submission capability object, matching
-    /// every other test and every deployment that does not support SMTP
-    /// FUTURERELEASE.
+    /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
-    /// Advertise the Cyrus vendor mail extension and accept `Email.snoozed`,
-    /// as [`crate::MockServerBuilder::snooze_extension`] asked. Off matches
-    /// every deployment without snooze (Stalwart included): the property is
-    /// then refused, not silently stored.
+    /// Whether the Cyrus snooze extension is advertised and `Email.snoozed` is accepted.
     pub snooze_extension: bool,
-    /// Every currently connected `/eventsource` client (RFC 8620 §7.3), so
-    /// [`crate::MockServer::push_state_change`] has someone to push to.
+    /// Connected `/eventsource` subscribers for push delivery.
     pub event_source: EventSourceHub,
 }
 
@@ -287,13 +126,7 @@ impl ServerState {
         State::new(self.session_state.to_string())
     }
 
-    /// Every account's state counter for the six types RFC 8620 push (and
-    /// this mock's own `/changes` methods) track, as of right now.
-    ///
-    /// [`crate::dispatch::handle_api`] takes one of these before and one
-    /// after running a request's method calls, and diffs them to find out
-    /// what actually changed — the automatic half of JMAP Push, which no
-    /// individual `*/set` handler has to know about.
+    /// Current per-account state counters for pushed types and `/changes`.
     pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
         self.accounts
             .iter()
@@ -324,10 +157,7 @@ impl ServerState {
             .collect()
     }
 
-    /// The `maxObjectsInGet` this server advertises, which is also the one it
-    /// enforces. The two being one number is the point: a mock that advertised
-    /// a limit it did not apply would let a client that ignores the session
-    /// document pass.
+    /// Effective `maxObjectsInGet` shared by session advertisement and request enforcement.
     pub fn objects_in_get(&self) -> u64 {
         self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
@@ -339,23 +169,13 @@ impl Default for ServerState {
     }
 }
 
-/// One `/eventsource` client: the channel its pushed SSE bytes go out on,
-/// and the `types` URI Template parameter (RFC 8620 §7.3) it registered
-/// with — `None` for "no filter, subscribed to everything" (an absent
-/// parameter, or the literal `*`).
+/// One `/eventsource` subscriber and its optional `types` filter.
 struct Subscriber {
     sender: Sender<Vec<u8>>,
     types: Option<BTreeSet<String>>,
 }
 
-/// The `/eventsource` clients currently connected (RFC 8620 §7.3).
-///
-/// [`Self::broadcast`] takes the structured `StateChange` rather than
-/// pre-formatted bytes so it can narrow `changed` to each subscriber's own
-/// `types` filter before formatting — a subscriber whose filter matches
-/// none of a change's types is sent nothing at all, rather than an empty
-/// `StateChange` it would have no way to tell apart from a real one naming
-/// zero types.
+/// Active `/eventsource` subscribers (RFC 8620 §7.3).
 #[derive(Default)]
 pub struct EventSourceHub {
     subscribers: Vec<Subscriber>,
@@ -366,10 +186,7 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Register a new subscriber with the `types` filter it connected with
-    /// (`None` = every type), returning the receiving end it reads pushed
-    /// bytes from until this hub (or its own disconnect) drops the sending
-    /// end.
+    /// Registers a subscriber and returns its SSE byte receiver; `None` means all types.
     pub fn subscribe(
         &mut self,
         types: Option<BTreeSet<String>>,
@@ -379,12 +196,8 @@ impl EventSourceHub {
         receiver
     }
 
-    /// Send `change`, narrowed to each subscriber's own `types` filter, to
-    /// every currently connected subscriber whose filter matches at least
-    /// one of its changed types — dropping any subscriber whose receiving
-    /// end has gone away (the client disconnected). A subscriber whose
-    /// filter matches nothing in `change` is left connected but sent
-    /// nothing, same as a request that mutated nothing at all.
+    /// Send `change` to each subscriber after optional type filtering.
+    /// Drop disconnected subscribers, but keep connected subscribers with no matching type.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -397,17 +210,15 @@ impl EventSourceHub {
         );
     }
 
-    /// How many `/eventsource` clients are connected right now — what
-    /// [`crate::MockServer::wait_for_event_source_subscriber`] polls.
+    /// How many `/eventsource` clients are connected for
+    /// [`crate::MockServer::wait_for_event_source_subscriber`].
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
 }
 
-/// Narrow `change`'s `changed` map to the type names in `types` (`None` =
-/// every type, so `change` passes through unchanged); an account whose
-/// entry has no matching type is dropped entirely, and `None` is returned
-/// when nothing survives — the signal to send this subscriber nothing.
+/// Return `change` narrowed to `types`; `None` keeps all types.
+/// Returns `None` when no account has any matching type.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
         return Some(change.clone());
@@ -432,67 +243,33 @@ pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
-    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`: this
-    /// mock never merges replies into an existing thread (see
-    /// `crate::mail::thread_get`), so a thread's whole lifecycle is exactly
-    /// its one email's — created and destroyed alongside it, never updated.
+    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`.
     pub threads: Store<jmap_proto::mail::Thread>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
-    /// The `VacationResponse` singleton (RFC 8621 §8.1). Always holds exactly
-    /// one object, seeded at account creation under the fixed id
-    /// `"singleton"`, since the type has no create or destroy: `Store<T>`'s
-    /// state counter and changes log are reused unchanged rather than
-    /// building a separate mechanism for one object.
+    /// `VacationResponse` singleton (RFC 8621 §8.1), seeded as `"singleton"`.
     pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
-    /// `Quota` objects (RFC 9425 §2). Read-only from the client's side (the
-    /// RFC defines no `Quota/set`), seeded at account creation the same way
-    /// `vacation_response` is.
+    /// `Quota` objects (RFC 9425 §2), seeded once and read-only to clients.
     pub quotas: Store<jmap_proto::quota::Quota>,
-    /// `SieveScript` objects (RFC 9661 §2.1). Unlike `quotas`, empty on a fresh
-    /// account: scripts are client-created, so there is nothing to seed.
+    /// `SieveScript` objects (RFC 9661 §2.1), empty until tests create them.
     pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
-    /// Every accepted `EmailSubmission` — what a real server would hand to
-    /// its SMTP queue. Tests assert against this.
+    /// Accepted `EmailSubmission` records, for test assertions.
     pub outbox: Vec<RecordedSubmission>,
-    /// Every iTIP scheduling message (RFC 5546) the server would have sent
-    /// for a `CalendarEvent/set` that asked for one
-    /// (draft-ietf-jmap-calendars-28 §5.9.2) — what a real server hands to
-    /// its iMIP transport. This mock has no SMTP path, so it records the
-    /// messages here and lets tests assert against them, exactly as
-    /// [`Self::outbox`] already does for accepted `EmailSubmission`s. The
-    /// iTIP payload itself is not built: what §5.9.2 specifies, and what a
-    /// client can get wrong, is which method goes to whom.
+    /// iTIP scheduling messages from `CalendarEvent/set`, recorded for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
-    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3): the
-    /// calendar addresses that *are* this account when an event names
-    /// participants. Empty on a fresh account, like `sieve_scripts`; a test
-    /// seeds whichever identities the case needs.
+    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3), seeded by tests.
     pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub calendars: Store<jmap_proto::calendars::Calendar>,
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
-    /// `ShareNotification` records (RFC 9670 §4), one per grant change. Kept
-    /// in the same account as the shared object itself rather than in a
-    /// separate per-recipient account, since this mock models one principal
-    /// per bearer token in a single account rather than a real server's
-    /// distinct account per principal — the recipient the notification is
-    /// for is carried alongside it (the `Id`) and used to filter
-    /// `ShareNotification/get`/`/query` to only the caller it belongs to.
+    /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
+    /// Stored per account because this mock maps bearer tokens into one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
-    /// `CalendarEventNotification` records (draft-ietf-jmap-calendars §8),
-    /// one per create/update/destroy of an event on a calendar shared with
-    /// someone other than the actor. Same per-recipient-tuple shape as
-    /// [`Self::share_notifications`] and for the same reason: this mock has
-    /// one principal per bearer token in a single account, not a real
-    /// server's distinct account per principal.
+    /// `CalendarEventNotification` records keyed by recipient id in the same single-account model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
-    /// The principal that answers RFC 9670 §2.5's `currentUserPrincipalId` —
-    /// "which principal is *me* in this account". `None` until a test seeds
-    /// one; the session document then omits the property rather than naming a
-    /// principal that does not exist.
+    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5); `None` omits it.
     pub current_user_principal_id: Option<Id>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
@@ -577,25 +354,20 @@ pub struct RecordedSubmission {
     pub envelope: jmap_proto::mail::Envelope,
 }
 
-/// One scheduling message left in [`AccountState::scheduling_outbox`].
+/// Scheduling message queued in [`AccountState::scheduling_outbox`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedSchedulingMessage {
-    /// The iTIP method: one of [`jmap_proto::calendars::scheduling_method`]'s.
+    /// iTIP method from `jmap_proto::calendars::scheduling_method`.
     pub method: String,
     pub event_id: Id,
     pub uid: Option<String>,
-    /// The `calendarAddress` the message comes from: the organizer's for a
-    /// REQUEST or a CANCEL, the replying participant's own for a REPLY.
+    /// Sender `calendarAddress`.
     pub sender: Option<String>,
-    /// The one `calendarAddress` this message is addressed to. A change that
-    /// concerns several participants records one message each, since that is
-    /// what the recipient set actually is.
+    /// Recipient `calendarAddress`.
     pub recipient: String,
-    /// The instance the message is about, when it is about one instance
-    /// rather than the whole event (draft-ietf-jmap-calendars-28 §5.9.2.2).
+    /// Instance identifier when this concerns one recurrence only.
     pub recurrence_id: Option<String>,
-    /// The message body itself: a `VCALENDAR` with a `METHOD` (RFC 5546
-    /// §3.2), built by `scheduling::build_ical`.
+    /// `VCALENDAR` body with `METHOD`, built by `scheduling::build_ical`.
     pub ical: String,
 }
 
@@ -607,8 +379,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes-log entry: object `id` changed in the transition *to*
-/// `state`.
+/// One changes-log entry: object `id` changed when state reached `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
@@ -616,9 +387,7 @@ pub struct Change {
     pub id: Id,
 }
 
-/// A typed object store with a monotonically increasing state counter and a
-/// per-type prefixed id allocator (`M1`, `M2`, … for mailboxes and so on —
-/// purely for debuggability; ids stay opaque on the wire).
+/// Typed object store with monotonic state and debug-friendly prefixed ids.
 pub struct Store<T> {
     prefix: &'static str,
     next_id: u64,
@@ -676,7 +445,7 @@ impl<T> Store<T> {
         self.objects.is_empty()
     }
 
-    /// Insert without touching state — for seeding fixtures.
+    /// Insert without a state bump, for fixture seeding.
     pub fn seed(&mut self, value: T) -> Id {
         let id = self.alloc_id();
         self.objects.insert(id.clone(), value);
@@ -688,12 +457,7 @@ impl<T> Store<T> {
         self.objects.insert(id, value);
     }
 
-    /// Apply a batch of mutations as one state transition (one `/set` call
-    /// bumps the state exactly once, however many objects it touched).
-    ///
-    /// The callback stages mutations through `Transaction`; if it stages at
-    /// least one change the state counter advances and the changes are
-    /// logged.
+    /// Apply staged mutations as one state transition and log one state bump.
     pub fn transaction<R>(&mut self, f: impl FnOnce(&mut Transaction<'_, T>) -> R) -> R {
         let mut transaction = Transaction {
             store: self,

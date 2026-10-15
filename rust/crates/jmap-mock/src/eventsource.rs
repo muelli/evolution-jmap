@@ -1,31 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `GET /eventsource` — the `text/event-stream` push resource (RFC 8620
-//! §7.3), and the wire format of what goes over it (§7.1).
+//! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! This is the one route in this crate that does not answer from inside the
-//! single-threaded `serve` loop: a real client holds the connection open
-//! indefinitely, so answering it there would starve every other request this
-//! server needs to keep taking. [`spawn_and_respond`] instead hands the
-//! request to its own thread, which blocks for as long as the connection
-//! lives.
+//! This route runs on its own thread so long lived subscribers do not block
+//! the main `serve` loop.
 //!
-//! Framed and flushed by hand via `Request::into_writer`, not
-//! `Request::respond` — `tiny_http::Response::raw_print` only flushes its
-//! `BufWriter` once, after the body reader returns EOF (see
-//! `respond_impl`/`raw_print` in `tiny_http`'s own source). A `state` event
-//! that a subscriber is waiting on right now would sit in that 1 KiB buffer
-//! until either 1 KiB of pushes accumulated or the connection ended — for a
-//! persistent connection (`closeafter=no`, RFC 8620 §7.3's normal case) that
-//! is "never" — so every chunk here is written and flushed by hand instead.
+//! Chunks are framed and flushed manually through `Request::into_writer`.
+//! `tiny_http::Response::raw_print` flushes after EOF, which is too late for
+//! persistent push streams.
 //!
-//! `types` (RFC 8620 §7.3's per-connection type filter) is parsed here and
-//! applied at [`crate::state::EventSourceHub::broadcast`]: this module only
-//! reads the query string and hands the parsed filter to
-//! [`crate::state::EventSourceHub::subscribe`], narrowing itself to no more
-//! than "what did the URL say" — this file's own shape (format, frame,
-//! flush) is unchanged either way.
+//! This module parses query parameters and forwards the `types` filter to
+//! [`crate::state::EventSourceHub::subscribe`]. Event filtering itself is
+//! enforced when broadcasting.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -37,12 +24,9 @@ use jmap_proto::push::StateChange;
 
 use crate::state::ServerState;
 
-/// Parsed `/eventsource` query parameters this mock acts on (RFC 8620
-/// §7.3).
+/// Parsed `/eventsource` query parameters used by this mock.
 struct EventSourceParams {
-    /// `None` means "every type" — an absent `types` parameter, or the
-    /// literal `*` (RFC 8620 §7.3's own wildcard), are both that; a
-    /// comma-separated list narrows to exactly those type names.
+    /// `None` means no type filter.
     types: Option<BTreeSet<String>>,
     close_after_state: bool,
     ping_interval: Option<Duration>,
@@ -74,10 +58,7 @@ fn parse_params(query: &str) -> EventSourceParams {
     }
 }
 
-/// Register `request` as a new `/eventsource` subscriber and hand it to its
-/// own thread to stream on — see the module doc for why it cannot be
-/// answered inline, and why it writes its own response head and chunk
-/// framing rather than going through `Request::respond`.
+/// Register `request` and stream on a dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
     let receiver = state
@@ -104,11 +85,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
     });
 }
 
-/// Write pushed `StateChange` events (and, if `ping_interval` is set, a
-/// `ping` event whenever that much time passes with nothing pushed) as HTTP
-/// chunks, flushing after each one, until the connection breaks, the
-/// [`crate::state::EventSourceHub`] drops its sending end, or — when
-/// `close_after_state` asked for it — the first pushed event has gone out.
+/// Stream `StateChange` and optional `ping` events as flushed HTTP chunks.
 fn stream_events(
     writer: &mut dyn Write,
     receiver: &Receiver<Vec<u8>>,
@@ -142,8 +119,7 @@ fn stream_events(
     }
 }
 
-/// Frame `data` as one HTTP chunked-transfer chunk (RFC 9112 §7.1) and flush
-/// it — the flush is the point, see the module doc.
+/// Frame `data` as one HTTP chunk and flush it.
 fn write_chunk(writer: &mut dyn Write, data: &[u8]) -> std::io::Result<()> {
     write!(writer, "{:x}\r\n", data.len())?;
     writer.write_all(data)?;
@@ -151,28 +127,21 @@ fn write_chunk(writer: &mut dyn Write, data: &[u8]) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// The zero-length final chunk that ends a chunked body (RFC 9112 §7.1.3),
-/// for `closeafter=state`.
+/// Write the final zero length chunk for `closeafter=state`.
 fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.write_all(b"0\r\n\r\n")?;
     writer.flush()
 }
 
-/// The bytes [`crate::state::EventSourceHub::broadcast`] sends for one
-/// pushed `StateChange` — a `state` event carrying it as `data` (RFC 8620
-/// §7.3's own example: `event: state` / `data: {…}`).
+/// Encode one pushed `StateChange` as `event: state` plus JSON `data`.
 ///
-/// No `id:` line: RFC 8620 §7.3 only *SHOULD*s one, and it exists to let a
-/// reconnecting client resume via `Last-Event-ID`, which nothing here
-/// implements yet — sending an id this mock cannot honor on reconnect would
-/// claim a capability it does not have.
+/// No `id:` line is emitted because reconnect resume is not implemented.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
 }
 
-/// The bytes a `ping` event carries (RFC 8620 §7.3): a JSON object naming
-/// the interval, in seconds, this connection is pinging at.
+/// Encode a `ping` event with its interval in seconds.
 fn format_ping_event(interval: Duration) -> Vec<u8> {
     format!(
         "event: ping\ndata: {{\"interval\":{}}}\n\n",

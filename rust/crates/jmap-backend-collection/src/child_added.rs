@@ -187,11 +187,11 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
 /// being compile-time constants; ours is per-account state in that group, and
 /// a child without it is a child whose token refresh has no client id, no
 /// token endpoint and no scope, so the first expired access token became a
-/// full re-consent (observed live 2026-08-26: the registry prepared a refresh
-/// form for a memory-only calendar child's uid, and mail's connect escalated
-/// to the consent window; that same send-time re-consent (`jmap-mail`'s
-/// `connect_sync` not authenticating before the shell's prompt-first path) is
-/// the mechanism seen here, through the transport).
+/// full re-consent (the registry prepared a refresh form for a memory-only
+/// calendar child's uid, and mail's connect escalated to the consent window;
+/// that same send-time re-consent (`jmap-mail`'s `connect_sync` not
+/// authenticating before the shell's prompt-first path) is the mechanism
+/// seen here, through the transport).
 ///
 /// That is true of every EDS this project supports today, and read again
 /// rather than assumed: the paragraph above describes 3.52 through 3.62

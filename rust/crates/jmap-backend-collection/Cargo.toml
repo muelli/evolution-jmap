@@ -57,6 +57,7 @@ jmap-config = { workspace = true }
 jmap-backend-collection = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
 # What the mail sources this backend writes on are read by. A dev-dependency
 # and deliberately not a dependency, for the reason `jmap-config` gives for the
 # same line: what the library writes is `ESource` groups, and the provider is

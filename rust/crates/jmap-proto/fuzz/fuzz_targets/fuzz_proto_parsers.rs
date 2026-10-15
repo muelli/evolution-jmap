@@ -6,9 +6,7 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    // Attempt deserialization of JMAP response envelope and top-level object types.
-    // Deserialization failure (Err) is expected and normal for arbitrary input:
-    // this fuzzer asserts that parser execution never panics, aborts, or hangs.
+    // Deserialization failure is expected; assert parser execution never panics or aborts.
     if let Ok(resp) = serde_json::from_slice::<jmap_proto::response::Response>(data) {
         let _ = serde_json::to_vec(&resp);
     }

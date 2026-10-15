@@ -5,23 +5,21 @@
 //! reached.
 //!
 //! Every other live-server test in `jmap-book-sync` uses a single contact;
-//! item 89 proved `jmap-mail-sync` clean at real-mailbox sizes, and item 94
-//! asks the same question of contacts: cold listing time and incremental
-//! `get_changes` cost once the book is no longer tiny.
+//! this one asks whether cold listing time and incremental `get_changes`
+//! cost stay reasonable once the book is no longer tiny, the question
+//! `jmap-mail-sync`'s own scale test already answered for mailboxes.
 //!
-//! This file covers the first, smallest slice of item 94(a): 500 cards (half
-//! of the item's first checkpoint) and a handful of edits afterward, plus
-//! bulk deletes from an already-large book, plus a batch where a tenth of the
-//! cards carry a ~50 KB PHOTO. One `ContactCard/set` call per card, no
-//! batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000 req/60s)
-//! well before 500 calls even at the default throwaway plan — confirmed
-//! empirically (a 429 on call #498, 2.2 seconds in, far faster than the
-//! window the limit is measured over) — so [`retrying`] below absorbs a 429
-//! with a short sleep rather than this file assuming it never happens the way
-//! item 89's mail equivalent could.
-//! The 5,000-card step, `jmap-cal-sync`'s (b) and the real-EDS leg (item 80's
-//! live-Stalwart book factory) are still open. Numbers so far are recorded in
-//! `docs/BOOK-SYNC-SCALE.md`.
+//! This file covers the smallest slice: 500 cards, a handful of edits
+//! afterward, bulk deletes from an already-large book, and a batch where a
+//! tenth of the cards carry a ~50 KB PHOTO. One `ContactCard/set` call per
+//! card, no batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000
+//! req/60s) well before 500 calls even at the default throwaway plan,
+//! confirmed empirically: a 429 on call #498, 2.2 seconds in, far faster
+//! than the window the limit is measured over. So [`retrying`] below
+//! absorbs a 429 with a short sleep instead of assuming it never happens.
+//!
+//! Larger steps and `jmap-cal-sync`'s own equivalent are still open. Numbers
+//! so far are recorded in `docs/BOOK-SYNC-SCALE.md`.
 //!
 //! ## Running it
 //!

@@ -1,0 +1,7 @@
+// Source: RFC 9661 §2.4.1 (Upload Sieve Script Endpoint Response), September 2024
+{
+  "accountId": "ken",
+  "blobId": "Gabcc83e44a6e19991c4568d0b94e1767c83dd123",
+  "type": "application/sieve",
+  "size": 98
+}

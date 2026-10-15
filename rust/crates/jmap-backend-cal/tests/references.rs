@@ -1,19 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the marshalling leaves behind, counted rather than reasoned about.
-//!
-//! `tests/marshal.rs` asks what the boundary *produces*; this asks what it
-//! costs. Every function in `marshal.rs` that walks an object takes owned
-//! references to components, properties and parameters on the way through
-//! (libical-glib is a GObject binding, so each getter hands back a reference),
-//! and a wrong number of them is invisible to a test that only reads the text
-//! that came out: one too few is a use-after-free in
-//! `evolution-calendar-factory`, one too many is a leak that grows with every
-//! sync. `docs/UNSAFE-AUDIT.md` Pattern C is about exactly that, and
-//! `jmap_backend_core::owned::Owned` is the answer to it — these are the tests
-//! that the answer holds on real libical objects, rather than only on the plain
-//! `GObject` the wrapper's own tests use.
+//! Reference count and allocation leak verification across libical-glib marshalling boundaries.
 
 use std::ffi::CString;
 use std::sync::Once;
@@ -47,17 +35,7 @@ const UNZONED: &str = "BEGIN:VCALENDAR\r\n\
                        END:VEVENT\r\n\
                        END:VCALENDAR\r\n";
 
-/// Makes GLib's own complaints fail the test run.
-///
-/// This is what actually catches an over-released reference: `g_object_unref`
-/// on a pointer whose count already reached zero answers with a
-/// `GLib-GObject-CRITICAL`, and by default a critical is printed and execution
-/// continues — so a test that only reads the rendered text passes while stderr
-/// fills with them, which is exactly what happened when this file was first
-/// written and the wrapper deliberately broken to check the tests bite. With the
-/// mask set, the same critical aborts the binary and the run is red.
-///
-/// Process-wide and set once, since every test in this binary wants it.
+/// Configures GLib critical and warning logs to abort the test process.
 fn glib_complaints_are_failures() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -68,11 +46,6 @@ fn glib_complaints_are_failures() {
 
 /// The strong reference count of a GObject-derived instance.
 ///
-/// Every libical-glib type derives from `GObject` through `ICalObject`, so an
-/// instance pointer is a `GObject *` and `ref_count` is the first field after
-/// the type instance — the same read
-/// `jmap-backend-core/tests/owned.rs` makes on a plain object.
-///
 /// # Safety
 ///
 /// `instance` must be a live GObject-derived instance.
@@ -81,9 +54,7 @@ unsafe fn strong_count<T>(instance: *mut T) -> u32 {
     unsafe { (*instance.cast::<GObject>()).ref_count }
 }
 
-/// What libical's own parse hands back, before any of this crate's traversal has
-/// touched the object. The number itself is libical's business; that
-/// [`marshal::component_from_ical`] agrees with it is this crate's.
+/// Returns baseline reference count from libical parsing before traversal.
 fn baseline_count(icalendar: &str) -> u32 {
     let text = CString::new(icalendar).expect("fixture has no interior NUL");
     // SAFETY: `text` is valid for the call; the reference is released below.
@@ -106,13 +77,7 @@ fn a_loaded_component_carries_exactly_the_callers_reference() {
             !component.is_null(),
             "{name}: not read as a calendar object"
         );
-        // The traversal takes references to the component's events, their
-        // properties and their `TZID` parameters, and — for the zoned fixture —
-        // to a builtin zone's definition and a clone of it. None of those is a
-        // reference to *this* object, so the count the caller is handed has to
-        // be the one libical's own parse gives. A reference kept by mistake
-        // would read one higher here and the component would never be freed;
-        // `load_component_sync` hands this straight to EDS, which unrefs once.
+        // Verify component reference count matches baseline after traversal.
         // SAFETY: a live component, just checked for NULL.
         assert_eq!(
             unsafe { strong_count(component) },
@@ -137,11 +102,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
         "the zone was never defined, so this test is not measuring the clone \
          handoff it is about: {rendered}"
     );
-    // The clone put into the envelope was handed over with `into_raw`, so the
-    // envelope owns it: rendering the component after the fact reaches it, which
-    // it could not do if the clone's reference had been dropped as well as
-    // taken. Read back through the text rather than through a second reference,
-    // because taking one would itself change what is being measured.
+    // Verify cloned timezone component is owned by the envelope.
     // SAFETY: the reference `component_from_ical` handed over.
     unsafe { marshal::component_unref(component) };
 }
@@ -149,31 +110,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
 #[test]
 fn loading_a_zoned_object_over_and_over_retains_nothing() {
     glib_complaints_are_failures();
-    // A reference released once too often shows up as a GLib critical — fatal
-    // here, see above — within a few iterations. One *kept* too often shows up
-    // as allocation that never comes back, which is what this measures and what
-    // no assertion about the rendered text can see.
-    //
-    // The criterion is a window of loads whose retained growth is
-    // indistinguishable from background noise — NOT exactly zero, and not a
-    // per-load threshold. A per-load threshold is the wrong instrument (too
-    // loose and a small leak passes: one leaked wrapper is 192 bytes/load =
-    // 1.9 MB/window, which an RSS-based first draft never noticed). Exactly
-    // zero is ALSO the wrong instrument, which an earlier draft of this test
-    // learned in CI: `allocated_bytes` reads `mallinfo2().uordblks`, a
-    // PROCESS-GLOBAL number, and this process is never quiet — the other
-    // tests in this binary run on parallel threads, and global machinery
-    // (GLib internals, libical's zone cache, the tracing/journald init the
-    // backends gained with Track B1) allocates lazily and incrementally.
-    // Observed noise on loaded CI machines: up to ~9 kB per window, settling
-    // but never exactly 0 — flaking ~4 of 6 runs.
-    //
-    // NOISE_FLOOR separates the two regimes with wide margins on both sides:
-    // the smallest REAL per-load leak expressible in glibc (one minimum
-    // 32-byte chunk per load) retains ≥ 320 kB per 10,000-load window — 10×
-    // the floor — while worst observed noise (~9 kB) is ~4× below it. A cache
-    // is finite, so growth per window falls under the floor and stays there;
-    // a leak is per-load, so no window can.
+    // Verifies that repeatedly loading zoned objects does not leak heap memory across windows.
     const LOADS: u64 = 10_000;
     const WINDOWS: usize = 8;
     const NOISE_FLOOR: u64 = 32 * 1024;
@@ -207,14 +144,7 @@ fn load_and_render() {
     marshal::icalendar_with_time_zones(ZONED);
 }
 
-/// Bytes this process has allocated from the heap and not yet returned.
-///
-/// `mallinfo2`'s `uordblks` rather than the resident set, because the resident
-/// set is measured in pages and an allocator that never returns them: a leaked
-/// libical wrapper is a couple of hundred bytes, so ten thousand of them are
-/// well inside the noise of an RSS reading (measured: they were — an RSS-based
-/// version of this test passed with the wrapper deliberately leaking) and
-/// exactly visible here.
+/// Returns total allocated heap bytes via mallinfo2.
 fn allocated_bytes() -> u64 {
     // SAFETY: no preconditions; returns a plain struct of counters.
     unsafe { libc::mallinfo2() }.uordblks as u64

@@ -11,8 +11,8 @@
 // four vfunc slots are the entire mechanism by which a JMAP address book or
 // calendar can be created, edited or committed from the GUI at all. So each
 // slot's offset is asserted individually against the struct the class
-// initialiser will write through, and the two `const gchar *` fields — the ones
-// a wrong offset turns into a vfunc pointer dereferenced as a string — are
+// initialiser will write through, and the two `const gchar *` fields, the ones
+// a wrong offset turns into a vfunc pointer dereferenced as a string, are
 // asserted to be exactly where the header puts them.
 //
 // Nothing here constructs an `ESourceConfigBackend`: it is an `EExtension` of
@@ -26,14 +26,14 @@ use std::sync::Once;
 
 /// Every test in this file starts here, and it is not boilerplate: without it
 /// the file deadlocks under `cargo test`'s default thread pool. Observed, not
-/// theorised — two threads parked in `futex_do_wait` for as long as they were
+/// theorised: two threads parked in `futex_do_wait` for as long as they were
 /// left to, one in `source_config_backend_layout_matches_the_gtype_system` and
 /// one in `source_config_is_an_opaque_gtk_box`.
 ///
 /// It is an ABBA between GLib's two type locks, and the middle of it is
 /// Evolution's own code. `e_source_config_backend_class_init`
 /// (`e-util/e-source-config-backend.c`, 3.52.4) sets `extensible_type =
-/// E_TYPE_SOURCE_CONFIG` — that is, it *registers a GtkBox subclass* from
+/// E_TYPE_SOURCE_CONFIG`, that is, it *registers a GtkBox subclass* from
 /// inside a class initialiser, which GLib runs with its type write lock held.
 /// A second thread that is already inside `e_source_config_get_type`'s
 /// `g_once_init_enter` wants that same write lock to finish registering, and
@@ -120,7 +120,7 @@ fn the_parent_is_the_extension_eds_sys_names() {
 /// The two fields that are not functions, in the order the header declares
 /// them, starting immediately after the inherited class.
 ///
-/// `backend_name` is what `ESourceConfig` matches a candidate against — it is
+/// `backend_name` is what `ESourceConfig` matches a candidate against: it is
 /// the `ESourceBackend:backend-name` an address book or calendar source
 /// carries, so ours has to be the string the registry modules already answer
 /// to. `parent_uid` is the one below it, and NULL for us: a JMAP address book
@@ -150,12 +150,11 @@ fn the_two_name_fields_lead_the_subclass_half() {
 ///
 /// This is the assertion the whole file exists for. A `class_init` writes these
 /// four pointers through the struct declared in this crate, into a class struct
-/// Evolution allocated to its own header's shape; every symptom item 34
-/// recorded — no entry in the Type list, a NULL backend when editing, a colour
-/// widget that never gets the source's colour, an OK button that asserts
-/// instead of saving — is what happens when one of the four is missing, and a
-/// wrong offset is the same thing plus an indirect call through whatever else
-/// was there.
+/// Evolution allocated to its own header's shape. A missing slot is one of: no
+/// entry in the Type list, a NULL backend when editing, a colour widget that
+/// never gets the source's colour, or an OK button that asserts instead of
+/// saving; a wrong offset is the same thing plus an indirect call through
+/// whatever else was there.
 #[test]
 fn the_four_vfunc_slots_follow_the_names_in_order() {
     warm_up();
@@ -193,7 +192,7 @@ fn the_four_vfunc_slots_follow_the_names_in_order() {
 /// crate deliberately does not know the shape of.
 ///
 /// The claim that licenses passing one around as an opaque pointer is that
-/// nothing here reads a field of it — and the claim that licenses treating a
+/// nothing here reads a field of it, and the claim that licenses treating a
 /// `GtkBox *` and an `ESourceConfig *` as the same object, the way C's
 /// `GTK_BOX()` does, is this crate's business to check rather than assume. So
 /// the running type system is asked, exactly as `tests/gtk.rs` asks it about
@@ -224,7 +223,7 @@ fn source_config_is_an_opaque_gtk_box() {
 ///
 /// `EExtensionClass::extensible_type` is a single `GType`, and
 /// `e_extensible_load_extensions` instantiates an extension only for the
-/// extensible whose type it names — so which of these two a subclass names is
+/// extensible whose type it names, so which of these two a subclass names is
 /// the whole of whether its candidate turns up in New Address Book or in New
 /// Calendar. Naming `ESourceConfig` itself would put it in both and hand each
 /// the other's scratch source, which is why the derived types have to be
@@ -234,7 +233,7 @@ fn source_config_is_an_opaque_gtk_box() {
 /// about the widget classes: the running type system says they derive from the
 /// `ESourceConfig` that `e_source_config_backend_get_config` returns, which is
 /// what licenses `allow_creation`'s cast of that return value to an
-/// `ECalSourceConfig *` — the Rust spelling of C's `E_CAL_SOURCE_CONFIG()`.
+/// `ECalSourceConfig *`, the Rust spelling of C's `E_CAL_SOURCE_CONFIG()`.
 #[test]
 fn the_two_dialog_classes_derive_from_the_config_a_backend_is_handed() {
     warm_up();
@@ -273,7 +272,7 @@ fn the_two_dialog_classes_derive_from_the_config_a_backend_is_handed() {
 /// This is not a binding detail. New Calendar, New Task List and New Memo List
 /// are the same dialog class with a different value here, so every registered
 /// calendar config backend is offered in all three unless its `allow_creation`
-/// says otherwise — Evolution's own `cal-config-google` and `cal-config-gtasks`
+/// says otherwise: Evolution's own `cal-config-google` and `cal-config-gtasks`
 /// each override it for exactly this reason. A JMAP account has calendars and
 /// no task or memo collections, so the constant this crate compares against had
 /// better be the one libecal means by "events"; the enum is `#[repr(C)]`

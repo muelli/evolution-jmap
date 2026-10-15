@@ -7,9 +7,9 @@
 //! real account has tens of thousands, and the failure modes differ:
 //! `Email/query` position paging, `maxObjectsInGet`/`maxCallsInRequest`
 //! chunking, the time a cold listing takes, and whether `messages_since`'s
-//! incremental path stays cheap once a mailbox is no longer small. Batch 1
-//! covered the import/listing/catch-up path at N=500; this file also covers
-//! deletion from an already-large mailbox, which batch 1 did not reach.
+//! incremental path stays cheap once a mailbox is no longer small: the
+//! import/listing/catch-up path at N=500, and deletion from an
+//! already-large mailbox.
 //!
 //! ## Running it
 //!
@@ -212,10 +212,10 @@ fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
     }
 }
 
-/// Batch 2's own case: `destroyed` ids cost nothing in `messages_since` (see
-/// its doc comment), so deleting from an already-large mailbox should stay on
-/// the cheap `Changed` path rather than tripping `catch_up_limit`'s relist,
-/// however large the mailbox has grown. Batch 1 only ever added messages.
+/// `destroyed` ids cost nothing in `messages_since` (see its doc comment), so
+/// deleting from an already-large mailbox should stay on the cheap `Changed`
+/// path rather than tripping `catch_up_limit`'s relist, however large the
+/// mailbox has grown.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn deleting_from_a_real_sized_mailbox_is_reported_without_a_relist() {

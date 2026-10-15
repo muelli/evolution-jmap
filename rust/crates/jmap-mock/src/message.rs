@@ -1,64 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading an RFC 5322 message back out of bytes, for `Email/import`.
+//! Minimal RFC 5322 parsing used by `Email/import`.
 //!
-//! Everywhere else this server works the other way round: it holds an `Email`
-//! and [`crate::mail`] writes a message out of it, which is backwards for a mail
-//! server and right for a test fixture. An import is the one method where the
-//! bytes come first — RFC 8621 §4.8 takes a blob and has the server derive the
-//! `Email` — so this is the only parser in the crate.
+//! Most of this crate moves from structured `Email` values to message bytes.
+//! `Email/import` is the reverse path, so this module reads a limited set of
+//! fields from raw bytes.
 //!
-//! ## How little of RFC 5322 is here, and why that is a choice
-//!
-//! Enough to fill the properties a message list shows and no more: the header
-//! block, unfolded; the body, for a preview; address lists; message ids. What is
-//! deliberately absent:
-//!
-//! - **The MIME tree.** No `bodyStructure`, `textBody` or `bodyValues` comes out
-//!   of an import. A seeded message has them because the seed *is* the structure;
-//!   deriving them from bytes means a MIME parser, and a half-written one would
-//!   make this server a worse thing to test against than one that visibly has
-//!   none. What a client downloads is the raw blob, unchanged, which is how a
-//!   message actually gets read.
-//! - **Encoded words (RFC 2047).** A `Subject` arrives as the octets it was sent
-//!   as, exactly as [`crate::mail`]'s writer emits display names without
-//!   encoding them.
-//! - **Dates.** No `Received` or `Date` header is turned into a `UtcDate`: that
-//!   is calendar arithmetic across a zone offset, and this crate does none (see
-//!   `jmap_proto::UtcDate`). An import therefore takes the `receivedAt` it is
-//!   given, or the mock's fixed clock — see [`crate::mail::email_import`].
-//! - **Address groups** (`managers: a@b, c@d;`, RFC 5322 §3.4). A group's
-//!   members would need to be flattened into the list, and nothing sends one.
-//!
-//! Each of those is a property an imported `Email` simply does not carry, rather
-//! than one it carries a guess in. A test that needs it seeds a message instead.
+//! Scope is intentionally small: unfolded headers, address lists, message IDs,
+//! and preview text. It does not build MIME trees, decode RFC 2047 encoded
+//! words, parse date headers, or support address groups. Tests that need those
+//! properties should seed messages directly.
 
 use jmap_proto::mail::EmailAddress;
 
-/// How many characters of the body a `preview` carries — the same 64 a seeded
-/// message gets, so a list of both does not visibly mix two kinds of message.
+/// Number of characters a preview keeps, matching seeded messages.
 const PREVIEW: usize = 64;
 
 /// A message, as far as this server reads one.
 pub(crate) struct Message {
-    /// Header fields in the order they appeared: name lowercased (RFC 5322 §1.2
-    /// makes a field name case-insensitive), value unfolded and trimmed.
+    /// Header fields in wire order: lowercase name and unfolded trimmed value.
     fields: Vec<(String, String)>,
-    /// Everything after the blank line, verbatim. Empty when the message is
-    /// headers alone, which RFC 5322 §3.5 allows.
+    /// Message body bytes after the header block, interpreted as UTF-8 text.
     body: String,
 }
 
 impl Message {
-    /// Reads `source`, or answers `None` if it is not a message at all.
-    ///
-    /// `None` is what RFC 8621 §4.8's `invalidEmail` is for, so the bar is the
-    /// one that separates "a message this server understands imperfectly" from
-    /// "not a message": valid UTF-8 (RFC 6532 mail is UTF-8; anything else is
-    /// not text), at least one header field, and a header block in which every
-    /// line is a field or the continuation of one. A body it cannot make sense
-    /// of is not a reason — a body is opaque bytes to this server either way.
+    /// Parses `source`, returning `None` for invalid UTF-8 or invalid header syntax.
     pub(crate) fn read(source: &[u8]) -> Option<Self> {
         let source = std::str::from_utf8(source).ok()?;
         let (headers, body) = split(source);
@@ -68,9 +36,7 @@ impl Message {
             if line.is_empty() {
                 continue;
             }
-            // A line beginning with whitespace continues the field above it
-            // (RFC 5322 §2.2.3); folding is where the CRLF goes, so unfolding
-            // replaces it with the single space the fold interrupted.
+            // Leading whitespace means a folded continuation line.
             if line.starts_with([' ', '\t']) {
                 let (_, value) = fields.last_mut()?;
                 value.push(' ');
@@ -93,11 +59,7 @@ impl Message {
         })
     }
 
-    /// The first value of `name`, which must be given in lower case.
-    ///
-    /// First rather than last, and singular: RFC 5322 §3.6 makes `Subject`,
-    /// `From` and the rest appear at most once in a valid message, and a message
-    /// carrying two is one where the topmost is the one a reader sees.
+    /// Returns the first value of a lowercase header name.
     fn field(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
@@ -110,10 +72,7 @@ impl Message {
         self.field("subject").map(str::to_owned)
     }
 
-    /// An address-list header as JMAP models it, or `None` if the header is not
-    /// there. An empty list is not answered: RFC 8621 §4.1.2 has the property
-    /// absent when the header is, and a `To: ` that parsed to nothing is a
-    /// header this server could not read rather than a message to nobody.
+    /// Parses one address-list header into JMAP addresses.
     pub(crate) fn addresses(&self, name: &str) -> Option<Vec<EmailAddress>> {
         let addresses: Vec<EmailAddress> = split_addresses(self.field(name)?)
             .into_iter()
@@ -122,8 +81,7 @@ impl Message {
         (!addresses.is_empty()).then_some(addresses)
     }
 
-    /// A `Message-ID`/`In-Reply-To`/`References` header as the bare ids JMAP
-    /// carries — RFC 8621 §4.1.2.1 keeps them without the angle brackets.
+    /// Parses message-id style headers and strips optional angle brackets.
     pub(crate) fn message_ids(&self, name: &str) -> Option<Vec<String>> {
         let ids: Vec<String> = self
             .field(name)?
@@ -137,14 +95,7 @@ impl Message {
         (!ids.is_empty()).then_some(ids)
     }
 
-    /// The start of the body as one line of text, or `None` for a message with
-    /// no body.
-    ///
-    /// Whitespace collapsed, because a preview is shown on one line in a message
-    /// list and the body's own line breaks would arrive in it as spaces anyway.
-    /// The bytes are not decoded first: a quoted-printable or base64 body
-    /// previews as its encoded form, which is the visible edge of having no MIME
-    /// parser here.
+    /// Builds a one-line preview from the start of the body.
     pub(crate) fn preview(&self) -> Option<String> {
         let preview: String = self
             .body
@@ -158,12 +109,7 @@ impl Message {
     }
 }
 
-/// The header block and the body, split at the first blank line.
-///
-/// A message with no blank line is all headers (RFC 5322 §3.5's body is
-/// optional), which is why this cannot fail. Both line endings are accepted: a
-/// client that serialized with bare LF has still handed over something every
-/// mail store on earth would read.
+/// Splits the message into headers and body at the first blank line.
 fn split(source: &str) -> (&str, &str) {
     match source.find("\r\n\r\n") {
         Some(end) => (&source[..end], &source[end + 4..]),
@@ -174,17 +120,12 @@ fn split(source: &str) -> (&str, &str) {
     }
 }
 
-/// Whether `byte` may appear in a field name: RFC 5322 §3.6.8's `ftext`, the
-/// printable US-ASCII except the colon that ends the name.
+/// Whether `byte` is valid RFC 5322 `ftext` for a field name.
 fn is_field_name(byte: u8) -> bool {
     (33..=57).contains(&byte) || (59..=126).contains(&byte)
 }
 
-/// An address list at its top-level commas.
-///
-/// A comma inside a quoted display name or inside angle brackets is part of an
-/// address rather than a separator — `"Doe, John" <j@example.com>` is one
-/// recipient — so the split tracks both.
+/// Splits an address list on top-level commas.
 fn split_addresses(list: &str) -> Vec<&str> {
     let mut addresses = Vec::new();
     let mut quoted = false;
@@ -206,13 +147,7 @@ fn split_addresses(list: &str) -> Vec<&str> {
     addresses
 }
 
-/// One address as JMAP models it, or `None` if there is nothing there.
-///
-/// `Name <local@domain>` and a bare `local@domain` are the two forms; a display
-/// name is unquoted but not otherwise decoded (see the module header on RFC
-/// 2047). Anything without an `@` is still answered rather than dropped: JMAP's
-/// `email` is a string, and a mock that silently discarded a malformed address
-/// would hide the malformed message rather than show it.
+/// Parses one address in `Name <local@domain>` or bare `local@domain` form.
 fn address(address: &str) -> Option<EmailAddress> {
     let address = address.trim();
     if address.is_empty() {
@@ -261,9 +196,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_message_is_refused() {
-        // No fields at all, a header block with a line that is not a field, a
-        // continuation with nothing to continue, an empty field name, and bytes
-        // that are not text.
+        // No fields, broken header syntax, or non-UTF-8 bytes.
         assert!(Message::read(b"").is_none());
         assert!(Message::read(b"this was never a message").is_none());
         assert!(Message::read(b"Subject: fine\r\nnot a field\r\n").is_none());

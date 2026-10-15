@@ -1,0 +1,7 @@
+// Source: RFC 9661 §2.4.1 (Reactivate Script Request), September 2024
+[
+  ["SieveScript/set", {
+    "accountId": "ken",
+    "onSuccessActivateScript": "dd1b164f-8cdc-448c-9f54"
+  }, "4"]
+]

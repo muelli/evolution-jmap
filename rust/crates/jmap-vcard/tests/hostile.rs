@@ -1,14 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What a hostile JMAP server can make of the vCard the backend stores.
+//! Hostile-input tests for server-controlled ContactCard data.
 //!
-//! Every string in a `ContactCard` came off the network, including the *keys*
-//! of the `emails` and `phones` maps, which are JSON object names the server
-//! chooses freely and which this mapping round-trips through the `X-JMAP-KEY`
-//! parameter. The rendered vCard is handed straight to
-//! `e_contact_new_from_vcard`, so a string that can end a content line early
-//! is a string that can add a property to the user's address book.
+//! Map keys become `X-JMAP-KEY` parameter text in rendered vCards.
+//! Keys that can terminate a content line must not inject properties.
 //!
 //! See `docs/AUDIT-FFI.md`, finding F1.
 
@@ -17,8 +13,7 @@ use std::collections::BTreeMap;
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// The parameter values that reach the wire without escaping, and therefore
-/// the ones a line break has to be stripped from.
+/// Map keys reach the wire as parameter text, so line breaks must be stripped.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -35,9 +30,7 @@ fn card_with_email_key(key: &str) -> ContactCard {
     }
 }
 
-/// The exploit, spelled out: a map key carrying CRLF used to close the `EMAIL`
-/// line and open an `FN` line of the server's choosing, which
-/// `e_contact_new_from_vcard` then reads as the contact's display name.
+/// CRLF in a map key must not terminate `EMAIL` and inject `FN`.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     let vcard = card_to_vcard(&card_with_email_key("e1\r\nFN:Mallory\r\nX-TAIL"));
@@ -46,8 +39,6 @@ fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
         !vcard.contains("\r\nFN:"),
         "a server-chosen map key injected an FN line:\n{vcard}"
     );
-    // Every line is still a line this crate wrote: BEGIN, VERSION, UID, EMAIL,
-    // END. Nothing new appeared.
     let names: Vec<&str> = vcard
         .split("\r\n")
         .filter(|line| !line.is_empty() && !line.starts_with(' '))
@@ -56,8 +47,7 @@ fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     assert_eq!(names, ["BEGIN", "VERSION", "UID", "EMAIL", "END"]);
 }
 
-/// A lone LF is the same attack without the CR, and a lone CR the same again:
-/// `EVCard`'s unfolder splits on either.
+/// Bare LF or CR must not start a new content line.
 #[test]
 fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     for key in ["e1\nFN:Mallory", "e1\rFN:Mallory", "e1\n\rFN:Mallory"] {
@@ -67,9 +57,6 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
             5,
             "{key:?} produced extra content lines:\n{vcard}"
         );
-        // The text survives inside the quoted parameter — it is data, and
-        // dropping more of it than the break would be its own kind of lie —
-        // but it no longer starts a line.
         assert!(
             !vcard.contains("\r\nFN:Mallory"),
             "{key:?} injected an FN line:\n{vcard}"
@@ -77,10 +64,7 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     }
 }
 
-/// The one place the line-break strip is *not* enough on its own: a value that
-/// legitimately needs a `:` or `;` is quoted, and an embedded quote must be
-/// escaped or removed — otherwise a map key of `x";FN="Mallory` would close the
-/// quoted run and open a parameter of its own.
+/// Embedded quotes in a quoted parameter must not open a second parameter.
 #[test]
 fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     let vcard = card_to_vcard(&card_with_email_key("x\";FN=\"Mallory"));
@@ -96,7 +80,7 @@ fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
-/// The phone half of the same map-key path.
+/// Same map-key injection path for `TEL`.
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
@@ -121,8 +105,7 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     );
 }
 
-/// The values that *are* escaped stay escaped, which is what keeps this fix
-/// from being the only thing standing between the server and the card.
+/// Escaped value newlines stay data and do not inject properties.
 #[test]
 fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
     let mut card = ContactCard {
@@ -140,7 +123,6 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
         1,
         "the escaped newline still ended the line:\n{vcard}"
     );
-    // And the text survives rather than being silently truncated or injecting a line.
     let back = vcard_to_card(&vcard).expect("the sanitised card still parses");
     assert_eq!(
         back.name.and_then(|name| name.full).as_deref(),
@@ -148,14 +130,10 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Adversarial-input robustness net (Batch 13 Item 5)
-
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Truncated and unterminated inputs must be rejected with typed VCardError,
-/// never panic, never hang, and never silently parse incomplete cards.
+/// Truncated inputs return typed errors, without panic or hang.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -197,7 +175,7 @@ fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     }
 }
 
-/// Unbalanced quoting in parameter values must never panic, hang, or inject properties.
+/// Unbalanced parameter quoting must not panic, hang, or inject properties.
 #[test]
 fn unbalanced_quoting_in_vcard_parameters_matrix() {
     let hostile_quoted = [
@@ -216,17 +194,15 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
             start.elapsed() < Duration::from_secs(1),
             "parse of hostile quoting hung on {input:?}"
         );
-        // Either parses with sanitized parameters or returns typed error; never panics.
         if let Ok(card) = res {
             assert!(card.id.is_none() || card.id.is_some());
         }
     }
 }
 
-/// Absurd folding (folded every second octet, folded across delimiters, and empty folding lines).
+/// Extreme folding patterns must not panic or mis-parse root fields.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
-    // Fold value every 2 octets
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
     let raw_val = "Alexander The Great";
     for chunk in raw_val.as_bytes().chunks(2) {
@@ -242,7 +218,6 @@ fn absurd_folding_every_second_octet_matrix() {
         Some("Alexander The Great")
     );
 
-    // Empty continuation lines and tab continuations
     let empty_continuations = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n \r\n \r\n \tSmith\r\nNOTE:First line\r\n\tSecond line\r\nEND:VCARD\r\n";
     let card2 = vcard_to_card(empty_continuations).expect("tabs and empty continuations parse");
     assert_eq!(
@@ -259,7 +234,7 @@ fn absurd_folding_every_second_octet_matrix() {
     );
 }
 
-/// A card with 10,000 properties parses in strictly bounded time with no stack overflow or hang.
+/// A 10k-property card stays bounded, without stack overflow or hang.
 #[test]
 fn card_with_10k_properties_bounded_execution() {
     let mut large_vcard = String::with_capacity(500_000);
@@ -291,7 +266,7 @@ fn card_with_10k_properties_bounded_execution() {
     );
 }
 
-/// Deeply nested AGENT vCards (10, 100, 1,000 levels) must not cause stack overflow or hang.
+/// Deeply nested AGENT vCards (10, 50, 100, 500) stay bounded.
 #[test]
 fn deeply_nested_agent_robustness() {
     for depth in [10, 50, 100, 500] {
@@ -313,7 +288,6 @@ fn deeply_nested_agent_robustness() {
             start.elapsed() < Duration::from_secs(1),
             "nested AGENT depth {depth} took too long"
         );
-        // AGENT properties are ignored by jmap-vcard domain model; root FN is preserved.
         if let Ok(card) = res {
             assert_eq!(
                 card.name.and_then(|n| n.full).as_deref(),
@@ -323,7 +297,7 @@ fn deeply_nested_agent_robustness() {
     }
 }
 
-/// CRLF, LF, CR, and mixed line endings must parse deterministically without data corruption.
+/// CRLF, LF, and mixed endings parse deterministically without data loss.
 #[test]
 fn crlf_lf_cr_mixed_line_endings_matrix() {
     let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
@@ -352,7 +326,6 @@ fn crlf_lf_cr_mixed_line_endings_matrix() {
         );
     }
 
-    // Bare CR (without LF) is rejected as a typed Malformed error rather than silently doing partial parse or panicking
     let pure_cr = "BEGIN:VCARD\rVERSION:3.0\rFN:Alice Smith\rEMAIL:alice@example.com\rEND:VCARD\r";
     assert!(matches!(
         vcard_to_card(pure_cr),
@@ -360,7 +333,7 @@ fn crlf_lf_cr_mixed_line_endings_matrix() {
     ));
 }
 
-/// Malformed PHOTO base64 payloads, corrupt data URIs, and invalid schemes never panic or corrupt state.
+/// Malformed PHOTO payloads never panic or corrupt parsed fields.
 #[test]
 fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     let hostile_photos = [
@@ -388,7 +361,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Multibyte UTF-8 characters at exact slice boundaries (4, 6, 8, 10, 75 octets) never cause char boundary panics.
+/// Multibyte UTF-8 in parsed fields never causes boundary panics.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [
@@ -402,7 +375,6 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     ];
 
     for ch in multi_byte_chars {
-        // Date properties with multibyte characters
         let vcard_bday = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nBDAY:{ch}1990-01-01\r\nEND:VCARD\r\n"
         );
@@ -413,14 +385,12 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
         );
         let _ = vcard_to_card(&vcard_anniv);
 
-        // Name components with multibyte characters
         let vcard_name = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Last{ch};First{ch};Mid{ch};Pref{ch};Suff{ch}\r\nFN:Full {ch}\r\nEND:VCARD\r\n"
         );
         let card = vcard_to_card(&vcard_name).expect("multibyte name should parse");
         assert!(card.name.is_some());
 
-        // Structured address with multibyte characters
         let vcard_adr = format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nADR:;;123 {ch} St;City {ch};State {ch};12345;Country {ch}\r\nEND:VCARD\r\n"
         );

@@ -235,8 +235,9 @@ fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
         // the browser". `authenticate_sync` needs no resolving at all —
         // `login_of` fetches the account's token itself, silently — so an
         // OAuth 2.0 account is asked for the way an anonymous one is:
-        // `e_backend_schedule_authenticate`, now. Observed live 2026-08-26 as
-        // a consent window looping at every populate of an account whose
+        // `e_backend_schedule_authenticate`, now; routing it through
+        // `e_backend_schedule_credentials_required` instead produced a
+        // consent window looping at every populate of an account whose
         // token every silent path could fetch fine.
         let collection = Collection::with(vec![]);
 

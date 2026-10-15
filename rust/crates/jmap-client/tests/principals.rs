@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Principal lookup against the mock server (RFC 9670) — the shared floor
+//! Principal lookup against the mock server (RFC 9670): the shared floor
 //! for scheduling and per-source sharing. See docs/PRINCIPALS-DESIGN.md.
 
 use jmap_client::{Client, Credentials};
@@ -299,7 +299,7 @@ fn current_user_principal_and_principal_get_fetch_seeded_principal() {
 /// that both happen to contain the account's own username as a substring
 /// can answer with the wrong one first. `current_user_principal` (used when
 /// the session omits `currentUserPrincipalId` entirely, the same fallback
-/// Finding 18's account-id-mismatch shape also lands in) must not accept
+/// account-id-mismatch shape also lands in) must not accept
 /// whichever principal the query returns first; it must pick the one that
 /// actually identifies the account owner.
 #[test]
@@ -311,7 +311,7 @@ fn current_user_principal_does_not_accept_an_unverified_decoy_candidate() {
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&account_id).unwrap();
         account.name = "alice".to_owned();
-        // Seeded first, so it sorts before the real principal below — a
+        // Seeded first, so it sorts before the real principal below: a
         // "take whichever Principal/get answers first" bug would return
         // this one. Its email contains "alice", matching the substring
         // filter, but it is not the account owner.

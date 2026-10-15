@@ -1,0 +1,25 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Full Object Patch Update Request), July 2019
+[
+  [
+    "Todo/set",
+    {
+      "accountId": "x",
+      "ifInState": "10324",
+      "update": {
+        "a": {
+          "id": "a",
+          "title": "Practise Piano",
+          "keywords": {
+            "music": true,
+            "beethoven": true,
+            "chopin": true,
+            "liszt": true,
+            "rachmaninov": true
+          },
+          "neuralNetworkTimeEstimation": 360
+        }
+      }
+    },
+    "0"
+  ]
+]

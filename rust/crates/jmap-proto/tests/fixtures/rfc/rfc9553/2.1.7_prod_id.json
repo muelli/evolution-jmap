@@ -1,0 +1,4 @@
+// Source: RFC 9553 §2.1.7 (Figure 12: Example for the prodId Property), May 2024
+{
+  "prodId": "ACME Contacts App version 1.23.5"
+}

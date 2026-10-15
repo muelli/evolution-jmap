@@ -663,8 +663,8 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 /// in-process fallback — find the account's `EOAuth2Service` and call it
 /// directly — but reaches it only when the D-Bus *interface object* is
 /// absent, never when a call on a present one fails. So this classification
-/// is the whole of what this crate can do about it, which is item 22's Do(3)
-/// second branch: report it, never consent over it.
+/// is the whole of what this crate can do about it: report it, never
+/// consent over it.
 ///
 /// **The interface is present for our accounts, which is what makes any of
 /// this reachable.** EDS's own registry module `module-oauth2-services.c`
@@ -673,7 +673,7 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 /// `EOAuth2Service` — ours is `jmap_config::oauth2_service::NAME` — and that
 /// setter exports the `Source.OAuth2Support` D-Bus interface at the source's
 /// object path. The tests below build the resulting `GError` by hand;
-/// `jmap-functional/tests/oauth2-stale-proxy.rs` is item 22's Do(1) and
+/// `jmap-functional/tests/oauth2-stale-proxy.rs`
 /// proves real daemons produce exactly it, by holding an `ESource` across a
 /// registry `SIGKILL`. If that test ever stops reporting
 /// `oauth2-support-exported=1`, this classification has become unreachable
@@ -914,7 +914,7 @@ pub unsafe fn access_token(
         // sign-in window offered here would complete and then have nowhere to
         // put the token, so the very next fetch would ask again. The user
         // does the whole dance and nothing keeps it. Erroring out is the
-        // honest outcome (maintainer, 2026-08-29).
+        // honest outcome.
         //
         // `Some(false)` and nothing else, the same discipline the locked
         // check above uses and for the same reason. A desktop whose keyring
@@ -1116,9 +1116,8 @@ mod tests {
         }
     }
 
-    /// A dead peer is `ServiceGone`, and — like every other infrastructure
-    /// failure item 17 classified — it never escalates to a consent window.
-    /// This is item 22's Do(3) in one assertion.
+    /// A dead peer is `ServiceGone`, and like every other infrastructure
+    /// failure, it never escalates to a consent window.
     #[test]
     fn a_dead_peer_never_escalates_to_consent() {
         let dead = error(

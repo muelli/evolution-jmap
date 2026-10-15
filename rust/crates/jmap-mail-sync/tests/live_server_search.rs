@@ -3,7 +3,7 @@
 
 //! `MailSync::search` against a real JMAP server — the function
 //! `jmap-mail`'s `folder.rs` calls to delegate a translatable Camel search
-//! expression to `Email/query` (`docs/RFC-SUPPORT.md` item 1), exercised end
+//! expression to `Email/query` (`RFC-SUPPORT.md` item 1), exercised end
 //! to end for the first time.
 //!
 //! `tests/live_server.rs` covers `import_message`/`expunge_message` and

@@ -9,17 +9,17 @@
 //! was fetched anonymously and answered with an empty account list.
 //!
 //! Deliberately exercises the real `UreqTransport` (the crate's default),
-//! not a fake in-memory one — the bug is in how that transport follows a
+//! not a fake in-memory one: the bug is in how that transport follows a
 //! redirect, which only a real HTTP round trip through `ureq` reproduces.
 //!
-//! The second half of this file is the download-path counterpart (CURRENT
-//! PRIORITY item 9): a real Fastmail account's blob download came back as
-//! ~105 KB of `www.fastmail.com`'s own marketing homepage, not the message —
+//! The second half of this file is the download-path counterpart:
+//! a real Fastmail account's blob download came back as
+//! ~105 KB of `www.fastmail.com`'s own marketing homepage, not the message:
 //! consistent with a *cross*-host redirect on the download hop, which
 //! `UreqTransport`'s `SameHost` policy already denies `Authorization`
 //! (correctly: it is genuinely a different, unnamed host), but which the
 //! client used to hand back as if it were the blob regardless. Unlike the
-//! session redirect above, this one is deliberately cross-host — a second
+//! session redirect above, this one is deliberately cross-host: a second
 //! listener on a different loopback address (127.0.0.2, not 127.0.0.1) so
 //! `ureq`'s own host comparison, and this test, see two different hosts the
 //! way a real cross-domain redirect is, with no real network or DNS
@@ -51,14 +51,14 @@ fn primary_account_resolves_through_a_same_host_session_redirect() {
     );
 }
 
-/// The body an unrelated public page answers with — standing in for
+/// The body an unrelated public page answers with, standing in for
 /// Fastmail's own marketing homepage, the real content a live download
 /// redirect came back with (see this file's module doc).
 const FOREIGN_PAGE: &[u8] = b"<html>this is not your blob</html>";
 
 /// A bare HTTP responder for the redirect target the download hop should
 /// never be trusted through: it answers every request 200 with
-/// [`FOREIGN_PAGE`], regardless of what the request carries — an
+/// [`FOREIGN_PAGE`], regardless of what the request carries: an
 /// unauthenticated bounce is exactly what a redirect target that never saw
 /// `Authorization` (stripped by `SameHost`, since it is a different host) is
 /// expected to answer with, not a 401 a JMAP-oblivious host has no reason to
@@ -164,7 +164,7 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
 /// A rebase that actually changes `downloadUrl`'s origin (the advertised
 /// origin differs from the one the client connected through) followed by a
 /// cross-origin-redirect refusal must name
-/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error — otherwise a poisoned
+/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error; otherwise a poisoned
 /// account's rebase looks like an ordinary client bug, which is exactly what
 /// cost a full debugging session before the env var was found by hand.
 #[test]
@@ -249,4 +249,270 @@ fn download_blob_does_not_declare_accept_application_json() {
         );
 
     assert_eq!(body, real_blob);
+}
+
+struct TrailingDotServer {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TrailingDotServer {
+    fn start(redirect_to_dot: bool) -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind trailing dot server");
+        let port = server.server_addr().to_ip().expect("server has ip").port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let path = request.url().split('?').next().unwrap_or_default();
+                            if path == "/.well-known/jmap" {
+                                let target_host = if redirect_to_dot {
+                                    "localhost."
+                                } else {
+                                    "localhost"
+                                };
+                                let location = format!("http://{target_host}:{port}/jmap/session");
+                                let response = tiny_http::Response::empty(307).with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Location"[..],
+                                        location.as_bytes(),
+                                    )
+                                    .expect("location header"),
+                                );
+                                let _ = request.respond(response);
+                            } else if path == "/jmap/session" {
+                                let has_auth = request.headers().iter().any(|h| {
+                                    h.field.equiv("Authorization")
+                                        && h.value.as_str().starts_with("Basic ")
+                                });
+                                let body = if has_auth {
+                                    format!(
+                                        r#"{{"capabilities":{{"urn:ietf:params:jmap:core":{{"maxSizeUpload":10000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-casemap"]}},"urn:ietf:params:jmap:mail":{{}}}},"accounts":{{"a1":{{"name":"agent@example.com","isPersonal":true,"isReadOnly":false,"accountCapabilities":{{"urn:ietf:params:jmap:mail":{{}}}}}}}},"primaryAccounts":{{"urn:ietf:params:jmap:mail":"a1"}},"username":"agent","apiUrl":"http://localhost:{port}/jmap/api","downloadUrl":"http://localhost:{port}/jmap/download","uploadUrl":"http://localhost:{port}/jmap/upload","eventSourceUrl":"http://localhost:{port}/jmap/events","state":"s1"}}"#
+                                    )
+                                } else {
+                                    format!(
+                                        r#"{{"capabilities":{{"urn:ietf:params:jmap:core":{{"maxSizeUpload":10000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-casemap"]}}}},"accounts":{{}},"primaryAccounts":{{}},"username":"","apiUrl":"http://localhost:{port}/jmap/api","downloadUrl":"http://localhost:{port}/jmap/download","uploadUrl":"http://localhost:{port}/jmap/upload","eventSourceUrl":"http://localhost:{port}/jmap/events","state":"s1"}}"#
+                                    )
+                                };
+                                let response = tiny_http::Response::from_data(body.into_bytes())
+                                    .with_status_code(200)
+                                    .with_header(
+                                        tiny_http::Header::from_bytes(
+                                            &b"Content-Type"[..],
+                                            &b"application/json"[..],
+                                        )
+                                        .expect("content type header"),
+                                    );
+                                let _ = request.respond(response);
+                            } else {
+                                let _ = request.respond(tiny_http::Response::empty(404));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            port,
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for TrailingDotServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct UnauthorizedForeignHost {
+    origin: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl UnauthorizedForeignHost {
+    fn start() -> Self {
+        let server =
+            tiny_http::Server::http("127.0.0.2:0").expect("bind unauthorized foreign host");
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("unauthorized host has ip")
+            .port();
+        let origin = format!("http://127.0.0.2:{port}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let response = tiny_http::Response::empty(401).with_header(
+                                tiny_http::Header::from_bytes(
+                                    &b"WWW-Authenticate"[..],
+                                    &b"Bearer"[..],
+                                )
+                                .expect("www-authenticate header"),
+                            );
+                            let _ = request.respond(response);
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            origin,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for UnauthorizedForeignHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct RedirectingServer {
+    origin: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RedirectingServer {
+    fn start(target: &str) -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind redirecting server");
+        let port = server.server_addr().to_ip().expect("server has ip").port();
+        let origin = format!("http://127.0.0.1:{port}");
+        let target = target.to_string();
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            let response = tiny_http::Response::empty(302).with_header(
+                                tiny_http::Header::from_bytes(&b"Location"[..], target.as_bytes())
+                                    .expect("location header"),
+                            );
+                            let _ = request.respond(response);
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            origin,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for RedirectingServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[test]
+fn session_fetch_survives_trailing_dot_redirect_to_dotless_host() {
+    let server = TrailingDotServer::start(false);
+    let client = Client::connect(
+        &format!("http://localhost.:{}", server.port),
+        Credentials::basic("agent", "sekret"),
+    )
+    .expect("authenticated session discovery should survive redirect to dotless host");
+
+    assert!(
+        client.session().primary_account(CAPABILITY_MAIL).is_some(),
+        "credentials must be kept when redirecting from trailing-dot to dotless host"
+    );
+}
+
+#[test]
+fn session_fetch_survives_dotless_redirect_to_trailing_dot_host() {
+    let server = TrailingDotServer::start(true);
+    let client = Client::connect(
+        &format!("http://localhost:{}", server.port),
+        Credentials::basic("agent", "sekret"),
+    )
+    .expect("authenticated session discovery should survive redirect to trailing-dot host");
+
+    assert!(
+        client.session().primary_account(CAPABILITY_MAIL).is_some(),
+        "credentials must be kept when redirecting from dotless to trailing-dot host"
+    );
+}
+
+#[test]
+fn cross_origin_redirect_with_credentials_returns_redirect_credentials_withheld_error() {
+    let foreign = UnauthorizedForeignHost::start();
+    let server = RedirectingServer::start(&format!("{}/jmap/session", foreign.origin()));
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(
+            ref err @ Error::RedirectCredentialsWithheld {
+                ref requested,
+                ref followed,
+            },
+        ) => {
+            assert!(
+                err.is_redirect_credentials_withheld(),
+                "predicate should identify the withheld credentials error"
+            );
+            assert!(
+                !err.is_unauthorized(),
+                "withheld credentials error must not be classified as a rejected token"
+            );
+            assert_eq!(requested, server.origin());
+            assert_eq!(followed, foreign.origin());
+        }
+        other => panic!("expected Error::RedirectCredentialsWithheld, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "touches live Fastmail server without credentials"]
+fn fastmail_live_trailing_dot_session_redirect() {
+    let result = Client::connect("https://api.fastmail.com.", Credentials::none());
+    match result {
+        Err(Error::Http { status: 401, .. }) => {}
+        other => {
+            panic!("expected Error::Http 401 on unauthenticated Fastmail redirect, got {other:?}")
+        }
+    }
 }

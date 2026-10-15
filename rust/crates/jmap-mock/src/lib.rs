@@ -5,17 +5,9 @@
 
 //! Stateful in-memory mock JMAP server.
 //!
-//! Serves a subset of JMAP sufficient for exercising the Evolution JMAP
-//! client end-to-end in tests: session discovery, Basic/Bearer auth, mail
-//! read/send/import, contacts CRUD, and calendar CRUD. State lives behind an
-//! `Arc<Mutex<..>>` handle that tests can inspect directly (for example the
-//! recorded `EmailSubmission` outbox).
-//!
-//! Not a real server: single-threaded per connection via `tiny_http`,
-//! plaintext HTTP on `127.0.0.1`, everything held in memory. The one
-//! exception is `/eventsource` (RFC 8620 §7.3): a long-lived connection is
-//! handed to its own thread rather than answered inline — see the
-//! `eventsource` module doc.
+//! Covers the JMAP surface this tree needs for integration tests.
+//! State is kept in memory behind `Arc<Mutex<..>>` and can be inspected by tests.
+//! Uses plain HTTP on `127.0.0.1` and `tiny_http`; `/eventsource` runs on its own thread.
 
 mod auth;
 mod blob;

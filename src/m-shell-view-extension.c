@@ -130,23 +130,13 @@ m_shell_view_extension_constructed (GObject *object)
 	EExtension *extension;
 	EExtensible *extensible;
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_shell_view_extension_parent_class)->constructed (object);
 
 	extension = E_EXTENSION (object);
 	extensible = e_extension_get_extensible (extension);
 
 #if JMAP_EVO_EUI_MANAGER
-	/* No "toggled" signal exists on EShellView any more (confirmed live:
-	 * connecting it the old way logs a GLib-CRITICAL and never fires, the
-	 * whole GtkToggleAction-based view switcher it belonged to went with
-	 * the rest of the GtkAction era — see jmap-ui's snooze extension for
-	 * the same finding). e-rss-shell-view-extension.c proves merging the
-	 * menu in constructed() itself is safe here: unlike jmap-ui's own
-	 * snooze extension, this module needs nothing off the view beyond its
-	 * name and its own EUIManager, both available the moment EExtension
-	 * constructs, so there is no "not populated yet" case to retry on
-	 * update-actions for. */
+	/* Merge menus in constructed(); the old EShellView::toggled path is gone. */
 	{
 		EShellView *shell_view = E_SHELL_VIEW (extensible);
 		const gchar *name = e_shell_view_get_name (shell_view);
@@ -168,7 +158,6 @@ m_shell_view_extension_finalize (GObject *object)
 
 	g_hash_table_destroy (shell_view_ext->priv->ui_definitions);
 
-	/* Chain up to parent's method. */
 	G_OBJECT_CLASS (m_shell_view_extension_parent_class)->finalize (object);
 }
 
@@ -182,7 +171,6 @@ m_shell_view_extension_class_init (MShellViewExtensionClass *class)
 	object_class->constructed = m_shell_view_extension_constructed;
 	object_class->finalize = m_shell_view_extension_finalize;
 
-	/* Set the type to extend, it's supposed to implement the EExtensible interface */
 	extension_class = E_EXTENSION_CLASS (class);
 	extension_class->extensible_type = E_TYPE_SHELL_VIEW;
 }

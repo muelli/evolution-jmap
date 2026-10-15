@@ -23,20 +23,16 @@ use crate::dispatch::{account_mut, parse_arguments, project_properties, to_resul
 use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSubmission, ServerState};
 
-/// Deterministic stand-in for "now" — the mock has no clock on purpose
-/// (reproducible tests).
+/// Deterministic stand-in for "now" for reproducible tests.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-/// `caller` is the identity `Mailbox/get`'s request carried, as resolved by
-/// [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound to
-/// the credential) reads as "this account's own owner", matching every test
-/// that predates sharing. A caller who *is* a distinct principal only sees
-/// mailboxes that principal's own `shareWith` entry grants, and gets
-/// `forbidden` outright if the account shares nothing with them at all
-/// (same enforcement as `AddressBook/get`, verified against a live Stalwart
-/// server: Track E Phase C step 1's findings, recorded in the work queue).
+/// `caller` carries `Mailbox/get` identity context.
+///
+/// No caller identity means account owner access. A foreign caller only sees
+/// mailboxes whose `shareWith` grants them rights, and gets `forbidden` when
+/// nothing is shared with them.
 pub fn mailbox_get(
     state: &mut ServerState,
     arguments: Value,
@@ -124,8 +120,7 @@ pub fn mailbox_get(
     })
 }
 
-/// The rights `mailbox.share_with` grants `principal`, or `None` if it
-/// grants them nothing (including "not shared at all").
+/// Rights `mailbox.share_with` grants `principal`, if any.
 fn mailbox_rights_for(
     mailbox: &Mailbox,
     principal: &Id,
@@ -133,10 +128,8 @@ fn mailbox_rights_for(
     mailbox.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// The owner sees every mailbox unchanged, exactly as before sharing
-/// existed. A foreign caller sees a mailbox only if it is shared with them,
-/// with `myRights` replaced by the grant itself rather than whatever the
-/// owner's own `myRights` happened to be.
+/// Owners see every mailbox unchanged; shared callers only see granted ones,
+/// with `myRights` set to the grant.
 fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Option<Mailbox> {
     if is_owner {
         return Some(mailbox.clone());
@@ -148,20 +141,11 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5): making, changing and removing a folder.
+/// `Mailbox/set` (RFC 8621 §2.5): create, update, and destroy mailboxes.
 ///
-/// Written out rather than handed to [`crate::setops::simple_set`] for the
-/// reason `Email/set` is: every decision here is about the *rest* of the store
-/// rather than about the object in hand. A name is only wrong beside its
-/// siblings, a `parentId` is only a loop when the tree above it is walked, and
-/// a destroy is only refused because of what is filed inside. The generic
-/// helper validates a creation and nothing else, which is exactly the half of
-/// this method that matters least.
-///
-/// The tree the checks run against is a copy that this request updates as it
-/// goes, so a creation is refused by a sibling made two entries earlier in the
-/// same call — a client that sends two folders of one name in one request is
-/// told about the second, not handed both.
+/// This stays custom instead of [`crate::setops::simple_set`] because
+/// validation depends on sibling, ancestor, and message state across the
+/// account, including earlier operations from the same request.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -183,9 +167,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
     let mut to_create: Vec<(Id, Mailbox)> = Vec::new();
     for (creation_id, mut mailbox) in request.create.unwrap_or_default() {
-        // `id` is server-set (RFC 8620 §5.3). A backend that sent one would be
-        // offering some local name — a Camel folder path, say — as a JMAP id,
-        // and accepting it would hide the mistake until the two disagreed.
+        // `id` is server-set (RFC 8620 §5.3).
         if mailbox.id.is_some() {
             not_created.insert(
                 creation_id,
@@ -203,9 +185,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         if mailbox.sort_order.is_none() {
             mailbox.sort_order = Some(0);
         }
-        // A folder the user has just asked for is one they are watching; RFC
-        // 8621 §2 leaves the default to the server, and every other answer
-        // would hide the new folder from a client that lists subscribed ones.
+        // Default new mailboxes to subscribed per RFC 8621 §2 server latitude.
         if mailbox.is_subscribed.is_none() {
             mailbox.is_subscribed = Some(true);
         }
@@ -222,10 +202,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
         };
-        // Captured now: `existing` borrows `tree`, which the placement check
-        // below re-borrows mutably, so the pre-patch `shareWith` has to be an
-        // owned clone to survive past that point for the `ShareNotification`
-        // diff (Track E Phase C step 2, RFC 9670 §4).
+        // Keep pre-patch `shareWith` for share-notification diffs.
         let old_share_with = existing.share_with.clone();
         let Some(patch_map) = patch.as_object() else {
             not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
@@ -247,9 +224,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
                 continue;
             }
         };
-        // The counts are derived (see `mailbox_get`) and the id is immutable;
-        // a patch that touched either would be describing a different mailbox
-        // than the one it names.
+        // Counts are derived and `id` is immutable for patch targets.
         if patched.id.as_ref() != Some(&id) {
             not_updated.insert(
                 id,
@@ -290,11 +265,8 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             );
             continue;
         }
-        // `onDestroyRemoveEmails` is the argument that would make this a
-        // question rather than a refusal, and this mock does not implement it:
-        // a client that wants the mail gone says so about the mail. What the
-        // refusal is here for is the answer a backend has to be able to pass
-        // on to the user unchanged.
+        // `onDestroyRemoveEmails` is not implemented, so non-empty mailboxes
+        // are refused with `hasEmail`.
         if account.emails.iter().any(|(_, email)| filed_in(email, &id)) {
             not_destroyed.insert(
                 id,
@@ -332,17 +304,11 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Whether `mailbox` may stand where it says it does, in the tree `tree`.
+/// Validate mailbox placement constraints against the current tree.
 ///
-/// `of` is the id of the mailbox being changed, or `None` for one being made —
-/// it is what stops a mailbox being its own sibling or its own ancestor when a
-/// rename leaves it exactly where it was.
-///
-/// The three rules are RFC 8621 §2's, and each of them is one a client would
-/// otherwise only discover by finding two folders it cannot tell apart:
-/// a name is unique among siblings and nowhere else, a `parentId` names a
-/// mailbox that exists and is not below the one being moved, and a role belongs
-/// to one mailbox of an account.
+/// `of` is the mailbox being changed, or `None` for create.
+/// Rules follow RFC 8621 §2: sibling name uniqueness, valid non-cyclic
+/// `parentId`, and role uniqueness per account.
 fn placeable(
     tree: &BTreeMap<Id, Mailbox>,
     of: Option<&Id>,
@@ -358,9 +324,7 @@ fn placeable(
                 .with_description(format!("parentId names {parent}, which is not a mailbox")));
         }
         if let Some(of) = of {
-            // Up from the parent, one step at a time. The walk is bounded by
-            // the size of the tree because a loop it did not put there is
-            // still a loop it must not hang on.
+            // Walk parent links with a bounded step count to avoid loops.
             let mut above = Some(parent.clone());
             for _ in 0..=tree.len() {
                 let Some(here) = above else { break };
@@ -396,12 +360,7 @@ fn placeable(
     Ok(())
 }
 
-/// A mailbox as a `/set` response describes one that has just been made.
-///
-/// The counts are derived rather than stored (see [`mailbox_get`]), and a
-/// mailbox created a moment ago holds nothing — so they are answered here
-/// rather than left out, which would send the client back for a `Mailbox/get`
-/// to learn a number it could not fail to know.
+/// Return a newly created mailbox with explicit zero counts.
 fn counted_empty(mailbox: &Mailbox) -> Mailbox {
     Mailbox {
         total_emails: Some(0),
@@ -412,11 +371,9 @@ fn counted_empty(mailbox: &Mailbox) -> Mailbox {
     }
 }
 
-/// Whether `email` is filed in the mailbox `id`.
+/// Whether `email` is filed in mailbox `id`.
 ///
-/// RFC 8621 §4.1 makes `mailboxIds` a set written as a map to `true`, so a
-/// member that maps to `false` is one that is not there — which a client
-/// removing a message from a folder with a patch produces.
+/// RFC 8621 §4.1 models `mailboxIds` as a set encoded as a map to `true`.
 fn filed_in(email: &Email, id: &Id) -> bool {
     email
         .mailbox_ids
@@ -428,11 +385,8 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let request: GetRequest = parse_arguments(arguments)?;
 
     // `maxObjectsInGet` (RFC 8620 §5.1): asking for more objects than the
-    // session document advertises fails the whole call. Also enforced by
-    // `contacts::contact_card_get`, added after item 94's real-Stalwart scale
-    // test hit it there too — this mock started out only enforcing it here,
-    // on the assumption `Email` was the one place a real account gets large
-    // enough to matter, which contacts proved wrong.
+    // session document advertises fails the whole call. Other `/get` handlers
+    // in this mock enforce the same limit.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -473,21 +427,13 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     })
 }
 
-/// The `threadId` a freshly created `email_id` gets. This mock never merges
-/// replies into an existing thread, so every Email mints its own Thread, and
-/// every site that creates or destroys an Email (`email_set`, `email_import`,
-/// `AccountState::seed_email`/`deliver_email`/`destroy_email`) uses this to
-/// keep `AccountState::threads` in lockstep for `Thread/changes`.
+/// The `threadId` assigned to new emails in this one-email-per-thread mock.
 fn new_thread_id(email_id: &Id) -> Id {
     Id::new(format!("T{}", email_id.as_str()))
 }
 
-/// `Thread/get` (RFC 8621 §3.1): a Thread is every Email sharing a
-/// `threadId`, `emailIds` sorted by `receivedAt` oldest first. This mock never
-/// merges replies into an existing thread (`email.thread_id` is allocated
-/// fresh per Email, in `email_set`/`email_import`/`AccountState::seed_email`),
-/// so every Thread here holds exactly one Email today, but the grouping below
-/// is written to hold if that changes.
+/// `Thread/get` (RFC 8621 §3.1): group emails by `threadId` and sort
+/// `emailIds` by `receivedAt` oldest first.
 pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -532,11 +478,8 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
     })
 }
 
-/// `SearchSnippet/get` (RFC 8621 §5.1): highlight, in the subject and body,
-/// the text a `filter`'s leaf conditions matched. `notFound` covers only
-/// email ids that do not exist; a `filter` matching nothing for an email
-/// that does exist still returns a `SearchSnippet` with both fields `null`,
-/// per the RFC.
+/// `SearchSnippet/get` (RFC 8621 §5.1): highlight matched filter text in
+/// subject and body. `notFound` only lists unknown email ids.
 pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SearchSnippetGetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -590,11 +533,7 @@ fn search_snippet(email_id: Id, email: &Email, filter: &Filter<EmailQueryFilter>
     snippet
 }
 
-/// The substrings a filter tree's `subject`/`body`/`text` leaves would match
-/// against an Email's subject and body (RFC 8621 §4.4.1): `text` matches
-/// both, `subject` and `body` match only their own field. Every other leaf
-/// (`from`, `header`, `hasKeyword`, size, dates, …) has nothing to highlight
-/// in subject or body text and is ignored here.
+/// Collect snippet-highlight terms from `subject`, `body`, and `text` leaves.
 fn collect_snippet_terms<'a>(
     filter: &'a Filter<EmailQueryFilter>,
     subject_terms: &mut Vec<&'a str>,
@@ -621,11 +560,8 @@ fn collect_snippet_terms<'a>(
     }
 }
 
-/// HTML-escape `text`, wrapping every non-overlapping occurrence of any
-/// `terms` entry in `<mark></mark>` (RFC 8621 §5's `SearchSnippet` transform).
-/// At each position the longest matching term wins, so `text` = `"terms"` and
-/// `terms` = `["term", "terms"]` marks the whole word once, not `<mark>term
-/// </mark>s`.
+/// HTML-escape `text` and wrap non-overlapping term matches in `<mark>`.
+/// At each position, the longest matching term wins.
 fn mark_matches(text: &str, terms: &[&str]) -> String {
     let mut result = String::new();
     let mut rest = text;
@@ -756,12 +692,9 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// A `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5): a leaf condition, or an
-/// AND/OR/NOT combination of nested filters. NOT is true iff every one of its
-/// conditions is false — RFC 8620's definition, which is not "negate the
-/// single child" once a NOT has more than one, but every generator in this
-/// codebase and in Camel's own search grammar only ever gives NOT one child,
-/// so the two readings agree in practice.
+/// Evaluate a `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5).
+///
+/// NOT matches only when all nested conditions are false.
 fn filter_matches(email: &Email, filter: &Filter<EmailQueryFilter>) -> bool {
     match filter {
         Filter::Condition(condition) => email_matches(email, condition),
@@ -1084,11 +1017,8 @@ pub fn vacation_response_set(
     })
 }
 
-/// The snooze extension's coupling rule for `Email.snoozed`: without the
-/// extension the property does not exist, and with it a snoozed message must
-/// sit in the snoozed-role mailbox. (Cyrus also refuses the reverse — filing
-/// into that mailbox without snoozing — which is not modeled: an ordinary
-/// move into the folder is what a client without the extension does anyway.)
+/// Validate `Email.snoozed`: it requires the snooze extension and placement in
+/// the snoozed-role mailbox.
 fn snooze_refusal(
     snooze_extension: bool,
     snoozed_mailbox: Option<&Id>,
@@ -1254,9 +1184,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     });
 
-    // Keep `threads` in lockstep with `emails`: this mock's threads never
-    // merge (see `new_thread_id`), so a created Email always mints a Thread
-    // and a destroyed one always ends one.
+    // Keep `threads` aligned with `emails` in this one-thread-per-email mock.
     account.threads.transaction(|transaction| {
         for (id, thread) in to_create_threads {
             transaction.create(id, thread);
@@ -1283,18 +1211,8 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
 
 /// Whether `email` is in at least one mailbox this account has.
 ///
-/// RFC 8621 §4.6: an `Email` in the mail store belongs to one or more
-/// `Mailbox`es, and `mailboxIds` names them. Both halves of that are checked
-/// here — a set with nothing in it, and a set naming a mailbox that is not
-/// there — because both describe a message the store cannot hold, and a mock
-/// that accepted either would be teaching a client that a move it botched
-/// worked. It is what makes a client's move one patch rather than a removal
-/// followed by an addition.
-///
-/// Applied to a creation and to the result of an update alike: the rule is an
-/// invariant of the store rather than a property of one request, so an update
-/// that would break it is refused with the same `invalidProperties` a creation
-/// gets.
+/// RFC 8621 §4.6: `mailboxIds` must contain at least one `true` entry and each
+/// such id must exist. The same invariant is enforced for create and update.
 fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError> {
     let Some(mailbox_ids) = email
         .mailbox_ids
@@ -1322,32 +1240,16 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
 /// `Email/import` (RFC 8621 §4.8): a message that is already a message, filed
 /// into the account from a blob.
 ///
-/// The one method here that runs the mock's usual direction backwards. Every
-/// other message in this server starts as an `Email` and gets a message written
-/// out of it by [`rfc5322`]; an import starts with the bytes and derives the
-/// `Email`, which is what a real server always does. [`crate::message`] is the
-/// reading half and says what little of RFC 5322 it takes on.
+/// This reverses the mock's normal flow: parse RFC 5322 bytes into an `Email`
+/// with [`crate::message::Message`] instead of rendering bytes from an `Email`.
 ///
-/// Three decisions worth naming, because each is a branch the RFC leaves open:
+/// Behavior choices kept explicit here:
+/// - the uploaded blob bytes are preserved as-is;
+/// - duplicates are allowed;
+/// - `receivedAt` uses the request value, or falls back to [`MOCK_NOW`].
 ///
-/// - **The blob is kept as it arrived**, so the `blobId` answered is the one that
-///   was handed in and a download of the imported message returns the uploaded
-///   octets byte for byte. RFC 8621 §4.8 allows a server to repair a message
-///   instead and answer with a blob of its own; a mock that rewrote what it was
-///   given would make it impossible to test that what a client appended is what
-///   it later opens.
-/// - **Duplicates are allowed.** Forbidding two copies of one message with an
-///   `alreadyExists` is a MAY, and the account this mock stands in for is a test
-///   account into which the same fixture is imported twice on purpose.
-/// - **`receivedAt` is the one given, or the mock's fixed clock.** The RFC's
-///   default is the most recent `Received` header's date, which is a zone offset
-///   away from a `UtcDate` and therefore calendar arithmetic this crate does not
-///   do. The provider that will drive this has the date parsed already — Camel
-///   hands it over as a `time_t` — so it sends `receivedAt` rather than leaving
-///   it to be guessed at.
-///
-/// Keyword *grammar* (RFC 8621 §4.1.1) is not checked, exactly as `Email/set`
-/// does not check it: a keyword is a map key here as it is there.
+/// Keyword grammar (RFC 8621 §4.1.1) is intentionally not validated here, the
+/// same as `Email/set`.
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1417,16 +1319,11 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
     })
 }
 
-/// `Email/parse` (RFC 8621 §4.8): reads an uploaded RFC 5322 blob into an
-/// `Email`, without storing it.
+/// `Email/parse` (RFC 8621 §4.8): parse an uploaded RFC 5322 blob without
+/// storing it.
 ///
-/// Reuses [`crate::message::Message`], the same reduced-fidelity reader
-/// `email_import` uses below — see that module's doc comment for why there is
-/// no MIME tree here. `textBody`, `htmlBody`, `attachments`, `bodyStructure`
-/// and `bodyValues` are therefore never populated, the same as an imported
-/// message never gets them. `id`, `threadId`, `keywords`, `mailboxIds` and
-/// `receivedAt` stay unset too, matching real Stalwart's own choice for a
-/// message that is parsed but not stored anywhere.
+/// This reuses [`crate::message::Message`], so MIME-tree fields stay unset,
+/// matching the reduced-fidelity import path.
 pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1470,11 +1367,9 @@ pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, M
     }))
 }
 
-/// The `Email` one `EmailImport` becomes, or the server's reason for refusing it.
+/// Build an `Email` for one `EmailImport`, or return the refusal.
 ///
-/// Nothing is allocated and nothing is stored until every refusal has been ruled
-/// out — an id spent on a message that was rejected would make the ids in a
-/// test's assertions depend on the failures beside them.
+/// Allocation and storage happen only after all validations pass.
 fn imported(
     account: &mut AccountState,
     import: &jmap_proto::mail::EmailImport,
@@ -1515,9 +1410,7 @@ fn imported(
         preview: message.preview(),
         ..Email::default()
     };
-    // The same rule a create and an update are held to, asked in the same place:
-    // what makes `mailboxIds` invalid does not depend on how the message got
-    // here.
+    // Reuse the same mailboxIds validation path as Email/set.
     filed_somewhere(account, &email)?;
 
     let id = account.emails.alloc_id();
@@ -1526,13 +1419,10 @@ fn imported(
     Ok(email)
 }
 
-/// The FUTURERELEASE ask on a submission's envelope: seconds to hold, from
-/// `HOLDFOR` directly or from `HOLDUNTIL` minus the mock's fixed clock
-/// (RFC 4865). Parameter names are EHLO keywords, so they are matched
-/// case-insensitively, the same latitude real servers take (Stalwart parses
-/// them through its SMTP grammar, Cyrus compares with `strcasecmp`).
-/// `Ok(None)` when the envelope asks for no hold; `Err` is the
-/// `invalidProperties` description.
+/// Parse FUTURERELEASE hold delay from envelope parameters (RFC 4865).
+///
+/// Accepts `HOLDFOR` directly or derives from `HOLDUNTIL` relative to
+/// `MOCK_NOW`.
 fn hold_seconds(envelope: Option<&Envelope>) -> Result<Option<i64>, String> {
     let Some(Value::Object(parameters)) =
         envelope.and_then(|envelope| envelope.mail_from.parameters.as_ref())
@@ -1593,13 +1483,12 @@ pub fn email_submission_set(
 
     let mut created: BTreeMap<String, EmailSubmission> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
-    // creation id → submission id, for onSuccessUpdateEmail's `#` keys.
+    // creation id -> submission id, for onSuccessUpdateEmail `#` keys.
     let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
     for (creation_id, mut submission) in request.set.create.clone().unwrap_or_default() {
-        // Resolve a `#creationId` reference to an Email/set create earlier
-        // in this request (RFC 8620 §5.3).
+        // Resolve a `#creationId` reference from an earlier Email/set create.
         if let Some(reference) = submission.email_id.as_str().strip_prefix('#') {
             match request_created_ids.get(reference) {
                 Some(id) => submission.email_id = id.clone(),
@@ -1631,9 +1520,7 @@ pub fn email_submission_set(
             continue;
         };
 
-        // RFC 8621 §7.1: `sendAt` is server-set. Refusing a client-supplied
-        // one is what a real server does (this crate's own client used to
-        // send one), so the mistake cannot creep back in quietly.
+        // RFC 8621 §7.1: `sendAt` is server-set.
         if submission.send_at.is_some() {
             not_created.insert(
                 creation_id,
@@ -1644,8 +1531,7 @@ pub fn email_submission_set(
             continue;
         }
 
-        // SMTP FUTURERELEASE (RFC 4865): how long the envelope asks the
-        // message to be held, gated on the advertised `maxDelayedSend`.
+        // SMTP FUTURERELEASE (RFC 4865), bounded by `maxDelayedSend`.
         let hold = match hold_seconds(submission.envelope.as_ref()) {
             Ok(hold) => hold,
             Err(description) => {
@@ -1700,9 +1586,7 @@ pub fn email_submission_set(
         submission.thread_id = email.thread_id.clone();
         submission.envelope = Some(envelope.clone());
 
-        // A positive hold makes the submission `pending`, with the release
-        // time answered in `sendAt`; no hold, or one already in the past
-        // (RFC 4865 §4.1), delivers now with `undoStatus: "final"`.
+        // Positive holds stay pending until `sendAt`; otherwise send now.
         match hold {
             Some(seconds) if seconds > 0 => {
                 let now = crate::time::parse_utc(MOCK_NOW).expect("MOCK_NOW parses");
@@ -1726,13 +1610,7 @@ pub fn email_submission_set(
         to_create.push((id, submission));
     }
 
-    // RFC 8621 §7.4: the only change a client may ask for on an existing
-    // submission is `undoStatus` moving from `pending` to `canceled` — an
-    // attempt to cancel a submission the mock already treated as `final`
-    // (never held), or to touch any other property, is
-    // `forbidden`, the same refusal a real server gives once a message has
-    // gone out. Canceling never removes anything from `outbox`: a `pending`
-    // submission was never pushed there in the first place.
+    // RFC 8621 §7.4: only `undoStatus: pending -> canceled` is allowed.
     let mut updated: BTreeMap<Id, Option<EmailSubmission>> = BTreeMap::new();
     let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
     let mut to_update: Vec<(Id, EmailSubmission)> = Vec::new();
@@ -1764,8 +1642,7 @@ pub fn email_submission_set(
         }
     });
 
-    // onSuccessUpdateEmail: patch the emails referenced by successful
-    // submissions (RFC 8621 §7.5).
+    // RFC 8621 §7.5: apply onSuccessUpdateEmail patches for successful sends.
     let mut email_patches: Vec<(Id, serde_json::Map<String, Value>)> = Vec::new();
     for (key, patch) in request.on_success_update_email.clone().unwrap_or_default() {
         let submission_id = match key.strip_prefix('#') {
@@ -1819,10 +1696,7 @@ pub fn email_submission_set(
         not_destroyed: None,
     })?;
 
-    // RFC 8620 §5.3: the `created` map need only carry properties the client
-    // did not already send. `identityId`/`emailId` never qualify — the
-    // client names both when it asks for the create — so a server reading
-    // that literally (Stalwart among them) leaves both out.
+    // RFC 8620 §5.3: `created` omits properties the client already sent.
     if terse_submission_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -1837,9 +1711,7 @@ pub fn email_submission_set(
     Ok(result)
 }
 
-/// `EmailSubmission/get` (RFC 8621 §7.4). A submission id naming nothing is
-/// silently absent from the result, the same as [`thread_get`] and
-/// [`identity_get`] treat a missing id.
+/// `EmailSubmission/get` (RFC 8621 §7.4). Missing ids stay in `notFound`.
 pub fn email_submission_get(
     state: &mut ServerState,
     arguments: Value,
@@ -2010,19 +1882,10 @@ impl EmailSeed {
     }
 }
 
-/// The RFC 5322 bytes a seeded message's `message/rfc822` blob serves.
+/// Build the RFC 5322 bytes for a seeded message's `message/rfc822` blob.
 ///
-/// A real server stores the message and derives the `Email` object from it;
-/// this mock has the `Email` and derives a message, which is backwards but
-/// gives a client something to parse that agrees with what `Email/get` says
-/// about the same message. That agreement is the point — a download that
-/// answered with the empty blob this used to seed would let a broken fetch
-/// look like a message with no content.
-///
-/// Single-part, always: a seed's attachments are their own blobs with their own
-/// ids, and building the multipart that would contain them would be writing a
-/// MIME composer inside a test server. A test about attachments reads the
-/// `Email`'s body parts, which is where the mock does model them.
+/// Output stays single-part. Attachment behavior is modeled through `Email`
+/// body parts and blob fetches.
 fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     let mut message = String::new();
     message.push_str(&format!("From: {}\r\n", address(&seed.from)));
@@ -2055,11 +1918,9 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     message
 }
 
-/// One address, as a message carries it.
+/// One address in message-header form.
 ///
-/// No quoting and no encoded words: seeds use plain ASCII display names, and a
-/// mock that half-implemented RFC 2047 would be a worse test subject than one
-/// that visibly does not implement it at all.
+/// Seeds use plain ASCII display names and do not model RFC 2047 encoding.
 fn address(address: &EmailAddress) -> String {
     match &address.name {
         Some(name) => format!("{name} <{}>", address.email),
@@ -2067,13 +1928,10 @@ fn address(address: &EmailAddress) -> String {
     }
 }
 
-/// A JMAP `UtcDate` as an RFC 5322 date, or `None` if it is not the shape JMAP
-/// requires (`YYYY-MM-DDTHH:MM:SSZ`, RFC 8620 §1.4) — a seed exercising a
-/// malformed date should not also get a wrong `Date` header.
+/// Convert a JMAP `UtcDate` to an RFC 5322 date.
 ///
-/// The day of the week is left out, which RFC 5322 §3.3 allows: deriving it
-/// would need a calendar this server has no other use for, and getting it
-/// wrong would be worse than omitting it.
+/// Returns `None` for non-JMAP timestamps. Weekday is omitted, which RFC 5322
+/// allows.
 fn rfc5322_date(utc: &str) -> Option<String> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -2111,8 +1969,7 @@ impl AccountState {
     }
 
     /// Seed a mailbox nested under `parent`; returns its id. Does not bump
-    /// state. The parent is not checked to exist — a caller that wants to
-    /// serve a dangling `parentId` is exercising exactly that.
+    /// state. Parent existence is not validated.
     pub fn seed_child_mailbox(&mut self, name: &str, role: Option<&str>, parent: &Id) -> Id {
         self.seed_mailbox_with_parent(name, role, Some(parent.clone()))
     }
@@ -2137,14 +1994,11 @@ impl AccountState {
         id
     }
 
-    /// Create a mailbox as a state transition — what another client's
-    /// `Mailbox/set` looks like from here.
+    /// Create a mailbox as a state transition, like another client's
+    /// `Mailbox/set`.
     ///
-    /// The difference from [`AccountState::seed_mailbox`] is the whole point:
-    /// a seeded mailbox predates every state a client has ever seen, so it
-    /// never shows up in a `/changes` answer, while this one does. There is no
-    /// `Mailbox/set` in this mock, and until something needs one, a test that
-    /// wants a folder to appear mid-session says so directly.
+    /// Unlike [`AccountState::seed_mailbox`], this bumps state and appears in
+    /// `/changes`.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
         let mailbox = Mailbox {
@@ -2176,16 +2030,16 @@ impl AccountState {
         })
     }
 
-    /// Destroy a mailbox as a state transition. False if there is no such
-    /// mailbox. Its children and its mail are left alone — this is a test
-    /// helper, not a server.
+    /// Destroy a mailbox as a state transition. False if missing.
+    ///
+    /// This helper does not cascade to children or mail.
     pub fn destroy_mailbox(&mut self, id: &Id) -> bool {
         self.mailboxes
             .transaction(|transaction| transaction.destroy(id))
     }
 
-    /// Seed a full email (with a text body and optional attachments);
-    /// returns its id. Does not bump state.
+    /// Seed one email with text body and optional attachments. Does not bump
+    /// state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -2195,15 +2049,10 @@ impl AccountState {
         id
     }
 
-    /// Deliver an email as a state transition — what a message arriving
-    /// mid-session looks like from here.
+    /// Deliver an email as a state transition.
     ///
-    /// The difference from [`AccountState::seed_email`] is the same one
-    /// [`AccountState::create_mailbox`] draws: a seeded message predates every
-    /// state a client has ever seen, so `Email/changes` never names it, while
-    /// this one is named as created. There is no `Email/set` *create* in this
-    /// mock — RFC 8621 §4.6 makes that an import rather than a delivery — so a
-    /// test that wants new mail to show up says so directly.
+    /// Unlike [`AccountState::seed_email`], this bumps state and appears in
+    /// `Email/changes`.
     pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -2215,9 +2064,9 @@ impl AccountState {
         id
     }
 
-    /// Destroy a message as a state transition. False if there is no such
-    /// message. Its blobs are left behind — this is a test helper, not a
-    /// server.
+    /// Destroy a message as a state transition. False if missing.
+    ///
+    /// Blob cleanup is intentionally skipped in this helper.
     pub fn destroy_email(&mut self, id: &Id) -> bool {
         let thread_id = self
             .emails
@@ -2233,10 +2082,7 @@ impl AccountState {
         destroyed
     }
 
-    /// The message [`AccountState::seed_email`] and
-    /// [`AccountState::deliver_email`] both build, and the id it will be filed
-    /// under. Which of the two ways it then enters the store is the only thing
-    /// that separates them.
+    /// Build the message payload used by both `seed_email` and `deliver_email`.
     fn build_email(&mut self, seed: EmailSeed) -> (Id, Email) {
         let id = self.emails.alloc_id();
         let body_blob_id = self.add_blob("text/plain", seed.text_body.clone().into_bytes());
@@ -2265,11 +2111,8 @@ impl AccountState {
             .collect();
 
         let source = rfc5322(&id, &seed);
-        // RFC 8621 §4.1 defines `size` as the octets of the raw data the
-        // `blobId` references — "the number of octets in the file the user
-        // would download" — not the octets of the body. A client is entitled to
-        // check a download against it, so a mock that reported the body's
-        // length would be a mock that teaches a client the check is useless.
+        // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload,
+        // not just body text.
         let size = source.len() as u64;
         let email = Email {
             id: Some(id.clone()),

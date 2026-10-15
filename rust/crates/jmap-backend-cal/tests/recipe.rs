@@ -1,23 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// M4's last acceptance criterion, like M3's, is "a documented manual test
-// recipe with a hand-written `.source` keyfile" — and a recipe is prose, which
-// nothing else in this repository fails over. The symptom of a wrong one is a
-// calendar Evolution never even tries to open, with no error anywhere, and a
-// reader who concludes the backend is broken.
-//
-// So the keyfile is a file — `docs/examples/jmap-mock-calendar.source`, the one
-// the recipe says to copy — and these tests read it the way the registry does,
-// through `e_server_side_source_new`, which needs neither a bus nor a running
-// daemon. The shape is `jmap-backend-book`'s `tests/recipe.rs`; what is
-// calendar-specific is which extension group carries the `BackendName`, because
-// that group is how EDS decides a source is a *calendar* and not a task list —
-// and the factory answers for events alone.
-//
-// Not repeated from the book's recipe test: the `Method=none` versus
-// `Secure=true` pair. That one is about `SourceConfig`, which both backends
-// share verbatim, and it is pinned once where it lives.
+//! Verification of the manual test recipe and example `.source` keyfile.
 
 use std::ffi::CStr;
 use std::fs;
@@ -51,14 +34,7 @@ fn keyfile() -> PathBuf {
     repository().join("docs/examples/jmap-mock-calendar.source")
 }
 
-/// EDS's own table of which `ESource` extension carries the `BackendName` for
-/// each kind of calendar component, as `e_data_cal_factory` reads it.
-///
-/// It is a table and not a constant because it is the thing the recipe can get
-/// wrong: the group name and [`COMPONENT_KIND`] have to agree, and neither one
-/// alone says so. A `[Task List]` group asking for `BackendName=jmap` is looked
-/// up as `"jmap:VTODO"`, which no factory in the module claims — the source
-/// parses, the registry publishes it, and nothing ever opens it.
+/// Maps component kind to corresponding ESource extension name.
 fn extension_for(kind: ICalComponentKind) -> Option<&'static CStr> {
     match kind {
         I_CAL_VEVENT_COMPONENT => Some(E_SOURCE_EXTENSION_CALENDAR),
@@ -68,12 +44,7 @@ fn extension_for(kind: ICalComponentKind) -> Option<&'static CStr> {
     }
 }
 
-/// Registers the three calendar-ish source extensions.
-///
-/// `e_source_has_extension` answers out of the table the source built while
-/// parsing, and a group whose extension type was never registered leaves no
-/// entry in it. Without this, "the keyfile has no `[Task List]` group" and "the
-/// test binary never mentioned task lists" are the same answer.
+/// Registers calendar-related source extension GTypes.
 fn register_calendar_extensions() {
     // SAFETY: no arguments, and the EDS type system initialises itself.
     unsafe {
@@ -90,12 +61,7 @@ struct RegistrySource {
 }
 
 impl RegistrySource {
-    /// Parses `path`.
-    ///
-    /// `e_server_side_source_new` insists on a registry server — it is the
-    /// object a server-side source reports changes to — but constructing one
-    /// neither owns a bus name nor reads the user's sources; that only happens
-    /// when it is run.
+    /// Loads and parses the source file at `path`.
     fn load(path: &Path) -> Self {
         let path_string =
             std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
@@ -193,10 +159,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
     register_calendar_extensions();
     let source = RegistrySource::load(&keyfile());
 
-    // `evolution-calendar-factory` matches this string — together with the
-    // component kind below — against every registered `ECalBackendFactory`. A
-    // mismatch is silent: no factory claims the source, and the calendar simply
-    // never opens.
+    // Matches factory name and component kind against registered ECalBackendFactory.
     assert_eq!(
         source.backend_name(E_SOURCE_EXTENSION_CALENDAR).as_deref(),
         Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
@@ -208,10 +171,7 @@ fn the_recipes_keyfile_is_a_calendar_and_not_a_task_or_memo_list() {
     register_calendar_extensions();
     let source = RegistrySource::load(&keyfile());
 
-    // The half of the factory's key the keyfile spells by choosing a group.
-    // `[Calendar]` is right because `COMPONENT_KIND` is `VEVENT`; if the
-    // backend ever grows a second factory, this is the assertion that says
-    // which document has to grow a second keyfile.
+    // Keyfile chooses Calendar group matching VEVENT component kind.
     assert_eq!(
         extension_for(COMPONENT_KIND),
         Some(E_SOURCE_EXTENSION_CALENDAR),

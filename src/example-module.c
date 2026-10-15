@@ -23,7 +23,7 @@
 #include "m-shell-view-extension.h"
 #include "m-msg-composer-extension.h"
 
-/* Module Entry Points */
+/* Module entry points. */
 void e_module_load (GTypeModule *type_module);
 void e_module_unload (GTypeModule *type_module);
 

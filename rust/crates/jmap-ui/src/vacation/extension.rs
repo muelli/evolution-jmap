@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `JmapVacationExtension`: the `EExtension` on `EMailConfigNotebook` that
-//! puts the vacation page into the account editor — for JMAP accounts, and
+//! puts the vacation page into the account editor, for JMAP accounts, and
 //! for nobody else.
 //!
 //! The shape is `JmapConfigLookup`'s (jmap-config), which is
 //! `e-webdav-config-lookup.c`'s: `extensible_type` written in `class_init`,
 //! the actual work in `constructed`, where the extensible this instance was
-//! made for is in hand. The gate is level 1 only — the account source's
-//! backend name — because it is the one question answerable synchronously in
+//! made for is in hand. The gate is level 1 only (the account source's
+//! backend name) because it is the one question answerable synchronously in
 //! a dialog callback; whether the *server* offers the capability is the
 //! page's own async load to find out ([`crate::vacation::page`]).
 

@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Local payload and builder state for step-2 extension verification.
+payload/
+vendor/
+.build/
+.build-source*/
+.build-source*.log
+.flatpak-builder/
+repo/

@@ -54,10 +54,9 @@ impl Client {
         ))
     }
 
-    /// Patch an address book (`AddressBook/set` update) — a raw JSON Patch
+    /// Patch an address book (`AddressBook/set` update) with a raw JSON Patch
     /// object, the same shape `Client::mailbox_update` takes, so callers can
-    /// write typed fields the client has no dedicated setter for yet, such
-    /// as `shareWith` (RFC 9610 §2, Track E Phase C).
+    /// write typed fields such as `shareWith` (RFC 9610 §2).
     pub fn address_book_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<AddressBook>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.address_book_set(&request)?;
@@ -121,16 +120,9 @@ impl Client {
 
     /// Fetch contact cards by id.
     ///
-    /// Sent as several requests when naming every id at once would be more
-    /// than the server's `maxObjectsInGet` (RFC 8620 §2) — found the hard way
-    /// scale-testing item 94 against real Stalwart: an address book of 500
-    /// cards, well within reach for `jmap-book-sync`'s own `list_existing`,
-    /// made the server refuse the whole request with `requestTooLarge` rather
-    /// than answer it. Mirrors [`Client::email_get`]'s own chunking, minus its
-    /// byte-size (`maxSizeRequest`) half: ids and card counts here are modest
-    /// enough that the object-count limit is the one this crate has actually
-    /// hit, and adding an untested second limit was not worth the risk this
-    /// round. A server naming no `maxObjectsInGet` is sent the list whole.
+    /// Sent in chunks when the number of IDs exceeds the server's
+    /// `maxObjectsInGet` limit (RFC 8620 §2). A server naming no
+    /// `maxObjectsInGet` is sent the list whole.
     ///
     /// Always makes at least one call, even for an empty `ids`: callers like
     /// [`Client::contact_state`] ask for no cards at all just to read the

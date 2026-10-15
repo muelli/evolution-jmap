@@ -1,0 +1,15 @@
+// Source: RFC 8621 §4.1.2.3 (Header Field Addresses Form - EmailAddress[]), August 2019
+[
+  {
+    "name": "James Smythe",
+    "email": "james@example.com"
+  },
+  {
+    "name": null,
+    "email": "jane@example.com"
+  },
+  {
+    "name": "John Smith",
+    "email": "john@example.com"
+  }
+]

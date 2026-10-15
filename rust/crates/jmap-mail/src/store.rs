@@ -197,9 +197,9 @@ impl JmapStore {
         let refresher = unsafe { FolderRefresh::new(store.cast(), pass) };
         self.install_refresher(Some(refresher));
 
-        // Both halves of item 28's mail-side push in one subscription: a
-        // `Mailbox` change and an `Email`/`EmailDelivery` change ask Camel for
-        // different things, so `dispatch` needs to be told which one a given
+        // Both halves of mail's push in one subscription: a `Mailbox` change
+        // and an `Email`/`EmailDelivery` change ask Camel for different
+        // things, so `dispatch` needs to be told which one a given
         // `StateChange` actually named — `start_for_with`, not `start_for`,
         // is what carries that through.
         let watched: Vec<&str> = crate::push::PUSHED_TYPES

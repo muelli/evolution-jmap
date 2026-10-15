@@ -105,10 +105,78 @@ components.
 ## Batch 3A item 2 implementation note (2026-10-06 UTC)
 
 `ci/rpm.sh` now runs rootless in Podman by default when `podman` is available,
-using `registry.fedoraproject.org/fedora:rawhide` as the container image and
-installing the same development package set as this project's Fedora CI matrix
-job before invoking the host build step with `--host`.
+using the pinned Fedora image digest
+`docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`
+for reproducibility before invoking the host build step with `--host`.
+
+The dependency bootstrap intentionally omits `evolution-mapi-devel`, because
+this repository does not build against MAPI and rawhide package churn had made
+that package unavailable in prior runs.
 
 This satisfies the reproducible-in-container requirement for the RPM target.
 If Podman is unavailable, the script still runs on host as a fallback and keeps
 the same `rpmbuild` and `rpmlint` checks.
+
+## Batch 3A item 3 implementation note (2026-10-09 UTC)
+
+`cmake/PackagingRpm.cmake` now registers two RPM CTest gates only when both
+`rpmbuild` and `rpmlint` are present on the machine where CMake configures the
+tree:
+
+- `package-rpm` first runs `cmake --build` in `${CMAKE_BINARY_DIR}`, removes
+  any previous `*.rpm` there, and then runs `cpack -G RPM` into that same
+  build directory.
+- `package-rpm-lint` depends on `package-rpm`, fails loudly when no RPM payload
+  exists, and then runs `rpmlint` on the produced RPM files.
+
+`ci/rpm.sh` remains the loud missing-tool gate for environments where CTest is
+not used directly.
+
+Operator CI wiring for this lane, without editing `.github/workflows` in-repo:
+
+```bash
+cmake -S . -B build-rpm-ci -G Ninja
+ctest --test-dir build-rpm-ci --output-on-failure -R '^package-rpm$|^package-rpm-lint$'
+```
+
+## Batch 3A item 4 verification note (2026-10-09 UTC)
+
+Installed the locally built RPM in a clean Fedora container and verified the
+installed module locations against the same container's `pkg-config` variables.
+
+Container command used:
+
+```bash
+podman run --rm -v "$PWD:$PWD:Z" -w "$PWD" \
+  docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898 \
+  bash -lc '
+    dnf -y install pkgconf-pkg-config evolution-data-server-devel evolution-devel
+    dnf -y install ./build-rpm/*.rpm
+    pkg-config --variable=backenddir libedata-book-1.2
+    pkg-config --variable=backenddir libedata-cal-2.0
+    pkg-config --variable=camel_providerdir camel-1.2
+    pkg-config --variable=moduledir libebackend-1.2
+    pkg-config --variable=moduledir evolution-shell-3.0
+  '
+```
+
+Observed paths from `pkg-config` in that install-test container:
+
+- `book_dir=/usr/lib64/evolution-data-server/addressbook-backends`
+- `cal_dir=/usr/lib64/evolution-data-server/calendar-backends`
+- `camel_dir=/usr/lib64/evolution-data-server/camel-providers`
+- `registry_dir=/usr/lib64/evolution-data-server/registry-modules`
+- `config_dir=/usr/lib64/evolution/modules`
+
+Installed payload checks passed:
+
+- `${book_dir}/libebookbackendjmap.so` exists.
+- `${cal_dir}/libecalbackendjmap.so` exists.
+- `${camel_dir}/libcameljmap.so` and `${camel_dir}/libcameljmap.urls` exist.
+- `${registry_dir}/module-jmap-backend.so` exists.
+- `${config_dir}/module-jmap-configuration.so` exists.
+
+This confirms the three backend modules and the Camel provider install where
+EDS and Evolution discover them according to `pkg-config` in Fedora. Runtime
+loading under a real Evolution session remains unverified in a running
+Evolution.

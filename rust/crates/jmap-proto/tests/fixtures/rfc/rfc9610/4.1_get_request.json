@@ -1,0 +1,17 @@
+// Source: RFC 9610 §4.1 (Figure 1: 'methodCalls' Property of a JMAP Request), December 2024
+[
+  [
+    "AddressBook/get",
+    {
+      "accountId": "a0x9"
+    },
+    "0"
+  ],
+  [
+    "ContactCard/get",
+    {
+      "accountId": "a0x9"
+    },
+    "1"
+  ]
+]

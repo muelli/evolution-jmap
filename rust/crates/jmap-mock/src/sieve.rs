@@ -18,10 +18,8 @@ use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::patch::apply_patch;
 use crate::state::{AccountState, ServerState};
 
-/// `SieveScript/get` (RFC 9661 §2.3): an `ids: null` request returns every
-/// script the account has, which is none on a fresh account since scripts
-/// are client-created; a named id that does not exist is `notFound`, the
-/// same as every other `/get` method.
+/// `SieveScript/get` (RFC 9661 §2.3): `ids: null` returns all scripts;
+/// unknown ids are listed in `notFound`.
 pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -53,17 +51,15 @@ pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Val
     })
 }
 
-/// `SieveScript/set` (RFC 9661 §2.4). A script's `id` and `isActive` are
-/// both server-set: `isActive` only ever changes through
-/// `onSuccessActivateScript`, never a direct create or update, and
-/// destroying the currently active script is `sieveIsActive` until it is
-/// deactivated first. Script names are unique per account, so a duplicate
-/// is `alreadyExists`, the same as every other `/set` method that has names.
+/// `SieveScript/set` (RFC 9661 §2.4): `id` and `isActive` are server-managed,
+/// duplicate names are `alreadyExists`, and destroying the active script is
+/// rejected with `sieveIsActive`.
 pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SieveScriptSetRequest = parse_arguments(arguments)?;
     let SieveScriptSetRequest {
         set,
         on_success_activate_script,
+        on_success_deactivate_script,
     } = request;
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;
@@ -223,6 +219,8 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
             }
         };
         activate(account, resolved.as_ref());
+    } else if on_success_deactivate_script == Some(true) {
+        activate(account, None);
     }
 
     to_result(&SetResponse {
@@ -238,8 +236,8 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
     })
 }
 
-/// `SieveScript/query` (RFC 9661 §2.5): filters by `name` (substring match,
-/// the same idiom `principal_query` uses) and/or `isActive`.
+/// `SieveScript/query` (RFC 9661 §2.5): filters by `name` substring and/or
+/// `isActive`.
 pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<SieveScriptQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -285,13 +283,8 @@ fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -
     true
 }
 
-/// `SieveScript/validate` (RFC 9661 section 2.6): the request names a single
-/// `blobId`, the script content having already been uploaded (section 2.2).
-/// This mock has no real Sieve parser, the same deliberate limitation
-/// `SieveScript/set` already has (it never produces `invalidSieve`), so a
-/// `blobId` that resolves is always valid; only blob resolution is actually
-/// checked, the same `invalidArguments` case `SieveScript/set`'s
-/// `onSuccessActivateScript` already uses for an unknown reference.
+/// `SieveScript/validate` (RFC 9661 §2.6): checks only that `blobId` resolves.
+/// This mock does not parse Sieve source, so it never emits `invalidSieve`.
 pub fn sieve_script_validate(
     state: &mut ServerState,
     arguments: Value,
@@ -309,9 +302,8 @@ pub fn sieve_script_validate(
     ))
 }
 
-/// Make `target` the one active script, deactivating whatever else was
-/// active (RFC 9661 §2.4 `onSuccessActivateScript`); `None` deactivates
-/// everything.
+/// Activate only `target` (RFC 9661 §2.4 `onSuccessActivateScript`); `None`
+/// deactivates all scripts.
 fn activate(account: &mut AccountState, target: Option<&Id>) {
     let ids: Vec<Id> = account
         .sieve_scripts

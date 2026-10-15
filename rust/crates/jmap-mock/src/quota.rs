@@ -12,9 +12,8 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::ServerState;
 
-/// `Quota/get` (RFC 9425 §3): an `ids: null` request returns every quota the
-/// account has; a named id that does not exist is `notFound`, the same as
-/// every other `/get` method.
+/// `Quota/get` (RFC 9425 §3): `ids: null` returns all quotas, unknown ids go to
+/// `notFound`.
 pub fn quota_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -73,9 +72,8 @@ pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// A `Quota` matches a `FilterCondition` iff every condition given matches
-/// (RFC 9425 §4.4): `name` and `type` are substring tests, `scope` and
-/// `resourceType` exact ones. No condition given matches everything.
+/// Match RFC 9425 §4.4 filter conditions. `name` and `type` use substring
+/// checks, `scope` and `resourceType` are exact, and an empty filter matches all.
 fn quota_matches(quota: &Quota, filter: &QuotaQueryFilter) -> bool {
     if let Some(name) = &filter.name
         && !quota.name.contains(name.as_str())

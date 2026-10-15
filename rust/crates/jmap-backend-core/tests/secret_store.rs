@@ -349,7 +349,7 @@ fn an_unlocked_login_keyring_reports_itself_unlocked() {
     assert_eq!(keyring_daemons(&root.join("run")), Vec::<i32>::new());
 }
 
-/// The case item 17(a) exists for. Seeded first — a locked collection has to
+/// A locked, not-absent, secret service. Seeded first — a locked collection has to
 /// be a collection, so a keyring is created and unlocked once and its files
 /// copied — then served by a second daemon, on a second bus and a second
 /// runtime directory, that was never given the password.
@@ -375,8 +375,8 @@ fn a_locked_login_keyring_reports_itself_locked() {
 /// No secret service on the bus at all. The answer must be "do not know" and
 /// **not** an activation: a wrong answer here would have every OAuth 2.0
 /// account on a machine with no keyring report a locked store instead of
-/// asking for consent, and an activation would put item 18's 25-second
-/// timeout on the connect path.
+/// asking for consent, and an activation would put a 25-second timeout on
+/// the connect path.
 #[test]
 #[ignore = "needs dbus-run-session; see the module docs"]
 fn no_secret_service_at_all_is_not_a_locked_store() {

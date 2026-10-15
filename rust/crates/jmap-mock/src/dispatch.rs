@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! API endpoint dispatch: envelope parsing, back-reference resolution
-//! (RFC 8620 §3.7), and the method registry.
+//! API endpoint dispatch, result-reference resolution (RFC 8620 §3.7), and method routing.
 
 use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError};
@@ -12,27 +11,17 @@ use serde_json::{Map, Value};
 
 use crate::state::{ServerState, TypeStateSnapshot};
 
-/// Handle a POST to the API endpoint. Returns (HTTP status, JSON body).
-///
-/// `caller` is the principal the request's credential was bound to via
-/// [`crate::auth::AuthConfig::allow_bearer_as`], for the cross-account
-/// sharing checks (Track E Phase C) that need to know who is asking; `None`
-/// means the credential named no identity, which every check before sharing
-/// existed already assumed and keeps assuming.
+/// Handle a JMAP API POST and return `(HTTP status, JSON body)`.
+/// `caller` is the authenticated principal for access checks; `None` means anonymous.
 pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> (u16, Value) {
     if let Ok(text) = std::str::from_utf8(body) {
         println!("--> POST /jmap\n{text}");
     }
 
-    // Counted before anything is read out of the body: what it is for is
-    // telling one request carrying two chained calls apart from two requests
-    // carrying one each, and a request refused below is still a round trip the
-    // client spent.
+    // Count every HTTP round trip, including requests rejected before parsing.
     state.api_requests += 1;
 
-    // RFC 8620 §2: over `maxSizeRequest` the request is refused on its octets,
-    // before it is a request at all — a server counting bytes has not parsed
-    // anything yet, and cannot have run any of the calls inside.
+    // RFC 8620 §2: reject requests over `maxSizeRequest` before parsing method calls.
     if let Some(limit) = state.size_request
         && body.len() as u64 > limit
     {
@@ -60,9 +49,7 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
         }
     };
 
-    // RFC 8620 §3.2: over `maxCallsInRequest` the whole request is refused with
-    // a request-level error, and nothing in it runs — not even the calls that
-    // would have fitted.
+    // RFC 8620 §3.2: reject the whole request when `maxCallsInRequest` is exceeded.
     if let Some(limit) = state.calls_in_request
         && request.method_calls.len() as u64 > limit
     {
@@ -79,20 +66,13 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     }
 
     let mut responses: Vec<Invocation> = Vec::new();
-    // Creation-id → real id across the whole request, so later /set calls
-    // can reference earlier creations as `#creationId` (RFC 8620 §5.3).
+    // Track creation ids across calls so later `/set` calls can use `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
-    // Snapshotted before any call runs, and diffed against the same
-    // snapshot taken after (below), so this request can push one
-    // `StateChange` (RFC 8620 §7.1) for whatever it actually mutated —
-    // wiring a real mutation to `push_state_change` automatically, without
-    // every `*/set` handler having to say so itself.
+    // Snapshot type states so one `StateChange` can report all mutations in this request (RFC 8620 §7.1).
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
-        // Recorded before the call is answered, and whatever the answer is: a
-        // request that failed is still a round trip the client spent, which is
-        // what a test counting them is asking about.
+        // Record every attempted method call, even if it later fails.
         state.method_calls.push(call.name.clone());
         let invocation = match resolve_references(call, &responses) {
             Ok(arguments) => {
@@ -185,8 +165,7 @@ fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Val
     Ok(Value::Object(resolved))
 }
 
-/// RFC 8620 §3.7 pointer evaluation: JSON pointer (RFC 6901) extended with a
-/// `*` token that maps over arrays and flattens one level of nested arrays.
+/// RFC 8620 §3.7 pointer evaluation: JSON Pointer (RFC 6901) plus `*` to map arrays.
 fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     fn walk(tokens: &[&str], value: &Value) -> Option<Value> {
         let Some((token, rest)) = tokens.split_first() else {
@@ -219,10 +198,8 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     walk(&tokens, value)
 }
 
-/// Diff two [`ServerState::type_state_snapshot`] snapshots into a
-/// `StateChange` naming only the accounts/types whose counter actually
-/// moved between them — `None` when nothing did, so a request that mutated
-/// nothing (a `/get`, a failed `/set`) pushes nothing.
+/// Build a `StateChange` for counters that changed between snapshots.
+/// Returns `None` when the request produced no type-state changes.
 fn state_change_since(
     before: &TypeStateSnapshot,
     after: &TypeStateSnapshot,
@@ -267,7 +244,7 @@ fn record_created_ids(
     }
 }
 
-/// The method registry. Domain modules add their arms as milestones land.
+/// Dispatch one method invocation to its handler.
 fn handle_method(
     state: &mut ServerState,
     name: &str,
@@ -411,10 +388,9 @@ fn handle_method(
     }
 }
 
-// ── Helpers shared by method handlers ────────────────────────────────────────
+// Shared helper routines for method handlers.
 
-/// Parse method arguments into a typed request, mapping failures to
-/// `invalidArguments`.
+/// Parse method arguments into a typed request, returning `invalidArguments` on failure.
 pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     arguments: Value,
 ) -> Result<T, MethodError> {
@@ -440,8 +416,7 @@ pub(crate) fn account_mut<'a>(
         .ok_or_else(|| MethodError::new(error::method::ACCOUNT_NOT_FOUND))
 }
 
-/// Apply `/get` property projection: keep only the requested properties
-/// (plus `id`, which is always returned).
+/// Apply `/get` projection and always keep `id`.
 pub(crate) fn project_properties(
     object: &impl serde::Serialize,
     properties: Option<&[String]>,
@@ -476,11 +451,7 @@ mod tests {
         assert_eq!(eval_pointer("/missing", &value), None);
     }
 
-    /// A real mutation should push a `StateChange` on its own, not only
-    /// through the `MockServer::push_state_change` test hook. A subscriber
-    /// registered directly against the state's own hub (no socket needed —
-    /// that plumbing is `eventsource`'s own concern, already tested there)
-    /// proves `handle_api` itself is the one broadcasting.
+    /// A mutating request broadcasts a `StateChange` without using test hooks.
     #[test]
     fn a_mailbox_set_create_pushes_a_state_change_automatically() {
         let mut state = ServerState::new();
@@ -508,10 +479,7 @@ mod tests {
         assert!(text.contains("\"Mailbox\":\"2\""), "{text}");
     }
 
-    /// The other half of the same guarantee: a request that mutates nothing
-    /// (here, a `Mailbox/get` on an account with none) must push nothing —
-    /// a subscriber has no way to distinguish "no change" from "a slow
-    /// server", so a false push would train a client to distrust real ones.
+    /// A request that mutates nothing should broadcast nothing.
     #[test]
     fn a_request_that_mutates_nothing_pushes_nothing() {
         let mut state = ServerState::new();
@@ -532,9 +500,7 @@ mod tests {
         ));
     }
 
-    /// Push's `types`-filtering: a subscriber whose `types` filter names
-    /// none of what actually changed is sent nothing at all, same as a
-    /// request that mutated nothing.
+    /// A `types` filter that excludes changed types should receive no push.
     #[test]
     fn a_subscriber_filtered_to_an_unrelated_type_receives_nothing() {
         let mut state = ServerState::new();
@@ -563,8 +529,7 @@ mod tests {
         ));
     }
 
-    /// The other half: a subscriber filtered to a type that DID change still
-    /// receives the push.
+    /// A subscriber filtered to a changed type should still receive the push.
     #[test]
     fn a_subscriber_filtered_to_the_changed_type_receives_it() {
         let mut state = ServerState::new();

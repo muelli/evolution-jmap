@@ -1,0 +1,39 @@
+// Source: RFC 9661 §2.4.1 (Deactivate and Destroy Script Response), September 2024
+[
+  [
+    "SieveScript/set",
+    {
+      "oldState": "160374460.316617118-4096",
+      "newState": "1603744637.575375572-4096",
+      "created": null,
+      "updated": {
+        "dd1b164f-8cdc-448c-9f54": {
+          "isActive": false
+        }
+      },
+      "destroyed": null,
+      "notCreated": null,
+      "notUpdated": null,
+      "notDestroyed": null,
+      "accountId": "ken"
+    },
+    "5"
+  ],
+  [
+    "SieveScript/set",
+    {
+      "oldState": "1603744637.575375572-4096",
+      "newState": "1603744637.854390875-4096",
+      "created": null,
+      "updated": null,
+      "destroyed": [
+        "dd1b164f-8cdc-448c-9f54"
+      ],
+      "notCreated": null,
+      "notUpdated": null,
+      "notDestroyed": null,
+      "accountId": "ken"
+    },
+    "6"
+  ]
+]

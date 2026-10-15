@@ -22,8 +22,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Deterministic stand-in for "now" — the mock has no clock on purpose
-/// (reproducible tests), same value `mail.rs`'s own `MOCK_NOW` uses.
+/// Deterministic stand-in for "now" for reproducible tests.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 pub fn principal_get(
@@ -94,14 +93,9 @@ pub fn principal_query(
     })
 }
 
-/// `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2): computes
-/// `BusyPeriod`s from the account's seeded `CalendarEvent`s, so the client
-/// method is testable without a live server (design §4.3).
+/// Implements `Principal/getAvailability` from seeded `CalendarEvent` values.
 ///
-/// `tooLarge` (the draft's other named error, for an unreasonably wide
-/// window) is not implemented here — no test needs it yet, and there is no
-/// clean way to check window width without doing the calendar-date
-/// arithmetic `UtcDate`'s own doc says this crate deliberately avoids.
+/// The draft `tooLarge` error is intentionally omitted in this mock.
 pub fn principal_get_availability(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -127,11 +121,7 @@ pub fn principal_get_availability(
     to_result(&GetAvailabilityResponse { list })
 }
 
-/// A principal may be queried for availability unless its per-principal
-/// `urn:ietf:params:jmap:calendars` capability explicitly says
-/// `mayGetAvailability: false` (design §2.3) — absent the capability entry
-/// at all, the mock allows it, mirroring how a real server would for a
-/// principal it has no reason to restrict.
+/// Defaults `mayGetAvailability` to `true` when unset.
 fn may_get_availability(principal: &Principal) -> bool {
     principal
         .capabilities
@@ -141,11 +131,9 @@ fn may_get_availability(principal: &Principal) -> bool {
         .unwrap_or(true)
 }
 
-/// One event's `BusyPeriod`, or `None` if it doesn't count as busy in the
-/// requested window. Mock simplification, same one `calendars.rs::
-/// event_matches` already documents: `start`/`utcStart`/`utcEnd` are
-/// compared textually, correct for the tests' `Etc/UTC` events, not for
-/// arbitrary time zones.
+/// Returns one event `BusyPeriod`, or `None` if it is not busy in window.
+///
+/// Uses lexical timestamp comparison for the mock's UTC test data.
 fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
@@ -176,14 +164,10 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     })
 }
 
-/// Add a simple `PT<h>H<m>M<s>S` duration — the only shape
-/// `CalendarEvent::duration`'s doc comment gives, e.g. `PT1H` — to a
-/// `YYYY-MM-DDTHH:MM:SS` local start time.
+/// Adds `PT<h>H<m>M<s>S` to a `YYYY-MM-DDTHH:MM:SS` start time.
 ///
-/// Mock simplification: same-day second-of-day arithmetic only. `UtcDate`'s
-/// own doc says this crate never does calendar arithmetic (month/leap-year/
-/// DST); a duration this can't parse, or one that would cross midnight,
-/// leaves the busy period zero-length (`end == start`) rather than guessing.
+/// Uses same-day second arithmetic only. On parse failure or midnight crossing,
+/// returns `start`.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -206,10 +190,8 @@ fn busy_end(start: &str, duration: Option<&str>) -> String {
     .unwrap_or_else(|| start.to_owned())
 }
 
-/// Parse an ISO 8601 time-only duration (`PT` followed by any of `<n>H`,
-/// `<n>M`, `<n>S`) into whole seconds. `None` on anything else, including a
-/// date component (`P<n>D...`) — this mock only ever sees the time-only form
-/// `CalendarEvent::simple`'s callers write.
+/// Parses ISO 8601 time-only durations (`PT...`) into seconds.
+/// Returns `None` for unsupported forms such as date components.
 fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     let rest = duration.strip_prefix("PT")?;
     let mut seconds: u32 = 0;
@@ -235,16 +217,10 @@ fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     Some(seconds)
 }
 
-/// `ShareNotification/get` (RFC 9670 §4): a notification lives in the
-/// recipient's own account in the RFC's model, which this mock does not
-/// have (one principal per bearer token sharing a single account, not a
-/// separate account per principal — see [`AccountState::share_notifications`]).
-/// The nearest equivalent here is filtering to the notifications recorded
-/// for whichever principal `caller` resolves to; a caller bound to no
-/// principal, or one nothing was ever shared with, simply sees none. Unlike
-/// `AddressBook/get`/`Mailbox/get`, there is no owner special case: the
-/// owner is the one *making* grants, never their own recipient, so they see
-/// nothing here even though they see everything on the shared object itself.
+/// `ShareNotification/get` filtered to the resolved caller principal.
+///
+/// The mock keeps one account for all principals, so filtering is done by
+/// stored recipient id.
 pub fn share_notification_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -284,11 +260,8 @@ pub fn share_notification_get(
     })
 }
 
-/// `ShareNotification/query` (RFC 9670 §4): same viewer filter as
-/// [`share_notification_get`], narrowed further by `objectType`/`before`/
-/// `after` (compared as plain strings — every `UtcDate` this mock produces
-/// is already `YYYY-MM-DDTHH:MM:SSZ`, which sorts lexically the same as
-/// chronologically).
+/// `ShareNotification/query` applies the same viewer filter as
+/// [`share_notification_get`], then `objectType`/`before`/`after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -351,15 +324,9 @@ fn share_notification_matches(
     true
 }
 
-/// Record a `ShareNotification` (RFC 9670 §4) for each principal whose
-/// `shareWith` rights actually changed between `old` and `new` — a grant
-/// made, widened, narrowed, or revoked. Compares the typed rights directly
-/// (works for both `AddressBookRights` and `MailboxRights`) so a share
-/// changing from one right to an equal one is not reported as a change.
+/// Records `ShareNotification` entries for principals whose rights changed.
 ///
-/// Called from `AddressBook/set` and `Mailbox/set` on a successful update;
-/// creating an object with `shareWith` already populated does not yet emit a
-/// notification (no test needs it, and it is cheap to add if one does).
+/// Used by `AddressBook/set` and `Mailbox/set` updates.
 pub(crate) fn record_share_changes<R>(
     account: &mut AccountState,
     object_type: &str,
@@ -448,11 +415,10 @@ impl AccountState {
         id
     }
 
-    /// Seed a principal and make it the account's `currentUserPrincipalId`
-    /// (RFC 9670 §2.5) — the common case, since most tests only need one
-    /// principal representing the account owner. Tests that need more than
-    /// one (e.g. an attendee to resolve via `Principal/query`) call
-    /// [`Self::seed_principal`] for the rest.
+    /// Seeds a principal and sets `currentUserPrincipalId`.
+    ///
+    /// Most tests need one owner principal. Multi-principal tests can call
+    /// [`Self::seed_principal`] for additional identities.
     pub fn seed_current_user_principal(&mut self, principal: Principal) -> Id {
         let id = self.seed_principal(principal);
         self.current_user_principal_id = Some(id.clone());

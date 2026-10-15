@@ -382,10 +382,9 @@ mod tests {
 
     #[test]
     fn my_rights_absent_leaves_deletable_none_and_present_is_read_through() {
-        // The same shape as `writable`'s test above, for the field item 40's
-        // fix reads instead: an absent `myRights`, or one that says nothing
-        // about `mayDelete`, must not be mistaken for the server actually
-        // stating a rights answer.
+        // The same shape as `writable`'s test above, for `mayDelete` instead:
+        // an absent `myRights`, or one that says nothing about `mayDelete`,
+        // must not be mistaken for the server actually stating a rights answer.
         assert_eq!(
             resources(vec![book(Some("AB1"), "Personal")])[0].deletable,
             None

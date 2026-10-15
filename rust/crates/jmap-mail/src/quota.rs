@@ -34,7 +34,7 @@
 //! "CalendarEvent", "ContactCard"]`. [`quota_data_type::MAIL`] used to hold
 //! `"Mail"`, a string no real server has ever sent, which meant this check
 //! only ever fired through the "absent or empty" branch; fixed to `"Email"`
-//! by the same session that ran that probe.
+//! once that probe found it.
 //!
 //! ## The chain, and the empty case
 //!
@@ -183,11 +183,10 @@ mod tests {
     fn a_quota_naming_the_types_a_real_stalwart_server_sends_applies_to_mail() {
         // Literal strings, not `quota_data_type::MAIL`/`CONTACTS`/
         // `CALENDARS`: this pins the exact wire shape a real Stalwart
-        // server's own account-wide disk quota sent (confirmed live,
-        // 2026-09-19), so the test cannot pass merely by agreeing with
-        // whatever `quota_data_type::MAIL` happens to hold — it would have
-        // failed against the pre-fix `"Mail"` value, which no real server
-        // ever sends.
+        // server's own account-wide disk quota sends, so the test cannot
+        // pass merely by agreeing with whatever `quota_data_type::MAIL`
+        // happens to hold. It would have failed against the pre-fix
+        // `"Mail"` value, which no real server sends.
         assert!(applies_to_mail(&octets(
             "Storage",
             [

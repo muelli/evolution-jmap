@@ -1,0 +1,14 @@
+// Source: RFC 8621 §3.1.1 (Thread/get Request), August 2019
+[
+  [
+    "Thread/get",
+    {
+      "accountId": "acme",
+      "ids": [
+        "f123u4",
+        "f41u44"
+      ]
+    },
+    "#1"
+  ]
+]

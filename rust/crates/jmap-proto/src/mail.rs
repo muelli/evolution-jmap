@@ -338,23 +338,18 @@ pub mod role {
     /// Held for later sending (RFC 9979 §8.2).
     pub const SCHEDULED: &str = "scheduled";
     pub const SENT: &str = "sent";
-    /// Where snoozed messages wait (RFC 9979 §8.1 — the role is standard,
+    /// Where snoozed messages wait (RFC 9979 §8.1: the role is standard,
     /// the snoozing mechanism is not; see [`super::SnoozeDetails`]).
     pub const SNOOZED: &str = "snoozed";
     pub const SUBSCRIBED: &str = "subscribed";
     pub const TRASH: &str = "trash";
 }
 
-/// When a snoozed message wakes and where it goes: `Email.snoozed`, per
-/// draft-ietf-extra-email-snooze §4 as Cyrus implements it behind
-/// [`crate::session::CAPABILITY_CYRUS_MAIL`].
+/// When a snoozed message wakes and where it goes (`Email.snoozed`, per
+/// draft-ietf-extra-email-snooze §4 as implemented by Cyrus).
 ///
-/// The draft expired in 2024 without replacement, so this shape is vendor
-/// territory. It is modeled in this one place — plus the capability constant —
-/// so that a future RFC is a constant swap and a field check, not a rewrite.
-/// Setting it goes together with moving the message into the
-/// [`role::SNOOZED`] mailbox; the server moves it to `move_to_mailbox_id`
-/// (the inbox when absent) at `until` and applies `set_keywords`.
+/// Moving a message to [`role::SNOOZED`] moves it to `move_to_mailbox_id`
+/// at `until` and applies `set_keywords`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnoozeDetails {
@@ -622,18 +617,8 @@ impl Email {
     }
 }
 
-/// One message handed to `Email/import` (RFC 8621 §4.8): the blob the raw
-/// message was uploaded as, and what the account should file it under.
-///
-/// Every property is optional although the RFC makes `blobId` and `mailboxIds`
-/// required, for the reason [`Email`]'s are: this type is what a request is
-/// *deserialized into* as well as what a client fills in, and RFC 8621 §4.8 is
-/// explicit that a `blobId`, `mailboxIds` or `keywords` that is "missing, wrong
-/// type, id not found" is refused with an `invalidProperties` `SetError` — a
-/// per-message refusal, in a method whose other messages must still be
-/// imported. A required field here would turn one client mistake into a whole
-/// call failing to parse, which is the answer the RFC reserves for a request
-/// that is not an `Email/import` at all.
+/// One message handed to `Email/import` (RFC 8621 §4.8).
+/// Fields are optional on deserialization to isolate per-message invalidProperties errors.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailImport {
@@ -711,10 +696,8 @@ impl EmailImportRequest {
 
 /// `Email/import` response (RFC 8621 §4.8).
 ///
-/// `created` carries the properties the server chose — the RFC names `id`,
-/// `blobId`, `threadId` and `size` — as an [`Email`], whose properties are all
-/// optional, so what the server left out stays left out rather than arriving as
-/// a default.
+/// `created` carries server-chosen properties (`id`, `blobId`, `threadId`, `size`)
+/// as an [`Email`] with optional fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailImportResponse {
@@ -754,6 +737,86 @@ impl EmailImportResponse {
         not_created: BTreeMap<String, crate::error::SetError>,
     ) -> Self {
         self.not_created = Some(not_created);
+        self
+    }
+}
+
+/// `Email/get` arguments (RFC 8621 §4.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailGetRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<Id>>,
+    #[serde(rename = "#ids", default, skip_serializing_if = "Option::is_none")]
+    pub ids_ref: Option<crate::request::ResultReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_text_body_values: bool,
+    #[serde(
+        rename = "fetchHTMLBodyValues",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub fetch_html_body_values: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_all_body_values: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_value_bytes: Option<u64>,
+}
+
+impl EmailGetRequest {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_account_id(mut self, account_id: impl Into<Id>) -> Self {
+        self.account_id = Some(account_id.into());
+        self
+    }
+
+    pub fn with_ids(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.ids = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_properties(
+        mut self,
+        properties: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_body_properties(
+        mut self,
+        body_properties: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.body_properties = Some(body_properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn fetch_text_body_values(mut self) -> Self {
+        self.fetch_text_body_values = true;
+        self
+    }
+
+    pub fn fetch_html_body_values(mut self) -> Self {
+        self.fetch_html_body_values = true;
+        self
+    }
+
+    pub fn fetch_all_body_values(mut self) -> Self {
+        self.fetch_all_body_values = true;
+        self
+    }
+
+    pub fn with_max_body_value_bytes(mut self, max: u64) -> Self {
+        self.max_body_value_bytes = Some(max);
         self
     }
 }
@@ -880,16 +943,7 @@ impl EmailParseResponse {
 }
 
 /// The `SetError` type RFC 8621 §4.8 adds for `Email/import`.
-///
-/// The generic types of RFC 8620 §5.3 cannot say this one: the properties of
-/// the `EmailImport` are all fine and the blob is there — what is wrong is the
-/// *content* of the blob, which is not a message. A server is allowed to repair
-/// such a blob instead and answer with a `blobId` of its own; refusing it is
-/// the other branch of the same paragraph.
-///
-/// `alreadyExists` is the paragraph before it and is deliberately not here: it
-/// belongs to a server that forbids two copies of one message in an account,
-/// which RFC 8621 §4.8 leaves as a MAY.
+/// `invalidEmail` indicates the blob content is not a parsable RFC 5322 message.
 pub mod email_import_error {
     pub const INVALID_EMAIL: &str = "invalidEmail";
 }

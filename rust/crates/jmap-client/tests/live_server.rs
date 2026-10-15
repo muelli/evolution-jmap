@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Driving a real JMAP server end to end — the recipe this project's own
+//! Driving a real JMAP server end to end: the recipe this project's own
 //! "Integration testing (parallel track)" plan asks for, and the
 //! real-server half of the "real-server readiness" priority.
 //!
@@ -10,7 +10,7 @@
 //! quirks would add: capability objects with fields this client has never
 //! seen, an account list shaped differently than the mock's single seeded
 //! one, limits that are actually enforced rather than left unset. None of
-//! that shows up until a real server is on the other end of the wire — which
+//! that shows up until a real server is on the other end of the wire, which
 //! is what this file is for, and why it is not part of the default suite: it
 //! needs a server this repository does not run, reachable over the network,
 //! with an account already provisioned on it.
@@ -28,7 +28,7 @@
 //! `JMAP_LIVE_SERVER_REBASE_URLS` is [`Client::builder`]'s
 //! `rebase_urls_to_origin`: set it when the deployment's session document
 //! names an `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl` this runner
-//! cannot route to even though `JMAP_LIVE_SERVER_URL` itself is reachable —
+//! cannot route to even though `JMAP_LIVE_SERVER_URL` itself is reachable:
 //! a reverse proxy, NAT boundary, or (the case this exists for) a configured
 //! public hostname advertised over `https` when only a plain-`http` listener
 //! on a different address answers. Leave it unset against a deployment whose
@@ -38,9 +38,9 @@
 //! provision the disposable Stalwart VM this is meant to run against first
 //! (the harness repository's `harness/gcp/create-stalwart.sh`).
 //!
-//! Gated twice over — the `live-server` feature, so a plain `cargo test`
+//! Gated twice over: the `live-server` feature, so a plain `cargo test`
 //! never even compiles this file, and `#[ignore]`, so `cargo test --features
-//! live-server` still does not run it without `--ignored` — because unlike
+//! live-server` still does not run it without `--ignored`, because unlike
 //! every other test in this workspace it reaches outside the process, and it
 //! must never turn a routine `cargo test` into a network call that fails on a
 //! machine with no such server configured.
@@ -48,14 +48,14 @@
 //! ## What this deliberately does not do
 //!
 //! Write to any account it did not create for the purpose. Most of the
-//! deployment's real mail is not this suite's to touch — even the
+//! deployment's real mail is not this suite's to touch; even the
 //! disposable Stalwart VM is meant to be reused across runs rather than
-//! reseeded — so most tests here are read-only: session discovery,
+//! reseeded; so most tests here are read-only: session discovery,
 //! `Core/echo`, and listing what already exists. `Mailbox/set` round-trips
 //! (create, rename, destroy) are covered against the mock, where they cost
 //! nothing, *and* against a dedicated throwaway account here (see
 //! [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`])
-//! — the one exception, and scoped to an account this suite seeded for
+//! (the one exception, and scoped to an account this suite seeded for
 //! exactly this test.
 
 use std::collections::BTreeMap;
@@ -142,7 +142,7 @@ fn connect() -> Client {
         .expect("could not fetch the session document from JMAP_LIVE_SERVER_URL")
 }
 
-/// The session document names the core capability and at least one account —
+/// The session document names the core capability and at least one account:
 /// RFC 8620 §2 requires the former of every conforming server, mock or real.
 /// The latter is not spelled out as a hard requirement the way the capability
 /// is (this project's own `jmap-mockd` does not put `core` itself in
@@ -164,7 +164,7 @@ fn the_session_names_the_core_capability() {
     );
 }
 
-/// `Core/echo` round-trips an arbitrary JSON value unchanged (RFC 8620 §4) —
+/// `Core/echo` round-trips an arbitrary JSON value unchanged (RFC 8620 §4):
 /// the smallest proof that a method call reaches this server's API endpoint
 /// and comes back parsed as this client expects, rather than merely that its
 /// session document does.
@@ -177,16 +177,16 @@ fn echo_round_trips_through_the_real_api_endpoint() {
 }
 
 /// If the account has the mail capability, `Mailbox/get` answers with at
-/// least one mailbox — every real mailbox has an Inbox. An account with no
+/// least one mailbox: every real mailbox has an Inbox. An account with no
 /// mail capability at all (a contacts-or-calendars-only test account) is not
 /// a failure of this client's, so that case is reported and skipped rather
 /// than asserted on: the point of this test is capability-negotiation
-/// robustness, which cuts both ways — tolerating what a real deployment
+/// robustness, which cuts both ways: tolerating what a real deployment
 /// does not offer is as much a part of it as reading what it does. That is
 /// also why the account id comes from [`Client::primary_account`] rather
 /// than reading `Session::primary_accounts` directly: a real server is
 /// allowed to omit `primaryAccounts` altogether (RFC 8620 §2), and the
-/// robust resolver still finds the account by capability in that case —
+/// robust resolver still finds the account by capability in that case:
 /// this test should skip only when there truly is no mail-capable account,
 /// not merely because the server left the shortcut out.
 #[test]
@@ -205,7 +205,7 @@ fn mail_capable_accounts_list_a_non_empty_mailbox_set() {
     );
 }
 
-/// If the account has the contacts capability, `AddressBook/get` answers —
+/// If the account has the contacts capability, `AddressBook/get` answers:
 /// proof that this client's `AddressBook` type, exercised until now only
 /// against `jmap-mockd`'s own fixtures, deserialises what a real server
 /// actually sends. Deliberately not asserting a non-empty list the way the
@@ -246,7 +246,7 @@ fn calendars_capable_accounts_can_list_their_calendars() {
 /// whatever account someone points them at (their own mailbox, an
 /// operator's shared test login) must never be the one a `Mailbox/set`
 /// lands on. This account exists only if `JMAP_LIVE_SERVER_WRITE_USER`/
-/// `_PASSWORD` are set to a login seeded for exactly this purpose — see
+/// `_PASSWORD` are set to a login seeded for exactly this purpose; see
 /// `docs/manual-test-live-server.md`'s "write-path test" section for the
 /// `stw seed` recipe. Absent, not just empty, so the base
 /// read-only suite runs without ever needing them: this returns `None`
@@ -268,7 +268,7 @@ fn connect_for_write() -> Option<Client> {
 }
 
 /// A second throwaway account, distinct from [`connect_for_write`]'s, that
-/// the send-email test delivers a message *to* — proof of actual intra-server
+/// the send-email test delivers a message to: proof of actual intra-server
 /// delivery, not just that `EmailSubmission/set` was accepted. Same
 /// present-or-skip shape as `connect_for_write`; see
 /// `docs/manual-test-live-server.md`'s "send-email test" section for how to
@@ -291,9 +291,9 @@ fn connect_recipient() -> Option<Client> {
 }
 
 /// The one mutating test in this file: `Mailbox/set` creates a folder,
-/// renames it (`mailbox_update`'s `PatchObject` path — what `jmap-mail`'s
+/// renames it (`mailbox_update`'s `PatchObject` path, what `jmap-mail`'s
 /// Camel port sends whenever a user renames a folder), reads it back
-/// through `Mailbox/get` after each step, then destroys it — proof this
+/// through `Mailbox/get` after each step, then destroys it: proof this
 /// client's write path round-trips against a real server's own semantics
 /// (id assignment, state changes), not just `jmap-mockd`'s fixtures, which
 /// already cover the same shape at no risk. Scoped to the throwaway account
@@ -426,7 +426,7 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     );
 }
 
-/// `AddressBook/set` create then destroy — the JMAP calls the collection
+/// `AddressBook/set` create then destroy: the JMAP calls the collection
 /// backend's `create_resource_sync`/`delete_resource_sync` vfuncs
 /// issue when a user does "New Address Book" or
 /// deletes one, as opposed to [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
@@ -496,10 +496,10 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
 /// The contacts capability's half of the write-path proof: `ContactCard/set`
 /// creates a card in the account's default address book, reads it back
 /// through `ContactCard/get`, renames it (`contact_update`'s `PatchObject`
-/// path — what `jmap-book-sync` sends whenever a user edits a contact),
+/// path (what `jmap-book-sync` sends whenever a user edits a contact),
 /// reads it back again, then destroys it. Relies on Stalwart
 /// auto-provisioning one default address book per account (confirmed by
-/// hand before this test was written) rather than creating one first — the
+/// hand before this test was written) rather than creating one first: the
 /// same assumption the mailbox test makes about a default Inbox.
 ///
 /// Also checks `Client::all_changes` after each mutation, same as
@@ -512,8 +512,8 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::contact_query` right after the create and right
 /// after the destroy: `jmap-book-sync`'s `list_existing_sync` enumerates an
 /// address book via exactly `ContactCardQueryFilter::in_address_book`
-/// (`lib.rs:88`), the backend's actual listing path, which — unlike
-/// `get`/`set`/`changes` above — had no live-server coverage at all before
+/// (`lib.rs:88`), the backend's actual listing path, which (unlike
+/// `get`/`set`/`changes` above) had no live-server coverage at all before
 /// this test.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
@@ -637,9 +637,9 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     );
 }
 
-/// `Calendar/set` create, update, then destroy — the calendar counterpart of
+/// `Calendar/set` create, update, then destroy: the calendar counterpart of
 /// [`address_book_create_then_destroy_round_trips_through_the_real_api`]
-/// above, for the other half of Track D1's collection-creation vfuncs.
+/// above for collection-creation vfuncs.
 /// `Client::calendar_create`/`calendar_destroy` are mock-tested
 /// (`jmap-client/tests/calendars.rs`) but had never run against a real
 /// server before this test.
@@ -647,7 +647,7 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::calendar_update` (a colour patch), mirroring
 /// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]'s
 /// create→rename→destroy shape: it is the one pure-client layer of Track
-/// D2's calendar-colour write-back (the `ECalMetaBackendClass::
+/// calendar-colour write-back (the `ECalMetaBackendClass::
 /// source_changed` vfunc's `jmap_cal_sync::CalSync::set_color` issues
 /// exactly this call), mock-tested
 /// (`jmap-client/tests/calendars.rs::calendar_update_color`) but, unlike the
@@ -724,7 +724,7 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
 /// The calendars capability's half of the write-path proof: `CalendarEvent/
 /// set` creates an event in the account's default calendar, reads it back
 /// through `CalendarEvent/get`, updates it (`event_update`'s `PatchObject`
-/// path — what a user editing an event's title in the calendar view sends),
+/// path (what a user editing an event's title in the calendar view sends),
 /// reads it back again, then destroys it. Same default-calendar assumption
 /// as the contacts test makes about the default address book.
 ///
@@ -739,8 +739,8 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::event_query` right after the create and right after
 /// the destroy: `jmap-cal-sync::list_existing_sync` enumerates a calendar via
 /// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:101`), the
-/// backend's actual listing path, which — unlike `get`/`set`/`changes`
-/// above — had no live-server coverage at all before this test. Mirrors the
+/// backend's actual listing path, which (unlike `get`/`set`/`changes`
+/// above) had no live-server coverage at all before this test. Mirrors the
 /// `ContactCard/query` check
 /// [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
 /// already makes for the address-book listing path.
@@ -861,12 +861,9 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
 /// The recurring-event counterpart to the test above, and the first
 /// real-server exercise of `CalendarEvent`'s singular `recurrenceRule`
 /// property (jscalendarbis §3.3.3; this codebase sent RFC 8984's plural
-/// `recurrenceRules` array until the fix this test pins). Item 14's own
-/// operator verification against Fastmail only ever covered a plain,
-/// non-recurring create/edit, so a real, independent JSCalendar
-/// implementation had never seen the singular shape — a server that still
-/// expected the old array would reject this create with `invalidProperties`,
-/// exactly item 14's own original failure mode.
+/// `recurrenceRules` array until the fix this test pins). An
+/// implementation that had never seen the singular shape (a server that still
+/// expected the old array) would reject this create with `invalidProperties`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api() {
@@ -920,7 +917,7 @@ fn a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_throu
 /// already has into the store, rather than `Mailbox/set`'s create-from-
 /// properties. Uploads a small RFC 5322 message via [`Client::upload_blob`],
 /// imports it into the account's Inbox, confirms it via `Email/get`, marks it
-/// read (`email_update`'s `PatchObject` path — what
+/// read (`email_update`'s `PatchObject` path, what
 /// `jmap-mail-sync::MailSync::set_keywords` sends whenever a user marks a
 /// message read/unread or flags it), confirms the keyword via another
 /// `Email/get`, downloads the blob back through [`Client::download_blob`],
@@ -996,7 +993,7 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
 
     // Same call `jmap-mail-sync::message_ids` makes to list a mailbox's
     // messages (`in_mailbox` filter, ascending `receivedAt`, unbounded
-    // position) — the folder-listing path itself, not just get/set/changes
+    // position): the folder-listing path itself, not just get/set/changes
     // on an id already known.
     let queried_after_import = client
         .email_query(
@@ -1105,17 +1102,17 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
     );
 }
 
-/// `Client::send_email` — draft creation chained to `EmailSubmission/set` —
+/// `Client::send_email`: draft creation chained to `EmailSubmission/set`:
 /// against a real server's own submission and delivery machinery, not just
 /// `jmap-mockd`'s outbox stub (`jmap-client/tests/mail_send.rs`). Every prior
 /// live-server session left this out with the same note: "no SMTP path
 /// configured for this throwaway account". That is true of *outbound* relay
 /// to the public Internet, which a throwaway domain with no MX/DKIM cannot
-/// do — but says nothing about *intra-server* delivery between two accounts
+/// do, but says nothing about *intra-server* delivery between two accounts
 /// on the same deployment, which needs no outbound relay at all. This test
 /// sends from [`connect_for_write`]'s account to [`connect_recipient`]'s
 /// (both on `agent-livewrite.net`) and polls the recipient's `Email/query`
-/// for the message actually landing in its Inbox — proof of delivery, not
+/// for the message actually landing in its Inbox: proof of delivery, not
 /// merely that the server accepted the submission.
 ///
 /// Skipped, not failed, when `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD`
@@ -1247,7 +1244,7 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
         .expect("Email/set destroy failed for the recipient's copy");
 }
 
-/// JMAP Sieve (RFC 9661) against a real server: item 48's own live-shape
+/// JMAP Sieve (RFC 9661) against a real server: live-shape
 /// probe, which nothing before this test ran (`jmap-client/tests/sieve.rs`
 /// covers create/update/destroy/activate against `jmap-mockd` only). Uploads
 /// a trivial valid script (`keep;`, no `require` needed), creates it,
@@ -1270,8 +1267,8 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
 ///   `sieve_script_deactivate` yet (no Evolution filters UI exists) and a
 ///   future RFC-conformant server must not regress silently if this method
 ///   were bent to match Stalwart's bug.
-/// - The workaround that does work against Stalwart — and that this test
-///   uses to reach a destroyable state — is a direct `update: {"isActive":
+/// - The workaround that does work against Stalwart, and that this test
+///   uses to reach a destroyable state, is a direct `update: {"isActive":
 ///   false}`, even though RFC 9661 §2.1 documents `isActive` as
 ///   server-set, and [`Client::sieve_script_update`]'s own doc comment
 ///   (written before this test, against the RFC and the mock only) says a
@@ -1395,7 +1392,7 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
 /// the name filter cannot match any leftover script from a prior session
 /// sharing this write-test account, confirms the name filter narrows to
 /// just one of them, then activates one and confirms the `isActive: true`
-/// filter returns exactly that one script account-wide — safe even with
+/// filter returns exactly that one script account-wide, safe even with
 /// leftover scripts, since Stalwart enforces at most one active script per
 /// account (the earlier round-trip test above already pins that
 /// activating one deactivates every other).
@@ -1500,7 +1497,7 @@ fn sieve_script_query_filters_by_name_and_is_active_against_the_real_server() {
 /// content to a live server (`jmap-client/tests/sieve.rs` only runs against
 /// `jmap-mockd`, which has no parser and always answers valid). This is
 /// also the regression test for a real client bug this probe found
-/// (`STALWART-RFC-FINDINGS.md`, 2026-10-10): the old
+/// (`STALWART-RFC-FINDINGS.md`): the old
 /// `SieveScriptValidateResponse` declared `isValid` as a mandatory wire
 /// field, but RFC 9661 §2.6's response has only `accountId` and `error`; a
 /// real server (confirmed here against Stalwart) never sends `isValid` at
@@ -1557,7 +1554,7 @@ fn sieve_script_validate_against_a_real_parser_catches_genuinely_invalid_syntax(
 /// over the wire. Every other exercise of this module was against either a
 /// hand-rolled test TCP server (`eventsource.rs`'s own `#[cfg(test)]`
 /// module) or `jmap-mockd`'s fixed push loop
-/// (`jmap-backend-core/src/push.rs`'s tests) — chunked-transfer framing,
+/// (`jmap-backend-core/src/push.rs`'s tests): chunked-transfer framing,
 /// TLS negotiation, and the exact `event: state`/`data:` shape a real
 /// server sends had no live coverage until now.
 ///
@@ -1770,7 +1767,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
 /// copying it within the *same* account must produce a distinct blob id that
 /// reads back the same content, with the source untouched. This capability
 /// is modeled and mock-tested (`blob_management.rs`) but, per
-/// `RFC-SUPPORT.md` item 5, was never exercised against a real server at
+/// `RFC-SUPPORT.md` blob copy, was never exercised against a real server at
 /// all. `fromAccountId == accountId` rather than two different accounts:
 /// see [`blob_copy_into_an_account_you_do_not_own_is_forbidden`]'s doc
 /// comment for why a genuine cross-account copy cannot be tested here
@@ -1837,7 +1834,7 @@ fn blob_copy_within_the_same_real_account_copies_the_content() {
 /// target account the caller does not own answers a `forbidden` method
 /// error ("You are not an owner of account ..."), even though `jmap-mockd`'s
 /// own implementation allows it unconditionally (`blob_copy_between_two_
-/// accounts_copies_the_content` in `blob_management.rs`) — the mock never
+/// accounts_copies_the_content` in `blob_management.rs`): the mock never
 /// modeled an ownership check at all. Setting up ACL sharing between the two
 /// throwaway accounts so a real cross-account copy could succeed is out of
 /// scope for this increment; what is tractable and worth pinning down is
@@ -1897,7 +1894,7 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
 ///
 /// Imports a message via [`Client::email_import`], whose returned `blobId`
 /// differs from the blob that was uploaded to produce it (the server
-/// re-stores its own blob — see `email_import`'s own doc comment), so the
+/// re-stores its own blob; see `email_import`'s own doc comment), so the
 /// *imported* email's blob id, not the one this test uploaded, is the one
 /// `Blob/lookup` should report a match against. Confirms both halves:
 /// before import, the uploaded (as yet unreferenced) blob answers an empty
@@ -1909,7 +1906,7 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
 /// server has never seen must be echoed back in `notFound`
 /// (`"notFound": ["not-a-blob"]`). Real Stalwart drops such an id from both
 /// `list` and `notFound` instead, confirmed over raw HTTP before this test
-/// was written. See `STALWART-RFC-FINDINGS.md` finding 24 in the harness
+/// was written. See `STALWART-RFC-FINDINGS.md` in the harness
 /// repo.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
@@ -2036,7 +2033,7 @@ fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_a
 /// Stalwart only materialises a `Quota` object for a scope it actually
 /// enforces (RFC 9425 does not require advertising one that never applies),
 /// and a freshly seeded account with no configured `maxDiskQuota` enforces
-/// none at all — the capability being advertised only promises the *method*
+/// none at all: the capability being advertised only promises the *method*
 /// works, not that any particular scope is populated. `stw seed` does not
 /// set a disk quota by default, so this is the normal state for a throwaway
 /// write-test account unless one is configured (see
@@ -2133,17 +2130,17 @@ fn quota_used_reflects_a_real_email_import() {
 }
 
 /// `Client::quota_query` (RFC 9425 §4.4, `Quota/query`) had never been
-/// exercised against a real server through this crate's own method —
+/// exercised against a real server through this crate's own method:
 /// `jmap-client/tests/quota.rs` only checks it against `jmap-mockd`, which
 /// necessarily honours whatever filter it is given. A real Stalwart server
-/// does not: `STALWART-RFC-FINDINGS.md` finding 6 found, by reading
+/// does not: `STALWART-RFC-FINDINGS.md` recorded, by reading
 /// Stalwart's own source and then confirming live over raw HTTP, that
 /// `Quota/query` ignores its filter entirely and always answers every
 /// `Quota` id the account has. This pins that same behaviour through the
 /// actual `Client::quota_query` call this codebase ships, not raw HTTP: a
 /// filter that cannot possibly match (a `name` substring no real quota
 /// would ever contain) still returns the quota's id. If this ever starts
-/// failing, Stalwart may have fixed `Quota/query`; update finding 6 and
+/// failing, Stalwart may have fixed `Quota/query`; update findings and
 /// this test together.
 ///
 /// Needs the same per-account `octets` quota as `quota_used_reflects_a_
@@ -2210,7 +2207,7 @@ fn quota_query_ignores_its_filter_against_the_real_server() {
 /// Confirms both halves of what the mock test already pins: the mailbox gets
 /// a real id with the right name and role, and a second call reuses it
 /// rather than creating a sibling (checked by both the returned id and a
-/// fresh `Mailbox/get` listing — a duplicate find-or-create would show up
+/// fresh `Mailbox/get` listing: a duplicate find-or-create would show up
 /// there even if the returned id happened to match the first result by
 /// coincidence).
 #[test]
@@ -2821,7 +2818,7 @@ fn address_book_share_grant_and_revoke_deliver_a_real_share_notification() {
 /// rely on it: `objectType` and `before` both narrow correctly, but `after`
 /// does not. A cutoff in the future, which ought to exclude every existing
 /// notification, still returns one created well before it. See
-/// `STALWART-RFC-FINDINGS.md` finding 25 in the harness repo.
+/// `STALWART-RFC-FINDINGS.md` in the harness repo.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn share_notification_query_filters_by_object_type_and_date_window() {
@@ -2951,7 +2948,7 @@ fn share_notification_query_filters_by_object_type_and_date_window() {
         "querying before a date well after the notification's own creation wrongly excluded it"
     );
 
-    // Known Stalwart deviation (STALWART-RFC-FINDINGS.md finding 25,
+    // Known Stalwart deviation (STALWART-RFC-FINDINGS.md,
     // harness repo): unlike `before` above, the `after` filter argument is
     // silently ignored, so a cutoff in the future (which ought to exclude
     // every existing notification) still returns this one. Pinning the
@@ -4617,12 +4614,12 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .expect("cleanup destroy id2 failed");
 }
 
-/// Finding 17 (STALWART-RFC-FINDINGS.md): a `/changes` call carrying an
+/// STALWART-RFC-FINDINGS.md: a `/changes` call carrying an
 /// unrecognized `sinceState` answers `invalidArguments`, not RFC 8620 §5.2's
 /// own `cannotCalculateChanges`. `jmap-client/src/error.rs`'s
 /// `Error::is_unrecognized_changes_state` exists to paper over exactly this
 /// and is unit-tested against a synthetic `MethodError` built to match the
-/// shape finding 17 recorded, but nothing before this test had ever driven a
+/// shape findings recorded, but nothing before this test had ever driven a
 /// garbage `sinceState` through the real `Client::changes` against a genuine
 /// Stalwart response to confirm the predicate actually recognizes it.
 ///
@@ -4658,7 +4655,7 @@ fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calcu
     );
 }
 
-/// Finding 12 (STALWART-RFC-FINDINGS.md): Unauthenticated GET to the session
+/// STALWART-RFC-FINDINGS.md: Unauthenticated GET to the session
 /// resource on Stalwart v1.0.0 returns HTTP 200 OK with empty `accounts: {}`
 /// and `username: ""` rather than HTTP 401 Unauthorized with a WWW-Authenticate
 /// header. Verifies that `Client::connect` with `Credentials::none()` tolerates
@@ -4689,7 +4686,7 @@ fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
     assert!(client.primary_account(CAPABILITY_MAIL).is_err());
 }
 
-/// Finding 16 (STALWART-RFC-FINDINGS.md): Mailbox/set create with whitespace-padded
+/// STALWART-RFC-FINDINGS.md: Mailbox/set create with whitespace-padded
 /// name trims the stored name on Stalwart v1.0.0, but omits the name property from
 /// the `created` map, returning only `{"id": "<id>"}`. Verifies that `Client::mailbox_create`
 /// tolerates the omitted name, falls back to the requested name trimmed of whitespace,
@@ -4742,7 +4739,7 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .expect("Mailbox/set destroy failed");
 }
 
-/// Finding 20 (STALWART-RFC-FINDINGS.md): CalendarEventNotification/set destroy
+/// STALWART-RFC-FINDINGS.md: CalendarEventNotification/set destroy
 /// with an unformatted ID silently drops it from the response map on Stalwart v1.0.0
 /// rather than returning a notFound SetError in notDestroyed (RFC 8620 Section 5.3).
 /// Verifies that Client::calendar_event_notification_destroy tolerates the omitted ID
@@ -4781,7 +4778,7 @@ fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_r
     }
 }
 
-/// Finding 19 (STALWART-RFC-FINDINGS.md): ParticipantIdentity/get response omits
+/// STALWART-RFC-FINDINGS.md: ParticipantIdentity/get response omits
 /// mandatory state property required by RFC 8620 Section 5.1 and
 /// draft-ietf-jmap-calendars Section 3.1.
 /// Verifies that Client::participant_identities tolerates the omitted state field,
@@ -4815,7 +4812,7 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
         )
         .expect("raw ParticipantIdentity/get succeeds");
 
-    // 3. Confirm that live Stalwart indeed omits the mandatory state field (Finding 19):
+    // 3. Confirm that live Stalwart indeed omits the mandatory state field:
     assert!(
         raw_args.get("state").is_none(),
         "live Stalwart ParticipantIdentity/get response must omit the state field (Finding 19), got: {raw_args:?}"
@@ -4842,7 +4839,7 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
     }
 }
 
-/// Finding 18 (STALWART-RFC-FINDINGS.md): Session capability currentUserPrincipalId
+/// STALWART-RFC-FINDINGS.md: Session capability currentUserPrincipalId
 /// advertises the account ID instead of the principal ID, causing Principal/get to
 /// report notFound.
 /// Verifies that Client::current_user_principal and Client::current_user_principal_id
@@ -4927,7 +4924,7 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
     assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
 }
 
-/// Finding 13 (STALWART-RFC-FINDINGS.md): CalendarEvent/set rejects the standard
+/// STALWART-RFC-FINDINGS.md: CalendarEvent/set rejects the standard
 /// JSCalendar timeZones property (RFC 8984 Section 4.7.2) with invalidProperties,
 /// and CalendarEvent/parse converts custom VTIMEZONE definitions into iCalendar
 /// convertedProperties rather than RFC 8984 timeZones.
@@ -4956,7 +4953,7 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
         .expect("calendar must have an ID");
 
     // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} reproduces the
-    // invalidProperties rejection on live Stalwart (Finding 13):
+    // invalidProperties rejection on live Stalwart:
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
@@ -5092,7 +5089,7 @@ END:VCALENDAR\r\n";
 }
 
 /// `CalendarEvent/parse` on a blob holding two distinct top-level VEVENTs
-/// (different UIDs). Confirmed live 2026-10-06 against real Stalwart: it
+/// (different UIDs). Confirmed live against real Stalwart: it
 /// answers with one array element per event under the single blob id, which
 /// `Client::event_parse` cannot represent in its one-event-per-blob-id
 /// `parsed` map without silently discarding every event but the first.
@@ -5156,7 +5153,7 @@ END:VCALENDAR\r\n";
 }
 
 /// `ContactCard/set` create with `onlineServices` lacking a `uri`, and subsequent
-/// `ContactCard/get` against a real server (Finding 14).
+/// `ContactCard/get` against a real server.
 /// Stalwart accepts the creation, but silently discards the `onlineServices` entry on storage
 /// because it has no `uri` (RFC 9553 Section 2.3.2).
 /// Verifies that `Client::contact_create` and `Client::contact_get` pass the server's reply
@@ -5204,7 +5201,7 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
         .expect("contact_create with onlineServices lacking uri must succeed on Stalwart");
     let card_id = created.id.expect("created card must have an id");
 
-    // 2. Fetch the card back: Stalwart accepted the create, but discarded onlineServices on storage (Finding 14):
+    // 2. Fetch the card back: Stalwart accepted the create, but discarded onlineServices on storage:
     let fetched = client
         .contact_get(&account_id, std::slice::from_ref(&card_id))
         .expect("contact_get must succeed on Stalwart");
@@ -5225,7 +5222,7 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
         .expect("contact_destroy must succeed on Stalwart");
 }
 
-/// `ContactCard/parse` with `EMAIL;TYPE=home,internet:...` against a real server (Finding 15).
+/// `ContactCard/parse` with `EMAIL;TYPE=home,internet:...` against a real server.
 /// Stalwart promotes `TYPE=internet` to an unrecognized context (`"internet": true`) in `contexts`
 /// (RFC 9553 Section 1.7.3 / Section 2.2.3).
 /// Verifies that `Client::contact_card_parse` tolerates the non-standard context and passes
@@ -5295,7 +5292,7 @@ fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
         .find(|e| e.address == email_addr)
         .expect("expected email address in parsed card");
 
-    // Finding 15: Stalwart promotes TYPE=internet to an unrecognized context key:
+    // Stalwart promotes TYPE=internet to an unrecognized context key:
     let contexts = email
         .contexts
         .as_ref()
@@ -5332,7 +5329,7 @@ fn current_and_peak_rss_kb() -> (u64, u64) {
     (vmrss, vmhwm)
 }
 
-/// Batch 27: Large blob transfers, byte fidelity, memory/RSS, and limit edges.
+/// Large blob transfers, byte fidelity, memory/RSS, and limit edges.
 ///
 /// Uploads and downloads blobs across 1 MB, 10 MB, and 50 MB (the advertised
 /// maxSizeUpload limit), validating:
@@ -5463,7 +5460,7 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
     }
 }
 
-/// Finding 23 (STALWART-RFC-FINDINGS.md): `CalendarEvent/set` accepts the
+/// STALWART-RFC-FINDINGS.md: `CalendarEvent/set` accepts the
 /// `participants` property on both create and a whole-value update without
 /// any error, but the server never persists it: a subsequent `CalendarEvent/get`
 /// (even naming `participants` explicitly in `properties`) reports the event
@@ -5515,7 +5512,7 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
     let event_id = created.id.clone().expect("the server named the new event");
 
     // 2. A fresh CalendarEvent/get, explicitly asking for participants, comes
-    // back with none at all (Finding 23) — not an empty map, the property is
+    // back with none at all: not an empty map, the property is
     // simply absent from the object, exactly as jmap-cal-sync's own
     // load_component would observe it:
     let raw_args = client
@@ -5559,6 +5556,235 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
     client
         .event_destroy(&account_id, &event_id)
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
+/// Batch 37 Item 3: prove against the oracle that a CalendarEvent created with
+/// JSCalendar-bis participant properties (calendarAddress rather than reserved
+/// sendTo) is persisted and returned intact by Stalwart.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_set_preserves_jscalendar_bis_participants_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let suffix = unique_suffix();
+    let title = format!("agent-bis-participants-{suffix}");
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T10:00:00", "PT1H");
+    event.organizer_calendar_address = Some("mailto:admin@example.internal".to_owned());
+
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "attendee-1".to_owned(),
+        serde_json::to_value(
+            Participant::new("Alice Bis", "alice.bis@example.internal")
+                .with_calendar_address("mailto:alice.bis@example.internal")
+                .with_roles([("required".to_owned(), true)].into())
+                .with_participation_status("needs-action"),
+        )
+        .unwrap(),
+    );
+    event.participants = Some(participants);
+
+    // 1. Create event with bis participant on real server
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create with bis participant failed against the real server");
+    let event_id = created.id.clone().expect("the server named the new event");
+
+    // 2. Fetch the event back, explicitly requesting participants
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/get",
+            &GetRequest::ids(account_id.clone(), [event_id.clone()]).properties([
+                "participants",
+                "title",
+                "organizerCalendarAddress",
+            ]),
+        )
+        .expect("raw CalendarEvent/get succeeds");
+    let fetched = raw_args
+        .get("list")
+        .and_then(|list| list.as_array())
+        .and_then(|list| list.first())
+        .expect("CalendarEvent/get must return the created event");
+
+    let fetched_participants = fetched
+        .get("participants")
+        .and_then(|p| p.as_object())
+        .expect("Stalwart must preserve participants for bis calendarAddress shape");
+    assert!(
+        fetched_participants.contains_key("attendee-1"),
+        "participants must contain attendee-1, got: {fetched_participants:?}"
+    );
+    let attendee = &fetched_participants["attendee-1"];
+    assert_eq!(
+        attendee.get("calendarAddress").and_then(|v| v.as_str()),
+        Some("mailto:alice.bis@example.internal")
+    );
+
+    // 3. Client round-trip path
+    let reloaded = client
+        .event_get(&account_id, std::slice::from_ref(&event_id))
+        .expect("CalendarEvent/get failed against the real server");
+    let reloaded_event = reloaded
+        .list
+        .first()
+        .expect("CalendarEvent/get must return the created event");
+    let reloaded_participants = reloaded_event
+        .participants
+        .as_ref()
+        .expect("Client::event_get must observe preserved participants");
+    assert!(
+        reloaded_participants.contains_key("attendee-1"),
+        "reloaded participants must hold attendee-1"
+    );
+
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
+/// Batch 38 Item 1: prove on live Stalwart oracle that CalendarEvent/parse emits
+/// Link.display as a set (String[Boolean] conforming to draft-ietf-calext-jscalendarbis-22
+/// Section 1.5.11), matching jmap-ical's inbound output, and that CalendarEvent/set
+/// strictly requires the set form and roundtrips it via CalendarEvent/get.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_link_display_set_matches_jscalendar_bis_on_live_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    // 1. CalendarEvent/parse proof on live server:
+    // Upload an iCalendar stream containing IMAGE with DISPLAY=BADGE.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:live-link-display-probe\r\n\
+DTSTART:20261015T120000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Link Display Bis Probe\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:https://example.com/logo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let upload_res = client
+        .blob_upload(
+            &BlobUploadRequest::new(account_id.clone())
+                .create_blob("b_link", UploadBlob::from_text(ics, "text/calendar")),
+        )
+        .expect("blob_upload succeeds")
+        .created
+        .expect("blob created map present");
+    let blob_id = upload_res.get("b_link").expect("b_link created").id.clone();
+
+    let parse_req = CalendarEventParseRequest::new(account_id.clone(), vec![blob_id.clone()]);
+    let parse_res = client
+        .event_parse(&parse_req)
+        .expect("event_parse succeeds on Stalwart");
+    let parsed_map = parse_res
+        .parsed
+        .expect("parsed map must be present in response");
+    let server_ev = parsed_map
+        .get(&blob_id)
+        .expect("parsed event must be present for blob ID");
+
+    let server_links = server_ev
+        .links
+        .as_ref()
+        .expect("server parse returned links");
+    let server_img = server_links
+        .values()
+        .find(|l| l.get("href") == Some(&json!("https://example.com/logo.png")))
+        .expect("server link with matching href found");
+    assert_eq!(server_img.get("rel"), Some(&json!("icon")));
+    assert_eq!(
+        server_img.get("display"),
+        Some(&json!({"badge": true})),
+        "live server CalendarEvent/parse must emit display as set matching JSCalendar-bis"
+    );
+
+    // Verify local jmap_ical::ical_to_event produces identical Link representation
+    let local_ev = jmap_ical::ical_to_event(ics).expect("local ical_to_event succeeds");
+    let local_links = local_ev.links.as_ref().expect("local parse returned links");
+    let local_img = local_links
+        .values()
+        .find(|l| l.get("href") == Some(&json!("https://example.com/logo.png")))
+        .expect("local link with matching href found");
+    assert_eq!(
+        server_img.get("display"),
+        local_img.get("display"),
+        "live server parse display must match local jmap-ical parse display"
+    );
+
+    // 2. CalendarEvent/set write-path proof:
+    // Create an event with Link having display: {"badge": true}.
+    let suffix = unique_suffix();
+    let title = format!("agent-link-display-{suffix}");
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-10-15T12:00:00Z", "PT1H");
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "k_icon".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/badge.png",
+            "rel": "icon",
+            "display": { "badge": true },
+            "contentType": "image/png"
+        }),
+    );
+    event.links = Some(links);
+
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create with bis link display succeeded");
+    let event_id = created.id.clone().expect("server assigned event id");
+
+    // Fetch back and assert display was preserved as set
+    let fetched = client
+        .event_get(&account_id, std::slice::from_ref(&event_id))
+        .expect("event_get succeeds");
+    let fetched_ev = fetched.list.first().expect("created event returned");
+    let fetched_links = fetched_ev.links.as_ref().expect("fetched event has links");
+    let fetched_icon = &fetched_links["k_icon"];
+    assert_eq!(
+        fetched_icon.get("display"),
+        Some(&json!({"badge": true})),
+        "fetched event preserves display set"
+    );
+
+    // Clean up
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("event_destroy cleanup succeeds");
 }
 
 /// `VacationResponse` (RFC 8621 section 8.1) against a real server.

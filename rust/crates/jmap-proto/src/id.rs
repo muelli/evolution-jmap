@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// An object identifier: an opaque server-assigned string.
 ///
-/// Kept as a string — JMAP ids are only ever compared and echoed back, never
+/// Kept as a string: JMAP ids are only ever compared and echoed back, never
 /// interpreted.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
@@ -20,6 +20,10 @@ impl Id {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

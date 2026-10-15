@@ -244,9 +244,6 @@ impl Fields {
     }
 }
 
-/// The five properties' ids and the names `class_init` installs them under —
-/// dense from 1, since GObject treats 0 as "no property", and local to this
-/// class alone.
 /// The GObject property names `class_init` installs, in declaration order —
 /// the full set a caller binding or copying this extension between sources
 /// must carry. `jmap_backend_collection::child_added` binds exactly these
@@ -261,6 +258,8 @@ pub const PROPERTY_NAMES: [&CStr; 7] = [
     c"resource",
 ];
 
+// Paired with the ids `class_init` installs them under — dense from 1, since
+// GObject treats 0 as "no property", and local to this class alone.
 const PROPERTIES: [(u32, &CStr); 7] = [
     (1, PROPERTY_NAMES[0]),
     (2, PROPERTY_NAMES[1]),

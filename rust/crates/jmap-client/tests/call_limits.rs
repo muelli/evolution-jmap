@@ -5,9 +5,9 @@
 //! method calls into one request, against a server that takes only one call at
 //! a time.
 //!
-//! Both chains are optimisations — `Email/query` + `Email/get` through a
+//! Both chains are optimisations (`Email/query` + `Email/get` through a
 //! `#ids` back-reference, and `Email/set` + `EmailSubmission/set` through a
-//! `#draft` creation reference — and the point of these tests is that they stay
+//! `#draft` creation reference), and the point of these tests is that they stay
 //! optimisations. A server too small for the chain must still be able to read
 //! and send mail, at the cost of the round trip the chain saved.
 
@@ -135,7 +135,7 @@ fn query_and_get_travel_together_when_the_server_takes_two_calls() {
 
 /// The same read against a server that takes one call at a time: two requests,
 /// and the same two messages in the same order. The order matters because it
-/// is the query's, not the `/get`'s — RFC 8620 §5.1 lets a `/get` answer in any
+/// is the query's, not the `/get`'s: RFC 8620 §5.1 lets a `/get` answer in any
 /// order, and the split path has to restore the sort just as the chain does.
 #[test]
 fn query_and_get_split_when_the_server_takes_one_call() {
@@ -296,7 +296,7 @@ fn sending_is_one_request_when_the_server_takes_two_calls() {
 }
 
 /// A server that names no limit at all is sent the chain. RFC 8620 §2 requires
-/// the property, so this is a server out of spec — and splitting for it would
+/// the property, so this is a server out of spec, and splitting for it would
 /// pay a round trip per read against a server that never asked for one.
 #[test]
 fn a_server_that_names_no_call_limit_still_gets_the_chain() {

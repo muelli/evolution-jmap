@@ -249,9 +249,10 @@ impl UploadBlobResult {
 }
 
 /// `Blob/upload` arguments (RFC 9404 §2.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobUploadRequest {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
     pub create: BTreeMap<String, UploadBlob>,
 }
@@ -271,10 +272,15 @@ impl BlobUploadRequest {
 }
 
 /// `Blob/upload` response (RFC 9404 §2.2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobUploadResponse {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<BTreeMap<String, UploadBlobResult>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,6 +293,8 @@ impl BlobUploadResponse {
     pub fn new(account_id: impl Into<Id>) -> Self {
         Self {
             account_id: account_id.into(),
+            old_state: None,
+            new_state: None,
             created: None,
             not_created: None,
             extra: BTreeMap::new(),
@@ -332,6 +340,10 @@ pub struct BlobInfo {
     pub content_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_encoding_problem: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_truncated: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -345,6 +357,8 @@ impl BlobInfo {
             data: None,
             content_type: None,
             size: Some(size),
+            is_encoding_problem: None,
+            is_truncated: None,
             extra: BTreeMap::new(),
         }
     }
@@ -357,8 +371,20 @@ impl BlobInfo {
             data: None,
             content_type: None,
             size: None,
+            is_encoding_problem: None,
+            is_truncated: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_is_encoding_problem(mut self, problem: bool) -> Self {
+        self.is_encoding_problem = Some(problem);
+        self
+    }
+
+    pub fn with_is_truncated(mut self, truncated: bool) -> Self {
+        self.is_truncated = Some(truncated);
+        self
     }
 
     pub fn with_size(mut self, size: u64) -> Self {
@@ -407,12 +433,20 @@ impl BlobInfo {
 }
 
 /// `Blob/get` arguments (RFC 9404 §2.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobGetRequest {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
-    #[serde(alias = "blobIds")]
+    #[serde(alias = "blobIds", default, skip_serializing_if = "Vec::is_empty")]
     pub ids: Vec<Id>,
+    #[serde(
+        rename = "#ids",
+        alias = "#blobIds",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ids_ref: Option<crate::request::ResultReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -426,10 +460,16 @@ impl BlobGetRequest {
         Self {
             account_id: account_id.into(),
             ids: ids.into_iter().map(Into::into).collect(),
+            ids_ref: None,
             properties: None,
             offset: None,
             length: None,
         }
+    }
+
+    pub fn with_ids_ref(mut self, ids_ref: crate::request::ResultReference) -> Self {
+        self.ids_ref = Some(ids_ref);
+        self
     }
 
     pub fn with_properties(
@@ -452,9 +492,10 @@ impl BlobGetRequest {
 }
 
 /// `Blob/get` response (RFC 9404 §2.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobGetResponse {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
     #[serde(default)]
     pub list: Vec<BlobInfo>,
@@ -478,9 +519,10 @@ impl BlobGetResponse {
 }
 
 /// `Blob/lookup` arguments (RFC 9404 §2.3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobLookupRequest {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
     pub type_names: Vec<String>,
     pub ids: Vec<Id>,
@@ -542,9 +584,10 @@ impl BlobLookupMatch {
 }
 
 /// `Blob/lookup` response (RFC 9404 §2.3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobLookupResponse {
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
     #[serde(default)]
     pub list: Vec<BlobLookupMatch>,

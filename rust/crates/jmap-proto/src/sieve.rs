@@ -72,14 +72,27 @@ impl SieveCapability {
     }
 }
 
+fn deserialize_null_as_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// A Sieve script object (RFC 9661 §2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScript {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub blob_id: Id,
     #[serde(default)]
     pub is_active: bool,
@@ -100,6 +113,11 @@ impl SieveScript {
 
     pub fn with_id(mut self, id: impl Into<Id>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
         self
     }
 
@@ -125,18 +143,16 @@ impl SieveScript {
 pub struct SieveScriptSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<SieveScript>,
-    /// `serde`'s blanket `Option<T>` impl treats a JSON `null` the same as
-    /// the key being absent, collapsing both to `None` — indistinguishable
-    /// here, where they mean opposite things ("leave the active script
-    /// alone" vs "deactivate it"). `deserialize_present` only runs when the
-    /// key is there at all, `null` included, so it is the field's presence
-    /// that this `Option` tracks, not whether its value is non-null.
+    /// Distinguishes key absence from JSON `null` ("deactivate script").
+    /// `deserialize_present` tracks property presence.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_present"
     )]
     pub on_success_activate_script: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_deactivate_script: Option<bool>,
 }
 
 fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
@@ -151,6 +167,7 @@ impl SieveScriptSetRequest {
         Self {
             set,
             on_success_activate_script: None,
+            on_success_deactivate_script: None,
         }
     }
 
@@ -161,6 +178,12 @@ impl SieveScriptSetRequest {
 
     pub fn deactivating(mut self) -> Self {
         self.on_success_activate_script = Some(Value::Null);
+        self.on_success_deactivate_script = Some(true);
+        self
+    }
+
+    pub fn with_deactivate_script(mut self, deactivate: bool) -> Self {
+        self.on_success_deactivate_script = Some(deactivate);
         self
     }
 }
@@ -280,17 +303,8 @@ impl SieveScriptValidateResponse {
     }
 }
 
-/// The two `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
-/// `invalidSieve` for a create or update whose content fails to parse, and
-/// `sieveIsActive` for a destroy of the currently active script (it must be
-/// deactivated in a separate call first). The RFC reuses three standard RFC
-/// 8620 §5.3 errors rather than defining Sieve-specific ones for the other
-/// documented failures: `alreadyExists` (duplicate name, with an
-/// `existingId` property), `tooLarge` (over `maxSizeScript`) and `overQuota`
-/// (over `maxNumberScripts` or storage) — see [`crate::error::set`].
-/// Activating two scripts at once cannot arise: `onSuccessActivateScript`
-/// names at most one id per call, so there is no `multipleActiveScripts`
-/// error to report.
+/// The `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
+/// `invalidSieve` for content parse failures, and `sieveIsActive` for destroy of active scripts.
 pub mod sieve_set_error {
     pub const INVALID_SIEVE: &str = "invalidSieve";
     pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The mapping against what a server actually returns, rather than against a
-//! fixture that could drift away from it.
+//! Round-trip mapping checks against mock-server responses.
 
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
@@ -32,7 +31,7 @@ fn a_stored_card_survives_the_trip_through_vcard() {
         .unwrap();
     let id = stored.id.clone().expect("server assigned id");
 
-    // The vCard EDS gets to see.
+    // vCard shape consumed by EDS.
     let vcard = card_to_vcard(&stored);
     assert!(vcard.contains(&format!("\r\nUID:{id}\r\n")), "{vcard}");
     assert!(vcard.contains("\r\nFN:Vera Oldenburg\r\n"), "{vcard}");
@@ -45,16 +44,14 @@ fn a_stored_card_survives_the_trip_through_vcard() {
         "{vcard}"
     );
 
-    // …and back, with the identifiers and the email key intact.
+    // Parse back with identifiers and email key intact.
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.id, stored.id);
     assert_eq!(back.uid, stored.uid);
     let key = back.emails.as_ref().unwrap().keys().next().unwrap().clone();
     assert_eq!(stored.emails.as_ref().unwrap().keys().next(), Some(&key));
 
-    // The point of preserving the key: a patch built from the round-tripped
-    // card addresses the entry the server already has, so an edit stays an
-    // edit instead of becoming a remove-and-re-add.
+    // Preserve the email key so this patch updates in place.
     client
         .contact_update(
             &account_id,

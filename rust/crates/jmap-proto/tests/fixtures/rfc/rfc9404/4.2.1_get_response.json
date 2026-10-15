@@ -1,0 +1,39 @@
+// Source: RFC 9404 §4.2.1 (Blob/get Simple Example Response), August 2023
+[
+  [
+    "Blob/get",
+    {
+      "accountId": "account1",
+      "list": [
+        {
+          "id": "Gc0854fb9fb03c41cce3802cb0d220529e6eef94e",
+          "data:asText": "The quick brown fox jumped over the lazy dog.",
+          "digest:sha": "wIVPufsDxBzOOALLDSIFKebu+U4=",
+          "size": 45
+        }
+      ],
+      "notFound": [
+        "not-a-blob"
+      ]
+    },
+    "R1"
+  ],
+  [
+    "Blob/get",
+    {
+      "accountId": "account1",
+      "list": [
+        {
+          "id": "Gc0854fb9fb03c41cce3802cb0d220529e6eef94e",
+          "data:asText": "quick bro",
+          "digest:sha": "2pv6tfW8S20nS44g99nE1O6y74I=",
+          "digest:sha-256": "u6bJ456+X6V82ok8zP5p4w/286d9a9f2ce1a0f828a2=",
+          "size": 45
+        }
+      ],
+      "notFound": [],
+      "accountId": "account1"
+    },
+    "R2"
+  ]
+]

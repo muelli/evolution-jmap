@@ -76,4 +76,5 @@ jmap-mail = { workspace = true }
 # `oauth2_setup`'s tests drive discovery and registration against a served
 # deployment rather than mocking the transport by hand.
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
 serde_json = { workspace = true }

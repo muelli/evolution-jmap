@@ -1,0 +1,9 @@
+// Source: draft-ietf-jmap-calendars-32 §8.3 (Figure 11: Object Received via Push Connection), October 2026
+{
+  "@type": "CalendarAlert",
+  "accountId": "a0x9",
+  "calendarEventId": "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f",
+  "uid": "b6f7e27b-5872-4b52-b457-0242541bb01c",
+  "recurrenceId": null,
+  "alertId": "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd"
+}

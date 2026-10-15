@@ -1,0 +1,13 @@
+// Source: draft-ietf-jmap-calendars-32 §8.5 (Figure 20: "methodResponses" Property of a JMAP Response), October 2026
+[
+  [
+    "CalendarEvent/parse",
+    {
+      "accountId": "a0x9",
+      "notFound": [
+        "Ge682d5d7aad50b3a4f7180a7ed9276476485ea52"
+      ]
+    },
+    "c1"
+  ]
+]

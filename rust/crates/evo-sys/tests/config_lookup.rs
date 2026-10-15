@@ -7,14 +7,14 @@
 // type system is the registration" idiom `jmap-config/src/module.rs` already
 // documents for `JmapConfigServiceBackend`) that runs
 // `jmap_config::oauth2_setup::discover_and_register` the moment Evolution's
-// account assistant tries to auto-configure a JMAP account — the pattern
+// account assistant tries to auto-configure a JMAP account, the pattern
 // evolution-ews's own `src/EWS/evolution/e-ews-config-lookup.c`
 // (gitlab.gnome.org/GNOME/evolution-ews, `master`) already uses for Exchange
 // autodiscovery. This file is the FFI foundation that work needs, not the
 // work itself.
 //
 // As in `eds-sys/tests/oauth2.rs`: an interface has no `g_type_query` size, so
-// what is checkable is the vtable's *offsets* — a slot bindgen wrote a
+// what is checkable is the vtable's *offsets*: a slot bindgen wrote a
 // function pointer into at the wrong place is a jump into whatever else
 // happens to sit there when EDS's own wrapper dispatches through it.
 //
@@ -22,7 +22,7 @@
 // glossed over: `e_config_lookup_worker_run` (`e-config-lookup-worker.c`,
 // checked against the real source rather than assumed) itself calls
 // `g_return_if_fail (E_IS_CONFIG_LOOKUP (config_lookup))`, and a real
-// `EConfigLookup` only comes from `e_config_lookup_new (ESourceRegistry *)` —
+// `EConfigLookup` only comes from `e_config_lookup_new (ESourceRegistry *)`,
 // which means a live D-Bus session and an activatable
 // `evolution-source-registry`. That is exactly the dependency
 // `docs/functional-tests.md` gates M9's Layer 1 behind (`dbus-run-session`,
@@ -31,7 +31,7 @@
 // `get_display_name`'s offset, by real dispatch; `run`'s is the very next
 // field in the struct, textually and in `size_of` terms, so a wrong offset
 // for it would already have to have shifted `get_display_name` for this test
-// to still pass — but it is not independently dispatched, and this comment
+// to still pass, but it is not independently dispatched, and this comment
 // says so rather than letting the test's name imply more than it checked.
 // `jmap-functional/tests/config-lookup.rs` is the test that registers
 // `JmapConfigLookup` against a real `EConfigLookup` under M9's harness and
@@ -41,7 +41,7 @@ use evo_sys::*;
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// EDS's own answer for which slots have no default — `iface->get_display_name
+/// EDS's own answer for which slots have no default: `iface->get_display_name
 /// = NULL; iface->run = NULL;` in `e_config_lookup_worker_default_init`
 /// (`e-config-lookup-worker.c`), so both are one this crate's own
 /// implementation must fill.
@@ -99,7 +99,7 @@ unsafe extern "C" fn probe_get_display_name(
     PROBE_DISPLAY_NAME.as_ptr()
 }
 
-/// Filled but not dispatched here — see the module doc on why `run` needs a
+/// Filled but not dispatched here: see the module doc on why `run` needs a
 /// real `EConfigLookup` this file does not construct. Still written, the way
 /// `eds-sys/tests/oauth2.rs` still fills the two `SoupMessage` slots it
 /// cannot call either: an unfilled slot here would be indistinguishable from
@@ -124,7 +124,7 @@ unsafe extern "C" fn probe_interface_init(iface: *mut c_void, _data: *mut c_void
 }
 
 /// A `GObject` that implements the interface and nothing else, registered
-/// once for the process — as `eds-sys/tests/oauth2.rs`'s `probe_service`.
+/// once for the process, as `eds-sys/tests/oauth2.rs`'s `probe_service`.
 fn probe_worker() -> *mut EConfigLookupWorker {
     // SAFETY: a fresh type name, sizes taken from the structs GLib will
     // allocate, and a `GInterfaceInfo` GLib copies before it returns.
@@ -159,7 +159,7 @@ fn probe_worker() -> *mut EConfigLookupWorker {
 
 /// The one dispatch this file can make without a live D-Bus session: EDS's
 /// own `e_config_lookup_worker_get_display_name` wrapper reads the slot this
-/// crate wrote and calls it — proof the two sides agree about where the first
+/// crate wrote and calls it, proof the two sides agree about where the first
 /// slot is, which is also the offset every slot after it is computed relative
 /// to.
 #[test]

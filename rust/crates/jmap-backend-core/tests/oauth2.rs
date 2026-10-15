@@ -23,6 +23,7 @@ use eds_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_core::connect::ConnectError;
 use jmap_backend_core::oauth2::{access_token, method_is_oauth2, source_uses_oauth2};
+use jmap_tracing_capture::capture;
 
 /// A live `ESource` with nothing but a uid, plus whatever a test writes on it.
 /// The same shape `jmap-config/tests/oauth2_service.rs` uses, and for the same
@@ -127,19 +128,10 @@ fn the_method_is_read_off_the_source() {
 fn a_source_with_no_token_is_a_required_not_a_rejected() {
     let source = TestSource::new("jmap-oauth2-no-token").with_method("OAuth2");
 
-    // Takes the same lock `capture` does, below: this call reaches the exact
-    // `tracing` call sites those tests capture, with no subscriber of its own
-    // installed. Racing it against one of those tests' first-ever
-    // registration of a call site (which happens, for a given call site, the
-    // first time any thread in the process executes it, whichever thread
-    // wins) can register that call site's cached `Interest` as `never`, under
-    // this call's absent subscriber, so this must never run concurrently with
-    // `capture`.
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     // SAFETY: a live source and a NULL cancellable, which is what an EDS vfunc
     // may be handed.
-    let error = unsafe { access_token(source.0, ptr::null_mut()) }.expect_err("no token exists");
+    let (result, _) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
+    let error = result.expect_err("no token exists");
 
     assert!(matches!(error, ConnectError::OAuth2(_)));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
@@ -176,122 +168,18 @@ fn an_oauth2_secret_store_failure_surfaces_error_and_dbus_client_error() {
     }
 }
 
-struct CapturingSubscriber {
-    captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-}
-
-struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
-
-impl tracing::field::Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((field.name().to_owned(), value.to_owned()));
-    }
-
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((field.name().to_owned(), value.to_string()));
-    }
-}
-
-impl tracing::Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-    fn event(&self, event: &tracing::Event<'_>) {
-        event.record(&mut Recorder(&self.captured));
-    }
-
-    fn enter(&self, _span: &tracing::span::Id) {}
-
-    fn exit(&self, _span: &tracing::span::Id) {}
-}
-
-/// Serializes every test in this file that calls `access_token` (both the two
-/// below and `a_source_with_no_token_is_a_required_not_a_rejected`, which
-/// takes this same lock without using `capture`), and forces a fresh
-/// callsite-interest rebuild once this subscriber is the thread's default.
-/// Both guard against the same fact `tests/tracing_writes.rs` in several
-/// sibling crates already documents: `tracing-core` caches each macro call
-/// site's `Interest` (never/sometimes/always) once, process-wide, the first
-/// time that call site fires anywhere in the process, based on whichever
-/// `Dispatch` is current *on the thread that happens to fire it first*, not
-/// on which `Dispatch` is current on any later call. `a_source_with_no_token_
-/// is_a_required_not_a_rejected` reaches the exact same `access_token` call
-/// sites with no subscriber installed at all; left unsynchronized, it can win
-/// the race to register one of those call sites first, caching it `never`
-/// under its own absent subscriber, which then silently drops that event even
-/// under a `capture` subscriber that would otherwise have accepted it.
-/// `rebuild_interest_cache` re-evaluates every *already-registered* call site
-/// against whatever is current right now, which is why the lock alone is not
-/// enough: a call site neither test has reached yet still registers itself,
-/// under whichever subscriber is current, the first time any locked caller
-/// reaches it, so it must run after `with_default` has installed this
-/// subscriber, not before.
-static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn capture(source: &TestSource) -> (Result<String, ConnectError>, Vec<(String, String)>) {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-
-    let result = tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        // SAFETY: a live source and NULL cancellable.
-        unsafe { access_token(source.0, ptr::null_mut()) }
-    });
-
-    let entries = std::mem::take(&mut *captured.lock().unwrap());
-    (result, entries)
-}
-
 #[test]
 fn access_token_traces_account_id_on_attempt() {
     let source = TestSource::new("jmap-oauth2-trace-uid").with_method("OAuth2");
 
-    let (_, entries) = capture(&source);
+    // SAFETY: a live source and NULL cancellable.
+    let (_, captured) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
     assert!(
-        entries.contains(&(
-            "account_id".to_owned(),
-            "Some(\"jmap-oauth2-trace-uid\")".to_owned()
-        )),
-        "expected account_id field, got {entries:?}"
+        captured
+            .iter()
+            .any(|(_, name, value)| name == "account_id"
+                && value == "Some(\"jmap-oauth2-trace-uid\")"),
+        "expected account_id field, got {captured:?}"
     );
 }
 
@@ -299,33 +187,36 @@ fn access_token_traces_account_id_on_attempt() {
 fn access_token_failure_traces_structured_fields_and_consent_escalation() {
     let source = TestSource::new("jmap-oauth2-trace-failure").with_method("OAuth2");
 
-    let (result, entries) = capture(&source);
+    // SAFETY: a live source and NULL cancellable.
+    let (result, captured) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
     assert!(result.is_err());
     assert!(
-        entries.contains(&(
-            "account_id".to_owned(),
-            "Some(\"jmap-oauth2-trace-failure\")".to_owned()
-        )),
-        "expected account_id field, got {entries:?}"
+        captured.iter().any(|(_, name, value)| name == "account_id"
+            && value == "Some(\"jmap-oauth2-trace-failure\")"),
+        "expected account_id field, got {captured:?}"
     );
     assert!(
-        entries.iter().any(|(k, _)| k == "reason"),
-        "expected reason field, got {entries:?}"
+        captured.iter().any(|(_, name, _)| name == "reason"),
+        "expected reason field, got {captured:?}"
     );
     assert!(
-        entries.iter().any(|(k, _)| k == "escalates_to_consent"),
-        "expected escalates_to_consent field, got {entries:?}"
+        captured
+            .iter()
+            .any(|(_, name, _)| name == "escalates_to_consent"),
+        "expected escalates_to_consent field, got {captured:?}"
     );
     assert!(
-        entries.iter().any(|(k, _)| k == "error_code"),
-        "expected error_code field, got {entries:?}"
+        captured.iter().any(|(_, name, _)| name == "error_code"),
+        "expected error_code field, got {captured:?}"
     );
     assert!(
-        entries.iter().any(|(k, _)| k == "store_failure"),
-        "expected store_failure field, got {entries:?}"
+        captured.iter().any(|(_, name, _)| name == "store_failure"),
+        "expected store_failure field, got {captured:?}"
     );
     assert!(
-        entries.iter().any(|(k, _)| k == "secret_not_found"),
-        "expected secret_not_found field, got {entries:?}"
+        captured
+            .iter()
+            .any(|(_, name, _)| name == "secret_not_found"),
+        "expected secret_not_found field, got {captured:?}"
     );
 }

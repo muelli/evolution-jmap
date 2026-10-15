@@ -1,0 +1,16 @@
+// Source: RFC 9553 §2.2.1 (Figure 16: Example of a Surname with Two Words), May 2024
+{
+  "name": {
+    "components": [
+      {
+        "kind": "given",
+        "value": "Vincent"
+      },
+      {
+        "kind": "surname",
+        "value": "van Gogh"
+      }
+    ],
+    "isOrdered": true
+  }
+}

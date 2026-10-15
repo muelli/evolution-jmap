@@ -1,217 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] ↔ vCard 3.0.
+//! JSContact [`ContactCard`] to vCard 3.0 mapping used by the address book backend.
 //!
-//! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the `X-` lines EDS
-//! keeps instant-messaging handles, spouse, manager, assistant, blog URL,
-//! and video URL on —
-//! and no more. Everything else on a card (preferred languages, the crypto keys
-//! it lists, what the contact is spoken to as, …) is *dropped*, which is only
-//! safe because saving goes back to the server as a PatchObject naming the
-//! mapped properties: a property we never mapped is a property we never
-//! overwrite.
+//! This mapping is intentionally partial. It emits fields Evolution can
+//! round-trip through EDS and leaves unsupported data to save-time patching.
+//! Helper predicates (`states_*`) define exactly what each emitted line states,
+//! so unseen data is preserved. `X_JMAP_UID` and `X_JMAP_KEY` keep stable
+//! identity where vCard has no keyed slot.
 //!
-//! `ORG` is the one property whose *value* is a list rather than a field: RFC
-//! 2426 §3.5.5 states the organisation's name and then the units within it,
-//! in the order RFC 9553 §2.2.3's `units` gives them, so an entry crosses as
-//! one line with as many components as it has units. What does not cross is
-//! the entry's `sortAs` and `contexts`, which `ORG` has no component and no
-//! parameter for — hence the `X_JMAP_KEY` this side already writes on an
-//! `EMAIL`, and a save that patches `organizations/<key>/name` in place.
-//!
-//! `titles` is the one property of which only *some* entries cross. RFC 9553
-//! §2.2.4 keeps the job title and the role played in one map, told apart by
-//! `kind`, and allows vendor kinds besides those two; vCard 3.0 has exactly
-//! `TITLE` and `ROLE`. An entry of any other kind is therefore dropped rather
-//! than written on a line that would misstate it — and, as with every other
-//! dropped thing here, the save path must then leave it alone.
-//!
-//! `addresses` is lossy the same way one level down, and is the one property
-//! that crosses on two lines. RFC 2426 §3.2.1's `ADR` has seven fields; RFC
-//! 9553 §2.5.1 builds an address out of named components, sixteen kinds of
-//! them. Seven of those kinds have a field of their own
-//! (`ADDRESS_COMPONENTS`) and one more, the house `number`, shares the
-//! street's (`JOINED_COMPONENTS`); the rest — `floor`, `room`, `landmark` —
-//! have nowhere to go, and are left off the line rather than written into a
-//! field that would say something else about them. Beside the `ADR`
-//! goes RFC 2426 §3.2.2's `LABEL`, the address written out as it should be
-//! printed, which is RFC 9553's `full` and what EDS keeps in its three
-//! synthetic address-label fields. An address may have either line, or both:
-//! `full` stands on its own for an address "even if the individual address
-//! components are not known", and an address stated only in components vCard
-//! has no field for has neither line and is invisible — so `addresses` too is
-//! a map of which the vCard states only some entries.
-//!
-//! `notes` is the plainest of them and lossy only around the value: RFC 2426
-//! §3.6.2's `NOTE` is free text, so an entry's own text crosses whole, while
-//! RFC 9553 §2.8.3's `created` and `author` — when the note was written and
-//! by whom — have no component and no parameter to sit in, and so ride along
-//! in the entry's `extra` for the save to patch around. An entry saying
-//! nothing at all gets no line, which is the same invisibility again.
-//!
-//! `anniversaries` is lossy in its *value*, which is new: RFC 9553 §2.8.1
-//! dates a memorable event either as a `PartialDate`, which may state as
-//! little as a year, or as a `Timestamp`, which states a point in time. A
-//! vCard date line states one calendar day and nothing else, so a date that
-//! names no single day gets no line — not because the line has nowhere to put
-//! it, but because EDS reads anything short of a whole date as *no* date and
-//! would show the user 1000-01-01. A whole date before the year 1000 gets no
-//! line for the neighbouring reason: EDS reads it correctly and writes it back
-//! clamped, so the line would come home naming a different millennium — see
-//! `Day::survives_the_field_it_lands_in`. A point in time crosses as the
-//! day it falls on, leaving the hour behind for the save to patch around
-//! ([`states_a_point_in_time`]). Of the three kinds, `birth` goes on RFC 2426
-//! §3.1.5's `BDAY` and `wedding` on the line EDS reads `E_CONTACT_ANNIVERSARY`
-//! off; `death` has no line at all, so `anniversaries` too is a map of which
-//! the vCard states only some entries.
-//!
-//! `nicknames` is the one property whose vCard *cardinality* is the decision.
-//! RFC 2426 §3.1.3 states the nicknames as one comma-separated list on a
-//! single `NICKNAME` line, which would leave RFC 9553 §2.2.2's keyed entries
-//! with nowhere to carry a key each — so an entry gets a line of its own
-//! instead, as `NOTE` and `TITLE` already do. That is also what EDS does with
-//! the value: measured against libebook-contacts 3.52, it hands the whole
-//! value back as one string rather than splitting it on commas, and escapes a
-//! comma the user typed, so a list on one line would reach the contact editor
-//! as a single nickname with commas in it. Unlike a date line, the `NICKNAME`
-//! is rewritten in place with its parameters intact, so the `X_JMAP_KEY`
-//! survives the trip through Evolution and the save needs no rekeying. An
-//! entry that names nothing gets no line, which is the same invisibility again.
-//!
-//! `links` is `titles`' shape with a stricter filter: RFC 9553 §2.6.3 keys the
-//! resources a card points at and tells them apart by `kind`, of which it
-//! defines exactly one — `contact`, a URI for writing to the person, which RFC
-//! 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`. vCard 3.0 has only RFC
-//! 2426 §3.6.8's `URL`, the plain website, so *only* an entry naming no kind
-//! at all crosses; `contact` and any vendor kind get no line rather than one
-//! that would tell the user this is the contact's home page. What also does not
-//! cross is the entry's `mediaType`, `contexts`, `pref` and `label`, for which
-//! a bare URI has no parameter, so they ride in its `extra` as a nickname's do.
-//! The `X_JMAP_KEY` survives here too: measured against libebook-contacts
-//! 3.52, `E_CONTACT_HOMEPAGE_URL` is the first `URL` line, a set rewrites that
-//! line's value and leaves its parameters alone, and any further `URL` line
-//! passes through untouched.
-//!
-//! `calendars` is the first property whose `kind` picks the *line* rather than
-//! deciding whether there is one. RFC 9553 §2.4.1 keys the calendaring
-//! resources of the contact and tells them apart by a `kind` it makes
-//! mandatory: a `calendar` of theirs, or the `freeBusy` data drawn from one.
-//! RFC 9555 §2.13.2 and §2.13.3 state those on `CALURI` and `FBURL`, which are
-//! vCard 4.0 properties (RFC 6350 §6.9.3 and §6.9.1) — and they are written on
-//! the 3.0 card anyway, because EDS keeps `E_CONTACT_CALENDAR_URI` and
-//! `E_CONTACT_FREEBUSY_URL` on exactly those lines whatever the version says,
-//! measured against libebook-contacts 3.52. So the two kinds cross and an entry
-//! naming any other — or, malformed, naming none — gets no line at all, since
-//! nothing then says which of the two fields it belongs in and both are in
-//! front of the user under a heading of their own. What does not cross is the
-//! entry's `mediaType`, `contexts`, `pref` and `label`, for which neither line
-//! has a parameter, so they ride in its `extra` as a link's do. The
-//! `X_JMAP_KEY` survives here too, for the reason it survives on a `URL`: a
-//! set rewrites the first line of that name in place and leaves its parameters
-//! alone, and any further line of the same name passes through untouched.
-//!
-//! `contexts` is the one member that crosses on four different properties, and
-//! the one narrowed by what EDS does with the parameter rather than by what
-//! vCard can spell. RFC 9553 §1.5.1 lets an entry name every context it belongs
-//! to; an `ADR` and a `TEL` state exactly one, because EDS picks the field a
-//! line lands in by matching `TYPE`, and a line wearing both matches two — one
-//! address filling both the Home and the Work block of Evolution's contact
-//! editor, with one line behind them, so retyping either rewrites the other.
-//! See `context_slot` for the measurement and [`states_context`] for what the
-//! save then does about the context left off. An `EMAIL` is not narrowed: EDS
-//! files it by position rather than by `TYPE`. A phone's `features` are
-//! narrowed the same way and for the same reason — `TYPE=WORK,VOICE,FAX` fills
-//! the Business Phone and the Business Fax field alike, and without a context
-//! `TYPE=VOICE,FAX` fills neither, leaving the number in no field at all. See
-//! `feature_slot` and [`states_phone_feature`].
-//!
-//! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
-//! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
-//! 4770's `IMPP` is vCard 4.0, which is not the format
-//! `e_contact_new_from_vcard()` is handed, so the line is the `X-` one EDS
-//! itself keeps a handle on — `ONLINE_SERVICES` — and the mapping states only
-//! the ten services libebook-contacts 3.52 gives contact-editor slots to. Which
-//! makes the property lossy in three separate places: a service EDS has no field
-//! for has no line, an entry stating a `uri` and no `user` has one only where
-//! `SERVICE_SCHEMES` says the URI holds the handle and nothing else (see
-//! `drawn_service`), and neither has a handle the line would come back from
-//! EDS having renamed.
-//!
-//! Its `TYPE` is also the one parameter here that is *not* the JSContact member
-//! it looks like. It is the slot EDS files the handle in — `HOME` or `WORK`,
-//! measured — and a line carrying none reaches no field the user can see, so
-//! every line must carry one whether the entry states a context or not. It is
-//! therefore written from the entry's `contexts` where they say something and
-//! never read back off the line — which is why [`OnlineService`] models no
-//! `contexts` of its own, and lets them ride in its `extra` as a nickname's do.
-//!
-//! `keywords` is the first mapped property that is a *set* rather than a keyed
-//! map, and the first to cross on one line holding all of it. RFC 9553 §2.8.2
-//! files a card under bare-string tags; RFC 2426 §3.7.1's `CATEGORIES` lists
-//! them, comma-separated, and EDS reads that line as `E_CONTACT_CATEGORY_LIST` —
-//! Evolution's Categories field. There is nothing inside an entry to preserve
-//! and no key to patch by, so unlike every property above it the set goes back
-//! **replaced whole**, and a tag the line cannot carry is therefore a tag the
-//! next save would *delete* rather than merely one the user cannot see — unless
-//! the save puts it back, which is what it does. What those tags are is
-//! [`states_keyword`]. One line rather than one per tag — the opposite of the
-//! `NICKNAME` decision — because a second `CATEGORIES` line reaches no field the
-//! user can see, measured against libebook-contacts 3.52; the reader takes them
-//! all in anyway, so tags on a line EDS ignores are not lost by a save.
-//!
-//! `media` is the one mapped property whose value is not text. RFC 9553 §2.6.4 keys the media a card
-//! carries and tells a photo, a sound and a logo apart by a `kind` it makes
-//! mandatory; RFC 2426 §3.1.4's `PHOTO` is the picture *of the contact*, which
-//! is what Evolution shows beside the name, so only a photo crosses and the
-//! other kinds get no line — `titles`' filter again. A picture the card
-//! *carries* arrives as a `data:` URI (RFC 2397) and crosses as the bytes
-//! themselves under `ENCODING=b`, which is the only form EDS reads a media type
-//! off: measured against libebook-contacts 3.52, `TYPE=JPEG` becomes
-//! `image/JPEG` and `TYPE=image/jpeg` becomes `image/image/jpeg`, so the
-//! parameter states the subtype alone (`image_subtype`). A picture the card
-//! only *points at* crosses as a `VALUE=uri` reference — the shape EDS's own
-//! writer emits, and one it reads as no picture at all when that parameter is
-//! missing, also measured. What else gets no line is a `data:` URI spelling its
-//! bytes as percent-encoded octets rather than base64, since `ENCODING=b` is
-//! the only encoding the line carries (`photo`).
-//!
-//! A `PHOTO` line is read back into a `media` entry the same way (`read_photo`),
-//! so the picture the *user* chooses in Evolution reaches the server. Only the
-//! two forms above are read, because they are the two EDS's own writer emits;
-//! what a line the reader has to be careful about is spelled out there. The
-//! sounds and logos a card carries have no vCard 3.0 property at all and so come
-//! back from nothing — the save patches around them, as it does around every
-//! other entry the emitter left off.
-//!
-//! What the save cannot lean on is the `X_JMAP_KEY`: unlike a `NICKNAME`'s,
-//! the key on a `PHOTO` line does not survive an edit. EDS rebuilds the line out
-//! of the photo it holds and writes none of the parameters back, exactly as it
-//! does for a date line (measured against libebook-contacts 3.52) — so the entry
-//! a chosen picture belongs to is found by pairing rather than by key, which is
-//! `jmap-book-sync`'s `diff_media`.
-//!
-//! `relatedTo` is the one property whose *key* is what crosses. RFC 9553 §2.1.8
-//! keys the entities a card relates to by the related Card's `uid` and says how
-//! each relates in a set of types; vCard 3.0 has no `RELATED` — RFC 6350 §6.6.6
-//! is 4.0 — and of the twenty types, `spouse` is the one Evolution has a field
-//! for, on the line EDS keeps `E_CONTACT_SPOUSE` on
-//! (`X_EVOLUTION_SPOUSE`). The value on that line is the person's *name*, and
-//! the only place a name can be is the key: RFC 9555 §2.9.5 is what says a key
-//! may hold free text rather than an identifier, since that is what a vCard
-//! `RELATED;VALUE=text` becomes. So an entry keyed by a URI has no line — a URN
-//! shown under the heading "Spouse" would be written back as the person's name by
-//! the next save — and neither has one keyed by a name EDS would respell, which
-//! for this property is not merely a rename but a *different entry*. See
-//! [`states_spouse`].
-//!
-//! Which also makes it the one property that carries no `X_JMAP_KEY`: there is
-//! nothing for the parameter to say that the value does not. The reader takes the
-//! key off the line's own text, so nothing is invented and no key has to survive
-//! Evolution — but a marriage the user retypes arrives under a key the server
-//! never had, which is the save's problem rather than this layer's.
+//! Main constraints:
+//! - `ORG` and `NICKNAME` shape keyed maps into vCard 3.0 value forms.
+//! - `TITLE` and `ROLE` map known title kinds only.
+//! - `ADR` and `LABEL` map address parts that have real vCard fields.
+//! - `ANNIVERSARY` values are emitted only when EDS can round-trip them.
+//! - `PHOTO` maps contact images; other media kinds remain patch-preserved.
+//! - `relatedTo` maps spouse via `X-EVOLUTION-SPOUSE`.
 
 use std::collections::BTreeMap;
 
@@ -249,16 +53,15 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 
 /// JSContact `contexts` keys and their vCard `TYPE` spelling.
 ///
-/// A line states at most *one* of them — see [`context_slot`] — because EDS
-/// files a line by its `TYPE` into whichever per-context field matches, and
-/// matches more than one when the line carries more than one.
+/// A line states at most one context, see [`context_slot`], so EDS keeps each
+/// line in exactly one editable context slot.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
 /// JSContact phone `features` and their vCard `TYPE` spelling, **most
 /// specific first**.
 ///
-/// A line states at most *one* of them, for the reason [`CONTEXTS`] gives, and
-/// the order here is which one — see [`feature_slot`].
+/// A line states at most one feature, and this order controls which feature is
+/// emitted first, see [`feature_slot`].
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -269,8 +72,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
 
 /// The vCard `TYPE` parameter names recognized for each JSContact phone feature on inbound parsing.
 ///
-/// In addition to standard vCard 3.0 type names (e.g. `CELL`), recognizes common synonyms
-/// emitted by real-world vCard generators (e.g. `MOBILE`).
+/// Includes common synonyms emitted by real-world generators, for example
+/// `MOBILE` alongside vCard's standard `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -281,8 +84,7 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
 
 /// JSContact address component kinds, paired with their position in the
 /// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
-/// street, locality, region, postal code, country), listed in that order —
-/// which is the order a reader gives the components it finds.
+/// street, locality, region, postal code, country), in on-wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -293,24 +95,15 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
-/// JSContact address component kinds that share a vCard `ADR` field with
-/// another kind instead of having one of their own, paired with the kind
-/// whose field they join.
+/// JSContact component kinds that share another kind's `ADR` field.
 ///
-/// RFC 2426 §3.2.1 gives the street address one field, while RFC 9553 §2.5.1
-/// lets a card name the street and the house number separately. Leaving the
-/// number off the line would take the house out of the address the user
-/// reads, so it goes on the street field beside the street name, in the order
-/// the card lists its components — which is the only thing that says whether
-/// the number is read before the street name (`1 Main Street`) or after it
-/// (`Hauptstraße 1`).
+/// `number` joins `name` so house numbers are preserved in the street field.
 const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
 /// JSContact title `kind` values and the vCard property stating each.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 
-/// RFC 2426 §3.7.1's `CATEGORIES` — the tags EDS reads as
-/// `E_CONTACT_CATEGORY_LIST`, which is Evolution's Categories field.
+/// RFC 2426 §3.7.1 `CATEGORIES`, mapped to EDS `E_CONTACT_CATEGORY_LIST`.
 const CATEGORIES: &str = "CATEGORIES";
 
 /// The one RFC 9553 §2.6.4 media kind a vCard 3.0 `PHOTO` line states: the
@@ -329,29 +122,19 @@ const BASE64_MARKER: &str = ";base64";
 /// [`image_subtype`].
 const IMAGE_PREFIX: &str = "image/";
 
-/// What EDS puts in a `PHOTO`'s `TYPE` for a picture it holds no media type
-/// for: measured against libebook-contacts 3.52, setting a photo whose
-/// `mime_type` is NULL writes `TYPE="X-EVOLUTION-UNKNOWN"`. It names no image
-/// format, so [`read_photo`] reads it as no media type rather than as
-/// `image/X-EVOLUTION-UNKNOWN`, which would tell the server the bytes are a
-/// format that does not exist.
+/// EDS placeholder `PHOTO` type when the image mime type is unknown.
+///
+/// This is treated as "no media type", not as `image/X-EVOLUTION-UNKNOWN`.
 const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 
 /// The `VALUE` a `PHOTO` line carrying a reference states, rather than the
 /// bytes themselves.
 const URI_VALUE: &str = "uri";
 
-/// The online services EDS keeps a contact's handles for, paired with the
-/// vCard property each is stated on, and spelled as RFC 9553 §2.3.2 invites —
-/// the way the service itself does.
+/// Services with dedicated EDS IM slots, paired with their vCard property.
 ///
-/// These are exactly the services libebook-contacts 3.52 gives per-slot fields
-/// to (`E_CONTACT_IM_JABBER_HOME_1` and its fifty-nine siblings), which is what
-/// makes a handle on one of them a handle Evolution's contact editor can show
-/// and change. Two of EDS's own instant-messaging fields are deliberately
-/// missing: `X-TWITTER`, which it knows only as a multi-valued field with no
-/// slots to put a handle in, and `X-SIP`, which is not a service name but a
-/// protocol EDS keeps in a field of a different shape.
+/// Non-slot fields such as `X-TWITTER` and protocol-only lines such as `X-SIP`
+/// are excluded.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -365,36 +148,10 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("Yahoo", "X-YAHOO"),
 ];
 
-/// The URI schemes each service states its handles under, for the services whose
-/// scheme names the handle *literally* — `xmpp:vera@jabber.example` is the JID
-/// `vera@jabber.example` with a prefix and nothing else.
+/// URI schemes accepted as bare handles for each online service.
 ///
-/// This is what lets an entry stating only a `uri` (RFC 9553 §2.3.2 asks for
-/// either that or a `user`) reach the free-text field EDS keeps handles in:
-/// without it the handle would have to be guessed out of the URI, and the guess
-/// would be written back on the next save.
-///
-/// - `aim` and `aol` for AIM (`aim:<screenname>` or `aol:<screenname>`).
-/// - `gg`, `gadugadu`, and `gadu` for Gadu-Gadu (RFC 7595 template `gg:<userid>`,
-///   whose path is the numerical user identifier / UIN).
-/// - `xmpp` (RFC 5122 §2.1) and `jabber` for Jabber / XMPP JIDs.
-/// - `xmpp` and `gtalk` for Google Talk JIDs.
-/// - `groupwise` and `novell` for GroupWise.
-/// - `icq` for ICQ (`icq:<uin>`).
-/// - `msn` and `msnim` for MSN Messenger (`msn:<user>` or `msnim:<user>`).
-/// - `matrix` for Matrix bare handle URIs (`matrix:<handle>`).
-/// - `skype` is the scheme Skype's own links use, where the bare form
-///   `skype:<name>` is the Skype Name and the rest is a query telling the client
-///   what to do with it — which [`plain_handle`] refuses.
-/// - `yahoo` and `ymsgr` for Yahoo Messenger (`yahoo:<user>` or `ymsgr:<user>`).
-///
-/// Action/query URIs (such as `aim:goim?screenname=...`, `msnim:chat?contact=...`,
-/// `ymsgr:sendim?...`, `icq:message?uin=...`, `matrix:u/vera:...`) are refused by
-/// [`plain_handle`] because they carry query parameters or path structures that
-/// do not represent bare handles.
-///
-/// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
-/// match is not drawn, which is the behaviour of every service missing here.
+/// This table lets URI-only entries map to EDS handle fields without guessing.
+/// [`plain_handle`] rejects action/query URIs and non-bare path forms.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -416,46 +173,27 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("Yahoo", "ymsgr"),
 ];
 
-/// The slot EDS files a handle in when nothing says otherwise, and the only one
-/// it writes a handle of its own accord into (measured against
-/// libebook-contacts 3.52).
+/// Default EDS IM slot when no explicit context is stated.
 const DEFAULT_SLOT: &str = "HOME";
 
-/// The line EDS 3.52 keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
-/// contact editor labels "Anniversary".
+/// Vendor anniversary property used by EDS 3.52 compatibility path.
 ///
-/// vCard 3.0 has no standard property for a wedding day: RFC 6474's `ANNIVERSARY`
-/// is vCard 4.0. In EDS 3.52, `e_contact_new_from_vcard()` reads
-/// `X-EVOLUTION-ANNIVERSARY` (ignoring `ANNIVERSARY`), while in EDS 3.60+ it
-/// reads standard `ANNIVERSARY`. We emit both lines so that EDS 3.52 reads its
-/// vendor line and EDS 3.60+ reads standard ANNIVERSARY, and each preserves
-/// the other as an unrecognised extension without requiring build-time version detection.
+/// We emit this and standard `ANNIVERSARY` so EDS 3.52 and 3.60+ both round-trip.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
-/// JSContact anniversary `kind` values and the vCard property stating each.
+/// JSContact anniversary kinds that map to vCard/EDS lines.
 ///
-/// RFC 9553 §2.8.1's third kind, `death`, is missing on purpose: no vCard 3.0
-/// property and no EDS field states it, and putting the date on a `BDAY`
-/// would tell the user it is a birthday.
+/// `death` is omitted because vCard 3.0 and EDS expose no matching field.
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
-/// The line EDS keeps `E_CONTACT_SPOUSE` on — the field Evolution's contact
-/// editor labels "Spouse".
-///
-/// vCard 3.0 has no property for a relation at all: RFC 6350 §6.6.6's `RELATED`
-/// is vCard 4.0, which `e_contact_new_from_vcard()` is not given. So this is not
-/// a shortcut past a standard line, it is the only line there is — and it is the
-/// one EDS reads the field off and writes it back onto, measured against
-/// libebook-contacts 3.52.
+/// Vendor spouse line used for EDS `E_CONTACT_SPOUSE` round-trip.
 const X_EVOLUTION_SPOUSE: &str = "X-EVOLUTION-SPOUSE";
 
-/// The line EDS keeps `E_CONTACT_MANAGER` on — the field Evolution's contact
-/// editor labels "Manager".
+/// Vendor line for EDS `E_CONTACT_MANAGER`.
 const X_EVOLUTION_MANAGER: &str = "X-EVOLUTION-MANAGER";
 
-/// The line EDS keeps `E_CONTACT_ASSISTANT` on — the field Evolution's contact
-/// editor labels "Assistant".
+/// Vendor line for EDS `E_CONTACT_ASSISTANT`.
 const X_EVOLUTION_ASSISTANT: &str = "X-EVOLUTION-ASSISTANT";
 
 /// RFC 9553 §2.1.8 relation types this mapping states on EDS relation lines.
@@ -469,17 +207,9 @@ const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 /// The line EDS keeps `E_CONTACT_VIDEO_URL` on.
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
-/// JSContact calendar `kind` values and the vCard property stating each.
+/// JSContact calendar kinds mapped to vCard lines EDS preserves.
 ///
-/// RFC 9555 §2.13.2 and §2.13.3 pair them: `calendar` with RFC 6350 §6.9.3's
-/// `CALURI` and `freeBusy` with §6.9.1's `FBURL`. Both are vCard 4.0
-/// properties, and both are nevertheless written on the 3.0 card EDS is handed
-/// — because EDS reads them off one and writes them back onto one, measured
-/// against libebook-contacts 3.52, which is what decides the question here.
-///
-/// EDS's third calendaring field, `ICSCALENDAR`, is missing on purpose: RFC
-/// 9553 §2.4.1 has two kinds, so nothing on a card says an entry belongs there
-/// rather than on the `CALURI` beside it.
+/// `ICSCALENDAR` is excluded because JSContact has no distinct kind for it.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
 /// RFC 9553 §2.2.4's default `kind` for a title that names none.
@@ -487,8 +217,7 @@ const DEFAULT_TITLE_KIND: &str = "title";
 
 /// The kind of a JSContact title, with the default filled in.
 ///
-/// The save path has to agree with this side about what an unsaid kind
-/// means, or it will patch a `kind` onto every card that left it out.
+/// Save logic must use the same default to avoid adding `kind` spuriously.
 pub fn title_kind(kind: Option<&str>) -> &str {
     kind.unwrap_or(DEFAULT_TITLE_KIND)
 }
@@ -502,16 +231,9 @@ fn maps_title_kind(kind: Option<&str>) -> bool {
 
 /// Whether the `N` value written for a name states this component.
 ///
-/// Anything that saves a card back to the server has to know exactly which
-/// JSContact fields a vCard can carry, or it will overwrite the ones it
-/// silently dropped on the way in. The predicates below are that knowledge,
-/// kept next to the tables they answer for.
-///
-/// Two things keep a component off the line, and the question is the same for
-/// both: `N` has no field for its kind, or it says nothing to put in one.
-/// `name_fields` leaves an empty component out exactly as it leaves an empty
-/// entry off a card, so a save reading absence as a removal must ask about the
-/// value too — the same "was this stated" [`states_context`] asks of a `TYPE`.
+/// Save logic uses this to distinguish "not mappable" from "mappable but
+/// absent". A component is stated only when its kind maps to an `N` field and
+/// its value is non-empty.
 pub fn states_name_component(component: &NameComponent) -> bool {
     !component.value.is_empty() && name_field(&component.kind).is_some()
 }
@@ -567,34 +289,11 @@ pub fn maps_context(key: &str) -> bool {
     CONTEXTS.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// The one context `TYPE` a line carries, or `None` for an entry whose
-/// contexts vCard 3.0 can spell none of.
+/// Selects the one emitted context `TYPE`, or `None` when no mappable context
+/// is present.
 ///
-/// **One and only one**, and that is the whole point of the function. EDS
-/// picks the field a line lands in by matching the field's `TYPE` set against
-/// the line's, so a single `ADR;TYPE=WORK,HOME` satisfies both
-/// `E_CONTACT_ADDRESS_WORK` and `E_CONTACT_ADDRESS_HOME`, and one address shows
-/// up in two of the blocks Evolution's contact editor lets the user edit
-/// separately. There is only one line behind them: retyping the work address
-/// rewrites it, and the home address the user never touched becomes the new
-/// work one. Measured against libebook-contacts 3.52 — `eds-sys`'
-/// `a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other`
-/// drives exactly that sequence — and the same holds for `TEL`, where
-/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME`
-/// wants `HOME`+`VOICE`, so a line carrying all three satisfies both.
-///
-/// So an entry at work *and* privately lands in [`DEFAULT_SLOT`], where the
-/// user looks first — the choice [`service_slot`] already makes for a handle,
-/// for the same reason. An entry with no context vCard can spell carries no
-/// `TYPE` at all, which is a slot of its own: EDS reads such a line as
-/// `E_CONTACT_ADDRESS_OTHER`.
-///
-/// A phone's `features` are narrowed the same way and for the same reason, by
-/// [`feature_slot`]. What is *not* narrowed is an `EMAIL`, which EDS files by
-/// position (`E_CONTACT_EMAIL_1` to `_4`) and not by `TYPE` at all.
-///
-/// The context left off the line is the save's problem, and
-/// [`states_context`] is the answer.
+/// Multiple mapped contexts collapse to [`DEFAULT_SLOT`] to avoid EDS placing
+/// one line into multiple editable UI slots.
 fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
     let stated = type_names(&CONTEXTS, contexts);
     match stated.len() {
@@ -607,11 +306,7 @@ fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for an entry with these `contexts` states this
 /// context.
 ///
-/// The question the save path asks before reading a context's absence from an
-/// edited line as the user having removed it. `context_slot` leaves one of two
-/// contexts off the line, and a context the user was never shown is not one
-/// they can have cleared — the same treatment [`maps_context`] already gives a
-/// context vCard 3.0 has no `TYPE` for at all.
+/// Save uses this before treating an omitted context as removed.
 pub fn states_context(contexts: Option<&Value>, key: &str) -> bool {
     let Some(slot) = context_slot(contexts) else {
         return false;
@@ -626,40 +321,9 @@ pub fn maps_phone_feature(key: &str) -> bool {
     PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// The one feature `TYPE` a `TEL` carries, or `None` for a phone whose
-/// features vCard 3.0 can spell none of.
+/// The one phone feature emitted as `TYPE`, or `None` if none is mappable.
 ///
-/// [`context_slot`]'s problem one axis over: EDS picks the phone field by
-/// matching `TYPE` there too, and a number that says it is both a voice line
-/// and a fax says it to two fields the user edits separately —
-/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE`, `E_CONTACT_PHONE_BUSINESS_FAX`
-/// wants `WORK`+`FAX`, and one `TEL;TYPE=WORK,VOICE,FAX` satisfies both, so
-/// retyping the office number silently moves the office fax with it. Without a
-/// context it is worse than duplication: the two unqualified fields
-/// `E_CONTACT_PHONE_OTHER` (`VOICE`) and `E_CONTACT_PHONE_OTHER_FAX` (`FAX`)
-/// are exclusive, and a bare `TEL;TYPE=VOICE,FAX` lands in *neither* — the
-/// number is in no field of the contact editor at all. Measured against
-/// libebook-contacts 3.52 by `eds-sys`'
-/// `a_line_wearing_several_feature_types_reaches_two_fields_or_none` and
-/// `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`.
-///
-/// **Which** feature survives is [`PHONE_FEATURES`]' order, and most of that
-/// order is EDS's own, read off the pairs where EDS resolves the collision
-/// itself: `VOICE,CELL` and `FAX,CELL` reach the mobile field alone, and
-/// `VOICE,PAGER` and `FAX,PAGER` the pager alone, so a feature naming a device
-/// outranks the two unqualified ones. `VIDEO` is last because this EDS knows
-/// no such `TYPE`: alone it reaches nothing, so it can never be the slot while
-/// another feature is available to be stated. `voice` sits just above it as
-/// the unmarked default — a `TEL;TYPE=WORK` with no feature at all already
-/// fills the *voice* field, so `voice` is the feature still said when it is
-/// left off, and `fax` the one that would be lost.
-///
-/// Two orderings EDS does not decide and this mapping does: `mobile` over
-/// `pager` (`CELL,PAGER` fills both fields, so there is nothing to read off),
-/// and `fax` over `voice` (`VOICE,FAX` fills neither). Neither pick loses
-/// anything from the *card* — the feature left off the line is kept by
-/// [`states_phone_feature`] — only which of the contact editor's phone fields
-/// the number appears in.
+/// Emitting one slot keeps EDS phone-field assignment stable.
 fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
     type_names(&PHONE_FEATURES, features).into_iter().next()
 }
@@ -667,8 +331,7 @@ fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for a phone with these `features` states this
 /// feature.
 ///
-/// [`states_context`] for features: a feature `feature_slot` left off the line
-/// is not one the user can have cleared by not typing it back.
+/// A feature omitted by [`feature_slot`] is preserved, not treated as deleted.
 pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
     let Some(slot) = feature_slot(features) else {
         return false;
@@ -678,10 +341,7 @@ pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
         .any(|(mapped, name)| *mapped == key && *name == slot)
 }
 
-/// Whether the `ADR` line written for an address states this component —
-/// [`states_name_component`]'s question one property over, and answered the
-/// same way: the seven fields must have room for its kind, and it must say
-/// something to put there. See `address_fields`, which skips both.
+/// Whether this component can be stated on an `ADR` line and has a value.
 pub fn states_address_component(component: &AddressComponent) -> bool {
     !component.value.is_empty() && address_field(&component.kind).is_some()
 }
@@ -704,44 +364,27 @@ fn address_field(kind: &str) -> Option<usize> {
         .map(|(_, index)| *index)
 }
 
-/// Whether an address reaches the user at all — whether it has anything an
-/// `ADR` or a `LABEL` line can state.
-///
-/// This is the emitter's own decision, asked of it by name, so that the save
-/// path cannot drift from what [`card_to_vcard`] actually wrote. Every keyed
-/// map the mapping carries has one of these, because every one of them has
-/// entries a vCard leaves out; a save that decided for itself which those
-/// were would eventually decide differently, and delete an entry the user
-/// never saw.
+/// Whether an address is user-visible through either `ADR` or `LABEL`.
 pub fn states_address(address: &Address) -> bool {
     address_fields(address).is_some() || address_label(address).is_some()
 }
 
-/// The text a `LABEL` line states for an address, or `None` for one written
-/// out as nothing — which says no more than an `EMAIL:` with no address does,
-/// and gets no line either.
+/// The non-empty text a `LABEL` line can state for this address.
 pub fn address_label(address: &Address) -> Option<&str> {
     address.full.as_deref().filter(|full| !full.is_empty())
 }
 
-/// Whether a note reaches the user at all — whether it says anything a
-/// `NOTE` line could state.
+/// Whether a note contains text a `NOTE` line can state.
 pub fn states_note(note: &Note) -> bool {
     !note.note.is_empty()
 }
 
-/// Whether a nickname reaches the user at all — whether it names anything a
-/// `NICKNAME` line could state.
+/// Whether a nickname contains text a `NICKNAME` line can state.
 pub fn states_nickname(nickname: &Nickname) -> bool {
     !nickname.name.is_empty()
 }
 
-/// Whether a link reaches the user at all: it must point somewhere *and* be
-/// of a kind vCard 3.0 or EDS has a property for.
-///
-/// As with a title, the kind alone is not the question — a plain link with no
-/// URI has no line either, and calling it visible would let a save
-/// delete it.
+/// Whether a link has a URI and a kind this mapping can emit.
 pub fn states_link(link: &Link) -> bool {
     !link.uri.is_empty()
         && !edged_with_whitespace(&link.uri)
@@ -749,35 +392,17 @@ pub fn states_link(link: &Link) -> bool {
         && maps_link_kind(link.kind.as_deref())
 }
 
-/// Whether the vCard mapping covers a JSContact link of this `kind`.
-///
-/// - `None`: plain website, mapped to RFC 2426 §3.6.8 `URL` (Evolution Homepage).
-/// - `Some("blog")`: blog URL, mapped to `X-EVOLUTION-BLOG-URL` (Evolution Blog URL).
-/// - `Some("video")`: video stream URL, mapped to `X-EVOLUTION-VIDEO-URL` (Evolution Video URL).
-///
-/// RFC 9553 §2.6.3 defines `contact` (a URI for writing to the person), which RFC 9555
-/// §2.6.3 states on vCard 4.0's `CONTACT-URI`. Other kinds outside this set get no line
-/// and remain safe on the server.
+/// Whether this link kind maps to an emitted vCard line.
 fn maps_link_kind(kind: Option<&str>) -> bool {
     matches!(kind, None | Some("blog") | Some("video"))
 }
 
-/// Whether a calendar reaches the user at all: it must point somewhere *and*
-/// be of a kind one of the two lines states.
-///
-/// As with a link, the kind alone is not the question — a calendar with no URI
-/// has no line either, and calling it visible would let a save delete it.
+/// Whether a calendar has a URI and a mapped calendar kind.
 pub fn states_calendar(calendar: &Calendar) -> bool {
     !calendar.uri.is_empty() && calendar_property(calendar.kind.as_deref()).is_some()
 }
 
-/// The vCard property a calendar of this `kind` is stated on.
-///
-/// RFC 9553 §2.4.1 makes the kind mandatory and gives it no default, so an
-/// entry naming none says nothing about which of the two lines its URI belongs
-/// on — and the two are different fields in front of the user. A kind outside
-/// the table, vendor kinds included, is the same case: the mapping states the
-/// kinds it knows and leaves the rest to the server.
+/// The vCard property a mapped calendar kind is stated on.
 fn calendar_property(kind: Option<&str>) -> Option<&'static str> {
     let kind = kind?;
     CALENDAR_KINDS
@@ -825,15 +450,7 @@ pub fn states_assistant(key: &str, relation: &Relation) -> bool {
 /// Whether the marriage is all a relation says, so that withdrawing it leaves
 /// nothing of the entry to keep.
 ///
-/// The question a save has to answer about the name the user just replaced. The
-/// line stated one thing about that entity — that it is a spouse — so that is the
-/// only thing the save may withdraw: an entry the server also calls `kin` stays,
-/// with the marriage struck off, and an entry that said nothing else goes
-/// altogether rather than lingering as a relation of no stated type, which is
-/// not what emptying the field said. A member this version has never heard of
-/// counts as something else said, for the reason every property here patches
-/// rather than replaces; the `@type` tag does not, because naming the object's
-/// type says nothing about the relation.
+/// `@type` does not count as relation data, but unknown extra members do.
 pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
     relation.extra.keys().all(|member| member == "@type")
         && relation
@@ -849,13 +466,7 @@ fn names_a_person(key: &str) -> bool {
     !key.is_empty() && !names_a_uri(key) && !edged_with_whitespace(key) && !key.contains('\r')
 }
 
-/// Whether a value is a URI rather than free text, by RFC 3986 §3.1's grammar
-/// for the scheme: an ASCII letter, then letters, digits, `+`, `-` and `.`, then
-/// the colon.
-///
-/// Checking the grammar rather than looking for a colon is what keeps a name
-/// from being mistaken for an identifier: `Jean Paul: the second` holds a colon
-/// and no scheme.
+/// Whether `value` starts with an RFC 3986 scheme and `:`.
 fn names_a_uri(value: &str) -> bool {
     let Some((scheme, _)) = value.split_once(':') else {
         return false;
@@ -872,28 +483,14 @@ fn names_a_uri(value: &str) -> bool {
 /// Whether a media entry reaches the user at all: it must be a photo, and the
 /// bytes or the URI it names must be something a `PHOTO` line can state.
 ///
-/// `photo` is where each of those is spelled out — the single point this and
-/// [`card_to_vcard`] agree through, so an entry cannot be called visible here
-/// and then left off the vCard.
+/// `photo` is the shared decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
 
-/// What a `PHOTO` line states for one media entry, or `None` for an entry that
-/// gets no line.
+/// Renders one media entry as `PHOTO` content, or `None` when it cannot be emitted.
 ///
-/// An entry has no line when:
-/// - it is not a photo. RFC 9553 §2.6.4 keeps all three kinds of media in one
-///   map, and RFC 2426 §3.1.4's `PHOTO` is the picture *of the contact*; a
-///   `logo`, a `sound` or a vendor kind on that line would show the user the
-///   wrong image. An entry naming no kind at all is malformed — §2.6.4 makes
-///   `kind` mandatory — and is treated the same way rather than guessed at.
-/// - it points nowhere, which says no more than an `EMAIL:` with no address.
-/// - it carries its bytes as a `data:` URI (RFC 2397) that does not spell them
-///   as base64, or spells them as base64 this side cannot decode. `ENCODING=b`
-///   is the only encoding an EDS-bound vCard 3.0 `PHOTO` carries, and handing
-///   EDS a value it would decode into a broken image is worse than showing the
-///   user no picture: the save cannot repair what it never sends.
+/// Returns `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
 fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
@@ -909,17 +506,10 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
     })
 }
 
-/// Whether two media entries state the same `PHOTO` line — the same picture,
-/// however each of them spells it.
+/// Whether two media entries render to the same `PHOTO` line.
 ///
-/// What the save compares, for the reason [`online_service_handle`] is what it
-/// compares for a handle: the line is what the user saw, and the entry read back
-/// off it is not the entry that produced it. A `data:` URI may leave its base64
-/// padding off (RFC 4648 §3.2) where the line carries the canonical spelling,
-/// and a media type the URI stated arrives as the entry's own `mediaType`, so
-/// comparing the members would call an untouched picture an edit and rewrite it
-/// on every save. The subtypes are compared case-insensitively, as RFC 2045 §5.1
-/// defines them.
+/// Comparison uses rendered form so base64 padding and media-type case do not
+/// trigger false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
     match (photo(one), photo(other)) {
         (None, None) => true,
@@ -945,39 +535,25 @@ pub fn same_photo(one: &Media, other: &Media) -> bool {
 
 /// What a `PHOTO` line states: the bytes, or where to fetch them.
 enum Photo<'a> {
-    /// The picture itself, base64 as `ENCODING=b` wants it, and the subtype
-    /// [`image_subtype`] read off its media type.
+    /// Inline image bytes plus optional subtype for `TYPE`.
     Inline {
         subtype: Option<&'a str>,
         base64: String,
     },
-    /// A URI to fetch the picture from, for a card that only points at one.
+    /// URI form for cards that reference, not embed, a picture.
     Uri(&'a str),
 }
 
-/// The subtype of an `image/*` media type, which is all a `PHOTO` line's `TYPE`
-/// may state, or `None` for a media type the parameter cannot say.
+/// Returns the subtype from an `image/*` media type for `PHOTO` `TYPE`.
 ///
-/// EDS builds the photo's mime type by putting `image/` in front of the `TYPE`:
-/// measured against libebook-contacts 3.52, `TYPE=JPEG` arrives as `image/JPEG`
-/// and `TYPE=image/jpeg` as `image/image/jpeg`, which names no format at all.
-/// So the parameter states the subtype alone — and for bytes whose media type is
-/// not an image, nothing: EDS accepts a line with no `TYPE` and reports no mime
-/// type for it, which is honest, where `TYPE=pdf` would tell the address book the
-/// bytes are an image format that does not exist.
+/// Non-image types return `None` because EDS reconstructs `image/<TYPE>`.
 fn image_subtype(media_type: &str) -> Option<&str> {
     // The media type's own parameters (`;charset=…`) are no part of its name.
     let name = media_type.split(';').next().unwrap_or_default().trim();
     strip_prefix_ci(name, IMAGE_PREFIX).filter(|subtype| !subtype.is_empty())
 }
 
-/// A base64 payload as its bytes: the standard alphabet, padded or not.
-///
-/// The bytes are decoded here and re-encoded by [`photo`] rather than copied
-/// across from the URI, so that the line carries the canonical spelling of what
-/// the URI meant. A `data:` URI is written by hand as often as by a library, and
-/// it is glib's base64 reader that decodes the line at the other end, not the one
-/// that wrote the URI.
+/// Decodes base64 payload bytes, accepting padded and unpadded forms.
 fn decoded(payload: &str) -> Option<Vec<u8>> {
     BASE64
         .decode(payload)
@@ -985,9 +561,7 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// `value` without `prefix`, comparing it case-insensitively — for a URI scheme
-/// and a media type, both of which RFC 3986 §3.1 and RFC 2045 §5.1 define as
-/// case-insensitive.
+/// Case-insensitive prefix strip used for URI schemes and media types.
 fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let start = value.get(..prefix.len())?;
     start
@@ -1002,40 +576,12 @@ fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
     end.eq_ignore_ascii_case(suffix).then(|| &value[..split])
 }
 
-/// Whether a handle at an online service reaches the user at all.
-///
-/// Three things have to hold at once, and `drawn_service` is where each is
-/// spelled out: the service must be one EDS has a field for, the entry must
-/// state a handle — as a `user`, or as a `uri` this side can read one out of —
-/// and that handle must survive the trip through EDS unrenamed.
+/// Whether an online-service entry can be emitted as a visible handle.
 pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
 
-/// The vCard property a handle is stated on and the handle itself, or `None` for
-/// an entry with no line — the single point [`states_online_service`] and
-/// [`card_to_vcard`] agree through, so an entry cannot be called visible and
-/// then left out.
-///
-/// An entry has no line when:
-///
-/// - **its service is not one EDS has a field for.** The line *is* the service:
-///   there is no property that states an arbitrary one, and an invented
-///   `X-SIGNAL` would reach nothing the user can see while making the save
-///   believe the entry had been shown. See [`ONLINE_SERVICES`].
-/// - **it states no handle.** RFC 9553 §2.3.2 asks for a `user` or a `uri`, and
-///   only the first is a handle, which is what the EDS field holds. An entry
-///   stating only a URI is drawn when [`SERVICE_SCHEMES`] says what its scheme
-///   means and the URI states the handle and nothing besides — see
-///   [`online_service_handle`] — and left invisible otherwise, because the
-///   alternative is guessing at a handle and then writing the guess back.
-/// - **its handle would come back from EDS spelled differently.** The empty
-///   handle says nothing; a carriage return is dropped by [`card_to_vcard`]
-///   as a security property; and ends made of ASCII whitespace are trimmed by
-///   EDS — measured against libebook-contacts 3.52, where `X-JABBER: vera@a `
-///   reaches the user as `vera@a`. Each would have the next save rename the
-///   handle on the server, which costs more than not showing it. See
-///   [`edged_with_whitespace`].
+/// Returns mapped property and handle for an emit-ready service entry.
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
     let handle = online_service_handle(service)?;
@@ -1043,17 +589,7 @@ fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     drawable.then_some((property, handle))
 }
 
-/// The handle a line states for an entry: its `user`, or — for an entry that
-/// names none — the one its `uri` spells out.
-///
-/// The `user` wins where both are there: it is what the service calls the
-/// contact, while the URI is a second way of saying the same thing, and the
-/// field the line reaches holds the first.
-///
-/// The save path compares *this* rather than the `user` on either side, because
-/// the vCard states only the handle: an entry that arrived as a URI comes back
-/// as a `user` saying the same thing, and calling that an edit would rewrite the
-/// entry every time the contact is touched.
+/// Emits `user` when present, else extracts a plain handle from `uri`.
 pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     match service.user.as_deref() {
         Some(user) => Some(user),
@@ -1073,29 +609,17 @@ fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
     (matches && plain_handle(handle)).then_some(handle)
 }
 
-/// The URI a service would state a handle under, or `None` when there is no
-/// scheme for the service or no URI that would say just this handle.
+/// Returns `<scheme>:<handle>` for services with a known plain-handle URI form.
 ///
-/// The save path's other half: the entry the server stated as a URI is patched
-/// as one, rather than answered with a `user` it never had. `None` is not a
-/// failure — it means the rename has to change the entry's shape, which is
-/// always allowed and never wrong, only less faithful.
+/// `None` means no compatible scheme exists or the handle is not URI-safe.
 pub fn online_service_uri(service: &str, handle: &str) -> Option<String> {
     let scheme = service_scheme(service)?;
     plain_handle(handle).then(|| format!("{scheme}:{handle}"))
 }
 
-/// Whether a URI's scheme-specific part is a bare handle.
+/// Whether a URI tail is a bare handle safe for read and write paths.
 ///
-/// A path, a query, a fragment or a percent-encoding means the URI says more
-/// than who the contact is — `skype:echo123?call` names an action, and
-/// `xmpp:vera%40jabber.example` states a handle this side would have to decode
-/// and the next save would have to re-encode. Whitespace is out for the reason
-/// it is out of a `user`: a URI cannot hold it, so a handle carrying one has no
-/// URI to go back into.
-///
-/// Used in both directions, so that a handle read out of a URI is exactly a
-/// handle that can be written back into one.
+/// Rejects paths, queries, fragments, percent-encoding, and whitespace.
 fn plain_handle(handle: &str) -> bool {
     !handle.is_empty()
         && !handle.contains(['/', '?', '#', '%'])
@@ -1182,34 +706,15 @@ fn service_slot(service: &OnlineService) -> &'static str {
     }
 }
 
-/// Whether one tag of `keywords` goes on the `CATEGORIES` line — the
-/// `states_*` predicate of the one mapped property that is a *set* rather than
-/// a keyed map of objects.
+/// Whether one `keywords` entry can be emitted on `CATEGORIES`.
 ///
-/// Being a set changes what the save does with the answer, not what the
-/// question means. A `CATEGORIES` line holds the whole set and a JSContact
-/// keyword is a bare string, so there is nothing inside an entry to preserve
-/// and no key to patch by: the line states what was shown, and the save writes
-/// back a whole new set. A tag this predicate refuses was therefore not merely
-/// unseen but *absent from what the user edited*, and the save has to put it
-/// back by hand rather than read its absence as a deletion. What is refused:
+/// `CATEGORIES` is a set line, so this predicate is the shared gate for both
+/// what we draw and what the save path treats as "stated". Refused tags are
+/// restored by save logic instead of being treated as user removals.
 ///
-/// - **A value that is not `true`.** RFC 9553 §1.4.3 has every value of a Set be
-///   `true`; drawing anything else would say the tag is set where the server
-///   said it is not.
-/// - **An empty tag.** An empty item between two commas reads back as no tag at
-///   all, so the tag would vanish between the drawing and the save.
-/// - **A tag holding a carriage return.** [`crate::syntax::write`] drops it —
-///   that is a security property, not tidiness — so the tag would come back
-///   spelled differently and a save would rename it. A line feed is not this
-///   case: it has an escape and survives both writers.
-/// - **A tag whose ends are whitespace.** EDS trims them: measured against
-///   libebook-contacts 3.52, `CATEGORIES: quiet` reaches the user as `quiet`,
-///   and the next save would rename the tag on the server. See
-///   `edged_with_whitespace`.
-///
-/// The single point the save and `drawn_tags` agree through, so a tag cannot
-/// be called shown and then left off the line.
+/// A tag is renderable only when its set value is `true`, the name is not
+/// empty, it has no carriage return (the writer strips it), and it has no edge
+/// whitespace that EDS would trim.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
@@ -1217,21 +722,16 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
         && !edged_with_whitespace(tag)
 }
 
-/// Whether a tag begins or ends with a character EDS would trim off it.
+/// Whether a tag has leading or trailing ASCII whitespace.
 ///
-/// The set is ASCII whitespace, which is one character wider than what EDS was
-/// measured to strip — it keeps a vertical tab — because the two errors are not
-/// the same size. Refusing to draw a tag costs the sight of it; drawing one that
-/// comes back trimmed costs the tag, on the server, without anybody having
-/// asked.
+/// This superset avoids writing tags that EDS may trim and then rename on the
+/// next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
 }
 
-/// The tags to write on the `CATEGORIES` line, in the order the set holds them —
-/// which is sorted, so the vCard is stable across renderings; a reordering would
-/// otherwise look to the save like an edit.
+/// The tags to write on `CATEGORIES`, in stable sorted order.
 fn drawn_tags(card: &ContactCard) -> Vec<&str> {
     card.keywords
         .iter()
@@ -1243,22 +743,15 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
 
 /// The tags the card is filed under, as a JSContact `keywords` Set.
 ///
-/// Every `CATEGORIES` line is read, not just the first, and that is not
-/// pedantry about RFC 2426 §3.7.1 admitting the property more than once: EDS
-/// shows the user the first line only and, when the Categories field is edited,
-/// rewrites that one and leaves the second exactly as it was — measured against
-/// libebook-contacts 3.52. Reading both is what keeps the tags on the second
-/// from being deleted by the next save, having never been shown.
+/// Reads every `CATEGORIES` line. EDS edits only the first one, so retaining
+/// later lines avoids deleting unseen tags on the next save.
 ///
-/// A tag named twice — across the lines or within one — is one member, because a
-/// set is what both sides mean. An empty item is dropped rather than carried as
+/// A duplicate tag is kept once because this is a set. Empty items are dropped:
 /// the tag whose name is nothing: `CATEGORIES:` and `CATEGORIES:a,,b` state
 /// nothing between their separators.
 ///
-/// `None` rather than an empty map for a card with no tags, for the reason the
-/// keyed maps have one: the save reads an edit off a difference from what was
-/// shown, and an empty set would claim the contact is untagged where the vCard
-/// made no claim at all.
+/// Returns `None` instead of an empty map so "no CATEGORIES line" stays
+/// distinct from "explicitly untagged" in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
@@ -1908,22 +1401,10 @@ const MAX_LINE_OCTETS: usize = 75;
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
 ///
-/// Folding is calcard's job, and its writer does it. Before calcard 0.3.13,
-/// a structured value's `;` separators were written *after* its fold check,
-/// and that check was skipped when the component coming next was empty
-/// text, so a value whose text folded to exactly 75 octets kept every empty
-/// trailing slot on the same physical line: 81 octets for an `ADR`, one per
-/// empty slot (found by a fuzzer seed; the regression test in
-/// `tests/proptest_fuzz.rs` still carries the shrunken card; was
-/// <https://github.com/stalwartlabs/calcard/issues/25>, fixed upstream in
-/// 0.3.13). This pass is now insurance rather than an active workaround —
-/// kept because it is a single scan and it is the guarantee the tightened
-/// `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8` property
-/// rests on. Folding is defined on the octet layer — unfolding restores the
-/// same stream wherever a cut lands — so any cut is *correct*; cutting at
-/// character boundaries, and never between a `\` and the octet it escapes,
-/// additionally keeps every physical line valid UTF-8 and every escape pair
-/// whole for line-oriented readers.
+/// Calcard already folds output, but this defensive pass keeps a hard 75-octet
+/// bound after the historic structured-value overflow fixed in calcard 0.3.13
+/// (<https://github.com/stalwartlabs/calcard/issues/25>). It also avoids cuts
+/// inside UTF-8 code points and escaped pairs.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1979,21 +1460,9 @@ fn fold_overlong_lines(vcard: String) -> String {
 /// `X-ABDATE`, `X-AB-DATE`) into basic format (`YYYYMMDD` / `YYYYMMDDTHHMMSS...`)
 /// before passing the vCard stream to `calcard`.
 ///
-/// Context & upstream rationale:
-/// Upstream `calcard` (0.3.11) exhibits two date parsing limitations:
-/// 1. `parse_vcard_date` (used when `VALUE=date` is stated) reads extended format
-///    `YYYY-MM-DD` only to the year and month, stopping at the second hyphen and
-///    leaving `day` as `None` (losing the day).
-/// 2. `parse_vcard_date_and_or_time` (used for standard date-and-or-time properties)
-///    misinterprets the second hyphen as a timezone offset transition, storing the
-///    day into `tz_hour` when no timezone offset is present, or overwriting it with
-///    the actual timezone offset (e.g. `+02:00` corrupting day 12 into day 02), or
-///    leaving `day` as `None` on UTC timestamps (`Z`).
-///
-/// In contrast, `calcard`'s basic-format date parser (`YYYYMMDD` / `YYYYMMDDTHHMMSS`)
-/// parses all date components (year, month, day, time, timezone) completely and
-/// losslessly across all versions (vCard 2.1, 3.0, 4.0). Pre-normalizing hyphenated
-/// date lines to basic format on import guarantees 100% fidelity without data loss.
+/// This is an import-side compatibility shim for calcard extended-date parsing.
+/// Converting hyphenated values to basic format preserves day and timezone
+/// fields reliably across supported vCard versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
     let mut remaining = vcard;
@@ -2641,36 +2110,14 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     })
 }
 
-/// The media entry a `PHOTO` line states, or `None` for a line naming no
-/// picture at all.
+/// Decodes a `PHOTO` line into one media entry.
 ///
-/// The inverse of the emitter's two forms, and only of those two: `VALUE=uri` is
-/// a picture the card points at, and anything else is a picture it carries,
-/// whose bytes cross as a `data:` URI (RFC 2397) because that is how RFC 9553
-/// §2.6.4 states one. Both are what EDS's own writer emits, measured against
-/// libebook-contacts 3.52 — with the `X-JMAP-KEY` gone from a line the user
-/// edited, which is the save's problem rather than this one's.
+/// Supports the two emitted forms: URI reference (`VALUE=uri`) and embedded
+/// image bytes. calcard already applies transfer decoding, so this function
+/// must treat `Text` and `Binary` as final and never decode again.
 ///
-/// The bytes come from [`entry_binary`] where the line carried bytes and from
-/// the value's own text otherwise. calcard consumes `ENCODING=b`/`BASE64`
-/// itself — it never survives into `entry.params` — decoding the value and
-/// handing back [`VCardValue::Binary`] when the result is not a valid string,
-/// or plain [`VCardValue::Text`] when it is: an SVG is a picture whose bytes
-/// *are* text, and a photo whose bytes happen to be valid UTF-8 hits the same
-/// path. Either way the value calcard hands back is already final; this side
-/// must not decode it a second time — a photo whose already-decoded bytes
-/// coincidentally also look like base64 would otherwise be corrupted. The
-/// cost of taking both paths as final is that a `PHOTO` line stating neither
-/// `VALUE=uri` nor a transfer encoding — a bare `PHOTO:<uri>`, which EDS reads
-/// as no picture at all (measured) — is indistinguishable here from a picture
-/// whose bytes are text, and is read as the latter. Neither EDS's writer nor
-/// this emitter produces such a line.
-///
-/// The media type is built from the `TYPE` parameter rather than taken from
-/// calcard, so that the one rule EDS applies is applied once and in one place:
-/// the parameter states the subtype and the type is `image/` in front of it (see
-/// [`image_subtype`]). [`UNKNOWN_TYPE`] is what EDS writes when it has none, and
-/// names no format, so it reads back as none.
+/// Media type follows EDS behavior: derive from `MEDIATYPE` or normalize
+/// `TYPE` as an image subtype via [`image_subtype`].
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
     let states_a_reference = (entry_param(entry, "VALUE")
@@ -3114,9 +2561,8 @@ fn name_fields(name: &Name) -> Option<Vec<String>> {
         if component.value.is_empty() {
             continue;
         }
-        // Two components of the same kind (a double-barrelled given name)
-        // share one vCard field, and are told apart again on the way back by
-        // `restore_name_components`.
+        // Same-kind components share one vCard field and are split again by
+        // `restore_name_components` on readback.
         if !fields[index].is_empty() {
             fields[index].push(' ');
         }
@@ -3150,10 +2596,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
     let fields = find("N").map(entry_components).unwrap_or_default();
 
-    // Each component is read as the bare kind and value the `N` field states.
-    // What a name component carries besides that — RFC 9553 §2.2.1's `phonetic`
-    // spelling — has no field and no parameter here, so it is left to the save
-    // to put back on the component it belongs to.
+    // Each component reads only the kind and value that `N` states.
+    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here, so the save
+    // path is responsible for restoring it on the right component.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -3172,9 +2617,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         extra.insert("fileAs".to_string(), Value::String(file_as));
     }
 
-    // No FN, no usable N, and no fileAs: the vCard simply does not name anybody. Note
-    // that a missing N is never guessed at by splitting FN — a wrong guess
-    // would be written back to the server on the next save.
+    // No FN, no usable N, and no fileAs means the card does not name anyone.
+    // We do not split FN to guess N fields, because a wrong guess would be
+    // written back on the next save.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
@@ -3244,8 +2689,8 @@ fn value_text(value: &VCardValue) -> Option<String> {
         VCardValue::Component(items) => Some(items.join(",")),
         VCardValue::PartialDateTime(date) => {
             let day = date.day.or_else(|| {
-                // Workaround for calcard parse_vcard_date_and_or_time bug where the
-                // second hyphen causes idx to jump to tz_hour.
+                // calcard can parse the second `-` into `tz_hour`; clamp that
+                // fallback to day-range values.
                 date.tz_hour.filter(|d| (1..=31).contains(d))
             });
             if let (Some(y), Some(m), Some(d)) = (date.year, date.month, day) {

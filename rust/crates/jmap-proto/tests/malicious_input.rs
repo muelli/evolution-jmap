@@ -6,7 +6,7 @@
 //! *shape* is hostile input, not a contract this crate's `Deserialize`
 //! impls are allowed to assume. Every property here feeds arbitrary JSON
 //! straight into an envelope type's deserialization; the only thing
-//! asserted is that decoding never panics — an `Err` is a perfectly normal
+//! asserted is that decoding never panics: an `Err` is a perfectly normal
 //! outcome for garbage input, a panic is not.
 
 use proptest::prelude::*;

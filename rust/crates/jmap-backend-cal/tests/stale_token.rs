@@ -1,29 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A pooled connection whose bearer token went stale.
-//!
-//! `with_connection` now runs every vfunc body against a private `GError`
-//! slot so that a 401 can be answered with a refreshed token and one retry
-//! instead of a consent window. The refresh itself needs an `ESource` with an
-//! `EOAuth2Service` behind it, which needs `evolution-source-registry` on the
-//! session bus, which neither this VM nor CI has — so the decision and the
-//! `GError` bookkeeping are tested where they live, as
-//! `jmap_backend_core::retry::retry_on_authentication_failure`'s own unit
-//! tests, with plain closures.
-//!
-//! What is tested *here* is the half of it that needs a real vfunc dispatch:
-//! that a genuinely stale token still reaches EDS as
-//! `E_CLIENT_ERROR_AUTHENTICATION_FAILED` when there is nothing to refresh
-//! from, that it does so having tried exactly once (a backend that retried a
-//! doomed request would double every 401 the user's password already caused),
-//! and that installing fresh credentials on the live connection makes the very
-//! next vfunc call succeed — which is what the refresh does, through a read
-//! guard the retry holds across both attempts.
-//!
-//! The server genuinely rotates the token it accepts
-//! (`MockServer::set_bearer_token`); the client is not sabotaged into sending
-//! something the server never took.
+//! Tests for stale bearer token handling and credential refresh retry behavior.
 
 use std::ptr;
 
@@ -69,10 +47,7 @@ impl Drop for Class {
     }
 }
 
-/// An instance the GObject type system knows nothing about, holding one
-/// connection. Only the session slot may be touched through it — which is why
-/// `e_backend_get_source` finds nothing and no refresh is attempted, exactly
-/// the "not an OAuth 2.0 account" path a Basic-password account takes.
+/// Detached backend instance holding a connection without an ESource.
 struct Detached(Box<JmapCalBackend>);
 
 impl Detached {
@@ -130,7 +105,7 @@ fn list_existing(class: &Class, backend: &mut Detached) -> Listed {
     let mut error: *mut GError = ptr::null_mut();
 
     // SAFETY: a valid instance of ours, a NULL cancellable, and three
-    // writable, currently-NULL out-parameters — what EDS passes.
+    // writable, currently-NULL out-parameters: what EDS passes.
     let ok = unsafe {
         vfunc(
             backend.as_ptr(),
@@ -142,8 +117,7 @@ fn list_existing(class: &Class, backend: &mut Detached) -> Listed {
     };
 
     // SAFETY: the out-parameters are transfer-full when the call succeeded and
-    // NULL otherwise, and the list is of `ECalMetaBackendInfo` — freed the way
-    // every other test in this crate frees one.
+    // NULL otherwise, and the list is of ECalMetaBackendInfo.
     let count = unsafe {
         let count = glib_sys::g_slist_length(objects) as usize;
         g_slist_free_full(objects, Some(e_cal_meta_backend_info_free));
@@ -234,10 +208,8 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
     let listed = list_existing(&class, &mut backend);
     listed.assert_is_an_authentication_failure();
 
-    // A detached instance has no `ESource`, so `refresh_credentials` reports
-    // "nothing to refresh" and the retry never runs — the same path a
-    // Basic-password account takes, where a re-fetch would only reproduce the
-    // wrong secret. One refused request, not two.
+    // A detached instance has no ESource, so refresh_credentials reports
+    // nothing to refresh and the retry never runs.
     assert_eq!(
         fixture.server.unauthorized_responses() - before,
         1,
@@ -247,11 +219,7 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
 
 #[test]
 fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_vfunc_call() {
-    // What the refresh does, minus the `ESource` this test cannot have: the
-    // retry replaces the credentials *on* the pooled connection rather than
-    // replacing the connection, so it can hold a read guard across both
-    // attempts and never block the other threads' operations. This pins that
-    // a vfunc dispatched afterwards sees the new token.
+    // Verifies updating credentials in-place allows subsequent requests to succeed.
     let class = Class::get();
     let fixture = Fixture::start();
     let mut backend = fixture.detached(GOOD);
@@ -274,10 +242,7 @@ fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_vfunc_ca
 
 #[test]
 fn a_failure_that_is_not_a_401_is_still_reported_unchanged() {
-    // The private `GError` slot the retry introduced must hand the caller
-    // exactly the error the attempt produced, not a rewritten one: a
-    // disconnected backend is still `REPOSITORY_OFFLINE`, which is what makes
-    // `ECalMetaBackend` serve its cache instead of showing an alert.
+    // Verifies disconnected backend still reports REPOSITORY_OFFLINE.
     let class = Class::get();
     let fixture = Fixture::start();
     let mut backend = fixture.detached(GOOD);

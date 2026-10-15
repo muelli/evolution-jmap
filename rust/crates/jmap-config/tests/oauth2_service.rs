@@ -36,7 +36,6 @@
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2ServiceInterface, EOAuth2Services,
@@ -59,52 +58,17 @@ use gobject_sys::{
 use jmap_backend_core::subclass::register_static;
 use jmap_config::oauth2::{self, Config};
 use jmap_config::oauth2_service::{NAME, Service};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
-/// A minimal `tracing::Subscriber` that records only each event's level,
-/// enough to pin F17's "missing PKCE verifier escalates to `warn!`, not
-/// `debug!`" fix without needing this crate's full field-visiting machinery
-/// (`tests/tracing_writes.rs` has that shape, for tests that need the field
-/// values too).
-struct LevelCapturingSubscriber {
-    levels: Arc<Mutex<Vec<Level>>>,
-}
-
-impl Subscriber for LevelCapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        self.levels.lock().unwrap().push(*event.metadata().level());
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
-
-/// Runs `body` under a subscriber that captures every emitted event's level,
-/// and returns them in emission order.
+/// Runs `body` under the shared capturing subscriber, and returns every
+/// emitted event's level, in emission order.
 fn capture_levels(body: impl FnOnce()) -> Vec<Level> {
-    let levels = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = LevelCapturingSubscriber {
-        levels: levels.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        body();
-    });
-    std::mem::take(&mut *levels.lock().unwrap())
+    capture(body)
+        .1
+        .into_iter()
+        .map(|(level, ..)| level)
+        .collect()
 }
 
 struct TestSource(*mut ESource);
@@ -726,7 +690,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
     }
 }
 
-/// F17 of the 2026-08-28 re-audit: a code exchange prepared with no stashed
+/// `docs/AUDIT-FFI-20260828.md`'s F17: a code exchange prepared with no stashed
 /// PKCE verifier is exactly the failure mode that turns into a repeating,
 /// unattributable consent window, so it must be logged loudly enough to find
 /// in the journal: `warn!`, not `debug!`. A verifier goes missing here only

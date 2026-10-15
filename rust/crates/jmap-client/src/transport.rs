@@ -54,7 +54,7 @@ pub fn observed() -> Option<CancelFlag> {
 /// for every operation on it, but the thing that cancels an operation belongs to
 /// the *operation*. Camel and EDS both hand a sync vfunc a `GCancellable` that
 /// means "stop this call", and that vfunc has no way to reach into a client
-/// built long before it and re-point a flag — nor should it, because the next
+/// built long before it and re-point a flag, nor should it, because the next
 /// vfunc along may be running on another thread at the same moment, under a
 /// cancellable of its own.
 ///
@@ -64,7 +64,7 @@ pub fn observed() -> Option<CancelFlag> {
 /// when the scope drops, so a folder operation that calls into its store leaves
 /// the outer operation's cancellation in place.
 ///
-/// A client checks a scope in preference to the flag it was built with — see
+/// A client checks a scope in preference to the flag it was built with; see
 /// [`Client::execute`].
 ///
 /// [`Client`]: crate::Client
@@ -82,7 +82,7 @@ impl CancelScope {
     /// the returned scope is dropped.
     ///
     /// Scopes nest, and are expected to be dropped in the reverse of the order
-    /// they were installed — which is what holding one in a local of the vfunc
+    /// they were installed, which is what holding one in a local of the vfunc
     /// it belongs to guarantees. Dropping them out of order restores an older
     /// observation over a newer one; nothing here can detect that, and no
     /// caller has reason to do it.
@@ -116,7 +116,7 @@ pub struct HttpRequest<'a> {
     pub headers: &'a [(String, String)],
     pub body: Option<&'a [u8]>,
     pub cancel: Option<&'a CancelFlag>,
-    /// The most octets of response body this request will accept — exactly
+    /// The most octets of response body this request will accept: exactly
     /// this many are fine, one more is [`TransportError::ResponseTooLarge`].
     ///
     /// It has no default and every caller states it, which is the whole point:
@@ -133,11 +133,11 @@ pub struct HttpResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
-    /// The URL this response actually came from — [`HttpRequest::url`] unless
+    /// The URL this response actually came from: [`HttpRequest::url`] unless
     /// a redirect was followed, in which case this is the last one.
     ///
     /// A caller that must not trust a redirect target it never named (a blob
-    /// download addressed by the session's own `downloadUrl`, in particular —
+    /// download addressed by the session's own `downloadUrl`, in particular,
     /// see [`crate::Client::download_blob`]) compares this against the URL it
     /// asked for; a transport with nothing to report here because it never
     /// redirects sets it to the request's own URL.
@@ -206,16 +206,10 @@ mod ureq_transport {
                 .timeout_recv_response(Some(read))
                 .timeout_recv_body(Some(read))
                 .timeout_global(Some(total))
-                // ureq's default (`Never`) strips `Authorization` on every
-                // redirect, even a same-host one. A server that serves its
-                // session document via a same-host redirect (Stalwart's
-                // `/.well-known/jmap` -> `/jmap/session`, for one) then sees
-                // an unauthenticated request and answers with an anonymous,
-                // empty-accounts session: not a 401, so the failure surfaces
-                // confusingly downstream as "no primary account" rather than
-                // here. Cross-host redirects still get no auth header, which
-                // is the safe default RFC 7235 leaves it out for.
-                .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
+                // Redirects are handled directly in execute() to ensure
+                // trailing dot hosts (e.g. api.fastmail.com.) are recognized as
+                // the same origin as dotless hosts, keeping Authorization headers.
+                .max_redirects(0)
                 .build();
             Self {
                 agent: config.into(),
@@ -235,85 +229,114 @@ mod ureq_transport {
 
     impl Transport for UreqTransport {
         fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-            if request.cancel.is_some_and(super::CancelFlag::is_cancelled) {
-                return Err(TransportError::Cancelled);
-            }
+            let mut current_url = request.url.to_string();
+            let mut current_method = request.method;
+            let mut current_headers: Vec<(String, String)> = request.headers.to_vec();
+            let mut redirect_count = 0;
 
-            tracing::trace!(
-                method = ?request.method,
-                url = request.url,
-                "sending HTTP request"
-            );
-
-            let result = match request.method {
-                HttpMethod::Get => {
-                    let mut builder = self.agent.get(request.url);
-                    for (name, value) in request.headers {
-                        builder = builder.header(name, value);
-                    }
-                    builder.call()
+            loop {
+                if request.cancel.is_some_and(super::CancelFlag::is_cancelled) {
+                    return Err(TransportError::Cancelled);
                 }
-                HttpMethod::Post => {
-                    let mut builder = self.agent.post(request.url);
-                    for (name, value) in request.headers {
-                        builder = builder.header(name, value);
-                    }
-                    builder.send(request.body.unwrap_or_default())
-                }
-            };
 
-            let response = result.map_err(|error| {
-                tracing::debug!(url = request.url, %error, "HTTP request failed");
-                TransportError::Failed(error.to_string())
-            })?;
-            let status = response.status().as_u16();
-            let content_type = response
-                .headers()
-                .get("content-type")
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned);
-            // The URL this response actually came from, which `ureq` tracks
-            // regardless of `redirect_auth_headers` — that setting only
-            // decides whether `Authorization` follows a redirect, not
-            // whether the redirect itself is taken. `get_uri()` is the
-            // request's own URL when nothing redirected.
-            let final_url = ureq::ResponseExt::get_uri(&response).to_string();
-            tracing::trace!(
-                status,
-                final_url = %final_url,
-                redirected = final_url != request.url,
-                "received HTTP response"
-            );
-            // `read_to_vec()` would apply `ureq`'s own `MAX_BODY_SIZE`; the
-            // limit is set here so the number in force is the caller's.
-            //
-            // One more than the ceiling, deliberately. `ureq`'s limiting reader
-            // fails on the read that finds nothing left rather than on the
-            // octet that overran, so a body of exactly `limit` octets is
-            // rejected by it: the last read consumes the allowance, and the
-            // read that would have returned end-of-file finds none. Asking for
-            // one octet more leaves that read an allowance to return zero
-            // against, which makes `max_response_bytes` mean "this many octets
-            // are fine" — the only reading a caller sizing a ceiling from a
-            // blob's own `size` can use.
-            let body = response
-                .into_body()
-                .with_config()
-                .limit(request.max_response_bytes.saturating_add(1))
-                .read_to_vec()
-                .map_err(|error| match error {
-                    ureq::Error::BodyExceedsLimit(_) => TransportError::ResponseTooLarge {
-                        limit: request.max_response_bytes,
-                    },
-                    error => TransportError::Failed(error.to_string()),
+                tracing::trace!(
+                    method = ?current_method,
+                    url = %current_url,
+                    redirect_count,
+                    "sending HTTP request"
+                );
+
+                let result = match current_method {
+                    HttpMethod::Get => {
+                        let mut builder = self.agent.get(&current_url);
+                        for (name, value) in &current_headers {
+                            builder = builder.header(name, value);
+                        }
+                        builder.call()
+                    }
+                    HttpMethod::Post => {
+                        let mut builder = self.agent.post(&current_url);
+                        for (name, value) in &current_headers {
+                            builder = builder.header(name, value);
+                        }
+                        builder.send(request.body.unwrap_or_default())
+                    }
+                };
+
+                let response = result.map_err(|error| {
+                    tracing::debug!(url = %current_url, %error, "HTTP request failed");
+                    TransportError::Failed(error.to_string())
                 })?;
 
-            Ok(HttpResponse {
-                status,
-                content_type,
-                body,
-                final_url,
-            })
+                let status = response.status().as_u16();
+
+                if matches!(status, 301..=303 | 307 | 308)
+                    && redirect_count < 10
+                    && let Some(location) = response
+                        .headers()
+                        .get("location")
+                        .and_then(|value| value.to_str().ok())
+                {
+                    let next_url = crate::url::resolve_redirect(&current_url, location)
+                        .map_err(TransportError::Failed)?;
+
+                    let same_origin = crate::url::same_origin(&current_url, &next_url);
+                    if !same_origin {
+                        // Cross-origin redirect: strip Authorization per RFC 7235
+                        current_headers
+                            .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+                    }
+
+                    if matches!(status, 301..=303) && current_method == HttpMethod::Post {
+                        current_method = HttpMethod::Get;
+                        current_headers.retain(|(name, _)| {
+                            !name.eq_ignore_ascii_case("content-type")
+                                && !name.eq_ignore_ascii_case("content-length")
+                        });
+                    }
+
+                    drop(response);
+                    current_url = next_url;
+                    redirect_count += 1;
+                    continue;
+                }
+
+                if matches!(status, 301..=303 | 307 | 308) && redirect_count >= 10 {
+                    return Err(TransportError::Failed("too many redirects".to_string()));
+                }
+
+                let content_type = response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
+
+                tracing::trace!(
+                    status,
+                    final_url = %current_url,
+                    redirected = current_url != request.url,
+                    "received HTTP response"
+                );
+
+                let body = response
+                    .into_body()
+                    .with_config()
+                    .limit(request.max_response_bytes.saturating_add(1))
+                    .read_to_vec()
+                    .map_err(|error| match error {
+                        ureq::Error::BodyExceedsLimit(_) => TransportError::ResponseTooLarge {
+                            limit: request.max_response_bytes,
+                        },
+                        error => TransportError::Failed(error.to_string()),
+                    })?;
+
+                return Ok(HttpResponse {
+                    status,
+                    content_type,
+                    body,
+                    final_url: current_url,
+                });
+            }
         }
     }
 
@@ -329,7 +352,7 @@ mod ureq_transport {
 
         /// Records every event this module emits (level + fields), so a test
         /// can assert a request attached structured fields rather than only a
-        /// free-text message — duplicated from `client.rs`'s own test
+        /// free-text message, duplicated from `client.rs`'s own test
         /// harness for the same reason that one gives: this crate depends on
         /// `tracing`, not `tracing-subscriber`, so there is no ready-made
         /// capturing layer to share across modules.

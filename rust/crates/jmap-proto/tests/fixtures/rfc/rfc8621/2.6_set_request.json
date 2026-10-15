@@ -1,0 +1,19 @@
+// Source: RFC 8621 §2.6 (Mailbox/set Request - Rename and Destroy), August 2019
+[
+  [
+    "Mailbox/set",
+    {
+      "accountId": "u33084183",
+      "ifInState": "78542",
+      "update": {
+        "MB674cc24095db49ce": {
+          "name": "Maybe important mail"
+        }
+      },
+      "destroy": [
+        "MB23cfa8094c0f41e6"
+      ]
+    },
+    "0"
+  ]
+]

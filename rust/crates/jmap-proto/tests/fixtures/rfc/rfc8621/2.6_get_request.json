@@ -1,0 +1,11 @@
+// Source: RFC 8621 §2.6 (Mailbox/get Request - Fetching all mailboxes), August 2019
+[
+  [
+    "Mailbox/get",
+    {
+      "accountId": "u33084183",
+      "ids": null
+    },
+    "0"
+  ]
+]

@@ -466,7 +466,7 @@ fn fanout_of(resources: Vec<Resource>) -> Fanout {
 fn a_childs_may_delete_reaches_set_remote_deletable_and_absence_stays_deletable() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Item 40: `myRights.mayDelete` reaches EDS's `remote-deletable` through
+        // `myRights.mayDelete` reaches EDS's `remote-deletable` through
         // `Resource::deletable` -> `Child::remote_deletable` ->
         // `Collection::set_remote_deletable`, and an absent `myRights` — the
         // ordinary case — must not be mistaken for "the server said no".

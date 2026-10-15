@@ -1,0 +1,35 @@
+// Source: draft-ietf-jmap-calendars-32 §8.3 (Figure 13: "methodResponses" Property of a JMAP Response), October 2026
+[
+  [
+    "CalendarEvent/get",
+    {
+      "accountId": "a0x9",
+      "list": [
+        {
+          "id": "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f",
+          "calendarIds": {
+            "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": true
+          },
+          "title": "Team catchup",
+          "start": "2023-02-10T18:00:00",
+          "timeZone": "America/New_York",
+          "useDefaultAlerts": false,
+          "alerts": {
+            "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd": {
+              "@type": "Alert",
+              "action": "display",
+              "trigger": {
+                "@type": "OffsetTrigger",
+                "relativeTo": "start",
+                "offset": "-PT1H"
+              }
+            }
+          }
+        }
+      ],
+      "notFound": [],
+      "state": "$$/414/208"
+    },
+    "0"
+  ]
+]

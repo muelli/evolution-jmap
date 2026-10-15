@@ -1,0 +1,26 @@
+// Source: RFC 9425 §5.1 (Fetching Quotas Response), June 2023
+[[ "Quota/get", {
+  "accountId": "u33084183",
+  "state": "78540",
+  "list": [{
+    "id": "2a06df0d-9865-4e74-a92f-74dcc814270e",
+    "resourceType": "count",
+    "used": 1056,
+    "warnLimit": 1600,
+    "softLimit": 1800,
+    "hardLimit": 2000,
+    "scope": "account",
+    "name": "bob@example.com",
+    "description": "Personal account usage. When the soft limit is reached, the user is not allowed to send mails or create contacts and calendar events anymore.",
+    "types" : [ "Mail", "Calendar", "Contact" ]
+  }, {
+    "id": "3b06df0e-3761-4s74-a92f-74dcc963501x",
+    "resourceType": "octets",
+    "used": 524288000,
+    "hardLimit": 1073741824,
+    "scope": "account",
+    "name": "Storage Quota",
+    "types": [ "Mail" ]
+  }],
+  "notFound": []
+}, "0" ]]

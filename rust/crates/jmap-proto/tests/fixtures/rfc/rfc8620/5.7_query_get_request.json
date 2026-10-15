@@ -1,0 +1,40 @@
+// Source: RFC 8620 §5.7 (Standard Methods Examples - Todo/query and Todo/get Request), July 2019
+[
+  [
+    "Todo/query",
+    {
+      "accountId": "x",
+      "filter": {
+        "operator": "OR",
+        "conditions": [
+          {
+            "hasKeyword": "music"
+          },
+          {
+            "hasKeyword": "video"
+          }
+        ]
+      },
+      "sort": [
+        {
+          "property": "title"
+        }
+      ],
+      "position": 0,
+      "limit": 10
+    },
+    "0"
+  ],
+  [
+    "Todo/get",
+    {
+      "accountId": "x",
+      "#ids": {
+        "resultOf": "0",
+        "name": "Todo/query",
+        "path": "/ids"
+      }
+    },
+    "1"
+  ]
+]

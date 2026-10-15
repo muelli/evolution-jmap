@@ -1,0 +1,10 @@
+// Source: RFC 8620 §7.2.3 (PushSubscription Example - Fetch Subscriptions Request), July 2019
+[
+  [
+    "PushSubscription/get",
+    {
+      "ids": null
+    },
+    "0"
+  ]
+]

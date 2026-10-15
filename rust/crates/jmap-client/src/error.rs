@@ -26,7 +26,7 @@ pub enum Error {
     Protocol(String),
     /// The operation was cancelled via [`crate::transport::CancelFlag`].
     Cancelled,
-    /// More octets than the session's `maxSizeUpload` (RFC 8620 §6.1) — the
+    /// More octets than the session's `maxSizeUpload` (RFC 8620 §6.1): the
     /// one failure here the server was never asked about.
     ///
     /// Its own variant rather than a `Protocol` string because it is the one
@@ -38,34 +38,25 @@ pub enum Error {
     /// More octets in one request to `apiUrl` than the session's
     /// `maxSizeRequest` (RFC 8620 §2).
     ///
-    /// Distinct from [`Self::TooLarge`] because the remedy is: an upload that
-    /// is too big cannot be made smaller by the caller, so that one is the end
-    /// of the road, while a request that is too long can nearly always be sent
-    /// as several. This variant is what is left when it cannot — a single id so
-    /// long that a call naming only it is still over the limit — and it says
-    /// so with both numbers rather than with the server's
-    /// `urn:ietf:params:jmap:error:limit`, which is the same string for every
-    /// request-level limit there is.
+    /// Distinct from [`Self::TooLarge`] because an upload that is too big
+    /// cannot be made smaller by the caller, while an oversized request can
+    /// nearly always be split into several requests. This variant is returned
+    /// when a single id alone exceeds the limit.
     RequestTooLarge { size: u64, limit: u64 },
     /// The server's answer was longer than the octets that request said it
     /// would take (see [`crate::limits`]), and was abandoned unread rather than
     /// buffered.
     ///
-    /// Only the limit, because the size is not known: the body was never read
-    /// to the end, which is the point of having a ceiling. Distinct from
-    /// [`Self::Transport`] because it is not a failure that retrying mends —
-    /// the same message will be the same length next time — and distinct from
-    /// the two limits above because those are refusals of something this client
-    /// was about to *send*.
+    /// Only the limit is reported because the body was never read to the end.
+    /// Distinct from [`Self::Transport`] because retrying will not resolve it
+    /// (the same message will be the same length next time).
     ResponseTooLarge { limit: u64 },
     /// An OAuth 2.0 token endpoint refused a grant (RFC 6749 §5.2).
     ///
     /// Its own variant rather than [`Self::Http`] with no problem: every
-    /// refusal at a token endpoint answers the same HTTP 400 (401 only for a
-    /// confidential client's bad credentials, which this client never is), so
-    /// the status carries none of the reason — only the body's `error` does,
-    /// and `invalid_grant` (re-authenticate) is not `invalid_client`
-    /// (the registration itself is gone).
+    /// refusal at a token endpoint answers HTTP 400, so the status carries
+    /// none of the reason; only the body's `error` does, and `invalid_grant`
+    /// (re-authenticate) is distinct from `invalid_client`.
     OAuthTokenRefused {
         error: String,
         description: Option<String>,
@@ -73,39 +64,37 @@ pub enum Error {
     /// A blob download was redirected to a different origin than the one the
     /// session's own `downloadUrl` named.
     ///
-    /// The transport already drops `Authorization` on a cross-host redirect
-    /// (`UreqTransport::new`'s `redirect_auth_headers`, `SameHost`) — RFC
-    /// 7235's safe default — but it still follows the redirect and hands back
-    /// whatever answered. A JSON response with the wrong shape fails to parse
-    /// and surfaces as [`Self::Json`] or [`Self::Protocol`]; a blob is raw
-    /// bytes with no shape to be wrong, so an unrelated 200 (a captive
-    /// portal, a CDN's catch-all page — Fastmail's own marketing homepage was
-    /// the case that found this) would otherwise be stored as if it were the
-    /// message. `download_blob` checks the origin actually reached against
-    /// the one it requested and refuses to treat a mismatch as data.
+    /// The transport drops `Authorization` on a cross-host redirect
+    /// (`UreqTransport::new`'s `redirect_auth_headers`, `SameHost`), RFC
+    /// 7235's safe default, but it still follows the redirect. An unrelated
+    /// 200 response (e.g. a captive portal or catch-all page) would otherwise
+    /// be stored as if it were the message. `download_blob` checks the origin
+    /// actually reached against the requested one and refuses a mismatch.
     ///
-    /// `rebase_note` is set when `ClientBuilder::rebase_urls_to_origin` (the
-    /// `JMAP_LIVE_SERVER_REBASE_URLS` opt-in) actually rewrote `downloadUrl`'s
-    /// origin before this request: a rebase silently pointed *this* request
-    /// somewhere other than the server's own advertised host, so an operator
-    /// reading this error needs to know that before chasing it as an
-    /// ordinary redirect bug — a leftover, process-global rebase env var
-    /// poisoning an unrelated account already cost one full debugging
-    /// session by leaving no trace of itself in the error it produced.
+    /// `rebase_note` is set when `ClientBuilder::rebase_urls_to_origin`
+    /// rewritten `downloadUrl`'s origin before this request.
     CrossOriginRedirect {
         requested: String,
         followed: String,
         rebase_note: Option<String>,
     },
+    /// A request was redirected to a different origin than requested, credentials
+    /// were withheld by the transport to prevent leaking them to an untrusted
+    /// origin (RFC 7235), and the target server answered HTTP 401 Unauthorized.
+    ///
+    /// Distinct from [`Error::Http`] with status 401: a 401 on a redirected request
+    /// where credentials were deliberately withheld is a connection or redirection
+    /// failure, not a rejected token or stale credentials, so callers must not
+    /// escalate to interactive user consent.
+    RedirectCredentialsWithheld { requested: String, followed: String },
 }
 
 impl Error {
     /// Whether the server refused an incremental sync because the state it was
     /// given is too old, or was never one of its own (RFC 8620 §5.2).
     ///
-    /// Not really an error: every caller's answer is to list the collection in
-    /// full and carry on, so the question is asked here rather than left for
-    /// each of them to string-match.
+    /// Not an error: callers list the collection in full and carry on, so the
+    /// check is exposed here rather than requiring string matching.
     pub fn is_cannot_calculate_changes(&self) -> bool {
         matches!(
             self,
@@ -116,31 +105,28 @@ impl Error {
 
     /// Whether the server rejected the request with HTTP 401.
     ///
-    /// On a long-lived connection this is what a stale bearer token — an
-    /// access token that expired while the connection sat idle — looks like,
-    /// as opposed to every other failure a caller cannot fix by refreshing
-    /// credentials and trying again. The single source of truth for that
-    /// question: `jmap_backend_core::connect::is_wrong_password` and every
-    /// per-backend `SyncError`/`StoreError` equivalent delegate here rather
-    /// than repeating the same `Http { status: 401, .. }` match.
+    /// Indicates an expired or invalid bearer token on long-lived connections.
+    /// The single source of truth that backend callers delegate to.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Http { status: 401, .. })
     }
 
+    /// Whether the request was redirected to a different origin, credentials
+    /// were withheld by the transport, and the target server answered HTTP 401.
+    pub fn is_redirect_credentials_withheld(&self) -> bool {
+        matches!(self, Self::RedirectCredentialsWithheld { .. })
+    }
+
     /// Whether a `/changes` call's `sinceState` was rejected as
-    /// `invalidArguments` rather than RFC 8620 §5.2's `cannotCalculateChanges`
-    /// — confirmed live against real Stalwart (`STALWART-RFC-FINDINGS.md`
-    /// finding 17): any unrecognized or non-conforming state string answers
-    /// `invalidArguments`/`"invalid JMAP State..."`, never the RFC's own error
-    /// type.
+    /// `invalidArguments` rather than RFC 8620 §5.2's `cannotCalculateChanges`.
+    ///
+    /// Some servers answer `invalidArguments` for unrecognized state strings
+    /// instead of the RFC's standard error type.
     ///
     /// Its own predicate rather than folded into
     /// [`Self::is_cannot_calculate_changes`]'s meaning: that one answers a
-    /// real, RFC-defined condition for any caller, while this one is a single
-    /// server's non-conformance, identifiable only by matching its
-    /// description text, and only meaningful for a caller that already knows
-    /// the request it sent was a `/changes` call. A caller treating the two
-    /// the same way should check both, not assume one implies the other.
+    /// standard condition for any caller, while this one is a server
+    /// quirk identified by description text in `/changes` responses.
     pub fn is_unrecognized_changes_state(&self) -> bool {
         matches!(
             self,
@@ -180,10 +166,8 @@ impl std::fmt::Display for Error {
                     error.error_type,
                     error.description.as_deref().unwrap_or("no description")
                 )?;
-                // The property list is often the ONLY diagnostic a strict
-                // server sends (observed: Fastmail's `invalidProperties`
-                // with no description) — dropping it turns a precise
-                // rejection into a mystery.
+                // The property list is often the only diagnostic a strict
+                // server sends: dropping it turns a precise rejection into a mystery.
                 if let Some(properties) = error
                     .properties
                     .as_deref()
@@ -228,6 +212,14 @@ impl std::fmt::Display for Error {
                 }
                 Ok(())
             }
+            Error::RedirectCredentialsWithheld {
+                requested,
+                followed,
+            } => write!(
+                f,
+                "request redirected from {requested} to a different origin \
+                 ({followed}); credentials were withheld and the server answered 401"
+            ),
         }
     }
 }

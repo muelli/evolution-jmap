@@ -36,7 +36,7 @@
 //! `e_credentials_prompter_loop_prompt_sync`, which for an OAuth2-method source
 //! is the consent window — before the service has been asked even once. That is
 //! the "a consent prompt at every send while every silent token path answered
-//! fine" the operator observed on 2026-08-26. Milan Crha's answer on the issue
+//! fine" behaviour the bug report describes. Milan Crha's answer on the issue
 //! is that a NULL mechanism *means* "you do not know how to connect", and that
 //! a provider which does should say so with a named `CamelSasl` — as
 //! evolution-ews does in `src/EWS/common/camel-sasl-xoauth2-office365.c`.
@@ -69,9 +69,10 @@
 //! So *registering the type is the registration*, and the mechanism's name is
 //! whatever string the class's [`CamelServiceAuthType`] carries. Both lookups
 //! above key on our `EOAuth2Service`'s name, so [`auth_type`]'s `authproto` is
-//! [`OAUTH2_SERVICE_NAME`] — the constant lives in `jmap-backend-core` rather
-//! than in either crate that spells it, because this crate cannot see
-//! `jmap-config` and a literal in each would be two strings nothing compares.
+//! [`jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME`] — the constant lives in
+//! `jmap-backend-core` rather than in either crate that spells it, because
+//! this crate cannot see `jmap-config` and a literal in each would be two
+//! strings nothing compares.
 //!
 //! Deriving from `CamelSaslXOAuth2` rather than straight from `CamelSasl` is
 //! the other half of the naming: `camel_sasl_is_xoauth2_alias` answers by

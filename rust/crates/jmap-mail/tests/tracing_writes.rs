@@ -8,8 +8,6 @@
 //! message fetching, keyword updates, filing, expunging, importing, subscriptions,
 //! folder management (create/delete/rename), sending, and service lifecycle.
 
-use std::sync::{Arc, Mutex};
-
 use eds_sys::CAMEL_STORE_FOLDER_INFO_REFRESH;
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
@@ -18,106 +16,8 @@ use jmap_mail_sync::{Filing, FolderInfo, KeywordChange, Keywords, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress, role};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id as SpanId, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
-
-struct CapturingSubscriber {
-    captured: Arc<Mutex<Vec<(Level, String, String)>>>,
-}
-
-struct Recorder<'a> {
-    level: Level,
-    sink: &'a Mutex<Vec<(Level, String, String)>>,
-}
-
-impl Visit for Recorder<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), format!("{value:?}")));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_owned()));
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.sink
-            .lock()
-            .unwrap()
-            .push((self.level, field.name().to_owned(), value.to_string()));
-    }
-}
-
-impl Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
-        SpanId::from_u64(1)
-    }
-
-    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Recorder {
-            level: *event.metadata().level(),
-            sink: &self.captured,
-        });
-    }
-
-    fn enter(&self, _span: &SpanId) {}
-
-    fn exit(&self, _span: &SpanId) {}
-}
-
-static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-
-fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run();
-    });
-    std::mem::take(&mut *captured.lock().unwrap())
-}
-
-fn untraced<T>(run: impl FnOnce() -> T) -> T {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let subscriber = CapturingSubscriber {
-        captured: Arc::new(Mutex::new(Vec::new())),
-    };
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        run()
-    })
-}
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
 fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
     captured
@@ -168,11 +68,11 @@ impl Fixture {
 
 #[test]
 fn store_connection_lifecycle_traces_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = JmapStore::detached();
 
-    let sync = untraced(|| fixture.sync());
-    let logs = capture(|| {
+    let sync = capture(|| fixture.sync()).0;
+    let (_, logs) = capture(|| {
         store.store_connection(sync);
     });
     assert!(
@@ -182,7 +82,7 @@ fn store_connection_lifecycle_traces_structured_fields() {
         "expected connection store event, got {logs:?}"
     );
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let dropped = store.drop_connection();
         assert!(dropped);
     });
@@ -194,10 +94,10 @@ fn store_connection_lifecycle_traces_structured_fields() {
 
 #[test]
 fn folders_traces_structured_fields_on_success() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let tree = store
             .folders(CAMEL_STORE_FOLDER_INFO_REFRESH)
             .expect("folders");
@@ -227,10 +127,10 @@ fn folders_traces_structured_fields_on_success() {
 
 #[test]
 fn messages_and_messages_since_trace_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let (state, messages) = store.messages(&fixture.inbox_id).expect("messages");
         assert!(messages.is_empty());
 
@@ -257,7 +157,7 @@ fn messages_and_messages_since_trace_structured_fields() {
 
 #[test]
 fn message_source_and_keywords_trace_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let message_uid = {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
@@ -272,7 +172,7 @@ fn message_source_and_keywords_trace_structured_fields() {
     };
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let source = store.message_source(&message_uid).expect("message_source");
         assert!(!source.is_empty());
 
@@ -297,7 +197,7 @@ fn message_source_and_keywords_trace_structured_fields() {
 
 #[test]
 fn file_and_expunge_message_trace_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let archive_id = {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
@@ -318,7 +218,7 @@ fn file_and_expunge_message_trace_structured_fields() {
     };
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let filing = Filing::moved(fixture.inbox_id.clone(), archive_id.clone());
         store
             .file_message(&message_uid, &filing)
@@ -341,10 +241,10 @@ fn file_and_expunge_message_trace_structured_fields() {
 
 #[test]
 fn import_message_and_subscription_trace_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let raw = b"From: me@example.com\r\nTo: you@example.com\r\nSubject: Import\r\n\r\nImported body\r\n".to_vec();
         let uid = store
             .import_message(&fixture.inbox_id, raw, &Keywords::default(), None)
@@ -373,13 +273,13 @@ fn import_message_and_subscription_trace_structured_fields() {
 
 #[test]
 fn folder_management_traces_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = fixture.store();
 
     let (created_id, created_path) = {
         let mut id = Id::from("");
         let mut path = String::new();
-        let logs = capture(|| {
+        let (_, logs) = capture(|| {
             let created = store
                 .create_folder(None, "Projects")
                 .expect("create_folder");
@@ -409,7 +309,7 @@ fn folder_management_traces_structured_fields() {
         children: Vec::new(),
     };
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let renamed = store
             .rename_folder(&folder_info, None, "Archived Projects")
             .expect("rename_folder");
@@ -430,7 +330,7 @@ fn folder_management_traces_structured_fields() {
 
 #[test]
 fn transport_send_message_traces_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
@@ -447,7 +347,7 @@ fn transport_send_message_traces_structured_fields() {
         rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
     };
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let sent = transport.send_message(raw, envelope).expect("send_message");
         assert!(!sent.uid.as_str().is_empty());
     });
@@ -470,10 +370,10 @@ fn transport_send_message_traces_structured_fields() {
 
 #[test]
 fn store_operations_error_paths_trace_structured_fields() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let store = fixture.store();
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let _ = store.delete_folder(&Id::from("nonexistent_mailbox"));
     });
 
@@ -490,7 +390,7 @@ fn store_operations_error_paths_trace_structured_fields() {
 
 #[test]
 fn send_message_identity_error_traces_failure_field() {
-    let fixture = untraced(Fixture::start);
+    let fixture = capture(Fixture::start).0;
     let transport = fixture.transport();
 
     let raw = b"From: Unknown <unknown@example.com>\r\nTo: Bob <bob@example.com>\r\n\r\nBody\r\n"
@@ -500,7 +400,7 @@ fn send_message_identity_error_traces_failure_field() {
         rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
     };
 
-    let logs = capture(|| {
+    let (_, logs) = capture(|| {
         let result = transport.send_message(raw, envelope);
         assert!(result.is_err());
     });

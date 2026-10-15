@@ -1,40 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! iTIP scheduling messages for `CalendarEvent/set`
-//! (draft-ietf-jmap-calendars-28 §5.9.2).
-//!
-//! The draft's rule is entirely about *who* hears about a change and under
-//! *which* iTIP method (RFC 5546), and that is what this module decides;
-//! [`build_ical`] then draws the decided event as the `VCALENDAR` payload
-//! (reusing `jmap_ical::scheduling_ical`, the same rendering a stored object
-//! gets, wrapped in a `METHOD`). The mock has no SMTP or iMIP transport, so
-//! the message, decision and payload both, is recorded in
-//! [`AccountState::scheduling_outbox`] the way it already records accepted
-//! `EmailSubmission`s in the mail outbox, and tests read it from there.
-//!
-//! Everything turns on whether this account is the event's *origin* (§10.9.5).
-//! The origin invites and withdraws; anybody else only ever answers.
-//!
-//! Not modelled here, deliberately rather than by accident:
-//!
-//! * the ADD message §5.9.2.1 permits for a single added instance, which the
-//!   draft itself advises against for interoperability;
-//! * the iMIP licence in §5.9.2 to drop changes the server deems inessential,
-//!   which would make the mock's output depend on a judgement call.
-//!
-//! `hideAttendees` (§5.1.3) *is* modelled: [`build_ical`] trims the
-//! participant map it hands to the renderer down to the owners plus the
-//! message's own recipient, whenever the event sets it. So is §5.9.2.1's rule
-//! that a series-scope message to somebody a recurrence override dropped
-//! from one occurrence must still show that occurrence as excluded: see
-//! [`occurrences_excluded_for`].
-//!
-//! Per-instance participant sets are modelled (§5.9.2.1's MUST that
-//! "participants are only sent information about recurrence instances they
-//! are added to"). This needs no recurrence expansion: a participant can only
-//! be named for one occurrence through `recurrenceOverrides`, so the
-//! recurrence ids in question are exactly that map's keys.
+//! Builds scheduling outbox messages for `CalendarEvent/set`.
+//! Origin accounts send `REQUEST` and `CANCEL`; non-origin accounts send `REPLY`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,15 +19,14 @@ use crate::state::{AccountState, RecordedSchedulingMessage};
 /// Who a message is about: the whole event, or one occurrence of it.
 type Scope = Option<String>;
 
-/// One event's transition, as `CalendarEvent/set` applied it: a create has no
-/// `before`, a destroy has no `after`.
+/// One event transition from `CalendarEvent/set`.
 pub(crate) struct EventChange {
     pub id: Id,
     pub before: Option<CalendarEvent>,
     pub after: Option<CalendarEvent>,
 }
 
-/// The calendar addresses that are this account, normalised for comparison.
+/// Normalized calendar addresses that belong to this account.
 pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
     account
         .participant_identities
@@ -69,21 +36,10 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Whether everyone this event would have to be announced to, in the shape
-/// it is being left in by this `/set` call, can actually be reached, which
-/// §5.9.2 makes a precondition of the change rather than of the message: a
-/// recipient with no `sendTo`/`imip` address at all is one the server has no
-/// scheduling method for.
-///
-/// Applies the same test to a create's object, an update's patched result
-/// and a destroy's about-to-be-removed object: whichever one it is, that is
-/// the event whose participant list the server is about to announce a
-/// REQUEST or CANCEL to. An occurrence's own participants count too, since
-/// they are recipients of a message just as the series' are.
+/// Return whether every required scheduling recipient has an address.
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
-        // The one recipient is the organizer, and an event without an
-        // organizer address would have been this account's own.
+        // Non-origin updates reply only to the organizer.
         return event.organizer_calendar_address.is_some();
     }
     let reachable = |participant: &Value| calendar_address(participant).is_some();
@@ -97,7 +53,7 @@ pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<Str
             })
 }
 
-/// Record whatever §5.9.2 asks for, for one applied `/set`.
+/// Record scheduling messages for one applied `/set` request.
 pub(crate) fn record_scheduling_messages(account: &mut AccountState, changes: &[EventChange]) {
     let own = own_addresses(account);
     let mut messages = Vec::new();
@@ -108,8 +64,7 @@ pub(crate) fn record_scheduling_messages(account: &mut AccountState, changes: &[
 }
 
 fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSchedulingMessage> {
-    // §5.1: a draft is not scheduled. The state that matters is the one the
-    // change left behind, so a destroy reads its own `before`.
+    // Draft events do not emit scheduling messages (§5.1).
     let subject = change.after.as_ref().or(change.before.as_ref());
     let Some(subject) = subject else {
         return Vec::new();
@@ -125,9 +80,7 @@ fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSch
     }
 }
 
-/// §10.9.5: the account is the origin when nobody outside it organises the
-/// event, either because no organizer is named at all or because the named
-/// organizer is one of the account's own participant identities.
+/// The account is origin when organizer is absent or one of its own addresses (§10.9.5).
 pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     match event.organizer_calendar_address.as_deref() {
         None => true,
@@ -135,7 +88,7 @@ pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     }
 }
 
-/// §5.9.2.1 and §5.9.2.2: what the event's origin sends.
+/// Messages sent by origin accounts (§5.9.2.1 and §5.9.2.2).
 fn origin_messages(
     change: &EventChange,
     subject: &CalendarEvent,
@@ -157,25 +110,22 @@ fn origin_messages(
     };
 
     match (&change.before, &change.after) {
-        // Created: invite everyone who is not this account, each about the
-        // series or about their one occurrence of it.
+        // Create: invite each external recipient.
         (None, Some(after)) => {
             for (recipient, recurrence_id) in invitation_scopes(after, own) {
                 send(scheduling_method::REQUEST, &recipient, recurrence_id);
             }
         }
-        // Destroyed: withdraw the same way.
+        // Destroy: withdraw each prior invite.
         (Some(before), None) => {
             for (recipient, recurrence_id) in invitation_scopes(before, own) {
                 send(scheduling_method::CANCEL, &recipient, recurrence_id);
             }
         }
         (Some(before), Some(after)) => {
-            // §5.9.2.2, first case: a participant who is gone hears CANCEL,
-            // and hears it alone.
+            // Removed participants receive series-level CANCEL.
             let mut withdrawn: BTreeSet<String> = BTreeSet::new();
-            // Whether this change withdrew any single occurrence, which is
-            // what §5.9.2.1's exception below turns on.
+            // Track override cancellation to suppress duplicate REQUEST.
             let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
@@ -190,10 +140,7 @@ fn origin_messages(
                 }
             }
 
-            // The same case, one occurrence at a time: somebody an override
-            // drops from a single instance is withdrawn from that instance,
-            // and stays on the series. Anybody already withdrawn from the
-            // whole event has heard about it and is not told again.
+            // Override-only removals receive occurrence-scoped CANCEL.
             for recurrence_id in overridden_ids(Some(before), Some(after)) {
                 let was = instance_addresses(before, &recurrence_id, own);
                 let is = instance_addresses(after, &recurrence_id, own);
@@ -210,10 +157,7 @@ fn origin_messages(
                 }
             }
 
-            // §5.9.2.2, third and fourth cases: an instance that stops
-            // happening is withdrawn from everybody who was in *it*, which is
-            // the series' participants plus whoever that occurrence alone
-            // named.
+            // Newly excluded instances are cancelled for their recipients.
             let excluded = newly_excluded(before, after);
             cancelled_occurrence |= !excluded.is_empty();
             for recurrence_id in &excluded {
@@ -229,11 +173,7 @@ fn origin_messages(
                 }
             }
 
-            // §5.9.2.1: any other change to a property that is not per-user
-            // re-invites whoever is still on the list, each at their own
-            // scope. The exception the section names is a change that touches
-            // *only* `recurrenceOverrides` and generates CANCELs by doing so:
-            // a REQUEST would contradict what was just withdrawn.
+            // Shared changes re-invite recipients, unless only overrides were cancelled.
             let changed = changed_shared_properties(before, after);
             let invited = invitation_scopes(after, own);
             let cancelling_overrides =
@@ -243,9 +183,7 @@ fn origin_messages(
                     send(scheduling_method::REQUEST, &recipient, recurrence_id);
                 }
             } else {
-                // That exception cannot swallow an invitation, though:
-                // somebody the same patch newly names for an occurrence has
-                // been told nothing at all otherwise.
+                // Always request newly added scoped recipients.
                 for (recipient, recurrence_id) in
                     invited.difference(&invitation_scopes(before, own))
                 {
@@ -258,15 +196,14 @@ fn origin_messages(
     messages
 }
 
-/// §5.9.2.3: what an account that is not the origin sends, which is only ever
-/// its own answer, and only when there is an answer to give.
+/// Build REPLY messages for attendee-owned events.
 fn reply_messages(
     change: &EventChange,
     subject: &CalendarEvent,
     own: &BTreeSet<String>,
 ) -> Vec<RecordedSchedulingMessage> {
     let Some(organizer) = subject.organizer_calendar_address.clone() else {
-        // Unreachable: an event with no organizer is this account's own.
+        // Without an organizer this event is origin-owned.
         return Vec::new();
     };
 
@@ -279,9 +216,9 @@ fn reply_messages(
             continue;
         }
         let answer = match (&change.before, &change.after) {
-            // Created, or destroyed, holding an answer already.
+            // Create and destroy can carry an immediate answer.
             (None, Some(_)) | (Some(_), None) => participation_status(participant),
-            // Updated: only a status that actually moved is news.
+            // Updates send only status changes.
             (Some(before), Some(_)) => {
                 let previous = participants(before)
                     .get(&id)
@@ -291,7 +228,7 @@ fn reply_messages(
             }
             (None, None) => None,
         };
-        // "needs-action" is the absence of an answer, not an answer.
+        // `needs-action` does not emit REPLY.
         if answer.is_none_or(|status| status == participant_participation_status::NEEDS_ACTION) {
             continue;
         }
@@ -307,10 +244,7 @@ fn reply_messages(
         });
     }
 
-    // §5.9.2.3's closing SHOULD: an answer the client pinned inside an
-    // override answers for that recurrence id, and for no other. Only a
-    // status the override itself sets counts, so a series-level answer that
-    // an occurrence merely inherits is not sent a second time here.
+    // Send override-scoped replies only when the override pins a status.
     for recurrence_id in overridden_ids(change.before.as_ref(), change.after.as_ref()) {
         for (id, participant) in participants_at(subject, &recurrence_id) {
             let Some(address) = calendar_address(&participant) else {
@@ -350,9 +284,7 @@ fn reply_messages(
     messages
 }
 
-/// Every participant address that is somebody other than this account.
-/// §5.9.2 forbids the origin from sending where it would only receive the
-/// message straight back into the same account.
+/// Return participant addresses that are not owned by this account.
 fn outward_addresses(event: &CalendarEvent, own: &BTreeSet<String>) -> Vec<String> {
     participants(event)
         .values()
@@ -371,9 +303,7 @@ fn participants(event: &CalendarEvent) -> BTreeMap<String, &Value> {
         .collect()
 }
 
-/// Every recurrence id the event singles out, in either state of a change.
-/// These are the only occurrences whose participant set can differ from the
-/// series', so they are the only ones worth asking about.
+/// Return recurrence IDs mentioned in either side of a change.
 fn overridden_ids(
     before: Option<&CalendarEvent>,
     after: Option<&CalendarEvent>,
@@ -386,21 +316,7 @@ fn overridden_ids(
         .collect()
 }
 
-/// The participants of one occurrence: the series' own, with the override's
-/// participant-scoped patches applied.
-///
-/// An override is a JSCalendar PatchObject (jscalendarbis §1.4.10), so its
-/// keys are pointer paths into the event and not nested objects: a
-/// per-occurrence answer arrives as the single key
-/// `participants/<id>/participationStatus`, and a per-occurrence removal as
-/// `participants/<id>` mapping to null. Figure 6 of
-/// draft-ietf-jmap-calendars-28 spells out that this is the only shape a
-/// client can send, since the outer `update` patch cannot reach inside an
-/// override that does not exist yet.
-///
-/// The patches are replayed through [`apply_patch`] rather than read by a
-/// second, hand-written pointer parser, so RFC 6901's `~0`/`~1` escaping is
-/// handled in exactly one place.
+/// Build one occurrence's participants by applying its override patch.
 fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<String, Value> {
     let mut participants = Value::Object(base.clone());
     for (path, new_value) in override_.as_object().into_iter().flatten() {
@@ -412,7 +328,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
             continue;
         }
         let Some(tail) = tail else {
-            // The whole property is replaced, or removed outright.
+            // Replace or remove the whole `participants` property.
             participants = match new_value {
                 Value::Object(_) => new_value.clone(),
                 _ => Value::Object(Map::new()),
@@ -420,8 +336,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
             continue;
         };
         let patch = Map::from_iter([(tail.to_owned(), new_value.clone())]);
-        // A patch this mock cannot apply (one reaching through a non-object,
-        // which §1.4.10 forbids anyway) leaves the occurrence as the series.
+        // Invalid paths leave participants unchanged.
         let _ = apply_patch(&mut participants, &patch);
     }
     match participants {
@@ -430,8 +345,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
     }
 }
 
-/// The participants of the occurrence `recurrence_id` names. An occurrence
-/// with no override of its own is the series, participants and all.
+/// Participants for one occurrence, or series participants when unoverridden.
 fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Value> {
     let base: Map<String, Value> = participants(event)
         .into_iter()
@@ -447,14 +361,7 @@ fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Va
     }
 }
 
-/// The iCalendar payload for one recorded message (draft-ietf-jmap-calendars-28
-/// §5.9.2, RFC 5546 §3.2): `event`'s already-decided content, wrapped as
-/// `method` names it, and narrowed to one occurrence when `recurrence_id`
-/// says the message is about one rather than the whole event. Building who
-/// gets a message is entirely the caller's job; this only ever builds what
-/// it says, `recipient` included: it decides nothing about who hears about
-/// the event, only what a message already addressed to `recipient` shows
-/// them (§5.1.3's `hideAttendees`).
+/// Build the iCalendar payload for one scheduling message.
 fn build_ical(
     event: &CalendarEvent,
     method: &str,
@@ -475,18 +382,7 @@ fn build_ical(
     }
 }
 
-/// §5.9.2.1: "If a participant is invited to a recurring event, but removed
-/// via a recurrence override from a particular instance, any scheduling
-/// messages to this participant MUST return the instance as excluded."
-/// A series-scope message (`recurrence_id` is `None` in [`build_ical`]) draws
-/// the event as it actually stands, which still has that occurrence's real
-/// override, participants and all; this rewrites the recipient's own copy
-/// so any occurrence they were dropped from, while remaining a series
-/// participant, reads as excluded instead, the only thing an `excluded`
-/// override may say (jmap-ical's own [`jmap_ical::event`] docs on
-/// `OVERRIDE_PROPERTIES`). Leaves the event untouched for a recipient who is
-/// not a series-level participant to begin with: they were never told about
-/// occurrences at all, so there is nothing to exclude them from.
+/// Rewrite overrides so missing recipient instances become `excluded`.
 fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     let recipient = normalize_uri(recipient);
     let in_series = participants(event).values().any(|participant| {
@@ -516,10 +412,7 @@ fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarE
     event
 }
 
-/// §5.1.3: with `hideAttendees` set, only the owners of the event may see
-/// the full guest list; everyone else sees only the owners and themselves.
-/// §5.9.2.1 extends the same rule to what a scheduling message states. Leaves
-/// the event as it is when `hideAttendees` is not set.
+/// Apply `hideAttendees` visibility rules for one recipient.
 fn attendees_shown_to(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     if event.hide_attendees != Some(true) {
         return event.clone();
@@ -541,9 +434,7 @@ fn attendees_shown_to(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     event
 }
 
-/// RFC 8984 §4.4.6: a participant's `roles` is a set, keyed by role name to
-/// `true`. jmap-ical's own copy of this test is private to the iCalendar
-/// mapping, so this is kept as a small local duplicate rather than exported.
+/// Return whether `participant.roles[role]` is `true`.
 fn holds_role(participant: &Value, role: &str) -> bool {
     participant
         .get("roles")
@@ -551,13 +442,7 @@ fn holds_role(participant: &Value, role: &str) -> bool {
         .is_some_and(|held| held == &Value::Bool(true))
 }
 
-/// The occurrence `recurrence_id` names, as a `CalendarEvent` of its own: the
-/// series, patched by its override exactly as any PatchObject applies (RFC
-/// 8620 §5.3, the same [`apply_patch`] [`instance_participants`] already
-/// reuses, rather than jmap-ical's display-only [`jmap_ical::OVERRIDE_PROPERTIES`]
-/// allowlist), with `participants` then forced to [`participants_at`]'s
-/// answer so the message never states a guest list this module did not
-/// already decide on.
+/// Build an occurrence event by patching series data with its override.
 fn instance_event(event: &CalendarEvent, recurrence_id: &str) -> CalendarEvent {
     let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
@@ -581,14 +466,7 @@ fn instance_event(event: &CalendarEvent, recurrence_id: &str) -> CalendarEvent {
     serde_json::from_value(value).unwrap_or_default()
 }
 
-/// The `participationStatus` the override for `recurrence_id` *itself* sets
-/// for a participant, which is what §5.9.2.3's "changed for just a single
-/// instance (i.e., set in recurrenceOverrides)" asks about.
-///
-/// Computed by replaying the override's participant patches onto an empty
-/// participant set rather than onto the series', so a status the participant
-/// merely inherits from the series does not read as pinned here. That is what
-/// keeps a plain series-level answer from being sent twice.
+/// Return an override-pinned `participationStatus` for one participant.
 fn pinned_status(
     event: &CalendarEvent,
     recurrence_id: &str,
@@ -604,9 +482,7 @@ fn pinned_status(
         .map(str::to_owned)
 }
 
-/// Everybody this event has to announce something to, each at the scope they
-/// hear it: the whole event for a participant of the series, one occurrence
-/// for somebody only that occurrence names (§5.9.2.1).
+/// Recipients with either series-level or occurrence-level scope.
 fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<(String, Scope)> {
     let series = outward_addresses(event, own);
     let normalized: BTreeSet<String> = series
@@ -625,7 +501,7 @@ fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<
     scopes
 }
 
-/// The addresses, other than this account's own, in one occurrence.
+/// Addresses in one occurrence, excluding this account's own addresses.
 fn instance_addresses(
     event: &CalendarEvent,
     recurrence_id: &str,
@@ -639,20 +515,17 @@ fn instance_addresses(
         .collect()
 }
 
-/// RFC 6901 §3's escaping, undone. Kept beside the split that produces the
-/// segment, since [`apply_patch`] does the same for the rest of the path.
+/// Undo RFC 6901 `~0` and `~1` escapes.
 fn unescape(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
-/// RFC 8984 §4.4.6: a `Participant` has no `calendarAddress` property of its
-/// own, only a `sendTo` map of addressing methods; `imip` is the one iTIP
-/// scheduling (RFC 5546) sends to. This is the same property
-/// `jmap_ical::event`'s own `drawn_participants` draws an `ATTENDEE`/
-/// `ORGANIZER` line from, so a message this module decides to send and the
-/// payload `build_ical` draws for it agree on who that is.
+/// The participant's `calendarAddress`, falling back to RFC 8984 `sendTo.imip`.
 fn calendar_address(participant: &Value) -> Option<&str> {
-    participant.get("sendTo")?.get("imip")?.as_str()
+    participant
+        .get("calendarAddress")
+        .and_then(Value::as_str)
+        .or_else(|| participant.get("sendTo")?.get("imip")?.as_str())
 }
 
 fn participation_status(participant: &Value) -> Option<&str> {
@@ -661,9 +534,7 @@ fn participation_status(participant: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// The recurrence ids that gained an exclusion in this change. Adding
-/// `excluded: true` means the instance no longer happens, whichever way it
-/// came to exist, so it is a cancellation either way.
+/// Recurrence IDs that newly gained `excluded: true` in this change.
 fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> {
     let was_excluded = |event: &CalendarEvent, key: &str| {
         event
@@ -683,12 +554,10 @@ fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> 
         .collect()
 }
 
-/// The top-level property names that changed and are not §5.4's per-user
-/// ones, i.e. the changes other people are entitled to hear about.
+/// Changed top-level properties, excluding per-user fields.
 fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> BTreeSet<String> {
     let as_object = |event: &CalendarEvent| match serde_json::to_value(event) {
         Ok(Value::Object(map)) => map,
-        // Unreachable: `CalendarEvent` always serializes to an object.
         _ => serde_json::Map::new(),
     };
     let before = as_object(before);
@@ -702,15 +571,8 @@ fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> B
         .collect()
 }
 
-/// RFC 3986 §6.2.2 syntax-based normalisation, which is the comparison
-/// draft-ietf-jmap-calendars-28 §3 asks for between a participant's
-/// `calendarAddress` and a `ParticipantIdentity`'s: lowercase the scheme,
-/// uppercase the hex digits of a percent-triplet, and spell out a triplet
-/// that only encodes an unreserved character.
-///
-/// Scheme-based normalisation (§6.2.3) is deliberately not done. §3 does not
-/// ask for it, and for the `mailto:` URIs this actually sees it would be
-/// wrong: a mailbox local part is case-sensitive.
+/// RFC 3986-inspired normalization for calendar-address comparison.
+/// Lowercases URI scheme and normalizes percent encoding, leaving the rest unchanged.
 fn normalize_uri(uri: &str) -> String {
     let (scheme, rest) = match uri.split_once(':') {
         Some((scheme, rest))
@@ -722,7 +584,7 @@ fn normalize_uri(uri: &str) -> String {
         {
             (scheme.to_ascii_lowercase() + ":", rest)
         }
-        // Not a URI with a scheme: normalise the percent-encoding only.
+        // Not URI-scheme syntax. Normalize percent encoding only.
         _ => (String::new(), uri),
     };
 
@@ -737,7 +599,7 @@ fn normalize_uri(uri: &str) -> String {
         let Some(byte) = u8::from_str_radix(&triplet, 16).ok().filter(|_| {
             triplet.len() == 2 && triplet.chars().all(|digit| digit.is_ascii_hexdigit())
         }) else {
-            // Not a well-formed triplet; leave it exactly as it stands.
+            // Preserve malformed triplets.
             normalized.push(character);
             continue;
         };
@@ -753,8 +615,7 @@ fn normalize_uri(uri: &str) -> String {
     normalized
 }
 
-/// RFC 3986 §2.3's unreserved set, the one percent-encoding never has to
-/// hide.
+/// RFC 3986 unreserved set.
 fn is_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
@@ -795,8 +656,7 @@ mod tests {
             .clone();
         let patched = instance_participants(
             &base,
-            // RFC 6901 §3: the id's own solidus is `~1`, so this is one
-            // segment naming the participant, not two naming a path.
+            // RFC 6901: `~1` keeps the slash inside one segment.
             &json!({"participants/a~1b/participationStatus": "accepted"}),
         );
         assert_eq!(
@@ -808,9 +668,7 @@ mod tests {
 
     #[test]
     fn an_escaped_solidus_in_the_first_segment_is_not_a_participant_patch() {
-        // draft-ietf-jmap-calendars-28 Figure 5: this key names a property
-        // called "participants/carol" on the event, which does not exist. It
-        // is the mistake the draft warns clients off, not a removal.
+        // This key names `participants/carol` as one property, not a path.
         let patched =
             instance_participants(&series_of_one(), &json!({"participants~1carol": null}));
         assert_eq!(patched, series_of_one(), "the occurrence is left alone");

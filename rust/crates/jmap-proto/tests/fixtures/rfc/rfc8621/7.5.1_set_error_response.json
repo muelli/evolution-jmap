@@ -1,0 +1,18 @@
+// Source: RFC 8621 §7.5.1 (EmailSubmission/set notCreated Localised Error Response), August 2019
+[
+  [
+    "EmailSubmission/set",
+    {
+      "accountId": "ue411d190",
+      "oldState": "012421s6-8nrq-4ps4-n0p4-9330r951ns21",
+      "newState": "012421s6-8nrq-4ps4-n0p4-9330r951ns21",
+      "notCreated": {
+        "k1490": {
+          "type": "forbiddenToSend",
+          "description": "Verzeihung, wegen verdaechtiger Aktivitaeten Ihres Benutzerkontos haben wir den Versand von Nachrichten gesperrt. Bitte wenden Sie sich fuer Hilfe an unser Support Team."
+        }
+      }
+    },
+    "0"
+  ]
+]

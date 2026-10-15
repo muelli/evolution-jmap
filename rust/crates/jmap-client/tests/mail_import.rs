@@ -6,8 +6,8 @@
 //!
 //! This is the other way a message gets into the store, and the one a mail
 //! client needs: an `Email/set` create builds a message out of properties, which
-//! is composing, while a message Evolution already holds — a draft it wrote, a
-//! message dragged out of another account — is bytes, and an import is how it
+//! is composing, while a message Evolution already holds (a draft it wrote, a
+//! message dragged out of another account) is bytes, and an import is how it
 //! arrives unaltered. It is what `append_message_sync` will be.
 
 use jmap_client::{Client, Credentials, Error, limits};
@@ -66,7 +66,7 @@ impl Fixture {
         }
     }
 
-    /// Upload `source` as a message blob and answer the blob id — the first half
+    /// Upload `source` as a message blob and answer the blob id: the first half
     /// of every import, since a method call cannot carry bytes.
     fn upload(&self, source: &str) -> Id {
         self.client
@@ -84,7 +84,7 @@ impl Fixture {
         self.client.email_state(&self.account_id).unwrap()
     }
 
-    /// How many blobs the account is holding — the question "did anything go
+    /// How many blobs the account is holding: the question "did anything go
     /// up", asked of the server rather than of the answer.
     fn blobs(&self) -> usize {
         let state = self.server.state();
@@ -204,7 +204,7 @@ fn an_imported_message_downloads_as_the_bytes_it_went_up_as() {
 
     // The round trip that matters to a mail client: what it appended is what it
     // opens afterwards. A server that repaired the message would answer with a
-    // blobId of its own — hence the download goes to the reported one, not the
+    // blobId of its own; hence the download goes to the reported one, not the
     // uploaded one.
     let source = fixture
         .client
@@ -305,7 +305,7 @@ fn an_import_into_no_mailbox_is_refused() {
     let fixture = Fixture::start();
     let blob_id = fixture.upload(MESSAGE);
 
-    // "At least one Mailbox MUST be given" — a map whose every value is false
+    // "At least one Mailbox MUST be given": a map whose every value is false
     // names none, exactly as it does for an `Email/set`.
     let result = fixture.client.email_import(
         &fixture.account_id,
@@ -370,7 +370,7 @@ fn one_import_refused_does_not_hold_up_another_in_the_same_call() {
     let blob_id = fixture.upload(MESSAGE);
 
     // "Each Email to import is considered an atomic unit that may succeed or
-    // fail individually" — which is only visible in a call carrying two.
+    // fail individually", which is only visible in a call carrying two.
     let request = EmailImportRequest::new(fixture.account_id.clone())
         .import("good", EmailImport::new(blob_id, fixture.inbox.clone()))
         .import("bad", EmailImport::new("B404", fixture.inbox.clone()));
@@ -464,7 +464,7 @@ fn the_same_message_imported_twice_is_two_messages() {
 ///
 /// RFC 8620 §6.1 makes the limit part of the session document precisely so a
 /// client can ask before it sends, and a client that does not ask sends the
-/// whole message — a mail-sized upload over a slow link — to be told at the end
+/// whole message (a mail-sized upload over a slow link) to be told at the end
 /// that it was too big. The refusal here is local and names the limit, so what
 /// the layer above can put in front of the user is "the account takes at most
 /// N bytes" rather than the server's HTTP status.
@@ -512,7 +512,7 @@ fn a_message_of_exactly_the_upload_limit_is_sent() {
 
 /// A server that names no limit gets the upload.
 ///
-/// RFC 8620 §2 requires `maxSizeUpload`, so this is a server out of spec — and
+/// RFC 8620 §2 requires `maxSizeUpload`, so this is a server out of spec, and
 /// the two ways to treat one are to invent a limit or to send. Inventing one
 /// would refuse messages the server would have taken, and be a number this
 /// crate made up appearing in front of the user as the account's.

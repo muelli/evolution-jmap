@@ -111,15 +111,9 @@ impl Client {
 
     /// Fetch calendar events by id.
     ///
-    /// Sent as several requests when naming every id at once would be more
-    /// than the server's `maxObjectsInGet` (RFC 8620 §2) — the same limit
-    /// [`Client::contact_get`](crate::Client::contact_get) chunks around,
-    /// found the hard way scale-testing item 94's `jmap-book-sync` slice
-    /// against real Stalwart, and just as reachable here: `CalSync::classify`
-    /// calls this with every created/updated id `CalendarEvent/changes`
-    /// named, unbounded by anything this crate controls. Mirrors
-    /// `contact_get`'s own chunking exactly, including always making at
-    /// least one call for an empty `ids`.
+    /// Sent in chunks when the number of IDs exceeds the server's
+    /// `maxObjectsInGet` limit (RFC 8620 §2). Always makes at least one call
+    /// when `ids` is empty.
     pub fn event_get(
         &self,
         account_id: &Id,
@@ -248,7 +242,7 @@ impl Client {
     }
 
     /// Fetch all `CalendarEventNotification`s visible to this credential
-    /// (draft-ietf-jmap-calendars §8) — one appears for each
+    /// (draft-ietf-jmap-calendars §8): one appears for each
     /// create/update/destroy of an event on a calendar shared with this
     /// principal, made by someone else.
     pub fn calendar_event_notifications(
@@ -299,10 +293,8 @@ impl Client {
         if let Some(err) = response.not_destroyed.as_ref().and_then(|map| map.get(id)) {
             return Err(Error::Set(err.clone()));
         }
-        // Stalwart v1.0.0 silently drops malformed or unformatted IDs from
-        // CalendarEventNotification/set destroy rather than returning notDestroyed
-        // with notFound (Finding 20). If the server omitted the requested ID from
-        // both destroyed and notDestroyed, treat it as notFound.
+        // If the server omitted the requested ID from both destroyed and
+        // notDestroyed, treat it as notFound.
         Err(Error::Set(SetError::new("notFound")))
     }
 

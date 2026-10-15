@@ -1,0 +1,20 @@
+// Source: RFC 8621 §2.6 (Mailbox/set Response - Updated and NotDestroyed), August 2019
+[
+  [
+    "Mailbox/set",
+    {
+      "accountId": "u33084183",
+      "oldState": "78542",
+      "newState": "78549",
+      "updated": {
+        "MB674cc24095db49ce": null
+      },
+      "notDestroyed": {
+        "MB23cfa8094c0f41e6": {
+          "type": "forbidden"
+        }
+      }
+    },
+    "0"
+  ]
+]

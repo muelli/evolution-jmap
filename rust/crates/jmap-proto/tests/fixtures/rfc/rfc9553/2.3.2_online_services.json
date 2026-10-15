@@ -1,0 +1,13 @@
+// Source: RFC 9553 §2.3.2 (Figure 26: Example for the onlineServices Property), May 2024
+{
+  "onlineServices": {
+    "x1": {
+      "uri": "xmpp:alice@example.com"
+    },
+    "x2": {
+      "service": "Mastodon",
+      "user": "@alice@example2.com",
+      "uri": "https://example2.com/@alice"
+    }
+  }
+}

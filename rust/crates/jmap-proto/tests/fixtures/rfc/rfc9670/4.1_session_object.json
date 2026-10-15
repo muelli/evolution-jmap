@@ -1,0 +1,30 @@
+// Source: RFC 9670 §4.1 (Figure 1: Part of a JMAP Session Object), November 2024
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {},
+    "urn:ietf:params:jmap:principals": {}
+  },
+  "accounts": {
+    "u12345678": {
+      "name": "jane.doe@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+      "accountCapabilities": {
+        "urn:com.example:jmap:todo": {},
+        "urn:ietf:params:jmap:principals:owner": {
+          "accountIdForPrincipal": "u33084183",
+          "principalId": "P105aga511jaa"
+        }
+      }
+    }
+  },
+  "primaryAccounts": {
+    "urn:ietf:params:jmap:principals": "u12345678"
+  },
+  "username": "jane.doe@example.com",
+  "apiUrl": "https://jmap.example.com/api/",
+  "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/",
+  "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/events/",
+  "state": "000001"
+}

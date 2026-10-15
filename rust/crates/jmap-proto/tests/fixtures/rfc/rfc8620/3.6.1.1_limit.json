@@ -1,0 +1,7 @@
+// Source: RFC 8620 §3.6.1.1 (Example Problem Details - limit), July 2019
+{
+  "type": "urn:ietf:params:jmap:error:limit",
+  "limit": "maxSizeRequest",
+  "status": 400,
+  "detail": "The request is larger than the server is willing to process."
+}
