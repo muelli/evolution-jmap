@@ -4,8 +4,7 @@
 //! `MailSync::create_folder`/`delete_folder`, `set_subscribed`/
 //! `rename_folder`, `set_keywords`/`file_message`, `expunge_message`, and
 //! `import_message`/`send_message` trace their writes with `account_id` and
-//! the folder's/message's name/id, the Track B1 slice after
-//! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
+//! the folder's/message's name/id.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync, Outgoing};

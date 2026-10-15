@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `create_collection`/`delete_collection` trace their writes with
-//! `account_id`/`kind`, the last Track B1 slice named as still open —
-//! `jmap-cal-sync`, `jmap-book-sync`, and `jmap-mail-sync` all got theirs
-//! first.
+//! `account_id`/`kind`.
 
 use jmap_client::{Client, Credentials};
 use jmap_collection_sync::{ChildKind, Doomed, Requested, create_collection, delete_collection};

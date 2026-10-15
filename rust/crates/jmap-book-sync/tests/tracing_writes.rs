@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `BookSync::save_contact`/`remove_contact` trace their writes with
-//! `account_id`/`address_book_id`, the Track B1 slice after
-//! `jmap-cal-sync`'s (`tests/tracing_writes.rs` there).
+//! `account_id`/`address_book_id`.
 
 mod common;
 

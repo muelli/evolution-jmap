@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured tracing tests for `jmap-mail` — Track B1 follow-up.
+//! Structured tracing tests for `jmap-mail`.
 //!
 //! Asserts structured fields attached to `tracing` events during mail store and
 //! transport operations: folder listing, message listing, changes diffing,
