@@ -4426,14 +4426,10 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
 
 #[test]
 fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
-    // Characterization of bare-year dates (RFC 9553 §2.8.1 PartialDate with year only):
-    // 1. vCard 3.0 (RFC 2426 §3.1.5) requires BDAY to be a full date (YYYY-MM-DD or YYYYMMDD).
-    // 2. EDS (libebook-contacts) e_contact_date_from_string returns NULL for partial dates.
-    // 3. When EDS writes an EContactDate via e_contact_date_to_string, it CLAMPs year into 1000..=9999,
-    //    month into 1..=12, and day into 1..=31. Emitting an unanchored bare year or partial date
-    //    would cause EDS to clamp missing fields to 01-01 (e.g. 1984-01-01), corrupting the user's date.
-    // 4. Therefore, jmap-vcard drops bare-year dates on emission, leaving diff_entries to preserve
-    //    the server-side PartialDate untouched without creating phantom vCard lines.
+    // Bare-year PartialDate handling: vCard BDAY needs a full calendar value, and EDS
+    // clamps missing month and day to 01-01 on serialization.
+    // jmap-vcard therefore omits bare-year emission and relies on diff_entries
+    // to preserve server-side values.
 
     // 1. Predicates on bare-year dates
     let birth_bare_year = Anniversary {
@@ -5529,9 +5525,8 @@ fn vcard_kind_group_and_member_lines_characterization() {
 
 #[test]
 fn vcard_apple_and_eds_group_list_extensions_characterization() {
-    // Vendor-specific group cards:
-    // 1. Apple CardDAV extension: `X-ADDRESSBOOKSERVER-KIND:group` + `X-ADDRESSBOOKSERVER-MEMBER:...`
-    // 2. EDS contact list extension: `X-EVOLUTION-LIST:TRUE` (`E_CONTACT_IS_LIST`) + `X-EVOLUTION-DEST-EMAIL:...`
+    // Vendor group cards: Apple uses `X-ADDRESSBOOKSERVER-*`; EDS uses
+    // `X-EVOLUTION-LIST` and `X-EVOLUTION-DEST-EMAIL`.
     let apple_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:apple-group-1\r\n",
@@ -7831,7 +7826,7 @@ fn x_property_name_casing_and_empty_values_handling() {
 
 #[test]
 fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
-    // 1. Long NOTE round-trip: value longer than 75 octets must fold on write and unfold losslessly on read
+    // Long NOTE values fold at 75 octets and unfold losslessly.
     let long_note_text = "This is an extremely long note that exceeds seventy-five octets by a substantial margin. \
         It contains detailed historical records, meeting minutes, action items, and extensive documentation \
         that must be folded across multiple physical lines according to RFC 2426 Section 2.6, and unfolded \
@@ -19170,8 +19165,8 @@ fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
 
 #[test]
 fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
-    // Audit & characterization of all 10 slotted services and 18 accepted URI scheme aliases
-    // across both outbound emission (JSContact -> vCard 3.0) and inbound parsing (vCard 3.0 X- lines and vCard 4.0 IMPP):
+    // Matrix for 10 slotted services and 18 URI aliases across outbound
+    // JSContact to vCard 3.0 and inbound vCard 3.0 X-lines and vCard 4.0 IMPP.
     let test_matrix: &[(&str, &str, &str, &str, &str)] = &[
         // (canonical service, scheme alias, handle, expected wire X-property, vCard 4.0 expected service)
         ("AIM", "aim", "alice_aim", "X-AIM", "AIM"),
@@ -20420,9 +20415,8 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
 
 #[test]
 fn evolution_contact_editor_clamping_and_sync_diff_safety() {
-    // Tests that when a contact containing bare-year, partial-date, and deathday
-    // anniversaries is synchronized, the sync diff engine preserves unstated
-    // anniversary records without writing spurious deletions or modifications.
+    // Sync preserves unstated bare-year and death anniversaries without
+    // generating phantom deletions or modifications.
     let mut anniversaries = BTreeMap::new();
     anniversaries.insert(
         "y1".to_owned(),
@@ -20463,7 +20457,7 @@ fn evolution_contact_editor_clamping_and_sync_diff_safety() {
         ..ContactCard::default()
     };
 
-    // Emission only states y2 (wedding full date) and y4 (timestamp converted to UTC date)
+    // Wire output states only representable anniversaries: y2 and y4.
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("y1"), "{vcard}");
     assert!(
@@ -20497,19 +20491,19 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
     ];
 
     for original_card in test_cards {
-        // Pass 1: Card -> vCard1 -> Card1
+        // Pass 1
         let vcard1 = card_to_vcard(&original_card);
         let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
 
-        // Pass 2: Card1 -> vCard2 -> Card2
+        // Pass 2
         let vcard2 = card_to_vcard(&card1);
         let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
 
-        // Pass 3: Card2 -> vCard3 -> Card3
+        // Pass 3
         let vcard3 = card_to_vcard(&card2);
         let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
-        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        // Pass 2 is the fixed point.
         assert_eq!(
             vcard2, vcard3,
             "vCard output must reach fixed point at pass 2"
