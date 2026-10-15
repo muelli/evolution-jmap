@@ -718,8 +718,7 @@ fn handle_request(
             }
             let mut state = state.lock().expect("mock state lock");
             let size = data.len() as u64;
-            // RFC 8620 §6.1: too big is a request-level error naming the limit
-            // it broke, not a stored blob and not a generic 400.
+            // RFC 8620 §6.1: oversize uploads return a request-level limit error.
             if state.size_upload.is_some_and(|limit| size > limit) {
                 drop(state);
                 respond_json(
@@ -835,16 +834,10 @@ fn handle_request(
     }
 }
 
-/// Split a request path into its segments, each percent-decoded.
+/// Split a request path first, then percent-decode each segment.
 ///
-/// The blob endpoints are the only routes here whose path holds values a
-/// client chose, and RFC 8620 §6.1/§6.2 tell that client to URI-encode each
-/// one before it substitutes it into the template this server published. So
-/// the escapes have to come back off, and — this is the part that matters —
-/// the split has to happen *first*: an `%2F` inside an id is a character of
-/// the id, not a separator, and decoding before splitting would let a
-/// server-chosen value invent a path segment. That is precisely the confusion
-/// the encoding exists to prevent.
+/// RFC 8620 blob templates percent-encode per segment, so `%2F` must stay
+/// inside one id instead of becoming a path separator.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -852,13 +845,9 @@ fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse an `application/x-www-form-urlencoded` body (RFC 6749 §4.1.3's
-/// request shape for the token endpoint) into its key/value pairs.
+/// Parse an OAuth token-form body into key/value pairs.
 ///
-/// A literal `+` is decoded as a space before the percent-escapes are undone,
-/// which is this media type's own historical convention for it — even though
-/// this crate's own client never sends one (it percent-encodes a space as
-/// `%20`, which the fallthrough case below already handles).
+/// `application/x-www-form-urlencoded` maps `+` to space before percent-decoding.
 fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(body)
         .split('&')
@@ -875,13 +864,8 @@ fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
 
 /// Undo percent-encoding in one path segment.
 ///
-/// A `%` that is not followed by two hex digits is kept as itself rather than
-/// rejected: this is a test server, and a malformed escape should surface as
-/// the 404 of an id that matches nothing, not as a parse error that hides
-/// which id was asked for — `percent_decode_str`'s own leniency matches that.
-/// Decoded octets that are not UTF-8 go through `decode_utf8_lossy` for the
-/// same reason — a `jmap_proto::Id` is a `String`, so bytes that spell no
-/// string can only miss the lookup.
+/// Malformed escapes and non-UTF-8 bytes decode lossily so bad ids miss lookup
+/// as 404s instead of being rejected before route handling.
 fn percent_decode(segment: &str) -> String {
     percent_encoding::percent_decode_str(segment)
         .decode_utf8_lossy()
@@ -913,11 +897,10 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_BLOB,
 ];
 
-/// The capability object to advertise for `capability`. An empty placeholder
-/// for everything but Sieve and Blob: `SieveCapability::max_size_script` is
-/// mandatory (RFC 9661 §1.2.1) and `BlobCapability::supported_type_names` is
-/// how a client learns what `Blob/lookup` accepts, so an empty object would
-/// make either one fail to parse or answer nothing useful.
+/// Capability object to advertise for `capability`.
+///
+/// Most capabilities stay as `{}` placeholders; Sieve and Blob need required
+/// fields so parsers can accept them and clients can issue `Blob/lookup`.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -938,11 +921,8 @@ fn capability_value(capability: &str) -> Value {
 
 /// Build the RFC 8620 §2 session document from current state.
 ///
-/// `authorized` is false only for the anonymous fetch
-/// [`MockServerBuilder::session_via_redirect`]'s target answers when the
-/// request carried no valid credentials — real servers shaped that way still
-/// answer 200, just with no accounts to show for it, which is the exact
-/// condition `Session::resolve_primary_account` has to fail loudly on.
+/// With redirect discovery, anonymous fetches still return 200 with empty
+/// accounts so primary-account resolution fails for the right reason.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
@@ -953,14 +933,8 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
-            // Unlike the four above, `principals`/`principals:owner`'s account
-            // capability objects carry real content (RFC 9670 §2.5), not an
-            // empty placeholder — so they are built here rather than folded
-            // into `ACCOUNT_CAPABILITIES`'s uniform `json!({})` map.
-            // Like `principals` below, `submission`'s content is real (RFC
-            // 8621 §7.1's `maxDelayedSend`) only when a test asked for it —
-            // every other test keeps the uniform empty-object placeholder
-            // above, matching a deployment with no SMTP FUTURERELEASE.
+            // `principals` and `principals:owner` carry non-empty account data.
+            // `submission` gets non-empty data only when maxDelayedSend is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
             {
