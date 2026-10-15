@@ -19338,10 +19338,9 @@ fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
 
 #[test]
 fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_characterization() {
-    // Comprehensive characterization of Evolution's Contact Editor UI and EDS libebook-contacts
-    // instant-messaging fields: 60 slotted string fields vs unslotted EContactAttrList fields:
+    // Cover slotted IM fields against unslotted and unmodeled service inputs.
 
-    // 1. Card containing both slotted services (Jabber, Skype, Matrix) and unslotted/unmodeled ones (Twitter, SIP, Discord, Signal, Telegram)
+    // Mix slotted services with unslotted and unmodeled ones.
     let mut services = BTreeMap::new();
     services.insert(
         "s_jabber".to_owned(),
@@ -19408,7 +19407,7 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
         ..ContactCard::default()
     };
 
-    // 2. Outbound serialization emits ONLY the 10 slotted services with Evolution UI field representation
+    // Outbound serialization keeps only slotted services.
     let vcard = card_to_vcard(&card);
     assert!(
         vcard.contains("X-JABBER;X-JMAP-KEY=s_jabber;TYPE=HOME:vera@jabber.example\r\n"),
@@ -19423,7 +19422,7 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
         "{vcard}"
     );
 
-    // Verify unslotted and unmodeled services are NEVER emitted on the wire
+    // Unslotted and unmodeled services are omitted from wire output.
     assert!(!vcard.contains("X-TWITTER"), "{vcard}");
     assert!(!vcard.contains("X-SIP"), "{vcard}");
     assert!(!vcard.contains("X-DISCORD"), "{vcard}");
@@ -19431,7 +19430,7 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
     assert!(!vcard.contains("twitter"), "{vcard}");
     assert!(!vcard.contains("sip:"), "{vcard}");
 
-    // 3. Sync Engine Safety Predicate: states_online_service returns false for unslotted/unmodeled services
+    // Sync safety rejects unslotted and unmodeled services.
     let s_map = card.online_services.as_ref().unwrap();
     assert!(states_online_service(&s_map["s_jabber"]));
     assert!(states_online_service(&s_map["s_skype"]));
@@ -19453,8 +19452,7 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
         "Signal is unmodeled and must not be stated"
     );
 
-    // 4. Inbound foreign vCard with X-TWITTER, X-SIP, and IMPP:sip lines:
-    // Safely parsed without inventing unslotted synthetic entries
+    // Inbound foreign lines parse safely without synthetic unslotted entries.
     let foreign_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Foreign Contact\r\n",
@@ -19484,9 +19482,7 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
 
 #[test]
 fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() {
-    // Audit & characterization of URI rejection boundaries in plain_handle and handle_in_uri:
-    // Any URI that carries actions, queries, sub-paths, fragments, percent-encodings, or whitespace
-    // is strictly rejected to prevent injecting commands or corrupting EDS contact fields.
+    // Reject handles that carry actions, paths, fragments, encoding, or whitespace.
 
     let rejected_uris: &[(&str, &str, &str)] = &[
         // (service, invalid URI, reason)
@@ -19551,7 +19547,7 @@ fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() 
             ..ContactCard::default()
         };
 
-        // states_online_service must return false
+        // Reject stating any invalid URI.
         assert!(
             !states_online_service(&card.online_services.as_ref().unwrap()["s1"]),
             "URI '{invalid_uri}' for service '{service}' ({reason}) must NOT be stated"
@@ -19562,14 +19558,14 @@ fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() 
             "URI '{invalid_uri}' must not produce a plain handle ({reason})"
         );
 
-        // card_to_vcard must omit the property
+        // Emission omits invalid URIs.
         let vcard = card_to_vcard(&card);
         assert!(
             !vcard.contains(invalid_uri),
             "invalid URI '{invalid_uri}' must not appear in vCard: {vcard}"
         );
 
-        // Inbound vCard 4.0 IMPP with this invalid URI must be safely ignored
+        // Inbound IMPP with invalid URIs is ignored.
         let v4_impp = format!(
             "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Reject Contact\r\nIMPP:{invalid_uri}\r\nEND:VCARD\r\n"
         );
