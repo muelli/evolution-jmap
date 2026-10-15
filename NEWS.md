@@ -12,6 +12,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   triggering a second sign-in.
 - Editing a JMAP account's server address now triggers a fresh sign-in
   instead of needing Evolution restarted to take effect.
+- Fixed an endless chain of sign-in prompts when an account's server
+  address ends in a trailing dot (for example api.fastmail.com.). The
+  dot names the same server and is now treated that way, sign-in
+  credentials survive the server's redirect, and a redirect that
+  cannot carry them is reported as a clear connection error instead
+  of yet another consent window.
+- A redirect to a malformed address from the server is now reported
+  as an error instead of crashing the connection attempt.
 - A new account's Sent and Drafts folders are now configured
   automatically from the server's own folder roles, the same way
   Inbox, Trash and Junk already were.
@@ -38,6 +46,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   lets one slow or unreachable server's address lookup delay the
   others.
 - Added a German translation.
+- Updated the bundled TLS library (rustls) to close four published
+  security advisories (RUSTSEC-2026-0346 through RUSTSEC-2026-0349).
 - Mail, contacts and calendars have all been verified against a real
   JMAP server at real-world scale (up to 10,000 messages, 5,000
   contacts and 3,000 calendar events, including through
