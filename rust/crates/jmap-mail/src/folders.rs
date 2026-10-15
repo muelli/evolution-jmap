@@ -148,12 +148,13 @@ impl<'a> Request<'a> {
     /// folders *are* the immediate subfolders of the root — the root is not a
     /// folder and is not returned — so there is no level left below them.
     ///
-    /// A `top` that matches nothing yields no roots rather than an error. Camel
-    /// documents the wrapper as able to "return NULL without setting a GError
-    /// if no folders match the search criteria", and the case is ordinary: a
-    /// folder another client deleted between one call and the next is asked
-    /// for once more before Camel notices, and reporting that as a failure
-    /// would turn someone else's tidying into a broken account.
+    /// A `top` that matches nothing yields no roots rather than an error, the
+    /// way IMAPX's own `get_folder_info_offline` answers an empty match too:
+    /// an empty array handed to `camel_folder_info_build` comes back NULL
+    /// with nothing having set a GError. The case is ordinary: a folder
+    /// another client deleted between one call and the next is asked for
+    /// once more before Camel notices, and reporting that as a failure would
+    /// turn someone else's tidying into a broken account.
     ///
     /// ## The two subscription flags
     ///

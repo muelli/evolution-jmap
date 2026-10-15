@@ -485,10 +485,11 @@ fn a_top_deeper_in_the_tree_is_found_by_its_path() {
 }
 
 /// A `top` no folder answers to asks for nothing, which Camel reads as a NULL
-/// chain with no error set — its own documentation for the wrapper says the
-/// call "can return NULL without setting a GError if no folders match the
-/// search criteria". An error instead would turn a folder deleted by another
-/// client into a broken account.
+/// chain with no error set — IMAPX's own `get_folder_info_offline` answers an
+/// empty match the same way, since an empty array handed to
+/// `camel_folder_info_build` comes back NULL with nothing having set a
+/// GError. An error instead would turn a folder deleted by another client
+/// into a broken account.
 #[test]
 fn a_top_that_names_no_folder_asks_for_nothing() {
     let tree = hand_built();
@@ -969,11 +970,12 @@ fn the_vfunc_answers_the_subscription_list_with_every_folder() {
     );
 }
 
-/// The case that must not be an error. Camel documents the wrapper as able to
-/// "return NULL without setting a GError if no folders match the search
-/// criteria", and a folder another client deleted between one call and the next
-/// is asked for once more before Camel notices; reporting that as a failure
-/// would turn someone else's tidying into a broken account.
+/// The case that must not be an error. IMAPX's own `get_folder_info_offline`
+/// answers an empty match the same way — an empty array handed to
+/// `camel_folder_info_build` comes back NULL with nothing having set a
+/// GError — and a folder another client deleted between one call and the
+/// next is asked for once more before Camel notices; reporting that as a
+/// failure would turn someone else's tidying into a broken account.
 #[test]
 fn a_top_naming_no_folder_is_an_empty_answer_and_not_a_failure() {
     let (_server, store) = nested();
