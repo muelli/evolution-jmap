@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 80 stage 2 batch 2: the calendar leg's own client against a real
- * server, the twin of `book-client.c`'s `write` phase one file over.
+ * The calendar leg's own client against a real server, the twin of
+ * `book-client.c`'s `write` phase one file over.
  *
  * `cal-client.c` beside this file is the mock-based suite's client, and it
  * deliberately stays untouched: it creates an all-day event, a zoned event, a
@@ -13,9 +13,8 @@
  * fail the whole run rather than just mismeasure one field. This file is the
  * one event at the head of that list only: SUMMARY, LOCATION, CATEGORIES,
  * TRANSP, PRIORITY, CLASS, one VALARM, created and read back — the same scope
- * `book-client.c`'s `write` phase covers for the address book, and the same
- * bet item 80 stage 2's own plan names: the simplest connectivity leg first,
- * the richer ones as a later batch.
+ * `book-client.c`'s `write` phase covers for the address book: the simplest
+ * connectivity leg first, the richer ones as a later, separate pass.
  *
  * Everything around it — the scratch XDG tree, the `.source` keyfile, the
  * private D-Bus session, the proxy to the real server and every assertion —

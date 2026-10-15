@@ -18,8 +18,8 @@
 //! email at all, so it asks about the write-test account itself -- a plain
 //! event on an account's own default calendar is enough to make that account
 //! read busy for its own availability, no participant required (the same
-//! finding AGY Batch 21 made when it fell back to `Principal/query` by email
-//! for the owner).
+//! finding made when free/busy fell back to `Principal/query` by email for
+//! the owner).
 //!
 //! The event's date is picked clear of every other live calendar test's own
 //! fixed date, so a leftover event from an earlier run of a *different* test

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 94(c): the real-EDS leg shared by `jmap-book-sync` and `jmap-cal-sync`'s
-//! own scale checkpoints (item 94a/94b, both fully delivered through the sync
-//! layer directly). Every number recorded there came from `BookSync`/`CalSync`
+//! The real-EDS leg shared by `jmap-book-sync` and `jmap-cal-sync`'s own
+//! scale checkpoints, both fully delivered through the sync layer directly.
+//! Every number recorded there came from `BookSync`/`CalSync`
 //! calling the real server with no EDS in between; this file asks the question
 //! those numbers cannot: how long `evolution-addressbook-factory`'s own first
 //! open of an already-large book takes, and how much memory it peaks at,
@@ -14,10 +14,10 @@
 //! `live-stalwart-book-changes.rs`'s own "a real second client" pattern) so
 //! the account is already large *before* EDS ever connects to it — unlike
 //! `live-stalwart-book.rs`'s single-contact `write` phase, this never asks
-//! EDS to do the importing. Confirmed clean at both 1,000 and the item's own
-//! 5,000-card checkpoint (`docs/BOOK-SYNC-SCALE.md`): no scale-only bug, cost
-//! growing sub-linearly with book size. `jmap-cal-sync`'s calendar-factory
-//! counterpart is still open.
+//! EDS to do the importing. Confirmed clean at both 1,000 and 5,000 cards
+//! (`docs/BOOK-SYNC-SCALE.md`): no scale-only bug, cost growing sub-linearly
+//! with book size. `jmap-cal-sync`'s calendar-factory counterpart is
+//! `live-stalwart-calendar-scale.rs`, one file over.
 //!
 //! ## Running it
 //!

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 94(c): `jmap-cal-sync`'s own half of the real-EDS leg, the twin of
+//! `jmap-cal-sync`'s own half of the real-EDS leg, the twin of
 //! `live-stalwart-book-scale.rs` one file over (see that file's own header
 //! for the full rationale, shared by both).
 //!
-//! Every number `jmap-cal-sync/tests/live_server_scale.rs` recorded for item
-//! 94(b) came from `CalSync` calling the real server directly; this asks
+//! Every number `jmap-cal-sync/tests/live_server_scale.rs` recorded came from
+//! `CalSync` calling the real server directly; this asks
 //! the question those numbers cannot: how long `evolution-calendar-factory`'s
 //! own first open of an already-large calendar takes through the real
 //! meta-backend machinery (cache population, JSCalendar-to-`ICalComponent`

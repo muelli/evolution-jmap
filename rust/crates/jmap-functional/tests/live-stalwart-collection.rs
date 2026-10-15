@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 80 stage 2 batch 3: the collection leg, driven against a real
-//! Stalwart instead of the in-process mock.
+//! The collection leg, driven against a real Stalwart instead of the
+//! in-process mock.
 //!
 //! Unlike the book and calendar legs, this one makes no write at all:
 //! `functional-collection-client` (`tests/functional/collection-client.c`,

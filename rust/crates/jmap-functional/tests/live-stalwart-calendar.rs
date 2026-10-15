@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 80 stage 2 batch 2: the calendar leg, driven against a real Stalwart
-//! instead of the in-process mock.
+//! The calendar leg, driven against a real Stalwart instead of the
+//! in-process mock.
 //!
 //! The twin of `live-stalwart-book.rs`, and deliberately narrower than
 //! `calendar.rs`'s own mock-based leg: `functional-cal-live-client`
@@ -11,8 +11,8 @@
 //! zoned event, a six-occurrence recurring series with three kinds of
 //! exception, a THISANDFUTURE split, and a second zoned recurring series — a
 //! real server genuinely differing on any one of those would fail the whole
-//! client rather than just mismeasure a field, which is a risk item 80
-//! stage 2's own plan deferred to a later batch. See the client's own header.
+//! client rather than just mismeasure a field, which is a risk this test
+//! deliberately defers to a later, richer pass. See the client's own header.
 //!
 //! The mechanism is unchanged from the address-book leg: `spawn_loopback_proxy`
 //! satisfies `jmap-backend-core::connect_target`'s plaintext-stays-loopback

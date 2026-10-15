@@ -16,8 +16,10 @@
 //! `ContactCard/set` calls even at the default throwaway plan, so this starts
 //! at the same 500-event size rather than assuming larger checkpoints are
 //! reachable in one call budget. [`retrying`] absorbs a 429 the same way.
-//! Larger checkpoints and a real-EDS leg against a live-Stalwart calendar
-//! factory are still open.
+//! Larger checkpoints (1,000 and 3,000 events, run through this same file
+//! with `JMAP_SCALE_TEST_EVENTS` set higher) and the real-EDS leg against a
+//! live-Stalwart calendar factory (`jmap-functional/tests/live-stalwart-
+//! calendar-scale.rs`) are both recorded in `docs/CAL-SYNC-SCALE.md`.
 //!
 //! ## Running it
 //!

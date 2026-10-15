@@ -18,8 +18,9 @@
 //! than the window the limit is measured over. So [`retrying`] below
 //! absorbs a 429 with a short sleep instead of assuming it never happens.
 //!
-//! Larger steps and `jmap-cal-sync`'s own equivalent are still open. Numbers
-//! so far are recorded in `docs/BOOK-SYNC-SCALE.md`.
+//! Larger steps (1,000 and 5,000 cards) and `jmap-cal-sync`'s own equivalent
+//! are both done; numbers are recorded in `docs/BOOK-SYNC-SCALE.md` and
+//! `docs/CAL-SYNC-SCALE.md`.
 //!
 //! ## Running it
 //!
