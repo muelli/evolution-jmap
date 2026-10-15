@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-10-15)
 
 - Fixed a brand-new account silently signing in twice on its first
   connect to the server, caused by its own setup accidentally
