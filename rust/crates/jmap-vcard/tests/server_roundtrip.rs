@@ -31,7 +31,6 @@ fn a_stored_card_survives_the_trip_through_vcard() {
         .unwrap();
     let id = stored.id.clone().expect("server assigned id");
 
-    // vCard shape consumed by EDS.
     let vcard = card_to_vcard(&stored);
     assert!(vcard.contains(&format!("\r\nUID:{id}\r\n")), "{vcard}");
     assert!(vcard.contains("\r\nFN:Vera Oldenburg\r\n"), "{vcard}");
@@ -44,14 +43,12 @@ fn a_stored_card_survives_the_trip_through_vcard() {
         "{vcard}"
     );
 
-    // Parse back with identifiers and email key intact.
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.id, stored.id);
     assert_eq!(back.uid, stored.uid);
     let key = back.emails.as_ref().unwrap().keys().next().unwrap().clone();
     assert_eq!(stored.emails.as_ref().unwrap().keys().next(), Some(&key));
 
-    // Preserve the email key so this patch updates in place.
     client
         .contact_update(
             &account_id,
