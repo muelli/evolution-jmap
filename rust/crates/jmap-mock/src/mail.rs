@@ -28,11 +28,8 @@ const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-/// `caller` carries `Mailbox/get` identity context.
-///
-/// No caller identity means account owner access. A foreign caller only sees
-/// mailboxes whose `shareWith` grants them rights, and gets `forbidden` when
-/// nothing is shared with them.
+/// `caller` carries `Mailbox/get` identity context: owners see all mailboxes,
+/// foreign callers see only mailboxes shared with them, else `forbidden`.
 pub fn mailbox_get(
     state: &mut ServerState,
     arguments: Value,
@@ -141,11 +138,9 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5): create, update, and destroy mailboxes.
-///
-/// This stays custom instead of [`crate::setops::simple_set`] because
-/// validation depends on sibling, ancestor, and message state across the
-/// account, including earlier operations from the same request.
+/// `Mailbox/set` (RFC 8621 §2.5), kept custom instead of
+/// [`crate::setops::simple_set`] because validation depends on sibling,
+/// ancestor, and message state, including earlier operations in the request.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -304,11 +299,9 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Validate mailbox placement constraints against the current tree.
-///
+/// Validate mailbox placement rules from RFC 8621 §2.
 /// `of` is the mailbox being changed, or `None` for create.
-/// Rules follow RFC 8621 §2: sibling name uniqueness, valid non-cyclic
-/// `parentId`, and role uniqueness per account.
+/// Checks sibling name uniqueness, non-cyclic `parentId`, and role uniqueness.
 fn placeable(
     tree: &BTreeMap<Id, Mailbox>,
     of: Option<&Id>,
@@ -384,9 +377,8 @@ fn filed_in(email: &Email, id: &Id) -> bool {
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // `maxObjectsInGet` (RFC 8620 §5.1): asking for more objects than the
-    // session document advertises fails the whole call. Other `/get` handlers
-    // in this mock enforce the same limit.
+    // Enforce `maxObjectsInGet` (RFC 8620 §5.1), like other `/get` handlers
+    // in this mock.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -657,9 +649,8 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
 
     let total = matches.len() as u64;
     let position = request.position.max(0) as usize;
-    // The server's own cap and the client's, whichever is lower. Only a cap
-    // this server imposed is reported back as `limit`: the client already knows
-    // about its own.
+    // Apply the lower of client-requested and server page caps. Report
+    // `limit` only when the server cap truncated results.
     let asked = request.limit.unwrap_or(u64::MAX);
     let never_terminates = query_never_terminates && !matches.is_empty();
     let ids: Vec<Id> = if never_terminates {
@@ -831,9 +822,9 @@ fn body_contains(email: &Email, needle: &str) -> bool {
         .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
 }
 
-/// `header` (RFC 8621 §4.4.1): `[name]` matches any message carrying that
-/// header at all; `[name, value]` also requires the value to contain
-/// `value`. Header names are case-insensitive per RFC 5322 §1.2.2.
+/// `header` (RFC 8621 §4.4.1): `[name]` matches header presence;
+/// `[name, value]` also requires `value` substring match.
+/// Header names are case-insensitive per RFC 5322 §1.2.2.
 fn header_matches(email: &Email, header: &[String]) -> bool {
     let Some(name) = header.first() else {
         return false;
@@ -879,9 +870,8 @@ pub fn identity_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
     })
 }
 
-/// `VacationResponse/get` (RFC 8621 §8.1): the singleton always exists, so an
-/// empty `ids: null` request or one naming `"singleton"` both find it; any
-/// other id is simply not found, the same as `Mailbox/get` with a bogus id.
+/// `VacationResponse/get` (RFC 8621 §8.1): this singleton always exists.
+/// `ids: null` and `"singleton"` both resolve; other ids go to `notFound`.
 pub fn vacation_response_get(
     state: &mut ServerState,
     arguments: Value,
@@ -916,10 +906,8 @@ pub fn vacation_response_get(
     })
 }
 
-/// `VacationResponse/set` (RFC 8621 §8.1): "This is a singleton type… A
-/// client MUST NOT attempt to create or destroy" it, so every entry in
-/// `create` and `destroy` is refused with a `singleton` `SetError` before
-/// anything is touched; `update` is the only mutation the store ever sees.
+/// `VacationResponse/set` (RFC 8621 §8.1): singleton objects cannot be
+/// created or destroyed, so only `update` mutates state.
 pub fn vacation_response_set(
     state: &mut ServerState,
     arguments: Value,
@@ -1237,19 +1225,13 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
     }
 }
 
-/// `Email/import` (RFC 8621 §4.8): a message that is already a message, filed
-/// into the account from a blob.
-///
-/// This reverses the mock's normal flow: parse RFC 5322 bytes into an `Email`
-/// with [`crate::message::Message`] instead of rendering bytes from an `Email`.
-///
-/// Behavior choices kept explicit here:
-/// - the uploaded blob bytes are preserved as-is;
-/// - duplicates are allowed;
-/// - `receivedAt` uses the request value, or falls back to [`MOCK_NOW`].
-///
-/// Keyword grammar (RFC 8621 §4.1.1) is intentionally not validated here, the
-/// same as `Email/set`.
+/// `Email/import` (RFC 8621 §4.8): import RFC 5322 bytes from an uploaded
+/// blob.
+/// Unlike this mock's seeding path, this parses bytes into `Email` with
+/// [`crate::message::Message`].
+/// Behavior stays explicit: preserve uploaded blob bytes, allow duplicates,
+/// use request `receivedAt` or [`MOCK_NOW`], and skip keyword grammar
+/// validation like `Email/set` (RFC 8621 §4.1.1).
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1321,9 +1303,8 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
 
 /// `Email/parse` (RFC 8621 §4.8): parse an uploaded RFC 5322 blob without
 /// storing it.
-///
-/// This reuses [`crate::message::Message`], so MIME-tree fields stay unset,
-/// matching the reduced-fidelity import path.
+/// Reuses [`crate::message::Message`], so MIME-tree fields stay unset, like
+/// the reduced-fidelity import path.
 pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1996,7 +1977,6 @@ impl AccountState {
 
     /// Create a mailbox as a state transition, like another client's
     /// `Mailbox/set`.
-    ///
     /// Unlike [`AccountState::seed_mailbox`], this bumps state and appears in
     /// `/changes`.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
