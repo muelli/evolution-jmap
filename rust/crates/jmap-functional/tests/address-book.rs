@@ -482,7 +482,7 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         .titles
         .as_ref()
         .unwrap_or_else(|| panic!("the card on the server has no titles: {card:?}"));
-    // RFC 9553 §2.2.4's default is spelled out here rather than borrowed
+    // RFC 9553 §2.2.5's default is spelled out here rather than borrowed
     // from the mapping, so this end states the wire shape it expects instead
     // of agreeing with the code that produced it.
     let by_kind: Vec<(&str, &str)> = titles
@@ -652,7 +652,7 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     assert_eq!(service.uri, None, "{card:?}");
     // The CATEGORIES line, as the server sees it: exactly two `keywords`
     // members, each set to `true`. Three would mean the comma inside the second
-    // tag had been read as RFC 2426 §3.7.1's list separator somewhere along the
+    // tag had been read as RFC 2426 §3.6.1's list separator somewhere along the
     // way, and the server would have been told the contact is filed under a tag
     // nobody typed. Asserted at this end too because the client's read-back
     // comes out of EDS's own cache, which would agree with itself even if the
@@ -1224,7 +1224,7 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     id
 }
 
-/// A `relatedTo` value stating one relation type, as RFC 9553 §1.4.3's Set:
+/// A `relatedTo` value stating one relation type, as RFC 9553 §2.1.8's Set:
 /// the type is a key and its value is `true`.
 fn relation_of(kind: &str) -> Relation {
     Relation {
