@@ -819,22 +819,11 @@ impl Day {
             && (1..=31).contains(&self.day)
     }
 
-    /// Whether EDS will hand this day back the day it is, so that a line
-    /// stating it can be believed when it comes home.
+    /// Whether EDS round-trips this day without rewriting it.
     ///
-    /// `e_contact_date_to_string()` CLAMPs each part into the range it can
-    /// print — the year to [`EARLIEST_YEAR`]`..=9999`, the month to `1..=12`,
-    /// the day to `1..=31`. Reading is not clamped, so a line whose year is
-    /// under a thousand parses back correctly and is *written* back as the
-    /// year 1000: `eds-sys/tests/contacts.rs` measures both halves, up to the
-    /// `BDAY:0800-06-21` that becomes `BDAY:1000-06-21` the moment the field
-    /// is set.
-    ///
-    /// The month and the day need no check of their own — [`Self::is_a_date`]
-    /// already refuses everything outside the ranges the clamp keeps — so this
-    /// is the year alone. A day it refuses is stated on no line, which leaves
-    /// it invisible to the user but leaves the server's date alone: an
-    /// anniversary no line states is one `diff_entries` will not patch.
+    /// `e_contact_date_to_string()` clamps years to
+    /// [`EARLIEST_YEAR`]`..=9999`, while parsing accepts lower years.
+    /// Years below [`EARLIEST_YEAR`] are omitted to avoid save churn.
     fn survives_the_field_it_lands_in(&self) -> bool {
         self.year >= EARLIEST_YEAR
     }
@@ -850,12 +839,11 @@ impl Day {
     }
 }
 
-/// The day a date line states, or `None` for text that names none.
+/// The day an anniversary line states, or `None` when none is present.
 ///
-/// Both ISO 8601 forms are read — `1964-03-27` and `19640327` — because
-/// `e_contact_date_from_string()` reads both, and so a vCard that has been
-/// through another client may carry either. A time after the date is dropped
-/// rather than refused, for the same reason.
+/// Accepts `YYYY-MM-DD` and `YYYYMMDD` because
+/// `e_contact_date_from_string()` accepts both.
+/// Trailing time text is dropped for compatibility.
 fn read_day(text: &str) -> Option<Day> {
     let digits: String = text
         .split(['T', 't'])
