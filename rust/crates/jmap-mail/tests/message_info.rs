@@ -536,7 +536,7 @@ fn an_untouched_row_claims_the_keywords_it_remembers() {
 
 /// And once the user has clicked, it claims the click. `attachments` is the one
 /// bit of the flags word that must not travel: `hasAttachment` is a property RFC
-/// 8621 §4.1.1 has the server compute, so sending it back would put a label on
+/// 8621 §4.1.4 has the server compute, so sending it back would put a label on
 /// the message every other client would then show.
 #[test]
 fn a_row_claims_the_flag_the_user_just_set() {

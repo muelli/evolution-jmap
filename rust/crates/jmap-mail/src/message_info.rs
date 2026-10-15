@@ -254,7 +254,7 @@ pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
 ///
 /// `attachments` is read out of the word for symmetry and contributes nothing:
 /// [`Keywords::new`] leaves it out, because `hasAttachment` is a property RFC
-/// 8621 §4.1.1 has the server compute rather than a label a client may set.
+/// 8621 §4.1.4 has the server compute rather than a label a client may set.
 ///
 /// # Safety
 ///
@@ -663,7 +663,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 /// it changes nothing, and the diff against the listing is then empty.
 ///
 /// `attachments` is taken from the listing on both paths. It is the one bit of
-/// the word that is not a keyword — RFC 8621 §4.1.1 has the server compute
+/// the word that is not a keyword — RFC 8621 §4.1.4 has the server compute
 /// `hasAttachment` — so the keyword set the replay works with cannot carry it.
 ///
 /// # Safety
