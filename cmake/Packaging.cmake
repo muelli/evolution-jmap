@@ -207,6 +207,19 @@ add_test(
 		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-package.cmake"
 )
 
+# package-deb above calls cpack with an explicit `-G DEB`, not the `package`
+# target the release workflow actually builds with
+# (`cmake --build build --target package`, no `-G` override). That runs
+# cpack against CPACK_GENERATOR's full configured list, so a generator whose
+# toolchain is missing (RPM without rpmbuild, on the release image) can take
+# the whole run down while every `-G DEB`-scoped test above stays green.
+add_test(
+	NAME package-default-generator
+	COMMAND ${CMAKE_COMMAND}
+		"-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-package-default-generator.cmake"
+)
+
 # The two epochs are decoys, deliberately wrong and deliberately different: the
 # test exports each in turn and requires the package not to notice. They are
 # 2020-09-13 and 2023-11-14, both long before anything in this tree, so a

@@ -120,9 +120,9 @@ during implementation is catalogued below with an actionable verdict:
 ### Paper Cut 7: `cargo package` checks registry for local sibling dependency
 - **Category:** Packaging / Cargo semantics
 - **Location:** `rust/crates/jmap-client/Cargo.toml`
-- **Observation:** `jmap-client` specifies `evolution-jmap-proto = { path = "../jmap-proto", version = "0.4.1" }`.
+- **Observation:** `jmap-client` specifies `evolution-jmap-proto = { path = "../jmap-proto", version = "0.5.0" }`.
   When packaging `jmap-client`, Cargo strips the `path` and checks whether
-  `evolution-jmap-proto 0.4.1` exists in the crates.io index. Because it is not
+  `evolution-jmap-proto 0.5.0` exists in the crates.io index. Because it is not
   yet published, packaging fails unless `--config 'patch.crates-io.evolution-jmap-proto.path="rust/crates/jmap-proto"'`
   is supplied.
 - **Verdict:** **accept**. This is standard Cargo behavior when packaging dependent
