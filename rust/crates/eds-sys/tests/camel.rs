@@ -2931,11 +2931,14 @@ fn camel_folder_search_utilities_in_eds() {
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, 0);
 
-        // 2. Date comparison helper (date-only comparison)
-        let dt1 = 1700000000i64;
-        let dt2 = 1700003600i64;
+        // 2. Date comparison helper (date-only comparison). `compare_date`
+        // works in local time, so these are picked at UTC midday: no local
+        // timezone in the -12..+14 range can push dt1/dt2 across a day
+        // boundary, nor fail to push dt3 across one.
+        let dt1 = 1700049600i64; // 2023-11-15 12:00:00 UTC
+        let dt2 = 1700053200i64; // 2023-11-15 13:00:00 UTC, same day
         assert_eq!(camel_folder_search_util_compare_date(dt1, dt2), 0);
-        let dt3 = 1700100000i64; // next day
+        let dt3 = 1700136000i64; // 2023-11-16 12:00:00 UTC, next day
         assert!(camel_folder_search_util_compare_date(dt1, dt3) < 0);
 
         // 3. Month addition helper
