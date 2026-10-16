@@ -8525,14 +8525,7 @@ fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
 
 #[test]
 fn categories_empty_absent_and_refused_permutations_roundtrip() {
-    // Tests empty, absent, and refused keyword combinations:
-    // 1. keywords: None -> No CATEGORIES line, roundtrips to keywords: None.
-    // 2. keywords: Some(BTreeMap::new()) -> No CATEGORIES line, roundtrips to keywords: None.
-    // 3. Inbound empty CATEGORIES: -> parses to keywords: None.
-    // 4. Inbound CATEGORIES:,,, -> parses to keywords: None.
-    // 5. Whitespace-only CATEGORIES items are rejected by states_keyword, so no line is re-emitted.
-
-    // 1. None keywords
+    // Empty, absent, or refused keywords all collapse to `keywords: None`.
     let card_none = ContactCard {
         name: Some(Name {
             full: Some("Alice Smith".to_owned()),
@@ -8546,7 +8539,6 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let parsed_none = vcard_to_card(&vcard_none).expect("parse none card");
     assert_eq!(parsed_none.keywords, None);
 
-    // 2. Empty map keywords
     let card_empty_map = ContactCard {
         name: Some(Name {
             full: Some("Alice Smith".to_owned()),
@@ -8560,7 +8552,6 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let parsed_empty_map = vcard_to_card(&vcard_empty_map).expect("parse empty map card");
     assert_eq!(parsed_empty_map.keywords, None);
 
-    // 3. Inbound CATEGORIES: (empty string)
     let inbound_empty =
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:\r\nEND:VCARD\r\n";
     let parsed_inbound_empty = vcard_to_card(inbound_empty).expect("parse inbound empty");
@@ -8568,7 +8559,6 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let reemitted_empty = card_to_vcard(&parsed_inbound_empty);
     assert!(!reemitted_empty.contains("\r\nCATEGORIES:"));
 
-    // 4. Inbound CATEGORIES:,,, (consecutive empty items)
     let inbound_commas =
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:,,,\r\nEND:VCARD\r\n";
     let parsed_inbound_commas = vcard_to_card(inbound_commas).expect("parse inbound commas");
@@ -8576,7 +8566,6 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let reemitted_commas = card_to_vcard(&parsed_inbound_commas);
     assert!(!reemitted_commas.contains("\r\nCATEGORIES:"));
 
-    // 5. Keywords map with only refused tags.
     let card_refused = ContactCard {
         name: Some(Name {
             full: Some("Alice Smith".to_owned()),
@@ -8668,8 +8657,7 @@ fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
 
 #[test]
 fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
-    // Tests multiple category tags emitted on a single line in lexicographically sorted order,
-    // verifying that embedded commas and semicolons within tags do not cause spurious item splits.
+    // Multiple tags emit as one sorted line while preserving escaped delimiters.
     let tags = [
         "Software, Core & Tools",
         "Hardware, Components",
@@ -8694,12 +8682,7 @@ fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
 
     let vcard = card_to_vcard(&card);
 
-    // Verify sorted order on the single emitted CATEGORIES line (unfolded):
-    // "Executive; Strategy" -> Executive\; Strategy
-    // "Finance & Accounting" -> Finance & Accounting
-    // "Hardware, Components" -> Hardware\, Components
-    // "Optics; Lasers & Sensors" -> Optics\; Lasers & Sensors
-    // "Software, Core & Tools" -> Software\, Core & Tools
+    // Verify sorted order on the unfolded CATEGORIES line.
     let unfolded_vcard = unfolded(&vcard);
     let expected_categories_line = "CATEGORIES:Executive\\; Strategy,Finance & Accounting,Hardware\\, Components,Optics\\; Lasers & Sensors,Software\\, Core & Tools";
     assert_eq!(
@@ -8713,7 +8696,7 @@ fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
         "Exactly one CATEGORIES line should be emitted"
     );
 
-    // Parse back and verify exact tag preservation
+    // Parse back and verify exact tag preservation.
     let parsed = vcard_to_card(&vcard).expect("parse multiple categories card");
     let kw = parsed.keywords.as_ref().expect("keywords present");
     assert_eq!(kw.len(), 5);
