@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-memory server state: per-account typed object stores with id
-//! allocation, per-type state counters, and an append-only changes log.
+//! In-memory server state with per-account stores and monotonic change tracking.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
@@ -10,18 +9,18 @@ use std::sync::mpsc::Sender;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// Snapshot of [`ServerState::type_state_snapshot`]: per-account type counters.
+/// Snapshot of [`ServerState::type_state_snapshot`].
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
-/// Global mock-server state for fixture seeding and assertions.
+/// Global mock-server state for seeding fixtures and assertions.
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names answered, in call order, for request-shape assertions.
+    /// Method names answered, in call order.
     pub method_calls: Vec<String>,
-    /// Authenticated API requests dispatched to method handlers.
+    /// Authenticated `/api` requests that reached handlers.
     pub api_requests: usize,
-    /// Requests refused with HTTP 401 before dispatch.
+    /// Requests rejected with HTTP 401 before dispatch.
     pub unauthorized_responses: usize,
     /// Capability URNs omitted from the session document.
     pub omitted_capabilities: BTreeSet<String>,
@@ -209,15 +208,13 @@ impl EventSourceHub {
         );
     }
 
-    /// How many `/eventsource` clients are connected for
-    /// [`crate::MockServer::wait_for_event_source_subscriber`].
+    /// Connected `/eventsource` clients for [`crate::MockServer::wait_for_event_source_subscriber`].
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
 }
 
-/// Return `change` narrowed to `types`; `None` keeps all types.
-/// Returns `None` when no account has any matching type.
+/// Return `change` narrowed to `types`; `None` keeps all types, and no match returns `None`.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
         return Some(change.clone());
@@ -237,7 +234,7 @@ fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<
     (!changed.is_empty()).then(|| StateChange::new(changed))
 }
 
-/// One account's data.
+/// One account state.
 pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
@@ -338,13 +335,11 @@ impl AccountState {
     }
 }
 
-/// An uploaded or seeded binary blob.
 pub struct Blob {
     pub content_type: String,
     pub data: Vec<u8>,
 }
 
-/// A submission the mock accepted for "delivery".
 pub struct RecordedSubmission {
     pub id: Id,
     pub email_id: Id,
@@ -363,13 +358,12 @@ pub struct RecordedSchedulingMessage {
     pub sender: Option<String>,
     /// Recipient `calendarAddress`.
     pub recipient: String,
-    /// Instance identifier when this concerns one recurrence only.
+    /// Recurrence identifier when this concerns one occurrence only.
     pub recurrence_id: Option<String>,
     /// `VCALENDAR` body with `METHOD`, built by `scheduling::build_ical`.
     pub ical: String,
 }
 
-/// What happened to an object, for the changes log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
     Created,
@@ -377,7 +371,6 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes-log entry: object `id` changed when state reached `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
