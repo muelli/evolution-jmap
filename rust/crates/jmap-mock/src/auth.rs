@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use jmap_proto::Id;
 
-/// Accepted credentials. With neither configured, every request passes.
+/// Accepted authorization header values. With none configured, every request passes.
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
     accepted: Vec<String>,
     /// Principal identity for an accepted bearer token, if scoped.
     identities: BTreeMap<String, Id>,
-    /// Remaining accepted requests for bearer authorization, if bounded.
+    /// Remaining accepted requests for any configured credentials, if bounded.
     remaining_uses: Option<usize>,
 }
 
@@ -48,7 +48,7 @@ impl AuthConfig {
         self.remaining_uses = None;
     }
 
-    /// Expire accepted bearer token(s) after `remaining` successful matches.
+    /// Expire accepted credentials after `remaining` successful matches.
     pub fn expire_after(&mut self, remaining: usize) {
         self.remaining_uses = Some(remaining);
     }
