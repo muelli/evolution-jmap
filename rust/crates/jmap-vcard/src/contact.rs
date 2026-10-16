@@ -2584,3 +2584,20 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::service_of;
+
+    #[test]
+    fn service_of_returns_the_mapped_service_name() {
+        assert_eq!(service_of("X-SKYPE"), Some("Skype"));
+        assert_eq!(service_of("X-MATRIX"), Some("Matrix"));
+    }
+
+    #[test]
+    fn service_of_rejects_unknown_properties() {
+        assert_eq!(service_of("X-UNKNOWN-SERVICE"), None);
+        assert_eq!(service_of("FN"), None);
+    }
+}
