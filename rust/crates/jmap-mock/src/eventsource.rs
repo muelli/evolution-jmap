@@ -3,12 +3,8 @@
 
 //! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! Subscribers run on a dedicated thread so long lived streams do not block
-//! the main `serve` loop. Chunks are flushed manually through
-//! `Request::into_writer` because `tiny_http::Response::raw_print` flushes only
-//! after EOF. Query parsing forwards the `types` filter to
-//! [`crate::state::EventSourceHub::subscribe`]. Broadcasting enforces the
-//! actual event filtering.
+//! Each subscriber runs on a dedicated thread, and chunked writes go through
+//! `Request::into_writer` so updates flush before EOF.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -54,7 +50,7 @@ fn parse_params(query: &str) -> EventSourceParams {
     }
 }
 
-/// Register `request` and stream on a dedicated thread.
+/// Subscribe this request and stream from a dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
     let receiver = state
@@ -129,9 +125,7 @@ fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// Encode one `StateChange` as `event: state` plus JSON `data`.
-///
-/// No `id:` line is emitted because reconnect resume is not implemented.
+/// Encode one `StateChange` as `event: state` plus JSON `data`, without `id:` resume data.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
