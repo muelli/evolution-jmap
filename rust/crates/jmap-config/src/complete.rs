@@ -327,6 +327,34 @@ mod tests {
     }
 
     #[test]
+    fn source_is_none_except_for_a_server_error() {
+        use std::error::Error;
+
+        assert!(Incomplete::MissingIdentity.source().is_none());
+        assert!(
+            Incomplete::InvalidIdentity(String::new())
+                .source()
+                .is_none()
+        );
+        assert!(Incomplete::OAuth2NotRegistered.source().is_none());
+
+        let account = Account {
+            connection: Connection {
+                host: String::new(),
+                secure: false,
+                ..complete_account().connection
+            },
+            ..complete_account()
+        };
+        let incomplete = check(&account).unwrap_err();
+        assert!(matches!(incomplete, Incomplete::Server(_)));
+        assert_eq!(
+            incomplete.source().unwrap().to_string(),
+            incomplete.to_string()
+        );
+    }
+
+    #[test]
     fn an_unusable_server_is_reported() {
         let account = Account {
             connection: Connection {
