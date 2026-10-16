@@ -8658,7 +8658,7 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let reemitted_commas = card_to_vcard(&parsed_inbound_commas);
     assert!(!reemitted_commas.contains("\r\nCATEGORIES:"));
 
-    // 5. Keywords map with only refused tags (empty, leading/trailing whitespace, carriage return, non-bool)
+    // 5. Keywords map with only refused tags.
     let card_refused = ContactCard {
         name: Some(Name {
             full: Some("Alice Smith".to_owned()),
@@ -10927,7 +10927,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
 
 #[test]
 fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
-    // 1. Multiple PHOTO entries on one card (e.g. inline avatar + remote full picture + inline thumbnail)
+    // 1. Multiple PHOTO entries on one card.
     let mut media_map = BTreeMap::new();
     media_map.insert(
         "m1".to_owned(),
@@ -13464,7 +13464,7 @@ fn vcard_21_photo_formats_and_encoding_permutations() {
 
 #[test]
 fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
-    // Tests quoted-printable soft line wrapping (=\r\n) and encoded delimiter bytes (=3D, =3B, =2C, =0D=0A)
+    // Covers quoted-printable soft line wraps and encoded delimiter bytes.
     let qp_vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:2.1\r\n",
@@ -13504,7 +13504,7 @@ fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
         )
     );
 
-    // Emitting to 3.0 produces clean RFC 2426 backslash-escaped delimiters and line folding
+    // Emitting 3.0 keeps escaped delimiters and folded lines.
     let emitted = card_to_vcard(&card);
     assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!emitted.contains("QUOTED-PRINTABLE"));
@@ -13518,7 +13518,6 @@ fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
 #[test]
 fn fixpoint_roundtrip_characterization_and_oscillation_diagnostics() {
     // Characterizes convergence after one full import-export cycle.
-    // Export 2 equals Export 3 byte-for-byte, and Card 2 equals Card 3 structurally.
     let complex_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:fixpoint-characterization-01\r\n",
