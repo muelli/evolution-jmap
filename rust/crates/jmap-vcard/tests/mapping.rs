@@ -711,7 +711,7 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
     assert_eq!(nameless_back.organizations, nameless_card.organizations);
 
-    // EDS may clear the office slot in place. Readback drops the empty unit and keeps positions stable.
+    // EDS may clear the office slot in place. Readback drops empty units and keeps position order stable.
     let cleared_office_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
@@ -8612,7 +8612,7 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     // 2. keywords: Some(BTreeMap::new()) -> No CATEGORIES line, roundtrips to keywords: None.
     // 3. Inbound empty CATEGORIES: -> parses to keywords: None.
     // 4. Inbound CATEGORIES:,,, -> parses to keywords: None.
-    // 5. Inbound CATEGORIES with only whitespace items -> states_keyword refuses them, re-emits no line.
+    // 5. Whitespace-only CATEGORIES items are rejected by states_keyword, so no line is re-emitted.
 
     // 1. None keywords
     let card_none = ContactCard {
@@ -8957,7 +8957,7 @@ fn categories_unicode_and_multibyte_utf8_roundtrip() {
 
 #[test]
 fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
-    // Tests states_keyword against valid and invalid inputs, verifying EDS whitespace trimming defense.
+    // Covers states_keyword accept and reject cases, including EDS whitespace-trimming defense.
     // 1. Valid tags: return true
     assert!(states_keyword("Work", &json!(true)));
     assert!(states_keyword("Personal & Family", &json!(true)));
@@ -9645,7 +9645,7 @@ fn url_empty_absent_and_predicate_fidelity() {
     let parsed_empty = vcard_to_card(raw_empty).expect("parse empty url lines");
     assert_eq!(parsed_empty.links, None);
 
-    // Unmodeled Link fields (contexts, pref, label, mediaType) in extra survive roundtrips untouched
+    // Unmodeled Link fields in extra survive roundtrips untouched.
     let mut extra_links = BTreeMap::new();
     extra_links.insert(
         "l_rich".to_owned(),
@@ -10614,7 +10614,7 @@ fn inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity() {
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
     assert_eq!(media["m1"].uri, "data:image/JPEG;base64,AQIDBA==");
 
-    // Outbound emission: ENCODING=8BIT and 7BIT are stripped on text; ENCODING=b is emitted on photo
+    // Export strips ENCODING=8BIT and 7BIT on text, and keeps ENCODING=b on PHOTO.
     let vcard_out = card_to_vcard(&parsed);
     assert_eq!(line(&vcard_out, "FN:"), "FN:René Müller");
     assert_eq!(
@@ -11951,7 +11951,7 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
     // 13. Other Fax: fax feature
     assert_eq!(phones["p13_other_fax"].features, Some(json!({"fax": true})));
 
-    // 14-21. Specialized telephony lines (CAR, ISDN, CALLBACK, COMPANY, RADIO, TELEX, TTYTDD, ASSISTANT)
+    // 14-21. Specialized telephony lines: CAR, ISDN, CALLBACK, COMPANY, RADIO, TELEX, TTYTDD, ASSISTANT.
     for (key, num) in [
         ("p14_car", "+1-555-0113"),
         ("p15_isdn", "+1-555-0114"),
@@ -12967,7 +12967,7 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted2, emitted);
 
-    // 2. Inbound vCard with mixed-case and lowercase parameters (type=work,pref, TYPE=HOME, type=other)
+    // 2. Inbound vCard with mixed-case parameter spellings.
     let mixed_case_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Case Permutations\r\n",
@@ -13164,7 +13164,7 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
 #[test]
 fn vcard_21_feature_phone_nokia_sony_ericsson_fixtures_import() {
     // Real-world vCard 2.1 from Nokia and Sony Ericsson feature phones:
-    // - Bare TEL types: TEL;VOICE;HOME, TEL;VOICE;WORK, TEL;CELL, TEL;MOBILE, TEL;FAX;WORK, TEL;PAGER
+    // - Bare TEL types: VOICE+HOME/WORK, CELL, MOBILE, FAX+WORK, and PAGER
     // - Bare EMAIL;INTERNET
     // - Soft line wrapped QP note with =0D=0A
     // - Unmapped SOUND property safely ignored
@@ -15879,7 +15879,7 @@ fn vcard_40_type_parameters_quoted_and_comma_delimited() {
 
 #[test]
 fn agent_property_variations_nested_vcards_uris_and_fixpoint() {
-    // AGENT has no mapped EDS slot, so parser input must be non-destructive and export must omit it.
+    // AGENT has no mapped EDS slot, so parsing is non-destructive and export omits it.
     // This matrix covers URI, nested vCard, plain-text, case-variant, and empty AGENT forms.
 
     let agent_permutations = [
@@ -16316,7 +16316,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
 #[test]
 fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
-    // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe but omitted.
+    // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe and omitted.
     // Asserts fixed-point stability after AGENT/SOUND stripping.
 
     let vcard_input = concat!(
