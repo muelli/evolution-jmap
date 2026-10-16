@@ -604,11 +604,7 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 
 #[test]
 fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
-    // RFC 2426 §3.5.5 and EDS field slotting:
-    // Component 1: Organization name (`Acme Ltd` -> `E_CONTACT_ORG`)
-    // Component 2: Department (`Research` -> `E_CONTACT_ORG_UNIT`)
-    // Component 3: Office (`Optics` -> `E_CONTACT_OFFICE`)
-    // Component 4: Fourth unit (`Lenses` -> unmapped in EDS, survives edits)
+    // ORG component order tracks EDS slots: org name, department, office, then extra units.
     let card = ContactCard {
         organizations: Some(
             [(
@@ -643,7 +639,7 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, card.organizations);
 
-    // Verify inbound vCard without X-JMAP-KEY preserves all 4 components into o1.
+    // Unkeyed ORG input still keeps all four components on generated key `o1`.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG:Acme Ltd;Research;Optics;Lenses\r\n",
@@ -725,8 +721,7 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
     assert_eq!(nameless_back.organizations, nameless_card.organizations);
 
-    // 3. Intermediate empty component (such as EDS clearing E_CONTACT_OFFICE in place):
-    // empty unit is filtered on read, emitting only non-empty units without sliding into name.
+    // EDS may clear the office slot in place. Readback drops the empty unit and keeps positions stable.
     let cleared_office_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
@@ -1015,10 +1010,7 @@ fn maps_every_field_the_adr_value_has() {
 
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
-    // RFC 9553 §2.5.1 has kinds — floor, room, landmark — that vCard's seven
-    // fields cannot state. Putting one in a field it does not belong to would
-    // misplace it, so it stays off the line, and an address made of nothing
-    // else has no line at all.
+    // Kinds like floor and room have no ADR field in vCard 3.0, so they are not emitted.
     let card = one_address(
         "a1",
         Address {
@@ -1076,8 +1068,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
-    // Readback keeps one `name` component because `Hauptstraße 1` is ambiguous
-    // across locales. Splitting is deferred to the save path tests.
+    // Readback keeps one `name` component because `Hauptstraße 1` is locale-ambiguous.
     let back = vcard_to_card(&vcard).expect("parse");
     let addresses = back.addresses.expect("addresses");
     assert_eq!(
@@ -2575,9 +2566,7 @@ fn a_photo_that_says_nothing_reads_back_as_no_entry() {
 
 #[test]
 fn a_photo_survives_the_round_trip_it_is_stated_on() {
-    // Emitted and read back, the fixture's picture is the same picture: the
-    // `data:` URI, the media type and the key all come back. Anything else
-    // would make every save an edit of a photo nobody touched.
+    // Roundtrip keeps fixture photo identity: URI, media type, and key all match.
     let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
     let media = card.media.expect("media");
     let original = fixture_card().media.expect("media");
@@ -2601,10 +2590,7 @@ fn tagged(tags: &[&str]) -> ContactCard {
 
 #[test]
 fn maps_keywords_onto_one_categories_line() {
-    // `keywords` is a set and `CATEGORIES` is a comma list, so one line carries
-    // all tags and no `X-JMAP-KEY` is needed.
-    // EDS reads one user-visible categories field, so emitting one line avoids
-    // hidden duplicates on extra `CATEGORIES` lines.
+    // Keywords serialize to one `CATEGORIES` line to avoid hidden duplicate category fields in EDS.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:hiking");
     assert_eq!(vcard.matches("\r\nCATEGORIES").count(), 1, "{vcard}");
@@ -2626,8 +2612,7 @@ fn every_tag_goes_on_the_one_line_in_sorted_order() {
 
 #[test]
 fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
-    // Comma and semicolon split category items unless escaped, so both must be
-    // escaped to preserve one keyword round trip.
+    // Comma and semicolon must be escaped so one keyword stays one `CATEGORIES` item.
     let vcard = card_to_vcard(&tagged(&["back, in Berlin", "a;b"]));
     assert_eq!(
         line(&vcard, "CATEGORIES"),
@@ -2646,10 +2631,8 @@ fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
 
 #[test]
 fn a_tag_no_categories_line_can_carry_gets_no_line() {
-    // Skip tags that cannot round trip through one `CATEGORIES` item. Emitting
-    // them would make later saves rename or delete data the user never saw.
-    // Empty items vanish on parse, `\r` is removed by `syntax::write`, and EDS
-    // trims leading or trailing ASCII whitespace from category text.
+    // Skip tags that cannot roundtrip through one `CATEGORIES` item.
+    // Empty items vanish on parse, `\r` is removed, and EDS trims edge ASCII whitespace.
     for tag in [
         "",
         "two\rlines",
