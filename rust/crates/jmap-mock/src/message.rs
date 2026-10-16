@@ -1,27 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Minimal RFC 5322 parsing used by `Email/import`.
+//! Minimal RFC 5322 reader used by `Email/import`.
 //!
-//! Most of this crate moves from structured `Email` values to message bytes.
-//! `Email/import` is the reverse path, so this module reads a limited set of
-//! fields from raw bytes.
+//! Most of this crate serializes structured `Email` values to message bytes.
+//! `Email/import` is the reverse path, so this module reads a narrow subset
+//! from raw bytes.
 //!
-//! Scope is intentionally small: unfolded headers, address lists, message IDs,
-//! and preview text. It does not build MIME trees, decode RFC 2047 encoded
-//! words, parse date headers, or support address groups. Tests that need those
-//! properties should seed messages directly.
+//! Scope: unfolded headers, address lists, message IDs, and preview text.
+//! It intentionally skips MIME trees, RFC 2047 encoded words, temporal headers,
+//! and address groups. Tests that need those features should seed messages
+//! directly.
 
 use jmap_proto::mail::EmailAddress;
 
-/// Number of characters a preview keeps, matching seeded messages.
+/// Preview character limit, matching seeded messages.
 const PREVIEW: usize = 64;
 
-/// A message, as far as this server reads one.
+/// Parsed message fields consumed by this server.
 pub(crate) struct Message {
-    /// Header fields in wire order: lowercase name and unfolded trimmed value.
+    /// Header fields in wire order as lowercase name and unfolded value.
     fields: Vec<(String, String)>,
-    /// Message body bytes after the header block, interpreted as UTF-8 text.
+    /// Message body after the header block, interpreted as UTF-8 text.
     body: String,
 }
 
