@@ -93,9 +93,7 @@ pub fn principal_query(
     })
 }
 
-/// Implements `Principal/getAvailability` from seeded `CalendarEvent` values.
-///
-/// The draft `tooLarge` error is intentionally omitted in this mock.
+/// `Principal/getAvailability` over seeded `CalendarEvent` values, omitting draft `tooLarge`.
 pub fn principal_get_availability(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -131,14 +129,12 @@ fn may_get_availability(principal: &Principal) -> bool {
         .unwrap_or(true)
 }
 
-/// Returns one event `BusyPeriod`, or `None` if it is not busy in window.
-///
-/// Uses lexical timestamp comparison for the mock's UTC test data.
+/// Returns one event `BusyPeriod`, or `None` when the event is not busy in window.
 fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
     }
-    // RFC 8984 §4.4.2 defaults `freeBusyStatus` to `busy`; only an explicit
+    // RFC 8984 §4.4.2 defaults `freeBusyStatus` to `busy`, so only explicit
     // `free` excludes an event here.
     if matches!(event.free_busy_status.as_deref(), Some("free")) {
         return None;
@@ -164,10 +160,8 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     })
 }
 
-/// Adds `PT<h>H<m>M<s>S` to a `YYYY-MM-DDTHH:MM:SS` start time.
-///
-/// Uses same-day second arithmetic only. On parse failure or midnight crossing,
-/// returns `start`.
+/// Adds `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` using same-day arithmetic.
+/// Returns `start` on parse failure or midnight crossing.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -190,8 +184,7 @@ fn busy_end(start: &str, duration: Option<&str>) -> String {
     .unwrap_or_else(|| start.to_owned())
 }
 
-/// Parses ISO 8601 time-only durations (`PT...`) into seconds.
-/// Returns `None` for unsupported forms such as date components.
+/// Parses ISO 8601 time-only durations (`PT...`) into seconds; returns `None` for unsupported forms.
 fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     let rest = duration.strip_prefix("PT")?;
     let mut seconds: u32 = 0;
@@ -217,10 +210,7 @@ fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     Some(seconds)
 }
 
-/// `ShareNotification/get` filtered to the resolved caller principal.
-///
-/// The mock keeps one account for all principals, so filtering is done by
-/// stored recipient id.
+/// `ShareNotification/get` filtered to the resolved caller principal's recipient id.
 pub fn share_notification_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -260,8 +250,7 @@ pub fn share_notification_get(
     })
 }
 
-/// `ShareNotification/query` applies the same viewer filter as
-/// [`share_notification_get`], then `objectType`/`before`/`after`.
+/// `ShareNotification/query` applies the same viewer filter as [`share_notification_get`], then `objectType`/`before`/`after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -324,9 +313,7 @@ fn share_notification_matches(
     true
 }
 
-/// Records `ShareNotification` entries for principals whose rights changed.
-///
-/// Used by `AddressBook/set` and `Mailbox/set` updates.
+/// Records `ShareNotification` entries for principals whose rights changed in `AddressBook/set` or `Mailbox/set`.
 pub(crate) fn record_share_changes<R>(
     account: &mut AccountState,
     object_type: &str,
@@ -415,10 +402,7 @@ impl AccountState {
         id
     }
 
-    /// Seeds a principal and sets `currentUserPrincipalId`.
-    ///
-    /// Most tests need one owner principal. Multi-principal tests can call
-    /// [`Self::seed_principal`] for additional identities.
+    /// Seeds a principal, sets `currentUserPrincipalId`, and returns its id.
     pub fn seed_current_user_principal(&mut self, principal: Principal) -> Id {
         let id = self.seed_principal(principal);
         self.current_user_principal_id = Some(id.clone());
@@ -464,7 +448,7 @@ mod tests {
             busy_end("2026-09-01T09:00:00", Some("garbage")),
             "2026-09-01T09:00:00"
         );
-        // Would cross midnight — the mock doesn't do calendar arithmetic.
+        // Would cross midnight, and the mock does not do calendar arithmetic.
         assert_eq!(
             busy_end("2026-09-01T23:30:00", Some("PT1H")),
             "2026-09-01T23:30:00"
