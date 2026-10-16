@@ -124,8 +124,7 @@ fn mailbox_rights_for(
     mailbox.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners see every mailbox unchanged; shared callers only see granted ones,
-/// with `myRights` set to the grant.
+/// Owners see every mailbox; shared callers only see granted ones with `myRights`.
 fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Option<Mailbox> {
     if is_owner {
         return Some(mailbox.clone());
@@ -416,8 +415,7 @@ fn new_thread_id(email_id: &Id) -> Id {
     Id::new(format!("T{}", email_id.as_str()))
 }
 
-/// `Thread/get` (RFC 8621 §3.1): group by `threadId`, then sort `emailIds`
-/// by `receivedAt` oldest first.
+/// `Thread/get` (RFC 8621 §3.1): group by `threadId`, then sort by `receivedAt` oldest first.
 pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -462,8 +460,7 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
     })
 }
 
-/// `SearchSnippet/get` (RFC 8621 §5.1): highlight matched filter text in subject
-/// and body. `notFound` only lists unknown email ids.
+/// `SearchSnippet/get` (RFC 8621 §5.1): highlight filter text in subject and body.
 pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SearchSnippetGetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -544,8 +541,7 @@ fn collect_snippet_terms<'a>(
     }
 }
 
-/// HTML-escape `text` and wrap non-overlapping term matches in `<mark>`.
-/// At each position, the longest matching term wins.
+/// HTML-escape `text` and wrap non-overlapping longest term matches in `<mark>`.
 fn mark_matches(text: &str, terms: &[&str]) -> String {
     let mut result = String::new();
     let mut rest = text;
@@ -671,8 +667,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Evaluate a `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5).
-/// NOT matches only when all nested conditions are false.
+/// Evaluate a `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5); NOT negates nested matches.
 fn filter_matches(email: &Email, filter: &Filter<EmailQueryFilter>) -> bool {
     match filter {
         Filter::Condition(condition) => email_matches(email, condition),
@@ -809,8 +804,7 @@ fn body_contains(email: &Email, needle: &str) -> bool {
         .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
 }
 
-/// `header` (RFC 8621 §4.4.1): `[name]` matches presence; `[name, value]`
-/// also requires `value` substring match. Names are case-insensitive.
+/// `header` (RFC 8621 §4.4.1): `[name]` matches presence; `[name, value]` also requires a `value` substring. Names are case-insensitive.
 fn header_matches(email: &Email, header: &[String]) -> bool {
     let Some(name) = header.first() else {
         return false;
@@ -1685,8 +1679,7 @@ pub fn email_submission_get(
     })
 }
 
-/// `EmailSubmission/query` (RFC 8621 §7.3): filter by `emailIds`,
-/// `identityIds`, `threadIds`, `undoStatus`, or a `sendAt` range.
+/// `EmailSubmission/query` (RFC 8621 §7.3): filter by ids, `undoStatus`, or `sendAt` range.
 pub fn email_submission_query(
     state: &mut ServerState,
     arguments: Value,
@@ -1758,8 +1751,6 @@ pub fn email_submission_query(
     })
 }
 
-// ── Seeding helpers ──────────────────────────────────────────────────────────
-
 /// Everything needed to seed one email into an account.
 pub struct EmailSeed {
     pub mailbox_id: Id,
@@ -1826,9 +1817,7 @@ impl EmailSeed {
     }
 }
 
-/// Build the RFC 5322 bytes for a seeded message's `message/rfc822` blob.
-/// Output stays single-part; attachment behavior is modeled through `Email`
-/// body parts and blob fetches.
+/// Build a single-part RFC 5322 `message/rfc822` blob for a seeded message.
 fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     let mut message = String::new();
     message.push_str(&format!("From: {}\r\n", address(&seed.from)));
@@ -1861,8 +1850,7 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     message
 }
 
-/// One address in message-header form.
-/// Seeds use plain ASCII display names and do not model RFC 2047 encoding.
+/// One address in message-header form; no RFC 2047 encoded names.
 fn address(address: &EmailAddress) -> String {
     match &address.name {
         Some(name) => format!("{name} <{}>", address.email),
@@ -1870,8 +1858,7 @@ fn address(address: &EmailAddress) -> String {
     }
 }
 
-/// Convert a JMAP `UtcDate` to an RFC 5322 date.
-/// Returns `None` for non-JMAP timestamps. Weekday is omitted, which RFC 5322 allows.
+/// Convert a JMAP `UtcDate` to RFC 5322 timestamp form, omitting weekday.
 fn rfc5322_date(utc: &str) -> Option<String> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
