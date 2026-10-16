@@ -72,8 +72,9 @@ pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Match RFC 9425 §4.4 filter conditions. `name` and `type` use substring
-/// checks, `scope` and `resourceType` are exact, and an empty filter matches all.
+/// Match RFC 9425 §4.4 filter conditions. `name` uses substring checks,
+/// `type` matches one member in `types`, and `scope` plus `resourceType`
+/// are exact.
 fn quota_matches(quota: &Quota, filter: &QuotaQueryFilter) -> bool {
     if let Some(name) = &filter.name
         && !quota.name.contains(name.as_str())
