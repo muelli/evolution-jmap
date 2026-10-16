@@ -725,7 +725,7 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
-            // vCard 4.0 property names.
+            // vCard 4.0 names that vCard 3.0 treats as unknown properties.
             Just("IMPP".to_string()),
             Just("RELATED".to_string()),
             Just("ANNIVERSARY".to_string()),
@@ -790,7 +790,7 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
-                // vCard 4.0 parameter forms.
+                // vCard 4.0 parameter forms seen by vCard 3.0 parsers.
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
                 Just(";MEDIATYPE=image/webp".to_string()),
@@ -810,7 +810,7 @@ prop_compose! {
                 Just(";PREF=1".to_string()),
                 Just(";PREF=2".to_string()),
                 Just(";PREF=10".to_string()),
-                // vCard 2.1 bare parameter tokens.
+                // vCard 2.1 bare parameter tokens from older producers.
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
                 Just(";CELL".to_string()),
@@ -1233,7 +1233,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Minimized failing seed keeps ADR lines at or below 75 octets.
+// Regression seed keeps ADR lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
