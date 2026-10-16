@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Principal methods (`Principal/get`, `Principal/query`, `ShareNotification/get`,
-//! `ShareNotification/query`, RFC 9670) and principal seeding helpers.
+//! Principal methods and seeding helpers (`Principal/*`, `ShareNotification/*`, RFC 9670).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,7 +128,7 @@ fn may_get_availability(principal: &Principal) -> bool {
         .unwrap_or(true)
 }
 
-/// Returns one event `BusyPeriod`, or `None` when the event is not busy in window.
+/// Return one event `BusyPeriod`, or `None` when the event is not busy in window.
 fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
@@ -160,8 +159,8 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     })
 }
 
-/// Adds `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` using same-day arithmetic.
-/// Returns `start` on parse failure or midnight crossing.
+/// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same-day arithmetic.
+/// Return `start` on parse failure or midnight crossing.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -184,7 +183,8 @@ fn busy_end(start: &str, duration: Option<&str>) -> String {
     .unwrap_or_else(|| start.to_owned())
 }
 
-/// Parses ISO 8601 time-only durations (`PT...`) into seconds; returns `None` for unsupported forms.
+/// Parse ISO 8601 time-only durations (`PT...`) into seconds.
+/// Return `None` for unsupported forms.
 fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     let rest = duration.strip_prefix("PT")?;
     let mut seconds: u32 = 0;
@@ -250,7 +250,7 @@ pub fn share_notification_get(
     })
 }
 
-/// `ShareNotification/query` applies the same viewer filter as [`share_notification_get`], then `objectType`/`before`/`after`.
+/// `ShareNotification/query` applies the [`share_notification_get`] viewer filter, then `objectType`/`before`/`after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -313,7 +313,7 @@ fn share_notification_matches(
     true
 }
 
-/// Records `ShareNotification` entries for principals whose rights changed in `AddressBook/set` or `Mailbox/set`.
+/// Record `ShareNotification` entries when principal rights change in `AddressBook/set` or `Mailbox/set`.
 pub(crate) fn record_share_changes<R>(
     account: &mut AccountState,
     object_type: &str,
@@ -391,7 +391,7 @@ fn principal_matches(principal: &Principal, filter: &PrincipalQueryFilter) -> bo
 }
 
 impl AccountState {
-    /// Seed a principal; returns its id. Does not bump state.
+    /// Seed a principal and return its id, without a state bump.
     pub fn seed_principal(&mut self, principal: Principal) -> Id {
         let id = self.principals.alloc_id();
         let principal = Principal {
@@ -402,7 +402,7 @@ impl AccountState {
         id
     }
 
-    /// Seeds a principal, sets `currentUserPrincipalId`, and returns its id.
+    /// Seed a principal, set `currentUserPrincipalId`, and return its id.
     pub fn seed_current_user_principal(&mut self, principal: Principal) -> Id {
         let id = self.seed_principal(principal);
         self.current_user_principal_id = Some(id.clone());
@@ -448,7 +448,7 @@ mod tests {
             busy_end("2026-09-01T09:00:00", Some("garbage")),
             "2026-09-01T09:00:00"
         );
-        // Would cross midnight, and the mock does not do calendar arithmetic.
+        // Crossing midnight is out of scope for this mock arithmetic.
         assert_eq!(
             busy_end("2026-09-01T23:30:00", Some("PT1H")),
             "2026-09-01T23:30:00"
