@@ -2827,20 +2827,15 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
 
 #[test]
 fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
-    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and Evolution's
-    // instant-messaging field holds only the second: a handle. Reading one out
-    // of a URI means knowing the service's scheme — which for the services whose
-    // scheme states the handle and nothing else is a fact, not a guess, so the
-    // entry is drawn rather than left invisible.
+    // RFC 9553 §2.3.2 allows `uri` or `user`; this mapping derives a handle only
+    // from known bare schemes whose payload is exactly that handle.
     let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
     assert_eq!(
         line(&vcard, "X-JABBER"),
         "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
     );
 
-    // Read back as a handle with no URI, as every line is: the reader states
-    // what the line says, and the save path is what knows the entry it belongs
-    // to was a URI.
+    // Reader output keeps only the handle text from the emitted line.
     let services = vcard_to_card(&vcard)
         .expect("parse")
         .online_services
@@ -2853,8 +2848,7 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
         card_to_vcard(&at_uri(Some("Jabber"), "XMPP:vera@jabber.example"))
             .contains(":vera@jabber.example")
     );
-    // And it is the service's scheme, not any scheme: an `https` URI under a
-    // service whose handles are JIDs states no handle this mapping can read.
+    // Only the service's own scheme is accepted for handle extraction.
     assert!(
         !card_to_vcard(&at_uri(Some("Jabber"), "https://jabber.example/vera")).contains("vera")
     );
@@ -2862,12 +2856,7 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
 
 #[test]
 fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
-    // The table holds the services whose scheme names the handle literally.
-    // Everything else stays invisible exactly as before: `matrix:` states the
-    // identifier as `u/vera:matrix.example`, which is not the `@vera:...` the
-    // field holds, and GroupWise has no scheme at all. Inventing one for either
-    // would put a fabricated handle in front of the user and then write the
-    // user's correction of it back to the server.
+    // Only services with known `scheme:handle` forms are drawn from URI values.
     for (service, uri) in [
         (Some("Matrix"), "matrix:u/vera:matrix.example"),
         (Some("GroupWise"), "vera.oldenburg"),
@@ -2878,20 +2867,15 @@ fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
         assert!(!vcard.contains("vera"), "{service:?} was drawn: {vcard}");
     }
 
-    // The fixture's Mastodon entry is the same case twice over — a service EDS
-    // has no field for, stated as a URI.
+    // Fixture Mastodon URI is omitted for the same reason.
     let vcard = card_to_vcard(&fixture_card());
     assert!(!vcard.contains("social.example"), "{vcard}");
 }
 
 #[test]
 fn a_uri_that_says_more_than_a_handle_gets_no_line() {
-    // Only the plain `scheme:handle` shape states a handle and nothing else. A
-    // path, a query, a fragment or a percent-encoding means the URI carries
-    // something the field cannot hold — so drawing it would show the user a
-    // handle the service does not know them by, and a save would write that
-    // back. Whitespace is refused for the same reason it is in a `user`: what
-    // the user sees and what the line says would differ.
+    // Accept only bare `scheme:handle` values with no path, query, fragment,
+    // percent-encoding, or leading whitespace.
     for uri in [
         "xmpp:",
         "xmpp:vera@jabber.example/work",
@@ -2909,10 +2893,7 @@ fn a_uri_that_says_more_than_a_handle_gets_no_line() {
 
 #[test]
 fn an_entry_stating_both_is_drawn_from_its_handle() {
-    // The `user` is what the service calls the contact; the `uri` is a second
-    // way of saying it. Where both are there the handle wins, so an entry whose
-    // URI disagrees with its handle shows the handle — the member the field is
-    // for.
+    // If both `user` and `uri` are present, `user` wins.
     let mut card = at_uri(Some("Jabber"), "xmpp:old@jabber.example");
     let services = card.online_services.as_mut().expect("online services");
     services.get_mut("s1").expect("the entry").user = Some("vera@jabber.example".to_owned());
@@ -2924,9 +2905,7 @@ fn an_entry_stating_both_is_drawn_from_its_handle() {
 
 #[test]
 fn a_handle_no_x_line_can_carry_gets_no_line() {
-    // Mirror CATEGORIES refusal rules: skip X- emission when EDS-normalized text would differ.
-    // Empty values, carriage returns, and leading or trailing ASCII whitespace are rejected.
-    // This avoids saving text that would not match what EDS later presents to users.
+    // Skip handles that EDS normalizes so rendered text matches saved text.
     for handle in [
         Some(""),
         None,
@@ -2945,11 +2924,7 @@ fn a_handle_no_x_line_can_carry_gets_no_line() {
 
 #[test]
 fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
-    // A JSContact `user` is free text, and EDS reads a raw semicolon in this
-    // value as the end of it: measured against libebook-contacts 3.52,
-    // `X-JABBER:a;b@c` hands the user `a`, while `a\;b@c` comes back whole and
-    // is re-escaped on the way out. The comma is the same case one step
-    // earlier — it separates the items of a `text-list` — so both are escaped.
+    // Escape separators so one handle remains one text-list item.
     let vcard = card_to_vcard(&on_service(Some("Jabber"), Some("a;b,c@d")));
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -2965,11 +2940,8 @@ fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
 
 #[test]
 fn the_work_context_files_the_handle_in_evolutions_work_slot() {
-    // The `TYPE` is the slot rather than the entry's `contexts`, but it is
-    // chosen from them where they say something: a work handle belongs in the
-    // field Evolution labels Work. Exactly one slot per line — a handle wearing
-    // both `TYPE`s shows up in two fields the user can edit independently, and
-    // nothing would say which edit wins.
+    // `contexts` selects HOME or WORK, and unknown or mixed contexts fall back
+    // to HOME so each line maps to one editable slot.
     let slotted = |contexts: Value| {
         let mut card = on_service(Some("Jabber"), Some("handle"));
         let services = card.online_services.as_mut().expect("online services");
@@ -2981,9 +2953,7 @@ fn the_work_context_files_the_handle_in_evolutions_work_slot() {
 
     assert!(slotted(json!({"work": true})).ends_with(";TYPE=WORK:handle"));
     assert!(slotted(json!({"private": true})).ends_with(";TYPE=HOME:handle"));
-    // A handle used in both, and one used in a context vCard cannot spell, go
-    // in the Home slot: it is where EDS puts a handle of its own accord, so an
-    // entry the mapping cannot place lands where the user looks first.
+    // Handles in both contexts, or in an unknown context, fall back to HOME.
     assert!(slotted(json!({"work": true, "private": true})).ends_with(";TYPE=HOME:handle"));
     assert!(slotted(json!({"school": true})).ends_with(";TYPE=HOME:handle"));
     assert!(
@@ -2993,10 +2963,7 @@ fn the_work_context_files_the_handle_in_evolutions_work_slot() {
 
 #[test]
 fn the_slot_a_handle_sits_in_is_not_read_back_as_a_context() {
-    // The other direction of the same decision. Every line carries a `TYPE`
-    // because a line without one is invisible, so reading the parameter back as
-    // RFC 9553 §1.5.1 contexts would put a context on every entry that had
-    // none — and the next save would write that invention to the server.
+    // Reading `TYPE` back as JSContact `contexts` would invent contexts.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
         "X-JABBER;TYPE=WORK:vera@work.example\r\n",
@@ -3015,11 +2982,7 @@ fn the_slot_a_handle_sits_in_is_not_read_back_as_a_context() {
 
 #[test]
 fn reads_a_handle_on_a_line_that_never_carried_a_key() {
-    // A handle the user has just typed reaches this side on a line EDS built
-    // from its own field, without an `X-JMAP-KEY` — measured against
-    // libebook-contacts 3.52, that is what setting one of the slots writes. It
-    // is keyed by counting, as every other property's addition is, and its
-    // service is the line's own.
+    // Keyless service lines from EDS are accepted and keyed by encounter order.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
         "X-MATRIX;TYPE=HOME:@vera:matrix.example\r\n",
@@ -3030,9 +2993,7 @@ fn reads_a_handle_on_a_line_that_never_carried_a_key() {
     .expect("parse");
 
     let services = card.online_services.expect("online services");
-    // Two, not three: the `X-SIGNAL` line is not a property this mapping
-    // states, so reading it would invent an entry the server never had — and
-    // the line stays in EDS's copy either way.
+    // Two, not three: `X-SIGNAL` is not a mapped service line.
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1", "s2"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Matrix"));
     assert_eq!(services["s1"].user.as_deref(), Some("@vera:matrix.example"));
@@ -3042,10 +3003,7 @@ fn reads_a_handle_on_a_line_that_never_carried_a_key() {
 
 #[test]
 fn a_card_with_no_online_services_states_none() {
-    // `None` rather than an empty map, for the reason every other keyed map has
-    // one: the save reads an edit off a difference from what was shown, and an
-    // empty map would claim the contact is on no service where the vCard made
-    // no claim at all.
+    // Keep `online_services` at `None` when no supported line is present.
     assert!(!card_to_vcard(&ContactCard::default()).contains("X-JABBER"));
     let card =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEND:VCARD\r\n").expect("parse");
@@ -3054,9 +3012,7 @@ fn a_card_with_no_online_services_states_none() {
 
 #[test]
 fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
-    // `preferredLanguages` has no place in the minimal vCard set. Dropping it
-    // is safe only because saving goes through a PatchObject that touches the
-    // mapped properties alone — this test pins that expectation down.
+    // `preferredLanguages` is out of scope for this minimal vCard subset.
     let vcard = card_to_vcard(&fixture_card());
     assert!(!vcard.contains("de-DE"), "{vcard}");
     assert!(!vcard.contains("preferredLanguages"), "{vcard}");
@@ -3065,8 +3021,7 @@ fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
 
 #[test]
 fn address_book_membership_is_not_a_vcard_concept() {
-    // It is decided by which EDS source the backend is serving, so the
-    // mapping must not invent one on the way back.
+    // Address-book membership comes from the source, not from vCard payload.
     let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
     assert_eq!(card.address_book_ids, None);
 }
@@ -3079,9 +3034,7 @@ fn rejects_input_that_is_not_a_vcard() {
 
 #[test]
 fn a_foreign_handle_holding_a_raw_separator_is_read_as_the_line_states_it() {
-    // Foreign cards may carry unescaped separators in X- handles.
-    // calcard returns the whole value, so this import path keeps what the line says.
-    // EDS 3.52 treats raw semicolons differently, but still re-emits the original text.
+    // Preserve raw separators when importing foreign X-IM handles.
     for (line, handle) in [("X-JABBER:a,b@c", "a,b@c"), ("X-JABBER:a;b@c", "a;b@c")] {
         let card = vcard_to_card(&format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n"
@@ -3094,8 +3047,7 @@ fn a_foreign_handle_holding_a_raw_separator_is_read_as_the_line_states_it() {
 
 #[test]
 fn a_uri_only_gadu_gadu_entry_is_drawn_as_x_gadugadu() {
-    // `gg` is the provisional IANA scheme (RFC 7595 template `gg:<userid>`) for
-    // Gadu-Gadu, where the handle is the numerical user identifier (UIN).
+    // `gg` URIs map to the Gadu-Gadu numeric handle.
     let vcard = card_to_vcard(&at_uri(Some("Gadu-Gadu"), "gg:12345678"));
     assert_eq!(
         line(&vcard, "X-GADUGADU"),
@@ -3126,10 +3078,7 @@ fn a_gadu_gadu_uri_that_says_more_than_a_handle_gets_no_line() {
 
 #[test]
 fn action_query_im_uris_get_no_vcard_line() {
-    // AIM, MSN, Yahoo, and ICQ URIs with action/query parameters (e.g. `?screenname=`,
-    // `?contact=`, `?uin=`) or path segments do not represent bare handles. When given
-    // only such a `uri` (and no `user`), card_to_vcard safely omits them so EDS fields
-    // are not corrupted.
+    // Action, query, and path URI forms are not bare handles and stay omitted.
     for (service, uri, header) in [
         ("AIM", "aim:goim?screenname=alice", "X-AIM"),
         ("AIM", "aim:addbuddy?screenname=alice", "X-AIM"),
@@ -3150,8 +3099,7 @@ fn action_query_im_uris_get_no_vcard_line() {
 
 #[test]
 fn bare_im_service_uris_are_drawn_and_roundtripped() {
-    // Bare URI schemes for all supported IM services (AIM, ICQ, MSN, Yahoo, GroupWise, Matrix)
-    // resolve to their respective handles and round-trip faithfully.
+    // Supported bare IM URIs resolve to handles and roundtrip.
     for (service, uri, handle, header) in [
         ("AIM", "aim:alice_aim", "alice_aim", "X-AIM"),
         ("ICQ", "icq:12345678", "12345678", "X-ICQ"),
@@ -3201,7 +3149,7 @@ fn online_service_uri_constructs_canonical_uri_for_all_supported_services() {
         );
     }
 
-    // Services without registered schemes or invalid handles return None
+    // Services without registered schemes or invalid handles return `None`.
     assert_eq!(online_service_uri("Signal", "ivan"), None);
     assert_eq!(
         online_service_uri("AIM", "invalid handle with spaces"),
