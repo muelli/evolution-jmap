@@ -545,6 +545,37 @@ mod tests {
     /// check and OAuth autodiscovery silently surfaces nothing. Non-default
     /// ports must stay, or nothing plaintext-local is reachable.
     #[test]
+    fn source_error_display_names_the_offending_host() {
+        assert!(SourceError::MissingHost.to_string().contains("JMAP server"));
+        assert!(
+            SourceError::InvalidHost("evil.example.com/x".into())
+                .to_string()
+                .contains("evil.example.com/x")
+        );
+        assert!(
+            SourceError::InsecureTransport("jmap.example.com".into())
+                .to_string()
+                .contains("jmap.example.com")
+        );
+    }
+
+    #[test]
+    fn a_default_port_only_drops_when_the_scheme_also_matches() {
+        // 443 only serializes out when the scheme is https (`secure`); over
+        // plain HTTP it is a non-default port like any other and must stay.
+        assert_eq!(
+            origin(Some("localhost"), 443, false).as_deref(),
+            Ok("http://localhost:443")
+        );
+        // 80 only serializes out when the scheme is http (`!secure`); over
+        // TLS it is a non-default port like any other and must stay.
+        assert_eq!(
+            origin(Some("jmap.example.com"), 80, true).as_deref(),
+            Ok("https://jmap.example.com:80")
+        );
+    }
+
+    #[test]
     fn a_default_port_serializes_out_of_the_origin() {
         assert_eq!(
             origin(Some("api.fastmail.com"), 443, true).as_deref(),
