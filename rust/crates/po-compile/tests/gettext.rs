@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Verifies glibc gettext can read this crate's `.mo` output in an isolated binary.
+//! Verifies glibc gettext can read this crate's `.mo` output.
 
 use std::ffi::{CStr, CString};
 use std::fs;

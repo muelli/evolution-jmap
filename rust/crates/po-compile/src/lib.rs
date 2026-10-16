@@ -1,34 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles translator `.po` input into runtime `.mo` catalogues with a small `msgfmt` subset.
+//! Compiles `.po` input into `.mo` data with a small `msgfmt` subset.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compiles `.po` text into `.mo` bytes sorted by msgid.
+/// Compiles `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Why `.po` compilation failed; line numbers are 1-based.
+/// Compilation failures. Line numbers are 1-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// No entry with an empty msgid, so nothing declares the file's charset.
+    /// No empty `msgid` entry, so no charset declaration exists.
     NoHeader,
-    /// The header charset is unsupported, or empty when no charset is declared.
+    /// Header charset is missing or unsupported.
     Charset { declared: String },
     /// Two entries translate the same message.
     Duplicate { msgid: String, line: usize },
     /// A `.po` construct this compiler does not implement.
     Unsupported { construct: String, line: usize },
-    /// A line that is not a comment, keyword, or string continuation.
+    /// A non-comment line this parser cannot classify.
     Unparsed { line: usize, text: String },
     /// A backslash escape this parser does not accept.
     UnknownEscape { line: usize, escape: char },
     /// A `msgid` whose entry ended before its `msgstr`.
     NoMsgstr { line: usize, msgid: String },
-    /// The catalogue is larger than the format's 32-bit offsets can address.
+    /// Catalogue size exceeds `.mo` 32-bit offsets.
     TooLarge { bytes: usize },
 }
 
@@ -73,7 +73,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Entry state from `msgid` until the next entry boundary.
+/// Entry state between `msgid` and the next boundary.
 #[derive(Default)]
 struct Pending {
     line: usize,
@@ -89,7 +89,7 @@ enum Reading {
     Msgstr,
 }
 
-/// Parses entries keyed by msgid, which defines `.mo` lookup order.
+/// Parses entries keyed by `msgid`.
 fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     let mut entries = BTreeMap::new();
     let mut pending: Option<Pending> = None;
@@ -100,7 +100,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Skip obsolete `msgmerge` records (`#~`).
+        // Skip blank and obsolete `#~` lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -206,7 +206,7 @@ fn take(
         });
     };
 
-    // Keep fuzzy headers so the charset declaration stays available.
+    // Keep fuzzy headers so the charset stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -221,7 +221,7 @@ fn take(
     Ok(())
 }
 
-/// Returns the `Content-Type` `charset=` value, or empty when absent.
+/// Extracts the `Content-Type` `charset=` value, or empty when absent.
 fn charset(header: &str) -> String {
     let Some(at) = header.find("charset=") else {
         return String::new();
@@ -233,7 +233,7 @@ fn charset(header: &str) -> String {
         .to_owned()
 }
 
-/// Decodes a fully quoted `.po` string fragment.
+/// Decodes one quoted `.po` string fragment.
 fn unquote(text: &str, line: usize) -> Result<String, Error> {
     let trimmed = text.trim();
     let unparsed = || Error::Unparsed {
@@ -263,7 +263,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // `.po` allows octal and hex escapes, but this parser rejects them.
+            // Reject `.po` octal and hex escapes.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -280,7 +280,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Header, two `(length, offset)` tables, then a NUL-terminated string blob.
+    // Header, two `(length, offset)` tables, then a NUL-terminated blob.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -307,7 +307,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     Ok(mo)
 }
 
-/// Writes one table row and appends bytes to the shared string blob.
+/// Writes one table row and appends bytes to the shared blob.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> Result<(), Error> {
     let at = strings_at + blob.len() as u64;
     let end = at + s.len() as u64;
@@ -319,7 +319,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Length excludes this terminator, but gettext still reads C strings.
+    // Length excludes this terminator.
     blob.push(0);
     Ok(())
 }
