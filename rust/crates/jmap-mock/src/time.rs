@@ -4,10 +4,9 @@
 //! Date arithmetic for the mock's fixed clock.
 //!
 //! The mock keeps one constant timestamp (`MOCK_NOW`) for reproducible tests.
-//! It only needs RFC 3339 UTC parsing and formatting plus second arithmetic.
-//! The conversions use the civil-from-days and days-from-civil pair.
+//! It only needs RFC 3339 UTC parsing, formatting, and second arithmetic.
 
-/// Parses RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) into Unix seconds.
+/// Parse RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) into Unix seconds.
 /// Fractional seconds are accepted and dropped.
 /// Returns `None` for invalid syntax and offset forms `UTCDate` forbids.
 pub fn parse_utc(date: &str) -> Option<i64> {
@@ -34,7 +33,7 @@ pub fn parse_utc(date: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second)
 }
 
-/// Inverse of [`parse_utc`], writing Unix seconds as `YYYY-MM-DDTHH:MM:SSZ`.
+/// Format Unix seconds as `YYYY-MM-DDTHH:MM:SSZ`.
 pub fn format_utc(seconds: i64) -> String {
     let days = seconds.div_euclid(86400);
     let in_day = seconds.rem_euclid(86400);
