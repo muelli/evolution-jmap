@@ -27,7 +27,27 @@ gh attestation verify jmap-mockd --repo muelli/evolution-jmap
 ```
 
 This proves the file was built by this repository's release workflow at a
-specific commit — not on a maintainer's laptop.
+specific commit — not on a maintainer's laptop. `gh attestation verify`
+refuses to run at all without `gh auth login` or `GH_TOKEN`, even for a
+public repository's attestations. Without a token, fetch and verify the
+same attestation directly instead:
+
+```bash
+digest=$(sha256sum jmap-mockd | cut -d' ' -f1)
+curl -s "https://api.github.com/repos/muelli/evolution-jmap/attestations/sha256:$digest" \
+  | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['attestations'][0]['bundle']))" \
+  > jmap-mockd.bundle.json
+cosign verify-blob-attestation --bundle jmap-mockd.bundle.json \
+  --certificate-identity-regexp '^https://github.com/muelli/evolution-jmap/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --type slsaprovenance1 \
+  jmap-mockd
+```
+
+One attestation covers every file in the release (subject list includes
+`SHA256SUMS` and all four other artifacts), so the bundle fetched for any
+one of them verifies all of them; querying by a different file's digest
+returns the identical bundle.
 
 ## 3. GitLab tag pipelines
 
@@ -131,3 +151,60 @@ deterministic function of `Cargo.lock` and the package's `Depends`. The crate
 versions are exact `pkg:cargo` Package-URLs; the system libraries are
 `pkg:deb/ubuntu` names carrying the `Depends` version *constraints* rather than
 resolved versions, because those are fixed only inside the build image.
+
+## 7. Runtime smoke test on a clean system
+
+Checksums and attestation prove the bytes are genuine; they say nothing about
+whether the `.deb` actually works once installed. The `.deb`'s `Depends` name
+one target: the pinned CI image (Ubuntu 24.04, Evolution 3.52.3), so that is
+the only distro to smoke-test. Do it in a throwaway rootless podman container
+so a bad install can't touch the host:
+
+```bash
+podman run -d --name jmap-smoke -v /path/to/release/assets:/assets:ro ubuntu:24.04 sleep infinity
+podman exec jmap-smoke bash -c "apt-get update -qq"
+podman exec jmap-smoke bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y evolution evolution-data-server libglib2.0-bin curl"
+podman exec jmap-smoke bash -c "cd /assets && apt-get install -y ./evolution-jmap_*_amd64.deb"
+```
+
+`apt` resolves the package's `Depends` against the distro's own EDS/Evolution
+packages with no extra repository needed, confirming the versions in
+`Depends` are satisfiable on a genuinely clean install, not just on the build
+image.
+
+To prove the backends actually load (not just that the files unpacked),
+start `evolution-source-registry` with `G_MESSAGES_DEBUG=all` against an
+isolated `XDG_*`/D-Bus session carrying a `BackendName=jmap` probe source
+(`[Collection] BackendName=jmap` with `ContactsEnabled=true` and
+`CalendarEnabled=true`, as in `docs/examples/jmap-mock-collection.source`),
+and look for `Adding probe (...)` in its output — that line only appears if
+`module-jmap-backend.so` registered a factory for that backend name. A
+`BackendName=notarealbackend` control source started from a clean registry
+produces no such line, and
+`org.gnome.evolution.dataserver.SourceManager.RefreshBackend` on its UID
+fails with `Cannot find source`, where the real probe's `RefreshBackend`
+call returns successfully: that contrast is what rules out the line always
+appearing regardless of backend name.
+
+For end-to-end proof, point a real collection source's `[Authentication]
+Host`/`Port` at a running `jmap-mockd` (release binary, no runtime
+dependencies beyond libc) and start `evolution-source-registry` plus
+`evolution-addressbook-factory -w` and `evolution-calendar-factory -w`. The
+collection backend queries `jmap-mockd`'s JMAP session over HTTP and creates
+real child `ESource`s for every resource the mock server reports (visible via
+`org.freedesktop.DBus.ObjectManager.GetManagedObjects` on
+`/org/gnome/evolution/dataserver/SourceManager`): an `[Address Book]
+BackendName=jmap` child with `Resource/Identity=AB1` and a `[Calendar]
+BackendName=jmap` child with `Resource/Identity=CAL1`, matching jmap-mockd's
+own seeded `AB1`/`CAL1` resources — proof the backend spoke real JMAP to the
+mock server, not just that its shared object loaded.
+
+Confirmed 2026-10-16 against the v0.5.0 release assets on a fresh
+`ubuntu:24.04` podman container: checksums and attestation verified (section
+2), `apt install ./evolution-jmap_0.5.0_amd64.deb` resolved cleanly against
+Ubuntu 24.04's own `evolution`/`evolution-data-server` 3.52.3 packages, the
+probe source produced `Adding probe (...)` with the `notarealbackend`
+control producing nothing, and a probe collection against a release
+`jmap-mockd` surfaced its `AB1`/`CAL1` resources as real child sources. No
+findings: everything in this release behaves as documented on a clean
+install.
