@@ -57,3 +57,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (7 of 7 viable mutants caught by test suites, 8 unviable due to types without Default: WebSocketRequest, WebSocketRequestError, and Invocation).
 
+## `src/principals.rs`
+
+- Zero missed mutants (28 of 28 viable mutants caught by test suites, 5 unviable due to types without Default: GetAvailabilityRequest, BusyPeriod, and PrincipalsOwnerCapability).
+
+## `src/sieve.rs`
+
+- Zero missed mutants (18 of 18 viable mutants caught by test suites, 7 unviable due to types without Default: SieveScriptSetRequest, SieveScriptValidateRequest, and SieveScriptValidateResponse).
+
