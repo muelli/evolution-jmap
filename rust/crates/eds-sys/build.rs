@@ -406,6 +406,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // provably this crate's and not a second one generated from the same
     // header.
     "e_extension_.*",
+    // The other half of that pair: the interface an extended object
+    // implements, and the call that instantiates every extension targeting
+    // it. `jmap-ui` has no extensible of its own to load extensions for, but
+    // its tests do, to pin what `EExtensionClass::extensible_type` accepts.
+    "e_extensible_.*",
     // The mail provider's side. `camel_provider_module_init` is in here for the
     // same reason as `e_module_load`: it is declared, not defined, by Camel, so
     // having the declaration in scope is what makes the module's `extern "C"`
