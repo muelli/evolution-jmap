@@ -2611,8 +2611,7 @@ fn a_tag_no_categories_line_can_carry_gets_no_line() {
         );
     }
 
-    // A newline *inside* a tag is not that case: it has an escape, EDS reads it
-    // back, and the tag survives the trip.
+    // Internal newlines are escaped, roundtrip, and stay visible.
     let vcard = card_to_vcard(&tagged(&["two\nlines"]));
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:two\\nlines");
     let keywords = vcard_to_card(&vcard)
@@ -2624,9 +2623,7 @@ fn a_tag_no_categories_line_can_carry_gets_no_line() {
 
 #[test]
 fn a_keyword_set_to_anything_but_true_gets_no_line() {
-    // RFC 9553 §1.4.3 has every value of a Set be `true`. Drawing a tag whose
-    // value is anything else would tell the user it is set where the server
-    // said it is not.
+    // RFC 9553 §1.4.3: Set values must be `true`; anything else is omitted.
     let card = ContactCard {
         keywords: Some([("hiking".to_owned(), json!(false))].into()),
         ..ContactCard::default()
@@ -2636,11 +2633,8 @@ fn a_keyword_set_to_anything_but_true_gets_no_line() {
 
 #[test]
 fn states_keyword_answers_for_the_tag_the_line_left_off() {
-    // The save needs the refusal *per tag*, not for the set: a tag the line
-    // could not carry is one the user never saw and therefore never asked to
-    // lose, so the save writes it back rather than dropping the whole edit. The
-    // predicate is the emitter's own, so what the save calls invisible is what
-    // the emitter actually left off.
+    // Visibility is evaluated per tag, not for the full set.
+    // Hidden tags are restored on save, matching the emitter predicate.
     for tag in ["", "two\rlines", " leading", "trailing ", "\u{b}vertical"] {
         assert!(
             !states_keyword(tag, &json!(true)),
@@ -2654,16 +2648,13 @@ fn states_keyword_answers_for_the_tag_the_line_left_off() {
 
     assert!(states_keyword("hiking", &json!(true)));
     assert!(states_keyword("two\nlines", &json!(true)));
-    // A value RFC 9553 §1.4.3 does not admit is the one refusal that is about
-    // the value rather than the spelling.
+    // False is rejected because RFC 9553 §1.4.3 requires `true`.
     assert!(!states_keyword("hiking", &json!(false)));
 }
 
 #[test]
 fn a_card_with_no_tags_states_none() {
-    // `None` rather than an empty set, for the reason the keyed maps have one:
-    // the save reads an edit off a difference from what was shown, and an empty
-    // set would claim the contact is untagged where the card made no claim.
+    // Keep `None` so absent keywords stay distinct from an explicit empty set.
     assert!(!card_to_vcard(&ContactCard::default()).contains("\r\nCATEGORIES"));
     let card =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEND:VCARD\r\n").expect("parse");
@@ -2672,10 +2663,8 @@ fn a_card_with_no_tags_states_none() {
 
 #[test]
 fn reads_the_tags_of_every_categories_line() {
-    // EDS exposes only the first categories line in UI but can preserve others,
-    // so read all lines to avoid deleting hidden tags on save.
-    // Duplicate names still collapse to one set member, and empty items are
-    // ignored.
+    // EDS UI shows only the first categories line, but preserves the rest.
+    // Read all lines so hidden tags survive; duplicates collapse and empty items drop.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CATEGORIES:Friends,Work,\r\n",
