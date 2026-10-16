@@ -11587,11 +11587,7 @@ fn standard_properties_case_insensitivity_and_empty_values() {
 
 #[test]
 fn phone_mobile_type_synonym_and_permutations_characterization() {
-    // Audit & characterization: `TYPE=MOBILE` is widely emitted in the wild (Android,
-    // iOS, Outlook, feature phones) as a synonym for vCard 3.0 standard `TYPE=CELL`.
-    // Verify that inbound `TYPE=MOBILE` parses into JSContact `features: {"mobile": true}`
-    // identically to `TYPE=CELL`, normalizes outbound to standard `TYPE=CELL`, and
-    // achieves fixed-point roundtrip stability.
+    // `TYPE=MOBILE` should parse as mobile and normalize back to `TYPE=CELL`.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -11613,7 +11609,6 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
     let phones = card.phones.as_ref().expect("phones map");
     assert_eq!(phones.len(), 9);
 
-    // 1. TEL;TYPE=MOBILE -> features: {"mobile": true}
     let p_bare = &phones["p_bare_mobile"];
     assert_eq!(p_bare.number, "+1-555-0101");
     assert_eq!(p_bare.contexts, None);
@@ -11621,17 +11616,14 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
     assert_eq!(p_bare.pref, None);
     assert!(states_phone_feature(p_bare.features.as_ref(), "mobile"));
 
-    // 2. TEL;TYPE=mobile -> lowercase
     let p_lower = &phones["p_lower_mobile"];
     assert_eq!(p_lower.number, "+1-555-0102");
     assert_eq!(p_lower.features, Some(json!({"mobile": true})));
 
-    // 3. TEL;type=Mobile -> mixed case
     let p_mixed = &phones["p_mixed_mobile"];
     assert_eq!(p_mixed.number, "+1-555-0103");
     assert_eq!(p_mixed.features, Some(json!({"mobile": true})));
 
-    // 4. TEL;TYPE=WORK,MOBILE -> work context + mobile feature
     let p_wm = &phones["p_work_mobile_plain"];
     assert_eq!(p_wm.number, "+1-555-0104");
     assert_eq!(p_wm.contexts, Some(json!({"work": true})));
@@ -11639,7 +11631,6 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
     assert!(states_context(p_wm.contexts.as_ref(), "work"));
     assert!(states_phone_feature(p_wm.features.as_ref(), "mobile"));
 
-    // 5. TEL;TYPE=HOME,MOBILE -> private context + mobile feature
     let p_hm = &phones["p_home_mobile"];
     assert_eq!(p_hm.number, "+1-555-0105");
     assert_eq!(p_hm.contexts, Some(json!({"private": true})));
@@ -11647,34 +11638,30 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
     assert!(states_context(p_hm.contexts.as_ref(), "private"));
     assert!(states_phone_feature(p_hm.features.as_ref(), "mobile"));
 
-    // 6. TEL;TYPE=MOBILE,PREF -> pref: 1 + mobile feature
     let p_pm = &phones["p_pref_mobile"];
     assert_eq!(p_pm.number, "+1-555-0106");
     assert_eq!(p_pm.pref, Some(1));
     assert_eq!(p_pm.features, Some(json!({"mobile": true})));
 
-    // 7. TEL;TYPE=WORK,MOBILE;TYPE=PREF -> work + mobile + pref
     let p_wmp = &phones["p_work_mobile_pref"];
     assert_eq!(p_wmp.number, "+1-555-0107");
     assert_eq!(p_wmp.pref, Some(1));
     assert_eq!(p_wmp.contexts, Some(json!({"work": true})));
     assert_eq!(p_wmp.features, Some(json!({"mobile": true})));
 
-    // 8. TEL;TYPE=MOBILE,VOICE -> mobile + voice, narrowed to mobile
     let p_mv = &phones["p_mobile_voice"];
     assert_eq!(p_mv.number, "+1-555-0108");
     assert_eq!(p_mv.features, Some(json!({"mobile": true, "voice": true})));
     assert!(states_phone_feature(p_mv.features.as_ref(), "mobile"));
     assert!(!states_phone_feature(p_mv.features.as_ref(), "voice"));
 
-    // 9. TEL;TYPE=MOBILE,FAX -> mobile + fax, narrowed to mobile
     let p_mf = &phones["p_mobile_fax"];
     assert_eq!(p_mf.number, "+1-555-0109");
     assert_eq!(p_mf.features, Some(json!({"mobile": true, "fax": true})));
     assert!(states_phone_feature(p_mf.features.as_ref(), "mobile"));
     assert!(!states_phone_feature(p_mf.features.as_ref(), "fax"));
 
-    // Outbound emission: TYPE=MOBILE normalizes to standard vCard 3.0 TYPE=CELL
+    // Outbound `MOBILE` spellings normalize to standard vCard 3.0 `TYPE=CELL`.
     let emitted = card_to_vcard(&card);
     assert_eq!(
         line(&emitted, "TEL;X-JMAP-KEY=p_bare_mobile"),
@@ -11713,7 +11700,7 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
         "TEL;X-JMAP-KEY=p_mobile_fax;TYPE=CELL:+1-555-0109"
     );
 
-    // Fixed-point convergence
+    // Roundtripping the normalized card remains stable.
     let card2 = vcard_to_card(&emitted).expect("parse roundtrip vcard");
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted, emitted2);
@@ -11721,8 +11708,7 @@ fn phone_mobile_type_synonym_and_permutations_characterization() {
 
 #[test]
 fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
-    // Covers the full EDS phone slot surface from libebook-contacts 3.52.
-    // The card below exercises each TEL type variant and checks round-trip stability.
+    // Exercise the full EDS phone slot surface and keep a stable fixed point.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -11756,25 +11742,21 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
     let phones = card.phones.as_ref().expect("phones map");
     assert_eq!(phones.len(), 21);
 
-    // 1. Primary: pref: 1
     assert_eq!(phones["p01_primary"].pref, Some(1));
     assert_eq!(phones["p01_primary"].number, "+1-555-0100");
 
-    // 2. Business: work context + voice feature
     assert_eq!(phones["p02_business"].contexts, Some(json!({"work": true})));
     assert_eq!(
         phones["p02_business"].features,
         Some(json!({"voice": true}))
     );
 
-    // 3. Business 2: work context + no feature
     assert_eq!(
         phones["p03_business_2"].contexts,
         Some(json!({"work": true}))
     );
     assert_eq!(phones["p03_business_2"].features, None);
 
-    // 4. Business Fax: work context + fax feature
     assert_eq!(
         phones["p04_business_fax"].contexts,
         Some(json!({"work": true}))
@@ -11784,53 +11766,44 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
         Some(json!({"fax": true}))
     );
 
-    // 5. Home: private context + voice feature
     assert_eq!(phones["p05_home"].contexts, Some(json!({"private": true})));
     assert_eq!(phones["p05_home"].features, Some(json!({"voice": true})));
 
-    // 6. Home 2: private context + no feature
     assert_eq!(
         phones["p06_home_2"].contexts,
         Some(json!({"private": true}))
     );
     assert_eq!(phones["p06_home_2"].features, None);
 
-    // 7. Home Fax: private context + fax feature
     assert_eq!(
         phones["p07_home_fax"].contexts,
         Some(json!({"private": true}))
     );
     assert_eq!(phones["p07_home_fax"].features, Some(json!({"fax": true})));
 
-    // 8. Mobile (CELL): mobile feature
     assert_eq!(
         phones["p08_mobile_cell"].features,
         Some(json!({"mobile": true}))
     );
 
-    // 9. Mobile (MOBILE synonym): mobile feature
     assert_eq!(
         phones["p09_mobile_syn"].features,
         Some(json!({"mobile": true}))
     );
 
-    // 10. Pager: pager feature
     assert_eq!(phones["p10_pager"].features, Some(json!({"pager": true})));
 
-    // 11. Other Voice: voice feature
     assert_eq!(
         phones["p11_other_voice"].features,
         Some(json!({"voice": true}))
     );
 
-    // 12. Other Bare: untyped
     assert_eq!(phones["p12_other_bare"].features, None);
     assert_eq!(phones["p12_other_bare"].contexts, None);
 
-    // 13. Other Fax: fax feature
     assert_eq!(phones["p13_other_fax"].features, Some(json!({"fax": true})));
 
-    // 14-21. Specialized telephony lines: CAR, ISDN, CALLBACK, COMPANY, RADIO, TELEX, TTYTDD, ASSISTANT.
+    // Specialized telephony aliases should remain parseable and stateful.
     for (key, num) in [
         ("p14_car", "+1-555-0113"),
         ("p15_isdn", "+1-555-0114"),
@@ -11846,7 +11819,7 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
         assert!(states_phone(p));
     }
 
-    // Outbound emission: primary phone is sorted first due to pref: 1
+    // Outbound order keeps the preferred number first.
     let emitted = card_to_vcard(&card);
 
     assert_eq!(
@@ -11902,7 +11875,7 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
         "TEL;X-JMAP-KEY=p13_other_fax;TYPE=FAX:+1-555-0112"
     );
 
-    // Multi-roundtrip fixed point stability
+    // Multi-roundtrip output remains stable.
     let card2 = vcard_to_card(&emitted).expect("parse roundtrip 2");
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted, emitted2);
