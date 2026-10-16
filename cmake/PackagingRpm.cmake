@@ -56,7 +56,12 @@ set(CPACK_RPM_USER_FILELIST
 
 if(INSTALLED_CATALOGUES)
 	foreach(_catalogue IN LISTS INSTALLED_CATALOGUES)
-		list(APPEND CPACK_RPM_USER_FILELIST "%attr(-,root,root) ${_catalogue}")
+		if(_catalogue MATCHES "^/usr/share/locale/([^/]+)/")
+			set(_catalogue_lang "${CMAKE_MATCH_1}")
+			list(APPEND CPACK_RPM_USER_FILELIST "%lang(${_catalogue_lang}) %attr(-,root,root) ${_catalogue}")
+		else()
+			list(APPEND CPACK_RPM_USER_FILELIST "%attr(-,root,root) ${_catalogue}")
+		endif()
 	endforeach()
 endif()
 
