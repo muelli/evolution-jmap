@@ -16,7 +16,6 @@ pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names answered, in call order.
     pub method_calls: Vec<String>,
     /// Authenticated `/api` requests that reached handlers.
     pub api_requests: usize,
@@ -68,7 +67,6 @@ pub struct ServerState {
     pub max_delayed_send: Option<u64>,
     /// Whether the Cyrus snooze extension is advertised.
     pub snooze_extension: bool,
-    /// Connected `/eventsource` subscribers for push delivery.
     pub event_source: EventSourceHub,
 }
 
@@ -354,9 +352,7 @@ pub struct RecordedSchedulingMessage {
     pub method: String,
     pub event_id: Id,
     pub uid: Option<String>,
-    /// Sender `calendarAddress`.
     pub sender: Option<String>,
-    /// Recipient `calendarAddress`.
     pub recipient: String,
     /// Recurrence identifier when this concerns one occurrence only.
     pub recurrence_id: Option<String>,
