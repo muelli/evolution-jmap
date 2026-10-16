@@ -3,16 +3,12 @@
 
 //! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! This route runs on its own thread so long lived subscribers do not block
-//! the main `serve` loop.
-//!
-//! Chunks are framed and flushed manually through `Request::into_writer`.
-//! `tiny_http::Response::raw_print` flushes after EOF, which is too late for
-//! persistent push streams.
-//!
-//! This module parses query parameters and forwards the `types` filter to
-//! [`crate::state::EventSourceHub::subscribe`]. Event filtering itself is
-//! enforced when broadcasting.
+//! Subscribers run on a dedicated thread so long lived streams do not block
+//! the main `serve` loop. Chunks are flushed manually through
+//! `Request::into_writer` because `tiny_http::Response::raw_print` flushes only
+//! after EOF. Query parsing forwards the `types` filter to
+//! [`crate::state::EventSourceHub::subscribe`]. Broadcasting enforces the
+//! actual event filtering.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -85,7 +81,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
     });
 }
 
-/// Stream `StateChange` and optional `ping` events as flushed HTTP chunks.
+/// Stream `state` and optional `ping` events as flushed HTTP chunks.
 fn stream_events(
     writer: &mut dyn Write,
     receiver: &Receiver<Vec<u8>>,
@@ -127,13 +123,13 @@ fn write_chunk(writer: &mut dyn Write, data: &[u8]) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// Write the final zero length chunk for `closeafter=state`.
+/// Write the trailing zero-length chunk for `closeafter=state`.
 fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.write_all(b"0\r\n\r\n")?;
     writer.flush()
 }
 
-/// Encode one pushed `StateChange` as `event: state` plus JSON `data`.
+/// Encode one `StateChange` as `event: state` plus JSON `data`.
 ///
 /// No `id:` line is emitted because reconnect resume is not implemented.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
