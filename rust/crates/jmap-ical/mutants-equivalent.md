@@ -28,3 +28,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - `crates/jmap-ical/src/zone.rs:217:45: replace > with >= in Day::of`: `day` in `of_month` originates from `BYMONTHDAY` tokens where non-zero day validation (`*day != 0`) filters out zero per RFC 5545 Section 3.3.10; for all non-zero integers, `day > 0` is logically identical to `day >= 0`.
 - `crates/jmap-ical/src/zone.rs:278:13: replace > with >= in length_of`: `days_in_month` returns `u32` (0 for invalid month numbers, 28 to 31 for valid months); returning `Some(0)` instead of `None` for invalid month numbers has no observable effect because `(1..=0).contains(&day)` is always false in all callers.
 
+## `src/freebusy.rs`
+
+- Zero missed mutants (14 of 14 generated mutants caught by integration test suites).
+
+## `src/error.rs`
+
+- Zero missed mutants (1 of 1 generated mutants caught by integration test suites).
+
