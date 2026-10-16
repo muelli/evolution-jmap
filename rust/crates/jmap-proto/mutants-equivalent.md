@@ -16,3 +16,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/blob.rs`
 
 - Zero missed mutants (28 of 28 viable mutants caught by test suites, 21 unviable due to types without Default).
+
+## `src/error.rs`
+
+- Zero missed mutants (5 unviable mutants generated due to types without Default: RequestError, MethodError, and SetError).
+
+## `src/metadata.rs`
+
+- Zero missed mutants (15 of 15 viable mutants caught by test suites, 1 unviable due to MetadataTextFilter without Default).
