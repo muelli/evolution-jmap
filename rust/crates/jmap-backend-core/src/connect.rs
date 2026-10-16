@@ -1075,4 +1075,53 @@ mod tests {
             "expected reason='oauth2_consent_required', got {entries:?}"
         );
     }
+
+    /// `reclassify_oauth2_rejection` only turns a password-shaped error into
+    /// `OAuth2(_)` when `uses_oauth2` is true, so an `OAuth2(_)` error on a
+    /// non-OAuth2 account cannot arise through that path. But the reason
+    /// classification reads `uses_oauth2` and the error's own shape as two
+    /// separate conditions, and a password account must never be reported as
+    /// awaiting OAuth2 consent merely because the error happens to carry that
+    /// variant: an operator reading "oauth2_consent_required" off a plain
+    /// password account would chase the wrong fix.
+    #[test]
+    fn finish_connect_does_not_report_oauth2_consent_for_a_non_oauth2_account() {
+        let (_, entries) = capture(|| {
+            finish_connect(
+                Collection::AddressBook,
+                Some("password-acc"),
+                false,
+                Err::<(), _>(ConnectError::OAuth2("stray consent error".to_owned())),
+            )
+        });
+
+        assert!(
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "reason" && value == "connect_error"),
+            "expected reason='connect_error', got {entries:?}"
+        );
+    }
+
+    /// The `GError` a NULL source fails with, independent of the unsafe
+    /// `connect_with` entry point that builds it: names the right noun for
+    /// each collection kind and carries `INVALID_ARG`, the code
+    /// `finish_connect`'s caller routes "misconfigured, do not re-prompt" on.
+    #[test]
+    fn no_source_gerror_names_the_collection_kind() {
+        for (kind, noun) in [
+            (Collection::AddressBook, "address book"),
+            (Collection::Calendar, "calendar"),
+        ] {
+            let gerror = no_source_gerror(kind);
+            assert!(!gerror.is_null(), "no GError for {kind:?}");
+            unsafe {
+                assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+                assert_eq!((*gerror).code, E_CLIENT_ERROR_INVALID_ARG as i32);
+                let message = crate::marshal::read_string((*gerror).message).unwrap();
+                assert!(message.contains(noun), "{message}");
+                glib_sys::g_error_free(gerror);
+            }
+        }
+    }
 }
