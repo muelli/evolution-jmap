@@ -675,7 +675,6 @@ fn handle_request(
             respond_json(request, status, &response);
         }
         (tiny_http::Method::Post, _) if path.starts_with("/upload/") => {
-            // /upload/{accountId} (RFC 8620 §6.1)
             let decoded = path_segments(&path);
             let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
             let ["upload", account_id] = segments.as_slice() else {
@@ -769,7 +768,6 @@ fn handle_request(
                 let _ = request.respond(response);
                 return;
             }
-            // /download/{accountId}/{blobId}/{name}
             let decoded = path_segments(&path);
             let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
             let ["download", account_id, blob_id, _name] = segments.as_slice() else {
@@ -900,7 +898,6 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
-            // `principals` and `principals:owner` always carry account data.
             // `submission` carries account data only when `maxDelayedSend` is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
