@@ -86,7 +86,7 @@ pub struct MockServerBuilder {
 }
 
 impl MockServerBuilder {
-    /// Accept HTTP Basic credentials; any configured credential makes auth mandatory.
+    /// Allow HTTP Basic auth. Any configured credential makes auth mandatory.
     pub fn basic_auth(mut self, user: &str, password: &str) -> Self {
         self.auth.allow_basic(user, password);
         self
@@ -103,7 +103,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Omit a capability URN from the document and `primaryAccounts`.
+    /// Omit one capability from `capabilities` and `primaryAccounts`.
     pub fn without_capability(mut self, capability: &str) -> Self {
         self.omitted_capabilities.insert(capability.to_owned());
         self
@@ -126,13 +126,13 @@ impl MockServerBuilder {
         self
     }
 
-    /// Cap `/changes` pages to at most `ids` returned ids.
+    /// Cap each `/changes` page to at most `ids` ids.
     pub fn changes_page_size(mut self, ids: u64) -> Self {
         self.changes_page_size = Some(ids);
         self
     }
 
-    /// Return Stalwart-style `sinceState` parse errors on `/changes`.
+    /// Return Stalwart-style invalid `sinceState` errors on `/changes`.
     pub fn stalwart_shaped_unrecognized_changes_state(mut self) -> Self {
         self.stalwart_shaped_unrecognized_changes_state = true;
         self
@@ -143,13 +143,13 @@ impl MockServerBuilder {
         self
     }
 
-    /// Cap `Email/query` responses to at most `ids` ids.
+    /// Cap each `Email/query` page to at most `ids` ids.
     pub fn query_page_size(mut self, ids: u64) -> Self {
         self.query_page_size = Some(ids);
         self
     }
 
-    /// Never terminate paginated `Email/query` responses.
+    /// Keep paginated `Email/query` responses non-terminating.
     pub fn query_never_terminates(mut self) -> Self {
         self.query_never_terminates = true;
         self
@@ -204,7 +204,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Bind to a fixed localhost port instead of an ephemeral one.
+    /// Bind to a fixed localhost port instead of an ephemeral port.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
         self
@@ -234,7 +234,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Return terse `EmailSubmission/set` creates without `identityId` and `emailId`.
+    /// Return terse `EmailSubmission/set` creates without `identityId` or `emailId`.
     pub fn terse_submission_create(mut self) -> Self {
         self.terse_submission_create = true;
         self
@@ -288,7 +288,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Bind localhost and serve in a background thread.
+    /// Bind localhost and serve requests in a background thread.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
@@ -401,17 +401,17 @@ impl MockServer {
         &self.origin
     }
 
-    /// The default account's id.
+    /// Default account id.
     pub fn account_id(&self) -> jmap_proto::Id {
         jmap_proto::Id::new(DEFAULT_ACCOUNT_ID)
     }
 
-    /// Shared state handle for seeding and white-box assertions.
+    /// Shared state handle for fixture seeding and white-box assertions.
     pub fn state(&self) -> Arc<Mutex<ServerState>> {
         Arc::clone(&self.state)
     }
 
-    /// Replace accepted bearer tokens with only `token` to simulate token refresh.
+    /// Replace accepted bearer tokens with only `token`.
     pub fn set_bearer_token(&self, token: &str) {
         self.auth
             .lock()
@@ -427,7 +427,7 @@ impl MockServer {
             .expire_after(remaining);
     }
 
-    /// Method call names seen so far, returned as a copy in request order.
+    /// Method call names seen so far, copied in request order.
     pub fn method_calls(&self) -> Vec<String> {
         let state = self
             .state
@@ -436,7 +436,7 @@ impl MockServer {
         state.method_calls.clone()
     }
 
-    /// Number of API endpoint requests, from [`ServerState::api_requests`].
+    /// Number of API endpoint requests from [`ServerState::api_requests`].
     pub fn api_requests(&self) -> usize {
         let state = self
             .state
@@ -445,7 +445,7 @@ impl MockServer {
         state.api_requests
     }
 
-    /// Number of 401 responses, from [`ServerState::unauthorized_responses`].
+    /// Number of 401 responses from [`ServerState::unauthorized_responses`].
     pub fn unauthorized_responses(&self) -> usize {
         let state = self
             .state
@@ -463,7 +463,7 @@ impl MockServer {
         state.event_source.broadcast(change);
     }
 
-    /// Wait until at least one `/eventsource` client is connected, then panic on timeout.
+    /// Wait for at least one `/eventsource` subscriber or panic on timeout.
     pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -518,7 +518,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // OAuth metadata is public per RFC 8414, so this route bypasses auth.
+    // RFC 8414 metadata is public, so this route bypasses auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -816,7 +816,7 @@ fn handle_request(
     }
 }
 
-/// Split a request path, then decode each segment so `%2F` stays inside ids.
+/// Split a request path, decoding each segment so `%2F` stays inside ids.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -870,7 +870,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_BLOB,
 ];
 
-/// Capability object for `capability`; most are `{}` placeholders.
+/// Capability object for `capability`; most capabilities map to `{}`.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -901,7 +901,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
             // `principals` and `principals:owner` always carry account data.
-            // `submission` carries account data only when maxDelayedSend is set.
+            // `submission` carries account data only when `maxDelayedSend` is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
             {
@@ -963,7 +963,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Build dynamically so optional limit fields can be omitted.
+    // Build core dynamically so optional limits can be omitted.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,
