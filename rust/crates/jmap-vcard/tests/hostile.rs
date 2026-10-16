@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Hostile-input tests for server-controlled ContactCard data.
-//! Map keys render as `X-JMAP-KEY` parameter text and must not inject properties.
+//! `X-JMAP-KEY` parameter text must never inject new properties.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Map keys reach the wire as parameter text, so line breaks must be stripped.
+/// Map keys become parameter text, so line breaks are stripped.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -76,7 +76,7 @@ fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
-/// Same map-key injection path for `TEL`.
+/// The same injection path exists for `TEL`.
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
@@ -230,7 +230,7 @@ fn absurd_folding_every_second_octet_matrix() {
     );
 }
 
-/// A 10k-property card stays bounded, without stack overflow or hang.
+/// A 10k-property card stays bounded without stack overflow or hang.
 #[test]
 fn card_with_10k_properties_bounded_execution() {
     let mut large_vcard = String::with_capacity(500_000);
@@ -262,7 +262,7 @@ fn card_with_10k_properties_bounded_execution() {
     );
 }
 
-/// Deeply nested AGENT vCards (10, 50, 100, 500) stay bounded.
+/// Deeply nested AGENT vCards stay bounded.
 #[test]
 fn deeply_nested_agent_robustness() {
     for depth in [10, 50, 100, 500] {
@@ -293,7 +293,7 @@ fn deeply_nested_agent_robustness() {
     }
 }
 
-/// CRLF, LF, and mixed endings parse deterministically without data loss.
+/// CRLF, LF, and mixed endings parse deterministically.
 #[test]
 fn crlf_lf_cr_mixed_line_endings_matrix() {
     let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
@@ -357,7 +357,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Multibyte UTF-8 in parsed fields never causes boundary panics.
+/// Multibyte UTF-8 in parsed fields does not panic on boundaries.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [
