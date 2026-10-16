@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Structure-aware property tests for JSContact and vCard 3.0 mapping.
-//! Asserts panic-free conversion and round-trip fixed-point stability.
+//! Covers panic-free conversion and round-trip fixed-point stability.
 
 use std::collections::BTreeMap;
 
@@ -725,7 +725,7 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
-            // vCard 4.0 standard properties
+            // vCard 4.0 property names.
             Just("IMPP".to_string()),
             Just("RELATED".to_string()),
             Just("ANNIVERSARY".to_string()),
@@ -790,7 +790,7 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
-                // vCard 4.0 parameters
+                // vCard 4.0 parameter forms.
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
                 Just(";MEDIATYPE=image/webp".to_string()),
@@ -810,7 +810,7 @@ prop_compose! {
                 Just(";PREF=1".to_string()),
                 Just(";PREF=2".to_string()),
                 Just(";PREF=10".to_string()),
-                // vCard 2.1 bare parameter names
+                // vCard 2.1 bare parameter tokens.
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
                 Just(";CELL".to_string()),
@@ -1144,7 +1144,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Regression: empty stated full name with only `given` must not oscillate.
+// Empty stated full name with only `given` must stay stable.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1168,7 +1168,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression: empty organization names with units keep their leading slot semicolon.
+// Empty organization names with units keep the leading slot semicolon.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1233,7 +1233,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression: minimized failing seed must keep ADR lines at or below 75 octets.
+// Minimized failing seed keeps ADR lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1316,14 +1316,14 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Enforce RFC 2426 §2.6 with a hard 75-octet physical line cap.
+            // RFC 2426 §2.6: physical lines stay within 75 octets.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
             );
-            // Folding must preserve UTF-8 code point boundaries.
+            // Folding preserves UTF-8 code point boundaries.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",
@@ -1370,7 +1370,6 @@ proptest! {
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("parse emitted escaped vcard");
         let parsed_note = &parsed1.notes.as_ref().unwrap()["n1"].note;
-        // Escaping must preserve exact text content across parse.
         prop_assert_eq!(parsed_note, &text);
 
         let vcard2 = card_to_vcard(&parsed1);
@@ -1621,7 +1620,6 @@ proptest! {
             ..ContactCard::default()
         };
         let vcard1 = card_to_vcard(&card);
-        // vCard 3.0 output never emits AGENT for relations.
         prop_assert!(!vcard1.contains("AGENT:"));
         prop_assert!(!vcard1.contains("AGENT;"));
 
@@ -1808,7 +1806,6 @@ proptest! {
         };
 
         let vcard1 = card_to_vcard(&card);
-        // vCard 3.0 output must not emit KEY, LOGO, or SOUND.
         prop_assert!(!vcard1.contains("KEY:"));
         prop_assert!(!vcard1.contains("KEY;"));
         prop_assert!(!vcard1.contains("LOGO:"));
@@ -1938,7 +1935,6 @@ proptest! {
 
         if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
             let vcard1 = card_to_vcard(&parsed1);
-            // vCard 3.0 output must not emit AGENT or SOUND.
             prop_assert!(!vcard1.contains("AGENT:"));
             prop_assert!(!vcard1.contains("AGENT;"));
             prop_assert!(!vcard1.contains("SOUND:"));
