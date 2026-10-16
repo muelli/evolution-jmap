@@ -12861,8 +12861,7 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
 
 #[test]
 fn vcard_21_outlook_representative_fixture_import_and_normalization() {
-    // Representative Outlook vCard 2.1 fixture with bare type words and quoted-printable payloads.
-    // This test locks import normalization for common legacy field combinations.
+    // Representative Outlook vCard 2.1 fixture with legacy type words and quoted-printable payloads.
     let outlook_vcard_21 = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:2.1\r\n",
@@ -12892,7 +12891,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
 
     let card = vcard_to_card(outlook_vcard_21).expect("parse outlook 2.1 vcard");
 
-    // 1. Name verification
     let name = card.name.as_ref().expect("name");
     assert_eq!(name.full.as_deref(), Some("Dr. Erika Mustermann"));
     let components = name.components.as_ref().expect("components");
@@ -12903,7 +12901,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     assert_eq!(components[2].kind, "surname");
     assert_eq!(components[2].value, "Mustermann");
 
-    // 2. Organization & Title
     let orgs = card.organizations.as_ref().expect("organizations");
     assert_eq!(orgs["o1"].name.as_deref(), Some("Musterfirma GmbH"));
     let units = orgs["o1"].units.as_ref().expect("units");
@@ -12913,14 +12910,12 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     let titles = card.titles.as_ref().expect("titles");
     assert_eq!(titles["t1"].name, "Leitende Entwicklerin");
 
-    // 3. Note with QP decoded umlauts and soft line break
     let notes = card.notes.as_ref().expect("notes");
     assert_eq!(
         notes["n1"].note,
         "Dies ist eine Notiz mit Umlauten: Ä, Ö, Ü, ä, ö, ü, ß.\r\nZweite Zeile mit Semikolon; und Komma, und Backslash\\"
     );
 
-    // 4. Telephones with bare 2.1 type words
     let phones = card.phones.as_ref().expect("phones");
     assert_eq!(phones.len(), 4);
     assert_eq!(phones["p1"].number, "+49-89-1234567");
@@ -12941,7 +12936,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     assert_eq!(phones["p4"].contexts, Some(json!({"work": true})));
     assert_eq!(phones["p4"].features, Some(json!({"fax": true})));
 
-    // 5. Address & Label with PREF and QP decoding
     let addrs = card.addresses.as_ref().expect("addresses");
     assert_eq!(addrs.len(), 1);
     let addr = &addrs["a1"];
@@ -12963,7 +12957,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     assert_eq!(addr_comps[4].kind, "country");
     assert_eq!(addr_comps[4].value, "Deutschland");
 
-    // 6. Emails with PREF
     let emails = card.emails.as_ref().expect("emails");
     assert_eq!(emails.len(), 2);
     assert_eq!(emails["e1"].address, "erika@musterfirma.de");
@@ -12971,7 +12964,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     assert_eq!(emails["e2"].address, "erika.mustermann@home.de");
     assert_eq!(emails["e2"].pref, None);
 
-    // 7. URL & Birthday
     let links = card.links.as_ref().expect("links");
     assert_eq!(links["l1"].uri, "https://www.musterfirma.de");
     let anniv = card.anniversaries.as_ref().expect("anniversaries");
@@ -12981,7 +12973,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
         Some("1975-04-12".to_owned())
     );
 
-    // 8. Photo with JPEG subtype inferred from bare 2.1 parameter
     let media = card.media.as_ref().expect("media");
     assert_eq!(media.len(), 1);
     let photo = &media["m1"];
@@ -12989,7 +12980,6 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     assert_eq!(photo.media_type.as_deref(), Some("image/JPEG"));
     assert!(photo.uri.starts_with("data:image/JPEG;base64,"));
 
-    // 9. Outbound emission normalizes strictly to vCard 3.0
     let emitted = card_to_vcard(&card);
     assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!emitted.contains("VERSION:2.1"));
@@ -13005,7 +12995,7 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
             || emitted.contains("EMAIL;TYPE=PREF;X-JMAP-KEY=e1:erika@musterfirma.de")
     );
 
-    // 10. Fixed-point roundtrip stability (re-emitting normalized 3.0 reaches fixpoint)
+    // Re-emitting normalized vCard 3.0 reaches a fixed point.
     let card2 = vcard_to_card(&emitted).expect("parse normalized 3.0 vcard");
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted2, emitted);
