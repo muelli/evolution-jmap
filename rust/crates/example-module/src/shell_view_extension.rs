@@ -24,7 +24,7 @@ unsafe extern "C" fn free_private(ptr: *mut c_void) {
     }
 }
 
-/// Return private instance state.
+/// Returns private instance state.
 ///
 /// # Safety
 /// `obj` must be a live extension with attached private data.
@@ -99,12 +99,12 @@ unsafe extern "C" fn action_calendar_menu_cb(
     eprintln!("action_calendar_menu_cb: My Calendar Action executed");
 }
 
-/// Read `G_TYPE_FROM_INSTANCE`.
+/// Reads `G_TYPE_FROM_INSTANCE`.
 unsafe fn instance_gtype(instance: *mut c_void) -> ffi::GType {
     unsafe { (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type }
 }
 
-/// Register per-view actions and return matching UI XML.
+/// Registers per-view actions and returns matching UI XML.
 unsafe fn init_view_ui(
     shell_view: *mut ffi::EShellView,
     shell_window: *mut ffi::EShellWindow,
@@ -181,7 +181,7 @@ unsafe fn init_view_ui(
     }
 }
 
-/// Handle the `EShellView::toggled` signal.
+/// Handles `EShellView::toggled`.
 unsafe extern "C" fn shell_view_toggled_cb(
     shell_view: *mut ffi::EShellView,
     extension: *mut ffi::GObject,
@@ -228,7 +228,7 @@ unsafe extern "C" fn shell_view_toggled_cb(
     }
 }
 
-/// Chain up and connect to the shell view toggled signal.
+/// Chains up and connects the shell view toggled signal.
 unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     unsafe {
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
@@ -254,7 +254,7 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     }
 }
 
-/// Chain up `GObjectClass.finalize`.
+/// Chains up `GObjectClass.finalize`.
 unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     unsafe {
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
@@ -264,7 +264,7 @@ unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     }
 }
 
-/// Populate the dynamic class vtable.
+/// Populates the dynamic class vtable.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     unsafe {
         PARENT_CLASS.store(
@@ -283,7 +283,7 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
 
 unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 
-/// Allocate and attach private instance data.
+/// Allocates and attaches private instance data.
 unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     unsafe {
         let obj = instance as *mut ffi::GObject;
@@ -301,7 +301,7 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     }
 }
 
-/// Register the dynamic type in `e_module_load`.
+/// Registers the dynamic type in `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
