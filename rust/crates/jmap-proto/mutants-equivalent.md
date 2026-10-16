@@ -73,3 +73,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (143 of 143 viable mutants caught by test suites, 24 unviable due to types without Default: CalendarSetRequest, CalendarEventSetRequest, CalendarEventParseRequest, CalendarEventParseResponse, GetFreeBusyRequest, FreeBusyBlock, GroupEntries, CalendarAlert, CalendarEventSendRequest, CalendarEventSendResponse, ParticipantReply, and ParticipantIdentitySetRequest).
 
+## `src/contacts.rs`
+
+- 1 genuinely equivalent mutant:
+  - `ContactCard::simple`: deleting field `card_type` from the struct expression falls back to `..Self::default()`, which sets `card_type` to `Some("Card".to_owned())`, the identical value.
+- Zero missed mutants (219 of 219 viable mutants caught by test suites, 11 unviable due to types without Default: AddressBookSetRequest, NameComponent, PronounsValue, ContactCardParseRequest, and ContactCardParseResponse).
+
+
