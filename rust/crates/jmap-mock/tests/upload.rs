@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Upload limit behavior for `maxSizeUpload` (RFC 8620 §6.1).
-//! Uses a raw socket because `jmap-client` rejects oversize uploads locally.
+//! Upload limit checks for `maxSizeUpload` (RFC 8620 §6.1).
+//! Uses raw HTTP because `jmap-client` rejects oversize payloads client side.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use jmap_mock::MockServer;
 
-/// Post `body` to `/upload/<account>` and return `(status_line, body)`.
+/// Post `body` to `/upload/<account>` and return `(status_line, response_body)`.
 fn post_upload(server: &MockServer, body: &[u8]) -> (String, String) {
     let address = server
         .origin()
@@ -52,10 +52,9 @@ fn an_upload_over_the_advertised_limit_is_refused_with_the_limit_it_broke() {
     assert!(status.contains("400"), "{status}");
     let problem: serde_json::Value = serde_json::from_str(&body).expect("problem details JSON");
     assert_eq!(problem["type"], "urn:ietf:params:jmap:error:limit");
-    // RFC 8620 §3.6.1: the error names the specific broken limit.
+    // RFC 8620 §3.6.1: limit errors name the exceeded capability.
     assert_eq!(problem["limit"], "maxSizeUpload");
 
-    // Refused uploads do not create blobs.
     let state = server.state();
     let state = state.lock().unwrap();
     assert!(
