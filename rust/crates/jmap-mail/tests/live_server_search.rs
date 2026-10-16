@@ -14,7 +14,7 @@
 //! `tests/live_server_expunge.rs`.
 //!
 //! Only reachable where `camel_folder_search_object` is defined (EDS up to
-//! 3.52, gone from 3.58 in favour of the base class's own `search_sync`); the
+//! 3.52, gone from 3.60 in favour of the base class's own `search_sync`); the
 //! runner this test suite builds against is 3.52.3.
 //!
 //! ## Running it
