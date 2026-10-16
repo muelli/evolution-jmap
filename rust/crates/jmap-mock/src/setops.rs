@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared `/set` and `/changes` helpers for [`Store`] backed JMAP data types
+//! Shared `/set` and `/changes` helpers for [`Store`]-backed JMAP data types
 //! that only need store-level create, update, and destroy behavior.
 
 use std::collections::BTreeMap;
@@ -15,15 +15,15 @@ use crate::state::Store;
 
 /// Answers `/changes` from the store log per RFC 8620 §5.2.
 ///
-/// Each id is reported in at most one list. If an object is created and
-/// destroyed within the served window, it appears in neither.
+/// Each id is reported in at most one list. Objects created and destroyed in
+/// the served window appear in neither list.
 ///
-/// `page_size` and client `maxChanges` both cap the response, but truncation
-/// always happens at a whole state transition so `newState` is reusable.
+/// `page_size` and client `maxChanges` both cap the response at transition
+/// boundaries so the returned `newState` is reusable.
 ///
-/// `unrecognized_state_is_invalid_arguments` toggles between RFC-shaped
-/// `cannotCalculateChanges` and Stalwart-shaped `invalidArguments` for
-/// unparseable `sinceState` values.
+/// `unrecognized_state_is_invalid_arguments` chooses parse-failure mapping for
+/// `sinceState`: RFC-style `cannotCalculateChanges` or Stalwart-style
+/// `invalidArguments`.
 pub(crate) fn store_changes<T>(
     store: &Store<T>,
     request: jmap_proto::methods::ChangesRequest,
@@ -85,17 +85,16 @@ pub(crate) fn store_changes<T>(
     })
 }
 
-/// Returns the last state included in this window and whether more changes
-/// remain.
+/// Returns the last included state and whether more changes remain.
 ///
-/// Windows grow by whole transitions. The first transition is always served so
-/// a tiny cap cannot trap the client at the same `sinceState` forever.
+/// Windows grow by whole transitions. The first transition is always included
+/// so tiny caps still advance `sinceState`.
 fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
     let Some(cap) = cap else {
         return (store.state_counter(), false);
     };
 
-    // One entry per transition state, with the number of changed objects.
+    // One entry per transition state with the number of changed objects.
     let mut transitions: Vec<(u64, u64)> = Vec::new();
     for change in store.changes_since(since) {
         match transitions.last_mut() {
@@ -118,10 +117,10 @@ fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
 
 /// Applies `/set` to `store`.
 ///
-/// `prepare` validates each create and can stamp server-set properties using
+/// `prepare` validates each create and can stamp server-set properties with
 /// the allocated id. Update and destroy are accepted as-is.
 ///
-/// Use [`simple_set_with_validation`] when update or destroy also need checks.
+/// Use [`simple_set_with_validation`] when update or destroy need checks.
 pub(crate) fn simple_set<T>(
     store: &mut Store<T>,
     request: SetRequest<T>,
