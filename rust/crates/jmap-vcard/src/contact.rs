@@ -1199,9 +1199,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // One line per service, on the property EDS keeps that service's handles
-    // on, and always with a slot: a line carrying no `TYPE` reaches none of the
-    // fields Evolution shows.
+    // Emit one line per service on the matching EDS slot property, and always
+    // include a slot type so Evolution maps it to a visible field.
     for (key, service) in card.online_services.iter().flatten() {
         let Some((property, handle)) = drawn_service(service) else {
             continue;
@@ -1254,14 +1253,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // The relations EDS keeps fields on: spouse (E_CONTACT_SPOUSE),
-    // manager (E_CONTACT_MANAGER), and assistant (E_CONTACT_ASSISTANT).
-    // And with no key on them, which no other keyed map here can do:
-    // RFC 9553 §2.1.8 keys `relatedTo` by the related entity, so the name
-    // on the line *is* the entry's key and there is nothing left for an
-    // X-JMAP-KEY to say. Every other relation, and every entity named by a
-    // UID rather than by name, gets no line: see [`states_spouse`],
-    // [`states_manager`], and [`states_assistant`].
+    // Emit only spouse, manager, and assistant relations because EDS exposes
+    // those three slots. These lines carry no `X-JMAP-KEY`: RFC 9553 keys
+    // `relatedTo` by the related entity name itself.
     for (key, relation) in card.related_to.iter().flatten() {
         if states_spouse(key, relation) {
             entries.push(
@@ -1283,10 +1277,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // The whole set on one line, which is all EDS reads, and with no key on it:
-    // a tag is its own identity. Empty when every tag the card holds is one the
-    // line cannot carry — see [`states_keyword`] — and then there is no line,
-    // exactly as for a card with no tags.
+    // Emit all mappable tags on one `CATEGORIES` line, matching EDS behavior.
+    // Tags are self-identifying, so this line carries no `X-JMAP-KEY`.
     let tags = drawn_tags(card);
     if !tags.is_empty() {
         entries.push(
@@ -1315,10 +1307,9 @@ const MAX_LINE_OCTETS: usize = 75;
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
 ///
-/// Calcard already folds output, but this defensive pass keeps a hard 75-octet
-/// bound after the historic structured-value overflow fixed in calcard 0.3.13
-/// (<https://github.com/stalwartlabs/calcard/issues/25>). It also avoids cuts
-/// inside UTF-8 code points and escaped pairs.
+/// calcard already folds output. This pass enforces the 75-octet RFC 2426
+/// limit after the historical calcard overflow issue, and avoids cuts inside
+/// UTF-8 code points or escaped pairs.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1353,8 +1344,8 @@ fn fold_overlong_lines(vcard: String) -> String {
                 cut -= 1;
             }
             if cut == 0 {
-                // Unreachable for anything calcard emits, but never loop: take
-                // the first boundary — unfolding restores the octets either way.
+                // Defensive fallback: pick the first UTF-8 boundary so the loop
+                // always advances. Unfolding restores the octets either way.
                 cut = (1..=rest.len())
                     .find(|&i| rest.is_char_boundary(i))
                     .unwrap_or(rest.len());
@@ -1369,14 +1360,11 @@ fn fold_overlong_lines(vcard: String) -> String {
     out
 }
 
-/// Pre-normalizes extended ISO 8601 hyphenated dates (`YYYY-MM-DD` and timestamps)
-/// on date property lines (`BDAY`, `ANNIVERSARY`, `X-EVOLUTION-ANNIVERSARY`,
-/// `X-ABDATE`, `X-AB-DATE`) into basic format (`YYYYMMDD` / `YYYYMMDDTHHMMSS...`)
-/// before passing the vCard stream to `calcard`.
+/// Normalizes extended ISO 8601 values on calendar properties to basic format
+/// before parsing with `calcard`.
 ///
-/// This is an import-side compatibility shim for calcard extended-date parsing.
-/// Converting hyphenated values to basic format preserves day and timezone
-/// fields reliably across supported vCard versions.
+/// This import-side shim preserves day and timezone fields across supported
+/// vCard versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
     let mut remaining = vcard;
@@ -2014,12 +2002,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 
 /// Decodes a `PHOTO` line into one media entry.
 ///
-/// Supports the two emitted forms: URI reference (`VALUE=uri`) and embedded
-/// image bytes. calcard already applies transfer decoding, so this function
-/// must treat `Text` and `Binary` as final and never decode again.
-///
-/// Media type follows EDS behavior: derive from `MEDIATYPE` or normalize
-/// `TYPE` as an image subtype via [`image_subtype`].
+/// Supports URI references (`VALUE=uri`) and inline image bytes. `calcard`
+/// already applies transfer decoding, so `Text` and `Binary` are consumed
+/// as-is. Media type follows EDS behavior via `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
     let states_a_reference = (entry_param(entry, "VALUE")
@@ -2056,9 +2041,8 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         })
         .or_else(|| entry_binary_content_type(entry).map(str::to_owned));
 
-    // A PHOTO property can only represent an image format. Non-image types (such as
-    // audio/ogg or application/pdf) cannot be stated on vCard 3.0 PHOTO lines, and
-    // keeping them on parse would cause roundtrip asymmetry against card_to_vcard.
+    // `PHOTO` can only state images. Drop non-image types so parse and emit
+    // stay symmetric.
     let media_type = media_type_param.filter(|mt| image_subtype(mt).is_some());
 
     if states_a_reference {
@@ -2127,12 +2111,10 @@ fn photo_entry(uri: String, media_type: Option<String>) -> Media {
     }
 }
 
-/// The title a `TITLE` or `ROLE` line states, or `None` for a line with no
-/// text on it.
+/// The title a `TITLE` or `ROLE` line states, or `None` when empty.
 ///
-/// The kind is left unsaid when it is the default, so that reading back a
-/// card that never named one produces the card that was there — a save then
-/// has nothing to patch.
+/// Omit the default kind so reading back an untyped source card stays
+/// patch-free.
 fn read_title(entry: &VCardEntry) -> Option<Title> {
     let name = entry_text(entry);
     if name.is_empty() {
@@ -2151,11 +2133,10 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
     })
 }
 
-/// The anniversary a date line states, or `None` for a line no calendar day
-/// can be read out of.
+/// The anniversary a calendar-property line states, or `None` when no day parses.
 ///
-/// The kind is the line's own: a `BDAY` states a birthday and nothing else,
-/// so unlike a title's it is never guessed at and never left unsaid.
+/// Kind follows the line name directly: `BDAY` means `birth`; `ANNIVERSARY`
+/// and `X-EVOLUTION-ANNIVERSARY` mean `wedding`.
 fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
     let kind = if entry.name.as_str().eq_ignore_ascii_case("BDAY") {
         "birth"
@@ -2241,8 +2222,7 @@ pub fn restore_name_components(
 ///
 /// Fields built from multiple parts round trip as one component. Matching
 /// joined text is re-split to the original sequence, while edited text stays
-/// merged. `fields` lists candidate slots, `field` maps a component to a slot,
-/// and `value` reads the component text.
+/// merged.
 fn restore_shared_fields<T: Clone>(
     current: &[T],
     edited: &[T],
