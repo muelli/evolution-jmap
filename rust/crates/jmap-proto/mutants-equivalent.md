@@ -41,3 +41,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (2 of 2 viable mutants caught by test suites, 3 unviable due to types without Default: Response and Invocation).
 
+## `src/session.rs`
+
+- Zero missed mutants (99 of 99 viable mutants caught by test suites, 11 unviable due to types without Default: Session and Account).
+
+## `src/methods.rs`
+
+- Zero missed mutants (8 of 8 viable mutants caught by test suites, 64 unviable due to types without Default: GetRequest, GetResponse, SetRequest, SetResponse, QueryRequest, QueryResponse, ChangesRequest, UploadResponse, ChangesResponse, QueryChangesRequest, QueryChangesResponse, CopyRequest, CopyResponse, and BlobCopyResponse).
+
