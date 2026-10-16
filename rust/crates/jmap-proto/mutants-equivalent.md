@@ -12,3 +12,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/state.rs`
 
 - Zero missed mutants (14 of 14 generated mutants caught by test suites).
+
+## `src/blob.rs`
+
+- Zero missed mutants (28 of 28 viable mutants caught by test suites, 21 unviable due to types without Default).
