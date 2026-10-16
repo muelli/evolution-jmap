@@ -28,8 +28,7 @@ const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-/// `caller` scopes mailbox visibility: owners see all mailboxes.
-/// Foreign callers need a share grant, or `Mailbox/get` returns `forbidden`.
+/// Owners see all mailboxes; foreign callers need a share grant.
 pub fn mailbox_get(
     state: &mut ServerState,
     arguments: Value,
@@ -138,8 +137,7 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5), custom because validation spans siblings,
-/// ancestors, and filed-email state across the full request.
+/// `Mailbox/set` (RFC 8621 §2.5), with cross-mailbox validation over the full request.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -297,8 +295,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Validate RFC 8621 §2 placement rules for `of` (`None` on create): sibling
-/// name uniqueness, non-cyclic `parentId`, and role uniqueness.
+/// Validate RFC 8621 §2 placement rules for `of` (`None` on create).
 fn placeable(
     tree: &BTreeMap<Id, Mailbox>,
     of: Option<&Id>,
@@ -373,8 +370,7 @@ fn filed_in(email: &Email, id: &Id) -> bool {
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Enforce `maxObjectsInGet` (RFC 8620 §5.1), like other `/get` handlers
-    // in this mock.
+    // Enforce `maxObjectsInGet` (RFC 8620 §5.1), matching other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -613,8 +609,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .filter(|(_, email)| filter_matches(email, &filter))
         .collect();
 
-    // Default order: receivedAt descending (RFC 8621 servers commonly do
-    // newest-first; tests pass sort explicitly anyway).
+    // Default order is `receivedAt` descending; tests usually pass sort explicitly.
     let mut sort_property = "receivedAt".to_owned();
     let mut ascending = false;
     if let Some(comparators) = &request.sort
@@ -644,13 +639,11 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
 
     let total = matches.len() as u64;
     let position = request.position.max(0) as usize;
-    // Apply the lower of client-requested and server page caps. Report
-    // `limit` only when the server cap truncated results.
+    // Apply the lower client or server page cap.
     let asked = request.limit.unwrap_or(u64::MAX);
     let never_terminates = query_never_terminates && !matches.is_empty();
     let ids: Vec<Id> = if never_terminates {
-        // A broken server that always claims more: the same non-empty page
-        // however far `position` has already moved past the real result set.
+        // Broken-server mode: repeat a non-empty page regardless of `position`.
         matches
             .iter()
             .map(|(id, _)| (*id).clone())
@@ -863,8 +856,7 @@ pub fn identity_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
     })
 }
 
-/// `VacationResponse/get` (RFC 8621 §8.1): this singleton always exists.
-/// `ids: null` and `"singleton"` both resolve; other ids go to `notFound`.
+/// `VacationResponse/get` (RFC 8621 §8.1): singleton always exists.
 pub fn vacation_response_get(
     state: &mut ServerState,
     arguments: Value,
@@ -899,8 +891,7 @@ pub fn vacation_response_get(
     })
 }
 
-/// `VacationResponse/set` (RFC 8621 §8.1): singleton objects cannot be
-/// created or destroyed, so only `update` mutates state.
+/// `VacationResponse/set` (RFC 8621 §8.1): only `update` mutates state.
 pub fn vacation_response_set(
     state: &mut ServerState,
     arguments: Value,
@@ -998,8 +989,7 @@ pub fn vacation_response_set(
     })
 }
 
-/// Validate `Email.snoozed`: it requires the snooze extension and placement in
-/// the snoozed-role mailbox.
+/// Validate `Email.snoozed`: requires the snooze extension and snoozed mailbox.
 fn snooze_refusal(
     snooze_extension: bool,
     snoozed_mailbox: Option<&Id>,
@@ -1050,8 +1040,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let mut created: BTreeMap<String, Email> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
 
-    // Server-set properties (ids, blobs) are allocated before the store
-    // transaction because blob allocation borrows the account.
+    // Allocate server-set ids and blobs before the transaction.
     let mut to_create: Vec<(Id, Email)> = Vec::new();
     let mut to_create_threads: Vec<(Id, Thread)> = Vec::new();
     for (creation_id, mut email) in request.create.unwrap_or_default() {
@@ -1099,8 +1088,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let mut destroyed: Vec<Id> = Vec::new();
     let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
 
-    // Compute patched emails outside the transaction (read + serde), then
-    // apply everything as one state bump.
+    // Compute patched emails outside the transaction, then apply one state bump.
     let mut to_update: Vec<(Id, Email)> = Vec::new();
     for (id, patch) in request.update.unwrap_or_default() {
         let Some(existing) = account.emails.get(&id) else {
@@ -1190,9 +1178,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     })
 }
 
-/// Whether `email` is in at least one mailbox this account has.
-/// RFC 8621 §4.6 requires at least one `mailboxIds` entry set to `true`, and
-/// each such id must exist. This is enforced for create and update.
+/// Whether `email` is in at least one existing mailbox in this account.
 fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError> {
     let Some(mailbox_ids) = email
         .mailbox_ids
@@ -1217,8 +1203,7 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
     }
 }
 
-/// `Email/import` (RFC 8621 §4.8): parse uploaded RFC 5322 blobs and keep blob bytes.
-/// Duplicates are allowed; `receivedAt` defaults to [`MOCK_NOW`] when absent.
+/// `Email/import` (RFC 8621 §4.8): parse uploaded blobs and keep blob bytes.
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1287,8 +1272,7 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
     })
 }
 
-/// `Email/parse` (RFC 8621 §4.8): parse an uploaded RFC 5322 blob without
-/// storing it. MIME-tree fields stay unset like the reduced-fidelity import path.
+/// `Email/parse` (RFC 8621 §4.8): parse an uploaded blob without storing it.
 pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1332,8 +1316,7 @@ pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, M
     }))
 }
 
-/// Build an `Email` for one `EmailImport`, or return the refusal.
-/// Allocation and storage happen only after all validations pass.
+/// Build an `Email` for one import request, or return the refusal.
 fn imported(
     account: &mut AccountState,
     import: &jmap_proto::mail::EmailImport,
@@ -1384,7 +1367,6 @@ fn imported(
 }
 
 /// Parse FUTURERELEASE hold delay from envelope parameters (RFC 4865).
-/// Accepts `HOLDFOR` directly or derives from `HOLDUNTIL` relative to `MOCK_NOW`.
 fn hold_seconds(envelope: Option<&Envelope>) -> Result<Option<i64>, String> {
     let Some(Value::Object(parameters)) =
         envelope.and_then(|envelope| envelope.mail_from.parameters.as_ref())
@@ -1926,8 +1908,7 @@ impl AccountState {
         self.seed_mailbox_with_parent(name, role, None)
     }
 
-    /// Seed a mailbox nested under `parent`; returns its id. Does not bump
-    /// state. Parent existence is not validated.
+    /// Seed a mailbox under `parent`; does not validate parent existence.
     pub fn seed_child_mailbox(&mut self, name: &str, role: Option<&str>, parent: &Id) -> Id {
         self.seed_mailbox_with_parent(name, role, Some(parent.clone()))
     }
@@ -1952,8 +1933,7 @@ impl AccountState {
         id
     }
 
-    /// Create a mailbox as a state transition like another client's `Mailbox/set`.
-    /// Unlike [`AccountState::seed_mailbox`], this bumps state and appears in `/changes`.
+    /// Create a mailbox as a state transition, so it appears in `/changes`.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
         let mailbox = Mailbox {
@@ -2001,8 +1981,7 @@ impl AccountState {
         id
     }
 
-    /// Deliver an email as a state transition.
-    /// Unlike [`AccountState::seed_email`], this bumps state and appears in `Email/changes`.
+    /// Deliver an email as a state transition so it appears in `Email/changes`.
     pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -2014,8 +1993,7 @@ impl AccountState {
         id
     }
 
-    /// Destroy a message as a state transition. False if missing.
-    /// Blob cleanup is intentionally skipped in this helper.
+    /// Destroy a message as a state transition. Blob cleanup is skipped.
     pub fn destroy_email(&mut self, id: &Id) -> bool {
         let thread_id = self
             .emails
@@ -2060,8 +2038,7 @@ impl AccountState {
             .collect();
 
         let source = rfc5322(&id, &seed);
-        // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload,
-        // not just body text.
+        // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload.
         let size = source.len() as u64;
         let email = Email {
             id: Some(id.clone()),
