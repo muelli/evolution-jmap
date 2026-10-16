@@ -8816,9 +8816,7 @@ fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
 
 #[test]
 fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
-    // Tests that multiple inbound CATEGORIES lines (e.g. from vCard imports or multiple providers)
-    // are merged into a single deduplicated set, and outbound serialization consolidates them
-    // into a single canonical sorted CATEGORIES line.
+    // Multiple inbound CATEGORIES lines merge into one deduplicated, sorted line.
     let multi_line_vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -8844,7 +8842,7 @@ fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
     assert_eq!(kw.keys().collect::<Vec<_>>(), expected_keys);
     assert!(kw.values().all(|v| v == &json!(true)));
 
-    // Re-emission consolidates into a single sorted line
+    // Re-emission stays consolidated as one sorted line.
     let emitted = card_to_vcard(&parsed);
     assert_eq!(
         emitted.matches("CATEGORIES:").count(),
@@ -8858,7 +8856,7 @@ fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
         "Emitted vCard must have consolidated sorted CATEGORIES line: {emitted}"
     );
 
-    // Fixed point stability across successive passes
+    // Fixed-point stability across successive passes.
     let reparsed = vcard_to_card(&emitted).expect("reparse");
     assert_eq!(reparsed.keywords, parsed.keywords);
     let reemitted = card_to_vcard(&reparsed);
@@ -8867,8 +8865,7 @@ fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
 
 #[test]
 fn categories_inbound_delimiter_variations_and_empty_item_skipping() {
-    // Tests inbound vCards with empty items between/around commas, mixed-case property names,
-    // parameters (ALTID, LANGUAGE, custom X- parameters), and parameter casing.
+    // Empty comma items are skipped while mixed-case names and parameters still parse.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -8896,8 +8893,7 @@ fn categories_inbound_delimiter_variations_and_empty_item_skipping() {
 
 #[test]
 fn categories_unicode_and_multibyte_utf8_roundtrip() {
-    // Tests non-ASCII and multi-byte UTF-8 categories across various languages and emoji scripts,
-    // asserting lossless round-trip fidelity and RFC 2426 line folding without UTF-8 splitting.
+    // Non-ASCII and multi-byte UTF-8 categories roundtrip without split code points.
     let utf8_tags = [
         "Büro & Verwaltung",
         "Forschung, Entwicklung",
@@ -8957,7 +8953,7 @@ fn categories_unicode_and_multibyte_utf8_roundtrip() {
 
 #[test]
 fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
-    // Covers states_keyword accept and reject cases, including EDS whitespace-trimming defense.
+    // Covers accepted and refused `states_keyword` cases, including EDS trim defense.
     // 1. Valid tags: return true
     assert!(states_keyword("Work", &json!(true)));
     assert!(states_keyword("Personal & Family", &json!(true)));
@@ -8994,8 +8990,7 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
     assert!(!states_keyword("Work", &json!(null)));
     assert!(!states_keyword("Work", &json!({})));
 
-    // 6. Card containing mix of valid and refused tags:
-    // only valid tags are emitted, refused tags are omitted to prevent EDS trimming corruption.
+    // 6. Mixed valid and refused tags emit only the valid tags.
     let card = ContactCard {
         name: Some(Name {
             full: Some("George Harris".to_owned()),
