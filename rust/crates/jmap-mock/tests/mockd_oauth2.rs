@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Tests OAuth 2.0 discovery flags on the standalone `jmap-mockd` binary.
-//! This drives the child process over a raw `TcpStream`.
-//! It covers command-line behavior that in-process `MockServer` tests do not.
-//! A raw socket keeps this crate free of HTTP-client test dependencies.
+//! Covers `--oauth2` discovery and registration on standalone `jmap-mockd`.
+//! Uses a raw `TcpStream` to exercise CLI-only behavior without HTTP test deps.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -39,8 +37,7 @@ impl Mockd {
             .unwrap_or_else(|| panic!("unexpected startup line: {first_line}"))
             .to_owned();
 
-        // Keep draining stdout so child `println!` calls do not fail with EPIPE.
-        // CI saw early child exit and a headerless response when this was dropped.
+        // Drain stdout so child `println!` calls do not hit EPIPE.
         std::thread::spawn(move || {
             let _ = std::io::copy(&mut reader, &mut std::io::sink());
         });
