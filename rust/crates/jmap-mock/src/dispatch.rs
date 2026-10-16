@@ -66,10 +66,10 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     }
 
     let mut responses: Vec<Invocation> = Vec::new();
-    // Track creation ids across calls so later `/set` calls can use `#creationId` (RFC 8620 §5.3).
+    // Track creation ids so later `/set` calls can resolve `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
-    // Snapshot type states so one `StateChange` can report all mutations in this request (RFC 8620 §7.1).
+    // Snapshot type states so one `StateChange` can report all request mutations (RFC 8620 §7.1).
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
         // Record every attempted method call, even if it later fails.
@@ -120,8 +120,7 @@ fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
     }
 }
 
-/// Replace `#argument` result references with values extracted from earlier
-/// responses in the same request (RFC 8620 §3.7).
+/// Replace `#argument` result references from earlier responses in this request (RFC 8620 §3.7).
 fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Value, MethodError> {
     let Value::Object(arguments) = &call.arguments else {
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
@@ -198,8 +197,7 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     walk(&tokens, value)
 }
 
-/// Build a `StateChange` for counters that changed between snapshots.
-/// Returns `None` when the request produced no type-state changes.
+/// Build a `StateChange` for counters that changed, or `None` when nothing changed.
 fn state_change_since(
     before: &TypeStateSnapshot,
     after: &TypeStateSnapshot,
@@ -388,8 +386,6 @@ fn handle_method(
     }
 }
 
-// Shared helper routines for method handlers.
-
 /// Parse method arguments into a typed request, returning `invalidArguments` on failure.
 pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     arguments: Value,
@@ -451,7 +447,6 @@ mod tests {
         assert_eq!(eval_pointer("/missing", &value), None);
     }
 
-    /// A mutating request broadcasts a `StateChange` without using test hooks.
     #[test]
     fn a_mailbox_set_create_pushes_a_state_change_automatically() {
         let mut state = ServerState::new();
@@ -479,7 +474,6 @@ mod tests {
         assert!(text.contains("\"Mailbox\":\"2\""), "{text}");
     }
 
-    /// A request that mutates nothing should broadcast nothing.
     #[test]
     fn a_request_that_mutates_nothing_pushes_nothing() {
         let mut state = ServerState::new();
@@ -500,7 +494,6 @@ mod tests {
         ));
     }
 
-    /// A `types` filter that excludes changed types should receive no push.
     #[test]
     fn a_subscriber_filtered_to_an_unrelated_type_receives_nothing() {
         let mut state = ServerState::new();
@@ -529,7 +522,6 @@ mod tests {
         ));
     }
 
-    /// A subscriber filtered to a changed type should still receive the push.
     #[test]
     fn a_subscriber_filtered_to_the_changed_type_receives_it() {
         let mut state = ServerState::new();
