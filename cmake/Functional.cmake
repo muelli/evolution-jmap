@@ -126,6 +126,17 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
+	# ROADMAP item 108, part (1): the live-server attendees leg, the twin of
+	# functional-cal-live-client above, narrowed to whether ORGANIZER/ATTENDEE
+	# survive a local create. See tests/functional/cal-attendees-client.c.
+	add_executable(functional-cal-attendees-client
+		tests/functional/cal-attendees-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-attendees-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-attendees-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-attendees-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-attendees-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# The config-lookup client is the odd one out in a different way: it does
 	# not open a `.source` keyfile at all, because a lookup happens *before*
 	# an account exists. It links evolution-shell-3.0 rather than a libe*
@@ -478,6 +489,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_LIVE_CLIENT=$<TARGET_FILE:functional-cal-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# ROADMAP item 108, part (1): functional-cal-attendees-client against a
+	# real Stalwart. `#[ignore]`d in the Rust source for the same reason
+	# functional-cal-live-stalwart is, so this registration only ever reports
+	# "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-cal-attendees-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar-attendees
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-attendees-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_ATTENDEES_CLIENT=$<TARGET_FILE:functional-cal-attendees-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# The real-EDS leg of the cal-sync scale checkpoint, the
