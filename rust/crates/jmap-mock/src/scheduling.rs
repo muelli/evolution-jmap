@@ -36,7 +36,7 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Return whether every required scheduling recipient has an address.
+/// Whether all required scheduling recipients expose an address.
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // Non-origin updates reply only to the organizer.
@@ -123,9 +123,9 @@ fn origin_messages(
             }
         }
         (Some(before), Some(after)) => {
-            // Removed participants receive series-level CANCEL.
+            // Series removals send one series-level CANCEL per recipient.
             let mut withdrawn: BTreeSet<String> = BTreeSet::new();
-            // Track override cancellation to suppress duplicate REQUEST.
+            // Track scoped cancels so override-only edits do not trigger REQUEST.
             let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
@@ -140,7 +140,7 @@ fn origin_messages(
                 }
             }
 
-            // Override-only removals receive occurrence-scoped CANCEL.
+            // Override-only removals send occurrence-scoped CANCEL.
             for recurrence_id in overridden_ids(Some(before), Some(after)) {
                 let was = instance_addresses(before, &recurrence_id, own);
                 let is = instance_addresses(after, &recurrence_id, own);
@@ -157,7 +157,7 @@ fn origin_messages(
                 }
             }
 
-            // Newly excluded instances are cancelled for their recipients.
+            // Newly excluded overrides also send scoped CANCEL.
             let excluded = newly_excluded(before, after);
             cancelled_occurrence |= !excluded.is_empty();
             for recurrence_id in &excluded {
@@ -173,7 +173,7 @@ fn origin_messages(
                 }
             }
 
-            // Shared changes re-invite recipients, unless only overrides were cancelled.
+            // Shared changes re-invite everyone unless this was only override cancellation.
             let changed = changed_shared_properties(before, after);
             let invited = invitation_scopes(after, own);
             let cancelling_overrides =
@@ -183,7 +183,7 @@ fn origin_messages(
                     send(scheduling_method::REQUEST, &recipient, recurrence_id);
                 }
             } else {
-                // Always request newly added scoped recipients.
+                // Keep sending REQUEST for newly added scoped recipients.
                 for (recipient, recurrence_id) in
                     invited.difference(&invitation_scopes(before, own))
                 {
@@ -196,7 +196,7 @@ fn origin_messages(
     messages
 }
 
-/// Build REPLY messages for attendee-owned events.
+/// Build REPLY messages for attendee-owned changes.
 fn reply_messages(
     change: &EventChange,
     subject: &CalendarEvent,
@@ -218,7 +218,7 @@ fn reply_messages(
         let answer = match (&change.before, &change.after) {
             // Create and destroy can carry an immediate answer.
             (None, Some(_)) | (Some(_), None) => participation_status(participant),
-            // Updates send only status changes.
+            // Updates send only a changed status.
             (Some(before), Some(_)) => {
                 let previous = participants(before)
                     .get(&id)
@@ -316,7 +316,7 @@ fn overridden_ids(
         .collect()
 }
 
-/// Build one occurrence's participants by applying its override patch.
+/// Build one occurrence's participants by applying its override paths.
 fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<String, Value> {
     let mut participants = Value::Object(base.clone());
     for (path, new_value) in override_.as_object().into_iter().flatten() {
@@ -382,7 +382,7 @@ fn build_ical(
     }
 }
 
-/// Rewrite overrides so missing recipient instances become `excluded`.
+/// Rewrite overrides so recipient-missing instances become `excluded`.
 fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     let recipient = normalize_uri(recipient);
     let in_series = participants(event).values().any(|participant| {
@@ -571,8 +571,7 @@ fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> B
         .collect()
 }
 
-/// RFC 3986-inspired normalization for calendar-address comparison.
-/// Lowercases URI scheme and normalizes percent encoding, leaving the rest unchanged.
+/// Normalize calendar addresses for comparison: fold URI scheme and normalize percent encoding.
 fn normalize_uri(uri: &str) -> String {
     let (scheme, rest) = match uri.split_once(':') {
         Some((scheme, rest))
