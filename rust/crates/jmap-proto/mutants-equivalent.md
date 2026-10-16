@@ -32,3 +32,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/push.rs`
 
 - Zero missed mutants (12 of 12 viable mutants caught by test suites, 6 unviable due to types without Default: PushVerification and StateChange).
+
+## `src/request.rs`
+
+- Zero missed mutants (3 of 3 viable mutants caught by test suites, 6 unviable due to types without Default: Request and Invocation, unbounded generic in Invocation::parse, and lack of Default on Serializer::Ok).
+
+## `src/response.rs`
+
+- Zero missed mutants (2 of 2 viable mutants caught by test suites, 3 unviable due to types without Default: Response and Invocation).
+
