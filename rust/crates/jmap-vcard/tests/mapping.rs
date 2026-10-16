@@ -5336,14 +5336,8 @@ fn inbound_vcard_with_multi_component_name_field() {
 
 #[test]
 fn vcard_kind_group_and_member_lines_characterization() {
-    // Characterizes inbound vCard 3.0 / RFC 6473 / RFC 6350 group cards with
-    // `KIND:group` and multiple `MEMBER` lines.
-    //
-    // In JSContact (RFC 9553 §2.1.2 & §2.1.9), group cards have `kind: "group"`
-    // and `members: Map[Id, Boolean]`. In `jmap-vcard`, `kind` and `members`
-    // are unmodeled in `ContactCard` struct fields (they ride in `extra` on the
-    // protocol layer) and are dropped by the vCard 3.0 parser/emitter rather
-    // than misstated.
+    // Group-card signals (`KIND`, `MEMBER`) are unmapped for vCard 3.0 and are
+    // dropped rather than being rewritten into incorrect mapped fields.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:group-dev-team\r\n",
@@ -5369,15 +5363,14 @@ fn vcard_kind_group_and_member_lines_characterization() {
     // `KIND` and `MEMBER` are unmapped properties, so `extra` is empty
     assert!(card.extra.is_empty());
 
-    // Outbound serialization emits a clean, valid vCard 3.0 envelope without
-    // inventing unmapped KIND/MEMBER lines.
+    // Serialization keeps mapped fields and does not invent KIND or MEMBER lines.
     let emitted = card_to_vcard(&card);
     assert!(emitted.contains("FN:Dev Team\r\n"));
     assert!(emitted.contains("NOTE;X-JMAP-KEY=n1:Core engineering team\r\n"));
     assert!(!emitted.contains("KIND:"));
     assert!(!emitted.contains("MEMBER:"));
 
-    // Roundtrip back to JSContact reaches a fixed-point
+    // Roundtrip back to JSContact reaches a fixed point.
     let back = vcard_to_card(&emitted).expect("reparse must succeed");
     assert_eq!(
         back.name.as_ref().and_then(|n| n.full.as_deref()),
@@ -5529,14 +5522,9 @@ fn jscontact_group_card_with_members_map_in_extra_characterization() {
 
 #[test]
 fn group_card_coexisting_with_full_suite_of_contact_properties_roundtrip() {
-    // A group card carrying `KIND:group` and `MEMBER` properties alongside all
-    // 12 standard mapped contact properties (`FN`, `NICKNAME`, `EMAIL`, `TEL`,
-    // `ADR`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CATEGORIES`, `PHOTO`,
-    // `X-EVOLUTION-SPOUSE`).
-    //
-    // Asserts that all 12 properties roundtrip losslessly through
-    // vCard -> JSContact -> vCard -> JSContact without degradation or component
-    // shifting.
+    // Group-only properties (`KIND`, `MEMBER`) coexist with mapped contact data.
+    // The mapped fields below must survive a full vCard -> JSContact -> vCard ->
+    // JSContact roundtrip without key or value drift.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:arch-wg-01\r\n",
@@ -6062,13 +6050,8 @@ fn vcard_altid_and_language_multilingual_structured_address_and_label_pairing() 
 
 #[test]
 fn vcard_altid_and_language_categories_and_keywords_union_and_deduplication() {
-    // Tests multiple `CATEGORIES` lines carrying `ALTID` and `LANGUAGE` parameters.
-    //
-    // Verifies that:
-    // 1. `read_keywords` aggregates all categories across all lines, deduplicating
-    //    shared tags and retaining language-specific tags into a unified `BTreeMap`.
-    // 2. Outbound serialization emits a single canonical, sorted `CATEGORIES` line.
-    // 3. Round-trip reaches fixed-point stability.
+    // Multiple ALTID and LANGUAGE variants collapse into one deduplicated keyword
+    // map, then serialize as one canonical sorted CATEGORIES line.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:altid-cat-01\r\n",
@@ -6108,13 +6091,8 @@ fn vcard_altid_and_language_categories_and_keywords_union_and_deduplication() {
 
 #[test]
 fn vcard_altid_and_language_explicit_and_colliding_jmap_keys_handling() {
-    // Tests vCards where `ALTID`/`LANGUAGE` lines carry explicit `X-JMAP-KEY`
-    // parameters, verifying:
-    // 1. Distinct explicit keys are preserved (`custom-en`, `custom-de`).
-    // 2. Colliding explicit keys (e.g. legacy generator wrote duplicate keys)
-    //    are resolved by `entry_key` allocating a fresh unique key (`n1`),
-    //    preventing accidental overwriting or loss of the second alternate.
-    // 3. Empty `X-JMAP-KEY=""` parameters allocate fresh sequential keys.
+    // Explicit X-JMAP-KEY values are preserved when unique; collisions and empty
+    // keys allocate fresh keys so alternates are kept without overwriting data.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:altid-keys-01\r\n",
@@ -6209,14 +6187,9 @@ fn vcard_altid_and_language_parameter_variations_and_boundary_cases() {
 
 #[test]
 fn jscontact_server_localizations_and_preferred_languages_characterization() {
-    // Characterizes server-originated JSContact cards containing RFC 9553 §1.7.3
-    // `localizations` (per-language patches) and §1.5.3 `preferredLanguages`.
-    //
-    // In `jmap-proto`, these unmodeled fields ride in `extra` on `ContactCard`.
-    // `card_to_vcard` safely ignores unmodeled JSON fields in `extra` rather
-    // than misrepresenting them as non-standard vCard lines. Server-side sync
-    // (`jmap-book-sync`) leaves unmapped `extra` properties untouched via
-    // JSON PatchObject updates.
+    // Server cards may carry RFC 9553 localizations and preferredLanguages in
+    // `extra`; vCard output must ignore these unmapped fields instead of leaking
+    // or misrepresenting them as vCard lines.
     let mut extra = BTreeMap::new();
     extra.insert(
         "preferredLanguages".to_owned(),
@@ -9379,13 +9352,9 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
 
 #[test]
 fn url_kind_filtering_and_contact_uri_omission() {
-    // Product Decision & Rationale:
-    // RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person.
-    // RFC 9555 §2.6.3 states `kind: "contact"` on vCard 4.0's `CONTACT-URI`.
-    // vCard 3.0 has only `URL` (RFC 2426 §3.6.8), which EDS maps to E_CONTACT_HOMEPAGE_URL.
-    // Emitting a contact link (or vendor kinds like feed/blog/video) on `URL` would misrepresent
-    // it in Evolution's UI as the contact's homepage.
-    // Therefore, ONLY `kind: None` (plain website) maps to `URL`. All other kinds emit no line.
+    // JSContact `kind: "contact"` maps to vCard 4.0 CONTACT-URI, but vCard 3.0
+    // only has homepage-style URL. Emit URL only for plain website links
+    // (`kind: None`) so contact or vendor-specific kinds are not mislabeled.
 
     let mut links = BTreeMap::new();
     links.insert(
