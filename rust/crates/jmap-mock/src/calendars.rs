@@ -88,7 +88,7 @@ fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRi
     calendar.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners see calendars unchanged; foreign callers see shared calendars with granted `myRights`.
+/// Owners get calendars unchanged; shared viewers get granted `myRights`.
 fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) -> Option<Calendar> {
     if is_owner {
         return Some(calendar.clone());
@@ -100,7 +100,7 @@ fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) ->
     Some(visible)
 }
 
-/// `Calendar/set` (draft-ietf-jmap-calendars §4) without hierarchy; create rejects `id` and empty `name`.
+/// `Calendar/set` (draft §4) has no hierarchy and rejects create `id` or empty `name`.
 pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Calendar> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -441,7 +441,7 @@ pub fn calendar_event_set(
     Ok(result)
 }
 
-/// `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7) projects via JSON so `properties` can prune fields.
+/// `CalendarEvent/parse` (draft §5.7) uses JSON projection for `properties` filtering.
 pub fn calendar_event_parse(
     state: &mut ServerState,
     arguments: Value,
@@ -553,7 +553,7 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
     true
 }
 
-/// Record draft §8 notifications for owners and shared principals except `actor`; leave `changed_by` unset.
+/// Record draft §8 notifications for owners and shared principals, excluding `actor`.
 fn record_event_change_notifications(
     account: &mut AccountState,
     event_id: &Id,
@@ -643,7 +643,7 @@ pub fn calendar_event_notification_get(
     })
 }
 
-/// `CalendarEventNotification/query` (draft §8) shares `get` visibility and string filter matching.
+/// `CalendarEventNotification/query` (draft §8) reuses `get` visibility and filters.
 pub fn calendar_event_notification_query(
     state: &mut ServerState,
     arguments: Value,
@@ -709,7 +709,7 @@ fn notification_matches(
     true
 }
 
-/// `CalendarEventNotification/set` (draft §8) forbids create/update; destroy is visibility-filtered.
+/// `CalendarEventNotification/set` (draft §8) forbids create and update.
 pub fn calendar_event_notification_set(
     state: &mut ServerState,
     arguments: Value,
@@ -841,7 +841,7 @@ pub fn participant_identity_get(
     })
 }
 
-/// `ParticipantIdentity/set` keeps `id` and `isDefault` server-set; only `onSuccessSetIsDefault` can switch defaults.
+/// `ParticipantIdentity/set` keeps `id` and `isDefault` server-set values.
 pub fn participant_identity_set(
     state: &mut ServerState,
     arguments: Value,
