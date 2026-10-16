@@ -1481,10 +1481,8 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
 
 /// Read a vCard 3.0 string into a contact card.
 ///
-/// The `id` is whatever the vCard's `UID` says, which for a contact
-/// Evolution has just created is a locally invented string rather than a
-/// JMAP id — the caller knows which case it is in and must drop it before
-/// sending a create.
+/// `id` comes from `UID`, including local placeholders Evolution invents for
+/// unsynced contacts. Callers must drop local-only IDs before create.
 pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let normalized = normalize_vcard_dates(vcard);
     let card = match Parser::new(&normalized).strict().entry() {
@@ -1532,11 +1530,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         let name_upper = entry.name.as_str().to_ascii_uppercase();
         match name_upper.as_str() {
             "NICKNAME" => {
-                // Read as a `text-list` value, because that is what RFC 2426
-                // §3.1.3 makes it and what calcard parses it as: a comma the
-                // card left unescaped is part of the nickname here, exactly as
-                // it is to EDS, rather than a separator that would file the
-                // rest of the line as a second nickname.
+                // Parse as RFC 2426 `text-list`, matching calcard and EDS.
+                // Unescaped commas stay in one nickname instead of splitting it.
                 let nickname = Nickname {
                     name: entry_text_list(entry),
                     extra: BTreeMap::new(),
@@ -1758,9 +1753,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 links.insert(entry_key(entry, "l", &links), link);
             }
-            // Both calendaring lines feed one keyed map, so the line's own name
-            // is the only thing that says what kind the entry is — and the keys
-            // the reader invents for the two have to be free of each other's.
+            // `CALURI` and `FBURL` share one map, so keys must stay disjoint.
             "CALURI" | "FBURL" => {
                 let uri = entry_text(entry);
                 if uri.is_empty() {
@@ -1780,10 +1773,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 media.insert(entry_key(entry, "m", &media), photo);
             }
-            // Every line of the name, not only the first EDS shows the user: a
-            // relation nobody can edit is still one a save must not delete. The
-            // key is the line's own text, so nothing is invented and an
-            // X-JMAP-KEY, if some other client wrote one, is not read.
+            // Keep every related-name line EDS shows so save does not drop it.
+            // Keys follow line text here, and this path ignores `X-JMAP-KEY`.
             X_EVOLUTION_SPOUSE
             | X_EVOLUTION_MANAGER
             | X_EVOLUTION_ASSISTANT
@@ -1958,8 +1949,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
-    // The `LABEL` lines after the `ADR` ones, because a label states an
-    // address the card may already have named and has to find it first.
+    // Process `LABEL` after `ADR` so labels can attach to parsed addresses.
     for entry in card
         .entries
         .iter()
@@ -2002,15 +1992,13 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
         calendars: (!calendars.is_empty()).then_some(calendars),
-        // Only the pictures — a `PHOTO` line is the one media kind vCard 3.0
-        // states, so the sounds and logos a card carries are read back by
-        // nothing and left to the save to patch around.
+        // vCard 3.0 exposes media only through `PHOTO`, so other media kinds
+        // stay absent here and are preserved through save-path extras.
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&card.entries),
-        // Only the marriages: `spouse` is the one relation type with a line, so
-        // every other entity the card relates to is read back by nothing and
-        // left to the save to patch around.
+        // Keep only relations represented by mapped vCard lines on read. Other
+        // relation kinds stay absent here and are preserved through extras.
         related_to: (!related_to.is_empty()).then_some(related_to),
         crypto_keys: None,
         directories: None,
