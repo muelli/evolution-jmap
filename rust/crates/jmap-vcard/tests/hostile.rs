@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Hostile-input tests for server-controlled ContactCard data.
-//! `X-JMAP-KEY` parameter text must never inject new properties.
+//! Hostile-input tests for server-controlled `ContactCard` data.
 
 use std::collections::BTreeMap;
 
@@ -76,7 +75,6 @@ fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
-/// The same injection path exists for `TEL`.
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
@@ -230,7 +228,6 @@ fn absurd_folding_every_second_octet_matrix() {
     );
 }
 
-/// A 10k-property card stays bounded without stack overflow or hang.
 #[test]
 fn card_with_10k_properties_bounded_execution() {
     let mut large_vcard = String::with_capacity(500_000);
@@ -293,7 +290,6 @@ fn deeply_nested_agent_robustness() {
     }
 }
 
-/// CRLF, LF, and mixed endings parse deterministically.
 #[test]
 fn crlf_lf_cr_mixed_line_endings_matrix() {
     let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
