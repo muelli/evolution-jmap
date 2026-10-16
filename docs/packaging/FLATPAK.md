@@ -419,3 +419,81 @@ vendoring path plus the expected review artifacts. Headless probes now include a
 successful `SourceManager.RefreshBackend` dispatch for `BackendName=jmap`, while
 interactive Evolution behavior verification remains out of scope for this
 headless lane.
+
+## Batch 8 item 3 Flathub submission notes (2026-10-16 UTC)
+
+This is the short, cited checklist requested for Batch 8 item 3. It does not
+submit anything.
+
+### 1. Vendored sources are mandatory for Flathub builds
+
+- Flathub requires no network access during build, so dependencies must be
+  provided as manifest sources before build starts.
+- Flathub also requires dependency manifests to be included in submissions.
+- For this extension, keep the Rust vendor tree and cargo source mapping wired
+  into the extension manifest so `flatpak-builder` can run with offline cargo.
+
+References:
+
+- Flathub requirements, "No network access during build":
+  <https://docs.flathub.org/docs/for-app-authors/requirements#no-network-access-during-build>
+- Flathub requirements, "Dependency manifest":
+  <https://docs.flathub.org/docs/for-app-authors/requirements#dependency-manifest>
+
+### 2. Extension point naming rules
+
+- Flatpak extensions must prefix their ID with the parent extension point ID.
+- `org.gnome.Evolution` defines extension point
+  `org.gnome.Evolution.Extension` with mount directory
+  `evolution/extensions` and merged `lib;share`.
+- The extension ID therefore must remain
+  `org.gnome.Evolution.Extension.<suffix>`.
+
+References:
+
+- Flathub requirements, "Extensions and BaseApps":
+  <https://docs.flathub.org/docs/for-app-authors/requirements#extensions-and-baseapps>
+- Flatpak dependencies documentation, "Extensions":
+  <https://docs.flatpak.org/en/latest/dependencies.html#extensions>
+- `org.gnome.Evolution` manifest extension-point definition:
+  <https://github.com/flathub/org.gnome.Evolution/blob/daf9916ab0020f6d37ff766319d1a079661e4774/org.gnome.Evolution.json#L38-L42>
+
+### 3. Licence and AppStream metadata requirements
+
+- Flathub requires legally redistributable content and correct license
+  declaration in MetaInfo.
+- Flathub requires a validated MetaInfo file for submissions shown on the
+  website; extensions are allowed to have optional MetaInfo, but guidance says
+  extensions should include one and application extensions must use `extends`.
+- Keep license files installed in
+  `$FLATPAK_DEST/share/licenses/$FLATPAK_ID/...` for the submitted payload.
+
+References:
+
+- Flathub requirements, "License" and "Installing license files":
+  <https://docs.flathub.org/docs/for-app-authors/requirements#license>
+  and
+  <https://docs.flathub.org/docs/for-app-authors/requirements#installing-license-files>
+- Flathub requirements, "Appstream":
+  <https://docs.flathub.org/docs/for-app-authors/requirements#appstream>
+- Flathub MetaInfo guidelines, "Extensions":
+  <https://docs.flathub.org/docs/for-app-authors/metainfo-guidelines#extensions>
+
+### 4. Which Evolution versions this extension loads into
+
+- Current Flathub `org.gnome.Evolution` manifest on `master`
+  (`daf9916ab0020f6d37ff766319d1a079661e4774`) declares runtime
+  `org.gnome.Platform` with `runtime-version` `50`.
+- Flatpak extension lookup uses the parent app or runtime branch by default
+  when no explicit extension `version` or `versions` key is set.
+- For this extension id and branch (`stable`), this means the expected target
+  is `org.gnome.Evolution//stable` running on `org.gnome.Platform//50`.
+  If Flathub moves Evolution to a new runtime branch, publish a matching
+  extension branch for that target.
+
+References:
+
+- `org.gnome.Evolution` manifest runtime branch:
+  <https://github.com/flathub/org.gnome.Evolution/blob/daf9916ab0020f6d37ff766319d1a079661e4774/org.gnome.Evolution.json#L3-L4>
+- Flatpak command reference, extension `version` and `versions` semantics:
+  <https://docs.flatpak.org/en/latest/flatpak-command-reference.html#extension-name>
