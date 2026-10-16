@@ -19,8 +19,7 @@ use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
 /// `caller` is the identity resolved by [`crate::auth::AuthConfig::identity_for`].
-/// `None` means owner access. Non-owners only see books shared with them and
-/// get `forbidden` when the account shares no address books with them.
+/// `None` means owner access; non-owners only see shared books and get `forbidden` when none are shared.
 pub fn address_book_get(
     state: &mut ServerState,
     arguments: Value,
@@ -96,9 +95,7 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
 }
 
 /// `AddressBook/set` (RFC 9610 §2): create, update, and destroy address books.
-/// Unlike `Mailbox/set`, no hierarchy checks are needed. Only non-empty
-/// `name` validation is enforced here, plus the shared create rule that `id`
-/// is server-set.
+/// This mock only enforces non-empty `name` plus the shared create rule that `id` is server-set.
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -108,8 +105,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
-    // Capture pre-update `shareWith` values so we can diff and emit
-    // `ShareNotification` updates after `simple_set`.
+    // Capture pre-update `shareWith` values to diff `ShareNotification` updates after `simple_set`.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
         .update
         .iter()
@@ -161,9 +157,8 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 
     let mut result = to_result(&response)?;
 
-    // RFC 8620 §5.3 allows omitting client-supplied properties in `created`.
-    // With `terse_collection_create`, drop `name` but keep server-computed
-    // `isDefault` and `myRights`.
+    // RFC 8620 §5.3 allows omitting client-supplied `created` properties.
+    // With `terse_collection_create`, drop `name` but keep `isDefault` and `myRights`.
     if terse_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -175,7 +170,6 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     }
 
     // Simulate a non-compliant server that omits `id` from `created`.
-    // Controlled by `MockServerBuilder::id_omitting_collection_create`.
     if id_omitting_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -231,8 +225,7 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let request: SetRequest<ContactCard> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
 
-    // Split borrows: validation reads address_books while `simple_set` mutates
-    // contact_cards.
+    // Split borrows: validation reads address_books while `simple_set` mutates contact_cards.
     let AccountState {
         address_books,
         contact_cards,
@@ -274,8 +267,7 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     })?;
     let mut result = to_result(&response)?;
 
-    // RFC 8620 §5.3 allows omitting client-supplied `created` properties.
-    // With `terse_contact_create`, keep only `id`.
+    // RFC 8620 §5.3 allows omitting client-supplied `created` properties; `terse_contact_create` keeps only `id`.
     if state.terse_contact_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -321,8 +313,7 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
 }
 
 /// `ContactCard/parse` (RFC 9610 §3.4): parse uploaded vCard blobs to
-/// `ContactCard` responses without storing cards, then project requested
-/// properties.
+/// `ContactCard` responses without storing cards, then project requested properties.
 pub fn contact_card_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: ContactCardParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
