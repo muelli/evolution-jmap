@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Parse failures.
+//! vCard parse failures.
 
 /// Why a string could not be read as a vCard.
-/// Unknown semantic fields are treated as absent, so partially mapped contacts still load.
+/// Unknown semantic fields are treated as absent so partial contacts still load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VCardError {
     /// The input does not start with `BEGIN:VCARD`.
