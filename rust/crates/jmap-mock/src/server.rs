@@ -92,7 +92,6 @@ impl MockServerBuilder {
         self
     }
 
-    /// Accept a Bearer token.
     pub fn bearer_token(mut self, token: &str) -> Self {
         self.auth.allow_bearer(token);
         self
@@ -116,7 +115,6 @@ impl MockServerBuilder {
         self
     }
 
-    /// Advertise and enforce `maxCallsInRequest`.
     pub fn calls_in_request(mut self, calls: u64) -> Self {
         self.calls_in_request = Some(calls);
         self
@@ -140,7 +138,6 @@ impl MockServerBuilder {
         self
     }
 
-    /// Advertise and enforce `maxObjectsInGet`.
     pub fn objects_in_get(mut self, ids: u64) -> Self {
         self.objects_in_get = Some(ids);
         self
@@ -158,7 +155,6 @@ impl MockServerBuilder {
         self
     }
 
-    /// Advertise and enforce `maxSizeRequest`.
     pub fn size_request(mut self, bytes: u64) -> Self {
         self.size_request = Some(bytes);
         self
@@ -170,7 +166,6 @@ impl MockServerBuilder {
         self
     }
 
-    /// Advertise and enforce `maxSizeUpload`.
     pub fn size_upload(mut self, bytes: u64) -> Self {
         self.size_upload = Some(bytes);
         self
@@ -821,7 +816,7 @@ fn handle_request(
     }
 }
 
-/// Split a request path, then decode each segment so `%2F` does not become a separator.
+/// Split a request path, then decode each segment so `%2F` stays inside ids.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -829,8 +824,7 @@ fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse an OAuth token-form body into key/value pairs.
-/// `application/x-www-form-urlencoded` treats `+` as space before percent-decoding.
+/// Parse an OAuth token body where `+` means space before percent-decoding.
 fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(body)
         .split('&')
@@ -845,7 +839,7 @@ fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Undo percent-encoding in one path segment with lossy UTF-8 fallback to keep bad ids as 404s.
+/// Undo percent-encoding in one path segment.
 fn percent_decode(segment: &str) -> String {
     percent_encoding::percent_decode_str(segment)
         .decode_utf8_lossy()
@@ -876,8 +870,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_BLOB,
 ];
 
-/// Capability object to advertise for `capability`.
-/// Most capabilities are `{}` placeholders; Sieve and Blob need required fields.
+/// Capability object for `capability`; most are `{}` placeholders.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -897,7 +890,6 @@ fn capability_value(capability: &str) -> Value {
 }
 
 /// Build the RFC 8620 §2 session document from current state.
-/// Redirect discovery still returns 200 for anonymous requests, but with empty accounts.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
