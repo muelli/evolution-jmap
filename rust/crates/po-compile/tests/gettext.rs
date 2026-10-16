@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Checks glibc gettext can read this crate's `.mo` output.
+//! Checks glibc gettext reads this crate's `.mo` output.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -39,15 +39,15 @@ const PO: &str = concat!(
     "msgstr \"Zum Lesen und Speichern von E-Mail auf JMAP-Servern.\"\n",
 );
 
-/// Finds a locale where gettext consults message catalogues.
+/// Finds a non-C locale so gettext attempts translation.
 fn a_locale_that_can_translate() -> Option<String> {
     for candidate in [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"] {
-        // SAFETY: this test binary is single-threaded when it runs.
+        // SAFETY: this binary has one test and does not spawn threads.
         let set = unsafe { setlocale(LC_MESSAGES, candidate.as_ptr()) };
         if set.is_null() {
             continue;
         }
-        // SAFETY: non-NULL points to glibc-owned C-string data that is copied.
+        // SAFETY: non-null points to glibc-owned C-string data that we copy.
         let name = unsafe { CStr::from_ptr(set) }
             .to_string_lossy()
             .into_owned();
@@ -73,7 +73,7 @@ fn glibc_reads_what_this_compiler_wrote() {
 
     let translating = a_locale_that_can_translate();
 
-    // SAFETY: this binary has one test and sets locale state once.
+    // SAFETY: this binary has one test and mutates env state once.
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
     let bound = CString::new(root.as_os_str().as_bytes()).expect("a path without a NUL");

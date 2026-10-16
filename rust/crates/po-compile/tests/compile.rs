@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Checks `.po` to `.mo` output and parser refusals.
+//! Checks `.po` to `.mo` output and parse refusals.
 
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ use po_compile::{Error, compile};
 
 const HEADER: &str = "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n";
 
-/// Reads `.mo` entries in on-disk order.
+/// Reads `.mo` entries in file order.
 fn read_mo(mo: &[u8]) -> Vec<(String, String)> {
     let word = |at: usize| -> u32 {
         u32::from_le_bytes(mo[at..at + 4].try_into().expect("four bytes for a word"))
