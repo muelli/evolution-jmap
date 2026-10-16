@@ -49,3 +49,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (8 of 8 viable mutants caught by test suites, 64 unviable due to types without Default: GetRequest, GetResponse, SetRequest, SetResponse, QueryRequest, QueryResponse, ChangesRequest, UploadResponse, ChangesResponse, QueryChangesRequest, QueryChangesResponse, CopyRequest, CopyResponse, and BlobCopyResponse).
 
+## `src/filenode.rs`
+
+- Zero missed mutants (21 of 21 viable mutants caught by test suites, 10 unviable due to FileNode without Default).
+
+## `src/websocket.rs`
+
+- Zero missed mutants (7 of 7 viable mutants caught by test suites, 8 unviable due to types without Default: WebSocketRequest, WebSocketRequestError, and Invocation).
+
