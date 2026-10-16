@@ -20155,11 +20155,9 @@ fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
 
 #[test]
 fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
-    // Inbound parsing tolerance across extended ISO, basic compact ISO,
-    // parameter-bearing lines, timestamps, Apple grouped ABDATE properties,
-    // and safe omission of unmodeled/bare/partial date lines:
+    // Accept multiple inbound anniversary encodings, and ignore unsupported ones.
 
-    // 1. Extended ISO format (YYYY-MM-DD)
+    // 1. Extended ISO `YYYY-MM-DD`.
     let vcard1 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nBDAY:1984-05-20\r\nEND:VCARD\r\n";
     let card1 = vcard_to_card(vcard1).expect("parse vcard1");
     let anniv1 = &card1.anniversaries.expect("anniversaries")["y1"];
@@ -20169,7 +20167,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
     );
 
-    // 2. Compact basic ISO format (YYYYMMDD)
+    // 2. Basic ISO `YYYYMMDD`.
     let vcard2 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Bob\r\nBDAY:19840520\r\nEND:VCARD\r\n";
     let card2 = vcard_to_card(vcard2).expect("parse vcard2");
     let anniv2 = &card2.anniversaries.expect("anniversaries")["y1"];
@@ -20179,7 +20177,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
     );
 
-    // 3. VALUE=date parameter
+    // 3. `VALUE` parameter.
     let vcard3 =
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Charlie\r\nBDAY;VALUE=date:1984-05-20\r\nEND:VCARD\r\n";
     let card3 = vcard_to_card(vcard3).expect("parse vcard3");
@@ -20190,7 +20188,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
     );
 
-    // 4. VALUE=date-time with timestamp
+    // 4. Timestamp variant.
     let vcard4 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:David\r\nBDAY;VALUE=date-time:1984-05-20T14:30:00Z\r\nEND:VCARD\r\n";
     let card4 = vcard_to_card(vcard4).expect("parse vcard4");
     let anniv4 = &card4.anniversaries.expect("anniversaries")["y1"];
@@ -20200,7 +20198,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
     );
 
-    // 5. Standard vCard 4.0 ANNIVERSARY property
+    // 5. vCard 4.0 `ANNIVERSARY`.
     let vcard5 = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Eve\r\nANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
     let card5 = vcard_to_card(vcard5).expect("parse vcard5");
     let anniv5 = &card5.anniversaries.expect("anniversaries")["y1"];
@@ -20210,7 +20208,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
     );
 
-    // 6. EDS X-EVOLUTION-ANNIVERSARY property
+    // 6. EDS `X-EVOLUTION-ANNIVERSARY`.
     let vcard6 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Frank\r\nX-EVOLUTION-ANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
     let card6 = vcard_to_card(vcard6).expect("parse vcard6");
     let anniv6 = &card6.anniversaries.expect("anniversaries")["y1"];
@@ -20220,7 +20218,7 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
     );
 
-    // 7. Apple grouped X-ABDATE with _$!<Anniversary>!$_
+    // 7. Apple grouped `X-ABDATE` anniversary label.
     let vcard7 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Grace\r\nitem1.X-ABDATE:1996-08-03\r\nitem1.X-ABLabel:_$!<Anniversary>!$_\r\nEND:VCARD\r\n";
     let card7 = vcard_to_card(vcard7).expect("parse vcard7");
     let anniv7 = &card7.anniversaries.expect("anniversaries")["y1"];
@@ -20230,22 +20228,22 @@ fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
         Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
     );
 
-    // 8. Inbound bare year BDAY:1984 is safely ignored (read_day returns None)
+    // 8. Bare-year `BDAY` is ignored.
     let vcard8 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Heidi\r\nBDAY:1984\r\nEND:VCARD\r\n";
     let card8 = vcard_to_card(vcard8).expect("parse vcard8");
     assert_eq!(card8.anniversaries, None);
 
-    // 9. Inbound year-month BDAY:1984-05 is safely ignored
+    // 9. Year-month `BDAY` is ignored.
     let vcard9 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ivan\r\nBDAY:1984-05\r\nEND:VCARD\r\n";
     let card9 = vcard_to_card(vcard9).expect("parse vcard9");
     assert_eq!(card9.anniversaries, None);
 
-    // 10. Inbound year-less BDAY:--05-20 is safely ignored
+    // 10. Year-less `BDAY` is ignored.
     let vcard10 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Judy\r\nBDAY:--05-20\r\nEND:VCARD\r\n";
     let card10 = vcard_to_card(vcard10).expect("parse vcard10");
     assert_eq!(card10.anniversaries, None);
 
-    // 11. Foreign DEATHDATE, X-DEATHDATE, X-EVOLUTION-DEATH-DATE are unmodeled on vCard 3.0
+    // 11. `DEATHDATE` variants are unmodeled and ignored.
     let vcard11 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Karl\r\nDEATHDATE:2020-01-15\r\nX-DEATHDATE:2020-01-15\r\nX-EVOLUTION-DEATH-DATE:2020-01-15\r\nEND:VCARD\r\n";
     let card11 = vcard_to_card(vcard11).expect("parse vcard11");
     assert_eq!(card11.anniversaries, None);
@@ -20329,15 +20327,12 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
     ];
 
     for original_card in test_cards {
-        // Pass 1
         let vcard1 = card_to_vcard(&original_card);
         let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
 
-        // Pass 2
         let vcard2 = card_to_vcard(&card1);
         let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
 
-        // Pass 3
         let vcard3 = card_to_vcard(&card2);
         let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
@@ -20513,15 +20508,12 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             ..ContactCard::default()
         };
 
-        // Pass 1: Card -> vCard1 -> Card1
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
 
-        // Pass 2: Card1 -> vCard2 -> Card2
         let vcard2 = card_to_vcard(&parsed1);
         let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
 
-        // Pass 3: Card2 -> vCard3 -> Card3
         let vcard3 = card_to_vcard(&parsed2);
         let parsed3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
@@ -21154,21 +21146,21 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
 #[test]
 fn photo_non_image_mediatype_and_data_uri_roundtrip_fixpoint_matrix() {
     let cases = [
-        // 1. Non-image audio/ogg data URI with invalid VALUE parameter (minimal repro from backlog)
+        // 1. Non-image audio/ogg data URI with invalid VALUE parameter.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=date:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
-        // 2. Explicit non-image MEDIATYPE parameter with audio data URI
+        // 2. Non-image MEDIATYPE on audio data URI.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;MEDIATYPE=audio/ogg:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
-        // 3. Explicit non-image TYPE parameter on binary photo
+        // 3. Non-image TYPE on binary photo.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=audio/ogg;ENCODING=b:T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
-        // 4. Explicit non-image MEDIATYPE parameter on remote URI
+        // 4. Non-image MEDIATYPE on remote URI.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=audio/ogg:https://example.com/sound.ogg\r\nEND:VCARD\r\n",
-        // 5. Data URI with explicit VALUE=uri parameter
+        // 5. Data URI with explicit VALUE=uri.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\nEND:VCARD\r\n",
-        // 6. Unknown type parameter
+        // 6. Unknown TYPE parameter.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=UNKNOWN;ENCODING=b:AQIDBA==\r\nEND:VCARD\r\n",
-        // 7. Standard vCard 4.0 data URI
+        // 7. vCard 4.0 data URI.
         "BEGIN:VCARD\r\nVERSION:4.0\r\nPHOTO:data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=\r\nEND:VCARD\r\n",
-        // 8. Remote URI with valid image MEDIATYPE
+        // 8. Remote URI with image MEDIATYPE.
         "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=image/jpeg:https://example.com/photo.jpg\r\nEND:VCARD\r\n",
     ];
 
