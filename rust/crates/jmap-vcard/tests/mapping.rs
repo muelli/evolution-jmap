@@ -18473,7 +18473,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
         "Missing o3 ORG line in:\n{unfolded_vcard}"
     );
 
-    // Verify all 2 TITLE and 2 ROLE lines are emitted with X-JMAP-KEY parameters
+    // Verify TITLE and ROLE lines keep X-JMAP-KEY.
     assert!(
         unfolded_vcard.contains("TITLE;X-JMAP-KEY=t1:Principal Optical Engineer\r\n"),
         "Missing t1 TITLE line in:\n{unfolded_vcard}"
@@ -18491,11 +18491,11 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
         "Missing r2 ROLE line in:\n{unfolded_vcard}"
     );
 
-    // Verify lossless roundtrip of organizations
+    // Organizations roundtrip losslessly.
     let back = vcard_to_card(&vcard).expect("parse emitted multi-org vcard");
     assert_eq!(back.organizations, card.organizations);
 
-    // Verify mapped titles and roles roundtrip cleanly (unmodeled organizationId in extra is omitted on wire)
+    // Mapped titles and roles roundtrip; unmodeled organizationId stays off-wire.
     let back_titles = back.titles.as_ref().expect("titles");
     assert_eq!(back_titles.len(), 4);
     assert_eq!(back_titles["t1"].name, "Principal Optical Engineer");
@@ -18507,7 +18507,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
     assert_eq!(back_titles["r2"].name, "Advisory Council Member");
     assert_eq!(back_titles["r2"].kind, Some("role".to_owned()));
 
-    // Multi-pass roundtrip fixpoint check
+    // Multi-pass fixpoint check.
     let vcard2 = card_to_vcard(&back);
     let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
     let vcard3 = card_to_vcard(&card3);
@@ -18523,16 +18523,10 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
 
 #[test]
 fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity() {
-    // Characterizes Evolution's contact editor UI fields vs RFC 2426 §3.5.5 ORG line:
-    // - Evolution Contact Editor UI presents 3 discrete text entries in the "Job" section:
-    //   1. "Company" -> maps to E_CONTACT_ORG (Component 1 of ORG) -> JSContact Organization.name
-    //   2. "Department" -> maps to E_CONTACT_ORG_UNIT (Component 2 of ORG) -> JSContact Organization.units[0]
-    //   3. "Office" -> maps to E_CONTACT_OFFICE (Component 3 of ORG) -> JSContact Organization.units[1]
-    // - 4th and subsequent components in ORG lines (e.g. Component 4 = "Lenses", Component 5 = "Pod 7")
-    //   are unrepresented in Evolution's 3-field UI, but are preserved in full by jmap-vcard
-    //   in Organization.units[2..] without truncation or data loss.
+    // Evolution exposes three ORG UI slots: company, department, and office.
+    // ORG components beyond office are not shown there, but must still roundtrip.
 
-    // 1. Single component (Company only)
+    // 1. Company only.
     let c1 = ContactCard {
         organizations: Some(
             [(
@@ -18554,7 +18548,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
         c1.organizations
     );
 
-    // 2. Two components (Company + Department / E_CONTACT_ORG_UNIT)
+    // 2. Company plus department.
     let c2 = ContactCard {
         organizations: Some(
             [(
@@ -18576,7 +18570,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
         c2.organizations
     );
 
-    // 3. Three components (Company + Department + Office / E_CONTACT_OFFICE)
+    // 3. Company plus department plus office.
     let c3 = ContactCard {
         organizations: Some(
             [(
@@ -18601,7 +18595,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
         c3.organizations
     );
 
-    // 4. Four components (Company + Department + Office + 4th Unit / unmapped in EDS UI)
+    // 4. Company plus department plus office plus one extra unit.
     let c4 = ContactCard {
         organizations: Some(
             [(
@@ -18630,7 +18624,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
         c4.organizations
     );
 
-    // 5. Six components (Company + 5 units extending deep into organizational hierarchy)
+    // 5. Company plus five units.
     let c6 = ContactCard {
         organizations: Some(
             [(
@@ -18661,7 +18655,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
         c6.organizations
     );
 
-    // 6. Inbound unkeyed vCard with 4 components preserves all 4 parts
+    // 6. Inbound unkeyed ORG with four components preserves all components.
     let raw_unkeyed = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Tester\r\nORG:Globex Corp;Robotics;Bay 12;Actuators\r\nEND:VCARD\r\n";
     let from_raw = vcard_to_card(raw_unkeyed).expect("parse raw 4-component org");
     let orgs = from_raw.organizations.expect("orgs");
@@ -18681,7 +18675,7 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
 
 #[test]
 fn multi_component_org_special_characters_escaping_and_fixpoint() {
-    // Tests special characters escaping (semicolons, commas, backslashes, Unicode) inside ORG components
+    // ORG components with escaped separators, backslashes, and UTF-8 stay stable.
     let card = ContactCard {
         organizations: Some(
             [(
@@ -18707,7 +18701,7 @@ fn multi_component_org_special_characters_escaping_and_fixpoint() {
     let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
     let vcard3 = card_to_vcard(&card3);
 
-    // Verify all special characters survived verbatim without double-escaping
+    // Special characters survive verbatim without double-escaping.
     let org2 = &card2.organizations.as_ref().unwrap()["o1"];
     assert_eq!(
         org2.name.as_deref(),
@@ -18718,7 +18712,7 @@ fn multi_component_org_special_characters_escaping_and_fixpoint() {
     assert_eq!(units2[1].name, "Office 42; Building B \\ Room 101");
     assert_eq!(units2[2].name, "Deep Tech / Quantum \\ Sub-unit, Team 4");
 
-    // Multi-pass fixpoint stability
+    // Multi-pass fixpoint stability.
     assert_eq!(
         vcard2, vcard3,
         "vCard fixpoint stability for escaped ORG components"
@@ -18731,8 +18725,8 @@ fn multi_component_org_special_characters_escaping_and_fixpoint() {
 
 #[test]
 fn multi_component_org_sparse_and_empty_slots_positioning() {
-    // Tests sparse component configurations:
-    // 1. Nameless organisation with 3 units: leading semicolon prevents units from sliding into name.
+    // Sparse ORG components remain position-stable.
+    // 1. Nameless organisation with three units keeps an empty name slot.
     let nameless = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Nameless Org Test\r\n",
         "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9\r\n",
@@ -18758,8 +18752,7 @@ fn multi_component_org_sparse_and_empty_slots_positioning() {
         "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9"
     );
 
-    // 2. Empty intermediate unit (e.g. EDS clearing Department in place):
-    // Empty units are filtered on read, non-empty units remain ordered.
+    // 2. Empty intermediate unit is dropped, and non-empty units keep order.
     let empty_dept = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Dept Test\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Corp;;Office 4B;Lenses\r\n",
@@ -18773,7 +18766,7 @@ fn multi_component_org_sparse_and_empty_slots_positioning() {
         Some([OrgUnit::new("Office 4B"), OrgUnit::new("Lenses")].as_slice())
     );
 
-    // 3. Multi-pass fixpoint verification across sparse inputs
+    // 3. Multi-pass fixpoint stability across sparse inputs.
     let v_pass1 = card_to_vcard(&c_empty_dept);
     let c_pass2 = vcard_to_card(&v_pass1).expect("parse pass 1");
     let v_pass2 = card_to_vcard(&c_pass2);
@@ -19085,10 +19078,9 @@ fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
 
 #[test]
 fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
-    // Matrix for 10 slotted services and 18 URI aliases across outbound
-    // JSContact to vCard 3.0 and inbound vCard 3.0 X-lines and vCard 4.0 IMPP.
+    // Matrix for 10 slotted services and 18 URI aliases across vCard 3.0 and IMPP.
     let test_matrix: &[(&str, &str, &str, &str, &str)] = &[
-        // (canonical service, scheme alias, handle, expected wire X-property, vCard 4.0 expected service)
+        // (canonical service, scheme alias, handle, expected X-property, vCard 4.0 service)
         ("AIM", "aim", "alice_aim", "X-AIM", "AIM"),
         ("AIM", "aol", "alice_aol", "X-AIM", "AIM"),
         ("Gadu-Gadu", "gg", "87654321", "X-GADUGADU", "Gadu-Gadu"),
