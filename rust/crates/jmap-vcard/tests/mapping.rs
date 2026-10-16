@@ -4010,7 +4010,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     let phones = card.phones.as_ref().expect("phones map");
     assert_eq!(phones.len(), 14);
 
-    // 1. TEL;TYPE=WORK,VOICE,FAX: parses work context and both voice & fax features
     let p_wvf = &phones["p_work_voice_fax"];
     assert_eq!(p_wvf.number, "+49 30 111111");
     assert_eq!(p_wvf.contexts, Some(json!({"work": true})));
@@ -4021,7 +4020,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_context(p_wvf.contexts.as_ref(), "work"));
     assert!(!states_context(p_wvf.contexts.as_ref(), "private"));
 
-    // 2. TEL;TYPE=HOME,VOICE,FAX: parses private context and both voice & fax features
     let p_hvf = &phones["p_home_voice_fax"];
     assert_eq!(p_hvf.number, "+49 30 222222");
     assert_eq!(p_hvf.contexts, Some(json!({"private": true})));
@@ -4030,7 +4028,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(!states_phone_feature(p_hvf.features.as_ref(), "voice"));
     assert!(states_context(p_hvf.contexts.as_ref(), "private"));
 
-    // 3. TEL;TYPE=VOICE,FAX: bare features with no context
     let p_bvf = &phones["p_bare_voice_fax"];
     assert_eq!(p_bvf.number, "+49 30 333333");
     assert_eq!(p_bvf.contexts, None);
@@ -4038,7 +4035,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_bvf.features.as_ref(), "fax"));
     assert!(!states_phone_feature(p_bvf.features.as_ref(), "voice"));
 
-    // 4. TEL;TYPE=WORK,CELL,VOICE: mobile outranks voice
     let p_wcv = &phones["p_work_cell_voice"];
     assert_eq!(p_wcv.number, "+49 170 444444");
     assert_eq!(p_wcv.contexts, Some(json!({"work": true})));
@@ -4046,7 +4042,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_wcv.features.as_ref(), "mobile"));
     assert!(!states_phone_feature(p_wcv.features.as_ref(), "voice"));
 
-    // 5. TEL;TYPE=WORK,CELL,FAX: mobile outranks fax
     let p_wcf = &phones["p_work_cell_fax"];
     assert_eq!(p_wcf.number, "+49 170 555555");
     assert_eq!(p_wcf.contexts, Some(json!({"work": true})));
@@ -4054,7 +4049,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_wcf.features.as_ref(), "mobile"));
     assert!(!states_phone_feature(p_wcf.features.as_ref(), "fax"));
 
-    // 6. TEL;TYPE=HOME,PAGER,VOICE: pager outranks voice
     let p_hpv = &phones["p_home_pager_voice"];
     assert_eq!(p_hpv.number, "+49 30 666666");
     assert_eq!(p_hpv.contexts, Some(json!({"private": true})));
@@ -4062,7 +4056,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_hpv.features.as_ref(), "pager"));
     assert!(!states_phone_feature(p_hpv.features.as_ref(), "voice"));
 
-    // 7. TEL;TYPE=WORK,VOICE,VIDEO: voice outranks unmapped video
     let p_wvv = &phones["p_work_voice_video"];
     assert_eq!(p_wvv.number, "+49 30 777777");
     assert_eq!(p_wvv.contexts, Some(json!({"work": true})));
@@ -4070,7 +4063,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_wvv.features.as_ref(), "voice"));
     assert!(!states_phone_feature(p_wvv.features.as_ref(), "video"));
 
-    // 8. TEL;TYPE=FAX,VIDEO: fax outranks video
     let p_bfv = &phones["p_bare_fax_video"];
     assert_eq!(p_bfv.number, "+49 30 888888");
     assert_eq!(p_bfv.contexts, None);
@@ -4078,7 +4070,6 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(states_phone_feature(p_bfv.features.as_ref(), "fax"));
     assert!(!states_phone_feature(p_bfv.features.as_ref(), "video"));
 
-    // 9. TEL;TYPE=HOME,CELL,PAGER,FAX,VOICE,VIDEO: full hierarchy resolves to CELL
     let p_all = &phones["p_all_features"];
     assert_eq!(p_all.number, "+49 170 999999");
     assert_eq!(p_all.contexts, Some(json!({"private": true})));
@@ -4098,33 +4089,28 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(!states_phone_feature(p_all.features.as_ref(), "voice"));
     assert!(!states_phone_feature(p_all.features.as_ref(), "video"));
 
-    // 10. TEL;TYPE=PREF,WORK,VOICE,FAX: pref extracted alongside types
     let p_pref = &phones["p_pref_work_fax"];
     assert_eq!(p_pref.number, "+49 30 000000");
     assert_eq!(p_pref.pref, Some(1));
     assert_eq!(p_pref.contexts, Some(json!({"work": true})));
     assert_eq!(p_pref.features, Some(json!({"voice": true, "fax": true})));
 
-    // 11. Separate TYPE parameters parse identically to comma-separated
     let p_sep = &phones["p_separate_params"];
     assert_eq!(p_sep.number, "+49 30 123456");
     assert_eq!(p_sep.contexts, Some(json!({"work": true})));
     assert_eq!(p_sep.features, Some(json!({"voice": true, "fax": true})));
 
-    // 12. Mixed case TYPE parameters and values parse correctly
     let p_case = &phones["p_mixed_case"];
     assert_eq!(p_case.number, "+49 30 234567");
     assert_eq!(p_case.pref, Some(1));
     assert_eq!(p_case.contexts, Some(json!({"work": true})));
     assert_eq!(p_case.features, Some(json!({"voice": true, "fax": true})));
 
-    // 13. Unmapped types (ISDN, CAR) are ignored while mapped types (VOICE, WORK) survive
     let p_unm = &phones["p_unmapped_types"];
     assert_eq!(p_unm.number, "+49 30 345678");
     assert_eq!(p_unm.contexts, Some(json!({"work": true})));
     assert_eq!(p_unm.features, Some(json!({"voice": true})));
 
-    // 14. Bare plain telephone with no types
     let p_bare = &phones["p_bare_plain"];
     assert_eq!(p_bare.number, "+49 30 456789");
     assert_eq!(p_bare.contexts, None);
@@ -4133,7 +4119,7 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
     assert!(!states_phone_feature(p_bare.features.as_ref(), "voice"));
     assert!(!states_context(p_bare.contexts.as_ref(), "work"));
 
-    // Now verify outbound vCard emission for each phone entry
+    // Outbound output keeps one slot feature and normalizes TYPE casing/order.
     let emitted = card_to_vcard(&card);
 
     assert_eq!(
@@ -4196,14 +4182,14 @@ fn multi_type_phone_numbers_characterization_and_roundtrip() {
 
 #[test]
 fn maps_phone_feature_predicate_characterization() {
-    // All supported JSContact phone features mapped to vCard 3.0 TYPE values
+    // Supported JSContact feature keys.
     assert!(maps_phone_feature("mobile"));
     assert!(maps_phone_feature("pager"));
     assert!(maps_phone_feature("fax"));
     assert!(maps_phone_feature("voice"));
     assert!(maps_phone_feature("video"));
 
-    // Unsupported, unmapped, or type-confusion keys
+    // Non-feature keys and unmapped TYPE tokens.
     assert!(!maps_phone_feature("cell")); // vCard spelling, not JSContact key
     assert!(!maps_phone_feature("car"));
     assert!(!maps_phone_feature("isdn"));
@@ -4219,7 +4205,7 @@ fn maps_phone_feature_predicate_characterization() {
 
 #[test]
 fn phone_feature_slot_resolution_order_is_fully_determined() {
-    // 1. Single feature slot resolution
+    // Single-feature slot mapping.
     for (feature, expected_type) in [
         ("mobile", "CELL"),
         ("pager", "PAGER"),
@@ -4235,7 +4221,7 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
         assert!(states_phone_feature(Some(&json!({feature: true})), feature));
     }
 
-    // 2. Pairwise feature precedence: mobile beats all
+    // Pairwise precedence cases.
     for other in ["pager", "fax", "voice", "video"] {
         let features = json!({"mobile": true, other: true});
         let line = phone_line(None, Some(features.clone()));
@@ -4244,7 +4230,6 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
         assert!(!states_phone_feature(Some(&features), other));
     }
 
-    // 3. Pairwise feature precedence: pager beats fax, voice, video
     for other in ["fax", "voice", "video"] {
         let features = json!({"pager": true, other: true});
         let line = phone_line(None, Some(features.clone()));
@@ -4253,7 +4238,6 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
         assert!(!states_phone_feature(Some(&features), other));
     }
 
-    // 4. Pairwise feature precedence: fax beats voice, video
     for other in ["voice", "video"] {
         let features = json!({"fax": true, other: true});
         let line = phone_line(None, Some(features.clone()));
@@ -4262,14 +4246,13 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
         assert!(!states_phone_feature(Some(&features), other));
     }
 
-    // 5. Pairwise feature precedence: voice beats video
     let features = json!({"voice": true, "video": true});
     let line = phone_line(None, Some(features.clone()));
     assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111");
     assert!(states_phone_feature(Some(&features), "voice"));
     assert!(!states_phone_feature(Some(&features), "video"));
 
-    // 6. Multiple contexts with multiple features: DEFAULT_SLOT (HOME) + winning feature
+    // Context narrowing plus feature precedence.
     let line_multi_ctx_feat = phone_line(
         Some(json!({"work": true, "private": true})),
         Some(json!({"voice": true, "fax": true})),
@@ -4285,12 +4268,7 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
 
 #[test]
 fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
-    // Bare-year PartialDate handling: vCard BDAY needs a full calendar value, and EDS
-    // clamps missing month and day to 01-01 on serialization.
-    // jmap-vcard therefore omits bare-year emission and relies on diff_entries
-    // to preserve server-side values.
-
-    // 1. Predicates on bare-year dates
+    // Bare-year PartialDate stays unstated because vCard BDAY needs year-month-day.
     let birth_bare_year = Anniversary {
         kind: "birth".to_owned(),
         date: Some(json!({"@type": "PartialDate", "year": 1984})),
@@ -4317,7 +4295,6 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
     assert!(!states_anniversary(&death_bare_year));
     assert_eq!(anniversary_date(&death_bare_year), None);
 
-    // 2. Outbound emission across various bare-year representations
     for bare_date in [
         json!({"year": 1984}),
         json!({"@type": "PartialDate", "year": 1984}),
@@ -4341,7 +4318,6 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         );
     }
 
-    // 3. Inbound parsing of bare-year and partial date lines from vCards
     for vcard_input in [
         "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984\r\nEND:VCARD\r\n",
         "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984-06\r\nEND:VCARD\r\n",
@@ -4359,7 +4335,6 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         );
     }
 
-    // 4. Roundtrip of a card with coexisting bare-year and full-date anniversaries
     let mixed_card = ContactCard {
         anniversaries: Some(
             [
