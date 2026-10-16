@@ -2188,12 +2188,10 @@ fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
     })
 }
 
-/// The seven `ADR` fields for an address, or `None` for one with nothing to
-/// put in any of them — an address stated only in components vCard has no
-/// field for, which is then invisible to the user and to the save.
+/// The seven `ADR` fields for an address, or `None` when no mapped component
+/// has text.
 ///
-/// Empty fields are kept: a field's position is what says which part of the
-/// address it is.
+/// Empty fields are preserved because field position carries meaning.
 fn address_fields(address: &Address) -> Option<Vec<String>> {
     let components = address.components.as_ref()?;
     let mut fields = vec![String::new(); ADDRESS_COMPONENTS.len()];
@@ -2205,9 +2203,7 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
         if component.value.is_empty() {
             continue;
         }
-        // Components that share a field — a street named on two lines, or a
-        // street name and the house number standing on it — are written into
-        // it one after another, in the order the card lists them.
+        // Components that share a field are joined with spaces in source order.
         if !fields[index].is_empty() {
             fields[index].push(' ');
         }
@@ -2217,14 +2213,11 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
     any.then_some(fields)
 }
 
-/// The components an edited `ADR` line states, with every field that still
-/// says exactly what the server built it from given those parts back.
+/// Components from an edited `ADR` line, restoring split source parts when a
+/// shared field still equals its original joined text.
 ///
-/// A field built from several components is read back as one component of the
-/// field's own kind, because nothing in `Hauptstraße 1` says where the street
-/// name ends and the house number begins, and a guess would be wrong in half
-/// the world's addresses. See `restore_shared_fields` for what is then done
-/// about it.
+/// Shared fields round trip as one component because split boundaries are
+/// ambiguous. `restore_shared_fields` repairs unchanged joined text.
 pub fn restore_address_components(
     current: &[AddressComponent],
     edited: &[AddressComponent],
@@ -2238,11 +2231,10 @@ pub fn restore_address_components(
     )
 }
 
-/// Restores `N` components when an edited field still equals the server-joined
-/// value.
+/// Restores split `N` components when an edited field still equals the
+/// server-joined value.
 ///
-/// RFC 9553 §2.2.1 allows repeated `given` parts that share one `N` slot, so
-/// save re-splits unchanged joined text through `restore_shared_fields`.
+/// RFC 9553 §2.2.1 allows repeated `given` parts to share one `N` slot.
 pub fn restore_name_components(
     current: &[NameComponent],
     edited: &[NameComponent],
@@ -2256,17 +2248,13 @@ pub fn restore_name_components(
     )
 }
 
-/// Restores split components for fields that still equal their original joined
-/// text.
+/// Restores split components when an edited shared field still equals its
+/// original joined text.
 ///
-/// If multiple source parts shared one field, such as street plus house number
-/// or repeated `given` parts, a round trip through vCard returns one merged
-/// component. When edited text still matches the joined source parts, this
-/// restores the original part sequence. Otherwise the field was user-edited
-/// and stays merged.
-///
-/// `fields` lists candidate positions, `field` maps a component to a position,
-/// and `value` reads the text each component contributes.
+/// Fields built from multiple parts round trip as one component. Matching
+/// joined text is re-split to the original sequence, while edited text stays
+/// merged. `fields` lists candidate slots, `field` maps a component to a slot,
+/// and `value` reads the component text.
 fn restore_shared_fields<T: Clone>(
     current: &[T],
     edited: &[T],
@@ -2301,8 +2289,7 @@ fn restore_shared_fields<T: Clone>(
     restored
 }
 
-/// The preference rank of an address, stored in its `pref` property (as `Address`
-/// in JSContact RFC 9553 §2.5.1 has a `pref` property), or `None` if unranked.
+/// The preference rank from `Address.pref` or `extra["pref"]`.
 fn address_pref(address: &Address) -> Option<u32> {
     address.pref.or_else(|| {
         address
@@ -2313,8 +2300,7 @@ fn address_pref(address: &Address) -> Option<u32> {
     })
 }
 
-/// The address an `ADR` line states, or `None` when every field of it is
-/// empty — the same "nothing was said" an `EMAIL:` with no address is.
+/// The address an `ADR` line states, or `None` when every field is empty.
 fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address> {
     let fields = entry_components(entry);
     let mut components = Vec::new();
@@ -2361,12 +2347,11 @@ fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address
     })
 }
 
-/// The `ORG` components for an organisation — its name, then its units — or
-/// `None` for an entry that names neither and so has no line to be written on.
+/// The `ORG` components for an organisation, name first then units, or `None`
+/// when both are empty.
 ///
-/// An organisation with units and no name keeps the empty first component:
-/// the name's meaning is its position, so letting a unit slide into it would
-/// say the department is the employer.
+/// Units without a name keep an empty first component so slot 0 remains the
+/// organisation-name field.
 fn organization_components(organization: &Organization) -> Option<Vec<String>> {
     let name = organization.name.clone().unwrap_or_default();
     let units: Vec<String> = organization
@@ -2384,8 +2369,8 @@ fn organization_components(organization: &Organization) -> Option<Vec<String>> {
     Some(components)
 }
 
-/// The organisation an `ORG` line states, or `None` when every component of
-/// it is empty — the same "nothing was said" an `EMAIL:` with no address is.
+/// The organisation an `ORG` line states, or `None` when all components are
+/// empty.
 fn read_organization(entry: &VCardEntry) -> Option<Organization> {
     let components = entry_components(entry);
     let name = components.first().filter(|name| !name.is_empty()).cloned();
@@ -2406,12 +2391,11 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
     })
 }
 
-/// Picks the `addresses` key a `LABEL` line belongs to.
+/// Picks the `addresses` key for a `LABEL` line.
 ///
-/// Prefer explicit `X-JMAP-KEY` when it names no conflicting address.
-/// Otherwise match by context and label text, then create a new key. This
-/// fallback is required because EDS synthetic label fields can rebuild `LABEL`
-/// without preserving `X-JMAP-KEY`.
+/// Prefer explicit `X-JMAP-KEY` when it does not conflict. Otherwise match by
+/// context and label text, then allocate a new key because EDS can synthesize
+/// `LABEL` lines without preserving `X-JMAP-KEY`.
 fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
