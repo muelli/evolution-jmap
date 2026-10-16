@@ -58,9 +58,7 @@ fn emits_a_vcard_30_envelope() {
 
 #[test]
 fn uid_is_the_jmap_id_and_the_jscontact_uid_is_kept_aside() {
-    // EDS keys its cache on the vCard UID and hands it back to
-    // load_contact_sync/remove_contact_sync, so it has to be the identifier
-    // the JMAP methods take: the server-assigned id.
+    // EDS keys and returns contacts by vCard UID, so UID must carry the JMAP id.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "UID:"), "UID:C1");
     assert_eq!(
@@ -94,8 +92,7 @@ fn a_card_without_a_jscontact_uid_omits_the_extra_property() {
 
 #[test]
 fn a_vcard_from_evolution_has_no_jmap_id_yet() {
-    // Evolution invents a UID for a contact the user just typed in; it is
-    // not a JMAP id, so the caller must be able to tell the two apart.
+    // Evolution invents this UID locally, so callers must not treat it as a JMAP id.
     let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:pas-id-6890AB\r\nFN:Vera\r\nEND:VCARD\r\n";
     let card = vcard_to_card(vcard).expect("parse");
     assert_eq!(card.id.as_ref().unwrap().as_str(), "pas-id-6890AB");
@@ -129,8 +126,7 @@ fn maps_name_components_onto_the_structured_n_property() {
 
 #[test]
 fn derives_the_missing_half_of_the_name() {
-    // No `full`: build the display name from the components, in reading
-    // order, so Evolution has something to show.
+    // No `full`: derive it from components in reading order for display.
     let components = ContactCard {
         name: Some(Name {
             components: Some(vec![
@@ -146,8 +142,7 @@ fn derives_the_missing_half_of_the_name() {
         "FN:Vera Oldenburg"
     );
 
-    // No N in the vCard: `full` is all we know, and guessing at a split
-    // would be worse than leaving the components unset.
+    // No N in the vCard: keep `components` unset instead of guessing.
     let card = vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nEND:VCARD\r\n")
         .expect("parse");
     let name = card.name.unwrap();
@@ -197,8 +192,7 @@ fn maps_phones_with_their_features() {
 
 #[test]
 fn keys_survive_the_round_trip_so_patches_address_the_right_entry() {
-    // A JSContact patch names the map key ("emails/work/address"), so
-    // losing the key would turn every edit into a remove-and-re-add.
+    // JSContact patches address map keys, so roundtrip keeps them stable.
     let card = fixture_card();
     let back = vcard_to_card(&card_to_vcard(&card)).expect("parse");
     assert_eq!(
@@ -398,8 +392,7 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
 
 #[test]
 fn invents_a_key_for_an_organization_that_has_none() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY, and Evolution
-    // writes the department in the second component.
+    // Evolution emits ORG without X-JMAP-KEY and puts department in component two.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG:Example GmbH;Research\r\n",
@@ -439,9 +432,7 @@ fn maps_titles_onto_title_and_role_by_their_kind() {
 
 #[test]
 fn a_title_of_a_kind_vcard_has_no_property_for_is_dropped() {
-    // RFC 9553 §2.2.4 allows vendor kinds besides `title` and `role`, and
-    // vCard 3.0 has nowhere to put one. Writing it as a TITLE would tell the
-    // user it is their job title, which it is not.
+    // Vendor kinds beyond `title` and `role` have no vCard 3.0 field, so skip them.
     let card = ContactCard {
         titles: Some(
             [(
@@ -478,8 +469,7 @@ fn a_title_with_no_name_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_title_that_has_none() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY, and its two
-    // separate fields land in one JSContact map.
+    // Evolution emits no X-JMAP-KEY, and TITLE plus ROLE still map into one map.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "TITLE:Research Scientist\r\n",
