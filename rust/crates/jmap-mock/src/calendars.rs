@@ -651,7 +651,7 @@ pub fn calendar_event_notification_get(
     })
 }
 
-/// `CalendarEventNotification/query` (draft §8) uses the same viewer filter as `get` and compares `after`, `before`, and `types` as strings.
+/// `CalendarEventNotification/query` (draft §8) shares `get` visibility and string filter matching.
 pub fn calendar_event_notification_query(
     state: &mut ServerState,
     arguments: Value,
@@ -852,8 +852,8 @@ pub fn participant_identity_get(
     })
 }
 
-/// `ParticipantIdentity/set` (draft-ietf-jmap-calendars-28 §3.2) keeps `id` and `isDefault` server-set.
-/// Default changes only through `onSuccessSetIsDefault`, and destroying the default returns `cannotDestroyDefault`.
+/// `ParticipantIdentity/set` keeps `id` and `isDefault` server-set (draft §3.2).
+/// Only `onSuccessSetIsDefault` switches defaults; destroying one returns `cannotDestroyDefault`.
 pub fn participant_identity_set(
     state: &mut ServerState,
     arguments: Value,
