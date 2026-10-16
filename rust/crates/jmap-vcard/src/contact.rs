@@ -41,8 +41,8 @@ const X_JMAP_UID: &str = "X-JMAP-UID";
 /// Carries the JSContact map key of an `emails`/`phones` entry.
 const X_JMAP_KEY: &str = "X-JMAP-KEY";
 
-/// JSContact name component kinds in reading order, paired with their
-/// position in the vCard `N` value (`family;given;additional;prefix;suffix`).
+/// JSContact name component kinds mapped to vCard `N`
+/// (`family;given;additional;prefix;suffix`) positions.
 const NAME_COMPONENTS: [(&str, usize); 5] = [
     ("title", 3),
     ("given", 1),
@@ -55,9 +55,8 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 /// A line states at most one context so EDS keeps one editable slot.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
-/// JSContact phone `features` and their vCard `TYPE` spelling, **most
-/// specific first**.
-/// A line states at most one feature, and this order picks that feature.
+/// JSContact phone `features` and their vCard `TYPE` spelling, most specific first.
+/// We emit one feature per line, so this order chooses that feature.
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -66,8 +65,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
-/// Accepted inbound `TYPE` spellings for each JSContact phone feature.
-/// Includes common synonyms, for example `MOBILE` beside standard `CELL`.
+/// Accepted inbound `TYPE` spellings for each JSContact phone feature,
+/// including common synonyms such as `MOBILE` for `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -76,9 +75,8 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("video", &["VIDEO"]),
 ];
 
-/// JSContact address component kinds, paired with their position in the
-/// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
-/// street, locality, region, postal code, country), in wire order.
+/// JSContact address component kinds mapped to vCard `ADR` field positions
+/// in RFC 2426 §3.2.1 wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -100,35 +98,27 @@ const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 /// RFC 2426 §3.7.1 `CATEGORIES`, mapped to EDS `E_CONTACT_CATEGORY_LIST`.
 const CATEGORIES: &str = "CATEGORIES";
 
-/// The one RFC 9553 §2.6.4 media kind a vCard 3.0 `PHOTO` line states: the
-/// picture of the contact, which is what Evolution shows.
+/// RFC 9553 §2.6.4 media kind that vCard `PHOTO` states.
 const PHOTO_KIND: &str = "photo";
 
-/// RFC 2397's URI scheme, which is how a card states a picture it carries
-/// rather than one it points at.
+/// RFC 2397 scheme for embedded media payloads.
 const DATA_SCHEME: &str = "data:";
 
-/// What RFC 2397 §3 puts before the comma when the data is base64 rather than
-/// percent-encoded octets.
+/// RFC 2397 marker for base64 payloads.
 const BASE64_MARKER: &str = ";base64";
 
-/// The media type prefix a `PHOTO` line's `TYPE` states the remainder of; see
-/// [`image_subtype`].
+/// Media-type prefix for `PHOTO` `TYPE`; see [`image_subtype`].
 const IMAGE_PREFIX: &str = "image/";
 
-/// EDS placeholder `PHOTO` type when the image mime type is unknown.
-///
-/// This is treated as "no media type", not as `image/X-EVOLUTION-UNKNOWN`.
+/// EDS placeholder `PHOTO` type for unknown image MIME types.
+/// Treat this as "no media type", not `image/X-EVOLUTION-UNKNOWN`.
 const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 
-/// The `VALUE` a `PHOTO` line carrying a reference states, rather than the
-/// bytes themselves.
+/// `VALUE` used when `PHOTO` carries a reference, not inline bytes.
 const URI_VALUE: &str = "uri";
 
-/// Services with dedicated EDS IM slots, paired with their vCard property.
-///
-/// Non-slot fields such as `X-TWITTER` and protocol-only lines such as `X-SIP`
-/// are excluded.
+/// Services with dedicated EDS IM slots, paired with their vCard properties.
+/// Excludes non-slot fields such as `X-TWITTER` and protocol-only lines such as `X-SIP`.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -143,8 +133,8 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ];
 
 /// URI schemes accepted as bare handles for each online service.
-/// This maps URI-only entries to EDS handle fields without guessing.
-/// [`plain_handle`] rejects action or query URIs and non-bare paths.
+/// Maps URI-only entries to EDS handle fields without guessing.
+/// [`plain_handle`] rejects action and query URIs plus non-bare paths.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -169,11 +159,11 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
 /// Default EDS IM slot when no explicit context is stated.
 const DEFAULT_SLOT: &str = "HOME";
 
-/// Vendor anniversary property used by EDS 3.52 compatibility path.
-/// Emitted together with standard `ANNIVERSARY` so EDS 3.52 and 3.60+ round-trip.
+/// Vendor anniversary property for the EDS 3.52 compatibility path.
+/// Emitted with standard `ANNIVERSARY` so EDS 3.52 and 3.60+ round-trip.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
-/// JSContact anniversary kinds that map to vCard/EDS lines.
+/// JSContact anniversary kinds that map to vCard or EDS lines.
 /// `death` is omitted because vCard 3.0 and EDS expose no matching field.
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
