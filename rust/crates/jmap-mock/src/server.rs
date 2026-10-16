@@ -86,8 +86,7 @@ pub struct MockServerBuilder {
 }
 
 impl MockServerBuilder {
-    /// Accept HTTP Basic credentials. May be combined with a bearer token;
-    /// configuring any credential makes authentication mandatory.
+    /// Accept HTTP Basic credentials; any configured credential makes auth mandatory.
     pub fn basic_auth(mut self, user: &str, password: &str) -> Self {
         self.auth.allow_basic(user, password);
         self
@@ -417,10 +416,7 @@ impl MockServer {
         Arc::clone(&self.state)
     }
 
-    /// Replace accepted bearer tokens with only `token`.
-    ///
-    /// This simulates an access-token refresh where in-flight requests that
-    /// still use the old token now receive a real 401.
+    /// Replace accepted bearer tokens with only `token` to simulate token refresh.
     pub fn set_bearer_token(&self, token: &str) {
         self.auth
             .lock()
@@ -429,8 +425,6 @@ impl MockServer {
     }
 
     /// Accept the current bearer token for `remaining` more requests.
-    ///
-    /// See [`crate::auth::AuthConfig::expire_after`] for why tests need this.
     pub fn expire_bearer_token_after(&self, remaining: usize) {
         self.auth
             .lock()
@@ -438,9 +432,7 @@ impl MockServer {
             .expire_after(remaining);
     }
 
-    /// Method call names seen so far, in request order.
-    ///
-    /// Returns a copy so tests can assert without holding the state lock.
+    /// Method call names seen so far, returned as a copy in request order.
     pub fn method_calls(&self) -> Vec<String> {
         let state = self
             .state
@@ -467,9 +459,7 @@ impl MockServer {
         state.unauthorized_responses
     }
 
-    /// Push `change` to every currently connected `/eventsource` client.
-    ///
-    /// This is a test hook for RFC 8620 state-change delivery.
+    /// Push `change` to every connected `/eventsource` client.
     pub fn push_state_change(&self, change: &jmap_proto::push::StateChange) {
         let mut state = self
             .state
@@ -478,10 +468,7 @@ impl MockServer {
         state.event_source.broadcast(change);
     }
 
-    /// Wait until at least one `/eventsource` client is connected.
-    ///
-    /// Panics after `timeout`. This avoids racey sleep-based tests before
-    /// `push_state_change`.
+    /// Wait until at least one `/eventsource` client is connected, then panic on timeout.
     pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -834,10 +821,7 @@ fn handle_request(
     }
 }
 
-/// Split a request path first, then percent-decode each segment.
-///
-/// RFC 8620 blob templates percent-encode per segment, so `%2F` must stay
-/// inside one id instead of becoming a path separator.
+/// Split a request path, then decode each segment so `%2F` does not become a separator.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -846,8 +830,7 @@ fn path_segments(path: &str) -> Vec<String> {
 }
 
 /// Parse an OAuth token-form body into key/value pairs.
-///
-/// `application/x-www-form-urlencoded` maps `+` to space before percent-decoding.
+/// `application/x-www-form-urlencoded` treats `+` as space before percent-decoding.
 fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(body)
         .split('&')
@@ -862,10 +845,7 @@ fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Undo percent-encoding in one path segment.
-///
-/// Malformed escapes and non-UTF-8 bytes decode lossily so bad ids miss lookup
-/// as 404s instead of being rejected before route handling.
+/// Undo percent-encoding in one path segment with lossy UTF-8 fallback to keep bad ids as 404s.
 fn percent_decode(segment: &str) -> String {
     percent_encoding::percent_decode_str(segment)
         .decode_utf8_lossy()
@@ -884,8 +864,7 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
     let _ = request.respond(response);
 }
 
-/// The capabilities every account here offers, unless a test asked for one to
-/// be left out.
+/// Capabilities every account here offers unless a test omits one.
 const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_MAIL,
     CAPABILITY_SUBMISSION,
@@ -898,9 +877,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
 ];
 
 /// Capability object to advertise for `capability`.
-///
-/// Most capabilities stay as `{}` placeholders; Sieve and Blob need required
-/// fields so parsers can accept them and clients can issue `Blob/lookup`.
+/// Most capabilities are `{}` placeholders; Sieve and Blob need required fields.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -920,9 +897,7 @@ fn capability_value(capability: &str) -> Value {
 }
 
 /// Build the RFC 8620 §2 session document from current state.
-///
-/// With redirect discovery, anonymous fetches still return 200 with empty
-/// accounts so primary-account resolution fails for the right reason.
+/// Redirect discovery still returns 200 for anonymous requests, but with empty accounts.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
@@ -933,8 +908,8 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
-            // `principals` and `principals:owner` carry non-empty account data.
-            // `submission` gets non-empty data only when maxDelayedSend is set.
+            // `principals` and `principals:owner` always carry account data.
+            // `submission` carries account data only when maxDelayedSend is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
             {
