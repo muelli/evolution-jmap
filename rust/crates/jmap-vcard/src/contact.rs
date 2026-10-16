@@ -1289,6 +1289,9 @@ fn fold_overlong_lines(vcard: String) -> String {
         // A continuation line's leading space spends one of its 75 octets.
         let mut budget = MAX_LINE_OCTETS;
         while rest.len() > budget {
+            if rest.is_empty() {
+                break;
+            }
             let mut cut = budget;
             while cut > 0 && !rest.is_char_boundary(cut) {
                 cut -= 1;
@@ -2587,7 +2590,22 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::service_of;
+    use super::{MAX_LINE_OCTETS, fold_overlong_lines, service_of};
+
+    fn unfold_lines(vcard: &str) -> String {
+        let mut unfolded = String::with_capacity(vcard.len());
+        for line in vcard.split("\r\n") {
+            if let Some(continued) = line.strip_prefix(' ') {
+                unfolded.push_str(continued);
+            } else {
+                if !unfolded.is_empty() {
+                    unfolded.push_str("\r\n");
+                }
+                unfolded.push_str(line);
+            }
+        }
+        unfolded
+    }
 
     #[test]
     fn service_of_returns_the_mapped_service_name() {
@@ -2599,5 +2617,58 @@ mod tests {
     fn service_of_rejects_unknown_properties() {
         assert_eq!(service_of("X-UNKNOWN-SERVICE"), None);
         assert_eq!(service_of("FN"), None);
+    }
+
+    #[test]
+    fn fold_overlong_lines_wraps_when_all_logical_lines_are_overlong() {
+        let first = "A".repeat(MAX_LINE_OCTETS + 1);
+        let second = "B".repeat(MAX_LINE_OCTETS + 5);
+        let input = format!("{first}\r\n{second}");
+
+        let folded = fold_overlong_lines(input.clone());
+
+        assert_ne!(folded, input);
+        assert_eq!(unfold_lines(&folded), input);
+        assert!(
+            folded
+                .split("\r\n")
+                .filter(|line| !line.is_empty())
+                .all(|line| line.len() <= MAX_LINE_OCTETS)
+        );
+    }
+
+    #[test]
+    fn fold_overlong_lines_keeps_existing_line_boundaries() {
+        let short = "SHORT";
+        let long = "C".repeat(MAX_LINE_OCTETS + 6);
+        let input = format!("{short}\r\n{long}\r\n");
+
+        let folded = fold_overlong_lines(input.clone());
+
+        assert!(!folded.starts_with("\r\n"));
+        assert_eq!(unfold_lines(&folded), input);
+    }
+
+    #[test]
+    fn fold_overlong_lines_does_not_emit_trailing_continuation_marker() {
+        let input = format!("{}\r\n", "D".repeat((MAX_LINE_OCTETS * 2) - 1));
+
+        let folded = fold_overlong_lines(input.clone());
+
+        assert_eq!(folded.matches("\r\n ").count(), 1);
+        assert!(!folded.ends_with("\r\n "));
+        assert_eq!(unfold_lines(&folded), input);
+    }
+
+    #[test]
+    fn fold_overlong_lines_splits_utf8_only_at_character_boundaries() {
+        let input = format!("{}éXYZ\r\n", "E".repeat(MAX_LINE_OCTETS - 1));
+
+        let folded = fold_overlong_lines(input.clone());
+        let mut segments = folded.split("\r\n ");
+        let first = segments.next().expect("folded output has first segment");
+
+        assert_eq!(first.len(), MAX_LINE_OCTETS - 1);
+        assert_eq!(unfold_lines(&folded), input);
     }
 }
