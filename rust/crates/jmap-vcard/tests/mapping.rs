@@ -2962,15 +2962,9 @@ fn an_entry_stating_both_is_drawn_from_its_handle() {
 
 #[test]
 fn a_handle_no_x_line_can_carry_gets_no_line() {
-    // The same measured refusals the `CATEGORIES` line makes, for the same
-    // reason: a handle that comes back from EDS spelled differently is a handle
-    // the next save renames on the server.
-    //
-    // The empty handle says nothing. A carriage return is dropped by
-    // `syntax::write` — a security property, not tidiness. And ends made of
-    // ASCII whitespace are trimmed by EDS: measured against libebook-contacts
-    // 3.52, `X-JABBER: vera@a ` reaches the user as `vera@a`, so the line keeps
-    // what the server said while every field the user can see disagrees with it.
+    // Mirror CATEGORIES refusal rules: skip X- emission when EDS-normalized text would differ.
+    // Empty values, carriage returns, and leading or trailing ASCII whitespace are rejected.
+    // This avoids saving text that would not match what EDS later presents to users.
     for handle in [
         Some(""),
         None,
@@ -3123,16 +3117,9 @@ fn rejects_input_that_is_not_a_vcard() {
 
 #[test]
 fn a_foreign_handle_holding_a_raw_separator_is_read_as_the_line_states_it() {
-    // A card written by somebody else may carry an unescaped separator, and
-    // neither of them separates anything in this value: calcard hands an `X-`
-    // line's value back whole, so the handle is what the line says.
-    //
-    // Which agrees with EDS about the comma and not about the semicolon —
-    // measured against libebook-contacts 3.52, `X-JABBER:a;b@c` reaches the user
-    // as `a` while `X-JABBER:a,b@c` reaches them whole. The cost of that
-    // disagreement is bounded: EDS re-emits such a line untouched, so the text
-    // round-trips and the only difference is how much of the handle Evolution
-    // shows for a card no client of ours wrote.
+    // Foreign cards may carry unescaped separators in X- handles.
+    // calcard returns the whole value, so this import path keeps what the line says.
+    // EDS 3.52 treats raw semicolons differently, but still re-emits the original text.
     for (line, handle) in [("X-JABBER:a,b@c", "a,b@c"), ("X-JABBER:a;b@c", "a;b@c")] {
         let card = vcard_to_card(&format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n"
@@ -9248,15 +9235,9 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
 
 #[test]
 fn nickname_comma_separated_text_list_inbound_and_escaping_fidelity() {
-    // Characterizes comma handling in NICKNAME:
-    // 1. Inbound vCard with comma-separated list on a single line (RFC 2426 §3.1.3 text-list):
-    //    `NICKNAME:Rob,Robbie,Boss`
-    //    entry_text_list reads calcard's parsed values and joins them with commas into a single
-    //    Nickname struct ("Rob,Robbie,Boss") because EDS (libebook-contacts 3.52) hands the entire
-    //    line back as a single E_CONTACT_NICKNAME string.
-    // 2. Outbound emission escapes literal commas as `\,`:
-    //    `NICKNAME;X-JMAP-KEY=k1:Rob\,Robbie\,Boss`
-    // 3. Reading back the escaped vCard parses back to "Rob,Robbie,Boss", reaching fixed-point convergence.
+    // Characterizes comma handling in NICKNAME text-list input.
+    // Inbound list values become one comma-joined nickname, and outbound emission escapes commas.
+    // Re-import of the escaped output returns the same nickname text.
     let raw_list_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Rob Example\r\n",
@@ -13129,14 +13110,8 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
 
 #[test]
 fn vcard_21_outlook_representative_fixture_import_and_normalization() {
-    // Representative vCard 2.1 exported by legacy Microsoft Outlook:
-    // - VERSION:2.1
-    // - Bare parameter type words: TEL;WORK;VOICE, TEL;HOME;VOICE, TEL;CELL;VOICE, TEL;WORK;FAX
-    // - EMAIL;PREF;INTERNET and EMAIL;INTERNET
-    // - ADR;WORK;PREF and LABEL;WORK;PREF;ENCODING=QUOTED-PRINTABLE
-    // - NOTE;ENCODING=QUOTED-PRINTABLE with German umlauts and multi-line soft breaks
-    // - PHOTO;JPEG;ENCODING=BASE64
-    // - Standard fields (N, FN, ORG, TITLE, BDAY, URL, REV)
+    // Representative Outlook vCard 2.1 fixture with bare type words and quoted-printable payloads.
+    // This test locks import normalization for common legacy field combinations.
     let outlook_vcard_21 = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:2.1\r\n",
@@ -13643,18 +13618,8 @@ fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
 
 #[test]
 fn fixpoint_roundtrip_characterization_and_oscillation_diagnostics() {
-    // Characterizes the multi-stage roundtrip contract:
-    // vCard₁ (raw inbound)
-    //   -> Card₁ (JSContact)
-    //   -> vCard₂ (Export₁)
-    //   -> Card₂ (EContact₂ / JSContact)
-    //   -> vCard₃ (Export₂)
-    //   -> Card₃ (EContact₃ / JSContact)
-    //   -> vCard₄ (Export₃)
-    //
-    // Fixed-Point Stability Invariants:
-    // 1. Export₂ (vCard₃) == Export₃ (vCard₄) byte-identical.
-    // 2. Card₂ (EContact₂) == Card₃ (EContact₃) structurally identical.
+    // Characterizes convergence after one full import-export cycle.
+    // Export 2 equals Export 3 byte-for-byte, and Card 2 equals Card 3 structurally.
     let complex_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:fixpoint-characterization-01\r\n",
