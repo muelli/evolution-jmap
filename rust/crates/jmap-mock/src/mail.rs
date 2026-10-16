@@ -28,8 +28,8 @@ const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-/// `caller` carries `Mailbox/get` identity context: owners see all mailboxes,
-/// foreign callers see only mailboxes shared with them, else `forbidden`.
+/// `caller` scopes mailbox visibility: owners see all mailboxes.
+/// Foreign callers need a share grant, or `Mailbox/get` returns `forbidden`.
 pub fn mailbox_get(
     state: &mut ServerState,
     arguments: Value,
@@ -138,8 +138,8 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5), kept custom because validation depends on
-/// sibling, ancestor, and message state across the whole request.
+/// `Mailbox/set` (RFC 8621 §2.5), custom because validation spans siblings,
+/// ancestors, and filed-email state across the full request.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -259,8 +259,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             );
             continue;
         }
-        // `onDestroyRemoveEmails` is not implemented, so non-empty mailboxes
-        // are refused with `hasEmail`.
+        // `onDestroyRemoveEmails` is unsupported, so non-empty mailboxes fail with `hasEmail`.
         if account.emails.iter().any(|(_, email)| filed_in(email, &id)) {
             not_destroyed.insert(
                 id,
@@ -421,8 +420,8 @@ fn new_thread_id(email_id: &Id) -> Id {
     Id::new(format!("T{}", email_id.as_str()))
 }
 
-/// `Thread/get` (RFC 8621 §3.1): group emails by `threadId` and sort
-/// `emailIds` by `receivedAt` oldest first.
+/// `Thread/get` (RFC 8621 §3.1): group by `threadId`, then sort `emailIds`
+/// by `receivedAt` oldest first.
 pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -467,8 +466,8 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
     })
 }
 
-/// `SearchSnippet/get` (RFC 8621 §5.1): highlight matched filter text in
-/// subject and body. `notFound` only lists unknown email ids.
+/// `SearchSnippet/get` (RFC 8621 §5.1): highlight matched filter text in subject
+/// and body. `notFound` only lists unknown email ids.
 pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SearchSnippetGetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -587,8 +586,7 @@ fn escape_html_into(text: &str, out: &mut String) {
     }
 }
 
-/// Truncate `text` to at most `max_octets` bytes, never splitting a UTF-8
-/// character.
+/// Truncate `text` to at most `max_octets` bytes without splitting UTF-8.
 fn truncate_octets(text: &str, max_octets: usize) -> String {
     if text.len() <= max_octets {
         return text.to_owned();
@@ -1219,10 +1217,8 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
     }
 }
 
-/// `Email/import` (RFC 8621 §4.8): import RFC 5322 bytes from an uploaded blob.
-/// This parses with [`crate::message::Message`], preserves uploaded blob bytes,
-/// allows duplicates, uses request `receivedAt` or [`MOCK_NOW`], and skips
-/// keyword grammar validation unlike `Email/set` (RFC 8621 §4.1.1).
+/// `Email/import` (RFC 8621 §4.8): parse uploaded RFC 5322 blobs and keep blob bytes.
+/// Duplicates are allowed; `receivedAt` defaults to [`MOCK_NOW`] when absent.
 pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: EmailImportRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -1241,8 +1237,7 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
     for (creation_id, import) in request.emails {
         match imported(account, &import) {
             Ok(email) => {
-                // The four properties the RFC has the response carry: what the
-                // server chose, and nothing the client already knows.
+                // Return only the four RFC-selected server fields.
                 created.insert(
                     creation_id,
                     Email {
