@@ -1,13 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] to vCard 3.0 mapping for the address book backend.
-//!
-//! The mapping is intentionally partial: it emits only data Evolution can
-//! round-trip through EDS and leaves unsupported fields to save-time patching.
-//! `states_*` helpers define what each line states so omitted data is
-//! preserved. `X_JMAP_UID` and `X_JMAP_KEY` carry stable identity where vCard
-//! has no keyed slot.
+//! JSContact [`ContactCard`] to vCard 3.0 mapping for Evolution address books.
+//! Emits only round-trippable fields; unsupported data is preserved by
+//! `states_*` save checks plus `X_JMAP_UID` and `X_JMAP_KEY` identity lines.
 
 use std::collections::BTreeMap;
 
@@ -33,8 +29,7 @@ const X_JMAP_UID: &str = "X-JMAP-UID";
 /// Carries the JSContact map key of an `emails`/`phones` entry.
 const X_JMAP_KEY: &str = "X-JMAP-KEY";
 
-/// JSContact name component kinds mapped to vCard `N`
-/// (`family;given;additional;prefix;suffix`) positions.
+/// JSContact name component kinds mapped to vCard `N` field order.
 const NAME_COMPONENTS: [(&str, usize); 5] = [
     ("title", 3),
     ("given", 1),
@@ -43,12 +38,10 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
     ("credential", 4),
 ];
 
-/// JSContact `contexts` keys and their vCard `TYPE` spelling.
-/// A line states at most one context so EDS keeps one editable slot.
+/// JSContact `contexts` keys and emitted vCard `TYPE` values.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
-/// JSContact phone `features` and their vCard `TYPE` spelling, most specific first.
-/// We emit one feature per line, so this order chooses that feature.
+/// JSContact phone `features` and vCard `TYPE` values, most specific first.
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -79,9 +72,7 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
-/// JSContact component kinds that share another kind's `ADR` field.
-///
-/// `number` joins `name` so house numbers are preserved in the street field.
+/// JSContact kinds that share another kind's `ADR` field.
 const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
 /// JSContact title `kind` values and the vCard property stating each.
@@ -109,8 +100,7 @@ const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 /// `VALUE` used when `PHOTO` carries a reference, not inline bytes.
 const URI_VALUE: &str = "uri";
 
-/// Services with dedicated EDS IM slots, paired with their vCard properties.
-/// Excludes non-slot fields such as `X-TWITTER` and protocol-only lines such as `X-SIP`.
+/// Services with dedicated EDS IM slots and their vCard properties.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -125,8 +115,7 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ];
 
 /// URI schemes accepted as bare handles for each online service.
-/// Maps URI-only entries to EDS handle fields without guessing.
-/// [`plain_handle`] rejects action and query URIs plus non-bare paths.
+/// `plain_handle` enforces the URI tail constraints.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -151,12 +140,10 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
 /// Default EDS IM slot when no explicit context is stated.
 const DEFAULT_SLOT: &str = "HOME";
 
-/// Vendor anniversary property for the EDS 3.52 compatibility path.
-/// Emitted with standard `ANNIVERSARY` so EDS 3.52 and 3.60+ round-trip.
+/// Vendor anniversary line for EDS 3.52 compatibility.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
 /// JSContact anniversary kinds that map to vCard or EDS lines.
-/// `death` is omitted because vCard 3.0 and EDS expose no matching field.
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
@@ -181,14 +168,12 @@ const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
 /// JSContact calendar kinds mapped to vCard lines EDS preserves.
-/// `ICSCALENDAR` is excluded because JSContact has no distinct kind for it.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
 /// RFC 9553 §2.2.4's default `kind` for a title that names none.
 const DEFAULT_TITLE_KIND: &str = "title";
 
-/// The kind of a JSContact title, with the default filled in.
-/// Save logic must use the same default to avoid adding `kind` spuriously.
+/// The kind of a JSContact title with the implicit default filled in.
 pub fn title_kind(kind: Option<&str>) -> &str {
     kind.unwrap_or(DEFAULT_TITLE_KIND)
 }
