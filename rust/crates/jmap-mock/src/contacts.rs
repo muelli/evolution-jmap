@@ -18,8 +18,8 @@ use crate::dispatch::{account_mut, parse_arguments, project_properties, to_resul
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
-/// `caller` is the identity resolved by [`crate::auth::AuthConfig::identity_for`].
-/// `None` means owner access; non-owners only see shared books and get `forbidden` when none are shared.
+/// `caller` comes from [`crate::auth::AuthConfig::identity_for`].
+/// `None` means owner access. Non-owners only see shared books.
 pub fn address_book_get(
     state: &mut ServerState,
     arguments: Value,
@@ -81,8 +81,8 @@ fn book_rights_for(
     book.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners see every book unchanged. Non-owners only see shared books, with
-/// `myRights` replaced by the caller-specific grant.
+/// Owners see every book unchanged.
+/// Non-owners see shared books with caller-specific `myRights`.
 fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Option<AddressBook> {
     if is_owner {
         return Some(book.clone());
@@ -95,7 +95,7 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
 }
 
 /// `AddressBook/set` (RFC 9610 §2): create, update, and destroy address books.
-/// This mock only enforces non-empty `name` plus the shared create rule that `id` is server-set.
+/// This mock enforces non-empty `name` and server-set `id` on create.
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -105,7 +105,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
-    // Capture pre-update `shareWith` values to diff `ShareNotification` updates after `simple_set`.
+    // Capture pre-update `shareWith` values for `ShareNotification` diffs.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
         .update
         .iter()
@@ -158,7 +158,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3 allows omitting client-supplied `created` properties.
-    // With `terse_collection_create`, drop `name` but keep `isDefault` and `myRights`.
+    // With `terse_collection_create`, keep only `id`, `isDefault`, and `myRights`.
     if terse_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -312,8 +312,8 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// `ContactCard/parse` (RFC 9610 §3.4): parse uploaded vCard blobs to
-/// `ContactCard` responses without storing cards, then project requested properties.
+/// `ContactCard/parse` (RFC 9610 §3.4): parse vCard blobs to projected
+/// `ContactCard` responses without storing cards.
 pub fn contact_card_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: ContactCardParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -391,7 +391,7 @@ fn card_matches(card: &ContactCard, filter: &ContactCardQueryFilter) -> bool {
 }
 
 impl AccountState {
-    /// Seed an address book; returns its id. Does not bump state.
+    /// Seed an address book and return its id without bumping state.
     pub fn seed_address_book(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.address_books.alloc_id();
         let book = AddressBook {
