@@ -69,3 +69,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (38 of 38 viable mutants caught by test suites, 8 unviable due to TaskList without Default).
 
+## `src/calendars.rs`
+
+- Zero missed mutants (143 of 143 viable mutants caught by test suites, 24 unviable due to types without Default: CalendarSetRequest, CalendarEventSetRequest, CalendarEventParseRequest, CalendarEventParseResponse, GetFreeBusyRequest, FreeBusyBlock, GroupEntries, CalendarAlert, CalendarEventSendRequest, CalendarEventSendResponse, ParticipantReply, and ParticipantIdentitySetRequest).
+
