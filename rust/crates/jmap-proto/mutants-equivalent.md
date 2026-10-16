@@ -65,3 +65,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (18 of 18 viable mutants caught by test suites, 7 unviable due to types without Default: SieveScriptSetRequest, SieveScriptValidateRequest, and SieveScriptValidateResponse).
 
+## `src/tasks.rs`
+
+- Zero missed mutants (38 of 38 viable mutants caught by test suites, 8 unviable due to TaskList without Default).
+
