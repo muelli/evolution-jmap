@@ -73,7 +73,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Entry buffered until the next boundary.
 #[derive(Default)]
 struct Pending {
     line: usize,
@@ -82,14 +81,12 @@ struct Pending {
     msgstr: Option<String>,
 }
 
-/// Target field for quoted continuation lines.
 enum Reading {
     Nothing,
     Msgid,
     Msgstr,
 }
 
-/// Parses supported entries keyed by `msgid`.
 fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     let mut entries = BTreeMap::new();
     let mut pending: Option<Pending> = None;
@@ -190,7 +187,6 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     }
 }
 
-/// Stores a finished entry unless it is skipped.
 fn take(
     pending: &mut Option<Pending>,
     entries: &mut BTreeMap<String, String>,
@@ -221,7 +217,6 @@ fn take(
     Ok(())
 }
 
-/// Returns `charset=` from `Content-Type`, or empty when absent.
 fn charset(header: &str) -> String {
     let Some(at) = header.find("charset=") else {
         return String::new();
@@ -233,7 +228,6 @@ fn charset(header: &str) -> String {
         .to_owned()
 }
 
-/// Decodes one quoted `.po` fragment.
 fn unquote(text: &str, line: usize) -> Result<String, Error> {
     let trimmed = text.trim();
     let unparsed = || Error::Unparsed {
@@ -275,7 +269,6 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
     Ok(decoded)
 }
 
-/// Emits little-endian `.mo` data without a hash table.
 fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
@@ -307,7 +300,6 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     Ok(mo)
 }
 
-/// Writes one table row and appends bytes to the shared string blob.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> Result<(), Error> {
     let at = strings_at + blob.len() as u64;
     let end = at + s.len() as u64;
