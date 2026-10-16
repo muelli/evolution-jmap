@@ -7958,7 +7958,7 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
 
             let vcard = card_to_vcard(&card);
 
-            // 1. Check that EVERY physical line is valid UTF-8 and targets 75 octets (max <= 77)
+            // 1. Each physical line stays within fold limits and valid UTF-8.
             for (line_idx, physical_line) in vcard.split("\r\n").enumerate() {
                 assert!(
                     physical_line.len() <= 77,
@@ -7966,14 +7966,13 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
                     physical_line.len(),
                     physical_line
                 );
-                // Confirm valid UTF-8 boundary integrity: no split UTF-8 code point
                 assert!(
                     std::str::from_utf8(physical_line.as_bytes()).is_ok(),
                     "[{label}, pad {pad_len}, line {line_idx}] invalid UTF-8 in line slice"
                 );
             }
 
-            // 2. Parse back and assert 100% byte-for-byte exact equality (no corruption, no replacement chars)
+            // 2. Parse back and preserve the note value exactly.
             let read_card = vcard_to_card(&vcard).unwrap_or_else(|e| {
                 panic!(
                     "[{label}, pad {pad_len}] failed to parse emitted vCard: {e:?}\nvCard:\n{vcard}"
@@ -7989,7 +7988,7 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
                 "[{label}, pad {pad_len}] UTF-8 replacement character found"
             );
 
-            // 3. Verify fixed point
+            // 3. Verify fixed point.
             let vcard2 = card_to_vcard(&read_card);
             assert_eq!(
                 vcard2, vcard,
@@ -8001,11 +8000,8 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
 
 #[test]
 fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
-    // Tests exact line length boundaries around 75 octets:
-    // Property prefix is "NOTE;X-JMAP-KEY=n1:" which is 19 octets.
-    // ASCII characters without escaping.
-    // Lengths <= 75 octets (total line with prefix <= 75) fit in 1 line.
-    // Lengths > 75 octets fold into 2 lines.
+    // Validate folding around the 75-octet boundary.
+    // Prefix "NOTE;X-JMAP-KEY=n1:" is 19 octets.
 
     for (target_line_len, expect_folded) in [
         (70, false),
@@ -8690,8 +8686,7 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
 
 #[test]
 fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
-    // Tests single category tags containing plain text, interior spaces, commas, semicolons,
-    // backslashes, newlines, and combinations, asserting exact value preservation and fixed-point convergence.
+    // Single-tag categories preserve escaping and fixed-point behavior.
     let test_cases = [
         ("Work", "CATEGORIES:Work\r\n"),
         ("Project Alpha", "CATEGORIES:Project Alpha\r\n"),
@@ -8739,7 +8734,7 @@ fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
         );
         assert_eq!(kw[tag], json!(true));
 
-        // Fixed point convergence
+        // Fixed-point convergence.
         let reemitted = card_to_vcard(&parsed);
         assert_eq!(
             reemitted, vcard,
@@ -9482,11 +9477,8 @@ fn url_kind_filtering_and_contact_uri_omission() {
 
 #[test]
 fn url_eds_blog_video_and_custom_extensions_characterization() {
-    // Characterizes EDS blog and video URL properties:
-    // EDS defines E_CONTACT_BLOG_URL (`X-EVOLUTION-BLOG-URL`) and
-    // E_CONTACT_VIDEO_URL (`X-EVOLUTION-VIDEO-URL`).
-    // jmap-vcard maps them to `links` with kind "blog" and "video",
-    // while ignoring vendor URLs without X-EVOLUTION- prefix (X-BLOG-URL, X-VIDEO-URL).
+    // EDS blog and video URL properties map to link kinds.
+    // Vendor-prefixed variants without X-EVOLUTION- stay ignored.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Baker\r\n",
@@ -9524,9 +9516,7 @@ fn url_eds_blog_video_and_custom_extensions_characterization() {
 
 #[test]
 fn url_query_parameters_punctuation_and_encoding_fidelity() {
-    // Verifies complex URIs containing query strings, semicolons, commas, hashes,
-    // authentication userinfo, ports, and percent-encodings:
-    // calcard preserves raw URI characters without backslash-escaping URI punctuation (RFC 3986 / RFC 2426 §3.6.8).
+    // Complex URLs preserve URI punctuation and encoding as raw URI text.
     let mut links = BTreeMap::new();
     links.insert(
         "l_complex_query".to_owned(),
@@ -12879,9 +12869,8 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let parsed_mixed = vcard_to_card(&emitted_mixed).expect("parse mixed slots");
     assert_eq!(parsed_mixed, card_mixed);
 
-    // --- 4. Unkeyed vCard with WORK, HOME, and OTHER ADR + LABEL lines ---
-    // Simulates an EDS contact export or foreign vCard without X-JMAP-KEY:
-    // label_entry must pair each LABEL with its matching ADR by context (WORK -> WORK, HOME -> HOME, OTHER/bare -> OTHER).
+    // 4. Unkeyed WORK, HOME, and OTHER ADR plus LABEL lines.
+    // Labels pair with matching ADR context; bare LABEL maps to OTHER.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Unkeyed Address Contact\r\n",
@@ -12897,7 +12886,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 
     let unkeyed_card = vcard_to_card(unkeyed_vcard).expect("parse unkeyed addresses");
     let unkeyed_addrs = unkeyed_card.addresses.as_ref().expect("addresses");
-    // a1 (WORK), a2 (HOME), a3 (OTHER), a4 (bare label)
+    // a1 WORK, a2 HOME, a3 OTHER, a4 bare LABEL.
     assert_eq!(
         unkeyed_addrs.len(),
         4,
@@ -12924,7 +12913,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         Some("Bare Label Without Type\nBerlin")
     );
 
-    // Re-emission converges to fixed point
+    // Re-emission converges to a fixed point.
     let unkeyed_emitted = card_to_vcard(&unkeyed_card);
     let unkeyed_card2 = vcard_to_card(&unkeyed_emitted).expect("re-parse");
     assert_eq!(unkeyed_card2, unkeyed_card);
@@ -20307,7 +20296,7 @@ fn evolution_contact_editor_clamping_and_sync_diff_safety() {
         ..ContactCard::default()
     };
 
-    // Wire output states only representable anniversaries: y2 and y4.
+    // Wire output carries only representable anniversaries: y2 and y4.
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("y1"), "{vcard}");
     assert!(
@@ -20317,13 +20306,13 @@ fn evolution_contact_editor_clamping_and_sync_diff_safety() {
     assert!(!vcard.contains("y3"), "{vcard}");
     assert!(vcard.contains("BDAY;X-JMAP-KEY=y4:1990-05-12"), "{vcard}");
 
-    // Sync visibility predicates
+    // Sync visibility predicates.
     assert!(!states_anniversary(&anniversaries["y1"]));
     assert!(states_anniversary(&anniversaries["y2"]));
     assert!(!states_anniversary(&anniversaries["y3"]));
     assert!(states_anniversary(&anniversaries["y4"]));
 
-    // Point in time predicate
+    // Point-in-time predicate.
     assert!(!states_a_point_in_time(&anniversaries["y1"]));
     assert!(!states_a_point_in_time(&anniversaries["y2"]));
     assert!(!states_a_point_in_time(&anniversaries["y3"]));
