@@ -1828,11 +1828,8 @@ fn maps_nicknames_onto_nickname_lines() {
 
 #[test]
 fn each_nickname_gets_a_line_of_its_own() {
-    // Separate lines preserve per-entry keys; one comma list has nowhere to store them.
-    // EDS also does not read NICKNAME as a list, verified against
-    // libebook-contacts 3.52, which hands the whole value back as one string
-    // and escapes a comma inside it — so a list on one line would reach the
-    // user as a single nickname with commas in it.
+    // Use one line per nickname key. A comma list cannot carry per-entry keys,
+    // and EDS reads NICKNAME as one string anyway.
     let mut card = one_nickname("k1", "Vee");
     card.nicknames.as_mut().expect("nicknames").insert(
         "k2".to_owned(),
@@ -1868,12 +1865,7 @@ fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
     assert_eq!(nicknames.len(), 1);
     assert_eq!(nicknames["k1"].name, "Jim, the tall one");
 
-    // And an *unescaped* comma, which is what a vCard from some other client
-    // carries when it does mean RFC 2426 §3.1.3's list. It is read as the one
-    // text it says rather than as two entries — which is not a shrug at the
-    // RFC but agreement with EDS, whose own reader hands the whole value back
-    // as one string and re-escapes the comma on the way out. Splitting here
-    // would tell the server about a nickname EDS will never show.
+    // Even an unescaped comma stays one nickname to match EDS and avoid ghost entries.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "NICKNAME:Jim,Jimmie\r\n",
@@ -1887,9 +1879,7 @@ fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
 
 #[test]
 fn a_nickname_that_names_nothing_is_skipped_in_both_directions() {
-    // The same invisibility every other keyed map has: an entry with no name
-    // says no more than an `EMAIL:` with no address, gets no line, and must
-    // therefore be invisible to the save as well.
+    // Empty nickname text emits no line and stays absent on read.
     assert!(!card_to_vcard(&one_nickname("k1", "")).contains("\r\nNICKNAME"));
 
     let card = vcard_to_card(concat!(
@@ -7344,13 +7334,8 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
 
 #[test]
 fn supported_evolution_and_im_x_properties_complete_roundtrip() {
-    // Tests all supported X- properties that jmap-vcard explicitly maps:
-    // 1. X-EVOLUTION-SPOUSE -> related_to
-    // 2. X-EVOLUTION-ANNIVERSARY -> anniversaries (wedding)
-    // 3. Known instant-messaging services: X-AIM, X-GADUGADU, X-GOOGLE-TALK, X-GROUPWISE,
-    //    X-ICQ, X-JABBER, X-MSN, X-MATRIX, X-SKYPE, X-YAHOO -> online_services
-    // 4. X-JMAP-UID -> ContactCard.uid
-    // 5. X-JMAP-KEY parameter -> JSContact map keys
+    // Covers mapped X- properties: spouse, anniversary, IM slots,
+    // `X-JMAP-UID`, and `X-JMAP-KEY` keyed entries.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:c-full-x\r\n",
@@ -8504,11 +8489,7 @@ fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
 
 #[test]
 fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
-    // Tests inbound vCard unescaping variants:
-    // 1. \N uppercase newline escape (RFC 2426 §2.4.2)
-    // 2. Trailing backslash at end of property
-    // 3. Consecutive escaped backslashes (\\\\ -> \\)
-    // 4. Escaped backslash preceding escaped delimiter (\\; -> \;, \\, -> \,)
+    // Covers \N newlines, trailing and repeated backslashes, and escaped delimiters.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -8988,14 +8969,10 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
 
 #[test]
 fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
-    // Characterizes NICKNAME cardinality and EDS slotting:
-    // RFC 2426 §3.1.3 states NICKNAME on a single comma-separated line, but
-    // JSContact (RFC 9553 §2.2.2) keys nicknames individually.
-    // jmap-vcard emits one NICKNAME line per keyed entry so each carries an X-JMAP-KEY parameter.
-    // Evolution / EDS 3.52 reads E_CONTACT_NICKNAME from the first line, rewrites that line in
-    // place upon edit, and leaves parameters intact, while passing subsequent lines through.
+    // Emit one `NICKNAME` line per keyed JSContact entry so each keeps `X-JMAP-KEY`.
+    // EDS rewrites the first nickname slot and passes later lines through.
 
-    // 1. Single nickname roundtrip
+    // Single nickname roundtrip.
     let mut single_nick = BTreeMap::new();
     single_nick.insert(
         "k1".to_owned(),
@@ -10263,11 +10240,7 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
 
 #[test]
 fn inbound_vcard_charset_parameter_variations_and_normalization() {
-    // Tests inbound vCards carrying CHARSET parameters across case variations
-    // and multiple properties. vCard 3.0 specifies UTF-8 unconditionally, so
-    // our reader accepts CHARSET=UTF-8 for compatibility with older/buggy clients,
-    // while card_to_vcard normalizes outbound output to clean vCard 3.0 without
-    // redundant CHARSET parameters.
+    // Accept case-variant `CHARSET=UTF-8` input and normalize outbound vCard 3.0 by omitting CHARSET.
     let vcard_inbound = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -10290,7 +10263,7 @@ fn inbound_vcard_charset_parameter_variations_and_normalization() {
     let parsed1 =
         vcard_to_card(vcard_inbound).expect("parse inbound vcard with CHARSET parameters");
 
-    // Assert accurate extraction into JSContact fields
+    // Assert extraction into JSContact fields.
     let name = parsed1.name.as_ref().expect("name present");
     assert_eq!(name.full.as_deref(), Some("René Müller"));
     let comps = name.components.as_ref().expect("name components");
@@ -11512,13 +11485,8 @@ fn standard_properties_individual_variations_and_parameters() {
 
 #[test]
 fn jscontact_sound_and_logo_media_entries_server_preservation() {
-    // When a JSContact ContactCard on the JMAP server contains non-photo media entries
-    // (such as kind: "sound", kind: "logo", kind: "document"), states_media ensures that
-    // ONLY kind: "photo" entries are emitted onto vCard 3.0 PHOTO lines.
-    //
-    // Non-photo media entries get no vCard line and are omitted on the wire format to
-    // prevent confusing Evolution's contact editor (which only supports E_CONTACT_PHOTO).
-    // During JMAP sync, PatchObject preserves the untouched sound/logo entries on the server.
+    // Only `kind: "photo"` maps to vCard `PHOTO`; sound, logo, and document stay server-only.
+    // `PatchObject` keeps those non-photo media entries untouched during sync.
 
     let mut media = BTreeMap::new();
     media.insert(
