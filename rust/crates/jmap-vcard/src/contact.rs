@@ -1,21 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] to vCard 3.0 mapping used by the address book backend.
+//! JSContact [`ContactCard`] to vCard 3.0 mapping for the address book backend.
 //!
-//! This mapping is intentionally partial. It emits fields Evolution can
-//! round-trip through EDS and leaves unsupported data to save-time patching.
-//! Helper predicates (`states_*`) define exactly what each emitted line states,
-//! so unseen data is preserved. `X_JMAP_UID` and `X_JMAP_KEY` keep stable
-//! identity where vCard has no keyed slot.
-//!
-//! Main constraints:
-//! - `ORG` and `NICKNAME` shape keyed maps into vCard 3.0 value forms.
-//! - `TITLE` and `ROLE` map known title kinds only.
-//! - `ADR` and `LABEL` map address parts that have real vCard fields.
-//! - `ANNIVERSARY` values are emitted only when EDS can round-trip them.
-//! - `PHOTO` maps contact images; other media kinds remain patch-preserved.
-//! - `relatedTo` maps spouse via `X-EVOLUTION-SPOUSE`.
+//! The mapping is intentionally partial: it emits only data Evolution can
+//! round-trip through EDS and leaves unsupported fields to save-time patching.
+//! `states_*` helpers define what each line states so omitted data is
+//! preserved. `X_JMAP_UID` and `X_JMAP_KEY` carry stable identity where vCard
+//! has no keyed slot.
 
 use std::collections::BTreeMap;
 
@@ -208,20 +200,16 @@ fn maps_title_kind(kind: Option<&str>) -> bool {
         .any(|(mapped, _)| *mapped == title_kind(kind))
 }
 
-/// Whether the `N` value written for a name states this component.
+/// Whether the written `N` value states this component.
 ///
-/// Save logic uses this to distinguish "not mappable" from "mappable but
-/// absent". A component is stated only when its kind maps to an `N` field and
-/// its value is non-empty.
+/// Save logic distinguishes "not mappable" from "mappable but absent".
 pub fn states_name_component(component: &NameComponent) -> bool {
     !component.value.is_empty() && name_field(&component.kind).is_some()
 }
 
-/// Whether a JSContact [`Name`] states any mapped property on a vCard (full name,
-/// structured N components, or file-as string).
+/// Whether a JSContact [`Name`] states any mapped vCard property.
 ///
-/// A name that states none of these has no vCard lines and is invisible to the
-/// save path.
+/// Names with no mapped values emit no lines and are save-invisible.
 pub fn states_name(name: &Name) -> bool {
     name.full
         .as_deref()
@@ -239,8 +227,7 @@ pub fn states_name(name: &Name) -> bool {
 
 /// Whether a name states an Evolution file-as string.
 ///
-/// Evolution's `E_CONTACT_FILE_AS` is written as `X-EVOLUTION-FILE-AS` on
-/// vCard 3.0 lines and stored in `Name.extra["fileAs"]`.
+/// `E_CONTACT_FILE_AS` is serialized as `X-EVOLUTION-FILE-AS`.
 pub fn states_file_as(name: Option<&Name>) -> bool {
     let Some(name) = name else {
         return false;
@@ -268,11 +255,9 @@ pub fn maps_context(key: &str) -> bool {
     CONTEXTS.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// Selects the one emitted context `TYPE`, or `None` when no mappable context
-/// is present.
+/// Selects the emitted context `TYPE`, or `None` when none is mappable.
 ///
-/// Multiple mapped contexts collapse to [`DEFAULT_SLOT`] to avoid EDS placing
-/// one line into multiple editable UI slots.
+/// Multiple mapped contexts collapse to [`DEFAULT_SLOT`].
 fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
     let stated = type_names(&CONTEXTS, contexts);
     match stated.len() {
@@ -300,9 +285,7 @@ pub fn maps_phone_feature(key: &str) -> bool {
     PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
 }
 
-/// The one phone feature emitted as `TYPE`, or `None` if none is mappable.
-///
-/// Emitting one slot keeps EDS phone-field assignment stable.
+/// The emitted phone-feature `TYPE`, or `None` if none is mappable.
 fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
     type_names(&PHONE_FEATURES, features).into_iter().next()
 }
@@ -1126,9 +1109,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // The contact's own calendar and the free/busy data drawn from it, each on
-    // the line EDS keeps that one on. An entry naming neither kind gets no
-    // line: see [`calendar_property`].
+    // Emit calendar and free/busy URIs on their EDS-backed vCard lines.
+    // Entries with unsupported `kind` emit no line: see [`calendar_property`].
     for (key, calendar) in card.calendars.iter().flatten() {
         let Some(name) = calendar_property(calendar.kind.as_deref()) else {
             continue;
@@ -1151,12 +1133,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // The picture the card carries, on the line Evolution shows as the
-    // contact's photo — inline where the card holds the bytes, since that is
-    // the only form EDS reads a media type off, and a `VALUE=uri` reference
-    // where it merely points at them. Both forms and the parameters each takes
-    // are measured against libebook-contacts 3.52; see [`photo`] for the
-    // entries that get no line at all.
+    // Emit the contact photo on `PHOTO`.
+    // Inline media keeps subtype metadata; references use `VALUE=uri`.
+    // Selection rules come from libebook-contacts 3.52; see [`photo`] for
+    // media kinds that emit no line.
     for (key, media) in card.media.iter().flatten() {
         match photo(media) {
             None => continue,
@@ -1304,12 +1284,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 /// octets, excluding the line break.
 const MAX_LINE_OCTETS: usize = 75;
 
-/// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
-/// character boundaries.
+/// Folds physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
 ///
-/// calcard already folds output. This pass enforces the 75-octet RFC 2426
-/// limit after the historical calcard overflow issue, and avoids cuts inside
-/// UTF-8 code points or escaped pairs.
+/// calcard already folds. This pass enforces the 75-octet RFC 2426 limit and
+/// avoids splitting escaped pairs.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -2217,12 +2195,11 @@ pub fn restore_name_components(
     )
 }
 
-/// Restores split components when an edited shared field still equals its
+/// Restores split components when an edited shared field still equals the
 /// original joined text.
 ///
-/// Fields built from multiple parts round trip as one component. Matching
-/// joined text is re-split to the original sequence, while edited text stays
-/// merged.
+/// Shared fields round-trip as one component. Unchanged joined text is
+/// re-split; edited text stays merged.
 fn restore_shared_fields<T: Clone>(
     current: &[T],
     edited: &[T],
