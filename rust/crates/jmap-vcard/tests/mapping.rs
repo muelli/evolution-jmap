@@ -1967,18 +1967,12 @@ fn maps_links_onto_url_lines() {
 
 #[test]
 fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
-    // The fixture's `l2` is RFC 9553 §2.6.3's one defined kind, `contact`: a
-    // URI for writing to the person rather than a page about them. RFC 9555
-    // §2.6.3 states that on vCard 4.0's `CONTACT-URI`, which the 3.0 reader
-    // EDS gives us has never heard of, and putting it on a `URL` would tell
-    // the user it is the home page. So it gets no line — the same partial
-    // visibility `titles` has — and must therefore be invisible to the save.
+    // `kind=contact` maps to vCard 4.0 `CONTACT-URI`, not vCard 3.0 `URL`, so it is omitted.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
     assert!(!vcard.contains("write-to-me"), "{vcard}");
 
-    // And a kind this version has never heard of, which is the same case: the
-    // mapping states the kinds it knows and leaves the rest to the server.
+    // Unknown link kinds are omitted for the same reason.
     let mut card = one_link("l1", "https://vera.example/");
     card.links.as_mut().expect("links").insert(
         "l2".to_owned(),
@@ -1994,14 +1988,10 @@ fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
 
 #[test]
 fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
-    // The same invisibility every other keyed map has: an entry with no URI
-    // says no more than an `EMAIL:` with no address, gets no line, and must
-    // therefore be invisible to the save as well.
+    // Empty URIs are treated as absent entries.
     assert!(!card_to_vcard(&one_link("l1", "")).contains("\r\nURL"));
 
-    // That empty line is not hypothetical: it is what EDS leaves behind when
-    // the user clears Evolution's Home Page field, measured against
-    // libebook-contacts 3.52, which rewrites the value and keeps the line.
+    // EDS can leave an empty `URL` line after clearing the Home Page field.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "URL;X-JMAP-KEY=l1:\r\n",
@@ -2013,10 +2003,7 @@ fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
-    // A URI may hold a comma or a semicolon — a query string listing tags,
-    // say — and a vCard value gives both structural meaning. They are escaped
-    // on the way out, exactly as EDS escapes them, and read back as the URI
-    // that went in; splitting on either would send the server half a URI.
+    // URI punctuation that vCard also uses structurally must roundtrip without splitting the URI.
     let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
     assert_eq!(
         line(&vcard, "URL"),
@@ -2030,8 +2017,7 @@ fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
 
 #[test]
 fn invents_a_key_for_a_link_that_has_none() {
-    // Which is what a home page the user has just typed arrives as: EDS
-    // writes a fresh `URL` line with no parameters on it at all.
+    // EDS can emit fresh `URL` lines without `X-JMAP-KEY`.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "URL:https://vera.example/\r\n",
@@ -2064,8 +2050,7 @@ fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_calendars_onto_the_caluri_and_fburl_lines() {
-    // RFC 9555 maps `calendar` to CALURI and `freeBusy` to FBURL.
-    // Both are bare URIs, so keying uses X-JMAP-KEY and survives EDS rewrites.
+    // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`; both use `X-JMAP-KEY`.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "CALURI"),
@@ -2091,13 +2076,12 @@ fn maps_calendars_onto_the_caluri_and_fburl_lines() {
 
 #[test]
 fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
-    // Without a recognized kind, there is no safe CALURI or FBURL target.
-    // Unmapped calendar entries stay invisible to this vCard projection.
+    // Unknown calendar kinds have no `CALURI` or `FBURL` target and are omitted.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nCALURI").count(), 1, "{vcard}");
     assert!(!vcard.contains("nameless"), "{vcard}");
 
-    // Unknown kinds are also omitted.
+    // Vendor calendar kinds are omitted too.
     let vcard = card_to_vcard(&one_calendar(
         "c1",
         Some("example.com:tasks"),
@@ -2108,11 +2092,11 @@ fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
-    // Empty URIs are treated as absent entries, like empty EMAIL values.
+    // Empty calendar URIs are treated as absent entries.
     let vcard = card_to_vcard(&one_calendar("c1", Some("calendar"), ""));
     assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
 
-    // EDS can leave empty CALURI and FBURL lines after clearing fields.
+    // EDS can leave empty `CALURI` and `FBURL` lines after clearing fields.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI;X-JMAP-KEY=c1:\r\n",
@@ -2125,8 +2109,7 @@ fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_calendar_that_has_none() {
-    // EDS can emit fresh CALURI and FBURL lines without X-JMAP-KEY.
-    // Reader-generated keys must avoid collisions across both line types.
+    // Reader-generated keys must stay unique across keyless `CALURI` and `FBURL` lines.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI:https://vera.example/cal/vera.ics\r\n",
@@ -2141,7 +2124,7 @@ fn invents_a_key_for_a_calendar_that_has_none() {
     assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
     assert_eq!(calendars["c2"].uri, "https://vera.example/fb/vera.ifb");
     assert_eq!(calendars["c2"].kind.as_deref(), Some("freeBusy"));
-    // Non-primary CALURI lines must roundtrip even when Evolution hides them.
+    // Non-primary `CALURI` lines must still roundtrip.
     assert_eq!(calendars["c7"].uri, "https://vera.example/cal/team.ics");
 }
 
@@ -2175,9 +2158,7 @@ fn spouse_of(vcard: &str) -> Option<String> {
 
 #[test]
 fn maps_a_spouse_onto_the_line_eds_keeps_the_spouse_on() {
-    // Only spouse maps to an EDS field, which is stored as X-EVOLUTION-SPOUSE.
-    // vCard 3.0 has no RELATED line, so this X- line is the only channel.
-    // The spouse name itself is the key, so X-JMAP-KEY is not used.
+    // Only `spouse` maps to EDS, via `X-EVOLUTION-SPOUSE`; the spouse name is the map key.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-EVOLUTION-SPOUSE"),
@@ -2206,13 +2187,12 @@ fn maps_a_spouse_onto_the_line_eds_keeps_the_spouse_on() {
 
 #[test]
 fn a_relation_no_eds_field_holds_gets_no_line() {
-    // Most relation kinds, including `child`, have no vCard 3.0 or EDS field.
-    // Mapping them onto spouse would mislabel the relation shown to users.
+    // Non-spouse relation kinds have no vCard 3.0 or EDS field and are omitted.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("X-EVOLUTION-SPOUSE").count(), 1, "{vcard}");
     assert!(!vcard.contains("Nils"), "{vcard}");
 
-    // Untyped relations also stay off spouse lines.
+    // Untyped relations are omitted too.
     let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &[]));
     assert!(!vcard.contains("SPOUSE"), "{vcard}");
     let vcard = card_to_vcard(&ContactCard {
@@ -2224,12 +2204,11 @@ fn a_relation_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_spouse_the_card_names_by_uid_gets_no_line() {
-    // UID-keyed spouse entries have no displayable person name.
-    // Emitting them on spouse lines would expose identifiers as names and roundtrip them wrongly.
+    // Identifier-like spouse keys are omitted because spouse lines require displayable names.
     let vcard = card_to_vcard(&fixture_card());
     assert!(!vcard.contains("e1f0a1c2"), "{vcard}");
 
-    // Any URI key is treated as an identifier, not a person name.
+    // URI-shaped keys are treated as identifiers, not names.
     for key in [
         "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44",
         "mailto:jean@example.com",
@@ -2240,15 +2219,14 @@ fn a_spouse_the_card_names_by_uid_gets_no_line() {
         assert!(!vcard.contains("SPOUSE"), "{key}: {vcard}");
     }
 
-    // A plain name can contain `:` when it is not a URI scheme.
+    // A plain name may contain `:` when it is not a URI scheme.
     let vcard = card_to_vcard(&one_relation("Jean Paul: the second", &["spouse"]));
     assert!(vcard.contains("SPOUSE"), "{vcard}");
 }
 
 #[test]
 fn a_spouse_whose_name_eds_would_rename_gets_no_line() {
-    // The spouse name is the key, so EDS-normalized names would become different entries.
-    // Names EDS trims or rewrites are therefore not emitted.
+    // Names that EDS would trim or rewrite are omitted because the name is the key.
     for key in [" Jean Paul Oldenburg", "Jean Paul Oldenburg\t", ""] {
         let vcard = card_to_vcard(&one_relation(key, &["spouse"]));
         assert!(!vcard.contains("SPOUSE"), "[{key}]: {vcard}");
@@ -2263,8 +2241,7 @@ fn a_spouse_whose_name_eds_would_rename_gets_no_line() {
 
 #[test]
 fn reads_every_spouse_line_and_keys_each_by_its_own_name() {
-    // EDS preserves extra spouse lines, so readers must keep all non-empty lines.
-    // The name text is the key even when an X-JMAP-KEY parameter is present.
+    // Readers keep every non-empty spouse line and key entries by spouse-name text.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg\r\n",
@@ -2468,14 +2445,13 @@ fn photo_line(line: &str) -> Media {
 
 #[test]
 fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
-    // EDS writes chosen photos as inline PHOTO bytes with TYPE.
-    // Reader reconstructs the JSContact `data:` URI and media type from that line.
+    // Inline `PHOTO` bytes with `TYPE` read back as a JSContact `data:` URI plus media type.
     let media = photo_line(&format!("PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.kind.as_deref(), Some("photo"));
     assert_eq!(media.uri, format!("data:image/jpeg;base64,{PAYLOAD}"));
     assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
 
-    // Accept legacy spelling `ENCODING=BASE64` too.
+    // Accept legacy `ENCODING=BASE64` too.
     let media = photo_line(&format!("PHOTO;ENCODING=BASE64;TYPE=PNG:{PAYLOAD}"));
     assert_eq!(media.uri, format!("data:image/PNG;base64,{PAYLOAD}"));
     assert_eq!(media.media_type.as_deref(), Some("image/PNG"));
@@ -2483,15 +2459,14 @@ fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
 
 #[test]
 fn a_photo_eds_holds_no_media_type_for_reads_back_without_one() {
-    // EDS uses `TYPE="X-EVOLUTION-UNKNOWN"` for unknown mime_type.
-    // Treat that marker as no media type.
+    // `TYPE="X-EVOLUTION-UNKNOWN"` is treated as no media type.
     let media = photo_line(&format!(
         "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:{PAYLOAD}"
     ));
     assert_eq!(media.media_type, None);
     assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
 
-    // PHOTO lines without TYPE also read back as no media type.
+    // `PHOTO` lines without `TYPE` also read back as no media type.
     let media = photo_line(&format!("PHOTO;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.media_type, None);
     assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
@@ -2502,18 +2477,17 @@ fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
     let media = photo_line("PHOTO;VALUE=uri:https://vera.example/me.png");
     assert_eq!(media.kind.as_deref(), Some("photo"));
     assert_eq!(media.uri, "https://vera.example/me.png");
-    // URI PHOTO lines carry no usable media type in EDS.
+    // URI `PHOTO` lines carry no usable media type in EDS.
     assert_eq!(media.media_type, None);
 }
 
 #[test]
 fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
-    // Non-UTF8 payloads must roundtrip through decoded bytes, not text coercion.
-    // `iVBORw0KGgr//g==` is a PNG signature followed by 0xFF 0xFE.
+    // Non-UTF-8 payload bytes must roundtrip via bytes, not text coercion.
     let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");
     assert_eq!(media.uri, "data:image/png;base64,iVBORw0KGgr//g==");
 
-    // Full roundtrip guards against hand-written fixture bias.
+    // Full roundtrip guards against fixture bias.
     let uri = "data:image/png;base64,iVBORw0KGgr//g==";
     let vcard = card_to_vcard(&one_photo(uri, None));
     assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
@@ -2521,12 +2495,11 @@ fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
 
 #[test]
 fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice() {
-    // Regression from fuzzer case `raw_bytes = [97, 65, 56]`.
-    // UTF-8 payload text can also be valid base64 text, so reader must not decode twice.
+    // Regression from fuzzer case `raw_bytes = [97, 65, 56]`: do not decode text-like base64 twice.
     let media = photo_line("PHOTO;TYPE=jpeg;ENCODING=b:YUE4");
     assert_eq!(media.uri, "data:image/jpeg;base64,YUE4");
 
-    // Validate with full roundtrip, matching the property test path.
+    // Validate with a full roundtrip, matching the property test path.
     let uri = "data:image/jpeg;base64,YUE4";
     let vcard = card_to_vcard(&one_photo(uri, Some("image/jpeg")));
     assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
@@ -2534,8 +2507,7 @@ fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice
 
 #[test]
 fn a_photo_line_states_the_key_its_entry_is_filed_under() {
-    // Like other keyed maps, PHOTO can carry X-JMAP-KEY to keep identity stable.
-    // EDS can drop params on rewritten lines, so readers must also handle keyless lines.
+    // `PHOTO` can carry `X-JMAP-KEY`, but readers must also handle keyless rewritten lines.
     let card = vcard_to_card(&format!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n\
          PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}\r\n\
@@ -2556,7 +2528,7 @@ fn a_photo_line_states_the_key_its_entry_is_filed_under() {
 
 #[test]
 fn a_photo_that_says_nothing_reads_back_as_no_entry() {
-    // Empty PHOTO values name neither bytes nor URI and therefore create no entry.
+    // Empty `PHOTO` values name neither bytes nor URI, so no entry is created.
     for line in ["PHOTO;ENCODING=b:", "PHOTO;VALUE=uri:"] {
         let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
         let card = vcard_to_card(&vcard).unwrap_or_else(|e| panic!("{line}: {e}"));
@@ -2566,14 +2538,14 @@ fn a_photo_that_says_nothing_reads_back_as_no_entry() {
 
 #[test]
 fn a_photo_survives_the_round_trip_it_is_stated_on() {
-    // Roundtrip keeps fixture photo identity: URI, media type, and key all match.
+    // Roundtrip keeps fixture photo identity: URI, media type, and key.
     let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
     let media = card.media.expect("media");
     let original = fixture_card().media.expect("media");
     assert_eq!(media["m1"].kind, original["m1"].kind);
     assert_eq!(media["m1"].uri, original["m1"].uri);
     assert_eq!(media["m1"].media_type, original["m1"].media_type);
-    // The fixture's `m2` is a logo, which gets no line and so cannot come back.
+    // The fixture's `m2` is a logo and has no `PHOTO` line.
     assert_eq!(media.len(), 1, "{media:?}");
 }
 
