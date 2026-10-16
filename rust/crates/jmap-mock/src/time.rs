@@ -3,12 +3,12 @@
 
 //! Date arithmetic for the mock's fixed clock.
 //!
-//! The mock keeps one constant timestamp (`MOCK_NOW`) for reproducible tests.
-//! It only needs RFC 3339 UTC parsing, formatting, and second arithmetic.
+//! The mock clock is fixed for reproducible tests.
+//! This module only needs RFC 3339 UTC parsing, formatting, and second arithmetic.
 
 /// Parse RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) into Unix seconds.
 /// Fractional seconds are accepted and dropped.
-/// Returns `None` for invalid syntax and offset forms `UTCDate` forbids.
+/// Returns `None` for invalid syntax and non-`Z` offsets.
 pub fn parse_utc(date: &str) -> Option<i64> {
     let rest = date.strip_suffix('Z')?;
     let (date_part, time_part) = rest.split_once('T')?;
