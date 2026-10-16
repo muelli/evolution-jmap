@@ -22,3 +22,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - `crates/jmap-ical/src/event.rs:3279:9: delete field time_zones from struct CalendarEvent expression in read_vevent`: `time_zones` is explicitly assigned `None`, which is identical to the default value supplied by `..CalendarEvent::default()`.
 - `crates/jmap-ical/src/event.rs:3280:9: delete field extra from struct CalendarEvent expression in read_vevent`: `extra` is explicitly assigned `Default::default()`, which is identical to the default value supplied by `..CalendarEvent::default()`.
 - `crates/jmap-ical/src/event.rs:4118:42: replace || with && in date_time_digits`: `time.len() < 6` implies `!time.is_char_boundary(6)` because index 6 is beyond string length; since `B` implies `D`, `A || B || C || D` is logically equivalent to `A || (B && C) || D`.
+
+## `src/zone.rs`
+
+- `crates/jmap-ical/src/zone.rs:217:45: replace > with >= in Day::of`: `day` in `of_month` originates from `BYMONTHDAY` tokens where non-zero day validation (`*day != 0`) filters out zero per RFC 5545 Section 3.3.10; for all non-zero integers, `day > 0` is logically identical to `day >= 0`.
+- `crates/jmap-ical/src/zone.rs:278:13: replace > with >= in length_of`: `days_in_month` returns `u32` (0 for invalid month numbers, 28 to 31 for valid months); returning `Some(0)` instead of `None` for invalid month numbers has no observable effect because `(1..=0).contains(&day)` is always false in all callers.
+
