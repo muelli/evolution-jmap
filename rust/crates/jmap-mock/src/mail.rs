@@ -804,7 +804,7 @@ fn body_contains(email: &Email, needle: &str) -> bool {
         .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
 }
 
-/// `header` (RFC 8621 §4.4.1): `[name]` matches presence; `[name, value]` also requires a `value` substring. Names are case-insensitive.
+/// `header` (RFC 8621 §4.4.1): `[name]` checks presence, `[name, value]` also needs a value substring, and names are case-insensitive.
 fn header_matches(email: &Email, header: &[String]) -> bool {
     let Some(name) = header.first() else {
         return false;

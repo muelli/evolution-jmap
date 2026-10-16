@@ -250,7 +250,7 @@ pub fn share_notification_get(
     })
 }
 
-/// `ShareNotification/query` applies the [`share_notification_get`] viewer filter, then `objectType`/`before`/`after`.
+/// `ShareNotification/query` applies [`share_notification_get`] visibility, then filters by `objectType`, `before`, and `after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
