@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles `.po` input into `.mo` data with a small `msgfmt` subset.
+//! Compiles a small UTF-8-only subset of `.po` into `.mo` data.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -11,7 +11,7 @@ pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Compilation failures. Line numbers are 1-based.
+/// Compilation failures. Reported line numbers are 1-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// No empty `msgid` entry, so no charset declaration exists.
@@ -73,7 +73,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Entry state between `msgid` and the next boundary.
+/// Partially parsed entry awaiting its next boundary.
 #[derive(Default)]
 struct Pending {
     line: usize,
@@ -82,14 +82,14 @@ struct Pending {
     msgstr: Option<String>,
 }
 
-/// Target field for a bare `"…"` continuation line.
+/// Field that quoted continuation lines append to.
 enum Reading {
     Nothing,
     Msgid,
     Msgstr,
 }
 
-/// Parses entries keyed by `msgid`.
+/// Parses supported entries keyed by `msgid`.
 fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     let mut entries = BTreeMap::new();
     let mut pending: Option<Pending> = None;
@@ -100,7 +100,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Skip blank and obsolete `#~` lines.
+        // Blank lines and `#~` obsolete lines end the current entry.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -190,7 +190,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
     }
 }
 
-/// Stores a finished entry unless it is empty or fuzzy.
+/// Stores a finished entry unless it should be skipped.
 fn take(
     pending: &mut Option<Pending>,
     entries: &mut BTreeMap<String, String>,
@@ -206,7 +206,7 @@ fn take(
         });
     };
 
-    // Keep fuzzy headers so the charset stays available.
+    // Keep a fuzzy header so `charset=` stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -221,7 +221,7 @@ fn take(
     Ok(())
 }
 
-/// Extracts the `Content-Type` `charset=` value, or empty when absent.
+/// Extracts `charset=` from `Content-Type`, or empty when absent.
 fn charset(header: &str) -> String {
     let Some(at) = header.find("charset=") else {
         return String::new();
@@ -251,7 +251,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // A trailing backslash means the quoted string is unterminated.
+        // A trailing backslash means the quoted string never closed.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -263,7 +263,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject `.po` octal and hex escapes.
+            // Reject escape sequences this subset does not implement.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -275,12 +275,12 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
     Ok(decoded)
 }
 
-/// Encodes parsed entries as little-endian `.mo` data without a hash table.
+/// Encodes entries as little-endian `.mo` data without a hash table.
 fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Header, two `(length, offset)` tables, then a NUL-terminated blob.
+    // Fixed header, two `(length, offset)` tables, then one string blob.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -307,7 +307,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     Ok(mo)
 }
 
-/// Writes one table row and appends bytes to the shared blob.
+/// Writes one table row and appends bytes to the shared string blob.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> Result<(), Error> {
     let at = strings_at + blob.len() as u64;
     let end = at + s.len() as u64;
@@ -319,7 +319,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Length excludes this terminator.
+    // `.mo` table lengths exclude the trailing NUL.
     blob.push(0);
     Ok(())
 }

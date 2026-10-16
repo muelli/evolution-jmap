@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Verifies glibc gettext can read this crate's `.mo` output.
+//! Checks glibc gettext can read this crate's `.mo` output.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -39,7 +39,7 @@ const PO: &str = concat!(
     "msgstr \"Zum Lesen und Speichern von E-Mail auf JMAP-Servern.\"\n",
 );
 
-/// Returns a locale where gettext consults catalogues.
+/// Finds a locale where gettext consults message catalogues.
 fn a_locale_that_can_translate() -> Option<String> {
     for candidate in [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"] {
         // SAFETY: this test binary is single-threaded when it runs.
