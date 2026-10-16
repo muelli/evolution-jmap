@@ -26,8 +26,6 @@ use crate::state::{AccountState, RecordedSubmission, ServerState};
 /// Deterministic stand-in for "now" for reproducible tests.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
-// ── Method handlers ──────────────────────────────────────────────────────────
-
 /// Owners see all mailboxes; foreign callers need a share grant.
 pub fn mailbox_get(
     state: &mut ServerState,
@@ -51,7 +49,6 @@ pub fn mailbox_get(
         }
     }
 
-    // Message counts are derived, not stored.
     let counted: Vec<Mailbox> = account
         .mailboxes
         .iter()
@@ -158,7 +155,6 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
     let mut to_create: Vec<(Id, Mailbox)> = Vec::new();
     for (creation_id, mut mailbox) in request.create.unwrap_or_default() {
-        // `id` is server-set (RFC 8620 §5.3).
         if mailbox.id.is_some() {
             not_created.insert(
                 creation_id,
@@ -215,7 +211,6 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
                 continue;
             }
         };
-        // Counts are derived and `id` is immutable for patch targets.
         if patched.id.as_ref() != Some(&id) {
             not_updated.insert(
                 id,
@@ -357,8 +352,7 @@ fn counted_empty(mailbox: &Mailbox) -> Mailbox {
     }
 }
 
-/// Whether `email` is filed in mailbox `id`.
-/// RFC 8621 §4.1 models `mailboxIds` as a set encoded as a map to `true`.
+/// Whether `email` is filed in mailbox `id` (`mailboxIds[id] == true`).
 fn filed_in(email: &Email, id: &Id) -> bool {
     email
         .mailbox_ids
@@ -369,7 +363,6 @@ fn filed_in(email: &Email, id: &Id) -> bool {
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Enforce `maxObjectsInGet` (RFC 8620 §5.1), matching other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -485,7 +478,7 @@ pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// The plaintext/HTML-escaping snippet cap RFC 8621 §5 puts on `preview`.
+/// RFC 8621 §5 preview cap after escaping text and HTML.
 const PREVIEW_MAX_OCTETS: usize = 255;
 
 fn search_snippet(email_id: Id, email: &Email, filter: &Filter<EmailQueryFilter>) -> SearchSnippet {
@@ -605,7 +598,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .filter(|(_, email)| filter_matches(email, &filter))
         .collect();
 
-    // Default order is `receivedAt` descending; tests usually pass sort explicitly.
+    // Default sort is `receivedAt` descending.
     let mut sort_property = "receivedAt".to_owned();
     let mut ascending = false;
     if let Some(comparators) = &request.sort
@@ -635,11 +628,10 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
 
     let total = matches.len() as u64;
     let position = request.position.max(0) as usize;
-    // Apply the lower client or server page cap.
     let asked = request.limit.unwrap_or(u64::MAX);
     let never_terminates = query_never_terminates && !matches.is_empty();
     let ids: Vec<Id> = if never_terminates {
-        // Broken-server mode: repeat a non-empty page regardless of `position`.
+        // Broken-server mode repeats a non-empty page regardless of `position`.
         matches
             .iter()
             .map(|(id, _)| (*id).clone())
@@ -796,7 +788,7 @@ fn address_list_contains(addresses: Option<&[EmailAddress]>, needle: &str) -> bo
     })
 }
 
-/// `body` (RFC 8621 §4.4.1): the text/plain and text/html parts, not headers.
+/// RFC 8621 §4.4.1 `body`: check text/plain and text/html values only.
 fn body_contains(email: &Email, needle: &str) -> bool {
     email
         .body_values
@@ -804,7 +796,7 @@ fn body_contains(email: &Email, needle: &str) -> bool {
         .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
 }
 
-/// `header` (RFC 8621 §4.4.1): `[name]` checks presence, `[name, value]` also needs a value substring, and names are case-insensitive.
+/// RFC 8621 §4.4.1 `header`: names are case-insensitive; optional value checks substring.
 fn header_matches(email: &Email, header: &[String]) -> bool {
     let Some(name) = header.first() else {
         return false;
@@ -1876,7 +1868,7 @@ fn rfc5322_date(utc: &str) -> Option<String> {
 }
 
 impl AccountState {
-    /// Seed a sending identity; returns its id. Does not bump state.
+    /// Seed a sending identity without bumping state.
     pub fn seed_identity(&mut self, name: &str, email: &str) -> Id {
         let id = self.identities.alloc_id();
         let identity = Identity {
@@ -1890,12 +1882,12 @@ impl AccountState {
         id
     }
 
-    /// Seed a top-level mailbox; returns its id. Does not bump state.
+    /// Seed a top-level mailbox without bumping state.
     pub fn seed_mailbox(&mut self, name: &str, role: Option<&str>) -> Id {
         self.seed_mailbox_with_parent(name, role, None)
     }
 
-    /// Seed a mailbox under `parent`; does not validate parent existence.
+    /// Seed a mailbox under `parent` without validating the parent id.
     pub fn seed_child_mailbox(&mut self, name: &str, role: Option<&str>, parent: &Id) -> Id {
         self.seed_mailbox_with_parent(name, role, Some(parent.clone()))
     }
@@ -1920,7 +1912,7 @@ impl AccountState {
         id
     }
 
-    /// Create a mailbox as a state transition, so it appears in `/changes`.
+    /// Create a mailbox via transaction so `/changes` reports it.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
         let mailbox = Mailbox {
@@ -1937,7 +1929,7 @@ impl AccountState {
         id
     }
 
-    /// Rename a mailbox as a state transition. False if there is no such mailbox.
+    /// Rename a mailbox via transaction. Returns false when missing.
     pub fn rename_mailbox(&mut self, id: &Id, name: &str) -> bool {
         self.mailboxes.transaction(|transaction| {
             let Some(mailbox) = transaction.get(id) else {
@@ -1951,14 +1943,13 @@ impl AccountState {
         })
     }
 
-    /// Destroy a mailbox as a state transition. False if missing.
-    /// This helper does not cascade to children or mail.
+    /// Destroy a mailbox via transaction without cascading. Returns false when missing.
     pub fn destroy_mailbox(&mut self, id: &Id) -> bool {
         self.mailboxes
             .transaction(|transaction| transaction.destroy(id))
     }
 
-    /// Seed one email with text body and optional attachments. Does not bump state.
+    /// Seed one email and its thread without bumping state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -1968,7 +1959,7 @@ impl AccountState {
         id
     }
 
-    /// Deliver an email as a state transition so it appears in `Email/changes`.
+    /// Deliver one email and its thread via transactions.
     pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
         let thread_id = email.thread_id.clone().expect("built email has a threadId");
@@ -1980,7 +1971,7 @@ impl AccountState {
         id
     }
 
-    /// Destroy a message as a state transition. Blob cleanup is skipped.
+    /// Destroy one email and its thread record when present.
     pub fn destroy_email(&mut self, id: &Id) -> bool {
         let thread_id = self
             .emails
@@ -1996,7 +1987,7 @@ impl AccountState {
         destroyed
     }
 
-    /// Build the message payload used by both `seed_email` and `deliver_email`.
+    /// Build one email payload for both `seed_email` and `deliver_email`.
     fn build_email(&mut self, seed: EmailSeed) -> (Id, Email) {
         let id = self.emails.alloc_id();
         let body_blob_id = self.add_blob("text/plain", seed.text_body.clone().into_bytes());
