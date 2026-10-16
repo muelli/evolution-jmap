@@ -82,8 +82,8 @@ pub fn blob_get(
     to_result(&BlobGetResponse::new(request.account_id, list).with_not_found(not_found))
 }
 
-/// Resolve one `Blob/upload` creation (RFC 9404 §2.2) into concatenated octets,
-/// or return the `SetError` that stops it.
+/// Resolve one `Blob/upload` creation (RFC 9404 §2.2) into bytes.
+/// Returns the first `SetError` from invalid source data.
 fn resolve_data(account: &AccountState, sources: &[DataSource]) -> Result<Vec<u8>, SetError> {
     let mut bytes = Vec::new();
     for source in sources {
@@ -113,7 +113,7 @@ fn resolve_data(account: &AccountState, sources: &[DataSource]) -> Result<Vec<u8
 }
 
 /// `Blob/upload` (RFC 9404 §2.2). Each `create` entry is independent, so one
-/// failure does not stop other entries.
+/// failed entry does not stop others.
 pub fn blob_upload(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -153,7 +153,7 @@ pub fn blob_upload(
 }
 
 /// `Blob/lookup` (RFC 9404 §2.3). This mock has no reverse reference index, so
-/// every `matchedIds` list is empty instead of guessed.
+/// `matchedIds` is always empty for known blobs.
 pub fn blob_lookup(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -178,10 +178,9 @@ pub fn blob_lookup(
     to_result(&BlobLookupResponse::new(request.account_id, list).with_not_found(not_found))
 }
 
-/// `Blob/copy` (RFC 8620 §5.7). Blobs copied from `fromAccountId` to
-/// `accountId` get fresh target ids. Unknown source accounts fail the whole
-/// call with `fromAccountNotFound`; unknown blob ids fail only that entry in
-/// `notCopied`.
+/// `Blob/copy` (RFC 8620 §5.7). Copying to `accountId` assigns new blob ids.
+/// Unknown source accounts fail the whole call with `fromAccountNotFound`.
+/// Unknown blob ids fail only those entries in `notCopied`.
 pub fn blob_copy(
     state: &mut crate::state::ServerState,
     arguments: Value,
