@@ -1282,6 +1282,29 @@ mod tests {
         assert!(SilentRefreshFailureReason::EmptyToken.escalates_to_consent());
     }
 
+    /// `services()` must hand back the real singleton, never a null stand-in:
+    /// every caller trusts `is_null()` to mean "could not be built", and
+    /// `e_oauth2_services_new()` takes no registry or bus, so there is no
+    /// environment where this is expected to fail.
+    #[test]
+    fn services_singleton_is_never_null() {
+        assert!(!services().is_null());
+    }
+
+    /// `Display` must actually write `as_str()`'s text, not merely succeed:
+    /// [`service_gone_error`]'s own test only exercises `ConnectError`'s
+    /// `Display`, never this type's.
+    #[test]
+    fn display_writes_the_same_text_as_as_str() {
+        for reason in [
+            SilentRefreshFailureReason::NoStoredSecret,
+            SilentRefreshFailureReason::KeyringLocked,
+            SilentRefreshFailureReason::ServiceGone,
+        ] {
+            assert_eq!(reason.to_string(), reason.as_str());
+        }
+    }
+
     /// A source with no parent is its own credentials source, and is answered
     /// without a provider being built.
     ///
