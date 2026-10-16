@@ -24,3 +24,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/metadata.rs`
 
 - Zero missed mutants (15 of 15 viable mutants caught by test suites, 1 unviable due to MetadataTextFilter without Default).
+
+## `src/quota.rs`
+
+- Zero missed mutants (11 of 11 generated mutants caught by test suites).
+
+## `src/push.rs`
+
+- Zero missed mutants (12 of 12 viable mutants caught by test suites, 6 unviable due to types without Default: PushVerification and StateChange).
