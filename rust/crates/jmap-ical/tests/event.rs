@@ -35631,8 +35631,8 @@ END:VCALENDAR\r\n";
 fn differential_oracle_mapped_vs_override_properties_scope_and_contract() {
     use jmap_ical::event::{MAPPED_PROPERTIES, OVERRIDE_PROPERTIES};
 
-    // 1. MAPPED_PROPERTIES contains exactly 17 vetted properties
-    assert_eq!(MAPPED_PROPERTIES.len(), 17);
+    // 1. MAPPED_PROPERTIES contains exactly 19 vetted properties
+    assert_eq!(MAPPED_PROPERTIES.len(), 19);
     for prop in [
         "title",
         "description",
@@ -35651,6 +35651,8 @@ fn differential_oracle_mapped_vs_override_properties_scope_and_contract() {
         "alerts",
         "recurrenceRule",
         "recurrenceOverrides",
+        "participants",
+        "organizerCalendarAddress",
     ] {
         assert!(
             MAPPED_PROPERTIES.contains(&prop),
@@ -35694,7 +35696,6 @@ fn differential_oracle_mapped_vs_override_properties_scope_and_contract() {
 
     // 4. Server-only and unmodeled properties excluded from both sets
     for unmapped in [
-        "participants",
         "calendarIds",
         "color",
         "locale",

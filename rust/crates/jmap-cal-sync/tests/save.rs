@@ -235,10 +235,9 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     // reminders did; the scheduling revision is still nowhere on a component.)
     //
     // The guest list beside it is the other half of the same rule, one step on:
-    // it *is* drawn now — the ATTENDEE below — and still may not be written
-    // back, because changing it means an iTIP message this backend does not
-    // send. So it stands here as the property that survives a save it appears
-    // on, not one it is missing from.
+    // it is drawn (the ATTENDEE below) and patched one member at a time, so a
+    // save that never touched it must leave the `sendTo` the line has no room
+    // for, and everything else, as it was.
     let guest = json!({
         "@type": "Participant",
         "name": "Vera Example",

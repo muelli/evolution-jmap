@@ -4,10 +4,10 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps seventeen properties and
+//! lossy view of a JSCalendar event. The mapping keeps nineteen properties and
 //! drops everything else, so a save that sent the parsed event back whole
-//! would silently delete what it could not represent — the guest list, the
-//! sequence number — none of which the user ever saw, let alone asked to
+//! would silently delete what it could not represent (a guest's `sendTo`, the
+//! sequence number), none of which the user ever saw, let alone asked to
 //! remove.
 //!
 //! The lossiness also recurs *inside* the properties that are mapped, and
@@ -24,7 +24,7 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Eight properties need more than the baseline, because for them "no
+//! Ten properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`locations` is a map of places and the component has one line.** So the
@@ -85,6 +85,12 @@
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
 //!
+//! - **`participants` is a map of guests keyed by the server and drawn by
+//!   address.** So a guest's changes are patched into the entry the server
+//!   files that address under, and roles are compared the way servers
+//!   normalise them, or every save would patch them back; see
+//!   `diff_participants`.
+//!
 //! And one property is checked on its way *out* rather than against the
 //! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 admits
 //! as a time zone under its own name or beside the definition that says what it
@@ -92,6 +98,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use jmap_ical::event::{OWNER_ROLE, PARTICIPANT_ROLES, calendar_address};
 use jmap_ical::{
     event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_rule,
     maps_time_zone, maps_virtual_locations, sends_recurrence_override, time_zone_definition,
@@ -207,6 +214,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     diff_alerts(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
+    diff_participants(&mut patch, current, &baseline, edited);
     // Last, because it reads the patch the others wrote.
     diff_time_zones(&mut patch, current, edited);
     patch
@@ -811,6 +819,204 @@ fn diff_overrides(
             None => Value::Null,
         },
     );
+}
+
+/// The guest list, patched one guest and one member at a time, and the organizer
+/// beside it.
+///
+/// A guest is told apart by address: the reader files the guests it finds on a
+/// component under keys it invents (`p1`, `p2`, ...), while the server files them
+/// under keys of its own. So each address the drawing showed is looked up in the
+/// event the **server** holds, and what changed lands in that entry:
+/// `participants/<key>/<member>` for the members an `ATTENDEE` line shows, so
+/// that `sendTo`, `invitedBy` or a scheduling sequence beside them stays as the
+/// server had it. An address the drawing did not show is a guest the user
+/// added, filed under a key the server does not use; one it showed and the
+/// component no longer names is a guest the user removed. Unlike a conference
+/// (see [`diff_virtual_locations`]), a missing line *is* a deletion here: the
+/// guest list is Evolution's own, edited in its meeting editor.
+///
+/// Roles are compared the way both servers we know store them (Stalwart and
+/// Fastmail, both probed live): no roles at all is RFC 8984 §4.4.6's
+/// default of `attendee`, and `attendee` beside `owner` is dropped, so the
+/// organizer Evolution also lists as a guest is the same organizer the server
+/// keeps as `owner` alone. Without that, every save would patch the roles back.
+/// For the same reason the members only an `ATTENDEE` line shows are left alone
+/// for a participant whose roles come to `owner` alone: the drawing gives such an
+/// organizer an `ORGANIZER` line and nothing else, so whatever Evolution writes
+/// on the guest line it adds for itself is nothing the server was shown.
+///
+/// Where the roles do change they are written whole, carrying any role the
+/// server holds that no `ROLE` parameter can spell, the way [`diff_keywords`]
+/// carries a tag the `CATEGORIES` line could not.
+///
+/// An address the server files under more than one key is left alone: the
+/// drawing merged them, so no one entry is the one the user edited.
+fn diff_participants(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let empty = BTreeMap::new();
+    let held = current.participants.as_ref().unwrap_or(&empty);
+    let was = by_address(baseline);
+    let now = by_address(edited);
+
+    let mut changes = Map::new();
+    let mut removed = BTreeSet::new();
+    for (address, before) in &was {
+        let Some(key) = servers_key(held, address) else {
+            continue;
+        };
+        match now
+            .iter()
+            .find(|(other, _)| other.eq_ignore_ascii_case(address))
+        {
+            Some((_, after)) => diff_participant(&mut changes, key, &held[key], before, after),
+            None => {
+                removed.insert(key);
+                changes.insert(format!("participants/{}", escaped(key)), Value::Null);
+            }
+        }
+    }
+    let mut taken: BTreeSet<String> = held.keys().cloned().collect();
+    let added: Vec<&Value> = now
+        .iter()
+        .filter(|(address, _)| {
+            !was.iter()
+                .any(|(other, _)| other.eq_ignore_ascii_case(address))
+        })
+        .map(|(_, participant)| *participant)
+        .collect();
+
+    if current.participants.is_none() {
+        // RFC 8620 §5.3 requires every path segment before the last to exist, so
+        // the first guests are the property written whole.
+        if !added.is_empty() {
+            patch.insert(
+                "participants".to_owned(),
+                // Serialising a map this crate's own reader built cannot fail.
+                serde_json::to_value(&edited.participants).unwrap_or(Value::Null),
+            );
+        }
+    } else if added.is_empty() && !removed.is_empty() && removed.len() == held.len() {
+        // Every guest went, and the server held nobody else.
+        patch.insert("participants".to_owned(), Value::Null);
+    } else {
+        patch.extend(changes);
+        for participant in added {
+            let key = (1..)
+                .map(|n| format!("p{n}"))
+                .find(|key| !taken.contains(key))
+                .expect("an unbounded range always has a free key");
+            patch.insert(format!("participants/{key}"), participant.clone());
+            taken.insert(key);
+        }
+    }
+
+    let organizer = |event: &CalendarEvent| event.organizer_calendar_address.clone();
+    if !organizer(baseline)
+        .unwrap_or_default()
+        .eq_ignore_ascii_case(&organizer(edited).unwrap_or_default())
+    {
+        patch.insert(
+            "organizerCalendarAddress".to_owned(),
+            organizer(edited).map_or(Value::Null, Value::String),
+        );
+    }
+}
+
+/// One guest's changed members, as paths into the server's entry `key`.
+fn diff_participant(
+    changes: &mut Map<String, Value>,
+    key: &str,
+    held: &Value,
+    before: &Value,
+    after: &Value,
+) {
+    let path = |member: &str| format!("participants/{}/{member}", escaped(key));
+    let (roles_before, roles_after) = (roles_of(before), roles_of(after));
+    if roles_before != roles_after {
+        let mut roles: Map<String, Value> = held
+            .get("roles")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter(|(role, _)| !spells(role))
+            .map(|(role, set)| (role.clone(), set.clone()))
+            .collect();
+        roles.extend(
+            after
+                .get("roles")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .map(|(role, set)| (role.clone(), set.clone())),
+        );
+        changes.insert(path("roles"), Value::Object(roles));
+    }
+    let attends = roles_after.iter().any(|role| role != OWNER_ROLE);
+    for member in ["name", "kind", "participationStatus", "expectReply"] {
+        if member != "name" && !attends {
+            continue;
+        }
+        let value = after.get(member);
+        if before.get(member) != value {
+            changes.insert(path(member), value.cloned().unwrap_or(Value::Null));
+        }
+    }
+}
+
+/// The participants an event names by address, in the event's own order.
+fn by_address(event: &CalendarEvent) -> Vec<(&str, &Value)> {
+    event
+        .participants
+        .iter()
+        .flatten()
+        .filter_map(|(_, participant)| Some((calendar_address(participant)?, participant)))
+        .collect()
+}
+
+/// The key the server files `address` under, or `None` where it files it under
+/// none or under more than one.
+fn servers_key<'a>(held: &'a BTreeMap<String, Value>, address: &str) -> Option<&'a str> {
+    let mut keys = held.iter().filter(|(_, participant)| {
+        calendar_address(participant).is_some_and(|other| other.eq_ignore_ascii_case(address))
+    });
+    match (keys.next(), keys.next()) {
+        (Some((key, _)), None) => Some(key),
+        _ => None,
+    }
+}
+
+/// A participant's roles as both servers we know store them: none is
+/// `attendee`, and `attendee` beside `owner` goes.
+fn roles_of(participant: &Value) -> BTreeSet<String> {
+    let mut roles: BTreeSet<String> = participant
+        .get("roles")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, set)| *set == &Value::Bool(true))
+        .map(|(role, _)| role.clone())
+        .collect();
+    if roles.is_empty() {
+        roles.insert("attendee".to_owned());
+    }
+    if roles.contains(OWNER_ROLE) {
+        roles.remove("attendee");
+    }
+    roles
+}
+
+/// Whether a role is one the component can state: the `ORGANIZER` line's, or one
+/// a `ROLE` parameter spells.
+fn spells(role: &str) -> bool {
+    role == OWNER_ROLE
+        || PARTICIPANT_ROLES
+            .iter()
+            .any(|(spelled, _)| *spelled == role)
 }
 
 fn set(patch: &mut Map<String, Value>, property: &str, value: Option<&str>) {

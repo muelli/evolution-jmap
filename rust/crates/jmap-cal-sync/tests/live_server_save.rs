@@ -1275,3 +1275,135 @@ fn moving_an_events_reminder_reaches_the_real_server() {
     sync.remove_component(&saved.uid)
         .expect("CalendarEvent/set destroy failed against the real server");
 }
+
+/// The `ATTENDEE` line for `address`, unfolded, `None` if there is none.
+fn attendee_line<'a>(icalendar: &'a str, address: &str) -> Option<&'a str> {
+    icalendar
+        .split("\r\n")
+        .find(|line| line.starts_with("ATTENDEE") && line.ends_with(address))
+}
+
+/// A meeting's guest list edited the way Evolution's meeting editor edits it:
+/// one guest's reply changed, one guest removed, one added. Each change has to
+/// land in the server's own entry for that address, and once the server has
+/// normalised the roles, saving the same guest list again (organizer listed
+/// as a guest too, every `ROLE` spelled out) must not patch anything back.
+///
+/// Every address is on a `.test` domain (RFC 2606), so nothing the server
+/// might send on the guests' behalf can reach a real person.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn editing_a_meetings_guests_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+    let sync = CalSync::new(client, account_id.clone(), calendar_id);
+
+    let suffix = unique_suffix();
+    let olga = format!("mailto:olga-{suffix}@agent-guests.test");
+    let vera = format!("mailto:vera-{suffix}@agent-guests.test");
+    let ida = format!("mailto:ida-{suffix}@agent-guests.test");
+    let nils = format!("mailto:nils-{suffix}@agent-guests.test");
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:agent-guests-{suffix}@localhost\r\n\
+         SUMMARY:agent-guests-{suffix}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         ORGANIZER;CN=Olga:{olga}\r\n\
+         ATTENDEE;CN=Olga;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:{olga}\r\n\
+         ATTENDEE;CN=Vera;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION:{vera}\r\n\
+         ATTENDEE;CN=Ida;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION:{ida}\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let shown = sync
+        .load_component(&saved.uid)
+        .unwrap()
+        .icalendar
+        .replace("\r\n ", "");
+    eprintln!("as the server drew it:\n{shown}");
+    let vera_line = attendee_line(&shown, &vera).expect("Vera was invited");
+    let ida_line = attendee_line(&shown, &ida).expect("Ida was invited");
+
+    let edited = shown
+        .replace(
+            vera_line,
+            &vera_line.replace("PARTSTAT=NEEDS-ACTION", "PARTSTAT=ACCEPTED"),
+        )
+        .replace(&format!("{ida_line}\r\n"), "")
+        .replace(
+            "END:VEVENT",
+            &format!("ATTENDEE;CN=Nils;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:{nils}\r\nEND:VEVENT"),
+        );
+    sync.save_component(&edited, Some(&saved.uid))
+        .expect("CalendarEvent/set update of the guest list failed");
+
+    let held = sync
+        .client()
+        .event_get(&account_id, &[saved.uid.as_str().into()])
+        .unwrap()
+        .list
+        .remove(0);
+    eprintln!(
+        "as the server holds it: {}",
+        serde_json::to_string_pretty(&held.participants).unwrap()
+    );
+    let guests = held.participants.clone().expect("the guest list survived");
+    let find = |address: &str| {
+        guests
+            .values()
+            .find(|guest| guest["calendarAddress"].as_str() == Some(address))
+            .cloned()
+    };
+    assert_eq!(
+        find(&vera).expect("Vera is still invited")["participationStatus"],
+        "accepted"
+    );
+    assert!(find(&ida).is_none(), "Ida was removed: {guests:?}");
+    let added = find(&nils).expect("Nils was added");
+    assert_eq!(added["name"], "Nils");
+    assert_eq!(added["expectReply"], true);
+    assert!(find(&olga).is_some(), "the organizer stays: {guests:?}");
+    assert_eq!(guests.len(), 3, "{guests:?}");
+
+    // The server's normalised shape against the same guest list as
+    // Evolution writes it: nothing to send.
+    let reshown = sync
+        .load_component(&saved.uid)
+        .unwrap()
+        .icalendar
+        .replace("\r\n ", "");
+    let as_evolution_writes_it = reshown.replace(
+        "ORGANIZER;",
+        &format!("ATTENDEE;CN=Olga;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:{olga}\r\nORGANIZER;"),
+    );
+    let patch = jmap_cal_sync::patch::diff(
+        &held,
+        &jmap_ical::ical_to_event(&as_evolution_writes_it).unwrap(),
+    );
+    assert!(
+        patch.is_empty(),
+        "the server's normalised guest list would be patched back: {patch:?}\n{reshown}"
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}

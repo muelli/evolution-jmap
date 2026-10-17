@@ -201,7 +201,7 @@ All implementation logic resides in `rust/crates/jmap-ical/src/event.rs`, `rust/
   - Each `ATTENDEE` becomes a participant with `calendarAddress` (never the reserved `sendTo`), `name` from `CN`, `kind` from `CUTYPE`, `participationStatus` from `PARTSTAT` and `expectReply` from `RSVP=TRUE`.
   - Roles: `REQ-PARTICIPANT` or no `ROLE` → `{"attendee": true}`, `OPT-PARTICIPANT` → `{"attendee": true, "optional": true}`, `CHAIR` → `{"attendee": true, "chair": true}`, `NON-PARTICIPANT` → `{"informational": true}`. These are exactly the sets the outbound mapping draws each `ROLE` from, so a round trip is stable, including Fastmail's normalised shapes (an organizer with `owner` alone, a guest with no `roles`).
   - A line whose value is not a URI is dropped. Participants are keyed `p1`, `p2`, ... in document order.
-  - Sending the invitations is not the mapping's business: Evolution sends its own iTIP for this backend unless the backend says the server schedules (item 112 steps (b)-(e)). Patching the guest list on an edit is not done yet: `participants` is not in `MAPPED_PROPERTIES`.
+  - Sending the invitations is not the mapping's business: Evolution sends its own iTIP for this backend unless the backend says the server schedules (item 112 steps (b)-(e)). On an edit, `participants` and `organizerCalendarAddress` are patched (both are in `MAPPED_PROPERTIES`): a guest is matched by address to the server's own entry, and only the members an `ATTENDEE` line shows are written into it, so `sendTo`, `invitedBy` and the like stay. Roles are compared as servers store them (no `roles` is `attendee`, and `attendee` beside `owner` is dropped), so a save does not patch a normalised guest list back. A guest added gets a key the server does not use; a guest removed is removed by key.
 
 ### 3.9 Recurrence Rules (`RRULE` ↔ `recurrenceRule`)
 - **Model Evolution & Wire Representation**:
@@ -775,14 +775,13 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Observed Behavior**:
   Stalwart v1.0.0's `CalendarEvent/parse` maps incoming iCalendar `ORGANIZER` and `ATTENDEE` records to JSCalendar `event.participants`. `jmap-ical`'s `ical_to_event` does the same since ROADMAP item 112 (see §3.8). Outbound serialization (`event_to_ical`) does emit `ORGANIZER` and `ATTENDEE` when `event.participants` is populated.
 - **Specification and Architectural Context**:
-  1. RFC 8984 §4.4 and draft-ietf-jmap-calendars §5.9 define `participants` as the representation of event owners and invitees. In server-side file import, converting attendees into participant objects provides full visibility for archival storage.
-  2. In JMAP scheduling (draft-ietf-jmap-calendars §5.9.2 and RFC 5546 iTIP), participant state and reply status (`PARTSTAT` / `participationStatus`) are scheduling state. Changes to participants trigger iTIP `REQUEST`, `REPLY`, or `CANCEL` notifications.
-  3. `jmap-ical` operates inside the client synchronization pipeline (`jmap-cal-sync`). The desktop client does not manage autonomous server-side iTIP scheduling flows directly through generic property patches. If `ical_to_event` parsed `participants`, every local appointment edit in Evolution would submit a `PatchObject` modifying `participants`, which could cause unauthorized attendee mutations or trigger unsanctioned scheduling messages.
-  4. Omitting `participants` from `MAPPED_PROPERTIES` and dropping them on inbound parse ensures client saves never propose unauthorized mutations to the server's authoritative guest list. Outbound emission continues to render `ORGANIZER` and `ATTENDEE` so the user can see invitees in the desktop UI.
+  1. RFC 8984 §4.4 and draft-ietf-jmap-calendars §5.9 define `participants` as the representation of event owners and invitees.
+  2. A guest list is meeting data every client of the account shows, so stripping it from a save defeats the point of syncing (operator decision, 2026-10-17). `participants` and `organizerCalendarAddress` are therefore in `MAPPED_PROPERTIES` and patched member by member into the server's own entries (see §3.8).
+  3. Whether the server or Evolution sends the iTIP messages is decided separately, by the calendar backend; the mapping itself never sets `sendSchedulingMessages`.
 - **Adjudication**:
-  Justified architectural deviation required for scheduling safety. Stalwart performs full archival ingestion. `jmap-ical` treats scheduling state as server-authoritative and read-only during client synchronization.
+  No divergence any more: both sides map the guest list.
 - **Status**:
-  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+  Closed. Pinned in `jmap-cal-sync/tests/participants.rs` and, live, `live_server_save.rs`.
 
 ### 13.5 Divergence 5: `PRODID`, `CALSCALE`, and `METHOD` Envelope Properties vs Generator Ownership
 
