@@ -446,8 +446,9 @@ pub const PARTICIPANT_KINDS: [(&str, &str); 4] = [
 /// stays. See `X_JMAP_KEY`, which is how a line says which entry it was drawn
 /// from. `links` is conditional too, per entry rather than per property: see
 /// `jmap_cal_sync::patch`, which is where the condition lives, since it is about
-/// which entry a patch path can reach.
-pub const MAPPED_PROPERTIES: [&str; 17] = [
+/// which entry a patch path can reach. `participants` is named into as well, one
+/// guest at a time, under the key the server files each address under.
+pub const MAPPED_PROPERTIES: [&str; 19] = [
     "title",
     "description",
     "start",
@@ -465,6 +466,8 @@ pub const MAPPED_PROPERTIES: [&str; 17] = [
     "alerts",
     "recurrenceRule",
     "recurrenceOverrides",
+    "participants",
+    "organizerCalendarAddress",
 ];
 
 /// The event properties an edited instance may restate, and therefore the only
