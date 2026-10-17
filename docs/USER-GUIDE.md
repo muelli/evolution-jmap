@@ -7,38 +7,53 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 This guide is for end users who want to use JMAP with Evolution.
 
-## What this supports
+## Install the package
 
-After setup, one JMAP account can provide:
+Install one package format, then restart Evolution so it reloads modules.
 
-- mail
-- address books
-- calendars
+Debian or Ubuntu (`.deb` release asset):
 
-JMAP-only Evolution features in this repository:
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify evolution-jmap_*_amd64.deb --repo muelli/evolution-jmap
+sudo apt install ./evolution-jmap_*_amd64.deb
+evolution --force-shutdown
+```
 
-- vacation autoresponder page in account settings
-- scheduled send in the composer
-- snooze in message lists (only when the server advertises the snooze capability)
+Fedora (`.rpm` build or release asset):
 
-## Before you start
+```bash
+sudo dnf install ./evolution-jmap*.rpm
+evolution --force-shutdown
+```
 
-1. Install Evolution and this project's package for your distro.
-2. Restart Evolution so it loads the new JMAP modules.
-3. Keep your account details ready:
-   - email address
-   - password (for password login)
-   - OAuth provider access (for OAuth login)
+Unverified in a running Evolution: exact package filename pattern on every distro release.
 
-Unverified in a running Evolution: exact package names and install commands for every distro.
+## Add a Fastmail account (OAuth)
 
-## Add a JMAP account (password flow)
+Use this flow for Fastmail and similar providers that support OAuth 2.0.
+
+1. Open Evolution and add a new mail account.
+2. Select account type `JMAP`.
+3. Enter:
+   - `JMAP Session URL`: `https://api.fastmail.com/jmap/session`
+   - `User`: your Fastmail address
+4. Trigger account lookup and OAuth sign in from the assistant.
+5. Complete browser login and consent, then return to Evolution and finish.
+
+If OAuth metadata lookup fails, Evolution keeps the account on password authentication for that server.
+
+Unverified in a running Evolution: exact button labels for the OAuth lookup and sign-in steps across Evolution versions.
+
+## Add a Stalwart account (password)
+
+Use this flow for Stalwart and other password-based setups.
 
 1. Open Evolution.
 2. Start adding a new mail account.
 3. Select the account type named `JMAP`.
 4. Fill in:
-   - server URL field: `JMAP Session URL`
+   - server URL field: `JMAP Session URL` (for example `http://<stalwart-ip>:8080/jmap/session`)
    - user field: `User`
 5. Continue and save the account.
 
@@ -49,21 +64,6 @@ The account setup module writes these settings into the account source:
 
 These values are consumed by the collection backend and the generated mail/calendar/address-book sources.
 
-## Add a JMAP account (OAuth flow)
-
-Use this when your provider supports OAuth 2.0 for JMAP.
-
-1. In account setup, enter your address and JMAP details.
-2. Trigger OAuth sign-in from the Evolution account flow.
-3. Complete provider login and consent in the browser window.
-4. Return to Evolution and finish account creation.
-
-The implementation performs RFC 8414 discovery and dynamic client registration, then stores per-account OAuth endpoints and client data for token refresh.
-
-If your server does not publish usable OAuth metadata, Evolution can show OAuth as unavailable for that account.
-
-Unverified in a running Evolution: exact wording and placement of each OAuth prompt on all Evolution versions.
-
 ## What you should see after setup
 
 A working JMAP account should appear as one account with three service areas:
@@ -73,6 +73,20 @@ A working JMAP account should appear as one account with three service areas:
 - calendars
 
 The project manual test recipe confirms this end-to-end against real servers and the local mock server.
+
+## Token rejected: what to expect
+
+If an OAuth token is revoked or otherwise rejected, Evolution asks you to sign in again.
+
+Mail uses separate receive and send services, so a rejected token can trigger one consent prompt per service. This is expected from EDS authentication flow, not a duplicate-account bug.
+
+If prompts loop forever without a successful sign-in, treat it as an error and capture debug logs.
+
+## Trailing-dot host case
+
+Hosts with one trailing dot are normalized to the same host without the dot. Example: `api.fastmail.com.` is treated as `api.fastmail.com`.
+
+If you previously saved a host with a trailing dot and saw repeated sign-in prompts, edit and save the account once so the normalized host is used consistently.
 
 ## JMAP-only features
 
@@ -99,6 +113,30 @@ Important limit: many public JMAP servers do not expose the snooze capability to
 - Evolution does not have an EDS hook to surface JMAP push (`eventSourceUrl`) in this plugin architecture. The provider runs pull-based refresh instead.
 - Snooze is capability-gated. Many public servers currently do not advertise the capability for API clients.
 - Some UI details in this guide are marked unverified in a running Evolution where they depend on desktop/runtime specifics.
+
+## Logs and debug output
+
+- Runtime logs are emitted through journald when available, otherwise stderr.
+- For detailed module logs, start Evolution with `EVOLUTION_JMAP_LOG=debug`.
+- For additional GLib process logs, also set `G_MESSAGES_DEBUG=all`.
+- To watch live user-session logs: `journalctl --user -f`.
+- Account source files are in `~/.config/evolution/sources/`.
+
+## Uninstall
+
+Debian or Ubuntu:
+
+```bash
+sudo apt remove evolution-jmap
+evolution --force-shutdown
+```
+
+Fedora:
+
+```bash
+sudo dnf remove evolution-jmap
+evolution --force-shutdown
+```
 
 ## Troubleshooting
 
