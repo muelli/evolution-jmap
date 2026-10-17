@@ -1,17 +1,17 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ROADMAP item 108, part (1): live confirmation that a meeting created
+ * ROADMAP item 112, step (a): live confirmation that a meeting created
  * locally through `ECalClient` keeps its attendees after EDS reads it back.
  *
- * The twin of `cal-live-client.c`, narrowed to the one question item 108
- * asks: whether `ORGANIZER`/`ATTENDEE` survive a create. `jmap_ical::
- * ical_to_event` never sends `participants` (see `event.rs`'s own comment
- * beside `drawn_participants`), and `jmap-cal-sync::CalSync::save_component`
- * re-reads the event from the server rather than trusting the component it
- * was handed (see that function's own comment), so EDS's meta-backend cache
- * ends up with whatever the server echoes back on the very same create —
- * no second connect or explicit refresh needed to observe the loss.
+ * The twin of `cal-live-client.c`, narrowed to one question: whether
+ * `ORGANIZER`/`ATTENDEE` survive a create. `jmap-cal-sync::CalSync::
+ * save_component` re-reads the event from the server rather than trusting
+ * the component it was handed (see that function's own comment), so EDS's
+ * meta-backend cache ends up with whatever the server echoes back on the
+ * very same create, no second connect or explicit refresh needed. Item 108
+ * part (1) used this program to observe the attendees being lost; item 112
+ * made them go out as `participants`, so it now observes them surviving.
  *
  * Everything around this file -- the scratch XDG tree, the `.source`
  * keyfile, the private D-Bus session, the proxy to the real server and

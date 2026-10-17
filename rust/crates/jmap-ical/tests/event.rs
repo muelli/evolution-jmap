@@ -7204,22 +7204,237 @@ fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
     );
 }
 
+/// A meeting the way Evolution's editor writes one: the organizer on a line of
+/// its own and again on the guest list, then everybody else invited.
+fn meeting(lines: &str) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\nBEGIN:VEVENT\r\n\
+         UID:meeting-1\r\nDTSTART:20260115T130000Z\r\nDURATION:PT1H\r\n\
+         SUMMARY:Sprint planning\r\n{lines}END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+}
+
+/// The participants an event holds, keyed by address rather than by the map's
+/// own key: a key read off a component is one this side invented, and the
+/// address is what says who somebody is.
+fn by_address(event: &CalendarEvent) -> BTreeMap<String, Value> {
+    event
+        .participants
+        .iter()
+        .flatten()
+        .map(|(_, participant)| {
+            (
+                participant["calendarAddress"]
+                    .as_str()
+                    .expect("every participant read has an address")
+                    .to_owned(),
+                participant.clone(),
+            )
+        })
+        .collect()
+}
+
+/// The addresses of everybody an event holds as a participant, sorted.
+fn addresses(event: &CalendarEvent) -> Vec<String> {
+    by_address(event).into_keys().collect()
+}
+
 #[test]
-fn the_guest_list_is_written_and_never_read_back() {
-    // The precedent CREATED and LAST-MODIFIED set, for a different reason:
-    // changing who is invited, or what they replied, is *scheduling*: it means
-    // an iTIP REQUEST or REPLY going out (RFC 5546), which this backend does not
-    // send. So the guest list is drawn for the user to read and nothing more:
-    // `participants` is absent from MAPPED_PROPERTIES, so no save can name it,
-    // and the server's own guest list cannot be overwritten from here.
-    let ics = event_to_ical(&attended(json!({
-        "alice": guest("mailto:alice@example.com", "Alice Example", json!({
-            "roles": {"owner": true, "attendee": true},
-        })),
-    })));
-    let event = ical_to_event(&ics).expect("parse");
+fn the_guest_list_of_a_meeting_is_read_back_as_participants() {
+    // A meeting is synced with its guests, so that one made on the laptop shows
+    // them on the phone. JSCalendar-bis names each guest by `calendarAddress`
+    // (never the reserved `sendTo`), and the event's organizer by
+    // `organizerCalendarAddress` beside the participant holding `owner`.
+    let event = ical_to_event(&meeting(
+        "ORGANIZER;CN=Alice Example:mailto:alice@example.com\r\n\
+         ATTENDEE;CN=Alice Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+         mailto:alice@example.com\r\n\
+         ATTENDEE;CN=Bob Example;CUTYPE=INDIVIDUAL;ROLE=OPT-PARTICIPANT;\
+         PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:bob@example.com\r\n",
+    ))
+    .expect("parse");
+
+    assert_eq!(
+        event.organizer_calendar_address.as_deref(),
+        Some("mailto:alice@example.com")
+    );
+    assert_eq!(
+        by_address(&event),
+        BTreeMap::from([
+            (
+                "mailto:alice@example.com".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "calendarAddress": "mailto:alice@example.com",
+                    "name": "Alice Example",
+                    "roles": {"owner": true, "attendee": true},
+                    "participationStatus": "accepted",
+                }),
+            ),
+            (
+                "mailto:bob@example.com".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "calendarAddress": "mailto:bob@example.com",
+                    "name": "Bob Example",
+                    "kind": "individual",
+                    "roles": {"attendee": true, "optional": true},
+                    "participationStatus": "needs-action",
+                    "expectReply": true,
+                }),
+            ),
+        ])
+    );
+    let keys: Vec<&String> = event
+        .participants
+        .iter()
+        .flatten()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(
+        keys.len(),
+        2,
+        "one entry per person, organizer merged: {keys:?}"
+    );
+}
+
+#[test]
+fn each_role_reads_back_as_the_set_that_draws_it() {
+    // ROLE is one value and `roles` a set, so a reading has to pick the set the
+    // drawing would spell that value from (see PARTICIPANT_ROLES): everybody on
+    // the guest list but a NON-PARTICIPANT attends, and a missing ROLE is RFC
+    // 5545 §3.2.16's default of REQ-PARTICIPANT.
+    for (role, roles) in [
+        (";ROLE=REQ-PARTICIPANT", json!({"attendee": true})),
+        ("", json!({"attendee": true})),
+        (
+            ";ROLE=OPT-PARTICIPANT",
+            json!({"attendee": true, "optional": true}),
+        ),
+        (";ROLE=CHAIR", json!({"attendee": true, "chair": true})),
+        (";ROLE=NON-PARTICIPANT", json!({"informational": true})),
+        // A role outside the shared vocabulary is the default, like every
+        // closed vocabulary this mapping reads.
+        (";ROLE=X-CAMEO", json!({"attendee": true})),
+    ] {
+        let event = ical_to_event(&meeting(&format!(
+            "ATTENDEE{role}:mailto:bob@example.com\r\n"
+        )))
+        .expect("parse");
+
+        assert_eq!(
+            by_address(&event)["mailto:bob@example.com"]["roles"],
+            roles,
+            "{role}"
+        );
+        // No ORGANIZER, no organizer.
+        assert_eq!(event.organizer_calendar_address, None, "{role}");
+    }
+}
+
+#[test]
+fn an_organizer_who_is_not_on_the_guest_list_only_owns_the_event() {
+    let event = ical_to_event(&meeting(
+        "ORGANIZER:mailto:alice@example.com\r\n\
+         ATTENDEE;CUTYPE=ROOM;PARTSTAT=TENTATIVE:mailto:room-1@example.com\r\n",
+    ))
+    .expect("parse");
+
+    assert_eq!(
+        by_address(&event),
+        BTreeMap::from([
+            (
+                "mailto:alice@example.com".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "calendarAddress": "mailto:alice@example.com",
+                    "roles": {"owner": true},
+                }),
+            ),
+            (
+                "mailto:room-1@example.com".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "calendarAddress": "mailto:room-1@example.com",
+                    "kind": "location",
+                    "roles": {"attendee": true},
+                    "participationStatus": "tentative",
+                }),
+            ),
+        ])
+    );
+}
+
+#[test]
+fn a_guest_no_address_can_name_is_not_read() {
+    // The mirror of a_participant_with_no_address_to_send_to_is_left_off: a
+    // CAL-ADDRESS is a URI (RFC 5545 §3.3.3), and a participant filed under
+    // something else would be one the server can never reach.
+    let event =
+        ical_to_event(&meeting("ORGANIZER:alice\r\nATTENDEE:bob example\r\n")).expect("parse");
 
     assert_eq!(event.participants, None);
+    assert_eq!(event.organizer_calendar_address, None);
+}
+
+#[test]
+fn an_event_nobody_is_invited_to_has_no_participants() {
+    let event = ical_to_event(&meeting("")).expect("parse");
+
+    assert_eq!(event.participants, None);
+    assert_eq!(event.organizer_calendar_address, None);
+}
+
+#[test]
+fn the_guest_list_survives_a_round_trip() {
+    // The server's shape, drawn and read back: what the save path diffs against
+    // (see jmap_cal_sync::patch), so anything lost here would read as an edit.
+    // Fastmail drops a plain attendee's `roles` (the RFC 8984 default) and keeps
+    // an organizer's `owner` alone, so both shapes have to come back as sent.
+    let sent = attended(json!({
+        "o": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:alice@example.com",
+            "name": "Alice Example",
+            "roles": {"owner": true},
+        },
+        "b": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:bob@example.com",
+            "name": "Bob Example",
+            "participationStatus": "declined",
+        },
+        "c": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:carol@example.com",
+            "roles": {"attendee": true, "chair": true},
+            "expectReply": true,
+        },
+    }));
+    let read = ical_to_event(&event_to_ical(&sent)).expect("parse");
+
+    let mut expected = by_address(&sent);
+    expected
+        .get_mut("mailto:bob@example.com")
+        .expect("bob")
+        .as_object_mut()
+        .expect("an object")
+        .insert("roles".to_owned(), json!({"attendee": true}));
+    assert_eq!(by_address(&read), expected);
+    assert_eq!(
+        read.organizer_calendar_address.as_deref(),
+        Some("mailto:alice@example.com")
+    );
+}
+
+#[test]
+fn a_guest_read_back_is_never_given_a_send_to() {
+    // jscalendarbis reserves `sendTo`; a create that named it would be one a
+    // server is entitled to refuse.
+    let event = ical_to_event(&meeting("ATTENDEE:mailto:bob@example.com\r\n")).expect("parse");
+    let json = serde_json::to_string(&event).expect("serialise");
+
+    assert!(!json.contains("sendTo"), "{json}");
 }
 
 #[test]
@@ -14045,8 +14260,9 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
     assert!(parsed1.links.is_some());
     assert!(parsed1.keywords.is_some());
     assert_eq!(
-        parsed1.participants, None,
-        "guest list is written and never read back (server-managed)"
+        addresses(&parsed1),
+        ["mailto:alice@example.com", "mailto:bob@example.com"],
+        "the guest list is read back"
     );
     assert!(parsed1.alerts.is_some());
 
@@ -16749,16 +16965,13 @@ END:VCALENDAR\r\n";
 }
 
 #[test]
-fn differential_oracle_organizer_and_attendee_dropped_on_import_for_scheduling_safety() {
+fn differential_oracle_organizer_and_attendee_read_on_import() {
     // Divergence 4 against Stalwart differential oracle:
     // Stalwart v1.0.0 CalendarEvent/parse converts ORGANIZER and ATTENDEE lines
     // into JSCalendar participants.
-    // In contrast, jmap-ical's ical_to_event drops them on import (participants: None),
-    // while outbound event_to_ical draws them when event.participants is present.
-    // Rationale: Guest list and reply statuses (PARTSTAT) are scheduling state.
-    // If ical_to_event parsed them, local desktop saves in Evolution would submit
-    // patches mutating participants on the server without sending iTIP messages
-    // (RFC 5546), corrupting server-authoritative guest list and response state.
+    // jmap-ical's ical_to_event does the same since ROADMAP item 112: a meeting
+    // is synced with its guests. Who sends the invitations is decided apart
+    // from the mapping (the server, or Evolution's own iTIP).
     let path = format!(
         "{}/tests/fixtures/google_calendar_export.ics",
         env!("CARGO_MANIFEST_DIR")
@@ -16766,10 +16979,14 @@ fn differential_oracle_organizer_and_attendee_dropped_on_import_for_scheduling_s
     let ics = std::fs::read_to_string(&path).expect("read fixture");
     let event = ical_to_event(&ics).expect("parse ics");
 
-    // Inbound: participants must be None
+    // Inbound: the guest list is read, the ATTENDEE inside a VALARM is not
     assert_eq!(
-        event.participants, None,
-        "participants must be dropped on inbound parse to preserve scheduling boundary"
+        addresses(&event),
+        [
+            "mailto:bob.smith@example.com",
+            "mailto:carol.danvers@example.com",
+            "mailto:jane.doe@example.com"
+        ]
     );
 
     // Dropped attendees must not pollute extra
@@ -18406,7 +18623,17 @@ END:VEVENT\r\n\
 END:VCALENDAR\r\n";
     let ev = ical_to_event(ics).expect("parse event with contact and scheduling parameters");
     assert_eq!(ev.title.as_deref(), Some("Executive Briefing"));
-    assert_eq!(ev.participants, None);
+    // The guests are read; SENT-BY and DIR are not, and say nothing about who
+    // the participant is.
+    assert_eq!(
+        addresses(&ev),
+        ["mailto:boss@example.com", "mailto:engineer@example.com"]
+    );
+    assert!(
+        by_address(&ev)
+            .values()
+            .all(|p| p.get("sentBy").is_none() && p.get("sendTo").is_none())
+    );
     assert!(ev.extra.is_empty());
 
     let out = event_to_ical(&ev);
@@ -21238,7 +21465,7 @@ fn differential_oracle_participant_sendto_imip_uri_validation_and_crlf_sanitizat
     // 2. names_a_uri validates RFC 3986 scheme, colon, and no whitespace.
     // 3. Newlines or carriage returns are rejected to prevent CRLF injection.
     // 4. Non-imip delivery methods (sms, other) or non-URI strings are dropped.
-    // 5. Inbound ical_to_event leaves participants: None for scheduling safety.
+    // 5. Inbound ical_to_event reads the guest back by calendarAddress.
     let valid_event = attended(json!({
         "alice": guest("mailto:alice@example.com", "Alice Example", json!({
             "roles": {"attendee": true},
@@ -21279,9 +21506,9 @@ fn differential_oracle_participant_sendto_imip_uri_validation_and_crlf_sanitizat
         );
     }
 
-    // Inbound safety: participants are dropped on import
+    // Inbound: the guest is read back
     let imported = ical_to_event(&ics).expect("parse valid event with attendee");
-    assert_eq!(imported.participants, None);
+    assert_eq!(addresses(&imported), ["mailto:alice@example.com"]);
 }
 
 #[test]
@@ -21526,9 +21753,17 @@ fn differential_oracle_participant_cn_name_mapping_and_empty_suppression() {
         "{ics}"
     );
 
-    // Inbound safety: participants dropped on parse
+    // Inbound: every guest is read back
     let parsed = ical_to_event(&ics).expect("parse valid event with attendees");
-    assert_eq!(parsed.participants, None);
+    assert_eq!(
+        addresses(&parsed),
+        [
+            "mailto:alice@example.com",
+            "mailto:bob@example.com",
+            "mailto:empty@example.com",
+            "mailto:noname@example.com"
+        ]
+    );
 }
 
 #[test]
@@ -21571,9 +21806,12 @@ fn differential_oracle_participant_delegation_parameter_omission() {
         "{ics}"
     );
 
-    // Inbound safety: participants dropped on parse
+    // Inbound: every guest is read back
     let parsed = ical_to_event(&ics).expect("parse valid event with delegated attendees");
-    assert_eq!(parsed.participants, None);
+    assert_eq!(
+        addresses(&parsed),
+        ["mailto:alice@example.com", "mailto:bob@example.com"]
+    );
 }
 
 #[test]
@@ -21601,9 +21839,9 @@ fn differential_oracle_participant_member_of_group_parameter_omission() {
         "{ics}"
     );
 
-    // Inbound safety
+    // Inbound: the guest is read back
     let parsed = ical_to_event(&ics).expect("parse valid event with member attendee");
-    assert_eq!(parsed.participants, None);
+    assert_eq!(addresses(&parsed), ["mailto:developer@example.com"]);
 }
 
 #[test]
@@ -21634,9 +21872,9 @@ fn differential_oracle_participant_schedule_agent_parameters_omission() {
         "{ics}"
     );
 
-    // Inbound safety
+    // Inbound: the guest is read back
     let parsed = ical_to_event(&ics).expect("parse valid event with managed invitee");
-    assert_eq!(parsed.participants, None);
+    assert_eq!(addresses(&parsed), ["mailto:managed@example.com"]);
 }
 
 #[test]
@@ -32674,9 +32912,10 @@ fn differential_oracle_multi_rrule_narrowing_and_property_dropping() {
         "END:VCALENDAR\r\n",
     );
     let event_parts = ical_to_event(ics_participants).expect("parses calendar");
-    assert!(
-        event_parts.participants.is_none(),
-        "participants dropped on import for iTIP safety"
+    assert_eq!(
+        addresses(&event_parts),
+        ["mailto:att@example.com", "mailto:org@example.com"],
+        "the guest list is read on import"
     );
 }
 
@@ -35484,8 +35723,11 @@ END:VEVENT\r\n\
 END:VCALENDAR\r\n";
 
     let event = jmap_ical::event::ical_to_event(ics).expect("parse ics");
-    // participants must be None because scheduling state is not mapped
-    assert!(event.participants.is_none());
+    // participants are read: the guest list is synced with the meeting
+    assert_eq!(
+        addresses(&event),
+        ["mailto:guest@example.com", "mailto:owner@example.com"]
+    );
     // created and updated must be None because timestamps are server store-owned
     assert!(event.created.is_none());
     assert!(event.updated.is_none());
@@ -36791,9 +37033,11 @@ END:VEVENT\r\n\
 END:VCALENDAR\r\n";
 
     let event_sched = jmap_ical::event::ical_to_event(ics_sched).expect("parse");
+    // The guest list is synced; sending the invitations is not this mapping's
+    // business (ROADMAP item 112).
     assert_eq!(
-        event_sched.participants, None,
-        "Inbound participants must be None for scheduling safety"
+        addresses(&event_sched),
+        ["mailto:guest@example.com", "mailto:owner@example.com"]
     );
 
     // 4. DATE-valued TZID ignorance: DTSTART;TZID=America/New_York:20260601
@@ -42041,8 +42285,15 @@ fn differential_oracle_participant_scheduling_protection_and_inbound_suppression
     );
     let event = jmap_ical::event::ical_to_event(ics).expect("parse event");
 
-    // 1. Inbound participant ingestion is suppressed to protect scheduling state
-    assert!(event.participants.is_none());
+    // 1. Inbound participants are read back by address
+    assert_eq!(
+        addresses(&event),
+        [
+            "mailto:arthur@example.com",
+            "mailto:ford@example.com",
+            "mailto:trillian@example.com"
+        ]
+    );
 
     // 2. Outbound participant serialization: drawn_participants correctly renders
     // ORGANIZER and ATTENDEE lines when participants are present in the event model.
@@ -44039,7 +44290,10 @@ fn differential_oracle_participants_roster_organizer_attendee_and_scheduling_iso
         "END:VCALENDAR\r\n"
     );
     let ev = ical_to_event(ics).expect("parses calendar");
-    assert_eq!(ev.participants, None);
+    assert_eq!(
+        addresses(&ev),
+        ["mailto:alicia.vance@example.com", "mailto:bob@example.com"]
+    );
 
     // 2. Outbound serialization maps owner role to ORGANIZER and non-owner attendee to ATTENDEE
     let mut parts = BTreeMap::new();
@@ -45310,16 +45564,27 @@ fn differential_oracle_participant_roster_and_organizer_dual_role_serialization(
     // RFC 5545 Section 3.8.4.1 ATTENDEE, Section 3.8.4.3 ORGANIZER vs
     // RFC 8984 Section 4.4.6 participants.
 
-    // 1. Inbound parsing drops ORGANIZER and ATTENDEE (participants is None)
-    // to isolate iTIP scheduling state (RFC 5546) and prevent unsolicited
-    // invitations from being sent by client bridge saves.
+    // 1. Inbound parsing reads ORGANIZER and ATTENDEE as participants, the
+    // organizer merged with its own guest line into one entry.
     let sogo_ics = include_str!("fixtures/sogo_calendar_export.ics");
     let ev_sogo = ical_to_event(sogo_ics).expect("parses sogo calendar");
-    assert!(ev_sogo.participants.is_none());
+    assert_eq!(
+        addresses(&ev_sogo),
+        [
+            "mailto:alan.turing@cambridge.example",
+            "mailto:helene.dubois@sorbonne-universite.example"
+        ]
+    );
 
     let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
     let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
-    assert!(ev_tb.participants.is_none());
+    assert_eq!(
+        addresses(&ev_tb),
+        [
+            "mailto:arthur.dent@earth.example",
+            "mailto:trillian@galaxy.example"
+        ]
+    );
 
     // 2. Outbound serialization: an owner with no other role gets only ORGANIZER
     let mut parts_owner_only = BTreeMap::new();
@@ -46268,12 +46533,16 @@ fn differential_oracle_participant_extended_parameters_and_scheduling_isolation(
 
     // 1. Inbound parsing: google calendar has ATTENDEE lines with X-NUM-GUESTS=0;
     // cyrus caldav has ATTENDEE lines with SCHEDULE-AGENT=SERVER and SCHEDULE-STATUS=2.0.
-    // In jmap-ical, participant rosters are dropped on inbound import to isolate scheduling state.
+    // In jmap-ical, the roster is read; none of those parameters is.
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
     let ev_google = ical_to_event(google_ics).expect("parses google calendar");
-    assert!(
-        ev_google.participants.is_none(),
-        "participants dropped on inbound import"
+    assert_eq!(
+        addresses(&ev_google),
+        [
+            "mailto:bob.smith@example.com",
+            "mailto:carol.danvers@example.com",
+            "mailto:jane.doe@example.com"
+        ]
     );
     assert!(
         ev_google.extra.is_empty(),
@@ -46282,20 +46551,25 @@ fn differential_oracle_participant_extended_parameters_and_scheduling_isolation(
 
     let cyrus_ics = include_str!("fixtures/cyrus_caldav_export.ics");
     let ev_cyrus = ical_to_event(cyrus_ics).expect("parses cyrus caldav");
-    assert!(
-        ev_cyrus.participants.is_none(),
-        "participants dropped on inbound import"
+    assert_eq!(
+        addresses(&ev_cyrus),
+        [
+            "mailto:brong@fastmail.example",
+            "mailto:murch@fastmail.example",
+            "mailto:neilj@fastmail.example"
+        ]
     );
     assert!(
         ev_cyrus.extra.is_empty(),
         "extra does not retain scheduling parameters"
     );
 
-    // 2. Outbound serialization: an event imported without participants renders no ATTENDEE lines.
+    // 2. Outbound serialization: the imported guests are drawn again, without
+    // the parameters that were not read.
     let out_google = event_to_ical(&ev_google);
     assert!(
-        !out_google.contains("ATTENDEE"),
-        "event without participants emits no ATTENDEE lines"
+        out_google.contains("ATTENDEE"),
+        "imported guests are drawn back: {out_google}"
     );
     assert!(
         !out_google.contains("X-NUM-GUESTS"),
@@ -46304,8 +46578,8 @@ fn differential_oracle_participant_extended_parameters_and_scheduling_isolation(
 
     let out_cyrus = event_to_ical(&ev_cyrus);
     assert!(
-        !out_cyrus.contains("ATTENDEE"),
-        "cyrus event emits no ATTENDEE lines"
+        out_cyrus.contains("ATTENDEE"),
+        "imported guests are drawn back: {out_cyrus}"
     );
     assert!(
         !out_cyrus.contains("SCHEDULE-AGENT"),
@@ -46394,34 +46668,42 @@ fn differential_oracle_organizer_calendar_address_and_scheduling_boundary_isolat
     // protocol boundary isolation: RFC 5545 Section 3.8.4.3 ORGANIZER vs draft-ietf-jmap-calendars Section 5.9.2 organizerCalendarAddress.
 
     // 1. Inbound parsing: evolution calendar export and thunderbird calendar export carry ORGANIZER.
-    // In jmap-ical, read_vevent drops ORGANIZER lines on import, isolating scheduling state.
+    // In jmap-ical, read_vevent reads it as organizerCalendarAddress (ROADMAP item 112).
     let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
     let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar");
-    assert!(
-        ev_evo.organizer_calendar_address.is_none(),
-        "organizer_calendar_address must be None on inbound import"
+    assert_eq!(
+        ev_evo.organizer_calendar_address.as_deref(),
+        Some("mailto:jane.doe@example.com"),
+        "the ORGANIZER is read as organizerCalendarAddress"
     );
-    assert!(
-        ev_evo.participants.is_none(),
-        "participants must be None on inbound import"
+    assert_eq!(
+        addresses(&ev_evo),
+        [
+            "mailto:erik.lindqvist@example.com",
+            "mailto:jane.doe@example.com"
+        ]
     );
 
     let tb_ics = include_str!("fixtures/thunderbird_calendar_export.ics");
     let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
-    assert!(
-        ev_tb.organizer_calendar_address.is_none(),
-        "organizer_calendar_address must be None on inbound import"
+    assert_eq!(
+        ev_tb.organizer_calendar_address.as_deref(),
+        Some("mailto:relman@thunderbird.example")
     );
-    assert!(
-        ev_tb.participants.is_none(),
-        "participants must be None on inbound import"
+    assert_eq!(
+        addresses(&ev_tb),
+        [
+            "mailto:arthur.dent@earth.example",
+            "mailto:relman@thunderbird.example",
+            "mailto:trillian@galaxy.example"
+        ]
     );
 
-    // 2. Outbound serialization: an imported event without participants emits no ORGANIZER line.
+    // 2. Outbound serialization: the imported organizer is drawn again.
     let out_evo = event_to_ical(&ev_evo);
     assert!(
-        !out_evo.contains("ORGANIZER"),
-        "event without participants emits no ORGANIZER line"
+        out_evo.contains("ORGANIZER"),
+        "an imported organizer is drawn back: {out_evo}"
     );
 
     // An event with an owner participant emits ORGANIZER.
@@ -47175,9 +47457,10 @@ fn differential_oracle_recurrence_overrides_organizer_scheduling_isolation() {
     // 2. Inbound parsing: google_calendar_export.ics declares ORGANIZER on both master and detached occurrence.
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
     let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
-    assert!(
-        ev_google.organizer_calendar_address.is_none(),
-        "read_vevent leaves organizer_calendar_address None to isolate store from scheduling metadata"
+    assert_eq!(
+        ev_google.organizer_calendar_address.as_deref(),
+        Some("mailto:jane.doe@example.com"),
+        "read_vevent reads the ORGANIZER as organizerCalendarAddress"
     );
     let overrides = ev_google
         .recurrence_overrides
@@ -47195,11 +47478,11 @@ fn differential_oracle_recurrence_overrides_organizer_scheduling_isolation() {
         "patch delta must not contain organizer"
     );
 
-    // 3. Outbound serialization: when no participant has owner role, no ORGANIZER line is emitted.
+    // 3. Outbound serialization: the owner read back is drawn as ORGANIZER again.
     let out_google = event_to_ical(&ev_google);
     assert!(
-        !out_google.contains("ORGANIZER"),
-        "events without owner participant do not emit ORGANIZER line"
+        out_google.contains("ORGANIZER"),
+        "the owner read back is drawn again: {out_google}"
     );
 
     // When an owner participant is present, vevent_of emits ORGANIZER on both master and detached occurrence.
