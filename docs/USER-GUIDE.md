@@ -151,7 +151,7 @@ evolution --force-shutdown
 
 ## Troubleshooting
 
-- Recheck `JMAP Session URL` and `User` first.
+- Recheck `Server`, `Port`, and `Username` first.
 - If mail authentication fails, confirm account credentials and whether OAuth or password flow is configured for that provider.
 - If `Send Later` is disabled, verify the active From account is JMAP and the server supports delayed send.
 - If `Snooze` is disabled, verify whether your server advertises snooze capability. Lack of capability is common and not necessarily a bug.
