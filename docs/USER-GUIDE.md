@@ -109,9 +109,15 @@ Unverified in a running Evolution: exact widget layout on every desktop theme an
 
 ### Scheduled send
 
-In the composer, open `File` then `Send Later`. Presets include one hour, tomorrow morning, and next Monday morning.
+In the composer, open `File` then `Send Later`.
 
 This menu is enabled only when the selected From account is JMAP and the server advertises delayed-send support (`maxDelayedSend > 0`).
+
+Current presets are:
+
+- `In One Hour`
+- next local `08:00`, `12:00`, `18:00`, and `21:00` (shown as Today, Tomorrow, or weekday)
+- next workday at `09:00` (Monday to Friday)
 
 ### Snooze
 
