@@ -403,3 +403,57 @@ fn destination_address_does_not_create_an_authentication_group_it_lacks() {
         "reading a source must not create the [Authentication] group it lacks"
     );
 }
+
+#[test]
+fn an_identity_with_an_account_names_a_collection_in_that_account() {
+    // A calendar or address book another user shares lives in that user's
+    // account, so the collection writes `<accountId>/<collectionId>`. JMAP
+    // ids never contain `/` (RFC 8620 §1.2), so the split is unambiguous.
+    let config = TestSource::new()
+        .host("jmap.example.com")
+        .identity("A2/C1")
+        .config()
+        .expect("a shared collection's source is valid");
+
+    assert_eq!(config.account_id(), Some("A2"));
+    assert_eq!(config.collection_id(), Some("C1"));
+}
+
+#[test]
+fn a_bare_identity_names_a_collection_in_the_primary_account() {
+    let config = TestSource::new()
+        .host("jmap.example.com")
+        .identity("Ab1")
+        .config()
+        .expect("a valid source");
+
+    assert_eq!(config.account_id(), None);
+    assert_eq!(config.collection_id(), Some("Ab1"));
+}
+
+#[test]
+fn a_malformed_identity_is_kept_whole_rather_than_guessed_at() {
+    // Kept whole so the server refuses it under the name the keyfile holds,
+    // instead of the backend quietly opening some other collection.
+    for identity in ["/C1", "A2/", "A2/C1/X", "/"] {
+        let config = TestSource::new()
+            .host("jmap.example.com")
+            .identity(identity)
+            .config()
+            .expect("a valid source");
+
+        assert_eq!(config.account_id(), None, "{identity}");
+        assert_eq!(config.collection_id(), Some(identity), "{identity}");
+    }
+}
+
+#[test]
+fn a_source_without_an_identity_names_no_account_and_no_collection() {
+    let config = TestSource::new()
+        .host("jmap.example.com")
+        .config()
+        .expect("a valid source");
+
+    assert_eq!(config.account_id(), None);
+    assert_eq!(config.collection_id(), None);
+}
