@@ -57,7 +57,7 @@ this way).
 |---|---|---|---|
 | Scheduling signal in the session | none (empty objects) | none (empty objects) | none |
 | `sendSchedulingMessages: true`, reachable guest | sends: the event lands in the guest's calendar, plus a notification and an iMIP "Invitation:" mail | sends: an iMIP invitation (HTML with RSVP links and `invite.ics`) within ~40 s; a destroy sends a cancellation | records the iTIP message in a per-account scheduling outbox (no transport) |
-| Guest with no address the server can send to | `noSupportedScheduleMethods`, nothing stored | not probed | `noSupportedScheduleMethods`, nothing stored |
+| Guest with no address the server can send to | `noSupportedScheduleMethods`, nothing stored | not probed | `noSupportedScheduleMethods`, nothing stored (only `mailto:` counts as deliverable, as on Stalwart) |
 | Unknown `/set` argument | ignored, change applied (against RFC 8620 section 3.9) | not probed | not probed |
 | Non-scheduling mode | n/a | n/a | none yet; needed to test the fallback |
 
@@ -124,9 +124,12 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
    that does not send invitations.
 3. **Switch on.** The backend advertises `create-messages`, `save-schedules`
    and `itip-suppress-on-remove-supported`, so Evolution does not mail guests
-   itself. Creates, edits and deletes of events with participants send
-   `sendSchedulingMessages: true`, except when the operation flags carry
+   itself. Creates, edits and deletes send `sendSchedulingMessages: true`,
+   except when the operation flags carry
    `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE` (the user chose not to send).
+   The flag goes out whether or not the event has participants: one without
+   any is not a scheduled event, so the server has nobody to send to, and a
+   delete need not load the event first to find out.
    The server picks REQUEST/CANCEL or REPLY from `isOrigin`, so the same flag
    serves the organizer's edits and a guest's accept or decline.
 4. **Switch off.** No capability is advertised, `sendSchedulingMessages` is
@@ -140,3 +143,17 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
    `invalidArguments` on a call that carried `sendSchedulingMessages` means
    the server does not implement it: the save fails the same way and tells the
    user to turn the switch off.
+
+## 5. Where this lives
+
+- `jmap-client`: `event_create_with_scheduling`, `event_update_with_scheduling`
+  and `event_destroy_with_scheduling` send the argument only when asked.
+- `jmap-cal-sync`: `CalSync::with_server_scheduling` is the account switch,
+  off by default until the calendar backend reads it from the source and
+  advertises the capabilities above; `save_component_with` and
+  `remove_component_with` take `Itip::Suppress` for
+  `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. A refusal comes back as the
+  record's `SetError`. Tests: `tests/scheduling.rs` (mock) and
+  `tests/live_server_scheduling.rs` (two accounts on one real server: with the
+  switch on the guest's calendar gets the meeting exactly once and then its
+  cancellation; with it off, nothing).

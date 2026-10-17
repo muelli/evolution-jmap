@@ -239,6 +239,107 @@ fn nothing_is_sent_unless_the_client_asks_for_it() {
 }
 
 #[test]
+fn the_create_update_and_destroy_helpers_ask_only_when_told_to() {
+    let fixture = Fixture::new();
+    let client = &fixture.client;
+    let event = meeting(&fixture.calendar_id);
+
+    let quiet = client
+        .event_create_with_scheduling(&fixture.account_id, &event, false)
+        .unwrap()
+        .id
+        .unwrap();
+    client
+        .event_update_with_scheduling(&fixture.account_id, &quiet, json!({"title": "x"}), false)
+        .unwrap();
+    client
+        .event_destroy_with_scheduling(&fixture.account_id, &quiet, false)
+        .unwrap();
+    assert!(fixture.sent().is_empty(), "false asks for nothing");
+
+    let id = client
+        .event_create_with_scheduling(&fixture.account_id, &event, true)
+        .unwrap()
+        .id
+        .unwrap();
+    let invited = fixture.sent_since(0);
+    assert_eq!(
+        invited,
+        vec![
+            ("REQUEST".to_owned(), BOB.to_owned(), None),
+            ("REQUEST".to_owned(), CAROL.to_owned(), None),
+        ]
+    );
+    client
+        .event_update_with_scheduling(
+            &fixture.account_id,
+            &id,
+            json!({"participants/carol": null}),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.sent_since(2),
+        vec![
+            ("CANCEL".to_owned(), CAROL.to_owned(), None),
+            ("REQUEST".to_owned(), BOB.to_owned(), None),
+        ]
+    );
+    client
+        .event_destroy_with_scheduling(&fixture.account_id, &id, true)
+        .unwrap();
+    assert_eq!(
+        fixture.sent_since(4),
+        vec![("CANCEL".to_owned(), BOB.to_owned(), None)]
+    );
+}
+
+#[test]
+fn a_refusal_to_schedule_is_the_helpers_error() {
+    let fixture = Fixture::new();
+    let mut event = meeting(&fixture.calendar_id);
+    event.participants.as_mut().unwrap().insert(
+        "dave".to_owned(),
+        json!({"@type": "Participant", "calendarAddress": "urn:uuid:dave"}),
+    );
+    let error = fixture
+        .client
+        .event_create_with_scheduling(&fixture.account_id, &event, true)
+        .expect_err("the server cannot reach Dave");
+    assert!(
+        matches!(&error, jmap_client::Error::Set(set) if set.error_type == "noSupportedScheduleMethods"),
+        "{error:?}"
+    );
+}
+
+/// Like Stalwart (`live_server.rs`'s
+/// `scheduling_for_an_undeliverable_guest_is_refused_and_nothing_is_stored`),
+/// the mock only delivers by iMIP, so a guest whose only address is not a
+/// `mailto:` cannot be reached.
+#[test]
+fn a_participant_reachable_only_at_a_non_mailto_address_is_refused() {
+    let fixture = Fixture::new();
+    let mut event = meeting(&fixture.calendar_id);
+    event.participants.as_mut().unwrap().insert(
+        "dave".to_owned(),
+        json!({"@type": "Participant", "calendarAddress": "https://example.com/dave"}),
+    );
+
+    let response = fixture.set(
+        SetRequest::new(fixture.account_id.clone()).create("new", event),
+        true,
+    );
+
+    let error = response
+        .not_created
+        .as_ref()
+        .and_then(|map| map.get("new"))
+        .expect("the create was refused");
+    assert_eq!(error.error_type, "noSupportedScheduleMethods");
+    assert!(fixture.sent().is_empty());
+}
+
+#[test]
 fn a_draft_is_never_scheduled() {
     let fixture = Fixture::new();
     let mut event = meeting(&fixture.calendar_id);

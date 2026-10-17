@@ -40,9 +40,12 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // Non-origin updates reply only to the organizer.
-        return event.organizer_calendar_address.is_some();
+        return event
+            .organizer_calendar_address
+            .as_deref()
+            .is_some_and(deliverable);
     }
-    let reachable = |participant: &Value| calendar_address(participant).is_some();
+    let reachable = |participant: &Value| calendar_address(participant).is_some_and(deliverable);
     participants(event).values().all(|p| reachable(p))
         && overridden_ids(None, Some(event))
             .iter()
@@ -521,6 +524,12 @@ fn unescape(segment: &str) -> String {
 }
 
 /// The participant's `calendarAddress`, falling back to RFC 8984 `sendTo.imip`.
+/// Whether the mock's one transport, iMIP, can carry a message to `address`.
+/// Stalwart refuses `urn:uuid:` and `https:` guests the same way.
+fn deliverable(address: &str) -> bool {
+    normalize_uri(address).starts_with("mailto:")
+}
+
 fn calendar_address(participant: &Value) -> Option<&str> {
     participant
         .get("calendarAddress")
