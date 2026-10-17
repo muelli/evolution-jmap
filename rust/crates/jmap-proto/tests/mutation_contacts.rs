@@ -1146,10 +1146,7 @@ fn language_pref_builders_and_custom_deserialization() {
     assert_eq!(deserialized_u64.language, "");
     assert_eq!(deserialized_u64.pref, Some(3));
 
-    let deserialized_i64: LanguagePref =
-        serde_json::from_value(json!(-4)).expect("deserialize i64 LanguagePref");
-    assert_eq!(deserialized_i64.language, "");
-    assert_eq!(deserialized_i64.pref, Some((-4i64) as u32));
+    assert!(serde_json::from_value::<LanguagePref>(json!(-4)).is_err());
 
     let deserialized_map: LanguagePref = serde_json::from_value(json!({
         "language": "fr",
