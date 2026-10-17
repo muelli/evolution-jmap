@@ -674,6 +674,7 @@ dependencies = [
  "jmap-backend-book",
  "jmap-backend-core",
  "jmap-config",
+ "serde_json",
  "tracing",
 ]
 
