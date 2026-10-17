@@ -1,0 +1,16 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-rfc9555-extensions-0001
+FN:Maria Vega
+N;SORT-AS="Vega,Maria";JSCOMPS="surname,surname2,given":Vega;de la;Maria;;
+NICKNAME:Mari,Pili
+BDAY:1980-03-14
+ANNIVERSARY:2001-09-08
+BIRTHPLACE:Valencia
+DEATHDATE:2040-11-01
+DEATHPLACE:Madrid
+EMAIL;TYPE=home;PREF=1:maria@example.com
+TEL;TYPE=work,cell;PREF=1:+12025550148
+URL;TYPE=work:https://example.com/profile/maria
+NOTE;LANGUAGE=es;AUTHOR-NAME="Admin":Contacto principal
+END:VCARD
