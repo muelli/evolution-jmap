@@ -68,3 +68,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - `crates/jmap-client/src/client.rs:258:9: replace Client::builder -> ClientBuilder with Default::default()`: `ClientBuilder` implements `Default`, so calling `ClientBuilder::default()` invokes `<ClientBuilder as Default>::default()`. Replacing `ClientBuilder::default()` with `Default::default()` calls the exact same trait method on the same type, resulting in semantically and binary-identical machine code.
 - 47 of 47 viable mutants caught by test suites, 15 unviable due to lack of `Default` implementations on `Credentials`, `Client`, `HttpResponse`, and `EventSourceSubscription`, 1 genuinely equivalent.
 
+## `src/oauth.rs`
+
+- Zero missed mutants (35 of 35 viable mutants caught by test suites, 9 unviable due to absence of `Default` implementations on `AuthorizationServer`, `ClientRegistration`, `PkceVerifier`, and `TokenResponse`).
+
+
