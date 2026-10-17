@@ -3,8 +3,10 @@
 
 //! Tests pinning mutant-targeted behavior in `jmap-backend-book::backend`.
 
-use jmap_backend_book::backend::JmapBookBackend;
+use eds_sys::e_book_meta_backend_get_type;
+use jmap_backend_book::backend::{JmapBookBackend, parent_class};
 use jmap_backend_core::push::PushRefresh;
+use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_book_sync::BookSync;
 use jmap_client::eventsource::expand_url;
 use jmap_client::{Client, Credentials};
@@ -99,7 +101,7 @@ fn drop_connection_reports_true_when_connected_and_false_when_not() {
 
 #[test]
 fn push_lifecycle_store_is_pushing_stop_and_refresh_headers() {
-    let fixture = Fixture::start();
+    let server = MockServer::builder().bearer_token("fresh-token").start();
     let backend = JmapBookBackend::detached();
 
     assert!(!backend.is_pushing());
@@ -108,22 +110,53 @@ fn push_lifecycle_store_is_pushing_stop_and_refresh_headers() {
     // Refreshing push headers on an inactive subscription is a safe no-op.
     backend.refresh_push_headers(vec![(
         "Authorization".to_owned(),
-        "Bearer token".to_owned(),
+        "Bearer stale-token".to_owned(),
     )]);
 
-    let push = fixture.push_subscription();
-    backend.store_push(push);
+    let url = expand_url(
+        &format!("{}/eventsource", server.origin()),
+        &["ContactCard"],
+        false,
+        0,
+    );
+    backend.store_push(PushRefresh::start(
+        url,
+        vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
+        server.account_id(),
+        vec!["ContactCard".to_owned()],
+        |_types: &[String]| {},
+    ));
     assert!(backend.is_pushing());
 
-    // Refresh headers while active.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while server.unauthorized_responses() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stale token was never refused"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Refresh headers while active to allow reconnection.
     backend.refresh_push_headers(vec![(
         "Authorization".to_owned(),
-        "Bearer updated".to_owned(),
+        "Bearer fresh-token".to_owned(),
     )]);
+
+    server.wait_for_event_source_subscriber(std::time::Duration::from_secs(5));
 
     assert!(backend.stop_push());
     assert!(!backend.is_pushing());
     assert!(!backend.stop_push());
+}
+
+#[test]
+fn parent_type_and_parent_class_return_valid_eds_meta_backend() {
+    let parent_type = <JmapBookBackend as ObjectSubclass>::parent_type();
+    assert_eq!(parent_type, unsafe { e_book_meta_backend_get_type() });
+    let class = unsafe { gobject_sys::g_type_class_ref(parent_type) };
+    assert!(parent_class().is_some());
+    unsafe { gobject_sys::g_type_class_unref(class) };
 }
 
 #[test]

@@ -13,6 +13,13 @@
 //! the server. `tests/functional/cal-scheduling-client.c` reports the three
 //! capabilities, then creates and removes one meeting the user sends and one
 //! the user chose not to, each with its own guest.
+//!
+//! Step (d): last, it creates a meeting with a guest the server has no way
+//! to reach, and reports how `ECalClient`'s create failed. The mock, like
+//! Stalwart, delivers only to `mailto:`, so a `urn:uuid:` guest is refused
+//! with `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section
+//! 5.9.2). Evolution must see that as a failed save naming the guest, and
+//! the meeting must not be stored anywhere for a later sync to send.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +29,8 @@ use jmap_proto::Id;
 
 const ORGANIZER: &str = "mailto:olga@example.com";
 const SENT_GUEST: &str = "mailto:vera@example.com";
+/// Must match `UNREACHABLE_GUEST` in `cal-scheduling-client.c`.
+const UNREACHABLE_GUEST: &str = "urn:uuid:5f0c9a4e-0000-4000-8000-0000000000d1";
 
 /// The calendar's keyfile, with `extra` appended. No `[Resource] Identity=`:
 /// the backend asks for the account's default calendar.
@@ -48,6 +57,8 @@ fn keyfile(port: u16, extra: &str) -> String {
 struct Run {
     observed: BTreeMap<String, String>,
     sent: Vec<(String, String)>,
+    /// Events left in the mock's store once the client is done.
+    stored: usize,
     report: String,
 }
 
@@ -111,9 +122,10 @@ fn run(name: &str, extra: &str) -> Run {
 
     let state = server.state();
     let state = state.lock().expect("mock state lock");
-    let sent = state
+    let account = state
         .account(&account_id)
-        .expect("the mock's default account")
+        .expect("the mock's default account");
+    let sent = account
         .scheduling_outbox
         .iter()
         .map(|message| (message.method.clone(), message.recipient.clone()))
@@ -121,6 +133,7 @@ fn run(name: &str, extra: &str) -> Run {
     Run {
         observed,
         sent,
+        stored: account.calendar_events.len(),
         report,
     }
 }
@@ -169,4 +182,44 @@ fn with_calendar_auto_schedule_off_evolution_tells_the_guests_and_the_server_is_
     }
     assert!(run.sent.is_empty(), "sent {:?}\n{}", run.sent, run.report);
     assert_eq!(run.seen("removed-sent"), Some("1"), "{}", run.report);
+    // Nothing asks the server to reach anyone, so it refuses nothing.
+    assert_eq!(run.seen("unreachable-created"), Some("1"), "{}", run.report);
+    assert_eq!(run.stored, 0, "{}", run.report);
+}
+
+/// Step (d): the server refuses to schedule a guest it cannot reach, and
+/// Evolution, which was told the server sends, gets a failed save with the
+/// translated sentence naming that guest. Nothing is stored and nothing is
+/// sent, so no later sync can file the meeting with the guest never told.
+#[test]
+fn a_guest_the_server_cannot_reach_fails_the_save_in_evolution_and_names_them() {
+    let run = run("unreachable", "");
+    assert_eq!(run.seen("unreachable-created"), Some("0"), "{}", run.report);
+    assert_eq!(
+        run.seen("unreachable-invalid-arg"),
+        Some("1"),
+        "not E_CLIENT_ERROR_INVALID_ARG\n{}",
+        run.report
+    );
+    let message = run.seen("unreachable-message").unwrap_or_default();
+    assert!(
+        message.contains("so the change was not saved") && message.contains(UNREACHABLE_GUEST),
+        "the message does not say the save failed for {UNREACHABLE_GUEST}: {message:?}\n{}",
+        run.report
+    );
+    assert!(
+        !message.contains(SENT_GUEST),
+        "the message names a guest the server can reach: {message:?}"
+    );
+    assert_eq!(
+        run.stored, 0,
+        "the refused meeting was stored\n{}",
+        run.report
+    );
+    assert!(
+        run.sent.iter().all(|(_, to)| to != UNREACHABLE_GUEST),
+        "sent {:?}\n{}",
+        run.sent,
+        run.report
+    );
 }
