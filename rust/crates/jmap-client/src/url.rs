@@ -362,6 +362,72 @@ mod tests {
         let _ = resolve_redirect("?://", "");
     }
 
+    #[test]
+    fn rebase_origin_with_http_scheme_and_short_authority() {
+        assert_eq!(
+            rebase_origin("http://example.com/path", "https://target.org"),
+            "https://target.org/path"
+        );
+        assert_eq!(
+            rebase_origin("http://a/b", "https://dest"),
+            "https://dest/b"
+        );
+        assert_eq!(rebase_origin("https://a/b", "http://c"), "http://c/b");
+    }
+
+    #[test]
+    fn origin_of_handles_userinfo_in_authority() {
+        assert_eq!(
+            origin_of("https://user:pass@example.com/path"),
+            "https://user:pass@example.com"
+        );
+        assert_eq!(
+            origin_of("https://user:pass@example.com:8080/path"),
+            "https://user:pass@example.com:8080"
+        );
+        assert_eq!(
+            origin_of("https://user:pass@example.com.:8080/path"),
+            "https://user:pass@example.com:8080"
+        );
+        assert_eq!(
+            origin_of("https://user@example.com/path"),
+            "https://user@example.com"
+        );
+    }
+
+    #[test]
+    fn origin_of_handles_ipv6_host_with_and_without_port() {
+        assert_eq!(
+            origin_of("http://[2001:db8::1]:8080/path"),
+            "http://[2001:db8::1]:8080"
+        );
+        assert_eq!(
+            origin_of("http://[2001:db8::1]/path"),
+            "http://[2001:db8::1]"
+        );
+        assert_eq!(
+            origin_of("https://[::1]:9999/download"),
+            "https://[::1]:9999"
+        );
+        assert_eq!(origin_of("https://[::1]/download"), "https://[::1]");
+    }
+
+    #[test]
+    fn origin_of_preserves_single_dot_host() {
+        assert_eq!(origin_of("http://./foo"), "http://.");
+        assert_eq!(origin_of("http://../foo"), "http://..");
+    }
+
+    #[test]
+    fn resolve_redirect_handles_short_urls() {
+        assert_eq!(resolve_redirect("https://a/b", "c").unwrap(), "https://a/c");
+        assert_eq!(resolve_redirect("http://x/y", "z").unwrap(), "http://x/z");
+        assert_eq!(
+            resolve_redirect("https://a/b/", "c").unwrap(),
+            "https://a/b/c"
+        );
+    }
+
     proptest! {
         // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
         // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's

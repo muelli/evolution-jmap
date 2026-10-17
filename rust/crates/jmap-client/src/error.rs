@@ -334,4 +334,80 @@ mod tests {
         );
         assert!(!Error::Transport("connection refused".into()).is_unauthorized());
     }
+
+    #[test]
+    fn cannot_calculate_changes_predicate_exactness() {
+        let cannot_calc = Error::Method(jmap_proto::error::MethodError {
+            error_type: jmap_proto::error::method::CANNOT_CALCULATE_CHANGES.into(),
+            description: None,
+            extra: Default::default(),
+        });
+        assert!(cannot_calc.is_cannot_calculate_changes());
+
+        let invalid_args = Error::Method(jmap_proto::error::MethodError {
+            error_type: jmap_proto::error::method::INVALID_ARGUMENTS.into(),
+            description: None,
+            extra: Default::default(),
+        });
+        assert!(!invalid_args.is_cannot_calculate_changes());
+
+        let http = Error::Http {
+            status: 400,
+            problem: None,
+        };
+        assert!(!http.is_cannot_calculate_changes());
+
+        let transport = Error::Transport("failed".into());
+        assert!(!transport.is_cannot_calculate_changes());
+    }
+
+    #[test]
+    fn redirect_credentials_withheld_predicate_exactness() {
+        let withheld = Error::RedirectCredentialsWithheld {
+            requested: "https://example.com/api".into(),
+            followed: "https://other.com/api".into(),
+        };
+        assert!(withheld.is_redirect_credentials_withheld());
+
+        let http_401 = Error::Http {
+            status: 401,
+            problem: None,
+        };
+        assert!(!http_401.is_redirect_credentials_withheld());
+
+        let cross_origin = Error::CrossOriginRedirect {
+            requested: "https://example.com/dl".into(),
+            followed: "https://other.com/dl".into(),
+            rebase_note: None,
+        };
+        assert!(!cross_origin.is_redirect_credentials_withheld());
+
+        let transport = Error::Transport("failed".into());
+        assert!(!transport.is_redirect_credentials_withheld());
+    }
+
+    #[test]
+    fn error_source_returns_some_only_for_json_variant() {
+        use std::error::Error as StdError;
+
+        let json_err: Result<serde_json::Value, _> = serde_json::from_str("{invalid");
+        let error = Error::Json(json_err.unwrap_err());
+        assert!(error.source().is_some());
+
+        let transport = Error::Transport("failed".into());
+        assert!(transport.source().is_none());
+
+        let http = Error::Http {
+            status: 500,
+            problem: None,
+        };
+        assert!(http.source().is_none());
+
+        let method = Error::Method(jmap_proto::error::MethodError {
+            error_type: "unknown".into(),
+            description: None,
+            extra: Default::default(),
+        });
+        assert!(method.source().is_none());
+    }
 }
