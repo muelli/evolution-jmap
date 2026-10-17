@@ -24,10 +24,10 @@ use jmap_backend_cal::connect;
 use jmap_backend_core::api_token::API_TOKEN_METHOD;
 use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::{ConnectTarget, SourceConfig};
-use jmap_cal_sync::CalSync;
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::calendars::CalendarRights;
 
 struct Fixture {
     server: MockServer,
@@ -75,13 +75,15 @@ impl Fixture {
 /// that resolves them, which is `connect_with`. See the address book backend's
 /// copy of this helper for why it takes the password path, and
 /// `jmap-backend-core/tests/oauth2.rs` for the choice between the two.
-fn open(config: &SourceConfig, password: Option<&str>) -> Result<CalSync, ConnectError> {
+fn open(
+    config: &SourceConfig,
+    password: Option<&str>,
+) -> Result<connect::OpenCalendar, ConnectError> {
     connect::open_calendar(config, credentials(config.user.as_deref(), password)?)
 }
 
-/// `CalSync` is not `Debug`, and naming the calendar it opened is a more useful
-/// failure message than the type name would have been anyway.
-fn expect_error(result: Result<CalSync, ConnectError>) -> ConnectError {
+/// `OpenCalendar` naming the calendar it opened is a useful failure message.
+fn expect_error(result: Result<connect::OpenCalendar, ConnectError>) -> ConnectError {
     match result {
         Ok(sync) => panic!("expected a failure, but opened {}", sync.calendar_id()),
         Err(error) => error,
@@ -391,7 +393,7 @@ impl ConnectOuts {
     }
 }
 
-fn connect_from(source: &TestSource, outs: &mut ConnectOuts) -> Option<CalSync> {
+fn connect_from(source: &TestSource, outs: &mut ConnectOuts) -> Option<connect::OpenCalendar> {
     // SAFETY: a live ESource, no credentials, no cancellable, and two writable
     // out-parameters: what EDS passes on a first connect.
     unsafe {
@@ -572,4 +574,66 @@ fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
     // SAFETY: as above.
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
+}
+
+#[test]
+fn a_calendar_with_no_my_rights_opens_writable() {
+    let fixture = Fixture::start(true);
+    let open = open(&fixture.config(), None).expect("connected");
+    assert!(open.writable);
+}
+
+#[test]
+fn a_calendar_with_write_rights_opens_writable() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let cal = account.calendars.get_mut(&fixture.other_calendar).unwrap();
+        cal.my_rights = Some(CalendarRights::all());
+    }
+    let mut config = fixture.config();
+    config.resource_id = Some(fixture.other_calendar.to_string());
+    let open = open(&config, None).expect("connected");
+    assert!(open.writable);
+}
+
+#[test]
+fn a_calendar_without_write_rights_opens_read_only() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let cal = account.calendars.get_mut(&fixture.other_calendar).unwrap();
+        cal.my_rights = Some(CalendarRights::read_only());
+    }
+    let mut config = fixture.config();
+    config.resource_id = Some(fixture.other_calendar.to_string());
+    let open = open(&config, None).expect("connected");
+    assert!(!open.writable);
+}
+
+#[test]
+fn connecting_from_a_source_reports_read_only_when_calendar_lacks_write_rights() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let cal = account
+            .calendars
+            .get_mut(fixture.default_calendar.as_ref().unwrap())
+            .unwrap();
+        cal.my_rights = Some(CalendarRights::read_only());
+    }
+    let source = TestSource::new().at(fixture.server.origin());
+    let mut outs = ConnectOuts::default();
+
+    let sync = connect_from(&source, &mut outs);
+    let open = sync.expect("connected");
+    assert!(!open.writable);
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+    assert!(outs.error.is_null());
 }

@@ -242,21 +242,25 @@ unsafe extern "C" fn connect_sync(
             }
 
             let source = e_backend_get_source(meta_backend.cast());
-            let Some(sync) =
+            let Some(open) =
                 connect::connect(source, credentials, cancellable, out_auth_result, error)
             else {
                 return GFALSE;
             };
 
             tracing::debug!(
-                account_id = sync.account_id().as_str(),
-                address_book_id = sync.address_book_id().as_str(),
+                account_id = open.sync.account_id().as_str(),
+                address_book_id = open.sync.address_book_id().as_str(),
+                writable = open.writable,
                 "address book backend connected"
             );
             // Connection must be stored before starting push to avoid race with incoming refresh.
-            backend.install_connection(sync, |sync| start_push(meta_backend, sync));
-            // Mark backend writable on EBookBackend so writes are permitted online and offline.
-            e_book_backend_set_writable(meta_backend.cast(), GTRUE);
+            backend.install_connection(open.sync, |sync| start_push(meta_backend, sync));
+            // Mark backend writable on EBookBackend according to its server rights.
+            e_book_backend_set_writable(
+                meta_backend.cast(),
+                if open.writable { GTRUE } else { GFALSE },
+            );
             GTRUE
         })
     }

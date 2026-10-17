@@ -71,7 +71,9 @@ impl Fixture {
     }
 
     fn sync(&self) -> jmap_book_sync::BookSync {
-        capture(|| open_book(&self.config(), Credentials::none()).expect("connected")).0
+        capture(|| open_book(&self.config(), Credentials::none()).expect("connected"))
+            .0
+            .sync
     }
 }
 
