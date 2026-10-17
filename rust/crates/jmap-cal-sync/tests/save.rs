@@ -5794,3 +5794,85 @@ fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
         Some(&json!("custom-event-data"))
     );
 }
+
+/// The invitation a guest accepts from their mail, as Evolution's invitation
+/// view hands it to `receive_objects`: its `UID` is the meeting's own, which
+/// the server already delivered into this calendar, while the local cache is
+/// keyed by JMAP id and so finds nothing and creates.
+const ACCEPTED_INVITATION: &str = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+UID:meeting-4711@example.org\r\n\
+SUMMARY:Planning\r\n\
+DTSTART;TZID=Europe/Berlin:20260115T130000\r\n\
+DURATION:PT1H\r\n\
+ORGANIZER:mailto:organizer@example.org\r\n\
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:organizer@example.org\r\n\
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:guest@example.org\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+#[test]
+fn a_new_event_whose_uid_this_calendar_already_holds_is_saved_into_that_event() {
+    let fixture = Fixture::start();
+    let mut delivered = jmap_proto::calendars::CalendarEvent::simple(
+        fixture.ours.clone(),
+        "Planning",
+        "2026-01-15T13:00:00",
+        "PT1H",
+    );
+    delivered.uid = Some("meeting-4711@example.org".to_owned());
+    let id = fixture
+        .client()
+        .event_create(&fixture.account_id, &delivered)
+        .unwrap()
+        .id
+        .unwrap();
+    let sync = fixture.sync();
+
+    let saved = sync
+        .save_component(ACCEPTED_INVITATION, None)
+        .expect("the accept is saved, not refused as a second copy");
+
+    assert_eq!(saved.uid, id.to_string(), "saved into the delivered copy");
+    let (_, events) = sync.list_existing().unwrap();
+    assert_eq!(events.len(), 1, "still one copy: {events:?}");
+    let stored = fixture.event(&id);
+    let statuses: Vec<_> = stored
+        .participants
+        .iter()
+        .flatten()
+        .filter_map(|(_, participant)| participant.get("participationStatus"))
+        .collect();
+    assert_eq!(statuses, [&json!("accepted"), &json!("accepted")]);
+}
+
+#[test]
+fn a_new_event_whose_uid_only_another_calendar_holds_is_still_created_here() {
+    let fixture = Fixture::start();
+    let mut elsewhere = jmap_proto::calendars::CalendarEvent::simple(
+        fixture.theirs.clone(),
+        "Planning",
+        "2026-01-15T13:00:00",
+        "PT1H",
+    );
+    elsewhere.uid = Some("meeting-4711@example.org".to_owned());
+    let theirs = fixture
+        .client()
+        .event_create(&fixture.account_id, &elsewhere)
+        .unwrap()
+        .id
+        .unwrap();
+
+    let result = fixture.sync().save_component(ACCEPTED_INVITATION, None);
+
+    // The event in the other calendar is not edited from this one: the create
+    // goes ahead, and a server that holds a `uid` once per account refuses it.
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(
+        fixture.event(&theirs).participants,
+        None,
+        "the other calendar's event is untouched"
+    );
+}

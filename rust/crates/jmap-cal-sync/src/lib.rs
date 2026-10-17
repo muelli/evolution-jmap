@@ -254,6 +254,25 @@ impl CalSync {
     ) -> Result<ComponentInfo, SyncError> {
         let schedule = self.schedules(itip);
         let mut event = ical_to_event(icalendar)?;
+        // A create of a meeting this calendar already holds: the invitation a
+        // guest accepts from their mail. Evolution hands it over under the
+        // meeting's own `UID`, which its cache (keyed by JMAP id) does not
+        // know, but the server delivered the meeting here already and holds a
+        // `uid` once (Stalwart refuses the second copy with
+        // `invalidProperties`). So it is an edit of that copy, which is also
+        // what sends the guest's answer to the organizer.
+        let held;
+        let existing_uid = match existing_uid {
+            Some(uid) => Some(uid),
+            None => {
+                let named = event.uid.as_deref().or(event.id.as_ref().map(Id::as_str));
+                held = match named {
+                    Some(named) => self.holding(named)?,
+                    None => None,
+                };
+                held.as_deref()
+            }
+        };
         let Some(uid) = existing_uid else {
             let local = event.id.take();
             event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
@@ -387,6 +406,20 @@ impl CalSync {
             return Err(refused(error, schedule, Some(&event)));
         }
         self.load_component(uid)
+    }
+
+    /// The JMAP id of the event in this calendar whose JSCalendar `uid` is
+    /// `uid`, if there is one.
+    ///
+    /// Only this calendar's: an event in another calendar is not edited from
+    /// this one, so a create there goes ahead and the server decides.
+    fn holding(&self, uid: &str) -> Result<Option<String>, SyncError> {
+        let filter = CalendarEventQueryFilter {
+            uid: Some(uid.to_owned()),
+            ..CalendarEventQueryFilter::in_calendar(self.calendar_id.clone())
+        };
+        let ids = self.client.event_query(&self.account_id, filter)?.ids;
+        Ok(ids.into_iter().next().map(|id| id.to_string()))
     }
 
     /// Destroy an event — `remove_component_sync`.

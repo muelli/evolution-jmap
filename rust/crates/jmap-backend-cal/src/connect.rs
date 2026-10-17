@@ -140,15 +140,18 @@ pub fn open_calendar(
     open_calendar_with_account(config, credentials, None)
 }
 
-/// Connects to the configured JMAP account (or `account_id` when specified)
-/// and resolves the target calendar.
+/// Connects to the configured JMAP account and resolves the target calendar.
+///
+/// The account is `account_id` when given, else the one the source's
+/// `[Resource] Identity` names (see [`SourceConfig::account_id`]), else the
+/// primary account for the capability.
 pub fn open_calendar_with_account(
     config: &SourceConfig,
     credentials: Credentials,
     account_id: Option<&str>,
 ) -> Result<OpenCalendar, ConnectError> {
     let client = source::connect(&config.target, config.rebase_urls, credentials)?;
-    let account_id = match account_id {
+    let account_id = match account_id.or(config.account_id()) {
         Some(id) => Id::from(id),
         None => client.primary_account(CAPABILITY_CALENDARS)?,
     };
@@ -156,7 +159,7 @@ pub fn open_calendar_with_account(
 
     let calendar_id = resolve(
         Collection::Calendar,
-        config.resource_id.as_deref(),
+        config.collection_id(),
         calendars
             .iter()
             .map(|calendar| (calendar.id.as_ref(), calendar.is_default)),

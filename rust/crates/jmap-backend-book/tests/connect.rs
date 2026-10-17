@@ -12,12 +12,12 @@ use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
     E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_CREDENTIAL_PASSWORD,
-    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication,
-    ESourceAuthenticationResult, e_client_error_quark, e_named_parameters_free,
-    e_named_parameters_new, e_named_parameters_set, e_source_authentication_set_host,
-    e_source_authentication_set_method, e_source_authentication_set_port,
-    e_source_authentication_set_user, e_source_get_extension, e_source_new_with_uid,
-    e_source_security_set_secure,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
+    ESource, ESourceAuthentication, ESourceAuthenticationResult, e_client_error_quark,
+    e_named_parameters_free, e_named_parameters_new, e_named_parameters_set,
+    e_source_authentication_set_host, e_source_authentication_set_method,
+    e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
+    e_source_new_with_uid, e_source_resource_set_identity, e_source_security_set_secure,
 };
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
@@ -351,6 +351,19 @@ impl TestSource {
                 0,
             );
         }
+        self
+    }
+
+    /// Sets `[Resource] Identity`, the field a collection child carries.
+    fn identity(self, id: &str) -> Self {
+        let id = CString::new(id).expect("no NUL in an identity");
+        // SAFETY: as `at`.
+        unsafe {
+            e_source_resource_set_identity(
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast(),
+                id.as_ptr(),
+            )
+        };
         self
     }
 
@@ -722,6 +735,52 @@ fn connecting_from_a_source_with_account_id_opens_that_account() {
     assert_eq!(sync.address_book_id(), &second_book_id);
     assert!(outs.error.is_null());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+/// The account a collection child names in `[Resource] Identity` is the one
+/// opened. Only the keyfile reaches the factory a child is opened in, so this
+/// source carries nothing else: no object data, no extra extension.
+#[test]
+fn connecting_from_a_source_whose_identity_names_an_account_opens_that_accounts_address_book() {
+    let (fixture, second_account_id, _) = Fixture::start_two_accounts();
+    // Not the second account's default, so the collection half is honoured too.
+    let shared = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&second_account_id).unwrap();
+        account.seed_address_book("Shared", false)
+    };
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .identity(&format!("{second_account_id}/{shared}"));
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+    let sync = sync.expect("the connection was refused");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.address_book_id(), &shared);
+    assert!(outs.error.is_null());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+#[test]
+fn a_config_whose_resource_names_an_account_opens_that_accounts_address_book() {
+    let (fixture, second_account_id, second_default) = Fixture::start_two_accounts();
+    let mut config = fixture.config();
+    config.resource_id = Some(format!("{second_account_id}/{second_default}"));
+
+    let sync = open(&config, None).expect("connected to the second account");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.address_book_id(), &second_default);
 }
 
 #[test]

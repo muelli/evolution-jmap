@@ -140,15 +140,18 @@ pub fn open_book(
     open_book_with_account(config, credentials, None)
 }
 
-/// Connects to the configured JMAP account (or `account_id` when specified)
-/// and resolves the target address book.
+/// Connects to the configured JMAP account and resolves the target address book.
+///
+/// The account is `account_id` when given, else the one the source's
+/// `[Resource] Identity` names (see [`SourceConfig::account_id`]), else the
+/// primary account for the capability.
 pub fn open_book_with_account(
     config: &SourceConfig,
     credentials: Credentials,
     account_id: Option<&str>,
 ) -> Result<OpenBook, ConnectError> {
     let client = source::connect(&config.target, config.rebase_urls, credentials)?;
-    let account_id = match account_id {
+    let account_id = match account_id.or(config.account_id()) {
         Some(id) => Id::from(id),
         None => client.primary_account(CAPABILITY_CONTACTS)?,
     };
@@ -156,7 +159,7 @@ pub fn open_book_with_account(
 
     let address_book_id = resolve(
         Collection::AddressBook,
-        config.resource_id.as_deref(),
+        config.collection_id(),
         books.iter().map(|book| (book.id.as_ref(), book.is_default)),
     )?;
 

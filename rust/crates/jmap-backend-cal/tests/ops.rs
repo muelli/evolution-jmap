@@ -1241,7 +1241,15 @@ impl Fixture {
 
 /// Saves [`MEETING`] as a create through the vfunc body, with `itip`.
 fn create_meeting(sync: &CalSync, itip: Itip) -> String {
-    let components = [instance(MEETING)];
+    create_meeting_with_uid(sync, itip, "planning@localhost")
+}
+
+/// Saves [`MEETING`] under its own `uid` as a create, with `itip`. A second
+/// create of a `UID` the calendar already holds is saved into that event, so
+/// two meetings need two.
+fn create_meeting_with_uid(sync: &CalSync, itip: Itip, uid: &str) -> String {
+    let meeting = MEETING.replace("UID:planning@localhost", &format!("UID:{uid}"));
+    let components = [instance(&meeting)];
     let list = instance_list(&components);
     let mut new_uid: *mut gchar = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
@@ -1282,8 +1290,8 @@ fn a_save_the_user_chose_not_to_send_asks_the_server_for_nothing() {
 fn a_removal_passes_its_itip_through_to_the_server() {
     let fixture = Fixture::start();
     let sync = fixture.scheduling_sync();
-    let quiet = create_meeting(&sync, Itip::Suppress);
-    let loud = create_meeting(&sync, Itip::Suppress);
+    let quiet = create_meeting_with_uid(&sync, Itip::Suppress, "quiet@localhost");
+    let loud = create_meeting_with_uid(&sync, Itip::Suppress, "loud@localhost");
     let mut error: *mut GError = ptr::null_mut();
 
     let quiet = CString::new(quiet).unwrap();
