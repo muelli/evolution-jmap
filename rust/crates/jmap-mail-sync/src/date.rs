@@ -285,6 +285,33 @@ mod tests {
     }
 
     #[test]
+    fn every_day_of_a_whole_era_reads_back_as_the_day_it_was_written_for() {
+        // Four hundred years is one whole cycle of the calendar, so this visits
+        // every place in it `civil_from_days` can be: the century years that
+        // are not leap years, the one that is, and the 1st of March after each,
+        // where its year begins. A handful of instants cannot reach the ones
+        // late in the cycle, and each is only wrong for a few days of it.
+        let first = epoch_seconds("1600-01-01T00:00:00Z").unwrap() / 86_400;
+        let last = epoch_seconds("2400-12-31T00:00:00Z").unwrap() / 86_400;
+        for day in first..=last {
+            let written = utc_date(day * 86_400).expect("a date inside the grammar");
+            assert_eq!(epoch_seconds(&written), Some(day * 86_400), "{written}");
+        }
+    }
+
+    #[test]
+    fn no_day_of_year_zero_is_written_as_a_date() {
+        // Every day before the first one a four-digit year can name, not only
+        // its first: the calendar is computed in March-to-February years, and
+        // the days of year zero's January and February are the ones a wrong
+        // era would carry into year one.
+        let year_one = epoch_seconds("0001-01-01T00:00:00Z").unwrap() / 86_400;
+        for day in year_one - 366..year_one {
+            assert_eq!(utc_date(day * 86_400), None, "day {day}");
+        }
+    }
+
+    #[test]
     fn the_epoch_itself_is_zero() {
         assert_eq!(epoch_seconds("1970-01-01T00:00:00Z"), Some(0));
     }
@@ -319,6 +346,20 @@ mod tests {
         );
         assert_eq!(
             epoch_seconds("2026-01-15T09:30:00-00:00"),
+            Some(1_768_469_400)
+        );
+    }
+
+    #[test]
+    fn the_largest_offset_is_still_an_offset() {
+        // RFC 3339 §5.6's `time-numoffset` is any `HH:MM` up to 23:59, either
+        // way; the bound refuses what comes after it, not the last of it.
+        assert_eq!(
+            epoch_seconds("2026-01-16T09:29:00+23:59"),
+            Some(1_768_469_400)
+        );
+        assert_eq!(
+            epoch_seconds("2026-01-14T09:31:00-23:59"),
             Some(1_768_469_400)
         );
     }
@@ -376,6 +417,7 @@ mod tests {
             "2026-01-15T09:60:00Z",
             "2026-01-15T09:30:61Z",
             "2026-01-15T09:30:00+24:00",
+            "2026-01-15T09:30:00+00:60",
         ] {
             assert_eq!(epoch_seconds(text), None, "{text:?} is not a date");
         }
