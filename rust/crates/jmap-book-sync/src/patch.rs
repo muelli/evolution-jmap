@@ -1706,4 +1706,27 @@ mod tests {
 
         assert_eq!(rekeyed, Some(edited));
     }
+
+    /// Units with no name have nothing on the `ORG` line, so each goes back
+    /// where it was: right after the named unit it followed, in the order the
+    /// server had them, however many there are and wherever they sit.
+    #[test]
+    fn merge_units_puts_every_nameless_unit_back_where_it_was() {
+        let unit = |unit: Value| -> OrgUnit { serde_json::from_value(unit).expect("an OrgUnit") };
+        let current = [
+            unit(json!({"name": "Sales"})),
+            unit(json!({"sortAs": "h1"})),
+            unit(json!({"name": "EMEA"})),
+            unit(json!({"sortAs": "h2"})),
+            unit(json!({"sortAs": "h3"})),
+        ];
+        let edited = [
+            unit(json!({"name": "Sales"})),
+            unit(json!({"name": "EMEA"})),
+        ];
+
+        let merged = merge_units(Some(&current), Some(&edited));
+
+        assert_eq!(merged.as_deref(), Some(&current[..]));
+    }
 }
