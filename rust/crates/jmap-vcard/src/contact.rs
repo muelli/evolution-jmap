@@ -2591,9 +2591,10 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_LINE_OCTETS, fold_overlong_lines, normalize_vcard_dates, service_of,
-        split_vcard_property_line,
+        MAX_LINE_OCTETS, VCardEntry, VCardProperty, entry_key, fold_overlong_lines,
+        normalize_vcard_dates, service_of, split_vcard_property_line,
     };
+    use std::collections::BTreeMap;
 
     fn unfold_lines(vcard: &str) -> String {
         let mut unfolded = String::with_capacity(vcard.len());
@@ -2766,5 +2767,13 @@ mod tests {
         let split = split_vcard_property_line(line);
 
         assert_eq!(split, Some(("BDAY", "2026-04-12")));
+    }
+
+    #[test]
+    fn entry_key_skips_taken_generated_keys() {
+        let entry = VCardEntry::new(VCardProperty::Email).with_value("one@example.com".to_owned());
+        let taken = BTreeMap::from([("e1".to_owned(), ())]);
+
+        assert_eq!(entry_key(&entry, "e", &taken), "e2");
     }
 }
