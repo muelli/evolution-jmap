@@ -1827,6 +1827,23 @@ fn maps_nicknames_onto_nickname_lines() {
 }
 
 #[test]
+fn nickname_type_and_pref_parameters_parse_and_normalize_to_eds_profile() {
+    let parsed = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME;TYPE=WORK,PREF;X-JMAP-KEY=k1:JQ\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    let nickname = &parsed.nicknames.as_ref().expect("nicknames")["k1"];
+    assert_eq!(nickname.name, "JQ");
+    assert_eq!(nickname.contexts, Some(json!({"work": true})));
+    assert_eq!(nickname.pref, Some(1));
+
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(line(&emitted, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:JQ");
+}
+
+#[test]
 fn each_nickname_gets_a_line_of_its_own() {
     // Use one line per nickname key. A comma list cannot carry per-entry keys,
     // and EDS reads NICKNAME as one string anyway.

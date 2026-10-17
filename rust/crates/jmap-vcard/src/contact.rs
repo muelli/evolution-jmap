@@ -1488,8 +1488,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 // Unescaped commas stay in one nickname instead of splitting it.
                 let nickname = Nickname {
                     name: entry_text_list(entry),
+                    contexts: read_flags(&CONTEXTS, entry),
+                    pref: entry_has_type(entry, "PREF").then_some(1),
                     extra: BTreeMap::new(),
-                    ..Nickname::default()
                 };
                 if !states_nickname(&nickname) {
                     continue;
