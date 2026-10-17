@@ -14514,6 +14514,64 @@ fn apple_group_labels_for_other_home_and_fax_map_without_spurious_labels() {
 }
 
 #[test]
+fn apple_group_labels_for_url_slots_map_to_kind_or_context_without_fallback_labels() {
+    // RFC 2426 §3.6.8 keeps URL as URI text; RFC 9553 §1.4.3 uses true-valued sets.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Grouped URL Labels\r\n",
+        "item1.URL:https://example.test/home\r\n",
+        "item1.X-ABLABEL:HomePage\r\n",
+        "item2.URL:https://example.test/blog\r\n",
+        "item2.X-ABLABEL:blog\r\n",
+        "item3.URL:https://example.test/work\r\n",
+        "item3.X-ABLABEL:work\r\n",
+        "item4.URL:https://example.test/private\r\n",
+        "item4.X-ABLABEL:home\r\n",
+        "item5.URL:https://example.test/other\r\n",
+        "item5.X-ABLABEL:other\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse grouped url labels card");
+    let links = card.links.as_ref().expect("links map");
+
+    let homepage = links
+        .values()
+        .find(|entry| entry.uri == "https://example.test/home")
+        .expect("homepage link");
+    assert_eq!(homepage.kind, None);
+    assert!(homepage.extra.is_empty());
+
+    let blog = links
+        .values()
+        .find(|entry| entry.uri == "https://example.test/blog")
+        .expect("blog link");
+    assert_eq!(blog.kind.as_deref(), Some("blog"));
+    assert!(blog.extra.is_empty());
+
+    let work = links
+        .values()
+        .find(|entry| entry.uri == "https://example.test/work")
+        .expect("work link");
+    assert_eq!(work.kind, None);
+    assert_eq!(work.extra.get("contexts"), Some(&json!({"work": true})));
+
+    let home = links
+        .values()
+        .find(|entry| entry.uri == "https://example.test/private")
+        .expect("home link");
+    assert_eq!(home.kind, None);
+    assert_eq!(home.extra.get("contexts"), Some(&json!({"private": true})));
+
+    let other = links
+        .values()
+        .find(|entry| entry.uri == "https://example.test/other")
+        .expect("other link");
+    assert_eq!(other.kind, None);
+    assert!(other.extra.is_empty());
+}
+
+#[test]
 fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
     use jmap_vcard::contact::{online_service_handle, online_service_uri};
 
