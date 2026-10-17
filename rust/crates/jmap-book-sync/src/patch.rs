@@ -1508,4 +1508,138 @@ mod tests {
         );
         assert!(patch.contains_key("titles/t1"));
     }
+
+    fn relations(entries: &[(&str, &[&str])]) -> BTreeMap<String, Relation> {
+        entries
+            .iter()
+            .map(|(key, kinds)| {
+                (
+                    (*key).to_owned(),
+                    Relation {
+                        relation: Some(
+                            kinds
+                                .iter()
+                                .map(|k| ((*k).to_owned(), json!(true)))
+                                .collect(),
+                        ),
+                        extra: BTreeMap::new(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Every mapped relation changing at once is still a change: the scan
+    /// that decides whether there is anything to patch must not need one kind
+    /// to have stayed put.
+    #[test]
+    fn respelling_every_mapped_relation_at_once_patches_all_three() {
+        let current = relations(&[
+            ("Alex", &["spouse"]),
+            ("Blair", &["manager"]),
+            ("Casey", &["assistant"]),
+        ]);
+        let edited = relations(&[
+            ("Alexa", &["spouse"]),
+            ("Blake", &["manager"]),
+            ("Cass", &["assistant"]),
+        ]);
+
+        let mut patch = Map::new();
+        diff_related_to(&mut patch, Some(&current), Some(&edited));
+
+        let keys: BTreeSet<&str> = patch.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "relatedTo/Alex",
+                "relatedTo/Alexa",
+                "relatedTo/Blair",
+                "relatedTo/Blake",
+                "relatedTo/Casey",
+                "relatedTo/Cass",
+            ]
+            .into_iter()
+            .collect(),
+            "{patch:?}"
+        );
+    }
+
+    /// Moving a name from the Spouse field to the Manager field keeps the
+    /// entity: the key is who it is, so only the relation type changes, and
+    /// the entry is not deleted in the same patch that reaches into it.
+    #[test]
+    fn a_spouse_who_becomes_the_manager_keeps_the_entry() {
+        let current = relations(&[("Kim", &["spouse"])]);
+        let edited = relations(&[("Kim", &["manager"])]);
+
+        let mut patch = Map::new();
+        diff_related_to(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(
+            Value::Object(patch),
+            json!({
+                "relatedTo/Kim/relation/spouse": null,
+                "relatedTo/Kim/relation/manager": true,
+            })
+        );
+    }
+
+    fn name(value: Value) -> Name {
+        serde_json::from_value(value).expect("a Name")
+    }
+
+    fn name_patch(current: Option<&Name>, edited: Option<&Name>) -> Value {
+        let mut patch = Map::new();
+        diff_name(&mut patch, current, edited);
+        Value::Object(patch)
+    }
+
+    /// A name that held nothing but what `FN` and `N` show goes away whole
+    /// when the user clears it.
+    #[test]
+    fn clearing_a_plain_name_removes_it_whole() {
+        let plain = [
+            json!({"full": "Hans Oldenburg"}),
+            json!({"components": [{"kind": "surname", "value": "Oldenburg"}]}),
+            json!({"full": "Hans", "fileAs": "Oldenburg, Hans"}),
+            json!({"full": "Hans", "file_as": "Oldenburg, Hans"}),
+        ];
+        for current in plain {
+            assert_eq!(
+                name_patch(Some(&name(current.clone())), None),
+                json!({"name": null}),
+                "{current}"
+            );
+        }
+    }
+
+    /// A name that also carries what no vCard line shows keeps it when the
+    /// user clears the name: only the members the vCard did show are
+    /// removed.
+    #[test]
+    fn clearing_a_name_keeps_the_members_vcard_never_showed() {
+        let carrying = [
+            json!({"full": "Hans", "isOrdered": true}),
+            json!({"full": "Hans", "sortAs": {"surname": "Oldenburg"}}),
+            json!({"full": "Hans", "phonetic": "hans"}),
+        ];
+        for current in carrying {
+            assert_eq!(
+                name_patch(Some(&name(current.clone())), None),
+                json!({"name/full": null}),
+                "{current}"
+            );
+        }
+    }
+
+    /// A name the server never had is written whole when the user types one.
+    #[test]
+    fn typing_a_name_into_a_card_without_one_writes_it_whole() {
+        let edited = name(json!({"full": "Hans Oldenburg"}));
+        assert_eq!(
+            name_patch(None, Some(&edited)),
+            json!({"name": {"full": "Hans Oldenburg"}})
+        );
+    }
 }
