@@ -144,7 +144,6 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
    guests. The switch is the only reliable signal. The user guide must tell the
    user to turn the switch off for a server that does not send invitations.
 3. **Switch on.** The backend advertises `create-messages`, `save-schedules`
-<<<<<<< HEAD
    and `itip-suppress-on-remove-supported`. Evolution therefore does not mail
    the guests itself.
    - Creates, edits and deletes send `sendSchedulingMessages: true`.
@@ -157,6 +156,15 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
    - The server selects REQUEST/CANCEL or REPLY from `isOrigin`. The same flag
      therefore serves the edits of the organizer and the accept or decline of
      a guest.
+   - A guest answers in the event editor or from the invitation mail. The
+     editor edits the copy that the server delivered.
+   - The invitation view gives the mailed invitation to `receive_objects` with
+     the `UID` of the meeting. The local cache uses JMAP ids as keys, so it does
+     not know this `UID`, and `ECalMetaBackend` creates a new event.
+   - The server already delivered the meeting into the calendar. Stalwart
+     refuses a second event with the same `uid`. Thus, a create with a `UID`
+     that this calendar already holds goes into that event. The answer reaches
+     the organizer the same way as from the editor.
 4. **Switch off.** The backend advertises no capability. It never sends
    `sendSchedulingMessages`. It still syncs the guests as data. Evolution
    mails them as it does today.
@@ -169,41 +177,10 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
    - `invalidArguments` on a call that carried `sendSchedulingMessages` means
      that the server does not implement it. The save fails in the same way. The
      message tells the user to turn the switch off.
-=======
-   and `itip-suppress-on-remove-supported`, so Evolution does not mail guests
-   itself. Creates, edits and deletes send `sendSchedulingMessages: true`,
-   except when the operation flags carry
-   `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE` (the user chose not to send).
-   The flag goes out whether or not the event has participants: one without
-   any is not a scheduled event, so the server has nobody to send to, and a
-   delete need not load the event first to find out.
-   The server picks REQUEST/CANCEL or REPLY from `isOrigin`, so the same flag
-   serves the organizer's edits and a guest's accept or decline.
-   A guest answers either in the event editor (an edit of the copy the server
-   delivered) or from the invitation mail. The invitation view hands the
-   mailed invitation to `receive_objects` under the meeting's own `UID`, which
-   the local cache (keyed by JMAP id) does not know, so `ECalMetaBackend`
-   creates. The server already delivered that meeting into the calendar, and
-   Stalwart refuses a second event with the same `uid`, so a create whose
-   `UID` this calendar already holds is saved into that event instead, and the
-   answer reaches the organizer the same way as from the editor.
-4. **Switch off.** No capability is advertised, `sendSchedulingMessages` is
-   never sent, guests are still synced as data, and Evolution mails them as it
-   does today.
-5. **Refusals are errors, not fallbacks.** By the time the server answers,
-   Evolution has already been told the backend sends, so a quiet retry without
-   scheduling would leave guests uninvited and the user unaware.
-   `noSupportedScheduleMethods` fails the save with a message naming the
-   address the server cannot reach; the change was not applied (section 5.9.2).
-   `invalidArguments` on a call that carried `sendSchedulingMessages` means
-   the server does not implement it: the save fails the same way and tells the
-   user to turn the switch off.
->>>>>>> origin/master
 
 ## 5. Where this lives
 
 - `jmap-client`: `event_create_with_scheduling`, `event_update_with_scheduling`
-<<<<<<< HEAD
   and `event_destroy_with_scheduling` send the argument only if the caller
   asks.
 - `jmap-cal-sync`:
@@ -219,37 +196,19 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
       guest it could not reach. A delete names nobody, because it does not
       load the event.
     - `NotImplemented` for `invalidArguments`.
+  - A create first asks the server for an event in this calendar with the same
+    `uid`. If there is one, the create patches it (the invitation-mail answer
+    in rule 3).
   - Tests: `tests/scheduling.rs` (mock) and `tests/live_server_scheduling.rs`
     (two accounts on one real server). With the switch on, the calendar of
     the guest gets the meeting exactly once and then its cancellation. With
-    the switch off, it gets nothing.
+    the switch off, it gets nothing. When a guest accepts, from the editor or
+    from the invitation mail, the calendar keeps one copy and the answer
+    reaches the organizer.
 - `jmap-backend-cal`: `scheduling.rs` reads the switch from the source of the
   calendar. The CalDAV backend of EDS keeps the same option there:
   `[WebDAV Backend] CalendarAutoSchedule`. An absent group means on (rule 1).
   To turn the switch off, add this text
-=======
-  and `event_destroy_with_scheduling` send the argument only when asked.
-- `jmap-cal-sync`: `CalSync::with_server_scheduling` lets the sync layer
-  ask at all (off by default; the calendar backend turns it on at connect
-  and decides per change); `save_component_with` and
-  `remove_component_with` take `Itip::Suppress` for
-  `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. A refusal of a call that asked
-  the server to schedule comes back as `SyncError::Unscheduled`:
-  `Unreachable` for `noSupportedScheduleMethods`, naming the event's
-  non-`mailto:` addresses (the server does not say which guest it could not
-  reach, and a delete names nobody, since it does not load the event), and
-  `NotImplemented` for `invalidArguments`. A create first asks the server for an
-  event in this calendar with the same `uid` and, when there is one, patches
-  it (rule 3's invitation-mail answer). Tests: `tests/scheduling.rs` (mock) and
-  `tests/live_server_scheduling.rs` (two accounts on one real server: with the
-  switch on the guest's calendar gets the meeting exactly once and then its
-  cancellation; with it off, nothing; a guest's accept, from the editor or
-  from the invitation mail, keeps one copy and reaches the organizer).
-- `jmap-backend-cal`: `scheduling.rs` reads the switch from the calendar's
-  source, where EDS's CalDAV backend keeps the same option:
-  `[WebDAV Backend] CalendarAutoSchedule`. An absent group means on (rule 1);
-  to turn it off, add
->>>>>>> origin/master
 
   ```text
   [WebDAV Backend]
