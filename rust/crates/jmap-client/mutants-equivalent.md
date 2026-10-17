@@ -78,4 +78,6 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - `crates/jmap-client/src/eventsource.rs:466:9: replace <impl Write for Conn>::flush -> io::Result<()> with Ok(())`: `Conn` implements `std::io::Write` to permit calling `conn.write_all(...)` during HTTP request transmission. `eventsource.rs` never invokes `conn.flush()`. Furthermore, for `Conn::Plain(stream)`, `std::net::TcpStream::flush` in Rust's standard library is an unconditional no-op returning `Ok(())`. Replacing `conn.flush()` with `Ok(())` produces identical behavior.
 - 68 of 68 viable mutants caught by test suites, 16 unviable (absence of `Default` implementations on `EventSourceSubscription`, `EventSourceItem`, and `UrlParts`; let-chain syntax errors with `||`; and invalid type arithmetic on `Instant` and `Duration`), 2 genuinely equivalent.
 
+## `src/mail.rs`
 
+- Zero missed mutants (60 of 60 viable mutants caught by test suites, 2 timeouts due to infinite loop on zero `maxObjectsInGet` filter boundary mutations, 17 unviable due to absence of `Default` implementations on `EmailSubmissionSetRequest`, `GetResponse`, `SetResponse`, `QueryResponse`, `GetRequest`, `EmailParseResponse`, `UploadResponse`, and Rust 2024 let-chain syntax errors with `||`).

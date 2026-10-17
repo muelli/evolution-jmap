@@ -1006,3 +1006,240 @@ impl Client {
         Ok(response.body)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Credentials;
+    use crate::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    struct TestTransport {
+        handler: Arc<dyn Fn(&HttpRequest<'_>) -> HttpResponse + Send + Sync>,
+    }
+
+    impl Transport for TestTransport {
+        fn execute(&self, req: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+            Ok((self.handler)(&req))
+        }
+    }
+
+    fn test_client_with_session(session: Value) -> Client {
+        Client::builder()
+            .transport(TestTransport {
+                handler: Arc::new(move |req| {
+                    if req.method == HttpMethod::Get {
+                        HttpResponse {
+                            status: 200,
+                            content_type: Some("application/json".to_owned()),
+                            body: session.to_string().into_bytes(),
+                            final_url: req.url.to_owned(),
+                        }
+                    } else {
+                        panic!(
+                            "unexpected request in test_client: {:?} {}",
+                            req.method, req.url
+                        );
+                    }
+                }),
+            })
+            .connect("https://mail.example.internal", Credentials::none())
+            .expect("Client::connect succeeds")
+    }
+
+    fn test_session(max_size_request: Option<u64>) -> Value {
+        let mut core_cap = json!({
+            "maxSizeUpload": 50000000,
+            "maxConcurrentUpload": 4,
+            "maxConcurrentRequests": 4,
+            "maxCallsInRequest": 16,
+            "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+        });
+        if let Some(limit) = max_size_request {
+            core_cap["maxSizeRequest"] = json!(limit);
+        }
+
+        json!({
+            "capabilities": {
+                "urn:ietf:params:jmap:core": core_cap,
+                "urn:ietf:params:jmap:mail": {}
+            },
+            "accounts": {
+                "acc1": {
+                    "name": "user@example.com",
+                    "isPersonal": true,
+                    "isReadOnly": false,
+                    "accountCapabilities": {
+                        "urn:ietf:params:jmap:core": {},
+                        "urn:ietf:params:jmap:mail": {}
+                    }
+                }
+            },
+            "primaryAccounts": {
+                "urn:ietf:params:jmap:core": "acc1",
+                "urn:ietf:params:jmap:mail": "acc1"
+            },
+            "username": "user@example.com",
+            "apiUrl": "https://mail.example.internal/jmap/api",
+            "downloadUrl": "https://mail.example.internal/jmap/download/{blobId}",
+            "uploadUrl": "https://mail.example.internal/jmap/upload",
+            "eventSourceUrl": "https://mail.example.internal/jmap/events",
+            "state": "session-state-1"
+        })
+    }
+
+    #[test]
+    fn creation_outcome_success_refusal_and_protocol_error() {
+        let mut created = BTreeMap::new();
+        created.insert("item1".to_string(), "success_val".to_string());
+        let res = creation_outcome(Some(&created), None, "item1");
+        assert_eq!(res.unwrap(), "success_val");
+
+        let mut not_created = BTreeMap::new();
+        not_created.insert("item2".to_string(), SetError::new("invalidProperties"));
+        let res: Result<String, Error> = creation_outcome(None, Some(&not_created), "item2");
+        match res {
+            Err(Error::Set(err)) => assert_eq!(err.error_type, "invalidProperties"),
+            other => panic!("expected Error::Set, got {:?}", other),
+        }
+
+        let res: Result<String, Error> = creation_outcome(None, None, "item3");
+        match res {
+            Err(Error::Protocol(msg)) => {
+                assert!(msg.contains("item3"));
+            }
+            other => panic!("expected Error::Protocol, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn in_query_order_sorts_by_ids_and_drops_unmatched() {
+        let ids = vec![Id::new("m1"), Id::new("m2"), Id::new("m3")];
+        let emails = vec![
+            Email::new().with_id(Id::new("m2")),
+            Email::new().with_id(Id::new("m1")),
+            Email::new(),
+            Email::new().with_id(Id::new("m_other")),
+        ];
+        let ordered = in_query_order(&ids, emails);
+        assert_eq!(ordered.len(), 2);
+        assert_eq!(ordered[0].id.as_ref().map(|id| id.as_str()), Some("m1"));
+        assert_eq!(ordered[1].id.as_ref().map(|id| id.as_str()), Some("m2"));
+    }
+
+    #[test]
+    fn backfill_submission_created_patches_missing_fields_and_preserves_existing() {
+        let raw = json!({
+            "created": {
+                "sub1": {
+                    "id": "s1"
+                },
+                "sub2": {
+                    "id": "s2",
+                    "identityId": "existing-identity",
+                    "emailId": "existing-email"
+                }
+            }
+        });
+        let identity_id = Id::new("new-identity");
+        let email_id = Id::new("new-email");
+
+        let patched1 = backfill_submission_created(raw, "sub1", &identity_id, &email_id);
+        assert_eq!(patched1["created"]["sub1"]["identityId"], "new-identity");
+        assert_eq!(patched1["created"]["sub1"]["emailId"], "new-email");
+        assert_eq!(patched1["created"]["sub1"]["id"], "s1");
+
+        let patched2 = backfill_submission_created(patched1, "sub2", &identity_id, &email_id);
+        assert_eq!(
+            patched2["created"]["sub2"]["identityId"],
+            "existing-identity"
+        );
+        assert_eq!(patched2["created"]["sub2"]["emailId"], "existing-email");
+
+        let empty_raw = json!({"created": {}});
+        let patched_empty =
+            backfill_submission_created(empty_raw, "nonexistent", &identity_id, &email_id);
+        assert_eq!(patched_empty, json!({"created": {}}));
+    }
+
+    #[test]
+    fn submission_request_builds_expected_shape() {
+        let account_id = Id::new("acc1");
+        let identity_id = Id::new("ident1");
+        let email_id = Id::new("m1");
+        let patch = json!({"/keywords/$seen": true});
+
+        let req = submission_request(
+            &account_id,
+            &identity_id,
+            email_id.clone(),
+            None,
+            Some(patch.clone()),
+        );
+
+        let sub = req.set.create.as_ref().unwrap().get("submission").unwrap();
+        assert_eq!(sub.identity_id, identity_id);
+        assert_eq!(sub.email_id, email_id);
+        assert!(sub.envelope.is_none());
+
+        let patches = req.on_success_update_email.as_ref().unwrap();
+        assert_eq!(patches.get("#submission"), Some(&patch));
+        assert!(req.on_success_destroy_email.is_none());
+    }
+
+    #[test]
+    fn ids_that_fit_boundaries_comma_cost_and_oversized_first_id() {
+        let client = test_client_with_session(test_session(None));
+        let account_id = Id::new("acc1");
+        let ids = vec![Id::new("id_one"), Id::new("id_two"), Id::new("id_three")];
+        let call_id = "c1";
+
+        let empty = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL])
+            .call(
+                "Email/get",
+                &Client::email_get_arguments(&account_id, &[], None),
+                call_id,
+            )
+            .unwrap();
+        let base_used = serde_json::to_vec(&empty).unwrap().len() as u64;
+
+        let cost0 = serde_json::to_string(&ids[0]).unwrap().len() as u64;
+        let cost1 = serde_json::to_string(&ids[1]).unwrap().len() as u64 + 1;
+        let cost2 = serde_json::to_string(&ids[2]).unwrap().len() as u64 + 1;
+
+        let under_first = base_used + cost0 - 1;
+        let res = client.ids_that_fit(&account_id, &ids, None, call_id, under_first);
+        match res {
+            Err(Error::RequestTooLarge { size, limit }) => {
+                assert_eq!(size, base_used + cost0);
+                assert_eq!(limit, under_first);
+            }
+            other => panic!("expected RequestTooLarge, got {:?}", other),
+        }
+
+        let exact_first = base_used + cost0;
+        let res = client
+            .ids_that_fit(&account_id, &ids, None, call_id, exact_first)
+            .unwrap();
+        assert_eq!(res, 1);
+
+        let under_second = base_used + cost0 + cost1 - 1;
+        let res = client
+            .ids_that_fit(&account_id, &ids, None, call_id, under_second)
+            .unwrap();
+        assert_eq!(res, 1);
+
+        let exact_second = base_used + cost0 + cost1;
+        let res = client
+            .ids_that_fit(&account_id, &ids, None, call_id, exact_second)
+            .unwrap();
+        assert_eq!(res, 2);
+
+        let all_fit = base_used + cost0 + cost1 + cost2;
+        let res = client
+            .ids_that_fit(&account_id, &ids, None, call_id, all_fit)
+            .unwrap();
+        assert_eq!(res, 3);
+    }
+}
