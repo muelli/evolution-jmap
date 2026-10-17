@@ -64,6 +64,20 @@ impl Fixture {
         }
     }
 
+    /// Starts a mock server with a primary account and a second account.
+    /// Returns (fixture, second_account_id, second_book_id).
+    fn start_two_accounts() -> (Self, Id, Id) {
+        let fixture = Self::start(true);
+        let second_account_id = Id::from("second-account");
+        let second_book_id = {
+            let state = fixture.server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.add_account(second_account_id.clone(), "Second Account");
+            account.seed_address_book("SecondShared", true)
+        };
+        (fixture, second_account_id, second_book_id)
+    }
+
     fn config(&self) -> SourceConfig {
         SourceConfig {
             target: ConnectTarget::Origin(self.server.origin().to_owned()),
@@ -351,6 +365,11 @@ impl TestSource {
         let method = CString::new(method).expect("no NUL in a method");
         // SAFETY: as `at`.
         unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
+        self
+    }
+
+    fn account_id(self, account_id: &str) -> Self {
+        unsafe { connect::set_source_account_id(self.0, account_id) };
         self
     }
 }
@@ -649,4 +668,82 @@ fn connecting_from_a_source_reports_read_only_when_address_book_lacks_write_righ
     assert!(!open.writable);
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
     assert!(outs.error.is_null());
+}
+
+#[test]
+fn open_book_with_explicit_account_resolves_collections_from_that_account() {
+    let (fixture, second_account_id, second_book_id) = Fixture::start_two_accounts();
+    let open = connect::open_book_with_account(
+        &fixture.config(),
+        Credentials::none(),
+        Some(second_account_id.as_str()),
+    )
+    .expect("connected to second account");
+
+    assert_eq!(open.sync.account_id(), &second_account_id);
+    assert_eq!(open.sync.address_book_id(), &second_book_id);
+}
+
+#[test]
+fn open_book_with_omitted_account_defaults_to_primary_account() {
+    let (fixture, second_account_id, _) = Fixture::start_two_accounts();
+    let open = connect::open_book_with_account(&fixture.config(), Credentials::none(), None)
+        .expect("connected to primary account");
+
+    assert_eq!(open.sync.account_id(), &fixture.server.account_id());
+    assert_ne!(open.sync.account_id(), &second_account_id);
+    assert_eq!(
+        open.sync.address_book_id(),
+        fixture.default_book.as_ref().expect("default book")
+    );
+}
+
+#[test]
+fn connecting_from_a_source_with_account_id_opens_that_account() {
+    let (fixture, second_account_id, second_book_id) = Fixture::start_two_accounts();
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .account_id(second_account_id.as_str());
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    let sync = sync.expect("the connection was refused");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.address_book_id(), &second_book_id);
+    assert!(outs.error.is_null());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+#[test]
+fn connecting_from_a_source_with_unknown_account_id_fails() {
+    let fixture = Fixture::start(true);
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .account_id("non-existent-account-id");
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none(), "connection should fail for unknown account");
+    assert!(!outs.error.is_null());
+    unsafe { outs.take_error(eds_sys::E_CLIENT_ERROR_OTHER_ERROR) };
 }
