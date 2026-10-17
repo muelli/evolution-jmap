@@ -378,7 +378,7 @@ impl Drop for UidList {
 }
 
 /// A translatable expression is answered by the server, not the (empty)
-/// local summary: the round trip item 46(c2) wires up.
+/// local summary.
 #[cfg(camel_folder_search_object)]
 #[test]
 fn a_translatable_expression_is_delegated_to_the_server() {

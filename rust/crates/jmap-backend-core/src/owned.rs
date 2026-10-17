@@ -7,9 +7,8 @@
 //! `(transfer full)` return is a reference the caller must release, and a
 //! `(transfer none)` one is a reference it must not. Written out by hand, that
 //! contract is a `g_object_unref` on every path out of the function — which is
-//! correct exactly as long as nobody adds a path. `docs/UNSAFE-AUDIT.md`
-//! Pattern C found ~15 such sites in `jmap-backend-cal/src/marshal.rs` alone,
-//! every one of them correct at the time of the audit and none of them
+//! correct exactly as long as nobody adds a path. `jmap-backend-cal/src/marshal.rs`
+//! alone once had ~15 such sites, every one of them correct and none of them
 //! checkable by the compiler.
 //!
 //! [`Owned`] moves that contract into the type system: a transfer-full pointer

@@ -1081,7 +1081,7 @@ fn arb_utc_offset() -> impl Strategy<Value = String> {
     )
 }
 
-/// A custom `TimeZoneId` (RFC 8984 §1.4.9's solidus-prefixed second form)
+/// A custom `TimeZoneId` (RFC 8984 §1.4.8's solidus-prefixed second form)
 /// paired with the one-observance `TimeZone` definition that names it.
 ///
 /// `vtimezone_of` draws the single `standard` rule whole (RFC 5545 §3.6.5's

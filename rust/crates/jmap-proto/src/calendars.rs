@@ -226,11 +226,11 @@ pub struct CalendarEvent {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
-    /// When the event was created (RFC 8984 §4.1.7 `created`, UTCDateTime).
+    /// When the event was created (RFC 8984 §4.1.5 `created`, UTCDateTime).
     /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
-    /// When the event was last changed (RFC 8984 §4.1.8 `updated`, UTCDateTime).
+    /// When the event was last changed (RFC 8984 §4.1.6 `updated`, UTCDateTime).
     /// Server-set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
@@ -308,7 +308,7 @@ pub struct CalendarEvent {
     pub recurrence_overrides: Option<BTreeMap<String, Value>>,
     /// Custom time zone definitions (RFC 8984 §4.7.2), keyed by time zone id.
     /// Kept as JSON for lossless preservation. Intentional interop deviation
-    /// (ICAL-MAPPING Section 17 Divergence 437) for custom /... timezones.
+    /// (ICAL-MAPPING §11, `timeZones`, and §4.2) for custom /... timezones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zones: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

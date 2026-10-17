@@ -305,7 +305,7 @@ impl CalSync {
             //
             // Which is the answer only where there is no spelling. An IANA name
             // has one, and so does a zone the document *defines* — RFC 8984
-            // §1.4.9's custom identifier, sent beside the §4.7.2 `timeZones`
+            // §1.4.8's custom identifier, sent beside the §4.7.2 `timeZones`
             // entry that says what it is, which is how an appointment whose zone
             // came from an Exchange invitation rather than a database reaches
             // the server as the event it is. See [`maps_time_zone`], and

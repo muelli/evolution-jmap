@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 112, step (c), end to end: a meeting organised through a
+//! End to end: a meeting organised through a
 //! real `evolution-calendar-factory` against a real server reaches a guest on
 //! that server exactly once, sent by the server and not by Evolution, and the
 //! guest's answer comes back into the organizer's calendar.

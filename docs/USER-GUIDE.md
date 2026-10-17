@@ -20,22 +20,24 @@ sudo apt install ./evolution-jmap_*_amd64.deb
 evolution --force-shutdown
 ```
 
-`gh attestation verify` currently needs GitHub CLI authentication (`gh auth login` or
-`GH_TOKEN`). If you do not have that, use the no-token fallback in
-`docs/verifying-artifacts.md`.
+`gh attestation verify` needs GitHub CLI authentication (`gh auth login` or
+`GH_TOKEN`). Without it, use the cosign steps in `docs/verifying-artifacts.md`.
 
-Fedora (`.rpm` build or release asset):
+Fedora: releases have no `.rpm`. Build one with `ci/rpm.sh` (see
+`docs/PACKAGING.md`), then:
 
 ```bash
-sudo dnf install ./evolution-jmap*.rpm
+sudo dnf install ./build-rpm/*.rpm
 evolution --force-shutdown
 ```
 
-Unverified in a running Evolution: exact package filename pattern on every distro release.
-
 ## Add a Fastmail account (OAuth)
 
-Use this flow for Fastmail and similar providers that support OAuth 2.0.
+Use this flow for Fastmail and other servers that support OAuth 2.0. No
+pre-registered client is needed: the module registers itself with the server
+through OAuth dynamic client registration (RFC 7591), which Fastmail offers.
+OAuth 2.0 can only be set up through the lookup below, not on the manual
+server settings page.
 
 1. Open Evolution and add a new mail account.
 2. On the identity page, enter your Fastmail address.
@@ -48,14 +50,13 @@ Use this flow for Fastmail and similar providers that support OAuth 2.0.
    - `Use a secure connection (TLS)`: enabled
 5. Complete browser login and consent, then return to Evolution and finish.
 
-If lookup does not offer OAuth for that server, Evolution keeps `Authentication`
-on `Password`, and you can finish with password or API token authentication instead.
-
-Unverified in a running Evolution: exact button labels for the OAuth lookup and sign-in steps across Evolution versions.
+If the lookup does not offer OAuth for that server, use `Password` or
+`API Token` authentication instead.
 
 ## Add a Stalwart account (password)
 
-Use this flow for Stalwart and other password-based setups.
+Use this flow for Stalwart and other servers with password or API token
+sign-in.
 
 1. Open Evolution.
 2. Start adding a new mail account.
@@ -64,8 +65,9 @@ Use this flow for Stalwart and other password-based setups.
    - `Server`: your Stalwart host or IP (for example `<stalwart-ip>`)
    - `Port`: `443` for HTTPS, or your custom port
    - `Username`: your Stalwart login
-   - `Authentication`: `Password`
-   - `Use a secure connection (TLS)`: enabled for HTTPS; disable only for local/plain HTTP testing
+   - `Authentication`: `Password` (or `API Token`)
+   - `Use a secure connection (TLS)`: enabled. Plain HTTP is accepted only
+     for a loopback address (`127.0.0.1`, for local testing).
 5. Continue and save the account.
 
 The account setup module writes these settings into the account source:
@@ -73,7 +75,8 @@ The account setup module writes these settings into the account source:
 - `[Authentication] Host` from `Server`
 - `[Authentication] User` from `Username`
 
-These values are consumed by the collection backend and the generated mail/calendar/address-book sources.
+The collection backend reads them and creates the mail, calendar and address
+book sources from them.
 
 ## What you should see after setup
 
@@ -83,7 +86,6 @@ A working JMAP account should appear as one account with three service areas:
 - contacts/address books
 - calendars
 
-The project manual test recipe confirms this end-to-end against real servers and the local mock server.
 
 ## Token rejected: what to expect
 
@@ -97,7 +99,7 @@ If prompts loop forever without a successful sign-in, treat it as an error and c
 
 Hosts with one trailing dot are normalized to the same host without the dot. Example: `api.fastmail.com.` is treated as `api.fastmail.com`.
 
-No account rewrite is required on current builds. Normalization happens during connection target resolution.
+You do not need to change existing accounts.
 
 ## JMAP-only features
 
@@ -105,11 +107,10 @@ No account rewrite is required on current builds. Normalization happens during c
 
 Open account settings and look for a `Vacation Responder` page for the JMAP account. You can enable automatic replies, set optional start/end dates, subject, and message.
 
-Unverified in a running Evolution: exact widget layout on every desktop theme and Evolution release.
 
 ### Scheduled send
 
-In the composer, open `File` then `Send Later`. Presets include one hour, tomorrow morning, and next Monday morning.
+In the composer, open `File` then `Send Later`. Presets include in one hour, tomorrow morning and next Monday morning.
 
 This menu is enabled only when the selected From account is JMAP and the server advertises delayed-send support (`maxDelayedSend > 0`).
 
@@ -117,13 +118,13 @@ This menu is enabled only when the selected From account is JMAP and the server 
 
 In a message list context menu, use `Snooze` presets.
 
-Important limit: many public JMAP servers do not expose the snooze capability to third-party clients. In that case the menu stays disabled for that account. This is expected behavior.
+Snooze needs the Cyrus snooze capability. Stalwart and Fastmail do not offer it, so the menu stays disabled for their accounts. This is expected.
 
 ## Known limits
 
-- Evolution does not have an EDS hook to surface JMAP push (`eventSourceUrl`) in this plugin architecture. The provider runs pull-based refresh instead.
-- Snooze is capability-gated. Many public servers currently do not advertise the capability for API clients.
-- Some UI details in this guide are marked unverified in a running Evolution where they depend on desktop/runtime specifics.
+- Snooze works only on servers that offer the Cyrus snooze capability.
+- Mail uses JMAP Push when the server advertises an `eventSourceUrl`.
+  Otherwise new mail arrives on the account's refresh interval.
 
 ## Logs and debug output
 
@@ -151,14 +152,13 @@ evolution --force-shutdown
 
 ## Troubleshooting
 
-- Recheck `JMAP Session URL` and `User` first.
+- Check `Server`, `Port` and `Username` first.
 - If mail authentication fails, confirm account credentials and whether OAuth or password flow is configured for that provider.
 - If `Send Later` is disabled, verify the active From account is JMAP and the server supports delayed send.
 - If `Snooze` is disabled, verify whether your server advertises snooze capability. Lack of capability is common and not necessarily a bug.
 
-For developer-oriented validation steps and deeper diagnostics, see:
+For developer test steps and deeper diagnostics, see:
 
 - `docs/manual-test-account-setup.md`
 - `docs/manual-test-collection-backend.md`
-- `docs/OAUTH-FASTMAIL.md`
 - `docs/manual-test-ui-features.md`

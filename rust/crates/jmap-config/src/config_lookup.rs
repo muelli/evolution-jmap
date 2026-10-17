@@ -121,7 +121,7 @@ use crate::oauth2_setup::discover_and_register;
 /// against EDS's WebKit-based consent prompter.
 ///
 /// Dotted reverse-DNS, not a bare word: some providers (Fastmail's OAuth
-/// doc, confirmed in `docs/OAUTH-FASTMAIL.md`) require a private-use
+/// doc) require a private-use
 /// redirect scheme to contain at least one dot and reject registration
 /// otherwise.
 pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
@@ -655,7 +655,7 @@ mod tests {
         // reverse-DNS notation with at least one dot (or a loopback/https
         // URI, neither of which fits EDS's WebKit-based consent prompter —
         // see the module docs) — a dot-less scheme is rejected at dynamic
-        // client registration (docs/OAUTH-FASTMAIL.md).
+        // client registration.
         let scheme = REDIRECT_URI.split(':').next().expect("a URI has a scheme");
         assert!(
             scheme.contains('.'),

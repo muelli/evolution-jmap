@@ -185,7 +185,7 @@ fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
 
 #[test]
 fn a_save_leaves_the_servers_own_timestamps_alone() {
-    // `created` and `updated` (RFC 8984 §4.1.7, §4.1.8) are the server's record
+    // `created` and `updated` (RFC 8984 §4.1.5, §4.1.6) are the server's record
     // of the event. They are drawn onto the component — as CREATED, and as the
     // DTSTAMP and LAST-MODIFIED RFC 5545 §3.8.7.2 makes the same instant — and
     // never read back off it, which is what this pins: an editor rewrites all
@@ -2379,7 +2379,7 @@ END:VTIMEZONE\r\n";
 /// Respelling a zone is not changing it. Every save of a zoned appointment
 /// arrives with libical's own identifier in place of the name we wrote, and
 /// reading that as an edit would put a string into `timeZone` that RFC 8984
-/// §1.4.9 only admits beside a `timeZones` definition — a value a server is
+/// §1.4.8 only admits beside a `timeZones` definition: a value a server is
 /// entitled to reject, taking the user's real edits down with it.
 #[test]
 fn the_zone_evolution_respells_is_not_read_as_a_zone_change() {
@@ -2443,7 +2443,7 @@ fn a_move_to_another_zone_arrives_under_its_iana_name() {
 /// files the appointment floating — a wall-clock time in no particular zone,
 /// which every reader resolves to its own.
 ///
-/// RFC 8984 §1.4.9 gives such a zone a way to be stated all the same: the custom
+/// RFC 8984 §1.4.8 gives such a zone a way to be stated all the same: the custom
 /// identifier, sent beside the §4.7.2 `timeZones` entry that defines it. The
 /// definition is the document's own — read off the `VTIMEZONE` an Exchange
 /// invitation or another client's `.ics` carries — so the event goes out saying
@@ -2500,7 +2500,7 @@ fn a_new_event_naming_a_zone_nothing_defines_is_filed_floating() {
 /// The series' `TZID` is a Windows name, so the create files the series
 /// floating — there is no `TimeZoneId` to state it by. The occurrence the user
 /// moved is in a different zone, one the document *defines*, which RFC 8984
-/// §1.4.9 does admit; dropping `timeZones` wholesale along with the series'
+/// §1.4.8 does admit; dropping `timeZones` wholesale along with the series'
 /// zone took that definition with it and left the override's identifier
 /// dangling, which is the shape a server may refuse the whole
 /// `CalendarEvent/set` for.
@@ -2553,7 +2553,7 @@ fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names()
 }
 
 /// The identifier a server invents for a zone no database names — RFC 8984
-/// §1.4.9's second form — and the `VTIMEZONE` that defines it, as a document
+/// §1.4.8's second form, and the `VTIMEZONE` that defines it, as a document
 /// written elsewhere carries the pair.
 const CUSTOM_TZID: &str = "/example.com/Europe-Berlin";
 
@@ -2693,7 +2693,7 @@ fn moving_one_occurrence_to_another_zone_arrives_under_its_iana_name() {
 /// And the zone no document explains, one level down from
 /// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`]:
 /// `recurrenceOverrides` is replaced whole, so an entry holding a value RFC 8984
-/// §1.4.9 does not admit cannot be sent at all — the server would be entitled to
+/// §1.4.8 does not admit cannot be sent at all: the server would be entitled to
 /// reject the whole `CalendarEvent/set` and take the user's other edits with it.
 /// The property is left alone and the rest of the save still arrives.
 #[test]
@@ -2742,7 +2742,7 @@ fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
 /// brought: Evolution files that `VTIMEZONE` in the calendar's own timezone
 /// store, the backend's envelope copies it back beside the components that name
 /// it, and what reaches this crate is a custom identifier *with* its RFC 8984
-/// §4.7.2 definition. §1.4.9 admits that pair, so the save has something to send
+/// §4.7.2 definition. §1.4.8 admits that pair, so the save has something to send
 /// — and must send both halves: the identifier alone is a dangling reference the
 /// server may reject the whole `CalendarEvent/set` over.
 ///

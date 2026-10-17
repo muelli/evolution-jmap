@@ -40,7 +40,7 @@ const GLOBALLY_FORBIDDEN_PROPERTIES: &[&str] = &[
     "tzId",
     "validUntil",
     // Note: timeZones is obsoleted in JSCalendar-bis §7.4.2.1, but is retained
-    // as an Intentional Interop Deviation (ICAL-MAPPING §17 Divergence 437)
+    // as an Intentional Interop Deviation (ICAL-MAPPING §11, `timeZones`, and §4.2)
     // to preserve custom VTIMEZONE definitions in jmap-cal-sync and jmap-ical.
 ];
 

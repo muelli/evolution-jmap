@@ -1,114 +1,90 @@
 # Manual test: the JMAP UI features
 
-`module-jmap-configuration.so` carries, besides the account-setup pieces, the
-`jmap-ui` extensions: a vacation-autoresponder page in the account editor,
-scheduled send in the composer, and snooze in the message-list context menu.
-None of these is a `cargo test` — each needs a running Evolution, an installed
-module, and an account whose server actually offers the feature. This is that
-recipe.
+`module-jmap-configuration.so` contains the account setup and also the
+`jmap-ui` extensions: a vacation autoresponder page in the account editor,
+scheduled send in the composer, and snooze in the message list context menu.
+Each test needs a running Evolution, the installed module and an account
+whose server offers the feature.
 
-Each feature is gated twice. Whether its control appears at all is a
-synchronous check on the account's backend name or the folder's Camel
-provider; whether the control is *sensitive* is the server's own answer,
-fetched from the JMAP session document off the main loop. So the interesting
-half of every test is not "does the button work" but "is the button offered,
-and only where the server can honour it".
+Each feature has two gates. The account's backend name (or the folder's Camel
+provider) decides whether the control appears. The server's JMAP session
+decides whether the control is sensitive. So test both: the control appears
+only on JMAP accounts, and it is sensitive only where the server supports the
+feature.
 
-## What is already checked without you
+## What automated tests already cover
 
-- The protocol layer round-trips against the stateful mock: vacation get/set
-  (`jmap-client/tests/vacation_response.rs`), scheduled send with a `HOLDFOR`
-  hold staged in Drafts and moved to Sent on acceptance
-  (`jmap-ui/tests/send_later.rs`, `jmap-client/tests/mail_send.rs`), and snooze
-  through the Cyrus vendor capability with the two server-side refusals
-  (`jmap-client/tests/mail_snooze.rs`).
-- The gate arithmetic is unit-tested without a display
-  (`jmap-ui/src/session_cache.rs`, `.../send_later/schedule.rs`).
-- The FFI surface every widget and window crosses is pinned against the running
-  type system (`evo-sys/tests/{gtk,layout}.rs`).
+- Protocol round trips against the mock: vacation
+  (`jmap-client/tests/vacation_response.rs`), scheduled send
+  (`jmap-ui/tests/send_later.rs`, `jmap-client/tests/mail_send.rs`) and
+  snooze (`jmap-client/tests/mail_snooze.rs`).
+- Gate logic without a display (`jmap-ui/src/session_cache.rs`,
+  `jmap-ui/src/send_later/schedule.rs`).
+- The FFI types that the widgets use (`evo-sys/tests/gtk.rs`,
+  `evo-sys/tests/layout.rs`).
+- `docs/gui-smoke-test.md` checks that the controls are present against
+  `jmap-mockd`.
 
-What no automated test covers is the last foot: the extensions loading into a
-real Evolution, the controls appearing on the right accounts, and the round
-trip reaching a real server. That is this document.
+No automated test loads the extensions into a real Evolution against a real
+server. This recipe does.
 
 ## Servers
 
-- **Stalwart** offers vacation and scheduled send, and *not* snooze — the
-  useful negative case for the snooze gate. Any Stalwart deployment is fine.
-- **Fastmail** offers vacation and scheduled send (`maxDelayedSend` is
-  advertised at 512 days). It does **not** expose snooze on its public JMAP
-  API, despite snoozing in its own web UI — see the snooze section below.
-- **Snooze has no known public server.** The submenu can only be seen
-  sensitive against `jmap-mockd` (`MockServer::builder().snooze_extension()`)
-  or a self-hosted Cyrus with `jmap_nonstandard_extensions` enabled.
+- **Stalwart** offers vacation and scheduled send, but not snooze. Use it for
+  the negative snooze case.
+- **Fastmail** offers vacation and scheduled send. Its public JMAP API does
+  not expose snooze.
+- **Snooze** uses the Cyrus vendor capability. It is only sensitive against a
+  self-hosted Cyrus with `jmap_nonstandard_extensions` enabled, or against
+  the mock library with `MockServer::builder().snooze_extension()`. The
+  `jmap-mockd` binary does not enable it.
 
-Install the module the usual way (`cmake --install`, then
-`evolution --force-shutdown` so the shell reloads the `.so`), and run with
-`EVOLUTION_JMAP_LOG=trace` to see each gate's decision.
+Install the module (`cmake --install`, then `evolution --force-shutdown` so
+the shell loads the new `.so`). Run Evolution with `EVOLUTION_JMAP_LOG=trace`
+to see each gate decision in the log.
 
 ## Vacation autoresponder
 
-1. Open **Edit ▸ Accounts**, select the JMAP account, **Edit**.
-2. A **Vacation Responder** page is in the editor's side list. Non-JMAP
-   accounts do not get one.
-3. Selecting it fetches the current `VacationResponse`; the widgets fill and
-   become sensitive. A server that does not offer the capability leaves them
-   insensitive with a one-line explanation instead.
-4. Toggle *Send automatic replies* — the detail fields below it are
-   insensitive until it is on. Set a first/last day with the date pickers
-   (each may be left unset, which is the protocol's "no bound"), a subject
-   and a message, and press **OK**. Only a changed page writes; re-opening
-   the editor shows what the server now holds.
-5. Confirm out of band (the provider's web UI, or `VacationResponse/get`) that
-   the autoresponder is set. **Turn it back off afterwards** — this is a live
+1. Open **Edit ▸ Accounts**, select the JMAP account and click **Edit**.
+2. The editor has a **Vacation Responder** page. Non-JMAP accounts do not.
+3. Select the page. It fetches the current `VacationResponse` and the widgets
+   become sensitive. If the server does not offer the capability, the widgets
+   stay insensitive and a line explains why.
+4. Turn on *Send automatic replies*. The fields below it become sensitive.
+   Optionally set a first and last day, then a subject and a message, and
+   click **OK**. The page writes only when something changed. Open the
+   editor again to see what the server now has.
+5. Check in the provider's web UI (or with `VacationResponse/get`) that the
+   autoresponder is set. **Turn it off again afterwards.** This is a live
    setting on a real mailbox.
 
 ## Scheduled send
 
-1. Compose a message. **File ▸ Send Later** carries three presets (one hour,
+1. Compose a message. **File ▸ Send Later** has presets (in one hour,
    tomorrow morning, next Monday morning).
-2. The submenu is sensitive only when the From account's transport is JMAP and
-   its server advertises a non-zero `maxDelayedSend`. Switch the From line to a
-   non-JMAP identity and it desensitises, with the reason in its tooltip; the
-   trace logs each `send-later gate` decision.
-3. Pick a preset. The composer hands over its finished message, which is
-   imported into Drafts and submitted with a `HOLDFOR`; on the server's
-   acceptance it moves to Sent and the composer closes.
-4. Confirm the message is held (`undoStatus: pending`, a future `sendAt`) and
-   then delivered at the chosen time. A refusal keeps the composer open and
-   names the Drafts residue.
-5. Expect the sent copy to appear in **Sent as soon as the server accepts**,
-   before the hold elapses — `onSuccessUpdateEmail` fires at acceptance, not
-   at release. Filing it into the `scheduled`-role mailbox instead was tested
-   against Fastmail and is worse: the copy is never moved out again. See
-   `send_later/submit.rs` for the whole argument.
-
-Verified live against Fastmail (2026-09-04): `HOLDFOR=120` was accepted with
-`sendAt` two minutes out and the message arrived five seconds after it, so
-Fastmail honours RFC 4865 even though it advertises an empty
-`submissionExtensions`.
+2. The submenu is sensitive only when the From account's transport is JMAP
+   and its server advertises a non-zero `maxDelayedSend`. Change the From
+   line to a non-JMAP identity: the submenu becomes insensitive and its
+   tooltip gives the reason.
+3. Pick a preset. The message is imported into Drafts and submitted with an
+   RFC 4865 `HOLDFOR`. When the server accepts it, the message moves to Sent
+   and the composer closes. If the server refuses, the composer stays open.
+4. Check that the submission is held (`undoStatus: pending`, a future
+   `sendAt`) and that the message arrives at the chosen time.
+5. The sent copy appears in **Sent** when the server accepts the submission,
+   before the hold ends. This is intended: a copy filed in the `scheduled`
+   mailbox stays there on Fastmail (see `jmap-ui/src/send_later/submit.rs`).
 
 ## Snooze
 
-1. In the message list, select one or more messages and open the context menu.
-   A **Snooze** submenu carries the same three presets.
+1. In the message list, select one or more messages and open the context
+   menu. The **Snooze** submenu has the same kind of presets.
 2. It is sensitive only for a folder on a JMAP account whose server
-   advertises the Cyrus snooze capability. Against Stalwart *and against
-   Fastmail* the item stays insensitive with a tooltip saying so, and the
-   trace logs `snooze gate: capability fetched snooze=false` — that is the
-   expected result on both, not a bug. Fastmail was probed directly
-   (2026-09-04): `using` the capability returns `unknownCapability`,
-   `Email/get` of `snoozed` returns `invalidArguments`, there is no
-   `snoozed`-role mailbox, and `snoozedUntil` is an `unsupportedSort`.
-   To see the item live, point Evolution at `jmap-mockd` started with the
-   snooze extension on.
-3. Pick a preset. The selected messages move into the server's snoozed mailbox
-   (created if absent) with a wake time; they leave the inbox and return to it
-   when the time comes. The detached message window (double-click a message)
-   carries the same item.
-4. Verify against the provider's own snooze UI that the message is snoozed, and
-   that it reappears at the wake time.
-
-Relates to `docs/gui-smoke-test.md` (the automated Xvfb tier, which asserts the
-controls are *present* against `jmap-mockd`; this recipe is the live half it
-cannot be).
+   advertises the Cyrus snooze capability. Against Stalwart and Fastmail it
+   stays insensitive with a tooltip, and the trace log shows
+   `snooze gate: capability fetched`. That is the expected result.
+3. On a server with the capability, pick a preset. The messages move into the
+   server's snoozed mailbox (created if absent) with a wake time, and return
+   to the inbox at that time. The message window (double-click a message) has
+   the same submenu.
+4. Check that the messages come back at the wake time.

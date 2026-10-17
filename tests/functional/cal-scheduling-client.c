@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ROADMAP item 112, step (c): who tells a meeting's guests, seen from an
+ * Who tells a meeting's guests, seen from an
  * ordinary libecal consumer through a real, running `evolution-calendar-
  * factory`. Evolution's `itip-utils.c` composes no invitation mail of its own
  * for a client that has `create-messages`, so the capabilities this program

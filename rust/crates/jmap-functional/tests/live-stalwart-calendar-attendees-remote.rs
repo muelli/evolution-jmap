@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 108, part (3): live confirmation of item 102's code-reading
-//! answer (3) -- do attendees on a meeting another client created show up in
+//! Do attendees on a meeting another client created show up in
 //! Evolution?
 //!
 //! `jmap_ical::event::drawn_participants` reads a `CalendarEvent.participants`

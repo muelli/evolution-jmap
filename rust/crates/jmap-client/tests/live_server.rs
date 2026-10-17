@@ -5794,7 +5794,7 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
 }
 
-/// Batch 37 Item 3: prove against the oracle that a CalendarEvent created with
+/// Prove against the oracle that a CalendarEvent created with
 /// JSCalendar-bis participant properties (calendarAddress rather than reserved
 /// sendTo) is persisted and returned intact by Stalwart.
 #[test]
@@ -6033,7 +6033,7 @@ fn an_unknown_set_argument_is_ignored_rather_than_refused() {
         .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
 }
 
-/// Batch 38 Item 1: prove on live Stalwart oracle that CalendarEvent/parse emits
+/// Prove on the live Stalwart oracle that CalendarEvent/parse emits
 /// Link.display as a set (String[Boolean] conforming to draft-ietf-calext-jscalendarbis-22
 /// Section 1.5.11), matching jmap-ical's inbound output, and that CalendarEvent/set
 /// strictly requires the set form and roundtrips it via CalendarEvent/get.

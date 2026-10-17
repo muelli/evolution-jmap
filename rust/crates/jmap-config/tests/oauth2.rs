@@ -807,7 +807,7 @@ fn a_notify_handler_can_read_the_extension_back_on_its_own_thread() {
     // documentation — deliberately emitting `g_object_notify` from inside
     // this class's own locked section, which is the worst a change here could
     // do, still did not wedge this test or its sibling, because that emission
-    // was queued too. See `docs/AUDIT-FFI-20260828.md` section 8.
+    // was queued too.
     let source = TestSource::new().written(&config());
     // SAFETY: the handler has `notify`'s signature, and the source outlives
     // every emission this test causes.

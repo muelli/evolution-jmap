@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Item 66's live-Evolution caveat: a brand-new JMAP collection account's
-first populate must authenticate ONCE, not twice — `on_account_changed`
+"""Live-Evolution check: a brand-new JMAP collection account's
+first populate must authenticate ONCE, not twice: `on_account_changed`
 must not answer a `"changed"` emission its own populate caused.
 
 The oracle is jmap-mock's own request log rather than another AT-SPI read:

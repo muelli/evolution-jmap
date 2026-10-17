@@ -3,38 +3,66 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# RFC Example Conformance and Wire Model Verification
+# RFC example fixtures
 
-This document records the extraction, fixture mapping, and protocol conformance verification of the specifications' own JSON examples against the wire types in `jmap-proto`.
+The JSON examples printed in the JMAP and JSContact/JSCalendar specifications,
+one file per example, used to check that `jmap-proto`'s wire types accept
+what the specifications themselves send.
 
-## 1. Document Versions and Specifications
+## Specifications
 
-| Specification | Status | Date / Version | Source |
-|---|---|---|---|
-| RFC 8620 | Standards Track | July 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8620.txt |
-| RFC 8621 | Standards Track | August 2019, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8621.txt |
-| RFC 9610 | Standards Track | December 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9610.txt |
-| RFC 9553 | Standards Track | May 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9553.txt |
-| RFC 8984 | Standards Track | July 2021, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc8984.txt |
-| draft-ietf-jmap-calendars-32 | IETF Internet-Draft | October 2026, draft-ietf-jmap-calendars-32 | https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/ |
-| RFC 9425 | Standards Track | June 2023, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9425.txt |
-| RFC 9670 | Standards Track | November 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9670.txt |
-| RFC 9661 | Standards Track | September 2024, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9661.txt |
-| RFC 9404 | Standards Track | August 2023, ISSN: 2070-1721 | https://www.rfc-editor.org/rfc/rfc9404.txt |
+| Directory | Specification | Version |
+|---|---|---|
+| `rfc8620/` | RFC 8620, JMAP core | July 2019 |
+| `rfc8621/` | RFC 8621, JMAP for Mail | August 2019 |
+| `rfc9610/` | RFC 9610, JMAP for Contacts | December 2024 |
+| `rfc9553/` | RFC 9553, JSContact | May 2024 |
+| `rfc8984/` | RFC 8984, JSCalendar | July 2021 |
+| `jmap_calendars/` | draft-ietf-jmap-calendars-32, JMAP for Calendars | 5 October 2026 |
+| `rfc9425/` | RFC 9425, JMAP for Quotas | June 2023 |
+| `rfc9670/` | RFC 9670, JMAP Sharing (principals) | November 2024 |
+| `rfc9661/` | RFC 9661, JMAP for Sieve Scripts | September 2024 |
+| `rfc9404/` | RFC 9404, JMAP Blob Management | August 2023 |
 
-## 2. RFC 8620 Core JMAP Examples (July 2019)
+The calendars fixtures are taken from draft -32. `jmap_proto::calendars`
+cites draft -28 for its property names; -28 and -32 define the same
+properties and section structure (only the example values changed), so the
+-32 examples check that model.
+
+## How they differ from the specification text
+
+Each file is the example as published, made into valid JSON:
+
+- line 1 is a `// Source:` comment naming the specification, section and
+  figure (and the erratum, if one was applied);
+- strings folded at 72 columns, or wrapped with RFC 8792 `\` markers, are
+  unfolded;
+- `...` placeholders for omitted properties or list entries are replaced
+  with valid JSON, without touching any field `jmap-proto` models;
+- verified or obvious errata are applied where they break parsing (listed
+  per specification below); otherwise the example stays as published.
+
+## How `tests/rfc_examples.rs` uses them
+
+`load_rfc_fixture` strips the `//` lines, requires the source note, and
+deserialises the rest into the wire type under test. Each test then checks
+the source note names the expected section, asserts the fields the example
+is about, and re-serialises the value to confirm the round trip is lossless.
+Adding an example means adding the file here and a test there.
+
+## 1. RFC 8620 Core JMAP Examples (July 2019)
 
 RFC 8620 defines the fundamental JMAP protocol data structures, envelopes, problem details, and push notifications.
 
-### 2.1 Catalogued Fixtures
+### 1.1 Fixtures
 
-31 distinct JSON examples across 10 sections were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc8620/`:
+`rfc8620/`, 31 files:
 
 1. `2.1_session.json`: Complete JMAP Session resource advertising core, mail, contacts, and custom vendor capabilities with primary and secondary accounts.
 2. `3.3.1_request.json`: Standard Request envelope carrying `using` and multiple method calls.
 3. `3.4.1_response.json`: Standard Response envelope carrying multiple method responses and `sessionState`.
-4. `3.6.1_unknown_capability.json`: Request-level problem details (`urn:ietf:params:jmap:error:unknownCapability`).
-5. `3.6.1_limit.json`: Request-level problem details (`urn:ietf:params:jmap:error:limit`) with `limit: "maxSizeRequest"`.
+4. `3.6.1.1_unknown_capability.json`: Request-level problem details (`urn:ietf:params:jmap:error:unknownCapability`).
+5. `3.6.1.1_limit.json`: Request-level problem details (`urn:ietf:params:jmap:error:limit`) with `limit: "maxSizeRequest"`.
 6. `3.6.2_method_error.json`: Method-level `error` invocation with `type: "unknownMethod"`.
 7. `3.7_simple_backref_request.json`: Method call chaining `Foo/changes` and `Foo/get` with a `#ids` `ResultReference`.
 8. `3.7_thread_backref_request.json`: Four-stage method call pipeline chaining `Email/query`, `Email/get`, `Thread/get`, and `Email/get` with JSON Pointer backreferences.
@@ -62,9 +90,9 @@ RFC 8620 defines the fundamental JMAP protocol data structures, envelopes, probl
 30. `7.2.3_set_update_expires_request.json`: `PushSubscription/set` update extending expiry timestamp.
 31. `7.2.3_set_update_expires_response.json`: `PushSubscription/set` updated response confirming expiry extension.
 
-### 2.2 Specification Errata Audited
+### 1.2 Errata
 
-The IETF RFC Errata database for RFC 8620 was audited and applied:
+RFC 8620 errata:
 
 - **Errata ID 5791 (Technical, Verified)**: In §2.1, the example Session resource response erroneously named `maxConcurrentRequest` instead of `maxConcurrentRequests`, and was missing a trailing comma after `"urn:ietf:params:jmap:mail": {}`. Corrected in fixture `2.1_session.json`.
 - **Errata ID 6603 (Technical, Reported)**: Section 5.5 `upToId` specification clarification.
@@ -73,28 +101,27 @@ The IETF RFC Errata database for RFC 8620 was audited and applied:
 - **Errata ID 6606 (Technical, Reported)**: Section 3.3 `using` list clarification for JMAP core capability.
 - **Errata ID 6607 (Technical, Reported)**: Section 5.3 `/set` create and destroy referencing in the same request.
 
-### 2.3 Protocol Findings and Model Refinements
+### 1.3 Model notes
 
 1. **RFC 8620 §7.2 `PushSubscription/get` privacy requirement**:
    Section 7.2 states:
    > "As the 'url' and 'keys' properties may contain data that is private to a particular device, the values for these properties MUST NOT be returned. If the 'properties' argument is null or omitted, the server MUST default to all properties excluding these two."
 
-   In accordance with this rule, the official example in RFC 8620 §7.2.3 returns `PushSubscription` objects lacking the `url` property. Our `PushSubscription` wire model previously declared `pub url: String` as non-optional, causing deserialization of conformant `PushSubscription/get` responses to fail with `missing field url`.
-   Resolution: Updated `PushSubscription.url` to `Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]` and added `pub verification_code: Option<String>` to model the full RFC 8620 §7.2 specification.
+   So the §7.2.3 example returns `PushSubscription` objects without `url`, which is why `PushSubscription.url` is an `Option<String>`; `verification_code` is modelled too.
 
 2. **RFC 72-column string line folding**:
-   In plain-text RFC documents, URLs and description strings that exceed 72 columns are formatted across multiple lines (e.g. `downloadUrl` and `eventSourceUrl` in §2.1, and `detail` in §3.6.1.1). Unfolded in the extracted fixtures to form valid JSON string literals.
+   In plain-text RFC documents, URLs and description strings that exceed 72 columns are formatted across multiple lines (e.g. `downloadUrl` and `eventSourceUrl` in §2.1, and `detail` in §3.6.1.1). Unfolded in the fixtures.
 
 3. **RFC text ellipsis notation**:
-   Informational RFC examples use ellipsis `...` to represent omitted properties or additional array elements (e.g. §2.1 `accountCapabilities`, §3.7 list responses, §5.7 `list` and `Todo/set` responses). Normalized in fixtures into valid JSON structures without altering any field modeled by `jmap-proto`.
+   Informational RFC examples use ellipsis `...` to represent omitted properties or additional array elements (e.g. §2.1 `accountCapabilities`, §3.7 list responses, §5.7 `list` and `Todo/set` responses). Replaced with valid JSON in the fixtures.
 
-## 3. RFC 8621 JMAP for Mail Examples (August 2019)
+## 2. RFC 8621 JMAP for Mail Examples (August 2019)
 
 RFC 8621 defines the data model for synchronizing email data with a JMAP server, covering Mailboxes, Threads, Emails, SearchSnippets, Identities, and EmailSubmissions.
 
-### 3.1 Catalogued Fixtures
+### 2.1 Fixtures
 
-31 distinct JSON examples across 7 sections were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc8621/`:
+`rfc8621/`, 31 files:
 
 1. `2.6_get_request.json`: `Mailbox/get` request fetching all mailboxes with `ids: null` (§2.6).
 2. `2.6_get_response.json`: `Mailbox/get` response returning Inbox with `myRights` and `isSubscribed` (§2.6).
@@ -128,61 +155,57 @@ RFC 8621 defines the data model for synchronizing email data with a JMAP server,
 30. `7.5.1_set_created_response.json`: `EmailSubmission/set` response with implicit `Email/set` update response (§7.5.1).
 31. `7.5.1_set_error_response.json`: `EmailSubmission/set` error response returning localized `forbiddenToSend` failure (§7.5.1).
 
-### 3.2 Specification Errata Audited
+### 2.2 Errata
 
-The IETF RFC Errata database for RFC 8621 was audited:
+RFC 8621 has no errata.
 
-- **Errata Search**: Queried `https://errata.rfc-editor.org/search/?rfc_number=8621`. No matching errata found. RFC 8621 has zero reported or verified errata.
-
-### 3.3 Protocol Findings and Model Refinements
+### 2.3 Model notes
 
 1. **RFC 8621 §4.2 `Email/get` arguments**:
-   RFC 8621 §4.2 specifies `Email/get` as extending standard `/get` with `bodyProperties`, `fetchTextBodyValues`, `fetchHTMLBodyValues`, `fetchAllBodyValues`, and `maxBodyValueBytes`. In the specification's own example in §4.2.1, `accountId` is omitted in the request. Added typed `EmailGetRequest` with optional `account_id` and complete body-fetching argument options, allowing seamless typed parsing and roundtrip fidelity.
+   RFC 8621 §4.2 specifies `Email/get` as extending standard `/get` with `bodyProperties`, `fetchTextBodyValues`, `fetchHTMLBodyValues`, `fetchAllBodyValues`, and `maxBodyValueBytes`. In the specification's own example in §4.2.1, `accountId` is omitted in the request. `EmailGetRequest` models these arguments, with `account_id` optional.
 
 2. **RFC line folding in string literals**:
-   Plain-text RFC formatting folds lines exceeding 72 characters, splitting string literals across lines in §4.2.1 (`bodyValues`), §4.10 (`preview`, `bodyValues` text and HTML contents), §5.2 (`preview`), §6.4 (`htmlSignature`), and §7.5.1 (`description`). Unfolded in fixtures into valid JSON strings.
+   Plain-text RFC formatting folds lines exceeding 72 characters, splitting string literals across lines in §4.2.1 (`bodyValues`), §4.10 (`preview`, `bodyValues` text and HTML contents), §5.2 (`preview`), §6.4 (`htmlSignature`), and §7.5.1 (`description`). Unfolded in the fixtures.
 
 3. **Ellipsis notation in RFC examples**:
-   RFC 8621 uses ellipsis `...` to indicate omitted fields in responses (§2.6 `list`, §4.10 `ids`, `list`, and `SetResponse` omitted maps, §5.2 `emailIds` and `list`, §7.5.1 `rcptTo`). Normalized in fixtures into syntactically valid JSON structures while preserving all fields modeled by `jmap-proto`.
+   RFC 8621 uses ellipsis `...` to indicate omitted fields in responses (§2.6 `list`, §4.10 `ids`, `list`, and `SetResponse` omitted maps, §5.2 `emailIds` and `list`, §7.5.1 `rcptTo`). Replaced with valid JSON in the fixtures.
 
-## 4. RFC 9610 JMAP for Contacts Examples (December 2024)
+## 3. RFC 9610 JMAP for Contacts Examples (December 2024)
 
 RFC 9610 defines the data model for synchronizing address books and contact cards with a JMAP server, mapping JSContact cards into the JMAP data model with AddressBook and ContactCard types.
 
-### 4.1 Catalogued Fixtures
+### 3.1 Fixtures
 
-4 distinct JSON examples across Section 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9610/`:
+`rfc9610/`, 4 files:
 
 1. `4.1_get_request.json`: Method calls pipeline requesting `AddressBook/get` and `ContactCard/get` (§4.1, Figure 1).
 2. `4.1_get_response.json`: Method responses returning AddressBook list with `myRights` and `isDefault`, alongside ContactCard records with structured name components and emails (§4.1, Figure 2).
 3. `4.2_set_request.json`: `AddressBook/set` invocation setting `onSuccessSetIsDefault` to reassign the default address book (§4.2, Figure 3).
 4. `4.2_set_response.json`: `AddressBook/set` response confirming update of default address books (§4.2, Figure 4).
 
-### 4.2 Specification Errata Audited
+### 3.2 Errata
 
-The IETF RFC Errata database for RFC 9610 was audited:
+RFC 9610 has no errata.
 
-- **Errata Search**: Queried `https://errata.rfc-editor.org/search/?rfc_number=9610`. Zero errata reported.
-
-### 4.3 Protocol Findings and Model Refinements
+### 3.3 Model notes
 
 1. **RFC 9610 §2.3 `AddressBook/set` arguments**:
    Section 2.3 defines two additional request arguments on `AddressBook/set`:
    - `onDestroyRemoveContents: Option<bool>`
    - `onSuccessSetIsDefault: Option<Id>`
 
-   Introduced `AddressBookSetRequest` wrapping `SetRequest<AddressBook>` to cleanly model these arguments while preserving serialization fidelity and builder ergonomics.
+   `AddressBookSetRequest` wraps `SetRequest<AddressBook>` to model them.
 
 2. **RFC 9610 §4.2 Figure 4 erratum in example response**:
-   In Figure 4 of RFC 9610 §4.2, the example `AddressBook/set` response places `"oldState": "~4144"` and `"newState": "~4148"` inside the `"updated"` map rather than at the top level of the `SetResponse` object. In standard JMAP (RFC 8620 §5.3), `oldState` and `newState` are top-level properties of `SetResponse`. In `rfc_examples.rs`, this fixture is verified through invocation inspection, noting the specification erratum.
+   In Figure 4 of RFC 9610 §4.2, the example `AddressBook/set` response places `"oldState": "~4144"` and `"newState": "~4148"` inside the `"updated"` map rather than at the top level of the `SetResponse` object. In standard JMAP (RFC 8620 §5.3), `oldState` and `newState` are top-level properties of `SetResponse`. The fixture keeps the example as published, so `rfc_examples.rs` checks it as a raw invocation rather than a typed `SetResponse`.
 
-## 5. RFC 9553 JSContact Card Examples (May 2024)
+## 4. RFC 9553 JSContact Card Examples (May 2024)
 
 RFC 9553 defines JSContact, a JSON-based data format for contact card data.
 
-### 5.1 Catalogued Fixtures
+### 4.1 Fixtures
 
-42 distinct JSON examples across 20 sections were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9553/` (excluding Figures 2 and 5 which define ABNF grammar rules):
+`rfc9553/`, 42 files (excluding Figures 2 and 5 which define ABNF grammar rules):
 
 1. `1.4.5_phonetic.json`: Phonetic name pronunciation using the International Phonetic Alphabet (IPA) (§1.4.5, Figure 1).
 2. `1.6.2_vendor_properties.json`: Custom vendor-specific property extensions with domain prefixing (§1.6.2, Figure 3).
@@ -227,9 +250,9 @@ RFC 9553 defines JSContact, a JSON-based data format for contact card data.
 41. `2.8.3_notes.json`: Free-text notes with authorship and creation timestamp (§2.8.3, Figure 43).
 42. `2.8.4_personal_info.json`: Personal hobbies, interests, and expertise with proficiency levels (§2.8.4, Figure 44).
 
-### 5.2 Specification Errata Audited
+### 4.2 Errata
 
-The IETF RFC Errata database for RFC 9553 was audited:
+RFC 9553 errata:
 
 - **Errata ID 8263 (Technical, Reported)**: Section 2.2.1 Figure 20 omitted required Card properties (`uid`, `version`). The fixture preserves the example as published.
 - **Errata ID 8264 (Editorial, Reported)**: Section 2.7.1 Figure 39 bracket formatting consistency.
@@ -237,148 +260,148 @@ The IETF RFC Errata database for RFC 9553 was audited:
 - **Errata ID 8266 (Technical, Reported)**: Section 2.6.2 Figure 36 omitted the closing brace `}` on the `"directories"` map. Fixed in fixture `2.6.2_directories.json`.
 - **Errata ID 8267 (Technical, Reported)**: Section 2.6.1 CryptoKey kind enumeration clarification.
 
-### 5.3 Protocol Findings and Model Refinements
+### 4.3 Model notes
 
 1. **RFC 9553 §2.4.2 `schedulingAddresses`**:
-   The specification defines `schedulingAddresses: Id[SchedulingAddress] (optional)`. Added `SchedulingAddress` struct and modeled `scheduling_addresses: Option<BTreeMap<String, SchedulingAddress>>` on `ContactCard` with builder method `with_scheduling_address`.
+   The specification defines `schedulingAddresses: Id[SchedulingAddress] (optional)`. `ContactCard.scheduling_addresses` models it as `Option<BTreeMap<String, SchedulingAddress>>`.
 
 2. **RFC 9553 §2.2.4 `speakToAs.pronouns`**:
-   The specification models `pronouns: Id[Pronouns] (optional)`, where each `Pronouns` object carries `pronouns: String`, optional `contexts`, and optional `pref`. Added `Pronouns` struct and introduced `PronounsValue` enum supporting both the standard map of `Pronouns` and shorthand plain strings.
+   The specification models `pronouns: Id[Pronouns] (optional)`, where each `Pronouns` object carries `pronouns: String`, optional `contexts`, and optional `pref`. `PronounsValue` accepts both the standard map of `Pronouns` and a plain string shorthand.
 
 3. **RFC 9553 §2.1 top-level Card properties**:
-   Added typed fields on `ContactCard` for `language: Option<String>`, `members: Option<BTreeMap<String, bool>>`, and `prod_id: Option<String>`, ensuring all standard JSContact core properties deserialize cleanly.
+   `ContactCard` has typed `language`, `members` and `prod_id` fields, so every core JSContact property deserialises.
 
 4. **Multiline data URI folding in Figure 35**:
-   Figure 35 embeds an RSA public key in a base64 data URI split across multiple lines. The multiline data URI was unfolded into a single continuous URI string in `2.6.1_crypto_keys_embedded.json`.
+   Figure 35 embeds an RSA public key in a base64 data URI split across multiple lines. `2.6.1_crypto_keys_embedded.json` has it unfolded into one string.
 
-## 6. RFC 8984 JSCalendar: A JSON Representation of Calendar Data (July 2021)
+## 5. RFC 8984 JSCalendar: A JSON Representation of Calendar Data (July 2021)
 
 RFC 8984 defines the data model and JSON representation for calendar events, tasks, and groups of calendar objects.
 
-### 6.1 Catalogued Fixtures
+### 5.1 Fixtures
 
-10 distinct JSON examples across Section 6 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc8984/`:
+`rfc8984/`, 10 files:
 
-1. `6.1_simple_event.json`: Simple calendar event with mandatory properties (`@type`, `uid`, `updated`, `title`, `start`, `duration`) (§6.1).
-2. `6.2_simple_task.json`: Simple task with due date (`due`) and title (§6.2).
-3. `6.3_group.json`: Group object aggregating multiple events and tasks under a common collection (§6.3).
-4. `6.4_event_with_alert.json`: Event with absolute and relative alerts specifying audio and display actions (§6.4).
-5. `6.5_task_with_recurrence.json`: Recurring task with recurrence rule (`RecurrenceRule`), priority, and progress status (§6.5).
-6. `6.6_event_with_participants.json`: Meeting event with organizer, attendees, and RSVP roles and participation statuses (§6.6).
-7. `6.7_multilingual_event.json`: Multilingual event with localized title and description using JSON patch representations (§6.7).
-8. `6.8_time_zones.json`: Event with multiple custom time zone definitions (`timeZones`) and timeZone rules (§6.8).
-9. `6.9_recurring_event_exceptions.json`: Recurring event with recurrence rule, recurrence overrides (`recurrenceOverrides`), and excluded dates (§6.9).
-10. `6.10_recurring_event_participants.json`: Recurring event with instance-specific participant adjustments (§6.10).
+1. `6.1_simple_event.json`: Simple Event (§6.1).
+2. `6.2_simple_task.json`: Simple Task (§6.2).
+3. `6.3_simple_group.json`: Simple Group, with Errata ID 8028 applied (§6.3).
+4. `6.4_all_day_event.json`: All-Day Event (§6.4).
+5. `6.5_task_due_date.json`: Task with a Due Date (§6.5).
+6. `6.6_event_end_time_zone.json`: Event with End Time Zone (§6.6).
+7. `6.7_floating_time_event.json`: Floating-Time Event with Recurrence (§6.7).
+8. `6.8_multiple_locations.json`: Event with Multiple Locations and Localization (§6.8).
+9. `6.9_recurring_event_overrides.json`: Recurring Event with Overrides (§6.9).
+10. `6.10_recurring_event_participants.json`: Recurring Event with Participants (§6.10).
 
-### 6.2 Specification Errata Audited
+### 5.2 Errata
 
-The IETF RFC Errata database for RFC 8984 was audited:
+RFC 8984 errata:
 
 - **Errata ID 6872 (Technical, Verified)**: Section 5.1.2 private event shared properties clarification.
 - **Errata ID 6873 (Technical, Verified)**: Section 4.3.4 floating time `recurrenceIdTimeZone` clarification.
 - **Errata ID 8028 (Technical, Reported)**: Section 6.3 Group example incorrectly used `"name"` instead of `"title"` for Group title property.
 - **Errata ID 8461 (Technical, Reported)**: Section 4.5.3 `offsetFrom` and `offsetTo` type definition string UTC offset format clarification.
 
-### 6.3 Protocol Findings and Model Refinements
+### 5.3 Model notes
 
 1. **RFC 8984 §6.5 Task optional `uid`**:
-   The RFC 8984 §6.5 example (`6.5_task_with_recurrence.json`) omits the `uid` property. Although `uid` is standard on JSCalendar objects, tasks embedded as subcomponents or in client drafts may omit `uid`. Updated `Task.uid` in `tasks.rs` with `#[serde(default, skip_serializing_if = "String::is_empty")]` to enable clean deserialization.
+   The §6.5 example (`6.5_task_due_date.json`) has no `uid`, so `Task.uid` in `tasks.rs` defaults to empty and is skipped when empty.
 
 2. **RFC 8984 §5.3.1 Group `entries` array representation**:
-   RFC 8984 §5.3.1 defines `entries: (Event|Task)[]` as an array of JSCalendar objects. In `calendars.rs`, `CalendarGroup.entries` was previously typed as `BTreeMap<String, Value>`. Introduced the untagged enum `GroupEntries` (`Array(Vec<Value>)` and `Map(BTreeMap<String, Value>)`), enabling conformant array parsing while preserving backwards compatibility with existing map representations.
+   RFC 8984 §5.3.1 defines `entries: (Event|Task)[]` as an array of JSCalendar objects. `CalendarGroup.entries` in `calendars.rs` is the untagged enum `GroupEntries`, accepting that array as well as a map.
 
-## 7. draft-ietf-jmap-calendars-32: JMAP for Calendars (October 2026)
+## 6. draft-ietf-jmap-calendars-32: JMAP for Calendars (5 October 2026)
 
 draft-ietf-jmap-calendars defines the data model and methods for synchronizing calendar objects and managing calendars via JMAP.
 
-### 7.1 Catalogued Fixtures
+### 6.1 Fixtures
 
-20 distinct JSON examples across Section 5, 6, and 7 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/jmap_calendars/` (excluding Figure 14 in §5.9.8 which is an ASCII text user interface layout diagram):
+`jmap_calendars/`, 20 files (Figure 14, a sketch of an alert notification, is not JSON):
 
-1. `5.9.1_calendar_event.json`: Standard `CalendarEvent` resource with participants and recurrence (§5.9.1, Figure 1).
-2. `5.9.2_get_request.json`: `Calendar/get` request fetching calendars (§5.9.2, Figure 2).
-3. `5.9.2_get_response.json`: `Calendar/get` response returning calendar records with rights and default flags (§5.9.2, Figure 3).
-4. `5.9.3_set_request.json`: `Calendar/set` create and rename request (§5.9.3, Figure 4).
-5. `5.9.3_set_response.json`: `Calendar/set` created and updated response (§5.9.3, Figure 5).
-6. `5.9.4_event_get_request.json`: `CalendarEvent/get` request fetching event properties (§5.9.4, Figure 6).
-7. `5.9.4_event_get_response.json`: `CalendarEvent/get` response returning calendar events (§5.9.4, Figure 7).
-8. `5.9.5_event_query_request.json`: `CalendarEvent/query` filter request with date range and sort (§5.9.5, Figure 8).
-9. `5.9.5_event_query_response.json`: `CalendarEvent/query` response returning matching event ids (§5.9.5, Figure 9).
-10. `5.9.6_event_set_request.json`: `CalendarEvent/set` request creating an event with recurrence rules (§5.9.6, Figure 10).
-11. `5.9.6_event_set_response.json`: `CalendarEvent/set` created response with calculated properties (§5.9.6, Figure 11).
-12. `5.9.7_event_update_request.json`: `CalendarEvent/set` update request patching participant RSVP status (§5.9.7, Figure 12).
-13. `5.9.7_event_update_response.json`: `CalendarEvent/set` updated response confirming patch (§5.9.7, Figure 13).
-14. `5.9.8_event_query_freebusy_request.json`: `CalendarEvent/query` request for free/busy availability calculation (§5.9.8, Figure 15).
-15. `5.9.8_event_query_freebusy_response.json`: `CalendarEvent/query` free/busy response (§5.9.8, Figure 16).
-16. `5.9.9_event_copy_request.json`: `CalendarEvent/copy` cross-account request with `onSuccessDestroyOriginal: true` (§5.9.9, Figure 17).
-17. `5.9.9_event_copy_response.json`: `CalendarEvent/copy` response with implicit `CalendarEvent/set` destroy response (§5.9.9, Figure 18).
-18. `6.4_calendar_alert.json`: EventSource `CalendarAlert` push notification (§6.4, Figure 19).
-19. `7.1_notification_get_request.json`: `CalendarEventNotification/get` request (§7.1, Figure 20).
-20. `7.1_notification_get_response.json`: `CalendarEventNotification/get` response with change details (§7.1, Figure 21).
+1. `5.9.1_calendar_event.json`: Recurring `CalendarEvent` with two participants (§5.9.1, Figure 1).
+2. `5.9.1_patch_zoe_decline.json`: `CalendarEvent/set` patch declining one occurrence for one participant (§5.9.1, Figure 2).
+3. `5.9.1_recurrence_overrides.json`: The resulting `recurrenceOverrides` (§5.9.1, Figure 3).
+4. `5.9.1_patch_tom_restore.json`: Patch removing one participant's declined status from the override again (§5.9.1, Figure 4).
+5. `5.9.1_patch_invalid_remove.json`: Patch the draft shows does not work for removing a participant from one occurrence (§5.9.1, Figure 5).
+6. `5.9.1_patch_tom_remove_instance.json`: Patch that does it instead, replacing the whole override so the participant maps to null (§5.9.1, Figure 6).
+7. `8.1_initial_data_request.json`: `Calendar/get`, `ParticipantIdentity/get` and `CalendarEvent/query` for initial sync (§8.1, Figure 7).
+8. `8.1_initial_data_response.json`: Its responses (§8.1, Figure 8).
+9. `8.2_create_event_request.json`: `CalendarEvent/set` creating an event with participants (§8.2, Figure 9).
+10. `8.2_create_event_response.json`: Its response with server-set properties (§8.2, Figure 10).
+11. `8.3_push_alert_notification.json`: `CalendarAlert` push object (§8.3, Figure 11).
+12. `8.3_get_event_request.json`: `CalendarEvent/get` for the alerting event (§8.3, Figure 12).
+13. `8.3_get_event_response.json`: Its response (§8.3, Figure 13).
+14. `8.3_snooze_alert_request.json`: `CalendarEvent/set` acknowledging and snoozing an alert (§8.3, Figure 15).
+15. `8.4_default_calendar_request.json`: `Calendar/set` with `onSuccessSetIsDefault` (§8.4, Figure 16).
+16. `8.4_default_calendar_response.json`: Its response (§8.4, Figure 17).
+17. `8.5_parse_ical_request.json`: `CalendarEvent/parse` request (§8.5, Figure 18).
+18. `8.5_parse_ical_parsed_response.json`: Response with a parsed event (§8.5, Figure 19).
+19. `8.5_parse_ical_not_found_response.json`: Response with `notFound` (§8.5, Figure 20).
+20. `8.5_parse_ical_not_parsable_response.json`: Response with `notParsable` (§8.5, Figure 21).
 
-### 7.2 Specification Errata and Example Normalization
+### 6.2 Errata and normalisation
 
-- **Specification Status**: As an active Internet-Draft submitted for publication, official RFC Errata are not yet applicable. Issues and review notes from the IETF CalEXT working group were audited.
-- **Ellipsis Normalization**: In Figure 8 and Figure 10, informational ellipsis tokens (`...`) in non-normative sample contexts were normalized into standard JSON per RFC 8620 convention.
+- An Internet-Draft has no errata.
+- `...` placeholders in Figures 8 and 10 are replaced with valid JSON, and the RFC 8792 `\` line wrapping in Figures 2, 4, 5 and 15 is unfolded.
 
-### 7.3 Protocol Findings and Model Refinements
+### 6.3 Model notes
 
 1. **Section 4.3 `Calendar/set` arguments**:
-   Section 4.3 defines two additional request arguments on `Calendar/set`: `onDestroyRemoveContents: Option<bool>` and `onSuccessSetIsDefault: Option<Id>`. Added `CalendarSetRequest` wrapping `SetRequest<Calendar>` with helper constructors and builder methods.
+   Section 4.3 defines two additional request arguments on `Calendar/set`: `onDestroyRemoveContents: Option<bool>` and `onSuccessSetIsDefault: Option<Id>`. `CalendarSetRequest` wraps `SetRequest<Calendar>` to model them.
 
 2. **Section 6.4 `CalendarAlert` push notifications**:
-   Section 6.4 defines the `CalendarAlert` object pushed to clients over the event source stream when an event alarm triggers. Added `CalendarAlert` struct to `calendars.rs` modeling `account_id`, `calendar_event_id`, `uid`, `recurrence_id`, `title`, and `trigger`.
+   Section 6.4 defines the `CalendarAlert` object pushed when an alert triggers. `CalendarAlert` in `calendars.rs` models `accountId`, `calendarEventId`, `uid`, `recurrenceId` and `alertId`.
 
-## 8. RFC 9425 JMAP for Quotas Examples (June 2023)
+## 7. RFC 9425 JMAP for Quotas Examples (June 2023)
 
 RFC 9425 defines a data model for accessing server quotas via JMAP, enabling clients to inspect data usage and storage limits across mail, calendar, contact, and system resources.
 
-### 8.1 Catalogued Fixtures
+### 7.1 Fixtures
 
-4 distinct JSON examples across Section 5 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9425/`:
+`rfc9425/`, 4 files:
 
 1. `5.1_get_request.json`: `Quota/get` request querying quota records (§5.1).
 2. `5.1_get_response.json`: `Quota/get` response returning octets and count quotas with `used`, `hardLimit`, and `scope` (§5.1).
 3. `5.2_changes_request.json`: Chained `Quota/changes` and back-referenced `Quota/get` request (§5.2).
 4. `5.2_changes_response.json`: Chained `Quota/changes` and back-referenced `Quota/get` response (§5.2).
 
-### 8.2 Specification Errata Audited
+### 7.2 Errata
 
-The IETF RFC Errata database for RFC 9425 was audited: 0 errata reported on errata.rfc-editor.org.
+RFC 9425 has no errata.
 
-### 8.3 Protocol Findings and Model Refinements
+### 7.3 Model notes
 
 1. **RFC 9425 §5.1 Property Filtering**:
-   In `Quota/get`, the `properties` argument allows clients to request a subset of quota fields. When specific properties are omitted by the server in response to filtering, fields such as `name`, `resource_type`, `used`, `hard_limit`, and `scope` must default cleanly. Added `#[serde(default)]` to these fields on `Quota` in `quota.rs`.
+   In `Quota/get`, the `properties` argument allows clients to request a subset of quota fields. When specific properties are omitted by the server in response to filtering, fields such as `name`, `resource_type`, `used`, `hard_limit`, and `scope` must default, so these fields on `Quota` in `quota.rs` are `#[serde(default)]`.
 
-## 9. RFC 9670 JMAP Sharing Examples (November 2024)
+## 8. RFC 9670 JMAP Sharing Examples (November 2024)
 
 RFC 9670 specifies a sharing data model for JMAP, defining Principals and ShareNotifications to represent access rights and invitations across accounts.
 
-### 9.1 Catalogued Fixtures
+### 8.1 Fixtures
 
-4 distinct JSON examples across Section 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9670/`:
+`rfc9670/`, 4 files:
 
 1. `4.1_session_object.json`: Session object advertising `urn:ietf:params:jmap:principals` with principal account capabilities (§4.1).
 2. `4.1_principal_get_request.json`: `Principal/get` request fetching user principals (§4.1).
 3. `4.1_principal_get_response.json`: `Principal/get` response returning principal records with account id, name, and email (§4.1).
 4. `4.1_todolist_set_request.json`: `TodoList/set` request creating a shared list with `shareWith` access rights (§4.1).
 
-### 9.2 Specification Errata Audited
+### 8.2 Errata
 
-The IETF RFC Errata database for RFC 9670 was audited: 0 errata reported on errata.rfc-editor.org.
+RFC 9670 has no errata.
 
-### 9.3 Protocol Findings and Model Refinements
+### 8.3 Model notes
 
-All wire representations and principal models in `jmap-proto` fully conform to RFC 9670 specification examples with lossless roundtrip serialization.
+Every example round-trips losslessly with no special handling.
 
-## 10. RFC 9661 JMAP for Sieve Scripts Examples (September 2024)
+## 9. RFC 9661 JMAP for Sieve Scripts Examples (September 2024)
 
 RFC 9661 specifies a data model for managing Sieve mail filtering scripts via JMAP, supporting script upload, validation, activation, and deactivation.
 
-### 10.1 Catalogued Fixtures
+### 9.1 Fixtures
 
-16 distinct JSON examples across Sections 1 and 2 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9661/`:
+`rfc9661/`, 16 files:
 
 1. `1.2.2_session.json`: Session object advertising `urn:ietf:params:jmap:sieve` capability (§1.2.2).
 2. `2.3.1_get_all_request.json`: `SieveScript/get` request fetching all scripts with `ids: null` (§2.3.1).
@@ -397,31 +420,31 @@ RFC 9661 specifies a data model for managing Sieve mail filtering scripts via JM
 15. `2.4.1_deactivate_destroy_request.json`: `SieveScript/set` deactivate and destroy request (§2.4.1).
 16. `2.4.1_deactivate_destroy_response.json`: `SieveScript/set` deactivate and destroy response (§2.4.1).
 
-### 10.2 Specification Errata Audited
+### 9.2 Errata
 
-The IETF RFC Errata database for RFC 9661 was audited: 0 errata reported on errata.rfc-editor.org.
+RFC 9661 has no errata.
 
-### 10.3 Protocol Findings and Model Refinements
+### 9.3 Model notes
 
 1. **RFC 9661 §2.1 and §2.4 SieveScript Nullable Name**:
-   RFC 9661 §2.1 types `name: String|null (default: null)`. On script creation, clients may pass `name: null` or omit `name` to allow the server to choose a name. Modeled `name: Option<String>` on `SieveScript` in `sieve.rs`.
+   RFC 9661 §2.1 types `name: String|null (default: null)`. On script creation, clients may pass `name: null` or omit `name` to allow the server to choose a name. `SieveScript.name` in `sieve.rs` is an `Option<String>`.
 
 2. **Partial Update Deserialization in SetResponse**:
-   In `SetResponse<SieveScript>`, partial update responses (such as deactivating the old script `updated: { id: { isActive: false } }`) omit `blobId`. Added default and skip-empty serialization to `blob_id: Id` on `SieveScript`.
+   In `SetResponse<SieveScript>`, partial update responses (such as deactivating the old script `updated: { id: { isActive: false } }`) omit `blobId`, so `SieveScript.blob_id` defaults and is skipped when empty.
 
 3. **RFC 9661 §2.4 Deactivate Script Extension Argument**:
-   RFC 9661 §2.4 introduces `onSuccessDeactivateScript: Option<bool>` alongside `onSuccessActivateScript` on `SieveScriptSetRequest`. Added field and builder helpers.
+   RFC 9661 §2.4 introduces `onSuccessDeactivateScript: Option<bool>` alongside `onSuccessActivateScript` on `SieveScriptSetRequest`, which models it.
 
 4. **RFC 9661 §2.3.1 Backreferences in Blob/get**:
-   RFC 9661 §2.3.1 pipelines `Blob/get` with `#ids` backreference to fetch the script body blob. Added `ids_ref: Option<ResultReference>` and default empty `ids` vector support to `BlobGetRequest` in `blob.rs`.
+   RFC 9661 §2.3.1 pipelines `Blob/get` with `#ids` backreference to fetch the script body blob, which is why `BlobGetRequest` in `blob.rs` has `ids_ref` and a defaulted `ids`.
 
-## 11. RFC 9404 JMAP Blob Management Extension Examples (August 2023)
+## 10. RFC 9404 JMAP Blob Management Extension Examples (August 2023)
 
 RFC 9404 specifies methods for uploading, retrieving, and inspecting raw data blobs in JMAP.
 
-### 11.1 Catalogued Fixtures
+### 10.1 Fixtures
 
-11 distinct JSON examples across Sections 3 and 4 were extracted and stored under `rust/crates/jmap-proto/tests/fixtures/rfc/rfc9404/`:
+`rfc9404/`, 11 files:
 
 1. `3.1.1_capability.json`: Session object advertising `urn:ietf:params:jmap:blob` capability (§3.1.1).
 2. `4.1.1_upload_request.json`: `Blob/upload` request uploading data as text (§4.1.1).
@@ -435,18 +458,18 @@ RFC 9404 specifies methods for uploading, retrieving, and inspecting raw data bl
 10. `4.3.1_lookup_request.json`: `Blob/lookup` request (§4.3.1).
 11. `4.3.1_lookup_response.json`: `Blob/lookup` response (§4.3.1).
 
-### 11.2 Specification Errata Audited
+### 10.2 Errata
 
-The IETF RFC Errata database for RFC 9404 was audited: 0 errata reported on errata.rfc-editor.org.
+RFC 9404 has no errata.
 
-### 11.3 Protocol Findings and Model Refinements
+### 10.3 Model notes
 
 1. **RFC 9404 §2.1 BlobInfo Encoding Problem and Truncated Indicators**:
-   RFC 9404 §2.1 types `isEncodingProblem: Option<bool>` and `isTruncated: Option<bool>` on `BlobInfo`. Added typed fields to `BlobInfo` in `blob.rs`.
+   RFC 9404 §2.1 types `isEncodingProblem: Option<bool>` and `isTruncated: Option<bool>` on `BlobInfo`, both typed in `blob.rs`.
 
 2. **RFC 9404 §2.2 BlobUploadResponse States**:
-   RFC 9404 §2.2 types `oldState: Option<String>` and `newState: Option<String>` on `BlobUploadResponse`. Added typed fields to `BlobUploadResponse` in `blob.rs`.
+   RFC 9404 §2.2 types `oldState: Option<String>` and `newState: Option<String>` on `BlobUploadResponse`, both typed in `blob.rs`.
 
 3. **Single Account Context AccountId Omission**:
-   In RFC 9404 §4 request and response examples, `accountId` is omitted when operating within a single default account context. Added default and skip-empty serialization to `account_id` in `BlobUploadRequest`, `BlobUploadResponse`, `BlobGetRequest`, `BlobGetResponse`, `BlobLookupRequest`, and `BlobLookupResponse`.
+   In RFC 9404 §4 request and response examples, `accountId` is omitted when operating within a single default account context. So `account_id` defaults and is skipped when empty in `BlobUploadRequest`, `BlobUploadResponse`, `BlobGetRequest`, `BlobGetResponse`, `BlobLookupRequest`, and `BlobLookupResponse`.
 

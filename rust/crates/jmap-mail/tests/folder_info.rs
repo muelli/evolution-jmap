@@ -441,7 +441,7 @@ fn into_raw_hands_the_chain_over_and_the_wrapper_stops_owning_it() {
 /// that walks it recursively is a stack the server sizes: `FolderTree`'s own
 /// `Drop`, and `camel_folder_info_free`'s recursion over `child` and `next`.
 /// `FolderTree` therefore caps the depth it will produce (see
-/// `jmap_mail_sync::folder::MAX_DEPTH` and `docs/AUDIT-FFI.md` F3), which is
+/// `jmap_mail_sync::folder::MAX_DEPTH`), which is
 /// what this checks on the C side: the forest is broad rather than deep, and no
 /// folder was dropped to get there.
 #[test]

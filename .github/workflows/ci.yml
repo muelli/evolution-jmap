@@ -123,7 +123,7 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-artifacts
           if-no-files-found: ignore
 
-  # Item 74's live-Evolution caveat (docs/gui-smoke-test.md): the packaged
+  # Live-Evolution check (docs/gui-smoke-test.md): the packaged
   # example-module's merged menu items actually appearing in a real
   # Evolution session, not just linking cleanly. Its own small script beside
   # gui-smoke.sh, same discipline the doc asks for: a different assertion,
@@ -158,7 +158,7 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-example-module-artifacts
           if-no-files-found: ignore
 
-  # Item 74's other live-Evolution caveat: the mail-folder-popup half of the
+  # Live-Evolution check: the mail-folder-popup half of the
   # same merge, which Evolution only builds on demand when a folder's context
   # menu is actually triggered, so (unlike the sibling job above) this drives
   # a real right-click through AT-SPI rather than reading the tree statically.
@@ -192,10 +192,10 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-example-module-folder-popup-artifacts
           if-no-files-found: ignore
 
-  # Item 66's live-Evolution caveat: a brand-new JMAP collection account's
+  # Live-Evolution check: a brand-new JMAP collection account's
   # first populate must authenticate once, not twice. Same install recipe as
-  # gui-smoke-example-module; see docs/gui-smoke-test.md's "item 66's
-  # live-Evolution populate-once caveat" section and
+  # gui-smoke-example-module; see docs/gui-smoke-test.md's
+  # "live-Evolution populate-once caveat" section and
   # ci/gui-smoke-collection-populate-once-assert.py for why the oracle is
   # jmap-mock's own request log rather than another AT-SPI read.
   gui-smoke-collection-populate-once:

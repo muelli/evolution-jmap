@@ -14,15 +14,14 @@ backend follows.
 
 ## 1. What the draft says
 
-References are to draft-ietf-jmap-calendars-33 (October 2026); sections 1.5.1
-and 5.9.2 read the same in -28 and -32.
+References are to draft-ietf-jmap-calendars-33.
 
 - **No discovery signal.** Section 1.5.1: the `urn:ietf:params:jmap:calendars`
   value in the session `capabilities` "is an empty object", and the account
   value holds only `maxCalendarsPerEvent`, `minDateTime`, `maxDateTime`,
-  `maxExpandedQueryDuration`, `maxParticipantsPerEvent` and
-  `mayCreateCalendar`. Nothing says whether the server can send scheduling
-  messages. No other capability in the draft does either.
+  `maxExpandedQueryDuration`, `maxParticipantsPerEvent`, `mayCreateCalendar`
+  and `maxAvailabilityDuration`. Nothing says whether the server can send
+  scheduling messages. No other capability in the draft does either.
 - **Asking is per call.** Section 5.9: `CalendarEvent/set` takes
   `sendSchedulingMessages: Boolean (default: false)`. "If true then any changes
   to scheduled events will be sent to all the participants (if the server is
@@ -53,20 +52,22 @@ this way).
 
 ## 2. What the servers do
 
-| | Stalwart 0.16 | Fastmail | `jmap-mockd` |
+| | Stalwart | Fastmail | `jmap-mockd` |
 |---|---|---|---|
 | Scheduling signal in the session | none (empty objects) | none (empty objects) | none |
-| `sendSchedulingMessages: true`, reachable guest | sends: the event lands in the guest's calendar, plus a notification and an iMIP "Invitation:" mail | sends: an iMIP invitation (HTML with RSVP links and `invite.ics`) within ~40 s; a destroy sends a cancellation | records the iTIP message in a per-account scheduling outbox (no transport) |
+| `sendSchedulingMessages: true`, reachable guest | sends: the event lands in the guest's calendar once, and a destroy reaches the guest as a cancellation; a manual probe also saw a notification and an iMIP "Invitation:" mail | sends: an iMIP invitation (HTML with RSVP links and `invite.ics`) within ~40 s; a destroy sends a cancellation | records the iTIP message in a per-account scheduling outbox (no transport) |
 | Guest with no address the server can send to | `noSupportedScheduleMethods`, nothing stored | not probed | `noSupportedScheduleMethods`, nothing stored (only `mailto:` counts as deliverable, as on Stalwart) |
 | Unknown `/set` argument | ignored, change applied (against RFC 8620 section 3.9) | not probed | applied normally; in `without_scheduling` mode, `sendSchedulingMessages` is `invalidArguments` and nothing is applied |
 | Non-scheduling mode | n/a | n/a | `MockServer::builder().without_scheduling()` |
 
-Stalwart's two rows marked "nothing stored" and "ignored" are pinned by the
-live tests
+Stalwart's delivery row is pinned by
+`with_the_switch_on_the_server_delivers_the_meeting_and_its_cancellation_to_the_guest`
+in `rust/crates/jmap-cal-sync/tests/live_server_scheduling.rs`. Its two rows
+marked "nothing stored" and "ignored" are pinned by the live tests
 `scheduling_for_an_undeliverable_guest_is_refused_and_nothing_is_stored` and
 `an_unknown_set_argument_is_ignored_rather_than_refused` in
-`rust/crates/jmap-client/tests/live_server.rs`. Fastmail's row comes from the
-maintainer's own probe against a test calendar. The mock's row is
+`rust/crates/jmap-client/tests/live_server.rs`. Fastmail's column comes from a
+manual probe against a test calendar; no test pins it. The mock's column is
 `rust/crates/jmap-client/tests/calendar_scheduling.rs`.
 
 **Probing safely.** A probe must never mail a real person. The undeliverable

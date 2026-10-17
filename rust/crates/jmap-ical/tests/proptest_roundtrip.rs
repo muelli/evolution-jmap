@@ -3,7 +3,7 @@
 
 //! Property tests for the JSCalendar <-> iCalendar round trip using `proptest`.
 //!
-//! Mirrors claude's ROADMAP item 97 round-trip property testing for the sync layer.
+//! Mirrors the round-trip property tests of the sync layer.
 //! Generates valid JSCalendar events within what `jmap-ical` claims to support
 //! (`MAPPED_PROPERTIES`: start, duration, timeZone, recurrence rules and overrides,
 //! alerts, locations, links, keywords, status, and scalars), asserting that:
@@ -12,22 +12,22 @@
 //!     event_to_ical(parsed1) == event_to_ical(parsed2)
 //!
 //! Documented lossy fields and deviations (ICAL-MAPPING citations):
-//! 1. `id`: ICAL-MAPPING §9.1 (JMAP store-owned identifier, dropped on export;
-//!    `ical_to_event` derives `id` from iCalendar `UID` line).
+//! 1. `id`: ICAL-MAPPING §9.1 (written as `UID`; `ical_to_event` derives `id`
+//!    from the `UID` line).
 //! 2. `created` / `updated`: ICAL-MAPPING §9.1 (Store-owned metadata timestamps;
 //!    `DTSTAMP` is dropped as store-owned on import).
-//! 3. `participants`: ICAL-MAPPING Section 17 & ROADMAP item 102 (Operator decision;
-//!    attendees are not emitted from `ical_to_event`).
-//! 4. `calendar_ids`: ICAL-MAPPING §17 & JMAP §10.9.1 (JMAP container membership,
+//! 3. `participants`: ICAL-MAPPING §3.8 (`ical_to_event` reads them back, but
+//!    under `pN` keys and with only the members the lines carry).
+//! 4. `calendar_ids`: ICAL-MAPPING §9.2 & JMAP §10.9.1 (JMAP container membership,
 //!    managed by EDS backend, not in RFC 5545 VEVENT).
-//! 5. `is_origin` / `is_draft`: ICAL-MAPPING §17 & JMAP §10.9.1 (JMAP server state flags).
-//! 6. `use_default_alerts`: ICAL-MAPPING §17.3 (VALARM has no default alarm syntax).
-//! 7. `color`, `locale`, `localizations`: ICAL-MAPPING §13.15, §17 (Client/server metadata
+//! 5. `is_origin` / `is_draft`: ICAL-MAPPING §9.2 & JMAP §10.9.1 (JMAP server state flags).
+//! 6. `use_default_alerts`: ICAL-MAPPING §7.4 (VALARM has no default alarm syntax).
+//! 7. `color`, `locale`, `localizations`: ICAL-MAPPING §9.2 (Client/server metadata
 //!    not modeled in RFC 5545 VEVENT).
-//! 8. `Location.coordinates` / `Location.description`: ICAL-MAPPING §12.3 (RFC 5545 LOCATION
+//! 8. `Location.coordinates` / `Location.description`: ICAL-MAPPING §3.4 (RFC 5545 LOCATION
 //!    is a single text property).
-//! 9. `Link.size` / `Link.title` / `Link.cid`: ICAL-MAPPING §12.5 (RFC 5545 ATTACH carries
-//!    only URI and FMTTYPE).
+//! 9. `Link.title` / `Link.cid`: ICAL-MAPPING §3.6 (no iCalendar parameter carries
+//!    them; `size` rides in `SIZE` on `ATTACH` only).
 
 use std::collections::BTreeMap;
 
@@ -39,7 +39,7 @@ use serde_json::Value;
 
 /// Normalizes an event by stripping documented lossy fields before asserting equality.
 fn normalize_lossy_fields(mut event: CalendarEvent) -> CalendarEvent {
-    // 1. Store/container-owned fields (ICAL-MAPPING §9.1, §17)
+    // 1. Store/container-owned fields (ICAL-MAPPING §9.1, §9.2)
     event.calendar_ids = None;
     event.created = None;
     event.updated = None;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 80 stage 2: `address-book.rs`'s own single-write leg, driven against
+//! `address-book.rs`'s own single-write leg, driven against
 //! a real Stalwart instead of the in-process mock.
 //!
 //! Reuses `functional-book-client`'s `write` phase unchanged — the same

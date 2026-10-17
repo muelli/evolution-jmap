@@ -126,7 +126,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
-	# ROADMAP item 108, part (1): the live-server attendees leg, the twin of
+	# The live-server attendees leg, the twin of
 	# functional-cal-live-client above, narrowed to whether ORGANIZER/ATTENDEE
 	# survive a local create. See tests/functional/cal-attendees-client.c.
 	add_executable(functional-cal-attendees-client
@@ -137,7 +137,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-attendees-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-attendees-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
-	# ROADMAP item 108, part (3): the mirror of functional-cal-attendees-client
+	# The mirror of functional-cal-attendees-client
 	# above. That one writes through EDS and reads EDS's own cache back; this
 	# one writes nothing at all and only connects and lists, confirming
 	# whether an event another client put straight onto the server, with
@@ -152,7 +152,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-attendees-remote-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-attendees-remote-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
-	# ROADMAP item 112, step (c): the capabilities that tell Evolution the
+	# The capabilities that tell Evolution the
 	# server mails a meeting's guests, and whether a create or remove asks it
 	# to. See tests/functional/cal-scheduling-client.c.
 	add_executable(functional-cal-scheduling-client
@@ -528,7 +528,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_LIVE_CLIENT=$<TARGET_FILE:functional-cal-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# ROADMAP item 108, part (1): functional-cal-attendees-client against a
+	# Functional-cal-attendees-client against a
 	# real Stalwart. `#[ignore]`d in the Rust source for the same reason
 	# functional-cal-live-stalwart is, so this registration only ever reports
 	# "ignored" in the ordinary functional run.
@@ -545,7 +545,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_ATTENDEES_CLIENT=$<TARGET_FILE:functional-cal-attendees-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# ROADMAP item 108, part (3): functional-cal-attendees-remote-client
+	# Functional-cal-attendees-remote-client
 	# against a real Stalwart. `#[ignore]`d in the Rust source for the same
 	# reason functional-cal-attendees-live-stalwart is, so this registration
 	# only ever reports "ignored" in the ordinary functional run.
@@ -562,7 +562,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_ATTENDEES_REMOTE_CLIENT=$<TARGET_FILE:functional-cal-attendees-remote-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# ROADMAP item 112, step (c): functional-cal-scheduling-live-client
+	# Functional-cal-scheduling-live-client
 	# against a real Stalwart with two accounts. `#[ignore]`d in the Rust
 	# source for the same reason functional-cal-attendees-live-stalwart is, so
 	# this registration only ever reports "ignored" in the ordinary functional
@@ -669,7 +669,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_COLOR_CLIENT=$<TARGET_FILE:functional-cal-color-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
-	# ROADMAP item 112, step (c), through a real, running backend instance:
+	# Through a real, running backend instance:
 	# the scheduling capabilities a libecal consumer sees, with the account
 	# switch at its default and turned off, and which saves and removals ask
 	# the mock to send iTIP.

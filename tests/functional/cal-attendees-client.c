@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ROADMAP item 112, step (a): live confirmation that a meeting created
+ * Live confirmation that a meeting created
  * locally through `ECalClient` keeps its attendees after EDS reads it back.
  *
  * The twin of `cal-live-client.c`, narrowed to one question: whether

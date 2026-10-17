@@ -298,7 +298,7 @@ mod tests {
         );
     }
 
-    /// The regression test for F31: before this module had a pool, every
+    /// Regression test: before this module had a pool, every
     /// lookup shared one GMainContext, so a slow one delayed every other
     /// one behind it. Proven here with plain closures and no real DNS, so
     /// it is fast and deterministic: a job that sleeps on one worker must

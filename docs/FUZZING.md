@@ -3,132 +3,113 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# Coverage-Guided Fuzzing Architecture and Execution Log
+# Fuzzing
 
-## 1. Threat Model
+How to run the coverage-guided fuzz targets under `rust/crates/*/fuzz/`.
 
-In accordance with the architecture findings in `AUDIT-FFI.md`, the JMAP server is treated as untrusted:
-- The network endpoint can deliver arbitrarily malformed, truncated, deeply nested, or hostile payloads.
-- Deserialization and parsing code in client libraries must never panic, crash, abort, or hang on hostile input.
-- A decoding failure returning `Err(...)` is standard and expected; unhandled unwraps or indexing panics are security bugs.
+## Threat model
 
-## 2. Toolchain and Environment
+The JMAP server, and any vCard or iCalendar text a server or an import hands
+us, is untrusted. It can send arbitrarily malformed, truncated, deeply nested
+or deliberately hostile payloads. Parsing and mapping code may reject such
+input with `Err(...)`; it must never panic, abort, hang or run out of memory.
+A panic on input is a bug, and in the EDS and Camel processes it takes the
+whole process down.
 
-- Compiler: `rustc 1.101.0-nightly (a30aa9064 2026-10-08)`
-- Fuzzing Engine: `cargo-fuzz 0.13.2` with LLVM `libFuzzer` and AddressSanitizer (ASan)
-- Platform: `x86_64-unknown-linux-gnu`
+## Targets
 
-## 3. Fuzz Target Surfaces
+Each fuzzed crate has its own `fuzz/` directory, a standalone Cargo workspace
+(not a member of `rust/Cargo.toml`), so the nightly-only build never touches
+the main workspace.
 
-Three dedicated fuzz targets isolate the untrusted server parser boundaries. Each target lives in its own crate `fuzz/` directory with independent workspace isolation:
+| Crate | Target | What it covers |
+|---|---|---|
+| `jmap-proto` | `fuzz_proto_parsers` | Deserialises the bytes as `response::Response`, `session::Session`, `mail::Mailbox`, `mail::Email`, `contacts::ContactCard` and `calendars::CalendarEvent`, and re-serialises whatever parsed. |
+| `jmap-client` | `fuzz_client_response` | Feeds the bytes to a real `Client` through a fake `Transport`: once as the session document on connect, then as the body of every method response the client issues (mailboxes, email, calendars, events, address books, contacts, blobs, principals, identities, vacation response, threads, notifications). |
+| `jmap-ical` | `fuzz_ical_roundtrip` | Parses the bytes as iCalendar with `ical_to_event`, then exports and re-imports, asserting the export and the event reach a fixed point (see `docs/ICAL-MAPPING.md`). |
+| `jmap-vcard` | `fuzz_vcard_to_jscontact` | Parses the bytes as vCard with `vcard_to_card`. |
+| `jmap-vcard` | `fuzz_jscontact_to_vcard` | Deserialises the bytes as a JSContact `ContactCard`, renders it with `card_to_vcard` and parses the result back. |
+| `jmap-vcard` | `fuzz_vcard_roundtrip_fixed_point` | Runs `vcard -> card -> vcard` several times; every emitted vCard must parse, and once two consecutive emitted vCards are byte-identical their parsed cards must be equal. |
 
-### Surface A: `jmap-proto` (`fuzz_proto_parsers`)
-- Location: `rust/crates/jmap-proto/fuzz/fuzz_targets/fuzz_proto_parsers.rs`
-- Coverage: Deserializes arbitrary bytes into top-level response envelopes and domain object models:
-  - `jmap_proto::response::Response` (RFC 8620 Section 3.4)
-  - `jmap_proto::session::Session` (RFC 8620 Section 2)
-  - `jmap_proto::mail::Mailbox` (RFC 8621 Section 2)
-  - `jmap_proto::mail::Email` (RFC 8621 Section 4)
-  - `jmap_proto::contacts::ContactCard` (RFC 9610 / JSContact RFC 9553)
-  - `jmap_proto::calendars::CalendarEvent` (JMAP Calendars draft / JSCalendar RFC 8984)
-  - Re-serializes with `serde_json::to_vec` on successful parse to verify serializer safety.
+Stable-toolchain counterparts run in `cargo test`: `tests/fuzz_smoke.rs` in
+`jmap-proto`, `jmap-client` and `jmap-ical` replay hostile inputs and the
+regressions earlier fuzzing found; `jmap-vcard` has `tests/hostile.rs` and
+`tests/proptest_fuzz.rs`.
 
-### Surface B: `jmap-client` (`fuzz_client_response`)
-- Location: `rust/crates/jmap-client/fuzz/fuzz_targets/fuzz_client_response.rs`
-- Coverage: Connects `jmap_client::Client` with a synthetic `Transport` that feeds arbitrary bytes as HTTP response bodies for real requests built by the client across all supported domains:
-  - Session negotiation: `Client::connect` over `FuzzSessionTransport` with arbitrary session payloads.
-  - Mailboxes: `client.mailbox_get(&account_id)`, `client.changes::<Mailbox>`, `client.mailbox_create`, `client.mailbox_destroy`
-  - Emails: `client.email_get(&account_id, &[Id::new("e1")], None)`, `client.changes::<Email>`
-  - Calendars: `client.calendars(&account_id)`, `client.changes::<Calendar>`, `client.calendar_create`, `client.calendar_destroy`
-  - Events: `client.event_get(&account_id, &[Id::new("ev1")])`, `client.changes::<CalendarEvent>`, `client.event_create`, `client.event_destroy`, `client.event_parse`
-  - Contacts: `client.address_books(&account_id)`, `client.changes::<AddressBook>`, `client.contact_create`, `client.contact_destroy`, `client.contact_get(&account_id, &[Id::new("c1")])`, `client.changes::<ContactCard>`, `client.contact_card_parse`
-  - Blobs: `client.download_blob`, `client.upload_blob`
-  - Core & Extension: `client.echo`, `client.principal_get`, `client.principals`, `client.participant_identities`, `client.calendar_event_notifications`, `client.share_notifications`, `client.vacation_response_get`, `client.identities`, `client.thread_get`
+## Seed corpora
 
-### Surface C: `jmap-ical` (`fuzz_ical_roundtrip`)
-- Location: `rust/crates/jmap-ical/fuzz/fuzz_targets/fuzz_ical_roundtrip.rs`
-- Coverage: Ingests arbitrary bytes as iCalendar text via `ical_to_event`, maps to `CalendarEvent`, exports back via `event_to_ical`, and verifies the multi-stage fixed point invariant (`Export_2 == Export_3` and `Event_2 == Event_3`) documented in `docs/ICAL-MAPPING.md` Section 6.
+The committed corpus for a target is `fuzz/corpus/<target>/` in its crate.
 
-## 4. Initial Corpus and Seeding
+- `jmap-proto` and `jmap-client`: seeded from the JSON fixtures in
+  `jmap-proto/tests/fixtures/` (sessions, response envelopes, domain objects)
+  plus edge-case tokens, then minimised. Files are named by content hash.
+- `jmap-ical`: every real client export in `jmap-ical/tests/fixtures/*.ics`
+  under its own name, plus minimised inputs found by fuzzing.
+- `jmap-vcard`: the `*.vcf` exports in `jmap-vcard/tests/fixtures/` for the two
+  vCard-input targets, and `contact_card.json` for `fuzz_jscontact_to_vcard`.
 
-Corpora are seeded from real client exports and protocol fixtures:
-- `jmap-proto`: Seeded with `session.json`, `response_with_error.json`, `mailbox.json`, `email.json`, `contact_card.json`, `calendar_event.json`, and edge case JSON tokens.
-- `jmap-client`: Seeded with valid response envelope structures and session payloads.
-- `jmap-ical`: Seeded with all 12 real calendar client exports from `jmap-ical/tests/fixtures/` (Apple Calendar, Google Calendar, Nextcloud, Evolution, Thunderbird, Outlook M365, SOGo, Cyrus).
+Every corpus file needs a `.license` sidecar, or `reuse lint` fails.
 
-## 5. Execution Summary and Findings
+## Running
 
-### Session 1 (2026-10-09): Batch 30
-- Target `fuzz_proto_parsers` (`jmap-proto`):
-  - Total executions: 184,388 runs during bounded slice (-max_total_time=60), plus 2,000 validation runs.
-  - Speed: ~3,000 exec/s.
-  - Peak RSS: 83 MB.
-  - Crashes: 0.
-  - Hangs: 0.
-  - OOMs: 0.
-  - Findings: Serde custom visitors and enum deserializers across RFC 8620, RFC 8621, RFC 9610, and RFC 8984 safely reject malformed byte streams without panics.
-  - Minimized corpus: 200 files capturing 5,902 coverage branches and 9,972 features.
-- Target `fuzz_client_response` (`jmap-client`):
-  - Smoke execution: 100 runs.
-  - Findings: Response dispatch and JSON envelope error handling return structured `Err(Error::...)` cleanly on malformed payloads.
-- Target `fuzz_ical_roundtrip` (`jmap-ical`):
-  - Smoke execution: 100 runs.
-  - Findings: Fixed point stability confirmed across all seeded fixture permutations.
+You need a nightly toolchain and `cargo-fuzz`:
 
-### Session 2 (2026-10-09): Batch 30
-- Target `fuzz_client_response` (`jmap-client`):
-  - Total executions: 29,565 runs during bounded slice (-max_total_time=60), plus 1,000 smoke and 2,000 validation runs (32,565+ total runs).
-  - Speed: ~484 exec/s.
-  - Peak RSS: 457 MB.
-  - Crashes: 0.
-  - Hangs: 0.
-  - OOMs: 0.
-  - Findings: Client response dispatch across all domains (mailboxes, emails, calendars, events, contacts, address books, blobs, identities, vacation responses, threads, and session negotiation) safely converts malformed, truncated, or hostile payloads into structured `Error` variants (`Json`, `Protocol`, `Method`, `Set`, `Http`) without panics or hangs.
-  - Minimized corpus: 522 files capturing 3,840 coverage edges and 7,354 features.
-
-### Session 3 (2026-10-09): Batch 30
-- Target `fuzz_ical_roundtrip` (`jmap-ical`):
-  - Total executions: 112,259 runs during bounded slice (-max_total_time=120), plus 59,932 in initial 61s slice, and 2,000+ validation runs (174,000+ total runs).
-  - Speed: ~930 exec/s.
-  - Peak RSS: 501 MB.
-  - Crashes found and fixed: 3 fixed-point stability divergences uncovered under libFuzzer mutation and resolved:
-    1. Duration leading zero normalization: In `stated_duration`, duration digit strings with redundant leading zeros (e.g. `PT07M`) were previously passed through verbatim when paired with non-standard value parameters, whereas canonical iCalendar roundtrips via `calcard` normalized them to integer representations (`PT7M`), breaking fixed-point convergence (`Export_2 != Export_3`). Fixed by stripping redundant leading zeros in `stated_duration`.
-    2. Recurrence rule frequency validation: In `writable`, unmappable non-standard recurrence frequencies (e.g. `FREQ=FICE\\,TTENDEE`) were erroneously permitted because `writable` only checked `!rule.frequency.is_empty()`. When serializing to iCalendar via `rrule_entry`, `calcard` treated the invalid RRULE as an unformatted text property and escaped backslashes, causing backslashes to double on each round trip (`\\\\` to `\\\\\\\\`). Fixed by validating that `rule.frequency` matches one of the 7 standard RFC 5545 / RFC 8984 frequencies (`secondly`, `minutely`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`).
-    3. Zero duration canonical normalization: In `stated_duration`, durations where all units are zero (e.g. `PT0H`, `P0D`, `PT0M`) were returned as written when paired with custom or unrecognized parameters, whereas standard iCalendar parsing via `calcard` and `docs/ICAL-MAPPING.md` Sections 3.2 and 7.1 normalize zero durations to `PT0S` / `-PT0S`. Fixed by canonically normalizing zero durations to `PT0S` in `stated_duration`.
-  - Regression tests: Added stable-toolchain unit regression tests for all three issues in `rust/crates/jmap-ical/tests/fuzz_smoke.rs`.
-  - Minimized corpus: 50 files (12 client export fixtures plus 38 minimized inputs) covering 9,085 edges and 32,589 features committed to the repository per Operator Override 2; full working corpus (4,659 files) preserved outside the repository in `~/fuzz-corpus/jmap-ical/fuzz_ical_roundtrip`.
-  - All three surfaces of Batch 30 (`jmap-proto`, `jmap-client`, `jmap-ical`) are now delivered and verified. Batch 30 is DRAINED.
-
-## 6. Commands to Resume and Run Fuzz Targets
-
-All commands require the nightly toolchain and must be run from the respective crate directory.
-
-### Running `jmap-proto`:
-```bash
-cd rust/crates/jmap-proto
-cargo +nightly fuzz run fuzz_proto_parsers -- -max_total_time=2700
+```sh
+rustup toolchain install nightly
+cargo install cargo-fuzz
 ```
 
-### Running `jmap-client`:
-```bash
-cd rust/crates/jmap-client
-cargo +nightly fuzz run fuzz_client_response -- -max_total_time=2700
+Run every command from the crate directory (the one containing `fuzz/`).
+libFuzzer writes new inputs into the first corpus directory it is given, so
+fuzz into a scratch copy and keep the committed corpus clean:
+
+```sh
+cd rust/crates/jmap-proto        # or jmap-client, jmap-ical, jmap-vcard
+T=fuzz_proto_parsers             # a target name from the table above
+work=$(mktemp -d)
+find fuzz/corpus/$T -type f ! -name '*.license' -exec cp -t "$work" {} +
+cargo +nightly fuzz run $T "$work" -- -max_total_time=2700
 ```
 
-### Running `jmap-ical`:
-```bash
-cd rust/crates/jmap-ical
-cargo +nightly fuzz run fuzz_ical_roundtrip -- -max_total_time=2700
+`cargo +nightly fuzz list` prints the crate's target names.
+
+### Crashes
+
+A failing input is saved as `fuzz/artifacts/<target>/crash-<hash>` (or
+`timeout-`, `oom-`). Reproduce and shrink it with:
+
+```sh
+cargo +nightly fuzz run $T fuzz/artifacts/$T/crash-<hash>
+cargo +nightly fuzz tmin $T fuzz/artifacts/$T/crash-<hash>
 ```
 
-### Minifying Corpus:
-```bash
-cd rust/crates/<crate>
-cargo +nightly fuzz cmin <target_name>
+Fix the bug, then add the minimised input as a stable regression test (the
+crate's `tests/fuzz_smoke.rs`, or `tests/hostile.rs` for `jmap-vcard`), so
+`cargo test` keeps it fixed without nightly.
+
+### Minimising the corpus
+
+```sh
+cargo +nightly fuzz cmin $T "$work"
 ```
 
-### Checking Compilation:
-```bash
-cd rust/crates/<crate>
+To commit the result, replace `fuzz/corpus/$T/` with the contents of
+`$work`, restore any named fixture seeds `cmin` dropped, and give each new
+file a sidecar with the same two lines the existing ones carry:
+
+<!-- REUSE-IgnoreStart -->
+```sh
+for f in fuzz/corpus/$T/*; do
+    case $f in *.license) continue ;; esac
+    [ -e "$f.license" ] || printf '%s\n' \
+        'SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>' \
+        'SPDX-License-Identifier: GPL-3.0-or-later' > "$f.license"
+done
+```
+<!-- REUSE-IgnoreEnd -->
+
+### Checking the targets build
+
+```sh
 cargo +nightly fuzz check
 ```

@@ -92,7 +92,7 @@
 //!   `diff_participants`.
 //!
 //! And one property is checked on its way *out* rather than against the
-//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 admits
+//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.8 admits
 //! as a time zone under its own name or beside the definition that says what it
 //! is, and otherwise not at all. See [`jmap_ical::maps_time_zone`] and [`diff`].
 
@@ -127,12 +127,12 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     }
     // `timeZone` is the one property whose *new* value may be unsendable. A
     // component states its zone with a `TZID`, which is an iCalendar identifier
-    // and not the RFC 8984 §1.4.9 name JSCalendar wants; where the document
+    // and not the RFC 8984 §1.4.8 name JSCalendar wants; where the document
     // gave no way to translate it, the zone is left alone rather than sent as
     // it came or cleared. It is the same "seen in part, so not written back"
     // rule the recurrence properties follow, applied to one value.
     //
-    // §1.4.9's second form — the custom identifier — is sendable too, and by the
+    // §1.4.8's second form (the custom identifier) is sendable too, and by the
     // same `jmap_ical::maps_time_zone` the create path uses: legal only beside
     // the `timeZones` entry defining it, which [`diff_time_zones`] adds below,
     // one entry at a time so that nothing the server already holds is written
@@ -222,8 +222,8 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
 
 /// The definitions the identifiers already in `patch` need, added beside them.
 ///
-/// RFC 8984 §1.4.9's second form of a `TimeZoneId` — the solidus-prefixed one a
-/// server or an Exchange organiser invents for a zone no database names — means
+/// RFC 8984 §1.4.8's second form of a `TimeZoneId` (the solidus-prefixed one a
+/// server or an Exchange organiser invents for a zone no database names) means
 /// nothing on its own: it is legal only where the event's §4.7.2 `timeZones` map
 /// says what it is. So a save that sends one has to send the other, or the
 /// identifier reaches the server dangling and the whole `CalendarEvent/set` may
@@ -318,7 +318,7 @@ fn diff_time_zones(
 
 /// The custom `TimeZoneId` a `timeZone` states, where it states one.
 ///
-/// Only RFC 8984 §1.4.9's solidus-prefixed form, because that is the only one
+/// Only RFC 8984 §1.4.8's solidus-prefixed form, because that is the only one
 /// that needs saying: an IANA name resolves against a database every reader has,
 /// and a `null` is the zone cleared, which names nothing.
 fn custom_zone(value: Option<&Value>) -> Option<String> {
@@ -784,7 +784,7 @@ fn diff_overrides(
     //
     // And the overrides the *save* brings, checked the same way for the same
     // reason the series' own `timeZone` is checked on its way out: an instance
-    // states its zone with a `TZID`, which RFC 8984 §1.4.9 only sometimes admits
+    // states its zone with a `TZID`, which RFC 8984 §1.4.8 only sometimes admits
     // as a name, and this property goes out replaced whole — so one entry the
     // server is entitled to reject would cost every edit in the save.
     //
@@ -792,7 +792,7 @@ fn diff_overrides(
     // because this save *can* send a zone's definition: [`diff_time_zones`] adds
     // a `timeZones` entry for every custom identifier the patch names, so an
     // instance moved into a zone the document defines is one of the identifiers
-    // §1.4.9 admits rather than a dangling reference. Each side is asked of its
+    // §1.4.8 admits rather than a dangling reference. Each side is asked of its
     // own definitions — the server's for what it holds, the document's for what
     // the save brings — which is what makes both answers about the event they
     // came from.

@@ -1,807 +1,159 @@
 # Manual test: a real JMAP server
 
-Every other test in this repository runs against `jmap-mockd`, which answers
-exactly what its fixtures told it to. That is the right default — fast,
-deterministic, no account anywhere — but it cannot show what a real
-deployment's own quirks would: capability objects with fields this client has
-never seen, limits that are actually enforced, a session shaped by a server
-this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
-is the other half, and this is its recipe.
+All other tests run against `jmap-mockd`, which answers only what its
+fixtures say. The live-server tests run the same code against a real
+deployment, to find what the mock cannot show: unknown capability fields,
+enforced limits, terse `/set` responses and other server behaviour.
 
-Almost all of it is read-only — session discovery, `Core/echo`, or listing
-what already exists. Seven tests write: `mailbox_create_rename_then_destroy_
-round_trips_through_the_real_api` (`Mailbox/set` create, then a rename via
-`mailbox_update`, then destroy),
-`address_book_create_then_destroy_round_trips_through_the_real_api`
-(`AddressBook/set` create then destroy — the collection itself, not a card
-inside one),
-`contact_card_create_update_then_destroy_round_trips_through_the_real_api`
-(`ContactCard/set` create, then a rename via `contact_update`, then destroy),
-`calendar_create_then_destroy_round_trips_through_the_real_api`
-(`Calendar/set` create then destroy — the calendar counterpart of the
-address-book test),
-`calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
-(`CalendarEvent/set` create, then a title change via `event_update`, then
-destroy),
-`a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api`
-(`CalendarEvent/set` create with a `recurrenceRule`, then destroy — proves the
-singular-object wire shape, jscalendarbis §3.3.3, against a real server), and
-`email_import_update_then_destroy_round_trips_through_the_real_api`
-(`Email/import` via `upload_blob`, a mark-as-read via `email_update`, then
-`download_blob`). All seven run only against a separate, dedicated throwaway
-account (see step 3) so they can never touch whatever account the read-only
-tests are pointed at.
-
-One further test, `send_email_delivers_to_a_second_account_on_the_real_server`,
-writes to *two* throwaway accounts: it sends a message via `Client::send_email`
-from the write-test account to a second one (step 3's "send-email test"
-below) and polls the recipient's Inbox until the message actually arrives —
-proof of intra-server delivery, not just that `EmailSubmission/set` was
-accepted. It needs no outbound SMTP relay: both accounts live on the same
-Stalwart deployment, so delivery never leaves it.
+They never run in CI or in a plain `cargo test`: every live test is
+`#[ignore]`, and `jmap-client`'s file also needs the `live-server` feature.
 
 ## 1. Get a server
 
-Two ways, either is fine:
-
-- **The disposable Stalwart VM** the harness repository provisions for exactly this:
-  ```console
-  $ ./harness/gcp/create-stalwart.sh
-  ```
-  reports the VM's IP once it is up. Read its generated admin password with
-  ```console
-  $ gcloud compute ssh stalwart-1 --zone europe-west3-c -- sudo cat /opt/stalwart/admin-password
-  ```
-  and use Stalwart's admin UI (`http://<ip>:8080`) to create a mailbox account
-  and its password — that account is what the tests authenticate as. The VM
-  naps itself after 60 minutes idle; wake it with
-  `gcloud compute instances start stalwart-1`.
-- **Any other JMAP server** you already have an account on (a Fastmail
-  account works, per the roadmap's eventual second target). Basic auth against
-  Fastmail needs an app password, not the account password.
+Use any JMAP server where you can create throwaway accounts. The tests are
+written against Stalwart, which lets you create accounts from its admin UI
+or `stalwart-cli`. A Fastmail account works for the read-only tests (basic
+auth against Fastmail needs an app password).
 
 ## 2. Set the environment
 
 ```console
-$ export JMAP_LIVE_SERVER_URL=https://jmap.example.com   # or http://<stalwart-ip>:8080
+$ export JMAP_LIVE_SERVER_URL=https://jmap.example.com
 $ export JMAP_LIVE_SERVER_USER=me@example.com
 $ export JMAP_LIVE_SERVER_PASSWORD=...
 ```
 
-Or, for a Bearer token obtained some other way (there is no OAuth2 login flow
-in this repository yet):
+Or, for a Bearer token that you got some other way:
 
 ```console
 $ export JMAP_LIVE_SERVER_TOKEN=...
 ```
 
-`JMAP_LIVE_SERVER_TOKEN` takes priority if both are set.
+`JMAP_LIVE_SERVER_TOKEN` wins if both are set.
 
-If the deployment's session document names an `apiUrl` (and
-`downloadUrl`/`uploadUrl`/`eventSourceUrl`) this runner cannot route to, even
-though `JMAP_LIVE_SERVER_URL` itself is reachable — a reverse proxy, a NAT
-boundary, or a configured public hostname advertised over `https` when only a
-plain-`http` listener on a different address actually answers, as a
-disposable Stalwart 0.16 test deployment does — set:
+If the session document names an `apiUrl` (or `downloadUrl`, `uploadUrl`,
+`eventSourceUrl`) that you cannot reach, although `JMAP_LIVE_SERVER_URL`
+works (a reverse proxy, NAT, or a configured public hostname that differs
+from the listener), set:
 
 ```console
 $ export JMAP_LIVE_SERVER_REBASE_URLS=1
 ```
 
-This makes the client keep every URL the session names *pathwise*, but
-rewrite its scheme and authority to the one `JMAP_LIVE_SERVER_URL` actually
-reached, rather than trusting the address the server states. Leave it unset
-by default: it exists for exactly this apiUrl/hostname mismatch, not as a
-routine option.
+The client then keeps each URL's path but uses the scheme and authority of
+`JMAP_LIVE_SERVER_URL`. Leave it unset otherwise.
 
 ## 3. (optional) Enable the write-path tests
 
-The seven mutating tests are skipped, not failed, unless a *separate*
-login is given for them — deliberately not the same variables step 2
-sets, so pointing the read-only tests at a real mailbox can never also
-point the mutating tests at it. Seed a throwaway account for this alone
-(the harness repository's `harness/stalwart/stw seed` wrapper needs
-`stalwart-cli` on `PATH`; see that script's header for where to get it):
+Tests that change data run only with a separate login, so that the
+read-only settings of step 2 can never point them at a real mailbox. Create
+a throwaway account for them, on an obvious test domain:
 
 ```console
-$ ./harness/stalwart/stw seed agent-livewrite.net agent1 '<a fresh password>'
 $ export JMAP_LIVE_SERVER_WRITE_USER=agent1@agent-livewrite.net
 $ export JMAP_LIVE_SERVER_WRITE_PASSWORD='<that password>'
 ```
 
-`stw seed` is idempotent (an upsert), so re-running it — e.g. from a later
-session that lost the password — just resets that one account's password
-rather than erroring or duplicating anything. Use a domain name that is
-obviously a test fixture (`agent-*`), never the operator's own
-(`example.com`, `alice@example.com`).
+Without these, the write tests are skipped, not failed.
 
-## 3a. (optional) Enable the send-email test
+## 3a. (optional) Enable the send-email test and the two-account tests
 
-`send_email_delivers_to_a_second_account_on_the_real_server` needs a
-*second* account distinct from the write-test one above — it sends *to*
-it — on the same domain, so delivery stays intra-server and needs no
-outbound relay:
+Sending, sharing and scheduling tests need a second throwaway account on the
+same server, so that delivery stays on that server and needs no outbound
+relay:
 
 ```console
-$ ./harness/stalwart/stw seed agent-livewrite.net agent2 '<a different fresh password>'
 $ export JMAP_LIVE_SERVER_RECIPIENT_USER=agent2@agent-livewrite.net
-$ export JMAP_LIVE_SERVER_RECIPIENT_PASSWORD='<that password>'
+$ export JMAP_LIVE_SERVER_RECIPIENT_PASSWORD='<a different password>'
 ```
 
-Skipped, not failed, when unset — same shape as step 3.
+Without these, those tests are skipped.
 
 ## 3b. (optional) Enable the quota test
 
-`quota_used_reflects_a_real_email_import` needs the write-test account (step
-3) to have a per-account disk quota configured. Confirmed against real
-Stalwart: advertising `urn:ietf:params:jmap:quota` (which every account does)
-is not enough by itself — `Quota/get` only names a `Quota` object for a scope
-the server actually enforces, and `stw seed` sets no disk quota, so a
-freshly seeded account reports none at all. Give it one with `stalwart-cli` directly (`stw` has no wrapper for this;
-`Account`'s id is an internal short id, not the local part, so look it up
-first):
-
-```console
-$ stalwart-cli query Account --where "name=agent1" --fields id --json
-{"id":"d"}
-$ stalwart-cli update Account d --field "quotas/maxDiskQuota=104857600"
-```
-
-Skipped, not failed, when the write-test account still has no per-account
-`octets` quota — same tolerance as every other optional test here.
+The quota tests need a per-account disk quota on the write-test account. A
+server can advertise `urn:ietf:params:jmap:quota` and still report no
+`Quota` object for an account without a quota, so set one on the server
+first (in Stalwart, the account's `maxDiskQuota`). Without a quota, the
+tests are skipped.
 
 ## 4. Run it
 
-```console
-$ cargo test -p evolution-jmap-client --features live-server -- --ignored
-```
-
-Both gates matter: without `--features live-server` the test file is not even
-compiled, and without `--ignored` it is skipped even with the feature on — so
-a plain `cargo test` or `ci/checks.sh` never reaches out to a network. Missing
-an environment variable is a clear panic naming which one, not a silent skip:
-this test is never run by accident, so reaching it unconfigured is a mistake
-in the invocation, worth failing loudly on.
-
-## What "it worked" means
-
-- `the_session_names_the_core_capability` — the server answered
-  `/.well-known/jmap` with the core capability and at least one account for
-  the credentials given.
-- `echo_round_trips_through_the_real_api_endpoint` — a method call reaches the
-  real `apiUrl` and comes back parsed the way this client expects, not just
-  the session document.
-- `mail_capable_accounts_list_a_non_empty_mailbox_set` — if the account has
-  the mail capability, `Mailbox/get` lists at least an Inbox. An account with
-  no mail capability at all is reported and skipped rather than failed: this
-  test is about tolerating what a real deployment does and does not offer,
-  which cuts both ways.
-- `contacts_capable_accounts_can_list_their_address_books` and
-  `calendars_capable_accounts_can_list_their_calendars` — if the account has
-  the respective capability, `AddressBook/get` or `Calendar/get` deserialises
-  without error. Unlike the mailbox test, neither asserts a non-empty list: a
-  fresh account is not guaranteed to have created an address book or a
-  calendar yet, so the round trip succeeding — proving this client's types
-  read what a real server actually sends, not just `jmap-mockd`'s fixtures —
-  is the claim. An account with no such capability is reported and skipped.
-- `address_book_create_then_destroy_round_trips_through_the_real_api` and
-  `calendar_create_then_destroy_round_trips_through_the_real_api` —
-  `AddressBook/set`/`Calendar/set` create a *collection* (what a user's "New
-  Address Book"/"New Calendar" sends, and what the collection backend's
-  `create_resource_sync`/`delete_resource_sync` vfuncs issue), confirm the
-  new one shows up in
-  `AddressBook/get`/`Calendar/get` with the right name, then destroy it and
-  confirm it is gone. Unlike the tests below, these do not also check
-  `Client::all_changes`: neither type has a `_get` method here that exposes a
-  `state` token (`address_books`/`calendars` return only the list), and
-  adding one was out of scope for this coverage-only pair.
-- `mailbox_create_rename_then_destroy_round_trips_through_the_real_api`,
-  `contact_card_create_update_then_destroy_round_trips_through_the_real_api`,
-  and `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
-  — each creates a record (`Mailbox`/`ContactCard`/`CalendarEvent`), confirms
-  it via the matching `/get`, then destroys it — the write path, not just
-  reads, against a real server's own id assignment and state changes. All
-  three additionally update the record — a folder rename via
-  `mailbox_update`'s `PatchObject`, a name change via `contact_update`'s, a
-  title change via `event_update`'s — each confirmed via another `/get`
-  before destroying it (what a real folder rename, contact edit, or event
-  edit in Evolution sends). The contact/event tests create into the
-  account's default address book/calendar rather than one of their own
-  making, relying on Stalwart auto-provisioning both per account. The
-  mailbox, contact, and calendar-event tests additionally check
-  `Client::all_changes` (RFC 8620 §5.2's `/changes`, the primitive every EDS
-  meta-backend's `get_changes_sync` drives) after each of the three steps:
-  the record's id must show up in the right bucket
-  (`created`/`updated`/`destroyed`) since the state captured just before
-  that step — exercising this client's incremental-sync state tokens and
-  pagination against a real server rather than `jmap-mockd`'s own invention
-  of them, for `Mailbox/changes`, `ContactCard/changes`, and
-  `CalendarEvent/changes`. Skipped, not failed, when
-  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
-  The mailbox test additionally checks `all_changes` since the state
-  captured *before the create*, spanning both the create and the rename:
-  RFC 8620 §5.2's fold rule says an object created and updated within one
-  `/changes` window is reported as created only, and this checks that
-  against Stalwart's own `/changes` rather than just the mock (the client
-  itself already folds pages this way via `ChangeSet::classify`).
-  The contact test additionally checks `Client::contact_query` right after
-  the create and right after the destroy, filtered to the card's address
-  book (`ContactCardQueryFilter::in_address_book`) — the exact call
-  `jmap-book-sync::list_existing_sync` makes to enumerate an address book,
-  which had no live-server coverage from the `get`/`set`/`changes` checks
-  alone. The calendar test makes the same check with `Client::event_query`
-  and `CalendarEventQueryFilter::in_calendar`, mirroring
-  `jmap-cal-sync::list_existing_sync`'s equivalent call to enumerate a
-  calendar.
-- `a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api`
-  — creates a `CalendarEvent` whose `recurrenceRule` is set (a daily rule,
-  three occurrences), confirms it via `CalendarEvent/get`, then destroys it.
-  This property's wire shape changed from RFC 8984's plural `recurrenceRules`
-  array to jscalendarbis §3.3.3's singular `recurrenceRule` object; a server
-  that still expected the old array would reject this create with
-  `invalidProperties`, exactly the failure mode this format change guards
-  against.
-  Narrower than the plain create/update/destroy test above (no update, no
-  `all_changes`/`query` checks) — its only job is proving the property shape
-  itself against a real, independent JSCalendar implementation, which
-  nothing else in this suite exercises.
-- `email_import_update_then_destroy_round_trips_through_the_real_api` — the
-  mail write path's other shape: uploads a small message's bytes via
-  `Client::upload_blob`, imports it into the account's Inbox via
-  `Email/import`, confirms it via `Email/get`, marks it read via
-  `email_update`'s `{"keywords/$seen": true}` `PatchObject` (what
-  `jmap-mail-sync::MailSync::set_keywords` sends whenever a user marks a
-  message read/unread or flags it), confirms the `$seen` keyword via
-  another `Email/get`, downloads the blob back via `Client::download_blob`,
-  then destroys it. Does not require the downloaded bytes to equal the
-  uploaded bytes verbatim — RFC 8621 §4.8 allows a server to repair or
-  re-serialize an imported message — only that the downloaded length
-  matches the `size` `Email/get` itself reports and that the message's
-  subject survived. Also checks `Client::all_changes` for `Email` after each
-  of import/update/destroy, same as the other three tests — via
-  `Client::email_state` rather than a state field on `email_get`'s own
-  response, since `email_get` splits large id lists across several
-  `Email/get` calls and keeps only their `list`s, not a `state`. Additionally
-  checks `Client::email_query` right after the import and right after the
-  destroy, filtered to the Inbox and sorted `receivedAt` ascending
-  (`EmailQueryFilter::in_mailbox` + `Comparator::ascending("receivedAt")`) —
-  the exact call `jmap-mail-sync::message_ids` makes to enumerate a
-  mailbox's messages, mirroring the `contact_query`/`event_query` checks
-  above but for mail's own listing path, which had no live-server coverage
-  from `get`/`set`/`changes` alone. Skipped under the same condition as the
-  other three.
-- `send_email_delivers_to_a_second_account_on_the_real_server` — sends a
-  message via `Client::send_email` (`Email/set` + `EmailSubmission/set`,
-  chained) from the write-test account to the second account step 3a seeds,
-  then polls the recipient's `Email/query` (filtered by the message's unique
-  subject, in its Inbox) until the message shows up, confirming actual
-  delivery rather than only an accepted submission. Along the way this is
-  also the test that first caught a real client bug: Stalwart's created
-  `EmailSubmission` omits `identityId`/`emailId` (RFC 8620 §5.3 permits this
-  — the client supplied both itself, so neither is server-set), which
-  `Client::send_email`/`submit_email` now backfill from what they sent
-  before deserializing (`jmap-client/src/mail.rs`'s
-  `backfill_submission_created`, regression-tested against `jmap-mockd`'s
-  new `MockServerBuilder::terse_submission_create` in
-  `jmap-client/tests/mail_send.rs`). Skipped, not failed, when
-  `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` (step 3a) are not set.
-- `calendar_event_with_participant_reports_busy_period_in_free_busy_query`:
-  creates an event with an invited participant on the write-test account's default
-  calendar, queries free/busy for that account via `Client::get_availability` over
-  the event day window, asserts that the busy interval is reported with confirmed
-  status, and confirms the busy period is cleared once the event is destroyed.
-  When `JMAP_LIVE_SERVER_RECIPIENT_USER` is configured, it also asserts that the
-  recipient account cannot see unshared busy periods (reported as an empty list per
-  RFC 9670 and draft-ietf-jmap-calendars Section 2.2). Skipped, not failed, when
-  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `contact_card_parse_parses_an_uploaded_vcard_blob_through_the_real_api`:
-  uploads a vCard blob via `Client::upload_blob`, parses it with
-  `Client::contact_card_parse`, asserts the extracted name and email properties,
-  verifies `properties` projection filtering, confirms unparsable blobs are
-  placed in `notParsable`, and proves the parsed `ContactCard` can be filed into
-  an address book via `Client::contact_create` and destroyed cleanly. Skipped,
-  not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `participant_identity_lifecycle_and_validation_through_the_real_api`:
-  exercises `Client::participant_identities` (`ParticipantIdentity/get`), validates
-  that querying unknown ids via `ParticipantIdentity/get` reports them in `notFound`,
-  confirms that destroying an unknown identity returns `notFound`, proves that
-  server-enforced creation rules reject client-supplied `id`, client-supplied
-  `isDefault`, missing `calendarAddress`, and unassigned `calendarAddress` with
-  `invalidProperties`, and (if an identity is provisioned for the write account)
-  proves that `Client::participant_identity_update` and
-  `Client::participant_identity_set_default` round-trip. Skipped, not failed,
-  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `calendar_event_notification_lifecycle_and_validation_through_the_real_api`:
-  exercises `Client::calendar_event_notifications` (`CalendarEventNotification/get`),
-  validates that querying unknown ids via `CalendarEventNotification/get` reports
-  them in `notFound`, exercises `Client::calendar_event_notification_query`
-  (`CalendarEventNotification/query`) with empty and time-range filters, verifies
-  `CalendarEventNotification/changes` via `Client::changes`, verifies server-enforced
-  constraints rejecting direct `create` and `update` calls with `forbidden`, and
-  confirms that destroying a nonexistent notification with a formatted id returns `notFound`.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `email_submission_lifecycle_and_validation_through_the_real_api`:
-  exercises `Client::email_submission_query` (`EmailSubmission/query`) with empty,
-  undoStatus, emailIds, threadIds, identityIds, and time-range filters, validates
-  that querying unknown ids via `Client::email_submission_get` (`EmailSubmission/get`)
-  reports them in `notFound`, exercises `EmailSubmission/changes` via `Client::changes`
-  and `Client::all_changes`, proves that canceling a nonexistent submission via
-  `Client::cancel_email_submission` returns `notFound`, validates server-enforced creation
-  constraints rejecting client-supplied `id`, missing `emailId`/`identityId`, and invalid
-  properties with `invalidProperties`, and confirms that destroying a nonexistent
-  submission via `EmailSubmission/set` reports `notFound`. Skipped, not failed,
-  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `server_call_and_object_limits_enforced_through_the_real_api`:
-  exercises server-enforced request and call limits: `maxCallsInRequest`, `maxObjectsInGet`,
-  and `maxObjectsInSet`. Confirms advertised limits on session core capability, verifies
-  that exactly 16 calls in one request succeed while 17 calls are refused whole with HTTP 400
-  and Problem Details `urn:ietf:params:jmap:error:limit` (`maxCallsInRequest`), validates that
-  `Email/get` with 500 ids succeeds while 501 ids return MethodError `requestTooLarge`, proves
-  that high-level `Client::email_get` transparently splits 501 ids across requests to respect
-  `maxObjectsInGet`, and confirms that `Email/set` destroy with 500 ids succeeds while 501 ids
-  are rejected with `requestTooLarge`. Skipped, not failed, when
-  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `protocol_edges_optimistic_locking_and_backreference_failures_through_the_real_api`:
-  exercises optimistic locking (`ifInState`) and back-reference failure and resolution modes
-  (RFC 8620 §3.7 and §5.3). Proves that `ContactCard/set` with an outdated `ifInState` is rejected
-  with `stateMismatch` without mutating data, while matching `ifInState` succeeds; verifies that
-  a back-reference `#ids` referencing a failed method call fails with `invalidResultReference`;
-  confirms that a back-reference referencing a nonexistent path in a successful call fails with
-  `invalidResultReference`; and proves that successful back-reference resolution (`Principal/query`
-  -> `Principal/get` via `#ids` pointing to `/ids`) resolves IDs across calls in a single request.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `changes_paging_and_resumption_through_the_real_api`:
-  exercises incremental sync pagination and state resumption (RFC 8620 §5.2). Validates that
-  `ContactCard/changes` with `maxChanges: 1` returns `hasMoreChanges: true` and an intermediate
-  `newState` when multiple changes occurred; proves that following the intermediate `newState`
-  with a second page fetches the remaining changes and terminates with `hasMoreChanges: false`
-  at the current state; and proves that high-level `Client::all_changes` automatically traverses
-  multiple pages across intermediate states and folds them into a complete `ChangeSet`.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `unauthenticated_session_discovery_reports_anonymous_through_the_real_api`:
-  exercises Finding 12 (STALWART-RFC-FINDINGS.md) where an unauthenticated GET
-  to the JMAP session resource on Stalwart v1.0.0 returns HTTP 200 OK with empty
-  `accounts: {}` and `username: ""` instead of HTTP 401 Unauthorized with a
-  `WWW-Authenticate` header (RFC 8620 Section 2 and Section 8.1). Verifies that
-  `Client::connect` without credentials tolerates the response, parses session
-  capabilities, and accurately detects the unauthenticated state via
-  `Client::is_anonymous()`.
-- `mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api`:
-  exercises Finding 16 (STALWART-RFC-FINDINGS.md) where creating a mailbox with leading
-  or trailing whitespace in the `name` argument causes Stalwart v1.0.0 to trim the stored
-  name, but omit the `name` property from the `Mailbox/set` `created` response map (RFC 8620
-  Section 5.3). Verifies that `Client::mailbox_create` tolerates the omitted property,
-  falls back to the requested name trimmed of whitespace, and returns the expected name
-  matching what is stored on the server.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_real_api`:
-  exercises Finding 20 (STALWART-RFC-FINDINGS.md) where `CalendarEventNotification/set`
-  destroy with an unformatted ID silently drops it from the response map on Stalwart v1.0.0
-  rather than returning a `notFound` SetError in `notDestroyed` (RFC 8620 Section 5.3).
-  Verifies that `Client::calendar_event_notification_destroy` tolerates the omitted ID
-  and reports `notFound` instead of failing with a protocol error.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `participant_identity_get_tolerates_server_omitted_state_through_the_real_api`:
-  exercises Finding 19 (STALWART-RFC-FINDINGS.md) where `ParticipantIdentity/get`
-  responses on Stalwart v1.0.0 omit the mandatory `state` property required by RFC 8620
-  Section 5.1 and draft-ietf-jmap-calendars Section 3.1. Verifies that
-  `Client::participant_identities` tolerates the omitted property and deserializes
-  identities cleanly, and confirms that raw responses omit `state` and fail strict
-  `GetResponse<ParticipantIdentity>` deserialization.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `current_user_principal_resolves_past_account_id_mismatch_through_the_real_api`:
-  exercises Finding 18 (STALWART-RFC-FINDINGS.md) where `currentUserPrincipalId` in the
-  account's principals capability on Stalwart v1.0.0 advertises the account identifier
-  (for example, `"d333333"`) instead of the principal identifier (`"b"`), causing `Principal/get`
-  with that ID to report `notFound` (RFC 9670 Section 2). Verifies that `Client::current_user_principal`
-  and `Client::current_user_principal_id` tolerate the server mismatch and resolve the true owner
-  principal object and ID, and confirms that `Client::principal_get` tolerates the advertised ID.
-- `calendar_event_set_rejects_timezones_property_through_the_real_api`:
-  exercises Finding 13 (STALWART-RFC-FINDINGS.md) where `CalendarEvent/set` (create or update)
-  rejects the standard JSCalendar `timeZones` property (RFC 8984 Section 4.7.2) with `invalidProperties: ["timeZones"]`,
-  and `CalendarEvent/parse` outputs custom timezone definitions into `iCalendar` `convertedProperties`
-  as an array of events rather than an RFC 8984 `timeZones` object. Verifies that `Client::event_create` surfaces
-  the `invalidProperties` SetError cleanly, that events without `timeZones` create and destroy cleanly,
-  and that `Client::event_parse` tolerates Stalwart's event array representation and passes the parsed
-  event through intact to the client.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `contact_card_online_service_without_uri_through_the_real_api`:
-  exercises Finding 14 (STALWART-RFC-FINDINGS.md) where `ContactCard/set` create with
-  an `onlineServices` entry that contains `user` and `service` but no `uri` (valid per
-  RFC 9553 Section 2.3.2) is accepted on write, but silently discarded upon storage by
-  Stalwart v1.0.0. Verifies that `Client::contact_create` and `Client::contact_get`
-  tolerate the server response, pass the data through intact without error, and clean
-  up the created card.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `contact_card_parse_promotes_type_internet_to_context_through_the_real_api`:
-  exercises Finding 15 (STALWART-RFC-FINDINGS.md) where `ContactCard/parse` converts
-  vCard `TYPE=internet` on email addresses to `"internet": true` in `contexts` (RFC 9553
-  Section 1.7.3 and Section 2.2.3 define only `private` and `work`). Verifies that
-  `Client::contact_card_parse` tolerates the non-standard context property and passes
-  the parsed card through intact to the client.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api`:
-  exercises large blob transfers and limits (Batch 27). Uploads and downloads
-  blobs across 1 MB, 10 MB, and 50 MB (Stalwart's advertised `maxSizeUpload`),
-  verifying SHA-256 byte fidelity, tracking wall time and peak resident set size
-  (VmHWM via /proc/self/status), asserting that the client does not double-buffer
-  the body, verifying that uploading `maxSizeUpload + 1` (50,000,001 bytes) is
-  refused client-side prior to network dispatch with `Error::TooLarge` reporting
-  both the size and limit, and verifying that downloading with a `max_bytes` ceiling
-  smaller than the blob size returns `Error::ResponseTooLarge`.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `snoozed_mailbox_finds_or_creates_the_real_role_mailbox_on_the_real_server`:
-  exercises `Client::snoozed_mailbox` (`jmap-client/src/snooze.rs`), which
-  Stalwart can answer even though it has no Cyrus snooze extension at all:
-  the snoozed-role mailbox it finds-or-creates is an ordinary `Mailbox/set`
-  (RFC 9979 Section 8.1), nothing vendor-specific. Confirms the mailbox gets
-  a real id with the right name and role, and that a second call reuses it
-  rather than creating a sibling. Skipped, not failed, when
-  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-- `eventsource_reconnect_and_gap_handling_through_the_real_api`:
-  exercises EventSource stream reconnection and gap handling (RFC 8620 Section 7.3,
-  Batch 27). Connects to Stalwart's `eventSourceUrl`, shuts down the active socket from
-  the client side via `EventSourceSubscription::drop_connection`, creates a mailbox
-  during the disconnection gap, verifies that the client reconnects and notifies the caller
-  via `EventSourceItem::Reconnected`, confirms Stalwart does not replay missed events on
-  reconnect (omitting `id:` headers on state events), verifies that the caller performs
-  the required resync via `Client::mailbox_get` to recover the missed mailbox, and confirms
-  the reconnected stream remains live and delivers subsequent real-time changes.
-  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
-
-
-
-Anything short of that is a finding, not a nuisance — report it as you
-would any other bug in this project.
-
-## `jmap-cal-sync`'s free/busy test
-
-`rust/crates/jmap-cal-sync/tests/live_server.rs` is a second, separate
-live-server file, in the crate that actually implements
-`ECalBackendSync::get_free_busy_sync` — `jmap-client`'s own file proves the
-wire calls (`Calendar/set`, `CalendarEvent/set`) round-trip, but nothing
-there drives `CalSync::free_busy` itself (`Principal/query` by email, then
-`Principal/getAvailability`, then `jmap_ical::busy_periods_to_vfreebusy`'s
-marshalling) — the actual decision the meeting-scheduler vfunc makes.
-
-It reads the *same* `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
-`_REBASE_URLS` variables step 2/3 above already set up — no new credentials
-needed if you already enabled the write-path tests — but any account with
-the calendars capability works, since this test only asks about its *own*
-address (every real account has a `Principal` of its own, so there is
-nothing second to provision the way step 3a's recipient account is). Run it
-with:
+The protocol client, with the feature gate:
 
 ```console
-$ cargo test -p evolution-jmap-cal-sync -- --ignored
+$ cd rust
+$ cargo test -p evolution-jmap-client --features live-server --test live_server -- --ignored
 ```
 
-No `--features live-server` gate: unlike `jmap-client`, this crate defines
-no such feature — `#[ignore]` alone already keeps it out of a plain `cargo
-test`, the same mechanism that gates `jmap-client`'s own file.
-
-`free_busy_of_the_calendar_owner_reflects_a_real_event_against_the_real_server`
-creates a one-hour event on the account's default calendar, asks
-`free_busy` about the account's own address (plus a second, nonexistent
-address in the same call, confirming it is silently absent — the "invited
-someone outside the organisation" case, per
-`jmap-cal-sync/tests/freebusy.rs`'s equivalent mock test), confirms the
-answer's `VFREEBUSY` names the account and carries a
-`FREEBUSY;FBTYPE=BUSY:` line for exactly the event's window (`CalendarEvent::
-simple` anchors the event to `Etc/UTC`, so the digits are expected to match
-exactly, the same bar the mock-based tests hold to — not merely "some busy
-period exists"), then destroys the event. Skipped, not failed, when
-`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
-
-`rust/crates/jmap-cal-sync/tests/live_server_shared_freebusy.rs` covers the
-scenario that file cannot: a real meeting scheduler always asks about
-*someone else's* calendar, and every account can see its own regardless of
-sharing, so the self-lookup test never exercises the permission check at
-all. Needs both the write-test account (step 3, the one asked about) and
-the recipient account (step 3a, the one asking) — no new credentials beyond
-those two. Run it the same way:
-
-```console
-$ cargo test -p evolution-jmap-cal-sync --test live_server_shared_freebusy -- --ignored
-```
-
-`free_busy_of_another_account_reflects_only_what_was_shared` creates a
-calendar and a one-hour event on the write-test account, then calls the
-recipient's own `CalSync::free_busy` about the write-test account's address
-three times: before any grant (the address is still reported, per RFC
-9670's own empty-list-not-error answer for a principal you cannot read, but
-with no `FREEBUSY` line at all — indistinguishable from a genuinely empty
-diary, which is the one behaviour `harness/stalwart/
-seed-freebusy-fixture.py` flags as the most important thing to know about
-this call), after a `mayReadFreeBusy`-only `Calendar/set shareWith` grant
-(the created event's exact window appears), and after revoking that grant
-(back to no `FREEBUSY` line). Destroys the event and calendar at the end.
-Skipped, not failed, when either account's credentials are unset.
-
-## `jmap-book-sync`'s save/remove test
-
-`rust/crates/jmap-book-sync/tests/live_server.rs` is the address-book
-counterpart of the free/busy file above, in the crate that actually
-implements `EBookMetaBackendSync::save_contact_sync`/`remove_contact_sync` —
-`jmap-client/tests/live_server.rs` already proves `ContactCard/set` round-trips
-through `Client` directly, but nothing there drives `BookSync::save_contact`
-itself: the vCard-to-`ContactCard` mapping and the create/update decision.
-
-It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
-`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
+In these crates only the live-server tests are ignored, so `--ignored`
+selects them:
 
 ```console
 $ cargo test -p evolution-jmap-book-sync -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as `jmap-cal-sync`'s file.
-
-`saving_then_removing_a_contact_round_trips_through_the_real_server` saves a
-new vCard via `BookSync::save_contact`, confirms it via `list_existing`,
-edits it (a name change, mirroring an Evolution contact rename), confirms the
-edit via `load_contact`, then removes it via `remove_contact` and confirms
-it is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/
-`_PASSWORD` are unset.
-
-While building this test against real Stalwart, it also caught a real client
-bug (fixed, not just found): `ContactCard/set`'s `created` response held only
-`id`, omitting every property the client had just sent (RFC 8620 §5.3
-permits this — none of those properties is server-set). `BookSync::
-save_contact`'s create branch rendered its return value straight from that
-terse object, so the vCard handed back to EDS immediately after a save was
-missing the name and everything else just written. Fixed by rendering from a
-fresh `ContactCard/get` after create, the same way the update branch already
-did — see `jmap-book-sync/tests/terse_create.rs` for the headless,
-`jmap-mockd`-reproducible regression test (`MockServerBuilder::
-terse_contact_create`).
-
-## `jmap-collection-sync`'s create/delete test
-
-`rust/crates/jmap-collection-sync/tests/live_server.rs` is the collection
-counterpart of the two files above, in the crate that actually implements
-`ECollectionBackendClass::create_resource_sync`/`delete_resource_sync` —
-`jmap-client/tests/live_server.rs` already proves `AddressBook/set` and
-`Calendar/set` round-trip through `Client` directly, but nothing there drives
-this crate's own `create_collection`/`delete_collection`: the account
-resolution through `CollectionLayout`, the create/destroy dispatch by
-`ChildKind`, and the `Child` a create derives from what the server answered.
-
-It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
-`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
-
-```console
+$ cargo test -p evolution-jmap-cal-sync -- --ignored
 $ cargo test -p evolution-jmap-collection-sync -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as the two files above.
-
-`creating_then_deleting_a_collection_round_trips_through_the_real_server`
-creates an address book and a calendar via `create_collection`, confirms
-each is listed by a fresh `Fanout::discover`, then destroys both via
-`delete_collection` and confirms neither is listed anymore. Skipped, not
-failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
-
-While building this test against real Stalwart, it also caught a real client
-bug (fixed, not just found): a freshly created `AddressBook`/`Calendar` came
-back `isSubscribed: false` from Stalwart when the create did not say
-otherwise, and `jmap-collection-sync`'s own discovery deliberately drops
-`isSubscribed == Some(false)` (the same rule that keeps a collection the
-user unsubscribed from out of the sidebar). So a collection Evolution's "New
-Address Book"/"New Calendar" had just created would immediately vanish from
-the next discovery — this test's first run against real Stalwart failed
-exactly that way. `jmap-mockd` never caught it because it always seeds its
-address books/calendars `isSubscribed: Some(true)` and a create through it
-that names no `isSubscribed` is stored as `None`, which the discovery filter
-also treats as subscribed — a real divergence between the mock's and a real
-server's default for an unspecified property. Fixed: `create_collection` now
-asks for `isSubscribed: true` explicitly on both the `AddressBook` and
-`Calendar` create, rather than relying on the server's silence. See
-`jmap-collection-sync/tests/create.rs`'s
-`a_created_collection_is_discoverable_even_when_the_server_defaults_new_collections_to_unsubscribed`
-for the headless, `jmap-mockd`-reproducible regression test
-(`MockServerBuilder::new_collections_default_unsubscribed`).
-
-## `jmap-mail-sync`'s import/expunge test
-
-`rust/crates/jmap-mail-sync/tests/live_server.rs` is the mail counterpart of
-the three files above, in the crate that actually implements
-`append_message_sync`/`expunge_sync` (`MailSync::import_message`/
-`expunge_message`) — `jmap-client/tests/live_server.rs` already proves
-`Email/import` and `Mailbox/set` round-trip through `Client` directly, but
-nothing there drives this crate's own `import_message`/`expunge_message`:
-the upload-then-import sequencing, and `expunge_message`'s
-read-before-write mailbox-membership decision.
-
-It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
-`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
-
-```console
 $ cargo test -p evolution-jmap-mail-sync -- --ignored
+$ cargo test -p jmap-config --test live_server_discover_and_register -- --ignored
 ```
 
-No `--features live-server` gate, for the same reason as the three files
-above.
+To run one file, use `--test <file>`, for example
+`cargo test -p evolution-jmap-cal-sync --test live_server_shared_freebusy -- --ignored`.
 
-`importing_then_expunging_a_message_round_trips_through_the_real_server`
-imports a message into the write-test account's Inbox via
-`MailSync::import_message`, confirms it via `MailSync::messages`, then
-expunges it via `MailSync::expunge_message` and confirms it is gone.
-Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-unset.
+`jmap-mail`, `jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`
+and `jmap-backend-collection` also have `tests/live_server*.rs` files. They
+need the EDS development headers, like the rest of those crates. The
+`jmap-functional` `live-stalwart-*` tests drive real EDS daemons against the
+server; see `docs/functional-tests.md` for their environment.
 
-## `jmap-mail-sync`'s create/delete-folder test
+The scale tests (`live_server_scale.rs` in `jmap-book-sync`, `jmap-cal-sync`
+and `jmap-mail-sync`) take their sizes from `JMAP_SCALE_TEST_CARDS`,
+`JMAP_SCALE_TEST_EVENTS` and `JMAP_SCALE_TEST_MESSAGES`.
 
-`rust/crates/jmap-mail-sync/tests/live_server_folder.rs` is the
-folder-management counterpart of the import/expunge test above, in the same
-crate: it exercises `create_folder_sync`/`delete_folder_sync`
-(`MailSync::create_folder`/`delete_folder`), a materially different code
-path (`Mailbox/set` create/destroy, not `Email/import`/`Email/set`). Only
-`jmap-mockd` had exercised these before (`jmap-mail-sync/tests/{create,
-delete}_folder.rs`).
+## What the tests cover
 
-Same environment variables as the import/expunge test. Run it with:
+| Area | Files | Accounts |
+| --- | --- | --- |
+| Session, `Core/echo`, listing mailboxes, address books, calendars | `jmap-client/tests/live_server.rs` (read-only tests) | step 2 |
+| Create, update, destroy and `/changes` for each type; blobs; limits; back-references; push reconnect | `jmap-client/tests/live_server.rs` | step 3 |
+| Contact mapping, one vCard property per file | `jmap-book-sync/tests/live_server_*.rs` | step 3 |
+| Event save and remove, colour, `/changes` | `jmap-cal-sync/tests/live_server{,_save,_color,_changes}.rs` | step 3 |
+| Address book and calendar create and delete | `jmap-collection-sync/tests/live_server.rs` | step 3 |
+| Mail import, expunge, folders, keywords, filing, search | `jmap-mail-sync/tests/live_server_*.rs` | step 3 |
+| Sending between two accounts | `jmap-client` (`send_email_delivers_to_a_second_account_on_the_real_server`), `jmap-mail-sync/tests/live_server_send.rs` | steps 3 and 3a |
+| Shared address books, calendars and mailboxes | `*/tests/live_server_shared*.rs` | steps 3 and 3a |
+| Meeting invitations | `jmap-cal-sync/tests/live_server_scheduling.rs` | steps 3 and 3a |
+| OAuth 2.0 discovery and dynamic client registration | `jmap-config/tests/live_server_discover_and_register.rs` | step 2 (URL only) |
 
-```console
-$ cargo test -p evolution-jmap-mail-sync --test live_server_folder -- --ignored
-```
+### The write-path test
 
-No `--features live-server` gate, for the same reason as the other files.
+Each write test creates its own data on the write-test account, checks it
+with `/get` (and, for most types, `/query` and `/changes`), and destroys it.
+Contact and event tests use the account's default address book and calendar.
 
-`creating_then_deleting_a_folder_round_trips_through_the_real_server`
-creates a top-level folder via `MailSync::create_folder`, confirms it via
-`folder_tree`, then deletes it via `MailSync::delete_folder` and confirms it
-is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD`
-are unset.
+### The send-email test
 
-## `jmap-mail-sync`'s send test
+`send_email_delivers_to_a_second_account_on_the_real_server` sends a message
+with `Client::send_email` (`Email/set` and `EmailSubmission/set`) from the
+write-test account to the recipient account. It then polls the recipient's
+Inbox until the message arrives, which proves delivery, not only an accepted
+submission.
 
-`rust/crates/jmap-mail-sync/tests/live_server_send.rs` is the
-`MailSync::send_message` counterpart of `jmap-client/tests/
-live_server.rs::send_email_delivers_to_a_second_account_on_the_real_server`:
-that test already proves `Client::send_email` (`Email/set` +
-`EmailSubmission/set`, chained) delivers between two real accounts, but
-nothing had driven `MailSync::send_message` itself — the upload-then-stage-
-then-submit sequencing through `import_message`, `MailSync::identity_for`'s
-address-to-identity lookup, and `MailSync::outgoing_mailboxes`'s Drafts/Sent
-staging decision. Only `jmap-mockd` had exercised `send_message` before
-(`jmap-mail-sync/tests/send.rs`).
+### The free/busy test
 
-It needs both the write-test account (step 3) and the recipient account
-(step 3a) — the same pair `send_email_delivers_to_a_second_account_on_the_
-real_server` uses. Run it with:
+`jmap-cal-sync/tests/live_server.rs` creates a one-hour event and calls
+`CalSync::free_busy` for the account's own address and a nonexistent
+address. The `VFREEBUSY` must name the account with a `FREEBUSY;FBTYPE=BUSY`
+line for exactly the event's window. The nonexistent address must be absent.
 
-```console
-$ cargo test -p evolution-jmap-mail-sync --test live_server_send -- --ignored
-```
+`jmap-cal-sync/tests/live_server_shared_freebusy.rs` asks about another
+account, as a meeting scheduler does. The recipient account asks about the
+write-test account three times: before a share (no `FREEBUSY` line, which
+RFC 9670 makes look like an empty calendar), after a `mayReadFreeBusy`-only
+`shareWith` grant (the event's window appears), and after the grant is
+revoked (no line again).
 
-No `--features live-server` gate, for the same reason as the other files.
+## What "it worked" means
 
-`sending_a_message_delivers_to_a_second_account_on_the_real_server` builds an
-`Outgoing` from `MailSync::identity_for`'s lookup of the write-test account's
-own address and `MailSync::outgoing_mailboxes`'s Drafts/Sent decision, sends
-it via `MailSync::send_message`, then polls the recipient's own
-`MailSync::messages` (not raw `Client::email_query`, to keep the assertion on
-this crate's own read path) until the message actually lands in its Inbox —
-proof of delivery, not merely that the server accepted the submission.
-Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` or
-`JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` are unset.
-
-## `jmap-cal-sync`'s save/remove test
-
-`rust/crates/jmap-cal-sync/tests/live_server_save.rs` is the calendar
-counterpart of `jmap-book-sync`'s save/remove test above, in the crate that
-actually implements `ECalMetaBackend::save_component_sync`/
-`remove_component_sync` — `jmap-client/tests/live_server.rs` already proves
-`CalendarEvent/set` round-trips through `Client` directly, and this crate's
-own `live_server.rs` already proves `CalSync::free_busy` (a read-side
-decision), but nothing had driven `CalSync::save_component`/
-`remove_component` themselves: the iCalendar-to-`CalendarEvent` mapping and
-the create/update decision `save_component` makes.
-
-It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
-`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
-
-```console
-$ cargo test -p evolution-jmap-cal-sync --test live_server_save -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as the other files.
-
-`saving_then_removing_an_event_round_trips_through_the_real_server` saves a
-new iCalendar VEVENT via `CalSync::save_component`, confirms it via
-`list_existing`, edits it (a summary change, mirroring an Evolution
-appointment rename) via `save_component` with `existing_uid`, confirms the
-edit via `load_component`, then removes it via `remove_component` and
-confirms it is gone. Skipped, not failed, when
-`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
-
-While building this test against real Stalwart, it also caught a real client
-bug (fixed, not just found): `CalendarEvent/set`'s `created` response held
-only `id`, omitting every property the client had just sent (RFC 8620 §5.3
-permits this — none of those properties is server-set), the same class of
-bug `jmap-book-sync`'s save/remove test found for contacts.
-`CalSync::save_component`'s create branch rendered its return value straight
-from that terse object, so the iCalendar object handed back to EDS
-immediately after a save was missing the summary, start time, and everything
-else just written. Fixed by rendering from a fresh `load_component` after
-create, the same way the update branch already did — see
-`jmap-cal-sync/tests/terse_create.rs` for the headless, `jmap-mockd`-
-reproducible regression test (`MockServerBuilder::
-terse_calendar_event_create`).
-
-## `jmap-mail-sync`'s keywords test
-
-`rust/crates/jmap-mail-sync/tests/live_server_keywords.rs` is the
-`MailSync::set_keywords` counterpart of the import/expunge and
-create/delete-folder tests above, in the same crate: it exercises the
-function `CamelFolder::set_message_flags` actually calls — the single
-most-executed write in an ordinary mail client's life (mark read, star,
-flag) — which only `jmap-mockd` had exercised before
-(`jmap-mail-sync/tests/keywords.rs`).
-
-Same environment variables as the import/expunge test. Run it with:
-
-```console
-$ cargo test -p evolution-jmap-mail-sync --test live_server_keywords -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as the other files.
-
-`setting_keywords_on_a_message_reaches_the_real_server` imports a message
-into the write-test account's Inbox, flags it via `MailSync::set_keywords`,
-confirms the flag via `MailSync::messages`' returned
-`MessageSummary::flags`, then in a second patch clears `flagged` and sets
-`seen` in the same call and confirms both — proving the diff names both a
-removal and an addition correctly, not just whichever came first. Cleans up
-via `MailSync::expunge_message`. Skipped, not failed, when
-`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
-
-## `jmap-mail-sync`'s filing test
-
-`rust/crates/jmap-mail-sync/tests/live_server_filing.rs` is the
-`MailSync::file_message` counterpart of the tests above, in the same crate:
-it exercises the function `transfer_messages_to_sync` actually calls (a
-copy or a move between mailboxes), which only `jmap-mockd` had exercised
-before (`jmap-mail-sync/tests/mailboxes.rs`, `tests/updates.rs`).
-
-Same environment variables as the import/expunge test. Run it with:
-
-```console
-$ cargo test -p evolution-jmap-mail-sync --test live_server_filing -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as the other files.
-
-`filing_a_message_into_another_folder_reaches_the_real_server` imports a
-message into the write-test account's Inbox, creates a second folder via
-`MailSync::create_folder`, copies the message into it via
-`Filing::copied_into` and confirms `MailSync::messages` lists it in both
-mailboxes, then moves it out of the Inbox into the new folder via
-`Filing::moved` in one patch and confirms the Inbox no longer lists it while
-the new folder still does. Cleans up via `MailSync::expunge_message` and
-`MailSync::delete_folder`. Skipped, not failed, when
-`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
-
-## `jmap-mail-sync`'s folder-settings test
-
-`rust/crates/jmap-mail-sync/tests/live_server_folder_settings.rs` covers the
-two `jmap-mail-sync` writes none of the tests above touch:
-`MailSync::set_subscribed` (the write behind `CamelSubscribable`'s two
-vfuncs) and `MailSync::rename_folder` (`CamelStore::rename_folder_sync`).
-Only `jmap-mockd` had exercised either before
-(`jmap-mail-sync/tests/{subscribe,rename_folder}.rs`).
-
-Same environment variables as the import/expunge test. Run it with:
-
-```console
-$ cargo test -p evolution-jmap-mail-sync --test live_server_folder_settings -- --ignored
-```
-
-No `--features live-server` gate, for the same reason as the other files.
-
-`subscribing_and_renaming_a_folder_reach_the_real_server` creates a
-top-level folder, unsubscribes it and confirms via a fresh `folder_tree`
-listing, resubscribes it and confirms that too, renames it and confirms
-both the returned Camel path and the listing's new display name, then
-deletes it. Skipped, not failed, when
-`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+All tests pass or report that they were skipped for a missing optional
+account. A failure is a finding: report it like any other bug.

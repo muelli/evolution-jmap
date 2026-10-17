@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ROADMAP item 108, part (3): live confirmation that an event another client
+ * Live confirmation that an event another client
  * created directly on the server, with JSCalendar-bis `calendarAddress`
  * participants, shows its ORGANIZER/ATTENDEE once a fresh `ECalClient`
  * connects and pulls it.
