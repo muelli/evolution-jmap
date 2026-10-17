@@ -24,3 +24,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/snooze.rs`
 
 - Zero missed mutants (3 of 3 generated mutants caught by test suites).
+
+## `src/changes.rs`
+
+- `crates/jmap-client/src/changes.rs:169:35: replace match guard disposition.updated with true in ChangeSet::classify`: in `all_changes`, an entry in `by_id` is created only when the ID appears in `created`, `updated`, or `destroyed`, setting the corresponding boolean flag to true. When `(disposition.created, disposition.destroyed)` is `(false, false)`, `disposition.updated` is guaranteed to be true, so the guard is always true and replacing it with `true` has no observable effect.
+- 8 of 8 viable mutants caught by test suites, 4 unviable due to `ChangesResponse` and `ChangeSet` without `Default`, 1 genuinely equivalent.
+
+## `src/sieve.rs`
+
+- Zero missed mutants (9 of 9 viable mutants caught by test suites, 6 unviable due to `SieveScriptValidateResponse` without `Default`, `SetResponse::new` arity, and missing `From`/`FromIterator` implementations).
+
