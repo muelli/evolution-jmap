@@ -70,7 +70,8 @@ use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobLookupRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventParseRequest,
-    CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
+    CalendarEventQueryFilter, CalendarEventSetRequest, Participant, ParticipantIdentity,
+    RecurrenceRule,
 };
 use jmap_proto::contacts::{
     Address, AddressBook, AddressComponent, Anniversary, Author, ContactCard,
@@ -84,7 +85,7 @@ use jmap_proto::mail::{
 };
 use jmap_proto::methods::{
     BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, GetResponse,
-    SetRequest,
+    SetRequest, SetResponse,
 };
 use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
 use jmap_proto::quota::{Quota, QuotaQueryFilter, quota_resource_type, quota_scope};
@@ -5887,6 +5888,145 @@ fn calendar_event_set_preserves_jscalendar_bis_participants_through_the_real_api
         reloaded_participants.contains_key("attendee-1"),
         "reloaded participants must hold attendee-1"
     );
+
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+}
+
+/// A meeting this account organizes, inviting `guest_address`, in the shape
+/// `jmap-ical` writes: the organizer as `organizerCalendarAddress` and as an
+/// owner participant, the guest by `calendarAddress` alone.
+fn meeting_inviting(calendar_id: Id, organizer: &str, guest_address: &str) -> CalendarEvent {
+    let title = format!("agent-scheduling-probe-{}", unique_suffix());
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T10:00:00", "PT1H");
+    event.organizer_calendar_address = Some(organizer.to_owned());
+    let organizer = json!({
+        "@type": "Participant",
+        "calendarAddress": organizer,
+        "roles": {"owner": true, "attendee": true},
+    });
+    let guest = json!({
+        "@type": "Participant",
+        "calendarAddress": guest_address,
+        "roles": {"attendee": true},
+    });
+    event.participants = Some([("o".to_owned(), organizer), ("g".to_owned(), guest)].into());
+    event
+}
+
+/// draft-ietf-jmap-calendars-33 section 5.9.2: a server asked to send
+/// scheduling messages "MUST reject the change with a
+/// noSupportedScheduleMethods SetError" when a recipient has no calendar
+/// address it can send to. This is the only per-call signal the draft gives
+/// that a server cannot schedule for someone, so it is pinned here. The
+/// guest's address is a `urn:uuid:` URI, which no transport delivers to, so
+/// the probe can never reach a real person.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn scheduling_for_an_undeliverable_guest_is_refused_and_nothing_is_stored() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let organizer = format!(
+        "mailto:{}",
+        env::var("JMAP_LIVE_SERVER_WRITE_USER").expect("checked by connect_for_write")
+    );
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+    let undeliverable = format!("urn:uuid:{:032x}", unique_suffix());
+    let event = meeting_inviting(calendar_id.clone(), &organizer, &undeliverable);
+    let title = event.title.clone();
+    let response = client
+        .event_set(
+            &CalendarEventSetRequest::new(
+                SetRequest::new(account_id.clone()).create("probe", event),
+            )
+            .send_scheduling_messages(true),
+        )
+        .expect("the call itself succeeds; the refusal is per record");
+
+    let error = response
+        .not_created
+        .as_ref()
+        .and_then(|map| map.get("probe"))
+        .unwrap_or_else(|| panic!("the create was not refused: {response:?}"));
+    assert_eq!(error.error_type, "noSupportedScheduleMethods");
+    let ids = client
+        .event_query(
+            &account_id,
+            CalendarEventQueryFilter::in_calendar(calendar_id.clone()),
+        )
+        .expect("CalendarEvent/query after the probe")
+        .ids;
+    let stored = client
+        .event_get(&account_id, &ids)
+        .expect("CalendarEvent/get after the probe")
+        .list;
+    assert!(
+        stored.iter().all(|event| event.title != title),
+        "a refused create stores nothing"
+    );
+}
+
+/// RFC 8620 section 3.9 says a method given an unknown argument "MUST return
+/// an invalidArguments error". A server that does not implement
+/// `sendSchedulingMessages` at all would then refuse the call, which a client
+/// could notice. Stalwart 0.16 instead ignores an unknown `/set` argument and
+/// applies the change, so a server that does not schedule may equally drop
+/// `sendSchedulingMessages: true` without a word. This pins that leniency:
+/// it is why the client cannot learn from the response alone that nobody was
+/// invited, and needs an explicit per-account setting instead. If this starts
+/// failing, the server became strict, which is good news for that design.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn an_unknown_set_argument_is_ignored_rather_than_refused() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+    let title = format!("agent-unknown-argument-{}", unique_suffix());
+    let event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T10:00:00", "PT1H");
+
+    let arguments = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/set",
+            &json!({
+                "accountId": account_id,
+                "create": {"probe": event},
+                "agentNoSuchArgument": true,
+            }),
+        )
+        .expect("Stalwart applies the call instead of answering invalidArguments");
+    let response: SetResponse<CalendarEvent> = serde_json::from_value(arguments).unwrap();
+    let event_id = response
+        .created
+        .as_ref()
+        .and_then(|map| map.get("probe"))
+        .and_then(|event| event.id.clone())
+        .unwrap_or_else(|| panic!("the create was not applied: {response:?}"));
 
     client
         .event_destroy(&account_id, &event_id)
