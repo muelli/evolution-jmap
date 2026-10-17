@@ -289,6 +289,14 @@ pub fn calendar_event_set(
         })
         .collect();
     let own_addresses = crate::scheduling::own_addresses(account);
+    // Stalwart holds a `uid` once per account and refuses a create that
+    // repeats one ("An event with UID ... already exists"), which is how a
+    // guest's second copy of a delivered meeting is turned away.
+    let taken: BTreeSet<String> = account
+        .calendar_events
+        .iter()
+        .filter_map(|(_, event)| event.uid.clone())
+        .collect();
 
     let AccountState {
         calendars,
@@ -320,6 +328,11 @@ pub fn calendar_event_set(
                     .with_description("start is required"));
             }
             version_is_2_0(event)?;
+            if let Some(uid) = event.uid.as_ref().filter(|uid| taken.contains(*uid)) {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description(format!("An event with UID {uid} already exists."))
+                    .with_properties(["uid"]));
+            }
             schedulable(event, &own_addresses, send_scheduling_messages)?;
             event.id = Some(id.clone());
             if event.event_type.is_none() {
@@ -525,6 +538,11 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
             .calendar_ids
             .as_ref()
             .is_some_and(|ids| ids.get(calendar_id).copied().unwrap_or(false))
+    {
+        return false;
+    }
+    if let Some(uid) = &filter.uid
+        && event.uid.as_ref() != Some(uid)
     {
         return false;
     }
