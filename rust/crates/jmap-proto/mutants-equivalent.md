@@ -79,4 +79,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   - `ContactCard::simple`: deleting field `card_type` from the struct expression falls back to `..Self::default()`, which sets `card_type` to `Some("Card".to_owned())`, the identical value.
 - Zero missed mutants (219 of 219 viable mutants caught by test suites, 11 unviable due to types without Default: AddressBookSetRequest, NameComponent, PronounsValue, ContactCardParseRequest, and ContactCardParseResponse).
 
+## `src/mail.rs`
+
+- Zero missed mutants (162 of 162 viable mutants caught by test suites, 36 unviable due to types without Default: SnoozeDetails, EmailImportRequest, EmailImportResponse, EmailParseRequest, EmailParseResponse, SearchSnippetGetRequest, EmailSubmissionSetRequest, MDN, MDNDisposition, MDNSendRequest, and MDNSendResponse).
+
 
