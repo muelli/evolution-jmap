@@ -329,6 +329,28 @@ mod ceiling_tests {
         );
     }
 
+    /// A large message stored with bare LF and served with CRLF grows by one
+    /// octet per line. At 64-octet lines that is a sixty-fourth of it, far past
+    /// the flat margin for a message of several megabytes, so the proportional
+    /// term is what lets it arrive.
+    #[test]
+    fn a_large_message_gets_room_for_its_line_endings_to_grow() {
+        let size = 8 * 1024 * 1024;
+        let served = size + size / 64;
+        let ceiling = download_ceiling(Some(size));
+        assert!(
+            ceiling >= served,
+            "an {size}-octet row served as {served} octets got a ceiling of {ceiling}"
+        );
+    }
+
+    /// A short message gets the whole flat margin, not a sliver of it: an
+    /// eighth of nothing is nothing.
+    #[test]
+    fn a_short_message_gets_the_flat_margin() {
+        assert_eq!(download_ceiling(Some(0)), 64 * 1024);
+    }
+
     /// A row that states no size gives nothing to be proportional to, and gets
     /// this repository's answer instead of an unbounded read.
     #[test]
