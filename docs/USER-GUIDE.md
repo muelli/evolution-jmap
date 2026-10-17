@@ -20,6 +20,10 @@ sudo apt install ./evolution-jmap_*_amd64.deb
 evolution --force-shutdown
 ```
 
+`gh attestation verify` currently needs GitHub CLI authentication (`gh auth login` or
+`GH_TOKEN`). If you do not have that, use the no-token fallback in
+`docs/verifying-artifacts.md`.
+
 Fedora (`.rpm` build or release asset):
 
 ```bash
@@ -34,14 +38,18 @@ Unverified in a running Evolution: exact package filename pattern on every distr
 Use this flow for Fastmail and similar providers that support OAuth 2.0.
 
 1. Open Evolution and add a new mail account.
-2. Select account type `JMAP`.
-3. Enter:
-   - `JMAP Session URL`: `https://api.fastmail.com/jmap/session`
-   - `User`: your Fastmail address
-4. Trigger account lookup and OAuth sign in from the assistant.
+2. On the identity page, enter your Fastmail address.
+3. Click `Look Up Account Details`, then pick the `JMAP` result.
+4. On `Receiving Email`, confirm:
+   - `Server`: `api.fastmail.com`
+   - `Port`: `443` (or blank, which means default HTTPS)
+   - `Username`: your Fastmail address
+   - `Authentication`: `OAuth 2.0`
+   - `Use a secure connection (TLS)`: enabled
 5. Complete browser login and consent, then return to Evolution and finish.
 
-If OAuth metadata lookup fails, Evolution keeps the account on password authentication for that server.
+If lookup does not offer OAuth for that server, Evolution keeps `Authentication`
+on `Password`, and you can finish with password or API token authentication instead.
 
 Unverified in a running Evolution: exact button labels for the OAuth lookup and sign-in steps across Evolution versions.
 
@@ -53,14 +61,17 @@ Use this flow for Stalwart and other password-based setups.
 2. Start adding a new mail account.
 3. Select the account type named `JMAP`.
 4. Fill in:
-   - server URL field: `JMAP Session URL` (for example `http://<stalwart-ip>:8080/jmap/session`)
-   - user field: `User`
+   - `Server`: your Stalwart host or IP (for example `<stalwart-ip>`)
+   - `Port`: `443` for HTTPS, or your custom port
+   - `Username`: your Stalwart login
+   - `Authentication`: `Password`
+   - `Use a secure connection (TLS)`: enabled for HTTPS; disable only for local/plain HTTP testing
 5. Continue and save the account.
 
 The account setup module writes these settings into the account source:
 
-- `[Authentication] Host` from `JMAP Session URL`
-- `[Authentication] User` from `User`
+- `[Authentication] Host` from `Server`
+- `[Authentication] User` from `Username`
 
 These values are consumed by the collection backend and the generated mail/calendar/address-book sources.
 
@@ -86,7 +97,7 @@ If prompts loop forever without a successful sign-in, treat it as an error and c
 
 Hosts with one trailing dot are normalized to the same host without the dot. Example: `api.fastmail.com.` is treated as `api.fastmail.com`.
 
-If you previously saved a host with a trailing dot and saw repeated sign-in prompts, edit and save the account once so the normalized host is used consistently.
+No account rewrite is required on current builds. Normalization happens during connection target resolution.
 
 ## JMAP-only features
 
