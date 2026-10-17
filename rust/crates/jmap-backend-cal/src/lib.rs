@@ -8,6 +8,7 @@
 //! - [`connect`]: opens [`CalSync`] connections from `ESource` configurations.
 //! - [`marshal`]: conversions between Rust types and EDS C structures.
 //! - [`ops`]: core backend operation bodies operating over `CalSync`.
+//! - [`scheduling`]: who sends meeting invitations, the server or Evolution.
 //! - [`backend`]: `ECalMetaBackend` GObject subclass and vfunc dispatch.
 //! - [`module`]: dynamic module loading routines called by EDS.
 //! - [`factory`]: `ECalBackendFactory` subclass mapping `BackendName=jmap`.
@@ -20,3 +21,4 @@ pub mod factory;
 pub mod marshal;
 pub mod module;
 pub mod ops;
+pub mod scheduling;

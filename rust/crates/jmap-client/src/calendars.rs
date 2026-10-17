@@ -94,9 +94,22 @@ impl Client {
         account_id: &Id,
         event: &CalendarEvent,
     ) -> Result<CalendarEvent, Error> {
+        self.event_create_with_scheduling(account_id, event, false)
+    }
+
+    /// [`Client::event_create`], asking the server to invite the event's
+    /// participants itself when `send_scheduling_messages` is true (see
+    /// [`Client::event_set`]). A refusal to schedule is the record's
+    /// `SetError`, typically `noSupportedScheduleMethods`.
+    pub fn event_create_with_scheduling(
+        &self,
+        account_id: &Id,
+        event: &CalendarEvent,
+        send_scheduling_messages: bool,
+    ) -> Result<CalendarEvent, Error> {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).create("new", event.clone());
-        let response = self.event_set_unscheduled(request)?;
+        let response = self.event_set_scheduling(request, send_scheduling_messages)?;
         if let Some(created) = response
             .created
             .as_ref()
@@ -163,9 +176,21 @@ impl Client {
 
     /// Apply a patch to a calendar event (RFC 8620 PatchObject).
     pub fn event_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
+        self.event_update_with_scheduling(account_id, id, patch, false)
+    }
+
+    /// [`Client::event_update`], asking the server to tell the participants
+    /// about the change itself when `send_scheduling_messages` is true.
+    pub fn event_update_with_scheduling(
+        &self,
+        account_id: &Id,
+        id: &Id,
+        patch: Value,
+        send_scheduling_messages: bool,
+    ) -> Result<(), Error> {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).update(id.clone(), patch);
-        let response = self.event_set_unscheduled(request)?;
+        let response = self.event_set_scheduling(request, send_scheduling_messages)?;
         if response
             .updated
             .as_ref()
@@ -180,8 +205,19 @@ impl Client {
 
     /// Destroy a calendar event.
     pub fn event_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        self.event_destroy_with_scheduling(account_id, id, false)
+    }
+
+    /// [`Client::event_destroy`], asking the server to send the participants
+    /// their cancellation itself when `send_scheduling_messages` is true.
+    pub fn event_destroy_with_scheduling(
+        &self,
+        account_id: &Id,
+        id: &Id,
+        send_scheduling_messages: bool,
+    ) -> Result<(), Error> {
         let request = SetRequest::<CalendarEvent>::new(account_id.clone()).destroy(id.clone());
-        let response = self.event_set_unscheduled(request)?;
+        let response = self.event_set_scheduling(request, send_scheduling_messages)?;
         if response
             .destroyed
             .as_ref()
@@ -225,7 +261,8 @@ impl Client {
     /// draft's `sendSchedulingMessages`: ask for it and the server sends the
     /// iTIP invitations, cancellations and replies §5.9.2 calls for once the
     /// change is applied. The plain create/update/destroy helpers above never
-    /// ask, which is the draft's own default.
+    /// ask, which is the draft's own default; their `_with_scheduling`
+    /// siblings ask when told to.
     pub fn event_set(
         &self,
         request: &CalendarEventSetRequest,
@@ -234,11 +271,19 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    fn event_set_unscheduled(
+    /// `false` leaves the argument out altogether rather than sending the
+    /// draft's own default, so a server that does not know it is never asked.
+    fn event_set_scheduling(
         &self,
         request: SetRequest<CalendarEvent>,
+        send_scheduling_messages: bool,
     ) -> Result<SetResponse<CalendarEvent>, Error> {
-        self.event_set(&CalendarEventSetRequest::new(request))
+        let request = CalendarEventSetRequest::new(request);
+        self.event_set(&if send_scheduling_messages {
+            request.send_scheduling_messages(true)
+        } else {
+            request
+        })
     }
 
     /// Fetch all `CalendarEventNotification`s visible to this credential

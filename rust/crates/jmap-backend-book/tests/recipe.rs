@@ -19,8 +19,36 @@ use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 
 /// The repository root, from the crate this test lives in.
 fn repository() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let relative = manifest_dir.join("../../..");
+    if relative.join("docs/manual-test-book-backend.md").exists() {
+        return relative
+            .canonicalize()
+            .expect("the crate directory is inside the repository");
+    }
+    if let Ok(pwd) = std::env::var("PWD") {
+        let mut cur = PathBuf::from(pwd);
+        loop {
+            if cur.join("docs/manual-test-book-backend.md").exists() {
+                return cur.canonicalize().unwrap_or(cur);
+            }
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut cur = cwd;
+        loop {
+            if cur.join("docs/manual-test-book-backend.md").exists() {
+                return cur.canonicalize().unwrap_or(cur);
+            }
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+    relative
         .canonicalize()
         .expect("the crate directory is inside the repository")
 }

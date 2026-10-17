@@ -72,4 +72,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (35 of 35 viable mutants caught by test suites, 9 unviable due to absence of `Default` implementations on `AuthorizationServer`, `ClientRegistration`, `PkceVerifier`, and `TokenResponse`).
 
+## `src/eventsource.rs`
 
+- `crates/jmap-client/src/eventsource.rs:321:26: replace < with <= in sleep_cancellable`: `deadline` is computed as `Instant::now() + duration`. The loop checks `while Instant::now() < deadline` and sleeps for `CANCEL_POLL_INTERVAL.min(duration)`. In `eventsource.rs`, `sleep_cancellable` is invoked only with `backoff`, which is always `>= INITIAL_BACKOFF` (500ms). After sleeping for at least `CANCEL_POLL_INTERVAL` (50ms), the monotonic clock `Instant::now()` has advanced by 50ms, so on the subsequent loop check `Instant::now() > deadline`, which evaluates identically under `<` and `<=`. Even if evaluated at the exact nanosecond where `now == deadline`, the next iteration immediately observes `now > deadline`, resulting in zero observable difference in behavior or return value.
+- `crates/jmap-client/src/eventsource.rs:466:9: replace <impl Write for Conn>::flush -> io::Result<()> with Ok(())`: `Conn` implements `std::io::Write` to permit calling `conn.write_all(...)` during HTTP request transmission. `eventsource.rs` never invokes `conn.flush()`. Furthermore, for `Conn::Plain(stream)`, `std::net::TcpStream::flush` in Rust's standard library is an unconditional no-op returning `Ok(())`. Replacing `conn.flush()` with `Ok(())` produces identical behavior.
+- 68 of 68 viable mutants caught by test suites, 16 unviable (absence of `Default` implementations on `EventSourceSubscription`, `EventSourceItem`, and `UrlParts`; let-chain syntax errors with `||`; and invalid type arithmetic on `Instant` and `Duration`), 2 genuinely equivalent.
+
+## `src/mail.rs`
+
+- Zero missed mutants (60 of 60 viable mutants caught by test suites, 2 timeouts due to infinite loop on zero `maxObjectsInGet` filter boundary mutations, 17 unviable due to absence of `Default` implementations on `EmailSubmissionSetRequest`, `GetResponse`, `SetResponse`, `QueryResponse`, `GetRequest`, `EmailParseResponse`, `UploadResponse`, and Rust 2024 let-chain syntax errors with `||`).

@@ -31,11 +31,13 @@ use jmap_ical::{
     event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
     unstateable_until,
 };
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
+use jmap_proto::calendars::{
+    CalendarEvent, CalendarEventQueryFilter, RecurrenceRule, calendar_event_set_error,
+};
 use jmap_proto::{Id, State};
 use serde_json::Value;
 
-pub use error::{SyncError, Unsendable};
+pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
 
 /// One event, as the meta backend wants it: an identifier, a change token and
@@ -63,11 +65,77 @@ pub struct Changes {
     pub removed: Vec<String>,
 }
 
+/// Whether one change may tell the meeting's guests about itself.
+///
+/// The per-change half of the scheduling rule in `docs/MEETING-SCHEDULING.md`:
+/// [`Itip::Suppress`] is EDS's `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`,
+/// set when the user chose not to send an update. It only matters while the
+/// account's switch ([`CalSync::with_server_scheduling`]) is on; with it off
+/// the server is never asked, whatever the change says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Itip {
+    /// Let the server send what the change calls for.
+    #[default]
+    Send,
+    /// Ask the server to send nothing for this change.
+    Suppress,
+}
+
+/// `error` from a create, edit or delete, as the [`Unscheduled`] refusal it is
+/// when the call asked the server to schedule; any other error as it came.
+///
+/// `event` is the event as sent, where there is one, to name the guests the
+/// server could not reach.
+fn refused(error: jmap_client::Error, schedule: bool, event: Option<&CalendarEvent>) -> SyncError {
+    if !schedule {
+        return error.into();
+    }
+    match &error {
+        jmap_client::Error::Set(set)
+            if set.error_type == calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS =>
+        {
+            SyncError::Unscheduled(Unscheduled::Unreachable {
+                addresses: event.map(unreachable_addresses).unwrap_or_default(),
+            })
+        }
+        jmap_client::Error::Method(method)
+            if method.error_type == jmap_proto::error::method::INVALID_ARGUMENTS =>
+        {
+            SyncError::Unscheduled(Unscheduled::NotImplemented)
+        }
+        _ => error.into(),
+    }
+}
+
+/// The calendar addresses `event` gives that are not `mailto:`, sorted and
+/// without repeats: the guests a server that delivers only by iMIP cannot
+/// reach. Only the event's own participants; one an override adds for a
+/// single occurrence is not named.
+fn unreachable_addresses(event: &CalendarEvent) -> Vec<String> {
+    let participants = event
+        .participants
+        .iter()
+        .flatten()
+        .filter_map(|(_, participant)| participant.get("calendarAddress").and_then(Value::as_str));
+    participants
+        .chain(event.organizer_calendar_address.as_deref())
+        .filter(|address| {
+            !address
+                .get(..7)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mailto:"))
+        })
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Synchronises one JMAP calendar.
 pub struct CalSync {
     client: Client,
     account_id: Id,
     calendar_id: Id,
+    server_schedules: bool,
 }
 
 impl CalSync {
@@ -76,7 +144,37 @@ impl CalSync {
             client,
             account_id,
             calendar_id,
+            server_schedules: false,
         }
+    }
+
+    /// The account's "server handles meeting invitations" switch.
+    ///
+    /// On, every create, edit and delete carries `sendSchedulingMessages`
+    /// (draft-ietf-jmap-calendars §5.9.2) unless the change says
+    /// [`Itip::Suppress`], and the server mails the guests, or the organizer
+    /// when this account only attends. The draft has no way to ask a server
+    /// whether it will, so this is the user's to say (see
+    /// `docs/MEETING-SCHEDULING.md`). Off, the default, nothing is ever
+    /// asked: Evolution sends the iTIP itself, and asking the server as well
+    /// would mail every guest twice.
+    ///
+    /// The flag goes out whether or not the event has participants. An event
+    /// without any is not a scheduled one, so the server has nobody to send
+    /// to, and a delete does not have to load the event first to find out.
+    pub fn with_server_scheduling(mut self, on: bool) -> Self {
+        self.server_schedules = on;
+        self
+    }
+
+    /// Whether the server is asked to send meeting invitations.
+    pub fn server_schedules(&self) -> bool {
+        self.server_schedules
+    }
+
+    /// Whether this change goes out with `sendSchedulingMessages`.
+    fn schedules(&self, itip: Itip) -> bool {
+        self.server_schedules && itip == Itip::Send
     }
 
     pub fn client(&self) -> &Client {
@@ -139,6 +237,22 @@ impl CalSync {
         icalendar: &str,
         existing_uid: Option<&str>,
     ) -> Result<ComponentInfo, SyncError> {
+        self.save_component_with(icalendar, existing_uid, Itip::Send)
+    }
+
+    /// [`CalSync::save_component`], saying whether the guests may be told.
+    ///
+    /// A server that cannot reach a guest refuses the whole change
+    /// (`noSupportedScheduleMethods`, §5.9.2) and stores nothing, and that
+    /// refusal is this save's error: Evolution has been told the server sends,
+    /// so quietly saving without scheduling would leave the guests uninvited.
+    pub fn save_component_with(
+        &self,
+        icalendar: &str,
+        existing_uid: Option<&str>,
+        itip: Itip,
+    ) -> Result<ComponentInfo, SyncError> {
+        let schedule = self.schedules(itip);
         let mut event = ical_to_event(icalendar)?;
         let Some(uid) = existing_uid else {
             let local = event.id.take();
@@ -209,19 +323,23 @@ impl CalSync {
             }
             let account_id = self.account_id().to_string();
             let calendar_id = self.calendar_id().to_string();
-            tracing::debug!(account_id, calendar_id, "creating calendar event");
-            let stored = match self.client.event_create(&self.account_id, &event) {
-                Ok(stored) => stored,
-                Err(error) => {
-                    tracing::warn!(
-                        account_id,
-                        calendar_id,
-                        %error,
-                        "calendar event create failed"
-                    );
-                    return Err(error.into());
-                }
-            };
+            tracing::debug!(account_id, calendar_id, schedule, "creating calendar event");
+            let stored =
+                match self
+                    .client
+                    .event_create_with_scheduling(&self.account_id, &event, schedule)
+                {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        tracing::warn!(
+                            account_id,
+                            calendar_id,
+                            %error,
+                            "calendar event create failed"
+                        );
+                        return Err(refused(error, schedule, Some(&event)));
+                    }
+                };
             // RFC 8620 §5.3 only requires the server to report properties
             // it set itself, so `stored` may carry nothing but `id` (a real
             // deployment does exactly this — see `tests/terse_create.rs`).
@@ -246,11 +364,19 @@ impl CalSync {
         }
         let account_id = self.account_id().to_string();
         let calendar_id = self.calendar_id().to_string();
-        tracing::debug!(account_id, calendar_id, uid, "updating calendar event");
-        if let Err(error) =
-            self.client
-                .event_update(&self.account_id, &Id::from(uid), Value::Object(patch))
-        {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            uid,
+            schedule,
+            "updating calendar event"
+        );
+        if let Err(error) = self.client.event_update_with_scheduling(
+            &self.account_id,
+            &Id::from(uid),
+            Value::Object(patch),
+            schedule,
+        ) {
             tracing::warn!(
                 account_id,
                 calendar_id,
@@ -258,17 +384,32 @@ impl CalSync {
                 %error,
                 "calendar event update failed"
             );
-            return Err(error.into());
+            return Err(refused(error, schedule, Some(&event)));
         }
         self.load_component(uid)
     }
 
     /// Destroy an event — `remove_component_sync`.
     pub fn remove_component(&self, uid: &str) -> Result<(), SyncError> {
+        self.remove_component_with(uid, Itip::Send)
+    }
+
+    /// [`CalSync::remove_component`], saying whether the guests may be told.
+    pub fn remove_component_with(&self, uid: &str, itip: Itip) -> Result<(), SyncError> {
+        let schedule = self.schedules(itip);
         let account_id = self.account_id().to_string();
         let calendar_id = self.calendar_id().to_string();
-        tracing::debug!(account_id, calendar_id, uid, "removing calendar event");
-        if let Err(error) = self.client.event_destroy(&self.account_id, &Id::from(uid)) {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            uid,
+            schedule,
+            "removing calendar event"
+        );
+        if let Err(error) =
+            self.client
+                .event_destroy_with_scheduling(&self.account_id, &Id::from(uid), schedule)
+        {
             tracing::warn!(
                 account_id,
                 calendar_id,
@@ -276,7 +417,7 @@ impl CalSync {
                 %error,
                 "calendar event destroy failed"
             );
-            return Err(error.into());
+            return Err(refused(error, schedule, None));
         }
         Ok(())
     }

@@ -30,6 +30,54 @@ pub enum SyncError {
     /// not describe or no event at all. Refusing is the one of those the user
     /// finds out about.
     Unsendable(Unsendable),
+    /// The server was asked to send the change's scheduling messages and
+    /// refused, so the change was not applied.
+    ///
+    /// Its own case rather than the server's error left in
+    /// [`SyncError::Client`] because Evolution has been told the server mails
+    /// the guests: the user has to learn that nobody was told, and what to
+    /// change, in a sentence `jmap_backend_cal::ops` translates.
+    Unscheduled(Unscheduled),
+}
+
+/// Why the server would not send a change's scheduling messages
+/// (`docs/MEETING-SCHEDULING.md`, rule 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unscheduled {
+    /// `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section 5.9.2):
+    /// some guest has no calendar address the server can send to.
+    ///
+    /// The server does not say which, so `addresses` are the ones the event
+    /// gives that are not `mailto:`, the one transport (iMIP) every server we
+    /// know delivers by. Empty when the event was not at hand (a delete) or
+    /// every address is a `mailto:` the server still would not take.
+    Unreachable {
+        /// The event's non-`mailto:` calendar addresses, sorted.
+        addresses: Vec<String>,
+    },
+    /// `invalidArguments` on a call that asked the server to schedule: by
+    /// RFC 8620 section 3.9, a server that does not implement
+    /// `sendSchedulingMessages`. Only the account's switch can fix this.
+    NotImplemented,
+}
+
+impl std::fmt::Display for Unscheduled {
+    /// The developer's account, in English; see [`Unsendable`]'s for why.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable { addresses } if addresses.is_empty() => {
+                f.write_str("the server cannot send scheduling messages to every participant")
+            }
+            Self::Unreachable { addresses } => write!(
+                f,
+                "the server cannot send scheduling messages to {}",
+                addresses.join(", ")
+            ),
+            Self::NotImplemented => {
+                f.write_str("the server does not implement sendSchedulingMessages")
+            }
+        }
+    }
 }
 
 /// What a component said that could not be stated as JSCalendar.
@@ -129,6 +177,7 @@ impl std::fmt::Display for SyncError {
             Self::ICal(error) => write!(f, "{error}"),
             Self::NotFound(uid) => write!(f, "no calendar event with identifier {uid}"),
             Self::Unsendable(reason) => write!(f, "{reason}"),
+            Self::Unscheduled(reason) => write!(f, "{reason}"),
         }
     }
 }
@@ -138,7 +187,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::ICal(error) => Some(error),
-            Self::NotFound(_) | Self::Unsendable(_) => None,
+            Self::NotFound(_) | Self::Unsendable(_) | Self::Unscheduled(_) => None,
         }
     }
 }

@@ -1171,4 +1171,102 @@ mod tests {
             .expect("the pushed StateChange arrives over TLS");
         assert_eq!(received, changed("a1", "Mailbox", "1"));
     }
+
+    #[test]
+    fn sleep_cancellable_waits_for_duration_and_wakes_on_cancel() {
+        let cancel = CancelFlag::new();
+        let start = Instant::now();
+        sleep_cancellable(Duration::from_millis(60), &cancel);
+        assert!(start.elapsed() >= Duration::from_millis(50));
+
+        let cancel2 = CancelFlag::new();
+        cancel2.cancel();
+        let start2 = Instant::now();
+        sleep_cancellable(Duration::from_secs(5), &cancel2);
+        assert!(start2.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn read_response_head_validates_status_and_chunked_encoding() {
+        let mut ok_head = Cursor::new(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+        assert!(read_response_head(&mut ok_head).is_ok());
+
+        let mut err_status = Cursor::new(
+            b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n\r\n",
+        );
+        let err = read_response_head(&mut err_status).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("eventsource request failed: HTTP/1.1 500")
+        );
+
+        let mut not_chunked = Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 42\r\n\r\n");
+        let err = read_response_head(&mut not_chunked).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("eventsource response is not chunked")
+        );
+
+        let mut gzip_chunked = Cursor::new(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n");
+        let err = read_response_head(&mut gzip_chunked).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("eventsource response is not chunked")
+        );
+    }
+
+    #[test]
+    fn stream_events_handles_id_clearing_and_non_state_events() {
+        let raw = b"id\nevent: other\ndata: {}\n\nid: 99\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(Some("old-id".to_owned())));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot).expect("no error");
+        let event = receiver.try_recv().expect("state event");
+        assert_eq!(event, EventSourceItem::State(changed("a1", "Mailbox", "1")));
+        assert_eq!(*last_id_slot.lock().unwrap(), Some("99".to_owned()));
+
+        let raw_reset = b"id\nevent: ping\ndata: {}\n\n";
+        let mut reader_reset = BufReader::new(Cursor::new(&raw_reset[..]));
+        stream_events(
+            &mut reader_reset,
+            &CancelFlag::new(),
+            &sender,
+            &last_id_slot,
+        )
+        .expect("no error");
+        assert_eq!(*last_id_slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn chunked_body_handles_extensions_and_trailers() {
+        let raw = b"5;ext=foo\r\nhello\r\n0\r\nTrailer-Header: val\r\n\r\nextra";
+        let mut inner = BufReader::new(Cursor::new(&raw[..]));
+        let mut body = ChunkedBody::new(&mut inner);
+        let mut out = String::new();
+        body.read_to_string(&mut out).expect("decode");
+        assert_eq!(out, "hello");
+        assert!(body.finished);
+
+        // Calling read on finished ChunkedBody with non-empty buffer must return 0
+        // without consuming from inner reader (kills || replaced with &&).
+        let mut extra_buf = [0u8; 10];
+        assert_eq!(body.read(&mut extra_buf).unwrap(), 0);
+
+        // All trailer lines including blank line were consumed (kills == with != on trailer loop).
+        let mut remaining = String::new();
+        inner
+            .read_to_string(&mut remaining)
+            .expect("read remaining");
+        assert_eq!(remaining, "extra");
+
+        let empty = b"";
+        let mut empty_body = ChunkedBody::new(BufReader::new(Cursor::new(empty)));
+        let mut buf = [0u8; 10];
+        assert_eq!(empty_body.read(&mut buf).unwrap(), 0);
+
+        let malformed = b"xyz\r\nhello\r\n";
+        let mut malformed_body = ChunkedBody::new(BufReader::new(Cursor::new(malformed)));
+        assert!(malformed_body.read(&mut buf).is_err());
+    }
 }

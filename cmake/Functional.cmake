@@ -152,6 +152,28 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-attendees-remote-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-attendees-remote-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
+	# ROADMAP item 112, step (c): the capabilities that tell Evolution the
+	# server mails a meeting's guests, and whether a create or remove asks it
+	# to. See tests/functional/cal-scheduling-client.c.
+	add_executable(functional-cal-scheduling-client
+		tests/functional/cal-scheduling-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-scheduling-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-scheduling-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
+	# The same calls against a real server with two accounts, split into a
+	# create run and a settle run so the guest's side can be read in between.
+	# See tests/functional/cal-scheduling-live-client.c.
+	add_executable(functional-cal-scheduling-live-client
+		tests/functional/cal-scheduling-live-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-scheduling-live-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-scheduling-live-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-scheduling-live-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-scheduling-live-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# The config-lookup client is the odd one out in a different way: it does
 	# not open a `.source` keyfile at all, because a lookup happens *before*
 	# an account exists. It links evolution-shell-3.0 rather than a libe*
@@ -540,6 +562,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_ATTENDEES_REMOTE_CLIENT=$<TARGET_FILE:functional-cal-attendees-remote-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
+	# ROADMAP item 112, step (c): functional-cal-scheduling-live-client
+	# against a real Stalwart with two accounts. `#[ignore]`d in the Rust
+	# source for the same reason functional-cal-attendees-live-stalwart is, so
+	# this registration only ever reports "ignored" in the ordinary functional
+	# run.
+	add_test(
+		NAME functional-cal-scheduling-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar-scheduling
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-scheduling-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_SCHEDULING_LIVE_CLIENT=$<TARGET_FILE:functional-cal-scheduling-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
 	# The real-EDS leg of the cal-sync scale checkpoint, the
 	# calendar twin of functional-book-scale-live-stalwart above. Seeds a
 	# real-sized calendar directly over JMAP before EDS ever opens it, then
@@ -627,6 +667,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_COLOR_CLIENT=$<TARGET_FILE:functional-cal-color-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# ROADMAP item 112, step (c), through a real, running backend instance:
+	# the scheduling capabilities a libecal consumer sees, with the account
+	# switch at its default and turned off, and which saves and removals ask
+	# the mock to send iTIP.
+	add_test(
+		NAME functional-cal-scheduling
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-scheduling
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-scheduling PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_SCHEDULING_CLIENT=$<TARGET_FILE:functional-cal-scheduling-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# Track E Path A's `get_free_busy_sync` through a real, running backend

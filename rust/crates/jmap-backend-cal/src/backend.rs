@@ -5,35 +5,37 @@
 //! Bridges EDS calendar factory requests to [`ops`] and [`connect`] operations.
 
 use std::ffi::CStr;
+use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, ECalBackendSync, ECalMetaBackend,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, ECalBackend, ECalBackendSync, ECalMetaBackend,
     ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
     ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
-    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_cal_meta_backend_schedule_refresh,
-    e_client_error_create, time_t,
+    e_cal_backend_notify_property_changed, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
+    e_cal_meta_backend_schedule_refresh, e_client_error_create, time_t,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint16};
+use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, g_free, gboolean, gchar, guint16};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
-use jmap_backend_core::marshal::dup_string;
+use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value};
-use jmap_cal_sync::CalSync;
+use jmap_cal_sync::{CalSync, Itip};
 use jmap_client::Credentials;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
 use crate::marshal;
 use crate::ops::{self, Outcome};
+use crate::scheduling::{self, CAPABILITIES_PROPERTY};
 
 /// The JMAP calendar backend.
 #[repr(C)]
@@ -149,7 +151,7 @@ impl JmapCalBackend {
     }
 
     /// Accesses the last known color slot if initialized.
-    fn last_known_color(&self) -> Option<&RwLock<Option<String>>> {
+    pub fn last_known_color(&self) -> Option<&RwLock<Option<String>>> {
         self.last_known_color.get()
     }
 }
@@ -179,6 +181,10 @@ unsafe impl ObjectSubclass for JmapCalBackend {
         vfuncs.save_component_sync = Some(save_component_sync);
         vfuncs.remove_component_sync = Some(remove_component_sync);
         vfuncs.source_changed = Some(source_changed);
+
+        // Installed on ECalBackendClass, over the meta backend's, to add the
+        // scheduling capabilities to its answer.
+        vfuncs.parent_class.parent_class.impl_get_backend_property = Some(get_backend_property);
 
         // Installed on ECalBackendSyncClass where e_cal_backend_sync_get_free_busy looks it up.
         vfuncs.parent_class.get_free_busy_sync = Some(get_free_busy_sync);
@@ -260,6 +266,10 @@ unsafe extern "C" fn connect_sync(
                 return GFALSE;
             };
 
+            // The account switch is read afresh for every change, by
+            // `itip_for`, so the sync layer is always allowed to ask and
+            // each change says whether it does.
+            let sync = sync.with_server_scheduling(true);
             tracing::debug!(
                 account_id = sync.account_id().as_str(),
                 calendar_id = sync.calendar_id().as_str(),
@@ -401,8 +411,8 @@ unsafe extern "C" fn save_component_sync(
     _conflict_resolution: EConflictResolution,
     instances: *const GSList,
     _extra: *const gchar,
-    // Operation flags (e.g. iTIP scheduling requests).
-    _opflags: ECalOperationFlags,
+    // Operation flags: whether the user chose not to send iTIP.
+    opflags: ECalOperationFlags,
     out_new_uid: *mut *mut gchar,
     out_new_extra: *mut *mut gchar,
     cancellable: *mut GCancellable,
@@ -423,6 +433,7 @@ unsafe extern "C" fn save_component_sync(
                     overwrite_existing,
                     instances,
                     meta_backend.cast(),
+                    itip_for(meta_backend, opflags),
                     out_new_uid,
                     out_new_extra,
                     error,
@@ -439,7 +450,7 @@ unsafe extern "C" fn remove_component_sync(
     uid: *const gchar,
     _extra: *const gchar,
     _object: *const gchar,
-    _opflags: ECalOperationFlags,
+    opflags: ECalOperationFlags,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
@@ -450,7 +461,7 @@ unsafe extern "C" fn remove_component_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::remove_component(sync, uid, error),
+            |sync, error| ops::remove_component(sync, uid, itip_for(meta_backend, opflags), error),
         )
     }
 }
@@ -465,6 +476,8 @@ unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
     // SAFETY: EDS's own contract for the vfunc: a valid instance of ours.
     unsafe {
         guard("source_changed", (), || {
+            notify_capabilities(meta_backend.cast());
+
             let Some(backend) = instance(meta_backend) else {
                 return;
             };
@@ -540,6 +553,72 @@ unsafe extern "C" fn get_free_busy_sync(
             }
         })
     }
+}
+
+/// Answers the meta backend's capabilities plus, while the account switch is
+/// on, the three that tell Evolution the server sends meeting invitations
+/// (`docs/MEETING-SCHEDULING.md` rule 3). Every other property is the
+/// meta backend's own answer.
+unsafe extern "C" fn get_backend_property(
+    backend: *mut ECalBackend,
+    prop_name: *const gchar,
+) -> *mut gchar {
+    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours and
+    // a NUL-terminated property name. The parent's answer is newly allocated
+    // and ours to free or pass on.
+    unsafe {
+        guard("get_backend_property", ptr::null_mut(), || {
+            let inherited = match parent_class()
+                .and_then(|class| class.parent_class.parent_class.impl_get_backend_property)
+            {
+                Some(chain_up) => chain_up(backend, prop_name),
+                None => ptr::null_mut(),
+            };
+            if prop_name.is_null() || CStr::from_ptr(prop_name) != CAPABILITIES_PROPERTY {
+                return inherited;
+            }
+
+            let on = scheduling::server_handles_invitations(backend_source(backend.cast()));
+            let caps = scheduling::capabilities(read_string(inherited).as_deref(), on);
+            g_free(inherited.cast());
+            tracing::debug!(server_schedules = on, "answered calendar capabilities");
+            dup_string(&caps)
+        })
+    }
+}
+
+/// Tells clients the capabilities may have changed, since the account switch
+/// that adds three of them lives in the source.
+///
+/// # Safety
+///
+/// As [`backend_source`]: a detached test instance is skipped.
+unsafe fn notify_capabilities(backend: *mut ECalBackend) {
+    // SAFETY: forwarded from this function's own contract.
+    if unsafe { backend_source(backend.cast()) }.is_null() {
+        return;
+    }
+    // SAFETY: a constructed backend, checked just above, and a property
+    // name that is ours; both strings are copied by the call.
+    unsafe {
+        let value = get_backend_property(backend, CAPABILITIES_PROPERTY.as_ptr());
+        e_cal_backend_notify_property_changed(backend, CAPABILITIES_PROPERTY.as_ptr(), value);
+        g_free(value.cast());
+    }
+}
+
+/// Whether this change may ask the server to tell the guests: the account
+/// switch, read now, and the change's own `opflags`.
+///
+/// # Safety
+///
+/// As [`backend_source`].
+unsafe fn itip_for(meta_backend: *mut ECalMetaBackend, opflags: ECalOperationFlags) -> Itip {
+    // SAFETY: forwarded from this function's own contract.
+    let source = unsafe { backend_source(meta_backend.cast()) };
+    // SAFETY: NULL or the backend's own source, alive for the call.
+    let on = unsafe { scheduling::server_handles_invitations(source) };
+    scheduling::itip(on, opflags)
 }
 
 // ---------------------------------------------------------------------------

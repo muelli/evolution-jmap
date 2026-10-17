@@ -5,8 +5,8 @@
 //! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ETimezoneCache, ICalComponent, e_cal_client_error_create,
-    time_t,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_NOT_SUPPORTED, ETimezoneCache,
+    ICalComponent, e_cal_client_error_create, e_client_error_create, time_t,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
@@ -14,7 +14,7 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{CalSync, SyncError, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -251,15 +251,20 @@ pub unsafe fn load_component(
 
 /// Creates or updates a component for `save_component_sync`.
 ///
+/// `itip` says whether the server may tell the guests about this change
+/// (see [`crate::scheduling::itip`]).
+///
 /// # Safety
 ///
 /// As [`list_existing`], `instances` must be a valid GSList of `ECalComponent *`,
 /// and `zones` NULL or a valid `ETimezoneCache`.
+#[allow(clippy::too_many_arguments)] // the vfunc's signature, plus `itip`
 pub unsafe fn save_component(
     sync: &CalSync,
     overwrite_existing: gboolean,
     instances: *const GSList,
     zones: *mut ETimezoneCache,
+    itip: Itip,
     out_new_uid: *mut *mut gchar,
     _out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
@@ -310,10 +315,11 @@ pub unsafe fn save_component(
         calendar_id,
         overwrite_existing = is_overwrite,
         existing_uid = existing_uid.as_deref(),
+        ?itip,
         "saving component"
     );
 
-    let info = match sync.save_component(&saved.icalendar, existing_uid.as_deref()) {
+    let info = match sync.save_component_with(&saved.icalendar, existing_uid.as_deref(), itip) {
         Ok(info) => info,
         // SAFETY: as above.
         Err(failure) => {
@@ -342,7 +348,8 @@ pub unsafe fn save_component(
     GTRUE
 }
 
-/// Destroys a component for `remove_component_sync`.
+/// Destroys a component for `remove_component_sync`, with `itip` as
+/// [`save_component`]'s.
 ///
 /// # Safety
 ///
@@ -350,6 +357,7 @@ pub unsafe fn save_component(
 pub unsafe fn remove_component(
     sync: &CalSync,
     uid: *const gchar,
+    itip: Itip,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -369,10 +377,11 @@ pub unsafe fn remove_component(
         account_id,
         calendar_id,
         uid = uid.as_str(),
+        ?itip,
         "removing component"
     );
 
-    match sync.remove_component(&uid) {
+    match sync.remove_component_with(&uid, itip) {
         Ok(()) => {
             tracing::debug!(
                 account_id,
@@ -409,6 +418,35 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         }
         SyncError::ICal(_) => invalid_arg_gerror(&failure.to_string()),
         SyncError::Unsendable(reason) => invalid_arg_gerror(&refusal(reason)),
+        SyncError::Unscheduled(reason @ Unscheduled::Unreachable { .. }) => {
+            invalid_arg_gerror(&unscheduled(reason))
+        }
+        SyncError::Unscheduled(reason @ Unscheduled::NotImplemented) => {
+            let message = cstring_lossy(&unscheduled(reason));
+            // SAFETY: code is valid enum value and message is copied.
+            unsafe { e_client_error_create(E_CLIENT_ERROR_NOT_SUPPORTED, message.as_ptr()) }
+        }
+    }
+}
+
+/// Translates the user-facing message for a change the server would not
+/// schedule. Evolution was told the server mails the guests, so each says the
+/// change was not saved and what to do about it.
+fn unscheduled(reason: &Unscheduled) -> String {
+    match reason {
+        Unscheduled::Unreachable { addresses } if addresses.is_empty() => translate(
+            // TRANSLATORS: shown when the server refused to send a meeting's invitations.
+            c"The server cannot send meeting invitations to every guest, so the change was not saved. Check that each guest has a valid email address.",
+        ),
+        Unscheduled::Unreachable { addresses } => translate_with(
+            // TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
+            c"The server cannot send meeting invitations to every guest, so the change was not saved. It has no way to reach: %1$s.",
+            &[addresses.join(", ").as_str()],
+        ),
+        Unscheduled::NotImplemented => translate(
+            // TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
+            c"This server does not send meeting invitations itself, so the change was not saved. Turn off “Server handles meeting invitations” for this calendar, and Evolution will send them instead.",
+        ),
     }
 }
 
