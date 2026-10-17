@@ -14389,6 +14389,62 @@ fn apple_property_groups_custom_labels_and_extended_relations() {
 }
 
 #[test]
+fn related_group_labels_map_partner_custom_and_empty_labels() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Related Group Labels\r\n",
+        "item1.RELATED:Pat Partner\r\n",
+        "item1.X-ABLabel:_$!<Partner>!$_\r\n",
+        "item2.RELATED:Riley Mentor\r\n",
+        "item2.X-ABLabel:Mentor\r\n",
+        "item3.RELATED:Casey Fallback\r\n",
+        "item3.X-ABLabel:_$!<>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse grouped related labels");
+    let related = card.related_to.as_ref().expect("related_to");
+
+    assert!(states_spouse("Pat Partner", &related["Pat Partner"]));
+
+    let mentor = related["Riley Mentor"]
+        .relation
+        .as_ref()
+        .expect("mentor relation");
+    assert_eq!(mentor.get("mentor"), Some(&Value::Bool(true)));
+
+    let fallback = related["Casey Fallback"]
+        .relation
+        .as_ref()
+        .expect("fallback relation");
+    assert_eq!(fallback.get("contact"), Some(&Value::Bool(true)));
+    assert_eq!(fallback.get(""), None);
+}
+
+#[test]
+fn x_abrelatednames_empty_group_label_maps_to_contact() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Related Empty Label\r\n",
+        "item1.X-ABRELATEDNAMES:Chris Fallback\r\n",
+        "item1.X-ABLabel:_$!<>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse grouped x-abrelatednames");
+    let related = card.related_to.as_ref().expect("related_to");
+    let fallback = related["Chris Fallback"]
+        .relation
+        .as_ref()
+        .expect("fallback relation");
+
+    assert_eq!(fallback.get("contact"), Some(&Value::Bool(true)));
+    assert_eq!(fallback.get(""), None);
+}
+
+#[test]
 fn apple_property_groups_variations_and_boundary_cases() {
     // 1. Case insensitivity in X-ABLabel and property names
     let vcard1 = concat!(
