@@ -15,8 +15,8 @@ Debian or Ubuntu (`.deb` release asset):
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify evolution-jmap_*_amd64.deb --repo muelli/evolution-jmap
-sudo apt install ./evolution-jmap_*_amd64.deb
+gh attestation verify evolution-jmap_*_$(dpkg --print-architecture).deb --repo muelli/evolution-jmap
+sudo apt install ./evolution-jmap_*_$(dpkg --print-architecture).deb
 evolution --force-shutdown
 ```
 
