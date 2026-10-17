@@ -245,6 +245,37 @@ fn a_set_splits_back_into_the_flags_and_the_labels_it_was_built_from() {
     assert_eq!(split_tags, vec!["home/todo".to_owned(), "Work".to_owned()]);
 }
 
+/// Every bit of the word that is a keyword, not just the two a row usually
+/// carries: a bit that came back as a label instead would show a replied-to or
+/// spam message in Evolution as an ordinary one tagged `$answered` or `$junk`,
+/// and the next write would send the bit as cleared.
+#[test]
+fn every_keyword_flag_splits_back_into_its_bit_and_never_into_a_label() {
+    let flags = MessageFlags {
+        seen: true,
+        answered: true,
+        flagged: true,
+        draft: true,
+        forwarded: true,
+        junk: true,
+        not_junk: true,
+        attachments: false,
+    };
+
+    let (split_flags, split_tags) = Keywords::new(&flags, &[]).split();
+
+    assert_eq!(split_flags, flags);
+    assert!(split_tags.is_empty(), "labels: {split_tags:?}");
+}
+
+#[test]
+fn a_set_holding_a_keyword_is_not_empty() {
+    let keywords = Keywords::new(&read_and_flagged(), &[]);
+
+    assert!(!keywords.is_empty());
+    assert!(Keywords::default().is_empty());
+}
+
 #[test]
 fn splitting_a_set_reads_a_keyword_the_server_shouted_as_the_flag_it_is() {
     // The folded name is what the match is against, or a server that spells it
