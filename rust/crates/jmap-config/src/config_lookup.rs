@@ -813,6 +813,11 @@ mod tests {
     }
 
     #[test]
+    fn a_bracketed_ipv6_literal_with_trailing_garbage_has_no_target_to_reach() {
+        assert!(parse_target("https://[::1]garbage").is_none());
+    }
+
+    #[test]
     fn a_non_numeric_port_suffix_has_no_target_to_reach() {
         assert!(parse_target("example.com:not-a-port").is_none());
     }
