@@ -310,7 +310,7 @@ impl Client {
 
     /// The note explaining a `downloadUrl` rewrite, if the rebase opt-in
     /// actually changed its origin; see [`Error::CrossOriginRedirect`].
-    pub(crate) fn rebase_note(&self) -> Option<&str> {
+    pub fn rebase_note(&self) -> Option<&str> {
         self.rebase_note.as_deref()
     }
 
@@ -456,7 +456,7 @@ impl Client {
     /// [`Session::max_calls_in_request`] for why nothing is invented here.
     ///
     /// [`Session::max_calls_in_request`]: jmap_proto::session::Session::max_calls_in_request
-    pub(crate) fn takes_calls_in_one_request(&self, calls: u64) -> bool {
+    pub fn takes_calls_in_one_request(&self, calls: u64) -> bool {
         self.session()
             .max_calls_in_request()
             .is_none_or(|limit| calls <= limit)
