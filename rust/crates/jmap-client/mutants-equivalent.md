@@ -46,3 +46,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (22 of 22 viable mutants caught by test suites, 22 unviable due to absence of `Default` and parameterless constructors on `SetResponse`, `GetResponse`, `CalendarEventParseResponse`, and `QueryResponse`).
 
+## `src/error.rs`
+
+- Zero missed mutants (12 of 12 viable mutants caught by test suites, 2 unviable due to absence of Default on dyn std::error::Error and Error).
+
+## `src/url.rs`
+
+- `crates/jmap-client/src/url.rs:98:51: replace + with - in origin_of` and `crates/jmap-client/src/url.rs:98:51: replace + with * in origin_of`: in `origin_of`, when `host_port.starts_with('[')`, `host` is extracted as the bracketed IPv6 literal `&host_port[..=end]`. Bracketed IPv6 hosts cannot end with a trailing dot per RFC 3986, so `normalized_host == host` is guaranteed to be true. Under `if normalized_host == host`, `origin_of` returns `Cow::Borrowed(&url[..authority_end])` directly without referencing `port`. Replacing `+` with `-` or `*` in the IPv6 port slice calculation produces no observable difference.
+- 42 of 42 viable mutants caught by test suites, 2 genuinely equivalent.
+
