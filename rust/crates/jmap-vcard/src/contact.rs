@@ -2594,6 +2594,8 @@ mod tests {
         MAX_LINE_OCTETS, VCardEntry, VCardProperty, entry_key, fold_overlong_lines,
         normalize_vcard_dates, service_of, split_vcard_property_line,
     };
+    use calcard::common::CalendarScale;
+    use calcard::vcard::{VCardLevel, VCardParameterValue, VCardPhonetic};
     use std::collections::BTreeMap;
 
     fn unfold_lines(vcard: &str) -> String {
@@ -2775,5 +2777,40 @@ mod tests {
         let taken = BTreeMap::from([("e1".to_owned(), ())]);
 
         assert_eq!(entry_key(&entry, "e", &taken), "e2");
+    }
+
+    #[test]
+    fn param_text_keeps_typed_parameter_text_for_round_trip_checks() {
+        // RFC 6350 section 3.3 carries parameters as text in content lines.
+        // RFC 6350 sections 4.3.5 and 4.5 define TIMESTAMP and INTEGER text forms.
+        // RFC 6350 section 5.8 defines CALSCALE as an IANA token parameter.
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Integer(42)),
+            "42".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Timestamp(1_725_210_000)),
+            "1725210000".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Bool(true)),
+            "TRUE".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Bool(false)),
+            "FALSE".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Calscale(CalendarScale::Gregorian)),
+            "GREGORIAN".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Level(VCardLevel::Expert)),
+            "EXPERT".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Phonetic(VCardPhonetic::Script)),
+            "SCRIPT".to_owned()
+        );
     }
 }
