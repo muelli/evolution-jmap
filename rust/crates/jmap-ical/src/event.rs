@@ -16,8 +16,9 @@
 //! written for display and never proposed back as patches.
 //!
 //! Online locations map to `CONFERENCE` lines and external attachments/images map to
-//! `ATTACH`/`IMAGE` lines, tracking original keys via `X-JMAP-KEY`. Participant and
-//! organizer headers are rendered for display while scheduling is handled separately.
+//! `ATTACH`/`IMAGE` lines, tracking original keys via `X-JMAP-KEY`. `ORGANIZER` and
+//! `ATTENDEE` map to jscalendarbis participants both ways; sending the invitations
+//! is not this mapping's business.
 //!
 //! Time zones translate between iCalendar `TZID` (including document-defined
 //! `VTIMEZONE`s) and JSCalendar IANA names. Recurrence `UNTIL` converts between UTC
@@ -929,9 +930,9 @@ pub fn stated_size(link: &Value) -> Option<String> {
 ///
 /// A CAL-ADDRESS is a URI (RFC 5545 §3.3.3), so a value that is not one is left
 /// off rather than written: there is nothing to invent in its place, and a line
-/// libical refuses costs every other field of the event with it. That is only
-/// safe because the guest list is written and never read back: see
-/// `read_vevent`, where `participants` stays `None`.
+/// libical refuses costs every other field of the event with it. The reading
+/// side drops such a line too (see [`read_participants`]), so a guest the
+/// server filed under no URI is one neither side can name.
 pub fn calendar_address(participant: &Value) -> Option<&str> {
     participant
         .get("calendarAddress")
@@ -2011,11 +2012,8 @@ fn vevent_of(
         );
     }
 
-    // Who called the meeting and who is invited to it. Written for the user to
-    // read and never read back: changing the guest list, or what somebody
-    // replied, is scheduling: an iTIP REQUEST or REPLY (RFC 5546) this backend
-    // does not send, so `participants` is absent from [`MAPPED_PROPERTIES`] and
-    // no save can name it. See [`drawn_participants`].
+    // Who called the meeting and who is invited to it, read back by
+    // [`read_participants`]. See [`drawn_participants`].
     for line in drawn_participants(event) {
         vevent = vevent.with(line);
     }
@@ -3254,15 +3252,12 @@ fn read_vevent(
         virtual_locations: read_virtual_locations(vevent),
         keywords: read_keywords(vevent),
         alerts: read_alerts(vevent, components),
-        // Drawn onto the document and never read back off it, like the two
-        // timestamps above and for a heavier reason: who is invited, and what
-        // each of them replied, is scheduling state. Changing it means an iTIP
-        // REQUEST or REPLY going out to those people (RFC 5546), which this
-        // backend does not send, so a save that patched `participants` would
-        // rewrite the server's guest list while nobody was told. Reading nothing
-        // here is what keeps that impossible: the property is not in
-        // `MAPPED_PROPERTIES`, so no save can name it.
-        participants: None,
+        // Read back so that a meeting reaches the server with its guests: one made
+        // on the laptop has to show them on the phone. Sending the invitations is
+        // not this mapping's business: Evolution mails its own iTIP for this
+        // backend unless told the server does it. See [`read_participants`].
+        participants: read_participants(vevent),
+        organizer_calendar_address: read_organizer(vevent),
         // Read back the way `virtualLocations` is, and for the same reason: a
         // Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a `title` that no
         // `ATTACH` or `IMAGE` line has room for, so what the line showed comes
@@ -3280,6 +3275,137 @@ fn read_vevent(
         extra: Default::default(),
         ..CalendarEvent::default()
     }
+}
+
+/// The key a participant read off a component is filed under: numbered from 1 in
+/// the order the component names them, organizer first. No `X_JMAP_KEY` rides on
+/// an `ATTENDEE`: a guest is told apart by address, which an editor that
+/// rewrites the guest list keeps where it might drop a parameter it does not know.
+const INVENTED_PARTICIPANT_KEY: &str = "p";
+
+/// The address on the component's `ORGANIZER`, as jscalendarbis's
+/// `organizerCalendarAddress`, or `None` for a component nobody called or one
+/// whose organizer no CAL-ADDRESS (RFC 5545 §3.3.3) names.
+pub fn read_organizer(vevent: &ICalendarComponent) -> Option<String> {
+    component_entry(vevent, "ORGANIZER")
+        .map(entry_raw_value)
+        .filter(|address| names_a_uri(address))
+}
+
+/// Who called the meeting and who is invited to it, as jscalendarbis
+/// Participants: the inverse of [`drawn_participants`].
+///
+/// One entry per address, so the organizer that Evolution also puts on its own
+/// guest list is one participant holding `owner` beside the roles its `ATTENDEE`
+/// spells, which is the shape the drawing splits into two lines. Addresses are
+/// compared without regard to case, since a `MAILTO:` and a `mailto:` name the
+/// same person.
+///
+/// Each `ROLE` reads back as the set [`PARTICIPANT_ROLES`] would spell it from:
+/// RFC 8984 §4.4.6's `attendee` for everybody on the guest list but a
+/// `NON-PARTICIPANT`, plus the narrower role the line states. A missing `ROLE`
+/// is RFC 5545 §3.2.16's default, `REQ-PARTICIPANT`, and so is one outside the
+/// vocabulary. A `PARTSTAT`, `CUTYPE` or `RSVP` the other format cannot say is
+/// left off, which is the default it would have had anyway.
+///
+/// The address goes in `calendarAddress` and never in `sendTo`, which
+/// jscalendarbis reserves. A line whose value is not a URI is dropped: a guest
+/// filed under something else is one the server can never reach.
+///
+/// `None` rather than an empty map for a component nobody is invited to, for the
+/// reason [`read_locations`] gives.
+pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+    let mut people: Vec<(String, Map<String, Value>)> = Vec::new();
+    fn entry(
+        people: &mut Vec<(String, Map<String, Value>)>,
+        address: String,
+    ) -> &mut Map<String, Value> {
+        let at = match people
+            .iter()
+            .position(|(known, _)| known.eq_ignore_ascii_case(&address))
+        {
+            Some(at) => at,
+            None => {
+                let mut participant = Map::new();
+                participant.insert("@type".to_owned(), json!("Participant"));
+                participant.insert("calendarAddress".to_owned(), json!(address));
+                people.push((address, participant));
+                people.len() - 1
+            }
+        };
+        &mut people[at].1
+    }
+    let named = |line: &ICalendarEntry, participant: &mut Map<String, Value>| {
+        if let Some(name) = entry_param(line, "CN").filter(|name| !name.is_empty()) {
+            participant.entry("name").or_insert(Value::String(name));
+        }
+    };
+
+    if let Some(line) = component_entry(vevent, "ORGANIZER") {
+        let address = entry_raw_value(line);
+        if names_a_uri(&address) {
+            let participant = entry(&mut people, address);
+            named(line, participant);
+            participant.insert("roles".to_owned(), json!({ OWNER_ROLE: true }));
+        }
+    }
+    for line in component_entries(vevent, "ATTENDEE") {
+        let address = entry_raw_value(line);
+        if !names_a_uri(&address) {
+            continue;
+        }
+        let participant = entry(&mut people, address);
+        named(line, participant);
+        let roles = participant
+            .entry("roles")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("roles are only ever written as an object here");
+        let role = entry_param(line, "ROLE").and_then(|role| {
+            PARTICIPANT_ROLES
+                .iter()
+                .find(|(_, ical)| ical.eq_ignore_ascii_case(&role))
+                .map(|(jscalendar, _)| *jscalendar)
+        });
+        match role {
+            Some("informational") => {}
+            _ => {
+                roles.insert("attendee".to_owned(), Value::Bool(true));
+            }
+        }
+        if let Some(role) = role.filter(|role| !matches!(*role, "attendee" | "required")) {
+            roles.insert(role.to_owned(), Value::Bool(true));
+        }
+        let read = |name: &str, table: &[(&'static str, &str)]| {
+            entry_param(line, name).and_then(|value| {
+                table
+                    .iter()
+                    .find(|(_, ical)| ical.eq_ignore_ascii_case(&value))
+                    .map(|(jscalendar, _)| Value::String((*jscalendar).to_owned()))
+            })
+        };
+        if let Some(kind) = read("CUTYPE", &PARTICIPANT_KINDS) {
+            participant.insert("kind".to_owned(), kind);
+        }
+        if let Some(status) = read("PARTSTAT", &PARTICIPATION_STATUSES) {
+            participant.insert("participationStatus".to_owned(), status);
+        }
+        if entry_param(line, "RSVP").is_some_and(|rsvp| rsvp.eq_ignore_ascii_case("TRUE")) {
+            participant.insert("expectReply".to_owned(), Value::Bool(true));
+        }
+    }
+
+    let participants: BTreeMap<String, Value> = people
+        .into_iter()
+        .enumerate()
+        .map(|(n, (_, participant))| {
+            (
+                format!("{INVENTED_PARTICIPANT_KEY}{}", n + 1),
+                Value::Object(participant),
+            )
+        })
+        .collect();
+    (!participants.is_empty()).then_some(participants)
 }
 
 /// The place the component names, as a one-entry `locations` map.

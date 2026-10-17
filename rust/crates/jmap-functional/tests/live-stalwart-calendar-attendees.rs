@@ -1,21 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 108, part (1): live confirmation of item 102's code-reading
-//! answer (1) -- does a meeting Evolution creates locally keep its
-//! attendees after EDS reads it back?
+//! ROADMAP item 112, step (a): a meeting created locally through
+//! `ECalClient` keeps its organizer and attendees, both in EDS's own copy and
+//! on the server.
 //!
-//! `jmap_ical::ical_to_event` hardcodes `participants: None` on a create
-//! (see `event.rs`'s own comment beside `drawn_participants`), and
-//! `jmap-cal-sync::CalSync::save_component` re-reads the event from the
-//! server rather than trusting the component EDS handed it (see that
-//! function's own comment), so by code reading the organizer and attendees
-//! never reach the server and the local copy loses them on the very same
-//! create, no second sync needed. This test drives that path through a
+//! Item 108 part (1) first pinned the opposite: `jmap_ical::ical_to_event`
+//! used to drop `ORGANIZER`/`ATTENDEE` on a create, and since
+//! `jmap-cal-sync::CalSync::save_component` re-reads the event from the server
+//! rather than trusting the component EDS handed it (see that function's own
+//! comment), the local copy lost them on the very same create. Now the guests
+//! go out as jscalendarbis `participants` (`calendarAddress`, never `sendTo`)
+//! beside `organizerCalendarAddress`. This test drives that path through a
 //! real `ECalClient` against real Stalwart (`functional-cal-attendees-
 //! client`, `tests/functional/cal-attendees-client.c`) and also asks the
 //! server directly over JMAP what it actually stored, so the answer is
 //! evidence rather than another reading of the same source.
+//!
+//! Every address is on `example.com` (RFC 2606), so a server that did mail
+//! the guests would reach nobody.
 //!
 //! The mechanism is unchanged from `live-stalwart-calendar.rs`:
 //! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
@@ -86,7 +89,7 @@ fn keyfile(port: u16, user: &str) -> String {
 
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn attendees_do_not_survive_a_local_create_against_the_real_server() {
+fn attendees_survive_a_local_create_against_the_real_server() {
     let Some((origin, user, password)) = live_server_params() else {
         eprintln!(
             "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the real-server attendees leg"
@@ -165,20 +168,25 @@ fn attendees_do_not_survive_a_local_create_against_the_real_server() {
         "EDS added an event with no UID\n{report}"
     );
 
-    // The local-copy half of item 108's question: EDS's own read-back,
-    // right after the create, already shows what `CalSync::save_component`'s
-    // fresh reload left in the cache.
+    // The local-copy half: EDS's own read-back, right after the create, already
+    // shows what `CalSync::save_component`'s fresh reload left in the cache.
     assert_eq!(
         seen.get("read-back-organizer"),
-        Some(&""),
-        "the event EDS handed back kept an organizer -- item 102's code-reading \
-         answer no longer holds\n{report}"
+        Some(&"mailto:organizer@example.com"),
+        "the event EDS handed back lost its organizer\n{report}"
     );
+    let mut attendees: Vec<&str> = seen
+        .get("read-back-attendees")
+        .map(|joined| joined.split(',').collect())
+        .unwrap_or_default();
+    attendees.sort_unstable();
     assert_eq!(
-        seen.get("read-back-attendees"),
-        Some(&""),
-        "the event EDS handed back kept its attendees -- item 102's code-reading \
-         answer no longer holds\n{report}"
+        attendees,
+        [
+            "mailto:attendee1@example.com",
+            "mailto:attendee2@example.com"
+        ],
+        "the event EDS handed back lost its attendees\n{report}"
     );
 
     // The server-copy half: ask Stalwart directly, not through EDS, what it
@@ -197,13 +205,32 @@ fn attendees_do_not_survive_a_local_create_against_the_real_server() {
         .iter()
         .find(|event| event.title.as_deref() == Some(summary.as_str()))
         .unwrap_or_else(|| panic!("the server has no event titled {summary:?}\n{report}"));
+    let participants = stored.participants.clone().unwrap_or_default();
+    let mut addresses: Vec<&str> = participants
+        .values()
+        .filter_map(|participant| participant.get("calendarAddress")?.as_str())
+        .collect();
+    addresses.sort_unstable();
+    assert_eq!(
+        addresses,
+        [
+            "mailto:attendee1@example.com",
+            "mailto:attendee2@example.com",
+            "mailto:organizer@example.com"
+        ],
+        "the server did not store the guest list the create sent: {participants:?}"
+    );
     assert!(
-        stored
-            .participants
-            .as_ref()
-            .is_none_or(|participants| participants.is_empty()),
-        "the server stored participants for an event this product never sent any for: {:?}",
-        stored.participants
+        participants.values().any(|participant| {
+            participant.get("calendarAddress").and_then(|a| a.as_str())
+                == Some("mailto:organizer@example.com")
+                && participant.pointer("/roles/owner") == Some(&serde_json::Value::Bool(true))
+        }),
+        "the organizer is not the participant holding `owner`: {participants:?}"
+    );
+    assert_eq!(
+        stored.organizer_calendar_address.as_deref(),
+        Some("mailto:organizer@example.com")
     );
 
     direct
