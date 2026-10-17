@@ -13,6 +13,12 @@
  * way. Each has its own guest, so the mock's scheduling outbox says which
  * change asked the server to send.
  *
+ * Last, step (d): it creates a meeting with a guest the server has no way to
+ * reach, as the comp editor would, and reports whether the create failed,
+ * whether as `E_CLIENT_ERROR_INVALID_ARG`, and the message Evolution would
+ * show. If the create succeeds (nothing asked the server to schedule), the
+ * meeting is removed again so the store is left empty either way.
+ *
  * Everything around this program belongs to
  * `rust/crates/jmap-functional/tests/calendar-scheduling.rs`, which runs it
  * and reads its output: one `key=value` line per observation, non-zero exit
@@ -28,6 +34,8 @@
 #define ORGANIZER "mailto:olga@example.com"
 #define SENT_GUEST "mailto:vera@example.com"
 #define QUIET_GUEST "mailto:ida@example.com"
+/* Must match UNREACHABLE_GUEST in calendar-scheduling.rs. */
+#define UNREACHABLE_GUEST "urn:uuid:5f0c9a4e-0000-4000-8000-0000000000d1"
 
 static int
 fail (const gchar *step,
@@ -91,6 +99,7 @@ main (int argc,
 	EClient *client;
 	gchar *sent_uid;
 	gchar *quiet_uid;
+	gchar *unreachable_uid;
 
 	if (argc != 2) {
 		g_printerr ("usage: %s <source-uid>\n", argv[0]);
@@ -143,8 +152,24 @@ main (int argc,
 		return fail ("remove-sent", error);
 	g_print ("removed-sent=1\n");
 
+	unreachable_uid = create_meeting (E_CAL_CLIENT (client), "Unreachable", UNREACHABLE_GUEST,
+					  E_CAL_OPERATION_FLAG_NONE, &error);
+	g_print ("unreachable-created=%d\n", unreachable_uid ? 1 : 0);
+	if (unreachable_uid) {
+		if (!e_cal_client_remove_object_sync (E_CAL_CLIENT (client), unreachable_uid, NULL,
+						      E_CAL_OBJ_MOD_ALL, E_CAL_OPERATION_FLAG_NONE,
+						      NULL, &error))
+			return fail ("remove-unreachable", error);
+	} else {
+		g_print ("unreachable-invalid-arg=%d\n",
+			 g_error_matches (error, E_CLIENT_ERROR, E_CLIENT_ERROR_INVALID_ARG) ? 1 : 0);
+		g_print ("unreachable-message=%s\n", error ? error->message : "");
+		g_clear_error (&error);
+	}
+
 	g_free (sent_uid);
 	g_free (quiet_uid);
+	g_free (unreachable_uid);
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
