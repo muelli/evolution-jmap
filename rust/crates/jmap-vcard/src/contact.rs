@@ -2671,4 +2671,41 @@ mod tests {
         assert_eq!(first.len(), MAX_LINE_OCTETS - 1);
         assert_eq!(unfold_lines(&folded), input);
     }
+
+    #[test]
+    fn fold_overlong_lines_keeps_escape_pairs_on_the_same_physical_line() {
+        let input = format!(
+            "{}\\;{}\r\n",
+            "F".repeat(MAX_LINE_OCTETS - 1),
+            "G".repeat(12)
+        );
+
+        let folded = fold_overlong_lines(input.clone());
+        let mut lines = folded.split("\r\n ");
+        let first = lines.next().expect("folded output has first line");
+        let continued = lines.next().expect("folded output has continuation line");
+
+        assert_eq!(first.len(), MAX_LINE_OCTETS - 1);
+        assert!(!first.ends_with('\\'));
+        assert!(continued.starts_with("\\;"));
+        assert_eq!(unfold_lines(&folded), input);
+    }
+
+    #[test]
+    fn fold_overlong_lines_limits_continuation_payload_width() {
+        let input = format!("{}\r\n", "H".repeat((MAX_LINE_OCTETS * 3) + 10));
+
+        let folded = fold_overlong_lines(input.clone());
+        let lines = folded.split("\r\n").filter(|line| !line.is_empty());
+        let continuation_count = lines.clone().filter(|line| line.starts_with(' ')).count();
+
+        assert!(continuation_count >= 2);
+        assert!(lines.clone().all(|line| line.len() <= MAX_LINE_OCTETS));
+        assert!(
+            lines
+                .filter(|line| line.starts_with(' '))
+                .all(|line| line[1..].len() < MAX_LINE_OCTETS)
+        );
+        assert_eq!(unfold_lines(&folded), input);
+    }
 }
