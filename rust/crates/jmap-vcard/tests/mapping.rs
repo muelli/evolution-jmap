@@ -14553,6 +14553,35 @@ fn x_abdate_unkeyed_same_day_different_kinds_are_distinct_entries() {
 }
 
 #[test]
+fn bday_lines_with_distinct_keys_keep_same_day_birth_entries() {
+    // RFC 9553 section 2.8.1 keeps anniversaries keyed as map entries, so two
+    // non-empty keys must remain two entries even when the birth day matches.
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Date Distinct Birthday Keys\r\n",
+        "BDAY;X-JMAP-KEY=y1:1980-01-01\r\n",
+        "BDAY;X-JMAP-KEY=y2:1980-01-01\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse keyed birthday duplicates");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+
+    assert_eq!(anniversaries.len(), 2);
+    assert_eq!(anniversaries["y1"].kind, "birth");
+    assert_eq!(
+        anniversary_date(&anniversaries["y1"]),
+        Some("1980-01-01".to_owned())
+    );
+    assert_eq!(anniversaries["y2"].kind, "birth");
+    assert_eq!(
+        anniversary_date(&anniversaries["y2"]),
+        Some("1980-01-01".to_owned())
+    );
+}
+
+#[test]
 fn apple_property_groups_variations_and_boundary_cases() {
     // 1. Case insensitivity in X-ABLabel and property names
     let vcard1 = concat!(
