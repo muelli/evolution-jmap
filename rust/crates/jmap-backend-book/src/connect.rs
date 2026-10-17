@@ -85,10 +85,10 @@ pub unsafe fn source_account_id(source: *mut ESource) -> Option<String> {
             source,
             eds_sys::E_SOURCE_EXTENSION_RESOURCE,
         );
-        if let Some(resource) = resource {
-            if let Some(val) = read_obj(resource.cast(), &keys) {
-                return Some(val);
-            }
+        if let Some(resource) = resource
+            && let Some(val) = read_obj(resource.cast(), &keys)
+        {
+            return Some(val);
         }
 
         if eds_sys::e_source_has_extension(source, c"JMAP Account".as_ptr()) != glib_sys::GFALSE {
