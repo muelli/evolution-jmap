@@ -20,3 +20,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
   where the next scan for an unvisited mailbox starts, and `orphan` is visited
   by the time that scan runs, so starting one index earlier finds the same
   mailbox. Only the scan's length changes.
+
+## `src/date.rs`
+
+- `crates/jmap-mail-sync/src/date.rs:213:49`: replace `-` with `+`, and with
+  `/`, in `days_from_civil`, the `year - 399` of the negative-year era.
+  `days_from_civil` is only called by `epoch_seconds`, after `YEARS` has
+  bounded the year to 1..=9999, and the March shift lowers it by at most one,
+  to 0. So the year is never negative and that branch never runs.
