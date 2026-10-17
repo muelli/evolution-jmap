@@ -14714,6 +14714,27 @@ fn apple_group_labels_for_other_home_and_fax_map_without_spurious_labels() {
 }
 
 #[test]
+fn apple_group_label_other_on_address_keeps_no_custom_label() {
+    // RFC 9553 §1.4.3 models contexts as known true-valued slots.
+    // Apple's grouped "other" label does not map to a slot and must stay unlabeled.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Grouped Address Other\r\n",
+        "item1.ADR:;;42 Side St;Berlin;;10115;Germany\r\n",
+        "item1.X-ABLABEL:other\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse grouped address label");
+    let addresses = card.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1);
+
+    let address = addresses.values().next().expect("grouped address");
+    assert_eq!(address.contexts, None);
+    assert!(address.extra.is_empty());
+}
+
+#[test]
 fn apple_group_labels_for_url_slots_map_to_kind_or_context_without_fallback_labels() {
     // RFC 2426 §3.6.8 keeps URL as URI text; RFC 9553 §1.4.3 uses true-valued sets.
     let vcard = concat!(
