@@ -24,3 +24,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## `src/ops.rs`
 
 - Zero missed mutants (1 of 1 viable mutants caught by test suites).
+
+## `src/backend.rs`
+
+- Zero missed mutants (18 of 18 viable mutants caught by test suites, 30 unviable).
+- 1 previously missed mutant killed by `tests/mutation_backend.rs`:
+  - `replace JmapBookBackend::inspect_connection -> Option<R> with None`
+- 30 unviable mutants identified:
+  - absence of `Default` implementations on `JmapBookBackend` (in `detached`), generic `R` (in `inspect_connection`), and `EBookMetaBackendClass` (in `parent_class`).
+  - let-chain syntax errors with `||` in `refresh_push_headers`.
+  - missing constructors and `Default` implementations on guard types `RwLockReadGuard`, `RwLockWriteGuard`, and `MutexGuard` (in `read`, `write`, `lock`).
+  - unviable static allocations for `session` return values.
