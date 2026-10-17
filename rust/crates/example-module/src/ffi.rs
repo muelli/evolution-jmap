@@ -128,6 +128,8 @@ extern "C" {
 
     pub fn g_type_query(type_: GType, query: *mut GTypeQuery);
 
+    pub fn g_type_from_name(name: *const c_char) -> GType;
+
     pub fn g_type_name(type_: GType) -> *const c_char;
 
     pub fn g_type_is_a(type_: GType, is_a_type: GType) -> GBoolean;

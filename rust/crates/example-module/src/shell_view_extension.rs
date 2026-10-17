@@ -277,7 +277,10 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
         obj_class.finalize = Some(instance_finalize);
 
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-        ext_class.extensible_type = ffi::e_shell_view_get_type();
+        // Looked up, not asked for: an accessor that registers its type from
+        // inside a class initialiser can deadlock against another thread's
+        // registration. `register_type` has already called it.
+        ext_class.extensible_type = ffi::g_type_from_name(c"EShellView".as_ptr());
     }
 }
 
@@ -305,6 +308,8 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
+        // Registers the extensible type `class_init` looks up.
+        ffi::e_shell_view_get_type();
 
         // Reuse the parent class and instance size values.
         let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();

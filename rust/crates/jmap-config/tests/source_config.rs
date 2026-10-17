@@ -37,7 +37,7 @@ use gobject_sys::{g_type_class_ref, g_type_class_unref, g_type_parent};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::source_config::{
-    BACKEND_NAME, JmapBookConfig, JmapCalConfig, offers_creation_for,
+    BACKEND_NAME, JmapBookConfig, JmapCalConfig, config_backend_type, offers_creation_for,
 };
 
 /// A registered class, kept referenced for the test's duration — the same
@@ -79,9 +79,12 @@ impl Drop for Class {
 /// Evolution's own class, for the "did `class_init` displace this slot or
 /// inherit it?" comparisons below.
 fn parent_class() -> &'static ESourceConfigBackendClass {
-    // SAFETY: no arguments; referencing the class of a registered type and
-    // never giving the reference back, which is what `'static` claims.
-    let class = unsafe { g_type_class_ref(e_source_config_backend_get_type()) };
+    // SAFETY: referencing the class of a registered type and never giving the
+    // reference back, which is what `'static` claims. `config_backend_type`
+    // rather than the bare accessor, because this reference may be the one
+    // that runs Evolution's class initialiser, and that has to find
+    // `ESourceConfig` already registered.
+    let class = unsafe { g_type_class_ref(config_backend_type()) };
     assert!(!class.is_null(), "g_type_class_ref returned NULL");
     // SAFETY: the reference above is never released.
     unsafe { &*class.cast::<ESourceConfigBackendClass>() }
