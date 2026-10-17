@@ -14461,6 +14461,59 @@ fn apple_property_groups_variations_and_boundary_cases() {
 }
 
 #[test]
+fn apple_group_labels_for_other_home_and_fax_map_without_spurious_labels() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Grouped Labels\r\n",
+        "item1.EMAIL:other@example.com\r\n",
+        "item1.X-ABLABEL:other\r\n",
+        "item2.TEL:+1-555-3010\r\n",
+        "item2.X-ABLABEL:fax\r\n",
+        "item3.TEL:+1-555-3011\r\n",
+        "item3.X-ABLABEL:home\r\n",
+        "item4.TEL:+1-555-3012\r\n",
+        "item4.X-ABLABEL:other\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse grouped-label card");
+
+    let emails = card.emails.as_ref().expect("emails map");
+    let email = emails
+        .values()
+        .find(|entry| entry.address == "other@example.com")
+        .expect("grouped other email");
+    assert_eq!(email.contexts, None);
+    assert!(email.extra.is_empty());
+
+    let phones = card.phones.as_ref().expect("phones map");
+
+    let fax = phones
+        .values()
+        .find(|entry| entry.number == "+1-555-3010")
+        .expect("grouped fax phone");
+    assert_eq!(fax.contexts, None);
+    assert_eq!(fax.features, Some(json!({"fax": true})));
+    assert!(fax.extra.is_empty());
+
+    let home = phones
+        .values()
+        .find(|entry| entry.number == "+1-555-3011")
+        .expect("grouped home phone");
+    assert_eq!(home.contexts, Some(json!({"private": true})));
+    assert_eq!(home.features, None);
+    assert!(home.extra.is_empty());
+
+    let other = phones
+        .values()
+        .find(|entry| entry.number == "+1-555-3012")
+        .expect("grouped other phone");
+    assert_eq!(other.contexts, None);
+    assert_eq!(other.features, None);
+    assert!(other.extra.is_empty());
+}
+
+#[test]
 fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
     use jmap_vcard::contact::{online_service_handle, online_service_uri};
 
