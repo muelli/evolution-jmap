@@ -340,6 +340,30 @@ mod tests {
     }
 
     #[test]
+    fn display_names_the_underlying_cause_for_every_variant() {
+        assert!(
+            Error::Host(jmap_backend_core::source::SourceError::MissingHost)
+                .to_string()
+                .contains("JMAP server")
+        );
+        assert!(
+            Error::Client(jmap_client::Error::Transport("no route to host".into()))
+                .to_string()
+                .contains("no route to host")
+        );
+        assert!(
+            Error::UnsupportedGrant
+                .to_string()
+                .contains("authorization-code grant")
+        );
+        assert!(
+            Error::NoRegistration
+                .to_string()
+                .contains("client registration")
+        );
+    }
+
+    #[test]
     fn every_other_failure_reads_back_as_g_io_error_failed_with_its_message() {
         let cases = [
             Error::UnsupportedGrant,

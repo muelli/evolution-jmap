@@ -16,6 +16,84 @@ fn script_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(manifest_dir).join("../../../ci/consumer-check.sh"))
 }
 
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+fn find_host_tool(name: &str) -> Option<PathBuf> {
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(name);
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    for dir in &["/usr/bin", "/bin", "/usr/local/bin"] {
+        let candidate = PathBuf::from(dir).join(name);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+struct ScratchBinDir {
+    path: PathBuf,
+}
+
+impl ScratchBinDir {
+    fn new() -> Self {
+        let unique = format!(
+            "consumer-check-scratch-bin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&path).expect("create scratch bin dir");
+        Self { path }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn link_host_tool(&self, name: &str) -> bool {
+        if let Some(target) = find_host_tool(name) {
+            let link = self.path.join(name);
+            let _ = fs::remove_file(&link);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &link).expect("symlink tool into scratch dir");
+            true
+        } else {
+            false
+        }
+    }
+
+    fn provide_tool(&self, name: &str) {
+        if !self.link_host_tool(name) {
+            let tool_path = self.path.join(name);
+            fs::write(&tool_path, "#!/bin/sh\nexit 0\n").expect("write dummy tool");
+            let mut perms = fs::metadata(&tool_path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&tool_path, perms).expect("set executable permissions");
+        }
+    }
+}
+
+impl Drop for ScratchBinDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 #[test]
 fn consumer_check_script_exists_and_is_executable() {
     let path = script_path();
@@ -63,11 +141,18 @@ fn consumer_check_script_fails_loudly_when_tools_missing() {
         panic!("ci/consumer-check.sh does not exist yet");
     }
 
-    // Provide bash in PATH (or invoke bash directly), but exclude cargo
-    let bash_dir = PathBuf::from("/usr/bin");
-    let output = Command::new("bash")
+    // Build a scratch PATH that demonstrably lacks cargo (empty temp bin dir plus symlinks
+    // to just what ci/consumer-check.sh needs) instead of assuming where cargo lives.
+    let scratch = ScratchBinDir::new();
+    scratch.provide_tool("bash");
+    scratch.provide_tool("tar");
+    scratch.provide_tool("mktemp");
+    scratch.provide_tool("sed");
+
+    let bash_bin = find_host_tool("bash").unwrap_or_else(|| PathBuf::from("bash"));
+    let output = Command::new(&bash_bin)
         .arg(&path)
-        .env("PATH", bash_dir)
+        .env("PATH", scratch.path())
         .output()
         .expect("execution of ci/consumer-check.sh without cargo in PATH");
 
@@ -81,6 +166,75 @@ fn consumer_check_script_fails_loudly_when_tools_missing() {
         stderr.contains("missing required tool: cargo"),
         "stderr must loudly announce missing required tool: cargo, got: {}",
         stderr
+    );
+}
+
+#[test]
+fn consumer_check_script_fails_loudly_when_each_tool_missing() {
+    let path = script_path();
+    if !path.exists() {
+        panic!("ci/consumer-check.sh does not exist yet");
+    }
+
+    let bash_bin = find_host_tool("bash").unwrap_or_else(|| PathBuf::from("bash"));
+
+    for missing in ["cargo", "tar", "mktemp", "sed"] {
+        let scratch = ScratchBinDir::new();
+        scratch.provide_tool("bash");
+        for tool in ["cargo", "tar", "mktemp", "sed"] {
+            if tool != missing {
+                scratch.provide_tool(tool);
+            }
+        }
+
+        let output = Command::new(&bash_bin)
+            .arg(&path)
+            .env("PATH", scratch.path())
+            .output()
+            .expect("execution of ci/consumer-check.sh with missing tool");
+
+        assert!(
+            !output.status.success(),
+            "ci/consumer-check.sh must fail when {} is missing",
+            missing
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let expected = format!("missing required tool: {}", missing);
+        assert!(
+            stderr.contains(&expected),
+            "stderr must loudly announce {}, got: {}",
+            expected,
+            stderr
+        );
+    }
+}
+
+#[test]
+fn scratch_path_demonstrably_lacks_cargo_regardless_of_host_cargo() {
+    let scratch = ScratchBinDir::new();
+    scratch.provide_tool("bash");
+    scratch.provide_tool("tar");
+    scratch.provide_tool("mktemp");
+    scratch.provide_tool("sed");
+
+    assert!(
+        !scratch.path().join("cargo").exists(),
+        "scratch directory must not contain cargo"
+    );
+
+    let bash_bin = find_host_tool("bash").unwrap_or_else(|| PathBuf::from("bash"));
+    let output = Command::new(&bash_bin)
+        .arg("-c")
+        .arg("command -v cargo || true")
+        .env("PATH", scratch.path())
+        .output()
+        .expect("check command -v cargo in scratch PATH");
+
+    assert!(
+        output.stdout.is_empty(),
+        "command -v cargo in scratch PATH must find nothing, found: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 
