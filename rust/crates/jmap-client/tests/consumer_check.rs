@@ -21,9 +21,15 @@ fn script_path() -> PathBuf {
         return relative.canonicalize().unwrap_or(relative);
     }
     if let Ok(pwd) = std::env::var("PWD") {
-        let p = PathBuf::from(pwd).join("ci/consumer-check.sh");
-        if p.exists() {
-            return p.canonicalize().unwrap_or(p);
+        let mut cur = PathBuf::from(pwd);
+        loop {
+            let candidate = cur.join("ci/consumer-check.sh");
+            if candidate.exists() {
+                return candidate.canonicalize().unwrap_or(candidate);
+            }
+            if !cur.pop() {
+                break;
+            }
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
