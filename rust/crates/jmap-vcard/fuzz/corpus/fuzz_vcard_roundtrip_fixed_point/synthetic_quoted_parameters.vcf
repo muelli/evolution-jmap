@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:urn:uuid:synthetic-quoted-parameters-0001
+FN:Quoted Parameters
+EMAIL;TYPE=INTERNET;X-ABLABEL="Work:Primary";X-CUSTOM="alpha:beta;gamma":quoted@example.com
+ADR;TYPE=WORK;LABEL="Suite 4: North; Wing":;;123 Main Street;Berlin;;;DE
+NOTE;X-NOTE-TAG="ops:team;oncall":Seed for quoted parameter fuzzing
+END:VCARD
