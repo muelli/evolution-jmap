@@ -1039,3 +1039,50 @@ mod payload {
         );
     }
 }
+
+/// A server that does not schedule and is strict about arguments, as RFC 8620
+/// section 3.9 asks: `sendSchedulingMessages` is an argument it never heard of,
+/// so the whole call is `invalidArguments` and nothing is stored. Without the
+/// argument the same create goes through and nobody is told.
+#[test]
+fn a_server_without_scheduling_refuses_the_argument_it_does_not_know() {
+    let server = MockServer::builder().without_scheduling().start();
+    let account_id = server.account_id();
+    let calendar_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_participant_identity("Alice", ALICE, true);
+        account.seed_calendar("Work", true)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let event = meeting(&calendar_id);
+
+    let error = client
+        .event_create_with_scheduling(&account_id, &event, true)
+        .expect_err("a server that does not schedule refuses the argument");
+    assert!(
+        matches!(&error, jmap_client::Error::Method(method) if method.error_type == "invalidArguments"),
+        "{error:?}"
+    );
+    assert!(
+        server
+            .state()
+            .lock()
+            .unwrap()
+            .account(&account_id)
+            .unwrap()
+            .calendar_events
+            .is_empty(),
+        "a refused call stores nothing"
+    );
+
+    client
+        .event_create_with_scheduling(&account_id, &event, false)
+        .expect("without the argument the create is an ordinary one");
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert_eq!(account.calendar_events.len(), 1);
+    assert!(account.scheduling_outbox.is_empty(), "nobody is told");
+}

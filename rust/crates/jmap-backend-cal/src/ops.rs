@@ -5,8 +5,8 @@
 //! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ETimezoneCache, ICalComponent, e_cal_client_error_create,
-    time_t,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_NOT_SUPPORTED, ETimezoneCache,
+    ICalComponent, e_cal_client_error_create, e_client_error_create, time_t,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
@@ -14,7 +14,7 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{CalSync, Itip, SyncError, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -418,6 +418,35 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         }
         SyncError::ICal(_) => invalid_arg_gerror(&failure.to_string()),
         SyncError::Unsendable(reason) => invalid_arg_gerror(&refusal(reason)),
+        SyncError::Unscheduled(reason @ Unscheduled::Unreachable { .. }) => {
+            invalid_arg_gerror(&unscheduled(reason))
+        }
+        SyncError::Unscheduled(reason @ Unscheduled::NotImplemented) => {
+            let message = cstring_lossy(&unscheduled(reason));
+            // SAFETY: code is valid enum value and message is copied.
+            unsafe { e_client_error_create(E_CLIENT_ERROR_NOT_SUPPORTED, message.as_ptr()) }
+        }
+    }
+}
+
+/// Translates the user-facing message for a change the server would not
+/// schedule. Evolution was told the server mails the guests, so each says the
+/// change was not saved and what to do about it.
+fn unscheduled(reason: &Unscheduled) -> String {
+    match reason {
+        Unscheduled::Unreachable { addresses } if addresses.is_empty() => translate(
+            // TRANSLATORS: shown when the server refused to send a meeting's invitations.
+            c"The server cannot send meeting invitations to every guest, so the change was not saved. Check that each guest has a valid email address.",
+        ),
+        Unscheduled::Unreachable { addresses } => translate_with(
+            // TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
+            c"The server cannot send meeting invitations to every guest, so the change was not saved. It has no way to reach: %1$s.",
+            &[addresses.join(", ").as_str()],
+        ),
+        Unscheduled::NotImplemented => translate(
+            // TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
+            c"This server does not send meeting invitations itself, so the change was not saved. Turn off “Server handles meeting invitations” for this calendar, and Evolution will send them instead.",
+        ),
     }
 }
 

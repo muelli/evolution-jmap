@@ -31,11 +31,13 @@ use jmap_ical::{
     event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
     unstateable_until,
 };
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
+use jmap_proto::calendars::{
+    CalendarEvent, CalendarEventQueryFilter, RecurrenceRule, calendar_event_set_error,
+};
 use jmap_proto::{Id, State};
 use serde_json::Value;
 
-pub use error::{SyncError, Unsendable};
+pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
 
 /// One event, as the meta backend wants it: an identifier, a change token and
@@ -77,6 +79,55 @@ pub enum Itip {
     Send,
     /// Ask the server to send nothing for this change.
     Suppress,
+}
+
+/// `error` from a create, edit or delete, as the [`Unscheduled`] refusal it is
+/// when the call asked the server to schedule; any other error as it came.
+///
+/// `event` is the event as sent, where there is one, to name the guests the
+/// server could not reach.
+fn refused(error: jmap_client::Error, schedule: bool, event: Option<&CalendarEvent>) -> SyncError {
+    if !schedule {
+        return error.into();
+    }
+    match &error {
+        jmap_client::Error::Set(set)
+            if set.error_type == calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS =>
+        {
+            SyncError::Unscheduled(Unscheduled::Unreachable {
+                addresses: event.map(unreachable_addresses).unwrap_or_default(),
+            })
+        }
+        jmap_client::Error::Method(method)
+            if method.error_type == jmap_proto::error::method::INVALID_ARGUMENTS =>
+        {
+            SyncError::Unscheduled(Unscheduled::NotImplemented)
+        }
+        _ => error.into(),
+    }
+}
+
+/// The calendar addresses `event` gives that are not `mailto:`, sorted and
+/// without repeats: the guests a server that delivers only by iMIP cannot
+/// reach. Only the event's own participants; one an override adds for a
+/// single occurrence is not named.
+fn unreachable_addresses(event: &CalendarEvent) -> Vec<String> {
+    let participants = event
+        .participants
+        .iter()
+        .flatten()
+        .filter_map(|(_, participant)| participant.get("calendarAddress").and_then(Value::as_str));
+    participants
+        .chain(event.organizer_calendar_address.as_deref())
+        .filter(|address| {
+            !address
+                .get(..7)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mailto:"))
+        })
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Synchronises one JMAP calendar.
@@ -286,7 +337,7 @@ impl CalSync {
                             %error,
                             "calendar event create failed"
                         );
-                        return Err(error.into());
+                        return Err(refused(error, schedule, Some(&event)));
                     }
                 };
             // RFC 8620 §5.3 only requires the server to report properties
@@ -333,7 +384,7 @@ impl CalSync {
                 %error,
                 "calendar event update failed"
             );
-            return Err(error.into());
+            return Err(refused(error, schedule, Some(&event)));
         }
         self.load_component(uid)
     }
@@ -366,7 +417,7 @@ impl CalSync {
                 %error,
                 "calendar event destroy failed"
             );
-            return Err(error.into());
+            return Err(refused(error, schedule, None));
         }
         Ok(())
     }

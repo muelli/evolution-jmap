@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_NOT_SUPPORTED,
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalComponent, ECalMetaBackendInfo, ICalComponent,
     e_cal_client_error_quark, e_cal_component_get_icalcomponent, e_cal_component_new_from_string,
     e_cal_meta_backend_info_free, e_client_error_quark, i_cal_component_set_uid,
@@ -19,7 +19,7 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_cal_sync::{CalSync, Itip, SyncError, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -752,6 +752,20 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
             unsafe { e_client_error_quark() },
             E_CLIENT_ERROR_INVALID_ARG as i32,
         ),
+        // The server cannot reach a guest: the meeting is what has to change.
+        (
+            SyncError::Unscheduled(Unscheduled::Unreachable {
+                addresses: Vec::new(),
+            }),
+            unsafe { e_client_error_quark() },
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        ),
+        // The server does not schedule at all: the account's switch is wrong.
+        (
+            SyncError::Unscheduled(Unscheduled::NotImplemented),
+            unsafe { e_client_error_quark() },
+            E_CLIENT_ERROR_NOT_SUPPORTED as i32,
+        ),
     ];
 
     for (error, domain, code) in cases {
@@ -803,6 +817,48 @@ fn a_recurrence_refused_for_anything_else_says_nothing_about_a_time_zone() {
         message.contains("repeat count"),
         "the user is owed the spelling that does work: {message}"
     );
+}
+
+/// A meeting the server refused to schedule names the guests it cannot reach,
+/// so the user knows whom to fix, and says the change was not saved.
+#[test]
+fn a_guest_the_server_cannot_reach_is_named() {
+    let message = gerror_message(&SyncError::Unscheduled(Unscheduled::Unreachable {
+        addresses: vec!["urn:uuid:dave".to_owned(), "tel:+15555550100".to_owned()],
+    }));
+
+    assert!(
+        message.contains("urn:uuid:dave, tel:+15555550100"),
+        "every unreachable guest has to be named: {message}"
+    );
+    assert!(message.contains("not saved"), "{message}");
+    assert!(!message.contains("%1$s"), "{message}");
+}
+
+/// When the sync layer could not tell which guest it was (a delete does not
+/// load the event), the message says what to check instead of naming nobody.
+#[test]
+fn an_unnamed_unreachable_guest_still_says_what_to_check() {
+    let message = gerror_message(&SyncError::Unscheduled(Unscheduled::Unreachable {
+        addresses: Vec::new(),
+    }));
+
+    assert!(message.contains("not saved"), "{message}");
+    assert!(message.contains("email address"), "{message}");
+    assert!(!message.contains("%1$s"), "{message}");
+}
+
+/// A server that does not schedule: the only fix is the account's switch,
+/// so the message names it the way Evolution's CalDAV settings label it.
+#[test]
+fn a_server_that_does_not_schedule_points_at_the_switch() {
+    let message = gerror_message(&SyncError::Unscheduled(Unscheduled::NotImplemented));
+
+    assert!(
+        message.contains("Server handles meeting invitations"),
+        "{message}"
+    );
+    assert!(message.contains("not saved"), "{message}");
 }
 
 /// The message of the `GError` `failure` maps to, the error freed after.

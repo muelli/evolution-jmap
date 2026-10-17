@@ -78,6 +78,7 @@ pub struct MockServerBuilder {
     terse_contact_create: bool,
     new_collections_default_unsubscribed: bool,
     terse_calendar_event_create: bool,
+    without_scheduling: bool,
     terse_collection_create: bool,
     id_omitting_collection_create: bool,
     reject_collection_create: bool,
@@ -264,6 +265,14 @@ impl MockServerBuilder {
         self
     }
 
+    /// Act as a server that does not send scheduling messages: a
+    /// `CalendarEvent/set` carrying `sendSchedulingMessages` is refused with
+    /// `invalidArguments` (RFC 8620 section 3.9) and nothing in it is applied.
+    pub fn without_scheduling(mut self) -> Self {
+        self.without_scheduling = true;
+        self
+    }
+
     /// Omit `name` from created `AddressBook` and `Calendar` responses.
     pub fn terse_collection_create(mut self) -> Self {
         self.terse_collection_create = true;
@@ -317,6 +326,7 @@ impl MockServerBuilder {
         state.terse_contact_create = self.terse_contact_create;
         state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         state.terse_calendar_event_create = self.terse_calendar_event_create;
+        state.without_scheduling = self.without_scheduling;
         state.terse_collection_create = self.terse_collection_create;
         state.id_omitting_collection_create = self.id_omitting_collection_create;
         state.reject_collection_create = self.reject_collection_create;
@@ -394,6 +404,7 @@ impl MockServer {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            without_scheduling: false,
             terse_collection_create: false,
             id_omitting_collection_create: false,
             reject_collection_create: false,

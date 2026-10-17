@@ -274,6 +274,10 @@ pub fn calendar_event_set(
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     let request: CalendarEventSetRequest = parse_arguments(arguments)?;
+    if state.without_scheduling && request.send_scheduling_messages.is_some() {
+        return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
+            .with_description("unknown argument: sendSchedulingMessages"));
+    }
     let send_scheduling_messages = request.send_scheduling_messages.unwrap_or(false);
     let request = request.set;
     let account = account_mut(state, &request.account_id)?;

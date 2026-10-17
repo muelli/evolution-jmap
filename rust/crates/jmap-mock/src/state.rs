@@ -59,6 +59,10 @@ pub struct ServerState {
     pub new_collections_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
+    /// Whether this server does not schedule and, as RFC 8620 section 3.9
+    /// asks, refuses `CalendarEvent/set`'s `sendSchedulingMessages` as an
+    /// unknown argument.
+    pub without_scheduling: bool,
     /// Whether collection create omits echoed `name` while keeping server-computed fields.
     pub terse_collection_create: bool,
     /// Whether collection create omits `id` to model an RFC-violating server.
@@ -99,6 +103,7 @@ impl ServerState {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            without_scheduling: false,
             terse_collection_create: false,
             id_omitting_collection_create: false,
             reject_collection_create: false,

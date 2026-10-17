@@ -58,8 +58,8 @@ this way).
 | Scheduling signal in the session | none (empty objects) | none (empty objects) | none |
 | `sendSchedulingMessages: true`, reachable guest | sends: the event lands in the guest's calendar, plus a notification and an iMIP "Invitation:" mail | sends: an iMIP invitation (HTML with RSVP links and `invite.ics`) within ~40 s; a destroy sends a cancellation | records the iTIP message in a per-account scheduling outbox (no transport) |
 | Guest with no address the server can send to | `noSupportedScheduleMethods`, nothing stored | not probed | `noSupportedScheduleMethods`, nothing stored (only `mailto:` counts as deliverable, as on Stalwart) |
-| Unknown `/set` argument | ignored, change applied (against RFC 8620 section 3.9) | not probed | not probed |
-| Non-scheduling mode | n/a | n/a | none yet; needed to test the fallback |
+| Unknown `/set` argument | ignored, change applied (against RFC 8620 section 3.9) | not probed | applied normally; in `without_scheduling` mode, `sendSchedulingMessages` is `invalidArguments` and nothing is applied |
+| Non-scheduling mode | n/a | n/a | `MockServer::builder().without_scheduling()` |
 
 Stalwart's two rows marked "nothing stored" and "ignored" are pinned by the
 live tests
@@ -152,8 +152,12 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
   ask at all (off by default; the calendar backend turns it on at connect
   and decides per change); `save_component_with` and
   `remove_component_with` take `Itip::Suppress` for
-  `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. A refusal comes back as the
-  record's `SetError`. Tests: `tests/scheduling.rs` (mock) and
+  `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. A refusal of a call that asked
+  the server to schedule comes back as `SyncError::Unscheduled`:
+  `Unreachable` for `noSupportedScheduleMethods`, naming the event's
+  non-`mailto:` addresses (the server does not say which guest it could not
+  reach, and a delete names nobody, since it does not load the event), and
+  `NotImplemented` for `invalidArguments`. Tests: `tests/scheduling.rs` (mock) and
   `tests/live_server_scheduling.rs` (two accounts on one real server: with the
   switch on the guest's calendar gets the meeting exactly once and then its
   cancellation; with it off, nothing).
@@ -174,7 +178,11 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
   tells clients the capabilities may have changed. The backend's
   `get_backend_property` adds the three capabilities to the meta backend's
   answer while the switch is on, and `save_component_sync` and
-  `remove_component_sync` map their operation flags to `Itip`. Tests:
+  `remove_component_sync` map their operation flags to `Itip`. `ops::to_gerror`
+  turns the two refusals into translated messages that say the change was not
+  saved: `Unreachable` as `E_CLIENT_ERROR_INVALID_ARG` (the meeting has to
+  change), `NotImplemented` as `E_CLIENT_ERROR_NOT_SUPPORTED`, naming the
+  "Server handles meeting invitations" switch to turn off. Tests:
   `tests/scheduling.rs` and `tests/ops.rs` (in process), and
   `jmap-functional`'s `calendar-scheduling` leg (a real
   `evolution-calendar-factory` and an `ECalClient`: the capabilities with the
