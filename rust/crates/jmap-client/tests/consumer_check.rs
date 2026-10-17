@@ -9,11 +9,37 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn script_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CONSUMER_CHECK_SCRIPT") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return p;
+        }
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir)
-        .join("../../../ci/consumer-check.sh")
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(manifest_dir).join("../../../ci/consumer-check.sh"))
+    let relative = PathBuf::from(manifest_dir).join("../../../ci/consumer-check.sh");
+    if relative.exists() {
+        return relative.canonicalize().unwrap_or(relative);
+    }
+    if let Ok(pwd) = std::env::var("PWD") {
+        let p = PathBuf::from(pwd).join("ci/consumer-check.sh");
+        if p.exists() {
+            return p.canonicalize().unwrap_or(p);
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut cur = cwd.as_path();
+        loop {
+            let candidate = cur.join("ci/consumer-check.sh");
+            if candidate.exists() {
+                return candidate.canonicalize().unwrap_or(candidate);
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+    }
+    relative
 }
 
 fn is_executable(path: &std::path::Path) -> bool {
