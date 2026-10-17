@@ -300,6 +300,10 @@ fn an_identity_the_account_does_not_have_sends_nothing() {
     // would look for an unsent message.
     let row = only(fixture.listing(&drafts));
     assert!(row.flags.draft, "the unsent message is not marked a draft");
+    // Read, though: the user wrote it, and an unread one would put a bold line
+    // and a count on their own Drafts folder. Only the import sets `$seen` on
+    // this path, because the patch that would otherwise is never applied.
+    assert!(row.flags.seen, "the refused message came back unread");
     assert!(fixture.listing(&sent).is_empty(), "filed as though it went");
 }
 
