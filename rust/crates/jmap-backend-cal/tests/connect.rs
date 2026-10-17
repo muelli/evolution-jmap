@@ -61,6 +61,20 @@ impl Fixture {
         }
     }
 
+    /// Starts a mock server with a primary account and a second account.
+    /// Returns (fixture, second_account_id, second_calendar_id).
+    fn start_two_accounts() -> (Self, Id, Id) {
+        let fixture = Self::start(true);
+        let second_account_id = Id::from("second-account");
+        let second_calendar_id = {
+            let state = fixture.server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.add_account(second_account_id.clone(), "Second Account");
+            account.seed_calendar("SecondTeam", true)
+        };
+        (fixture, second_account_id, second_calendar_id)
+    }
+
     fn config(&self) -> SourceConfig {
         SourceConfig {
             target: ConnectTarget::Origin(self.server.origin().to_owned()),
@@ -356,6 +370,11 @@ impl TestSource {
         unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
         self
     }
+
+    fn account_id(self, account_id: &str) -> Self {
+        unsafe { connect::set_source_account_id(self.0, account_id) };
+        self
+    }
 }
 
 impl Drop for TestSource {
@@ -636,4 +655,61 @@ fn connecting_from_a_source_reports_read_only_when_calendar_lacks_write_rights()
     assert!(!open.writable);
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
     assert!(outs.error.is_null());
+}
+
+#[test]
+fn open_calendar_with_explicit_account_resolves_collections_from_that_account() {
+    let (fixture, second_account_id, second_calendar_id) = Fixture::start_two_accounts();
+    let open = connect::open_calendar_with_account(
+        &fixture.config(),
+        Credentials::none(),
+        Some(second_account_id.as_str()),
+    )
+    .expect("connected to second account");
+
+    assert_eq!(open.sync.account_id(), &second_account_id);
+    assert_eq!(open.sync.calendar_id(), &second_calendar_id);
+}
+
+#[test]
+fn open_calendar_with_omitted_account_defaults_to_primary_account() {
+    let (fixture, second_account_id, _) = Fixture::start_two_accounts();
+    let open = connect::open_calendar_with_account(&fixture.config(), Credentials::none(), None)
+        .expect("connected to primary account");
+
+    assert_eq!(open.sync.account_id(), &fixture.server.account_id());
+    assert_ne!(open.sync.account_id(), &second_account_id);
+    assert_eq!(
+        open.sync.calendar_id(),
+        fixture.default_calendar.as_ref().expect("default calendar")
+    );
+}
+
+#[test]
+fn connecting_from_a_source_with_account_id_opens_that_account() {
+    let (fixture, second_account_id, second_calendar_id) = Fixture::start_two_accounts();
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .account_id(second_account_id.as_str());
+    let mut outs = ConnectOuts::default();
+
+    let sync = connect_from(&source, &mut outs).expect("the connection was refused");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.calendar_id(), &second_calendar_id);
+    assert!(outs.error.is_null());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+#[test]
+fn connecting_from_a_source_with_unknown_account_id_fails() {
+    let fixture = Fixture::start(true);
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .account_id("non-existent-account-id");
+    let mut outs = ConnectOuts::default();
+
+    let sync = connect_from(&source, &mut outs);
+    assert!(sync.is_none(), "connection should fail for unknown account");
+    assert!(!outs.error.is_null());
+    unsafe { outs.take_error(eds_sys::E_CLIENT_ERROR_OTHER_ERROR) };
 }
