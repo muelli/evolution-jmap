@@ -19,7 +19,7 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_cal_sync::{CalSync, SyncError, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, SyncError, Unsendable};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -375,6 +375,7 @@ fn saving_a_new_component_creates_it_under_the_identifier_the_server_assigns() {
             GFALSE,
             list,
             ptr::null_mut(),
+            Itip::Send,
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -420,6 +421,7 @@ fn saving_an_existing_component_patches_it_rather_than_adding_a_second() {
             GTRUE,
             list,
             ptr::null_mut(),
+            Itip::Send,
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -462,6 +464,7 @@ fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
             GTRUE,
             list,
             ptr::null_mut(),
+            Itip::Send,
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -499,6 +502,7 @@ fn saving_instances_with_no_master_is_an_invalid_argument() {
             GFALSE,
             list,
             ptr::null_mut(),
+            Itip::Send,
             ptr::null_mut(),
             ptr::null_mut(),
             &mut error,
@@ -520,6 +524,7 @@ fn saving_instances_with_no_master_is_an_invalid_argument() {
             GFALSE,
             ptr::null(),
             ptr::null_mut(),
+            Itip::Send,
             ptr::null_mut(),
             ptr::null_mut(),
             &mut error,
@@ -546,7 +551,7 @@ fn removing_a_component_destroys_it_on_the_server() {
     let mut error: *mut GError = ptr::null_mut();
     unsafe {
         assert_eq!(
-            ops::remove_component(&fixture.sync(), uid.as_ptr(), &mut error),
+            ops::remove_component(&fixture.sync(), uid.as_ptr(), Itip::Send, &mut error),
             GTRUE
         );
         assert!(error.is_null());
@@ -560,7 +565,7 @@ fn removing_nothing_is_an_invalid_argument_not_a_null_dereference() {
     let mut error: *mut GError = ptr::null_mut();
 
     unsafe {
-        let ok = ops::remove_component(&fixture.sync(), ptr::null(), &mut error);
+        let ok = ops::remove_component(&fixture.sync(), ptr::null(), Itip::Send, &mut error);
         assert_eq!(ok, GFALSE);
         assert_error(
             &mut error,
@@ -1135,4 +1140,113 @@ fn clearing_the_colour_is_pushed_as_none() {
         .find(|c| c.id.as_ref() == Some(&fixture.ours))
         .unwrap();
     assert_eq!(ours.color, None);
+}
+
+// ---------------------------------------------------------------------------
+// who tells the guests
+
+/// A meeting the account's own identity organises, with one guest.
+const MEETING: &str = "BEGIN:VEVENT\r\n\
+                       UID:planning@localhost\r\n\
+                       SUMMARY:Planning\r\n\
+                       DTSTART:20260922T110000Z\r\n\
+                       DURATION:PT1H\r\n\
+                       ORGANIZER;CN=Olga:mailto:olga@example.com\r\n\
+                       ATTENDEE;CN=Olga;PARTSTAT=ACCEPTED:mailto:olga@example.com\r\n\
+                       ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:vera@example.com\r\n\
+                       END:VEVENT\r\n";
+
+impl Fixture {
+    /// The fixture's account as Olga, the organiser of [`MEETING`], with the
+    /// sync layer allowed to ask the server to schedule.
+    fn scheduling_sync(&self) -> CalSync {
+        {
+            let state = self.server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&self.account_id).unwrap();
+            account.seed_participant_identity("Olga", "mailto:olga@example.com", true);
+        }
+        self.sync().with_server_scheduling(true)
+    }
+
+    /// Every iTIP method the server sent, in order.
+    fn sent(&self) -> Vec<String> {
+        let state = self.server.state();
+        let state = state.lock().unwrap();
+        state
+            .account(&self.account_id)
+            .unwrap()
+            .scheduling_outbox
+            .iter()
+            .map(|message| message.method.clone())
+            .collect()
+    }
+}
+
+/// Saves [`MEETING`] as a create through the vfunc body, with `itip`.
+fn create_meeting(sync: &CalSync, itip: Itip) -> String {
+    let components = [instance(MEETING)];
+    let list = instance_list(&components);
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a list of live components and valid out-parameters.
+    unsafe {
+        let ok = ops::save_component(
+            sync,
+            GFALSE,
+            list,
+            ptr::null_mut(),
+            itip,
+            &mut new_uid,
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        drop_instances(list, &components);
+        take_string(&mut new_uid)
+    }
+}
+
+#[test]
+fn a_save_that_may_tell_the_guests_has_the_server_invite_them() {
+    let fixture = Fixture::start();
+    create_meeting(&fixture.scheduling_sync(), Itip::Send);
+    assert_eq!(fixture.sent(), ["REQUEST"]);
+}
+
+#[test]
+fn a_save_the_user_chose_not_to_send_asks_the_server_for_nothing() {
+    let fixture = Fixture::start();
+    create_meeting(&fixture.scheduling_sync(), Itip::Suppress);
+    assert!(fixture.sent().is_empty(), "sent {:?}", fixture.sent());
+}
+
+#[test]
+fn a_removal_passes_its_itip_through_to_the_server() {
+    let fixture = Fixture::start();
+    let sync = fixture.scheduling_sync();
+    let quiet = create_meeting(&sync, Itip::Suppress);
+    let loud = create_meeting(&sync, Itip::Suppress);
+    let mut error: *mut GError = ptr::null_mut();
+
+    let quiet = CString::new(quiet).unwrap();
+    // SAFETY: a NUL-terminated uid and a valid error out-parameter.
+    unsafe {
+        assert_eq!(
+            ops::remove_component(&sync, quiet.as_ptr(), Itip::Suppress, &mut error),
+            GTRUE
+        );
+    }
+    assert!(fixture.sent().is_empty(), "sent {:?}", fixture.sent());
+
+    let loud = CString::new(loud).unwrap();
+    // SAFETY: as above.
+    unsafe {
+        assert_eq!(
+            ops::remove_component(&sync, loud.as_ptr(), Itip::Send, &mut error),
+            GTRUE
+        );
+    }
+    assert_eq!(fixture.sent(), ["CANCEL"]);
 }

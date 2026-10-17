@@ -23,6 +23,7 @@ use gobject_sys::g_object_unref;
 use jmap_backend_cal::connect::{self, open_calendar};
 use jmap_backend_cal::ops::{self, Outcome};
 use jmap_backend_core::source::{ConnectTarget, SourceConfig};
+use jmap_cal_sync::Itip;
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -311,6 +312,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
                 GFALSE,
                 list,
                 ptr::null_mut(),
+                Itip::Send,
                 &mut new_uid,
                 &mut extra,
                 &mut error,
@@ -383,7 +385,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
     );
 
     let (_, captured_remove) = capture(|| {
-        let result = unsafe { ops::remove_component(&sync, new_uid, &mut error) };
+        let result = unsafe { ops::remove_component(&sync, new_uid, Itip::Send, &mut error) };
         assert_eq!(result, GTRUE);
     });
 

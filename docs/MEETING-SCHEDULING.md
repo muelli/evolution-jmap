@@ -148,12 +148,35 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
 
 - `jmap-client`: `event_create_with_scheduling`, `event_update_with_scheduling`
   and `event_destroy_with_scheduling` send the argument only when asked.
-- `jmap-cal-sync`: `CalSync::with_server_scheduling` is the account switch,
-  off by default until the calendar backend reads it from the source and
-  advertises the capabilities above; `save_component_with` and
+- `jmap-cal-sync`: `CalSync::with_server_scheduling` lets the sync layer
+  ask at all (off by default; the calendar backend turns it on at connect
+  and decides per change); `save_component_with` and
   `remove_component_with` take `Itip::Suppress` for
   `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. A refusal comes back as the
   record's `SetError`. Tests: `tests/scheduling.rs` (mock) and
   `tests/live_server_scheduling.rs` (two accounts on one real server: with the
   switch on the guest's calendar gets the meeting exactly once and then its
   cancellation; with it off, nothing).
+- `jmap-backend-cal`: `scheduling.rs` reads the switch from the calendar's
+  source, where EDS's CalDAV backend keeps the same option:
+  `[WebDAV Backend] CalendarAutoSchedule`. An absent group means on (rule 1);
+  to turn it off, add
+
+  ```text
+  [WebDAV Backend]
+  CalendarAutoSchedule=false
+  ```
+
+  to the calendar's `.source` file. A group that exists without the key also
+  reads as off, since the property defaults to false; that fails safe, with
+  Evolution mailing the guests as before. The switch is read afresh for every
+  change and every capability query, as CalDAV does, and `source_changed`
+  tells clients the capabilities may have changed. The backend's
+  `get_backend_property` adds the three capabilities to the meta backend's
+  answer while the switch is on, and `save_component_sync` and
+  `remove_component_sync` map their operation flags to `Itip`. Tests:
+  `tests/scheduling.rs` and `tests/ops.rs` (in process), and
+  `jmap-functional`'s `calendar-scheduling` leg (a real
+  `evolution-calendar-factory` and an `ECalClient`: the capabilities with the
+  switch at its default and off, and which creates and removes reach the
+  mock's scheduling outbox).

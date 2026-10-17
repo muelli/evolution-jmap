@@ -14,7 +14,7 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{CalSync, SyncError, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, SyncError, Unsendable};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -251,15 +251,20 @@ pub unsafe fn load_component(
 
 /// Creates or updates a component for `save_component_sync`.
 ///
+/// `itip` says whether the server may tell the guests about this change
+/// (see [`crate::scheduling::itip`]).
+///
 /// # Safety
 ///
 /// As [`list_existing`], `instances` must be a valid GSList of `ECalComponent *`,
 /// and `zones` NULL or a valid `ETimezoneCache`.
+#[allow(clippy::too_many_arguments)] // the vfunc's signature, plus `itip`
 pub unsafe fn save_component(
     sync: &CalSync,
     overwrite_existing: gboolean,
     instances: *const GSList,
     zones: *mut ETimezoneCache,
+    itip: Itip,
     out_new_uid: *mut *mut gchar,
     _out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
@@ -310,10 +315,11 @@ pub unsafe fn save_component(
         calendar_id,
         overwrite_existing = is_overwrite,
         existing_uid = existing_uid.as_deref(),
+        ?itip,
         "saving component"
     );
 
-    let info = match sync.save_component(&saved.icalendar, existing_uid.as_deref()) {
+    let info = match sync.save_component_with(&saved.icalendar, existing_uid.as_deref(), itip) {
         Ok(info) => info,
         // SAFETY: as above.
         Err(failure) => {
@@ -342,7 +348,8 @@ pub unsafe fn save_component(
     GTRUE
 }
 
-/// Destroys a component for `remove_component_sync`.
+/// Destroys a component for `remove_component_sync`, with `itip` as
+/// [`save_component`]'s.
 ///
 /// # Safety
 ///
@@ -350,6 +357,7 @@ pub unsafe fn save_component(
 pub unsafe fn remove_component(
     sync: &CalSync,
     uid: *const gchar,
+    itip: Itip,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -369,10 +377,11 @@ pub unsafe fn remove_component(
         account_id,
         calendar_id,
         uid = uid.as_str(),
+        ?itip,
         "removing component"
     );
 
-    match sync.remove_component(&uid) {
+    match sync.remove_component_with(&uid, itip) {
         Ok(()) => {
             tracing::debug!(
                 account_id,
