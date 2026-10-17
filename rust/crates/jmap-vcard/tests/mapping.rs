@@ -2438,6 +2438,13 @@ fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
 }
 
 #[test]
+fn a_data_uri_photo_line_without_type_keeps_its_stated_media_type() {
+    let media = photo_line(&format!("PHOTO:data:image/heic;base64,{PAYLOAD}"));
+    assert_eq!(media.uri, format!("data:image/heic;base64,{PAYLOAD}"));
+    assert_eq!(media.media_type.as_deref(), Some("image/heic"));
+}
+
+#[test]
 fn a_photo_eds_holds_no_media_type_for_reads_back_without_one() {
     // `TYPE="X-EVOLUTION-UNKNOWN"` is treated as no media type.
     let media = photo_line(&format!(
