@@ -1688,4 +1688,22 @@ mod tests {
         }));
         assert_eq!(name_patch(Some(&current), None), json!({"name/full": null}));
     }
+
+    /// A keyless entry the vCard never showed cannot have been the one the
+    /// user edited, so an edited entry of the same kind is not paired with
+    /// it, and does not take (and overwrite) its key.
+    #[test]
+    fn rekey_keyless_never_pairs_an_edit_with_a_hidden_entry() {
+        let current: BTreeMap<String, (bool, &str)> = [("a1".to_owned(), (false, "birth"))].into();
+        let edited: BTreeMap<String, (bool, &str)> = [("x1".to_owned(), (true, "birth"))].into();
+
+        let rekeyed = rekey_keyless(
+            Some(&current),
+            Some(&edited),
+            |entry| entry.0,
+            |old, new| old.1 == new.1,
+        );
+
+        assert_eq!(rekeyed, Some(edited));
+    }
 }
