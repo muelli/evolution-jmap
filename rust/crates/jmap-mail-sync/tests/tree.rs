@@ -262,6 +262,20 @@ fn a_parent_cycle_does_not_hang_and_keeps_every_mailbox() {
 }
 
 #[test]
+fn a_mailbox_hanging_off_a_cycle_stays_under_its_parent() {
+    let tree = tree(&[
+        mailbox("M1", "Inbox"),
+        child("M2", "A", "M3"),
+        child("M3", "B", "M2"),
+        child("M4", "C", "M3"),
+    ]);
+
+    // Cutting the cycle removes one link, A's, and nothing else: C's parent
+    // is still B, so C must not become a second top-level folder.
+    assert_eq!(paths(&tree), ["Inbox", "A", "A/B", "A/B/C"]);
+}
+
+#[test]
 fn counts_come_from_the_mailbox_and_saturate() {
     let tree = tree(&[
         Mailbox {
@@ -322,6 +336,13 @@ fn an_empty_list_is_an_empty_tree() {
     assert!(tree.is_empty());
     assert_eq!(tree.len(), 0);
     assert!(tree.roots().is_empty());
+}
+
+#[test]
+fn a_tree_with_one_mailbox_is_not_empty() {
+    let tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(!tree.is_empty());
 }
 
 #[test]
