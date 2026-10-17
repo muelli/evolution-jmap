@@ -28,6 +28,7 @@ use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::contacts::AddressBookRights;
 
 struct Fixture {
     server: MockServer,
@@ -74,16 +75,12 @@ impl Fixture {
 }
 
 /// Helper opening an address book using resolved credentials.
-fn open(
-    config: &SourceConfig,
-    password: Option<&str>,
-) -> Result<jmap_book_sync::BookSync, ConnectError> {
+fn open(config: &SourceConfig, password: Option<&str>) -> Result<connect::OpenBook, ConnectError> {
     connect::open_book(config, credentials(config.user.as_deref(), password)?)
 }
 
-/// `BookSync` is not `Debug`, and naming the address book it opened is a more
-/// useful failure message than the type name would have been anyway.
-fn expect_error(result: Result<jmap_book_sync::BookSync, ConnectError>) -> ConnectError {
+/// `OpenBook` naming the address book it opened is a useful failure message.
+fn expect_error(result: Result<connect::OpenBook, ConnectError>) -> ConnectError {
     match result {
         Ok(sync) => panic!("expected a failure, but opened {}", sync.address_book_id()),
         Err(error) => error,
@@ -580,4 +577,76 @@ fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
     // SAFETY: as above.
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
+}
+
+#[test]
+fn an_address_book_with_no_my_rights_opens_writable() {
+    let fixture = Fixture::start(true);
+    let open = open(&fixture.config(), None).expect("connected");
+    assert!(open.writable);
+}
+
+#[test]
+fn an_address_book_with_write_rights_opens_writable() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let book = account.address_books.get_mut(&fixture.other_book).unwrap();
+        book.my_rights = Some(AddressBookRights::all());
+    }
+    let mut config = fixture.config();
+    config.resource_id = Some(fixture.other_book.to_string());
+    let open = open(&config, None).expect("connected");
+    assert!(open.writable);
+}
+
+#[test]
+fn an_address_book_without_write_rights_opens_read_only() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let book = account.address_books.get_mut(&fixture.other_book).unwrap();
+        book.my_rights = Some(AddressBookRights::read_only());
+    }
+    let mut config = fixture.config();
+    config.resource_id = Some(fixture.other_book.to_string());
+    let open = open(&config, None).expect("connected");
+    assert!(!open.writable);
+}
+
+#[test]
+fn connecting_from_a_source_reports_read_only_when_address_book_lacks_write_rights() {
+    let fixture = Fixture::start(true);
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.server.account_id()).unwrap();
+        let book = account
+            .address_books
+            .get_mut(fixture.default_book.as_ref().unwrap())
+            .unwrap();
+        book.my_rights = Some(AddressBookRights::read_only());
+    }
+    let source = TestSource::new().at(fixture.server.origin());
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    let open = sync.expect("connected");
+    assert!(!open.writable);
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+    assert!(outs.error.is_null());
 }

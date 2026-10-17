@@ -260,7 +260,7 @@ unsafe extern "C" fn connect_sync(
             }
 
             let source = e_backend_get_source(meta_backend.cast());
-            let Some(sync) =
+            let Some(open) =
                 connect::connect(source, credentials, cancellable, out_auth_result, error)
             else {
                 return GFALSE;
@@ -269,16 +269,20 @@ unsafe extern "C" fn connect_sync(
             // The account switch is read afresh for every change, by
             // `itip_for`, so the sync layer is always allowed to ask and
             // each change says whether it does.
-            let sync = sync.with_server_scheduling(true);
+            let sync = open.sync.with_server_scheduling(true);
             tracing::debug!(
                 account_id = sync.account_id().as_str(),
                 calendar_id = sync.calendar_id().as_str(),
+                writable = open.writable,
                 "calendar backend connected"
             );
             // Push starts after connection is stored so refreshes find a live session.
             backend.install_connection(sync, |sync| start_push(meta_backend, sync));
             // Sets writable on the backend; EDS overwrites connected-writable from this value.
-            e_cal_backend_set_writable(meta_backend.cast(), GTRUE);
+            e_cal_backend_set_writable(
+                meta_backend.cast(),
+                if open.writable { GTRUE } else { GFALSE },
+            );
             GTRUE
         })
     }

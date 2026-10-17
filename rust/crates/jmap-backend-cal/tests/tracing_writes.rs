@@ -77,7 +77,9 @@ impl Fixture {
     }
 
     fn sync(&self) -> jmap_cal_sync::CalSync {
-        capture(|| open_calendar(&self.config(), Credentials::none()).expect("connected")).0
+        capture(|| open_calendar(&self.config(), Credentials::none()).expect("connected"))
+            .0
+            .sync
     }
 }
 
