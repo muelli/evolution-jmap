@@ -134,10 +134,12 @@ Important limit: many public JMAP servers do not expose the snooze capability to
 ## Logs and debug output
 
 - Runtime logs are emitted through journald when available, otherwise stderr.
-- For detailed module logs, start Evolution with `EVOLUTION_JMAP_LOG=debug`.
-- For additional GLib process logs, also set `G_MESSAGES_DEBUG=all`.
-- To watch live user-session logs: `journalctl --user -f`.
-- Account source files are in `~/.config/evolution/sources/`.
+- `EVOLUTION_JMAP_LOG` is read when each Evolution process starts. If Evolution is already running, restart it first.
+- For detailed module logs, restart and run Evolution as:
+  `EVOLUTION_JMAP_LOG=debug G_MESSAGES_DEBUG=all evolution`
+- To watch live user-session logs when journald is present: `journalctl --user -f`.
+- If journald is not present (for example in some containers), start Evolution from a terminal and read stderr directly in that terminal.
+- Account source files are in `${XDG_CONFIG_HOME:-~/.config}/evolution/sources/`.
 
 ## Uninstall
 
