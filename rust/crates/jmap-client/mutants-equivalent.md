@@ -42,3 +42,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (15 of 15 viable mutants caught by test suites, 15 unviable due to `SetResponse`, `GetResponse`, and `Error` lacking `Default` implementations).
 
+## `src/calendars.rs`
+
+- Zero missed mutants (22 of 22 viable mutants caught by test suites, 22 unviable due to absence of `Default` and parameterless constructors on `SetResponse`, `GetResponse`, `CalendarEventParseResponse`, and `QueryResponse`).
+
