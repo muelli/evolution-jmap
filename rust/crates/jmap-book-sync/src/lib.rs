@@ -338,3 +338,18 @@ fn revision_of(vcard: &str) -> String {
     }
     format!("{hash:016x}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Revisions outlive the process in the EDS cache, so the digest is
+    /// pinned to the published FNV-1a 64-bit test vectors: any drift would
+    /// make every cached card look changed after an upgrade.
+    #[test]
+    fn revision_of_is_fnv1a_64() {
+        assert_eq!(revision_of(""), "cbf29ce484222325");
+        assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
+        assert_eq!(revision_of("foobar"), "85944171f73967e8");
+    }
+}
