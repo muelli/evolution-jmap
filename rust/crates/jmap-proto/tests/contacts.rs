@@ -1260,3 +1260,27 @@ fn rfc9553_sub_type_properties_roundtrip() {
     assert_eq!(de_dir.list_as, Some(1));
     assert_eq!(de_dir.label.as_deref(), Some("Public Staff Directory"));
 }
+
+/// An integer the server sends that does not fit a `u32` is rejected, the
+/// way the same value spelled as a string already is, rather than wrapped
+/// into a small, plausible-looking one.
+#[test]
+fn an_out_of_range_unsigned_int_is_rejected_not_wrapped() {
+    use jmap_proto::contacts::{Anniversary, Directory, LanguagePref, PersonalInfo};
+
+    let too_big = u64::from(u32::MAX) + 2;
+
+    let directory = serde_json::json!({"kind": "directory", "uri": "x:", "listAs": too_big});
+    assert!(serde_json::from_value::<Directory>(directory).is_err());
+
+    let info = serde_json::json!({"kind": "hobby", "value": "x", "listAs": too_big});
+    assert!(serde_json::from_value::<PersonalInfo>(info).is_err());
+
+    assert!(serde_json::from_value::<LanguagePref>(too_big.into()).is_err());
+    assert!(serde_json::from_value::<LanguagePref>((-1).into()).is_err());
+
+    let anniversary: Anniversary =
+        serde_json::from_value(serde_json::json!({"kind": "birth", "pref": too_big}))
+            .expect("pref is an extra property, kept as-is");
+    assert_eq!(anniversary.pref(), None);
+}

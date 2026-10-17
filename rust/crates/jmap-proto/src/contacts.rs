@@ -1164,7 +1164,7 @@ impl Anniversary {
         self.extra
             .get("pref")
             .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
+            .and_then(|n| u32::try_from(n).ok())
     }
 
     pub fn with_pref(mut self, pref: u32) -> Self {
@@ -1858,18 +1858,14 @@ where
         where
             E: serde::de::Error,
         {
-            Ok(Some(value as u32))
+            u32::try_from(value).map(Some).map_err(E::custom)
         }
 
         fn visit_i64<E>(self, value: i64) -> Result<Option<u32>, E>
         where
             E: serde::de::Error,
         {
-            if value >= 0 {
-                Ok(Some(value as u32))
-            } else {
-                Err(E::custom("expected non-negative integer"))
-            }
+            u32::try_from(value).map(Some).map_err(E::custom)
         }
 
         fn visit_str<E>(self, value: &str) -> Result<Option<u32>, E>
@@ -2229,7 +2225,7 @@ impl<'de> serde::Deserialize<'de> for LanguagePref {
                 E: serde::de::Error,
             {
                 Ok(LanguagePref {
-                    pref: Some(value as u32),
+                    pref: Some(u32::try_from(value).map_err(E::custom)?),
                     ..LanguagePref::default()
                 })
             }
@@ -2239,7 +2235,7 @@ impl<'de> serde::Deserialize<'de> for LanguagePref {
                 E: serde::de::Error,
             {
                 Ok(LanguagePref {
-                    pref: Some(value as u32),
+                    pref: Some(u32::try_from(value).map_err(E::custom)?),
                     ..LanguagePref::default()
                 })
             }

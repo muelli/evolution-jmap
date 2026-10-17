@@ -59,3 +59,14 @@ fn capturing_is_unaffected_by_concurrent_non_capturing_calls() {
         );
     }
 }
+
+#[test]
+fn a_nested_capture_hands_the_scope_back_to_the_outer_one() {
+    let ((), outer) = capture(|| {
+        emit(1);
+        let ((), inner) = capture(|| emit(2));
+        assert_eq!(ids_field(&inner), ["2"]);
+        emit(3);
+    });
+    assert_eq!(ids_field(&outer), ["1", "3"]);
+}

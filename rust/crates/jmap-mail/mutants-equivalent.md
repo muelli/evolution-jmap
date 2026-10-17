@@ -16,3 +16,26 @@ SPDX-License-Identifier: GPL-3.0-or-later
   operation, and `flags` starts the match fresh each call (not OR-ed onto a
   pre-existing value), so the two forms compute identical results for every
   role.
+
+## `src/sasl.rs`
+
+- `crates/jmap-mail/src/sasl.rs:283:5` (`sasl_type`) and `:353:5`
+  (`auth_type`), both `replace ... with Default::default()`, in the
+  `#[cfg(eds_oauth2_dynamic)]` arm. Not behaviourally equivalent code: a real
+  build of this arm with `auth_type` returning NULL would hand the account
+  editor's combo a NULL `CamelServiceAuthType` (see `crate::provider`'s
+  `authtypes` list). The mutants are spurious for a different reason:
+  `eds_oauth2_dynamic` needs `e_source_oauth2_client_get_type`, upstream
+  `Since: 3.64`, unreleased (`docs/eds-version-matrix.md`'s "OAuth2Dynamic"
+  section measured it only against a from-source EDS master build, never
+  against this VM's installed 3.52.3 or CI's pinned 3.60.2 Fedora image).
+  Confirmed with `cargo build -p jmap-mail -vv`: no `--cfg eds_oauth2_dynamic`
+  reaches rustc here, so the `#[cfg(not(eds_oauth2_dynamic))]` arm a few lines
+  above is what actually ships in every binary this provider builds today,
+  and it has its own `sasl_type`/`auth_type` (lines 265/318), both caught.
+  cargo-mutants enumerates mutation sites from the source text without
+  evaluating `#[cfg]`, so it still generates mutants for the inactive arm;
+  since that code is not compiled at all, the mutation changes nothing
+  observable and the mutant always reports MISSED, regardless of test
+  coverage. Nothing here is fixable by a test until an EDS exposing the
+  marker symbol is the one being built against; re-check then.
