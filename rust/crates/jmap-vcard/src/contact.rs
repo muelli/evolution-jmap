@@ -2595,7 +2595,9 @@ mod tests {
         normalize_vcard_dates, service_of, split_vcard_property_line,
     };
     use calcard::common::CalendarScale;
-    use calcard::vcard::{VCardLevel, VCardParameterValue, VCardPhonetic};
+    use calcard::vcard::{
+        VCardKind, VCardLevel, VCardParameterValue, VCardPhonetic, VCardSex, VCardValue,
+    };
     use std::collections::BTreeMap;
 
     fn unfold_lines(vcard: &str) -> String {
@@ -2811,6 +2813,36 @@ mod tests {
         assert_eq!(
             super::param_text(&VCardParameterValue::Phonetic(VCardPhonetic::Script)),
             "SCRIPT".to_owned()
+        );
+    }
+
+    #[test]
+    fn value_text_keeps_typed_value_text_for_round_trip_checks() {
+        // RFC 6350 section 3.3 carries property values as text in content lines.
+        // RFC 6350 sections 6.1.4 and 6.2.7 define KIND and GENDER text tokens.
+        assert_eq!(
+            super::value_text(&VCardValue::Integer(42)),
+            Some("42".to_owned())
+        );
+        assert_eq!(
+            super::value_text(&VCardValue::Float(3.5)),
+            Some("3.5".to_owned())
+        );
+        assert_eq!(
+            super::value_text(&VCardValue::Boolean(true)),
+            Some("TRUE".to_owned())
+        );
+        assert_eq!(
+            super::value_text(&VCardValue::Boolean(false)),
+            Some("FALSE".to_owned())
+        );
+        assert_eq!(
+            super::value_text(&VCardValue::Kind(VCardKind::Individual)),
+            Some("INDIVIDUAL".to_owned())
+        );
+        assert_eq!(
+            super::value_text(&VCardValue::Sex(VCardSex::Unknown)),
+            Some("U".to_owned())
         );
     }
 }
