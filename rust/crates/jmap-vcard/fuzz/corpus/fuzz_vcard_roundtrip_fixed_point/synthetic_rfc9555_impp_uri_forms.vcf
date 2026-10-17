@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-rfc9555-impp-uri-forms-0001
+FN:Sam Rivera
+N:Rivera;Sam;;;
+IMPP;TYPE=work;PREF=1;LANGUAGE=en;ALTID=1:xmpp:sam.rivera@example.net
+IMPP;TYPE=home;ALTID=2:matrix:@sam:matrix.example
+IMPP;TYPE=work:skype:sam.rivera
+IMPP;TYPE=work:xmpp:sam.rivera@example.net?message
+END:VCARD
