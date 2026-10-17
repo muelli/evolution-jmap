@@ -2845,4 +2845,22 @@ mod tests {
             Some("U".to_owned())
         );
     }
+
+    #[test]
+    fn states_name_treats_file_as_as_a_stated_name_signal() {
+        // RFC 6350 section 3.8 allows X- extension properties in vCard content.
+        // `X-EVOLUTION-FILE-AS` is this mapping's file-as extension signal.
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "fileAs".to_owned(),
+            super::Value::String("Example, Alice".to_owned()),
+        );
+
+        let name = super::Name {
+            extra,
+            ..super::Name::default()
+        };
+
+        assert!(super::states_name(&name));
+    }
 }
