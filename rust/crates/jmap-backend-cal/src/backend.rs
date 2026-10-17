@@ -151,7 +151,7 @@ impl JmapCalBackend {
     }
 
     /// Accesses the last known color slot if initialized.
-    fn last_known_color(&self) -> Option<&RwLock<Option<String>>> {
+    pub fn last_known_color(&self) -> Option<&RwLock<Option<String>>> {
         self.last_known_color.get()
     }
 }
