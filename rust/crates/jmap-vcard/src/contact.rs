@@ -2590,7 +2590,10 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_LINE_OCTETS, fold_overlong_lines, service_of};
+    use super::{
+        MAX_LINE_OCTETS, fold_overlong_lines, normalize_vcard_dates, service_of,
+        split_vcard_property_line,
+    };
 
     fn unfold_lines(vcard: &str) -> String {
         let mut unfolded = String::with_capacity(vcard.len());
@@ -2707,5 +2710,50 @@ mod tests {
                 .all(|line| line[1..].len() < MAX_LINE_OCTETS)
         );
         assert_eq!(unfold_lines(&folded), input);
+    }
+
+    #[test]
+    fn normalize_vcard_dates_only_touches_date_properties() {
+        // RFC 6350 section 6.6.2 defines NOTE as free text, not date data.
+        // RFC 6350 section 6.2.5 defines BDAY as date-and-or-time data.
+        let input = "NOTE:2026-04-12\r\nBDAY:2026-04-12\r\n";
+
+        let normalized = normalize_vcard_dates(input);
+
+        assert_eq!(normalized, "NOTE:2026-04-12\r\nBDAY:20260412\r\n");
+    }
+
+    #[test]
+    fn normalize_vcard_dates_normalizes_x_abdate_extension_values() {
+        // RFC 6350 section 3.8 allows X- extension properties in vCards.
+        // RFC 6350 section 4.3 uses the basic date format when separators are removed.
+        let input = "X-ABDATE:2026-04-12\r\n";
+
+        let normalized = normalize_vcard_dates(input);
+
+        assert_eq!(normalized, "X-ABDATE:20260412\r\n");
+    }
+
+    #[test]
+    fn split_vcard_property_line_ignores_colons_inside_quoted_parameters() {
+        // RFC 6350 section 3.3 requires quoted parameter text to be parsed as one value.
+        let line = "ITEM1.ANNIVERSARY;LABEL=\"one:two\":2026-04-12";
+
+        let split = split_vcard_property_line(line);
+
+        assert_eq!(
+            split,
+            Some(("ITEM1.ANNIVERSARY;LABEL=\"one:two\"", "2026-04-12"))
+        );
+    }
+
+    #[test]
+    fn split_vcard_property_line_splits_simple_property_lines() {
+        // RFC 6350 section 3.3 uses the first unquoted colon to separate value text.
+        let line = "BDAY:2026-04-12";
+
+        let split = split_vcard_property_line(line);
+
+        assert_eq!(split, Some(("BDAY", "2026-04-12")));
     }
 }
