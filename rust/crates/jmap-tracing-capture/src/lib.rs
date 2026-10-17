@@ -120,9 +120,21 @@ fn ensure_installed() {
 pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Captured) {
     ensure_installed();
     let sink = Arc::new(Mutex::new(Vec::new()));
-    SCOPE.with(|scope| *scope.borrow_mut() = Some(sink.clone()));
+    let outer = SCOPE.with(|scope| scope.replace(Some(sink.clone())));
+    let restore = Restore(outer);
     let result = run();
-    SCOPE.with(|scope| *scope.borrow_mut() = None);
+    drop(restore);
     let captured = std::mem::take(&mut *sink.lock().unwrap());
     (result, captured)
+}
+
+/// Hands the thread's scope back to an enclosing `capture`, if any, even
+/// when `run` panics.
+struct Restore(Option<Arc<Mutex<Captured>>>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        SCOPE.with(|scope| *scope.borrow_mut() = outer);
+    }
 }
