@@ -276,11 +276,19 @@ unsafe impl ObjectSubclass for JmapConfigLookup {
         vec![InterfaceDecl::filled_by::<Vtable>()]
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // SAFETY: no arguments, and the type initialises itself. Called here,
+        // ahead of registration, because `class_init` may only look it up.
+        vec![unsafe { e_config_lookup_get_type() }]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: `class` leads with `EExtensionClass`, whose `extensible_type`
         // field is what `e_extensible_load_extensions` matches against —
         // `e_webdav_config_lookup_class_init`'s own assignment, mirrored here.
-        unsafe { (*class).parent_class.extensible_type = e_config_lookup_get_type() };
+        unsafe {
+            (*class).parent_class.extensible_type = subclass::registered_type(c"EConfigLookup")
+        };
 
         // SAFETY: `JmapConfigLookupClass` leads with `EExtensionClass`, which
         // leads with `GObjectClass` — the same transitive leading-field cast

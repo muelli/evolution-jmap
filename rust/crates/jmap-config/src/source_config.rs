@@ -88,10 +88,10 @@ use evo_sys::{
     E_CAL_CLIENT_SOURCE_TYPE_EVENTS, ECalClientSourceType, ECalSourceConfig, ESourceConfigBackend,
     ESourceConfigBackendClass, e_book_source_config_get_type, e_cal_source_config_get_source_type,
     e_cal_source_config_get_type, e_source_config_backend_get_config,
-    e_source_config_backend_get_type,
+    e_source_config_backend_get_type, e_source_config_get_type,
 };
 use glib_sys::{GFALSE, GTRUE, GType, gboolean};
-use jmap_backend_core::subclass::ObjectSubclass;
+use jmap_backend_core::subclass::{ObjectSubclass, registered_type};
 use jmap_backend_core::trampoline::guard;
 
 /// The `BackendName` both dialogs match a candidate against.
@@ -129,6 +129,27 @@ pub struct ConfigBackendClass {
     pub parent_class: ESourceConfigBackendClass,
 }
 
+/// `ESourceConfigBackend`, both types' parent, with the type its own class
+/// initialiser asks for registered first.
+///
+/// Evolution's `e_source_config_backend_class_init` sets `extensible_type =
+/// E_TYPE_SOURCE_CONFIG`: an accessor called from a class initialiser, the
+/// deadlock [`registered_type`] describes, in code that is not ours to change.
+/// GLib initialises a parent's class under the same lock and just before the
+/// child's, so the only place left to break the cycle is ahead of both.
+/// Registering `ESourceConfig` (and the `GtkBox` it derives from) here does
+/// that on a thread holding no lock, because [`ObjectSubclass::parent_type`]
+/// is resolved before registration starts. Anything else that references
+/// the parent's class goes through this for the same reason.
+pub fn config_backend_type() -> GType {
+    // SAFETY: no arguments, and the type system initialises itself; called
+    // from no class initialiser.
+    unsafe {
+        e_source_config_get_type();
+        e_source_config_backend_get_type()
+    }
+}
+
 /// The address book half, and a type-level name rather than a value: no
 /// instance of this is ever built here or anywhere else, since GObject
 /// allocates a [`ConfigBackend`] and the marker exists only to carry the
@@ -149,8 +170,7 @@ unsafe impl ObjectSubclass for JmapBookConfig {
     type Class = ConfigBackendClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type system initialises itself.
-        unsafe { e_source_config_backend_get_type() }
+        config_backend_type()
     }
 
     fn class_init_types() -> Vec<GType> {
@@ -159,9 +179,11 @@ unsafe impl ObjectSubclass for JmapBookConfig {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: the caller's contract, passed straight to the shared body;
-        // the GType is Evolution's own and registered by `class_init_types`.
-        unsafe { init_class(class, e_book_source_config_get_type()) };
+        // SAFETY: the caller's contract, passed straight to the shared body.
+        // The dialog class is looked up rather than asked for: its accessor,
+        // called from here, is the deadlock `registered_type` describes, and
+        // `class_init_types` is what has registered it already.
+        unsafe { init_class(class, registered_type(c"EBookSourceConfig")) };
     }
 }
 
@@ -172,8 +194,7 @@ unsafe impl ObjectSubclass for JmapCalConfig {
     type Class = ConfigBackendClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type system initialises itself.
-        unsafe { e_source_config_backend_get_type() }
+        config_backend_type()
     }
 
     fn class_init_types() -> Vec<GType> {
@@ -183,7 +204,7 @@ unsafe impl ObjectSubclass for JmapCalConfig {
 
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: as `JmapBookConfig::class_init`.
-        unsafe { init_class(class, e_cal_source_config_get_type()) };
+        unsafe { init_class(class, registered_type(c"ECalSourceConfig")) };
         // The one slot either subclass overrides, and only this one does;
         // `offers_creation_for` says why the calendar side needs it and the
         // address book side does not.
@@ -201,7 +222,9 @@ unsafe impl ObjectSubclass for JmapCalConfig {
 /// `class` must be a freshly allocated class struct of one of the two types
 /// above, with the parent class already copied into its leading bytes — which
 /// is what GObject hands a `class_init`. `extensible` must be a registered
-/// `GType`.
+/// `GType`, or 0 when looking it up failed: an `extensible_type` of 0 matches
+/// no dialog in `e_extensible_load_extensions`, which is the safe way for this
+/// to fail. Left inherited, it would match both.
 unsafe fn init_class(class: *mut ConfigBackendClass, extensible: GType) {
     // SAFETY: `class` leads with the parent's class struct, where both name
     // fields and all four vfunc slots live.

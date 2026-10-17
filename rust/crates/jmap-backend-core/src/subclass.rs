@@ -103,6 +103,12 @@ pub unsafe trait ObjectSubclass: Sized {
     /// The list is the accessors' *effect*, not their values — nothing reads
     /// the `GType`s back. `Vec<GType>` rather than `()` only so an
     /// implementation reads as the list of types it is.
+    ///
+    /// The same goes for a type that is not ours: an Evolution or EDS class
+    /// `class_init` names, say as an `extensible_type`, is declared here too.
+    /// Its accessor cannot be called from `class_init` at all, though, not
+    /// even when it is declared; see [`registered_type`] for why, and for
+    /// what `class_init` calls instead.
     fn class_init_types() -> Vec<GType> {
         Vec::new()
     }
@@ -318,6 +324,41 @@ unsafe extern "C" fn interface_init_trampoline<I: InterfaceImpl>(
     });
 }
 
+/// A type that is not ours, looked up by name for a class initialiser.
+///
+/// The rule: no [`class_init`](ObjectSubclass::class_init) calls a foreign
+/// `*_get_type()` accessor. It looks the type up with this, and the type is
+/// named in [`class_init_types`](ObjectSubclass::class_init_types) so that
+/// the lookup finds it.
+///
+/// The accessor is the same cycle [`REGISTRATION`] is kept out of, with
+/// GLib's lazy `get_type` once-init in place of our lock. A class initialiser
+/// holds GLib's class-init lock; an accessor whose type is not registered yet
+/// waits in `g_once_init_enter` for whichever thread is registering it; and
+/// that thread, registering a `GtkBox` or anything else that implements an
+/// interface, waits in `g_type_add_interface_static` for the class-init lock.
+/// `jmap-config`'s `source_config` tests hung on exactly that when one of its
+/// declarations went missing: one thread initialising `EBookConfigJmap`'s
+/// class and asking for `EBookSourceConfig`, another registering
+/// `ECalSourceConfig` and, under it, the `GtkBox` they both derive from.
+///
+/// A lookup takes no once-init, so it cannot wait on anyone. When the type is
+/// not there it answers 0, `G_TYPE_INVALID`, and logs a critical that names
+/// the missing declaration: a class whose `extensible_type` is 0 is an
+/// extension `e_extensible_load_extensions` never loads, which fails a test
+/// in seconds where the accessor hung the whole run.
+pub fn registered_type(name: &CStr) -> GType {
+    // SAFETY: `name` is a NUL-terminated string that outlives the call.
+    let gtype = unsafe { g_type_from_name(name.as_ptr()) };
+    if gtype == 0 {
+        log_critical(&format!(
+            "{name:?}: asked for from a class initialiser before it was registered; \
+             name it in the initialising type's class_init_types()"
+        ));
+    }
+    gtype
+}
+
 /// Registers `T` as a static type, or returns the existing `GType` if it has
 /// already been registered.
 ///
@@ -411,16 +452,7 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     // that declaration missing — reported rather than papered over, because
     // the zero this returns is a GType nothing can be built from.
     if IN_CLASS_INIT.with(Cell::get) > 0 {
-        // SAFETY: NAME is a 'static NUL-terminated string.
-        let existing = unsafe { g_type_from_name(T::NAME.as_ptr()) };
-        if existing == 0 {
-            log_critical(&format!(
-                "{:?}: asked for from a class initialiser before it was registered; \
-                 name it in the initialising type's class_init_types()",
-                T::NAME
-            ));
-        }
-        return existing;
+        return registered_type(T::NAME);
     }
 
     // Resolved before the lock is taken, not inside the GTypeInfo below: a
@@ -767,6 +799,20 @@ mod tests {
         assert_eq!(dependency, unsafe {
             g_type_from_name(DeclaredDependency::NAME.as_ptr())
         });
+    }
+
+    /// A foreign type is found by name once it is registered, with no
+    /// accessor called and so no once-init to wait on.
+    #[test]
+    fn a_registered_type_is_looked_up_by_name() {
+        assert_eq!(registered_type(c"GObject"), G_TYPE_OBJECT);
+    }
+
+    /// The miss is 0, `G_TYPE_INVALID`: an `extensible_type` that matches
+    /// nothing, rather than a wait that never ends.
+    #[test]
+    fn an_unregistered_type_is_looked_up_as_invalid() {
+        assert_eq!(registered_type(c"JmapBackendCoreNeverRegistered"), 0);
     }
 
     static UNDECLARED_FROM_CLASS_INIT: AtomicUsize = AtomicUsize::new(1);

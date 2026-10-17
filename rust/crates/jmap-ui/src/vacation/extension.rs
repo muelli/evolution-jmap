@@ -63,10 +63,19 @@ unsafe impl ObjectSubclass for JmapVacationExtension {
         unsafe { e_extension_get_type() }
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // SAFETY: no arguments, and the type initialises itself. Called here,
+        // ahead of registration, because `class_init` may only look it up.
+        vec![unsafe { e_mail_config_notebook_get_type() }]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: `class` leads with `EExtensionClass`, whose
         // `extensible_type` is what `e_extensible_load_extensions` matches.
-        unsafe { (*class).parent_class.extensible_type = e_mail_config_notebook_get_type() };
+        unsafe {
+            (*class).parent_class.extensible_type =
+                subclass::registered_type(c"EMailConfigNotebook")
+        };
 
         // SAFETY: transitively leads with GObjectClass, as in JmapConfigLookup.
         let object_class = class.cast::<GObjectClass>();
