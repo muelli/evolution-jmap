@@ -14445,6 +14445,114 @@ fn x_abrelatednames_empty_group_label_maps_to_contact() {
 }
 
 #[test]
+fn x_abdate_empty_group_label_maps_to_wedding() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Date Empty Label\r\n",
+        "item1.X-ABDATE:2018-11-22\r\n",
+        "item1.X-ABLabel:_$!<>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse grouped x-abdate empty label");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+
+    assert_eq!(anniversaries.len(), 1);
+    let only = anniversaries.values().next().expect("anniversary entry");
+    assert_eq!(only.kind, "wedding");
+    assert_eq!(anniversary_date(only), Some("2018-11-22".to_owned()));
+}
+
+#[test]
+fn x_abdate_distinct_non_empty_keys_keep_same_kind_and_date_entries() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Date Distinct Keys\r\n",
+        "item1.X-ABDATE;X-JMAP-KEY=y1:2018-11-22\r\n",
+        "item1.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "item2.X-ABDATE;X-JMAP-KEY=y2:2018-11-22\r\n",
+        "item2.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse grouped x-abdate keys");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+
+    assert_eq!(anniversaries.len(), 2);
+    assert_eq!(anniversaries["y1"].kind, "wedding");
+    assert_eq!(anniversaries["y2"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniversaries["y1"]),
+        Some("2018-11-22".to_owned())
+    );
+    assert_eq!(
+        anniversary_date(&anniversaries["y2"]),
+        Some("2018-11-22".to_owned())
+    );
+}
+
+#[test]
+fn x_abdate_reused_key_keeps_entries_when_kind_or_date_differs() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Date Reused Key\r\n",
+        "BDAY;X-JMAP-KEY=y1:1980-01-01\r\n",
+        "item1.X-ABDATE;X-JMAP-KEY=y1:1980-01-01\r\n",
+        "item1.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "item2.X-ABDATE;X-JMAP-KEY=y1:1980-02-02\r\n",
+        "item2.X-ABLabel:_$!<Birth>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse grouped x-abdate reused key");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+
+    assert_eq!(anniversaries.len(), 3);
+    assert!(
+        anniversaries.values().any(|entry| entry.kind == "birth"
+            && anniversary_date(entry) == Some("1980-01-01".to_owned()))
+    );
+    assert!(
+        anniversaries.values().any(|entry| entry.kind == "birth"
+            && anniversary_date(entry) == Some("1980-02-02".to_owned()))
+    );
+    assert!(
+        anniversaries.values().any(|entry| entry.kind == "wedding"
+            && anniversary_date(entry) == Some("1980-01-01".to_owned()))
+    );
+}
+
+#[test]
+fn x_abdate_unkeyed_same_day_different_kinds_are_distinct_entries() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Date Same Day Different Kinds\r\n",
+        "item1.X-ABDATE:2018-11-22\r\n",
+        "item1.X-ABLabel:_$!<Birthday>!$_\r\n",
+        "item2.X-ABDATE:2018-11-22\r\n",
+        "item2.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse unkeyed grouped x-abdate");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+
+    assert_eq!(anniversaries.len(), 2);
+    assert!(
+        anniversaries.values().any(|entry| entry.kind == "birth"
+            && anniversary_date(entry) == Some("2018-11-22".to_owned()))
+    );
+    assert!(
+        anniversaries.values().any(|entry| entry.kind == "wedding"
+            && anniversary_date(entry) == Some("2018-11-22".to_owned()))
+    );
+}
+
+#[test]
 fn apple_property_groups_variations_and_boundary_cases() {
     // 1. Case insensitivity in X-ABLabel and property names
     let vcard1 = concat!(
