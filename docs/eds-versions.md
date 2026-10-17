@@ -1,65 +1,69 @@
 # Which Evolution Data Server this builds against
 
-An EDS backend module is a shared object that EDS `dlopen`s into its own
-process. Its classes derive from EDS classes and its instance structs begin
-with EDS instance structs. The module is therefore bound to EDS by its
-**ABI** (struct layouts, field offsets, vfunc slot order), not only by its
-API.
+An EDS backend module is a shared object. EDS loads it with `dlopen` into its
+own process. The classes of the module derive from EDS classes. Its instance
+structs begin with EDS instance structs. The **ABI** (struct layouts, field
+offsets, vfunc slot order) therefore binds the module to EDS. The API alone
+does not.
 
-> **Build the plugin against the exact Evolution Data Server it will run
-> on.** A `libebookbackendjmap.so` built against one EDS and installed beside
-> another is undefined behaviour. Distribution packages rebuild on every EDS
-> update; if you build from source, do the same.
+> **Build the plugin against the exact Evolution Data Server that it will run
+> on.** If you build a `libebookbackendjmap.so` against one EDS and install it
+> beside another EDS, the behavior is undefined. Distribution packages rebuild
+> on every EDS update. If you build from source, do the same.
 
 ## Supported versions
 
 | EDS | Status |
 | --- | --- |
-| < 3.52 | **Not supported.** `rust/crates/eds-sys/build.rs` refuses to configure. The backends use `EBookMetaBackend`/`ECalMetaBackend`, and older releases lack parts of that API. |
-| 3.52 | **The pinned target.** The CI image installs it and `docs/functional-tests.md` runs against it. |
-| newer | **Expected to work, and checked.** No code uses a 3.52-only API, but a later release can move a struct. The checks below exist for that. |
+| < 3.52 | **Not supported.** `rust/crates/eds-sys/build.rs` refuses to configure. The backends use `EBookMetaBackend` and `ECalMetaBackend`. Older releases do not have all of that API. |
+| 3.52 | **The pinned target.** The CI image installs it. `docs/functional-tests.md` runs against it. |
+| newer | **Expected to work, and checked.** No code uses an API that exists only in 3.52. A later release can move a struct. The checks below find this. |
 
-The Evolution UI modules have one more boundary: Evolution 3.55.1 replaced
+The Evolution UI modules have one more boundary. Evolution 3.55.1 replaced
 GtkUIManager with EUIManager. `rust/crates/evo-sys/build.rs` emits the
-`evolution_eui_manager` cfg, and `jmap-ui` picks its action API from it at
-compile time.
+`evolution_eui_manager` cfg. `jmap-ui` uses this cfg to select its action API
+at compile time.
 
-## How a version mismatch is caught
+## How the build finds a version mismatch
 
-bindgen generates the bindings from the installed headers at build time, so a
-struct that moved between releases changes the build input.
+bindgen generates the bindings from the installed headers at build time. If a
+struct moved between releases, the build input changes.
 `rust/crates/eds-sys/tests/layout.rs` then compares three versions:
 
-1. what **pkg-config** resolved when `build.rs` chose the include paths
-   (`eds_sys::EDS_HEADER_VERSION`);
-2. what the **headers** say (`EDS_MAJOR_VERSION` and its siblings in
-   `libedataserver/eds-version.h`);
-3. what the **library loaded at run time** says (`eds_major_version` and its
-   siblings in `libedataserver`).
+1. The version that **pkg-config** resolved when `build.rs` chose the include
+   paths (`eds_sys::EDS_HEADER_VERSION`).
+2. The version that the **headers** state (`EDS_MAJOR_VERSION` and the related
+   macros in `libedataserver/eds-version.h`).
+3. The version that the **library loaded at run time** states
+   (`eds_major_version` and the related symbols in `libedataserver`).
 
-The tests:
+These are the tests:
 
 - **(1) against (2)**: `pkg_config_describes_the_headers_it_pointed_at`.
 - **(2) against (3)**:
-  `the_running_eds_can_serve_what_these_bindings_were_compiled_against`,
-  which calls `eds_check_version()` so that EDS decides what is compatible.
-- **Struct layouts**: each `assert_layout!` compares a subclassed struct's
-  `size_of` with the size that `g_type_query()` reports at run time. A wrong
-  offset becomes a failing test instead of a segfault.
+  `the_running_eds_can_serve_what_these_bindings_were_compiled_against`. This
+  test calls `eds_check_version()`, so EDS decides what is compatible.
+- **Struct layouts**: each `assert_layout!` compares the `size_of` of a
+  subclassed struct with the size that `g_type_query()` reports at run time.
+  A wrong offset becomes a failing test. It does not become a segfault.
 
-Each failure message names the pkg-config, header and runtime versions, so a
-log from a matrix run shows which release broke.
+Each failure message gives the pkg-config, header and runtime versions. A log
+from a matrix run therefore shows which release broke.
 
-`build.rs` also stops before it generates anything when the `.pc` files it
-probes (`libebackend-1.2`, `libedata-book-1.2`, `libedata-cal-2.0`,
-`camel-1.2`) do not agree on a version. They ship in one tarball, so a
-disagreement means a mixed installation.
+`build.rs` also stops before it generates anything if the `.pc` files that it
+probes disagree on a version. The files are `libebackend-1.2`,
+`libedata-book-1.2`, `libedata-cal-2.0` and `camel-1.2`. They ship in one
+tarball. A disagreement therefore means a mixed installation.
 
-## What this does not catch
+## What these checks do not find
 
-These checks do not see **semantic** drift: the same struct size and function
-signature with a changed contract (who owns a returned pointer, what an enum
-value means, what a vfunc may assume). Only the behavioural tests in
-`docs/functional-tests.md`, which drive real EDS daemons, and a human reading
-the EDS release notes catch that. A green build on a new EDS does not prove
-that the plugin works there.
+These checks do not find **semantic** drift. In semantic drift, the struct
+size and the function signature stay the same, but the contract changes.
+Examples are the owner of a returned pointer, the meaning of an enum value and
+the assumptions that a vfunc may make. Two things find semantic drift:
+
+- the behavioral tests in `docs/functional-tests.md`, which drive real EDS
+  daemons
+- a person who reads the EDS release notes
+
+A green build on a new EDS does not prove that the plugin works there.

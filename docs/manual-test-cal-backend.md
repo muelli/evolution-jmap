@@ -1,22 +1,25 @@
 # Manual test: the JMAP calendar backend
 
-The test suite covers every layer of the calendar backend except
-`evolution-calendar-factory` loading the module and opening a calendar from a
-`.source` file. That step needs a running registry, so it cannot be a
-`cargo test`. This recipe covers it.
+The test suite covers every layer of the calendar backend except one step.
+This step is the loading of the module by `evolution-calendar-factory` and the
+opening of a calendar from a `.source` file. The step needs a running
+registry. It cannot be a `cargo test`. This recipe covers it.
 
-It uses `jmap-mockd`, not a real server, so you need no account. It mirrors
-[the address book recipe](manual-test-book-backend.md). You can run either
-one alone.
+The recipe uses `jmap-mockd`, not a real server. You do not need an account.
+It mirrors [the address book recipe](manual-test-book-backend.md). You can run
+either recipe alone.
 
 ## What automated tests already cover
 
 `rust/crates/jmap-backend-cal/tests/recipe.rs` loads the keyfile below with
-`e_server_side_source_new`. It checks the origin, the anonymous connection,
-that `BackendName` matches the factory name, and that the group is
-`[Calendar]` (not `[Task List]` or `[Memo List]`). It also checks that the
-keyfile in this document is identical to
-`docs/examples/jmap-mock-calendar.source`.
+`e_server_side_source_new`. The test checks these items:
+
+- the origin
+- the anonymous connection
+- that `BackendName` matches the factory name
+- that the group is `[Calendar]` (not `[Task List]` or `[Memo List]`)
+- that the keyfile in this document is identical to
+  `docs/examples/jmap-mock-calendar.source`
 
 ## Prerequisites
 
@@ -32,12 +35,13 @@ $ cargo run --manifest-path rust/Cargo.toml -p evolution-jmap-mock --bin jmap-mo
 jmap-mockd listening on http://127.0.0.1:8080
 ```
 
-It seeds one account (`A1`) with a calendar named "Personal", which is the
-account default. Leave it running in its own terminal. It logs each request
-that the backend makes.
+The mock server seeds one account (`A1`) with a calendar named "Personal".
+This is the default of the account. Leave the server running in its own
+terminal. It logs each request that the backend makes.
 
-Do not pass `--basic` or `--bearer` for the first run. The account below has
-no user, so the backend connects anonymously and there is no password prompt.
+Do not use `--basic` or `--bearer` for the first run. The account below has no
+user. The backend therefore connects anonymously, and no password prompt
+appears.
 
 ## 2. Build and install the backend
 
@@ -49,10 +53,11 @@ $ sudo cmake --install build --component cal-backend
 
 This installs `libecalbackendjmap.so` into
 `pkg-config --variable=backenddir libedata-cal-2.0` (on Debian and Ubuntu,
-`/usr/lib/evolution-data-server/calendar-backends`). That directory is
-different from the address book's, so both backends can be named `jmap`.
+`/usr/lib/evolution-data-server/calendar-backends`). This directory is
+different from the directory of the address book. Both backends can therefore
+have the name `jmap`.
 
-To avoid a system directory, install into a scratch tree and point the
+To avoid a system directory, install into a scratch tree. Then point the
 factory at it:
 
 ```console
@@ -60,15 +65,16 @@ $ DESTDIR=/tmp/jmap cmake --install build --component cal-backend
 $ export EDS_CALENDAR_MODULES=/tmp/jmap/usr/lib/evolution-data-server/calendar-backends
 ```
 
-`EDS_CALENDAR_MODULES` replaces the backend directory, so the factory then
-has only the JMAP backend. Set it in the environment that starts the factory
-(step 4).
+`EDS_CALENDAR_MODULES` replaces the backend directory. The factory then has
+only the JMAP backend. Set the variable in the environment that starts the
+factory (step 4).
 
 ## 3. Write the account
 
 Copy `docs/examples/jmap-mock-calendar.source` to
-`~/.config/evolution/sources/jmap-mock-calendar.source`. The file name
-becomes the source UID, so it must differ from the address book's.
+`~/.config/evolution/sources/jmap-mock-calendar.source`. The file name becomes
+the source UID. It must therefore differ from the file name of the address
+book.
 
 ```ini
 [Data Source]
@@ -88,21 +94,22 @@ Method=none
 
 Notes on the keys:
 
-- `[Calendar]` sets the kind of source. `ECalBackendFactory` is keyed by
-  backend name and component kind, and this module registers only
+- `[Calendar]` sets the kind of source. `ECalBackendFactory` uses the backend
+  name and the component kind as its key. This module registers only
   `jmap:VEVENT` (`factory::COMPONENT_KIND`). A `[Task List]` or `[Memo List]`
-  source parses but no factory opens it.
+  source parses, but no factory opens it.
 - `BackendName=jmap` is the other half of that key.
-- `Method=none` allows plain HTTP, and only for a loopback host. **The key is
-  `Method`, not `Secure`**: EDS ignores `Secure=true`. See the address book
+- `Method=none` allows plain HTTP, and only for a loopback address. **The key
+  is `Method`, not `Secure`**: EDS ignores `Secure=true`. See the address book
   recipe.
-- There is no `User=`. To test password sign-in, start the mock with
-  `--basic alice:secret`, add `User=alice` and `Method=plain/password` to
-  `[Authentication]`, and let Evolution prompt you.
+- There is no `User=`. To test password sign-in, do these steps:
+  1. Start the mock server with `--basic alice:secret`.
+  2. Add `User=alice` and `Method=plain/password` to `[Authentication]`.
+  3. Let Evolution prompt you.
 
-Without `[Resource] Identity=`, the backend uses the account's default
-calendar. To name one, list the mock's calendars (its `apiUrl` is `/jmap`)
-and add the id in a `[Resource]` group:
+If `[Resource] Identity=` is not set, the backend uses the default calendar of
+the account. To name a calendar, list the calendars of the mock server (its
+`apiUrl` is `/jmap`). Then add the id in a `[Resource]` group:
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8080/jmap \
@@ -111,10 +118,11 @@ $ curl -s -X POST http://127.0.0.1:8080/jmap \
          "methodCalls":[["Calendar/get",{"accountId":"A1"},"c0"]]}'
 ```
 
-A source that names an id the server does not have fails to open with "the
-account names calendar …, which the server does not have".
+If a source names an id that the server does not have, the source fails to
+open. The message is "the account names calendar …, which the server does not
+have".
 
-The source has no `Parent=`, so it appears on its own.
+The source has no `Parent=`. It therefore appears on its own.
 `docs/manual-test-collection-backend.md` covers the account form.
 
 ## 4. Restart the daemons and look
@@ -125,9 +133,9 @@ $ pkill -f evolution-source-registry
 $ evolution
 ```
 
-Both daemons start again on demand. In Evolution's Calendar view, "JMAP mock
-calendar" is in the calendar list. It is empty on a fresh mock. Create an
-event in Evolution and watch the mock log `CalendarEvent/set`.
+The daemons start again on demand. In the Calendar view of Evolution, "JMAP
+mock calendar" is in the calendar list. On a fresh mock server, it is empty.
+Create an event in Evolution. Watch the mock server log `CalendarEvent/set`.
 
 To watch the backend instead, start the factory by hand before Evolution:
 
@@ -139,12 +147,13 @@ $ G_MESSAGES_DEBUG=all evolution-calendar-factory -r -w
 
 - `evolution-calendar-factory` loaded `libecalbackendjmap.so` (see its debug
   output).
-- Showing the calendar made the mock serve `/jmap/session` and
+- When you showed the calendar, the mock server served `/jmap/session` and
   `CalendarEvent` requests.
-- An event created in Evolution made the mock serve `CalendarEvent/set`, and
-  the event is still there after you close and open the calendar again.
-- Editing the event's summary or start time makes another
-  `CalendarEvent/set` with an `update`, not a `create`. That shows the UID
-  survived the round trip through iCalendar.
+- When you created an event in Evolution, the mock server served
+  `CalendarEvent/set`. The event is still there after you close and open the
+  calendar again.
+- If you edit the summary or the start time of the event, the mock server
+  serves another `CalendarEvent/set`. It has an `update`, not a `create`. This
+  shows that the UID survived the round trip through iCalendar.
 
-Anything less is a bug in this repository. Report it.
+Any other result is a bug in this repository. Report it.
