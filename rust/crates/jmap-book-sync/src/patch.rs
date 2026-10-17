@@ -434,8 +434,22 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
                     if current.full.is_some() {
                         patch.insert("name/full".to_owned(), Value::Null);
                     }
-                    if current.components.is_some() {
-                        patch.insert("name/components".to_owned(), Value::Null);
+                    // Only the components `N` showed were cleared; one of a
+                    // kind it has no field for stays, as it does in an edit.
+                    let components = current.components.as_deref().unwrap_or_default();
+                    let kept: Vec<_> = components
+                        .iter()
+                        .filter(|c| !states_name_component(c))
+                        .collect();
+                    if kept.len() != components.len() {
+                        patch.insert(
+                            "name/components".to_owned(),
+                            if kept.is_empty() {
+                                Value::Null
+                            } else {
+                                json_of(&kept)
+                            },
+                        );
                     }
                 } else {
                     patch.insert("name".to_owned(), Value::Null);
@@ -1641,5 +1655,37 @@ mod tests {
             name_patch(None, Some(&edited)),
             json!({"name": {"full": "Hans Oldenburg"}})
         );
+    }
+
+    /// A component of a kind `N` has no field for is what keeps a cleared
+    /// name from being removed whole, so it must also survive the clearing:
+    /// the user never saw it, so cannot have deleted it.
+    #[test]
+    fn clearing_a_name_keeps_the_components_n_cannot_show() {
+        let current = name(json!({
+            "full": "Hans Oldenburg",
+            "components": [
+                {"kind": "surname", "value": "Oldenburg"},
+                {"kind": "generation", "value": "Jr."},
+            ],
+        }));
+        assert_eq!(
+            name_patch(Some(&current), None),
+            json!({
+                "name/full": null,
+                "name/components": [{"kind": "generation", "value": "Jr."}],
+            })
+        );
+    }
+
+    /// A list holding only components `N` cannot show was never on the
+    /// line, so clearing the name leaves it exactly as it was.
+    #[test]
+    fn clearing_a_name_leaves_a_wholly_unshown_component_list_alone() {
+        let current = name(json!({
+            "full": "Hans Oldenburg",
+            "components": [{"kind": "generation", "value": "Jr."}],
+        }));
+        assert_eq!(name_patch(Some(&current), None), json!({"name/full": null}));
     }
 }
