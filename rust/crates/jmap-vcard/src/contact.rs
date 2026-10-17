@@ -2735,6 +2735,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_vcard_dates_normalizes_anniversary_timestamps() {
+        // RFC 6350 section 6.2.6 defines ANNIVERSARY as date-and-or-time data.
+        // RFC 6350 section 4.3 uses the basic time format without separators.
+        let input = "ANNIVERSARY:2026-04-12T01:02:03Z\r\n";
+
+        let normalized = normalize_vcard_dates(input);
+
+        assert_eq!(normalized, "ANNIVERSARY:20260412T010203Z\r\n");
+    }
+
+    #[test]
     fn split_vcard_property_line_ignores_colons_inside_quoted_parameters() {
         // RFC 6350 section 3.3 requires quoted parameter text to be parsed as one value.
         let line = "ITEM1.ANNIVERSARY;LABEL=\"one:two\":2026-04-12";
