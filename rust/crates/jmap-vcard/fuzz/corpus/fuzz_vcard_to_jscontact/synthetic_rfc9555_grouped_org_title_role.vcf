@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-rfc9555-grouped-org-title-role-0001
+FN:Jordan Lee
+N:Lee;Jordan;;;
+item1.ORG;TYPE=work:Example Corp;Platform Engineering
+item1.TITLE;LANGUAGE=en;ALTID=1:Principal Engineer
+item1.ROLE;LANGUAGE=en;ALTID=1:Architecture Lead
+item2.ORG:Open Source Collective;Research
+item2.TITLE:Contributor
+EMAIL;TYPE=work:jordan.lee@example.com
+END:VCARD
