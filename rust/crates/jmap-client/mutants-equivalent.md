@@ -34,3 +34,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - Zero missed mutants (9 of 9 viable mutants caught by test suites, 6 unviable due to `SieveScriptValidateResponse` without `Default`, `SetResponse::new` arity, and missing `From`/`FromIterator` implementations).
 
+## `src/principals.rs`
+
+- Zero missed mutants (35 of 35 viable mutants caught by test suites, 3 unviable).
+
+## `src/contacts.rs`
+
+- Zero missed mutants (15 of 15 viable mutants caught by test suites, 15 unviable due to `SetResponse`, `GetResponse`, and `Error` lacking `Default` implementations).
+
