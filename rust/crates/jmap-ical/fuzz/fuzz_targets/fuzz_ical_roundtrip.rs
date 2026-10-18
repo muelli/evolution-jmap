@@ -6,12 +6,10 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    // Assert parser never panics and validly parsed events converge to a fixed point.
+    // Verify that the parser does not panic and parsed events reach a fixed point.
     if let Ok(text) = std::str::from_utf8(data) {
         if let Ok(event1) = jmap_ical::ical_to_event(text) {
-            // Canonical outbound serialization.
             let ical2 = jmap_ical::event_to_ical(&event1);
-            // Re-import and re-export for fixed-point stability.
             if let Ok(event2) = jmap_ical::ical_to_event(&ical2) {
                 let ical3 = jmap_ical::event_to_ical(&event2);
                 assert_eq!(

@@ -18,7 +18,7 @@ serde_json = "1"
 path = ".."
 features = ["mail", "contacts", "calendars", "principals"]
 
-# Use independent workspace for fuzzers
+# Isolate the fuzzer workspace from the project workspace.
 [workspace]
 members = ["."]
 

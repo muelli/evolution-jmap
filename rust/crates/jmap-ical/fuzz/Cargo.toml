@@ -16,7 +16,7 @@ libfuzzer-sys = "0.4"
 [dependencies.evolution-jmap-ical]
 path = ".."
 
-# Use independent workspace for fuzzers
+# Isolate the fuzzer workspace from the project workspace.
 [workspace]
 members = ["."]
 
