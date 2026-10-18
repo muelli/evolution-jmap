@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Weekly from-source build of the Flatpak extension against Flathub's
+# org.gnome.Evolution, checked inside the Evolution sandbox: every JMAP
+# module present and every library it links resolved against the app's own
+# EDS. Flathub moves Evolution to a new EDS (new SONAMEs) without telling
+# us, so this is where that turns red. The logic is in ci/flatpak.sh, which
+# runs the same way locally. Not on every push: the first build downloads
+# the GNOME SDK and two SDK extensions and builds the whole workspace.
+# Dispatch by hand with: gh workflow run flatpak-build.yml
+
+name: Flatpak build
+
+on:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flatpak and flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
+          # bubblewrap needs unprivileged user namespaces, which Ubuntu
+          # 24.04's AppArmor policy restricts by default.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: ci/flatpak.sh

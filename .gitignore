@@ -13,3 +13,4 @@
 
 # ci/rpm.sh build tree
 /build-rpm/
+/build-flatpak/
