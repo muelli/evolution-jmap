@@ -119,3 +119,20 @@ fn minimal_working_example_executes() {
         "acc1"
     );
 }
+
+#[test]
+fn changelog_exists_and_documents_unreleased_breaking_changes() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let changelog_path = Path::new(manifest_dir).join("CHANGELOG.md");
+    let content = fs::read_to_string(&changelog_path)
+        .expect("CHANGELOG.md must exist in crate root for publication readiness");
+
+    assert!(
+        content.contains("## [Unreleased]"),
+        "CHANGELOG must contain an [Unreleased] section"
+    );
+    assert!(
+        content.contains("Client::upload_blob"),
+        "CHANGELOG must document planned breaking change for Client::upload_blob"
+    );
+}
