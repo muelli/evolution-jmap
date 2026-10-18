@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:LOGO Section Probe
+UID:logo-rfc9555-1
+LOGO;VALUE=uri:https://www.example.com/pub/logos/abccorp.jpg
+END:VCARD
