@@ -14,3 +14,5 @@
 # ci/rpm.sh build tree
 /build-rpm/
 /build-flatpak/
+# ci/gui-smoke-fedora.sh build tree
+/build-gui-smoke-fedora/

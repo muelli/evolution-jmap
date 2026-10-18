@@ -237,6 +237,28 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-collection-populate-once-artifacts
           if-no-files-found: ignore
 
+  # The gui-smoke job's assertion against a newer Evolution: the jobs above
+  # all run Ubuntu 24.04's 3.52, so a break that only a 3.60 shell shows
+  # would pass them. ci/gui-smoke-fedora.sh runs the same ci/gui-smoke.sh in
+  # the pinned Fedora image (Evolution and EDS 3.60) under rootless podman,
+  # the way the rpm job runs ci/rpm.sh. Gated like the other GUI jobs.
+  gui-smoke-fedora:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/gui-smoke-fedora.sh
+        env:
+          GUI_SMOKE_ARTIFACTS: ${{ github.workspace }}/build-gui-smoke-fedora/artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-smoke-fedora-artifacts
+          path: ${{ github.workspace }}/build-gui-smoke-fedora/artifacts
+          if-no-files-found: ignore
+
   # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
   # job above (ctest there already runs rust-test-eds, layout checks
   # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).
