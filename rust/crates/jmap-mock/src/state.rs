@@ -276,6 +276,9 @@ pub struct AccountState {
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
     /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5); `None` omits it.
     pub current_user_principal_id: Option<Id>,
+    /// The session's `isPersonal` for this account (RFC 8620 §1.6.2). `false`
+    /// makes it an account shared with the login, as RFC 9670 sharing does.
+    pub is_personal: bool,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
 }
@@ -321,6 +324,7 @@ impl AccountState {
             share_notifications: Store::new("SN"),
             calendar_event_notifications: Store::new("CEN"),
             current_user_principal_id: None,
+            is_personal: true,
             blobs: BTreeMap::new(),
             next_blob_id: 1,
         }

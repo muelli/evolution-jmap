@@ -234,3 +234,127 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_delete() {
         "expected an Unserved(Calendar), got {failure:?}"
     );
 }
+
+/// A mock whose login also sees `zz-shared`, an account another user shares
+/// with it (`isPersonal: false`). The id sorts after the mock's own account,
+/// which therefore stays primary. Both accounts get a calendar and an address
+/// book, and they get the same ids in both, because each account numbers its
+/// objects from one: a destroy sent to the wrong account names a real object
+/// there.
+fn with_a_share() -> (MockServer, Id, Id, Id) {
+    let server = MockServer::builder().start();
+    let own = server.account_id();
+    let shared = Id::new("zz-shared");
+    let (calendar, book) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let mine = state.account_mut(&own).expect("the mock's own account");
+        mine.seed_calendar("Mine", false);
+        mine.seed_address_book("Mine", false);
+        let account = state.add_account(shared.clone(), "owner@example.com");
+        account.is_personal = false;
+        (
+            account.seed_calendar("Team", true),
+            account.seed_address_book("Team", true),
+        )
+    };
+    (server, shared, calendar, book)
+}
+
+fn held_by(server: &MockServer, account: &Id, kind: ChildKind) -> Vec<Id> {
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(account).expect("the account is seeded");
+    match kind {
+        ChildKind::AddressBook => account
+            .address_books
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect(),
+        ChildKind::Calendar => account.calendars.iter().map(|(id, _)| id.clone()).collect(),
+    }
+}
+
+#[test]
+fn deleting_a_shared_collection_destroys_it_in_the_sharing_account_only() {
+    for kind in [ChildKind::Calendar, ChildKind::AddressBook] {
+        let (server, shared, calendar, book) = with_a_share();
+        let collection = match kind {
+            ChildKind::Calendar => calendar,
+            ChildKind::AddressBook => book,
+        };
+        let own = server.account_id();
+        let own_before = held_by(&server, &own, kind);
+        assert!(
+            own_before.contains(&collection),
+            "the fixture must give the user's own account a {kind:?} with the shared one's id"
+        );
+
+        delete_collection(
+            &client(&server),
+            &Doomed {
+                kind,
+                collection_id: Id::new(format!("{shared}/{collection}")),
+            },
+        )
+        .expect("the mock destroys collections of a shared account");
+
+        assert!(
+            !held_by(&server, &shared, kind).contains(&collection),
+            "the shared {kind:?} is still on the server"
+        );
+        assert_eq!(
+            held_by(&server, &own, kind),
+            own_before,
+            "the delete of a shared {kind:?} touched the user's own account"
+        );
+    }
+}
+
+#[test]
+fn deleting_from_an_account_that_is_no_longer_shared_is_refused() {
+    // The share was withdrawn after the child was written. Falling back to the
+    // primary account would destroy the user's own collection of that id.
+    let (server, _, calendar, _) = with_a_share();
+    let own = server.account_id();
+    let own_before = held_by(&server, &own, ChildKind::Calendar);
+
+    let failure = delete_collection(
+        &client(&server),
+        &Doomed {
+            kind: ChildKind::Calendar,
+            collection_id: Id::new(format!("withdrawn/{calendar}")),
+        },
+    )
+    .expect_err("no account `withdrawn` is shared with this login");
+
+    assert!(
+        matches!(failure, DeleteFailure::Unshared(ChildKind::Calendar)),
+        "expected an Unshared(Calendar), got {failure:?}"
+    );
+    assert_eq!(held_by(&server, &own, ChildKind::Calendar), own_before);
+}
+
+#[test]
+fn deleting_through_a_personal_account_id_in_the_identity_is_refused() {
+    // Only an account the session lists as shared (`isPersonal: false`)
+    // is reached through a `<accountId>/<collectionId>` identity. The
+    // user's own collections are written with bare ids.
+    let (server, _, calendar, _) = with_a_share();
+    let own = server.account_id();
+
+    let failure = delete_collection(
+        &client(&server),
+        &Doomed {
+            kind: ChildKind::Calendar,
+            collection_id: Id::new(format!("{own}/{calendar}")),
+        },
+    )
+    .expect_err("the user's own account is not a share");
+
+    assert!(
+        matches!(failure, DeleteFailure::Unshared(ChildKind::Calendar)),
+        "expected an Unshared(Calendar), got {failure:?}"
+    );
+    assert!(held_by(&server, &own, ChildKind::Calendar).contains(&calendar));
+}
