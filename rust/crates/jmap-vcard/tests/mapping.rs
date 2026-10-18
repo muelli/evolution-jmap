@@ -11277,7 +11277,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, MEMBER, SOURCE, XML, CREATED, PRODID, REV,
+    // SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11309,6 +11310,8 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
+        "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
+        "MEMBER:mailto:alice@example.com\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
         "XML:<contact><displayName>Dr. Albert Einstein</displayName></contact>\r\n",
         "CREATED:19940930T143510Z\r\n",
@@ -11406,6 +11409,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
+    assert!(!emitted.contains("MEMBER:"), "MEMBER must not be emitted");
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
     assert!(!emitted.contains("PRODID:"), "PRODID must not be emitted");
@@ -11527,6 +11531,29 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("KIND:") && !emitted.contains("KIND;"),
             "KIND must not be emitted"
+        );
+    }
+
+    // MEMBER variants.
+    for member_val in [
+        "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af",
+        "MEMBER:mailto:alice@example.com",
+        "MEMBER;VALUE=uri:https://example.com/member/alice",
+        "MEMBER;X-JMAP-KEY=m1:urn:uuid:b8767877-b4a1-4c70-9acc-505d3819e519",
+        "member:mailto:case-insensitive@example.com",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Member User\r\n{member_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse MEMBER");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Member User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("MEMBER:") && !emitted.contains("MEMBER;"),
+            "MEMBER must not be emitted"
         );
     }
 
@@ -11827,7 +11854,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
 
 #[test]
 fn standard_properties_case_insensitivity_and_empty_values() {
-    // Verify that empty or whitespace-only lines for all 11 standard properties
+    // Verify that empty or whitespace-only lines for all audited standard properties
     // are safely handled without panicking or creating empty structs.
 
     for empty_line in [
@@ -11841,6 +11868,10 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "mailer:   ",
         "KIND:",
         "kind:   ",
+        "MEMBER:",
+        "MEMBER:   ",
+        "member:",
+        "MEMBER;VALUE=uri:",
         "SOURCE:",
         "source:   ",
         "PRODID:",

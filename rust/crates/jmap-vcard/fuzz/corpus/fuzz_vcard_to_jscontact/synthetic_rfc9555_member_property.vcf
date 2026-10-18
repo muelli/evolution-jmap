@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:rfc9555-member-seed-1
+FN:Standards Working Group
+KIND:group
+MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af
+MEMBER;VALUE=uri:mailto:alice@example.com
+MEMBER;X-JMAP-KEY=m1:https://example.com/member/bob
+NOTE;X-JMAP-KEY=n1:RFC 9555 MEMBER fuzz seed
+END:VCARD
