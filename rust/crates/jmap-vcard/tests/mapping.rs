@@ -11277,7 +11277,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11308,6 +11308,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "GEO:40.331575;-74.667232\r\n",
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
+        "XML:<contact><displayName>Dr. Albert Einstein</displayName></contact>\r\n",
         "CREATED:19940930T143510Z\r\n",
         "PRODID:-//Institute for Advanced Study//IAS Contacts 3.0//EN\r\n",
         "REV:2026-08-22T00:07:47Z\r\n",
@@ -11397,6 +11398,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("GEO:"), "GEO must not be emitted");
     assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
+    assert!(!emitted.contains("XML:"), "XML must not be emitted");
     assert!(!emitted.contains("PRODID:"), "PRODID must not be emitted");
     assert!(!emitted.contains("REV:"), "REV must not be emitted");
     assert!(
@@ -11493,6 +11495,28 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("MAILER:") && !emitted.contains("MAILER;"),
             "MAILER must not be emitted"
+        );
+    }
+
+    // XML variants.
+    for xml_val in [
+        "XML:<contact><displayName>Jane Doe</displayName></contact>",
+        "XML:<x/>",
+        "XML;VALUE=text:<meta><flag>true</flag></meta>",
+        "XML;MEDIATYPE=application/xml:<meta><a>1</a></meta>",
+        "xml:<card><uid>12345</uid></card>",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Xml User\r\n{xml_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse XML");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Xml User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("XML:") && !emitted.contains("XML;"),
+            "XML must not be emitted"
         );
     }
 

@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:XML Section Probe
+UID:xml-rfc9555-1
+XML:<contact><displayName>XML Probe</displayName></contact>
+END:VCARD
