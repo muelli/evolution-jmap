@@ -66,7 +66,7 @@
 //! What is still missing is only **the consent browser round trip.** The
 //! authentication combo lets a user *say* an account is OAuth 2.0; it does not
 //! by itself prove EDS's `ECredentialsPrompterImplOAuth2` reaches a real
-//! provider and back for this project's registered client — that needs a
+//! provider and back for this project's registered client. That needs a
 //! human and a real deployment, the same gap
 //! [`config_lookup`](crate::config_lookup)'s own docs name for its half of
 //! OAuth 2.0 setup.
