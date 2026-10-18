@@ -162,6 +162,8 @@ real Fastmail for OAuth2.
   [docs/verifying-artifacts.md](docs/verifying-artifacts.md).
 - `cargo deny` gates dependency licenses (GPLv3-compatible only);
   [REUSE](https://reuse.software/) tracks per-file licensing.
+- Regular FFI and security audits. Each finding and its fix is listed in
+  [docs/SECURITY-AUDITS.md](docs/SECURITY-AUDITS.md).
 
 ## License
 
