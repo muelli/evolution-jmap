@@ -152,9 +152,7 @@ impl PushVerification {
     }
 }
 
-/// One account's changed data types and their new state tokens, as named in
-/// a [`StateChange`]'s `changed` map: the type name ("Mailbox", "Email", …)
-/// paired with the state string a `Foo/get` call would currently answer.
+/// Maps changed data types to their new state tokens within a [`StateChange`] (RFC 8620 §7.1).
 pub type TypeState = BTreeMap<String, State>;
 
 /// A server-pushed notification that something changed (RFC 8620 §7.1),
@@ -172,9 +170,7 @@ impl StateChange {
     /// The literal `@type` value RFC 8620 §7.1 requires.
     pub const TYPE: &'static str = "StateChange";
 
-    /// Build a `StateChange` naming `changed` accounts/types, with `@type`
-    /// set to the required [`Self::TYPE`] rather than left for a caller to
-    /// get wrong.
+    /// Create a `StateChange` with the given account changes and required `@type`.
     pub fn new(changed: BTreeMap<Id, TypeState>) -> Self {
         Self {
             kind: Self::TYPE.to_owned(),

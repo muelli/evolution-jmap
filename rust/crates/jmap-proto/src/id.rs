@@ -5,10 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// An object identifier: an opaque server-assigned string.
-///
-/// Kept as a string: JMAP ids are only ever compared and echoed back, never
-/// interpreted.
+/// An object identifier representing an opaque server-assigned string (RFC 8620 §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct Id(String);

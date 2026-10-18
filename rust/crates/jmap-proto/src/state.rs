@@ -44,11 +44,8 @@ impl AsRef<str> for State {
     }
 }
 
-/// A date-time in UTC, `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339 subset).
-///
-/// Deliberately a string: Evolution Data Server converts to `GDateTime`; this
-/// crate never does date arithmetic. Lexicographic order equals chronological
-/// order for this format, which is all queries need.
+/// A date-time string in UTC format `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339 subset).
+/// Preserves lexicographical sorting without date arithmetic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct UtcDate(String);

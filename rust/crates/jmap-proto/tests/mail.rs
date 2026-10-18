@@ -59,7 +59,7 @@ fn email_object_roundtrip() {
     assert_eq!(from[0].email, "bob@example.com");
     assert_eq!(from[0].name.as_deref(), Some("Bob"));
 
-    // Body text is reachable through textBody's partId → bodyValues.
+    // Body text is reachable through textBody partId -> bodyValues.
     let text_part = &email.text_body.as_ref().unwrap()[0];
     let part_id = text_part.part_id.as_ref().unwrap();
     let body_values = email.body_values.as_ref().unwrap();
@@ -725,8 +725,7 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
         sub.envelope.as_ref().unwrap().mail_from.email,
         "eng@example.com"
     );
-    // The release time travels as an envelope parameter; `sendAt` stays the
-    // server's to answer with.
+    // Release schedule travels as an envelope parameter.
     assert!(sub.send_at.is_none());
     assert_eq!(sub.undo_status.as_deref(), Some("pending"));
 
@@ -746,8 +745,7 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
     );
 }
 
-/// [`Schedule`]'s two RFC 4865 forms as `mailFrom.parameters` entries, and
-/// that scheduling keeps parameters already on the envelope.
+/// Verifies Schedule RFC 4865 parameter encoding and preservation.
 #[test]
 fn schedule_becomes_a_futurerelease_envelope_parameter() {
     use jmap_proto::UtcDate;

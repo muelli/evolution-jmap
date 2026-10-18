@@ -40,9 +40,7 @@ fn calendar_event_roundtrip() {
     let rule = event.recurrence_rule.as_ref().unwrap();
     assert_eq!(rule.frequency, "weekly");
     assert_eq!(rule.by_day.as_deref(), Some(&[NDay::new("th")][..]));
-    // An override's patch stays JSON: "this instance is off" and "this instance
-    // was edited" are both PatchObjects, and only the caller knows which of
-    // them it can represent.
+    // An override patch uses JSON format to represent modification or deletion.
     let overrides = event.recurrence_overrides.as_ref().unwrap();
     assert_eq!(
         overrides.get("2026-01-22T13:00:00"),
@@ -52,9 +50,7 @@ fn calendar_event_roundtrip() {
         overrides["2026-01-29T13:00:00"]["title"],
         serde_json::json!("Team sync (long)")
     );
-    // `locations` is modeled but left as JSON: a Location holds coordinates,
-    // links and types the iCalendar mapping cannot draw, and the save path has
-    // to see them in order to patch the one field it can and leave the rest.
+    // Locations data stays in JSON format to preserve unmapped fields.
     let locations = event.locations.as_ref().expect("locations");
     assert_eq!(
         locations.get("loc1"),
@@ -69,10 +65,7 @@ fn calendar_event_roundtrip() {
     let keywords = event.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["offsite", "planning"]);
     assert!(keywords.values().all(|set| set == &Value::Bool(true)));
-    // `alerts` is modeled but left as JSON, for the reason `locations` is: an
-    // Alert holds a trigger that is one of two object types and an
-    // `acknowledged` timestamp a `VALARM` this mapping writes cannot carry, and
-    // the save path has to see them in order to refuse to replace the property.
+    // Alerts data stays in JSON format to preserve unmapped fields.
     let alerts = event.alerts.as_ref().expect("alerts");
     assert_eq!(alerts.keys().collect::<Vec<_>>(), ["a1", "a2"]);
     assert_eq!(
@@ -80,12 +73,7 @@ fn calendar_event_roundtrip() {
         serde_json::json!({"@type": "OffsetTrigger", "offset": "-PT15M"})
     );
     assert_eq!(alerts["a2"]["acknowledged"], "2026-01-15T11:01:00Z");
-    // `participants` is modeled but left as JSON, for the reason `locations` is
-    // and then some: a Participant holds a `sendTo` map, a set of `roles`, a
-    // `kind`, delegations and a scheduling agent, of which iCalendar spells the
-    // part it shares on the parameters of an `ATTENDEE` line. The mapping draws
-    // the guest list and never reads it back, so the shape matters only in that
-    // it survives untouched.
+    // Participants data stays in JSON format to preserve unmapped fields.
     let participants = event.participants.as_ref().expect("participants");
     assert_eq!(
         participants.get("p1"),
@@ -145,10 +133,7 @@ fn recurrence_rule_roundtrip() {
 
 #[test]
 fn recurrence_rule_days_of_the_month_roundtrip() {
-    // `byMonthDay` is modeled for the same reason `byDay` is: an `RRULE` spells
-    // it as `BYMONTHDAY`, so "the 15th and the last day of every month" is a
-    // rule the mapping can both show and hand back unchanged. The negative
-    // value is the one RFC 8984 §4.3.3 counts from the end of the month.
+    // `byMonthDay` models recurrence day-of-month intervals (RFC 8984 §4.3.3).
     let value = fixture("calendars/recurrence_rule_days_of_month.json");
     assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
 

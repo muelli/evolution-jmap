@@ -547,13 +547,10 @@ pub struct RecurrenceRule {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// JSCalendar NDay (RFC 8984 §4.3.3): one weekday a `byDay` names, and
-/// optionally which occurrence of it within the recurrence period.
-///
-/// `day` is the two-letter lowercase weekday (`mo` … `su`) both formats spell
-/// the same way but for case; `nthOfPeriod` is the ordinal iCalendar writes in
-/// front of it, negative for the nth-last (`-1FR`, the last Friday of the
-/// month).
+/// JSCalendar NDay (RFC 8984 §4.3.3).
+/// Identifies a weekday and an optional ordinal position within the recurrence period.
+/// Positive values count from the start.
+/// Negative values count from the end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct NDay {
@@ -1366,21 +1363,15 @@ impl CalendarPreferencesCapability {
     }
 }
 
-/// `CalendarEvent/set` arguments (draft-ietf-jmap-calendars-28 §5.9): a
-/// standard `/set` plus the one extra argument the draft adds to it.
-///
-/// Flattened over [`SetRequest`] rather than repeating its fields, so that a
-/// caller who wants no scheduling can keep building the plain request and
-/// wrap it at the last moment.
+/// `CalendarEvent/set` arguments (draft-ietf-jmap-calendars-28 §5.9).
+/// Extends [`SetRequest`] with `sendEventNotifications`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarEventSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<CalendarEvent>,
-    /// If true, the server sends the iTIP messages §5.9.2 calls for after
-    /// the change is applied: invitations to the participants when this
-    /// account is the event's origin, an answer back to the organizer when
-    /// it is not. Absent means false.
+    /// If true, the server sends iTIP scheduling messages after applying changes.
+    /// Defaults to false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_scheduling_messages: Option<bool>,
 }
@@ -1412,12 +1403,8 @@ pub mod scheduling_method {
     pub const REPLY: &str = "REPLY";
 }
 
-/// The top-level `CalendarEvent` properties draft-ietf-jmap-calendars-28 §5.4
-/// stores per user, and which therefore say nothing to anybody else: changing
-/// only these sends no scheduling message.
-///
-/// `updated` rides along because §5.4 stores it per user too whenever only
-/// per-user properties were written.
+/// Properties stored per user (draft-ietf-jmap-calendars-28 §5.4).
+/// Updates to these properties send no scheduling messages.
 pub const PER_USER_PROPERTIES: &[&str] = &[
     "alerts",
     "color",
@@ -2277,11 +2264,8 @@ pub struct ParticipantIdentity {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<String>,
-    /// The URI that represents this participant for iTIP scheduling
-    /// (draft-ietf-jmap-calendars-28 §3). An event participant corresponds to
-    /// this identity when the participant's own `calendarAddress` matches
-    /// this one after RFC 3986 §6.2.2 syntax-based normalisation, which is
-    /// how a server decides whether it is looking at the user themselves.
+    /// The URI that represents this participant for iTIP scheduling (draft-ietf-jmap-calendars-28 §3).
+    /// Matches participant `calendarAddress` using RFC 3986 §6.2.2 normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2347,16 +2331,8 @@ pub mod participant_identity_set_error {
     pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
 
-/// `ParticipantIdentity/set` arguments: the standard `/set` shape plus the
-/// `onSuccessSetIsDefault` extension (draft-ietf-jmap-calendars-28 §3.2).
-/// `isDefault` is server-set and only ever changes through this argument: a
-/// plain id (or a `#`-prefixed creation id from the same call) asks the
-/// server to make that identity the default. Unlike Sieve's
-/// `onSuccessActivateScript`, an id that does not resolve is silently
-/// ignored rather than an error (§3.2), so this stays `Option<Id>` rather
-/// than the `Value` Sieve needs to tell "absent" from "null": the draft
-/// gives `null` no meaning of its own here, so both collapse to "leave the
-/// default alone".
+/// `ParticipantIdentity/set` arguments (draft-ietf-jmap-calendars-28 §3.2).
+/// Adds the `onSuccessSetIsDefault` argument to the standard `/set` shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParticipantIdentitySetRequest {
