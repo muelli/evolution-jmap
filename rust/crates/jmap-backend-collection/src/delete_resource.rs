@@ -289,3 +289,63 @@ pub fn delete_on_server(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod delete_error_display_tests {
+    use jmap_backend_core::source::SourceError;
+    use jmap_collection_sync::{ChildKind, DeleteFailure};
+
+    use super::*;
+    use crate::authenticate::LoginError;
+
+    /// `DeleteError`'s `Display` writes something for every variant; without
+    /// this test a `Display` that writes nothing still compiles and a
+    /// refused delete reports as an empty error message.
+    #[test]
+    fn every_variant_displays_a_non_empty_message() {
+        assert!(!DeleteError::NotOurs.to_string().is_empty());
+
+        let login = DeleteError::Login(LoginError::Account(SourceError::MissingHost));
+        assert_eq!(login.to_string(), SourceError::MissingHost.to_string());
+
+        let unserved = DeleteError::Server(DeleteFailure::Unserved(ChildKind::Calendar));
+        assert!(unserved.to_string().contains("calendar"));
+
+        let unshared = DeleteError::Server(DeleteFailure::Unshared(ChildKind::AddressBook));
+        assert!(unshared.to_string().contains("address book"));
+
+        let client = DeleteError::Server(DeleteFailure::Client(jmap_client::Error::Protocol(
+            "boom".to_owned(),
+        )));
+        assert!(!client.to_string().is_empty());
+
+        let stale = DeleteError::Stale("gvfs mount busy".to_owned());
+        assert!(stale.to_string().contains("gvfs mount busy"));
+    }
+}
+
+#[cfg(test)]
+mod delete_error_to_gerror_tests {
+    use jmap_backend_core::marshal::read_string;
+
+    use super::*;
+
+    /// `NotOurs` goes through `invalid_arg_gerror`, the same as every
+    /// variant but `Login` and a server `Client` failure; without this test
+    /// `to_gerror` can be replaced with a function that always answers the
+    /// null pointer and nothing notices.
+    #[test]
+    fn not_ours_carries_the_invalid_arg_code_and_its_own_message() {
+        let error = DeleteError::NotOurs;
+        let gerror = error.to_gerror();
+        assert!(!gerror.is_null());
+        // SAFETY: a freshly allocated GError this test owns.
+        unsafe {
+            assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+            assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
+            let message = read_string((*gerror).message).unwrap();
+            assert_eq!(message, error.to_string());
+            glib_sys::g_error_free(gerror);
+        }
+    }
+}
