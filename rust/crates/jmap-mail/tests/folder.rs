@@ -25,10 +25,11 @@ use std::ffi::CStr;
 use common::Account;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CamelFolder, CamelStore,
-    camel_folder_get_display_name, camel_folder_get_flags, camel_folder_get_full_name,
-    camel_folder_get_parent_store, camel_folder_get_type, camel_offline_folder_get_type,
+    camel_folder_cmp_uids, camel_folder_get_display_name, camel_folder_get_flags,
+    camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_get_type,
+    camel_folder_sort_uids, camel_offline_folder_get_type,
 };
-use glib_sys::{GFALSE, gchar};
+use glib_sys::{GFALSE, g_ptr_array_add, g_ptr_array_new, g_ptr_array_unref, gchar};
 use gobject_sys::{g_object_unref, g_type_is_a, g_type_name};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_mail::folder::{JmapFolder, folder_type, new_folder};
@@ -223,6 +224,42 @@ fn folder_properties_and_custom_subfolder_nesting() {
         );
         let jmap = JmapFolder::borrow(folder).expect("a folder of ours");
         assert_eq!(jmap.mailbox(), Some(&Id::new("MbxSub99")));
+        g_object_unref(folder.cast());
+    }
+}
+
+/// How Camel orders two uids. Its own default parses each uid as a decimal
+/// number, which is IMAP's uid; a JMAP id is an opaque string, so every id
+/// that does not start with a digit parsed as 0 and every pair of messages
+/// compared equal. Byte order is arbitrary, but it is a total order, and
+/// `sort_uids` is only stable on top of one.
+#[test]
+fn uids_compare_as_strings_not_as_numbers() {
+    let account = Account::open();
+    let folder = folder_of(&account, &mailbox("Inbox", "Inbox", None));
+
+    let ids = [c"Mc", c"Ma2", c"Ma10", c"Mb"];
+    // SAFETY: `folder` is a live folder this test owns; the uid strings are
+    // static, and the array only borrows them until it is freed below.
+    unsafe {
+        assert!(camel_folder_cmp_uids(folder, c"Ma".as_ptr(), c"Mb".as_ptr()) < 0);
+        assert!(camel_folder_cmp_uids(folder, c"Mb".as_ptr(), c"Ma".as_ptr()) > 0);
+        assert_eq!(
+            camel_folder_cmp_uids(folder, c"Ma".as_ptr(), c"Ma".as_ptr()),
+            0
+        );
+
+        let array = g_ptr_array_new();
+        for id in ids {
+            g_ptr_array_add(array, id.as_ptr().cast_mut().cast());
+        }
+        camel_folder_sort_uids(folder, array);
+        let sorted: Vec<String> = (0..(*array).len as usize)
+            .map(|i| name((*(*array).pdata.add(i)).cast()))
+            .collect();
+        assert_eq!(sorted, ["Ma10", "Ma2", "Mb", "Mc"]);
+
+        g_ptr_array_unref(array);
         g_object_unref(folder.cast());
     }
 }
