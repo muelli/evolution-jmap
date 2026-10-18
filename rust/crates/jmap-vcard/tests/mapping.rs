@@ -2125,6 +2125,62 @@ fn invents_a_key_for_a_calendar_that_has_none() {
     assert_eq!(calendars["c7"].uri, "https://vera.example/cal/team.ics");
 }
 
+#[test]
+fn calendars_read_pref_and_media_type_parameters() {
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALURI;X-JMAP-KEY=c1;PREF=1;MEDIATYPE=text/calendar:https://vera.example/cal/vera.ics\r\n",
+        "FBURL;X-JMAP-KEY=c2;TYPE=PREF;MEDIATYPE=text/calendar:https://vera.example/fb/vera.ifb\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let calendars = card.calendars.expect("calendars");
+    assert_eq!(calendars["c1"].pref, Some(1));
+    assert_eq!(calendars["c1"].media_type.as_deref(), Some("text/calendar"));
+    assert_eq!(calendars["c2"].pref, Some(1));
+    assert_eq!(calendars["c2"].media_type.as_deref(), Some("text/calendar"));
+}
+
+#[test]
+fn calendars_emit_pref_and_media_type_parameters() {
+    let mut calendars = BTreeMap::new();
+    calendars.insert(
+        "c1".to_owned(),
+        Calendar {
+            kind: Some("calendar".to_owned()),
+            uri: "https://vera.example/cal/vera.ics".to_owned(),
+            media_type: Some("text/calendar".to_owned()),
+            pref: Some(1),
+            ..Calendar::default()
+        },
+    );
+    calendars.insert(
+        "c2".to_owned(),
+        Calendar {
+            kind: Some("freeBusy".to_owned()),
+            uri: "https://vera.example/fb/vera.ifb".to_owned(),
+            media_type: Some("text/calendar".to_owned()),
+            pref: Some(1),
+            ..Calendar::default()
+        },
+    );
+    let card = ContactCard {
+        calendars: Some(calendars),
+        ..ContactCard::default()
+    };
+
+    let vcard = unfolded(&card_to_vcard(&card));
+    assert_eq!(
+        line(&vcard, "CALURI"),
+        "CALURI;X-JMAP-KEY=c1;MEDIATYPE=text/calendar;TYPE=PREF:https://vera.example/cal/vera.ics"
+    );
+    assert_eq!(
+        line(&vcard, "FBURL"),
+        "FBURL;X-JMAP-KEY=c2;MEDIATYPE=text/calendar;TYPE=PREF:https://vera.example/fb/vera.ifb"
+    );
+}
+
 fn one_relation(key: &str, types: &[&str]) -> ContactCard {
     ContactCard {
         related_to: Some(

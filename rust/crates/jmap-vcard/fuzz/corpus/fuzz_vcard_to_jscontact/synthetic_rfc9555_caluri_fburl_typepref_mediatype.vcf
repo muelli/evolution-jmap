@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:urn:uuid:synthetic-rfc9555-caluri-fburl-typepref-mediatype-0001
+FN:Alex Mercer
+N:Mercer;Alex;;;
+CALURI;X-JMAP-KEY=c1;PREF=1;MEDIATYPE=text/calendar:https://calendar.example.test/users/alex/main.ics
+FBURL;X-JMAP-KEY=c2;TYPE=PREF;MEDIATYPE=text/calendar:https://calendar.example.test/users/alex/freebusy.ifb
+END:VCARD
