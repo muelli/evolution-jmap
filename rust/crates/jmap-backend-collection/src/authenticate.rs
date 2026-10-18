@@ -468,4 +468,19 @@ mod tests {
             ));
         }
     }
+
+    /// `LoginError`'s `Display` writes the inner error, for either variant;
+    /// without this test a `Display` that writes nothing still compiles and
+    /// a broken account reports as an empty error message.
+    #[test]
+    fn a_login_error_displays_the_inner_error() {
+        let account = LoginError::Account(SourceError::MissingHost);
+        assert_eq!(account.to_string(), SourceError::MissingHost.to_string());
+
+        let credentials = LoginError::Credentials(ConnectError::CredentialsRequired);
+        assert_eq!(
+            credentials.to_string(),
+            ConnectError::CredentialsRequired.to_string()
+        );
+    }
 }
