@@ -112,12 +112,13 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use eds_sys::{
     EOAuth2Service, EOAuth2ServiceBase, EOAuth2ServiceBaseClass, EOAuth2ServiceInterface, ESource,
     e_oauth2_service_base_get_type, e_oauth2_service_get_type, e_source_get_uid,
 };
-use glib_sys::{GHashTable, GType, g_hash_table_replace, g_strdup};
+use glib_sys::{GHashTable, GType, g_hash_table_replace, g_strdup, g_strndup};
 use jmap_backend_core::i18n::{self, N_};
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -125,6 +126,7 @@ use jmap_backend_core::trampoline::guard;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::read_string;
 use jmap_client::oauth::PkceVerifier;
+use zeroize::Zeroizing;
 
 use crate::oauth2;
 
@@ -289,7 +291,7 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // request (observed live 2026-08-23, after scope and resource
             // were already right). The verifier is stashed per source UID
             // for `prepare_get_token_form` to redeem; a repeated
-            // authorization attempt simply replaces it.
+            // authorization attempt simply replaces it (see [`Verifiers`]).
             //
             // All-or-nothing: a challenge is only ever added once its verifier
             // is stashed. A uid-less source could not be stashed against, and
@@ -305,7 +307,11 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 pkce_verifiers()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(uid.clone(), verifier.secret().to_owned());
+                    .stash(
+                        uid.clone(),
+                        Zeroizing::new(verifier.secret().to_owned()),
+                        Instant::now(),
+                    );
                 g_hash_table_replace(
                     uri_query,
                     g_strdup(c"code_challenge".as_ptr()).cast(),
@@ -345,9 +351,72 @@ unsafe extern "C" fn prepare_authentication_uri_query(
 /// in-memory only: a verifier is a per-flow secret with no business in the
 /// on-disk keyfile, and both halves of the flow run in the same process (the
 /// credentials prompter's).
-fn pkce_verifiers() -> &'static Mutex<HashMap<String, String>> {
-    static VERIFIERS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    VERIFIERS.get_or_init(|| Mutex::new(HashMap::new()))
+fn pkce_verifiers() -> &'static Mutex<Verifiers> {
+    static VERIFIERS: OnceLock<Mutex<Verifiers>> = OnceLock::new();
+    VERIFIERS.get_or_init(|| Mutex::new(Verifiers::default()))
+}
+
+/// How long a stashed verifier waits for its token exchange. EDS tells an
+/// `EOAuth2Service` nothing when the user closes the consent window, so an
+/// abandoned flow's verifier would otherwise stay for the life of the
+/// process. The bound has to cover the user's time on the consent page plus
+/// the code's own lifetime, which RFC 6749 section 4.1.2 recommends be at
+/// most ten minutes. A verifier older than this belongs to a consent nobody
+/// is going to finish; if one is finished after all, the exchange goes out
+/// without a verifier, is refused, and EDS asks for consent again.
+const VERIFIER_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+/// One verifier awaiting its token exchange.
+struct Pending {
+    /// Wiped wherever it is dropped: replaced, redeemed or evicted.
+    secret: Zeroizing<String>,
+    stashed: Instant,
+}
+
+/// The PKCE verifiers awaiting their token exchange, keyed by source UID.
+///
+/// Every verifier is held as a [`Zeroizing`] secret, so its bytes are
+/// overwritten when a repeated authorization replaces it, when
+/// [`redeem`](Self::redeem) hands it out and the caller drops it, and when it
+/// is evicted. Eviction runs on every stash and redeem, for every account,
+/// and drops anything older than [`VERIFIER_LIFETIME`]. Moving a `Pending`
+/// (on insert, or when the map grows) moves the `String`'s pointer, never the
+/// heap bytes it points at, so no unwiped copy is left behind.
+///
+/// Not covered: `jmap_client::oauth::PkceVerifier`, which the generated
+/// secret is copied out of, does not wipe its own copy on drop.
+#[derive(Default)]
+struct Verifiers(HashMap<String, Pending>);
+
+impl Verifiers {
+    fn stash(&mut self, uid: String, secret: Zeroizing<String>, now: Instant) {
+        self.evict_expired(now);
+        self.0.insert(
+            uid,
+            Pending {
+                secret,
+                stashed: now,
+            },
+        );
+    }
+
+    /// Takes the verifier for `uid`, if one is stashed and still within its
+    /// lifetime. Taken, not copied: a verifier is single-use.
+    fn redeem(&mut self, uid: &str, now: Instant) -> Option<Zeroizing<String>> {
+        self.evict_expired(now);
+        self.0.remove(uid).map(|pending| pending.secret)
+    }
+
+    fn evict_expired(&mut self, now: Instant) {
+        self.0.retain(|_, pending| {
+            now.saturating_duration_since(pending.stashed) < VERIFIER_LIFETIME
+        });
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 /// Adds the stored RFC 8707 `resource` indicator to `table` when the source
@@ -392,12 +461,16 @@ unsafe extern "C" fn prepare_get_token_form(
             && let Some(verifier) = pkce_verifiers()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(uid)
+                .redeem(uid, Instant::now())
         {
+            // Copied straight into the form's own allocation, with no
+            // intermediate `CString` that would be freed unwiped. The form's
+            // copy is EDS's to free. A verifier is base64url, so it holds no
+            // NUL for `g_strndup` to stop at.
             g_hash_table_replace(
                 form,
                 g_strdup(c"code_verifier".as_ptr()).cast(),
-                g_strdup(cstring_lossy(&verifier).as_ptr()).cast(),
+                g_strndup(verifier.as_ptr().cast(), verifier.len()).cast(),
             );
             true
         } else {
@@ -513,4 +586,88 @@ unsafe extern "C" fn get_redirect_uri(
         ptr::null(),
         || unsafe { oauth2::redirect_uri(source) },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use zeroize::Zeroizing;
+
+    use super::{VERIFIER_LIFETIME, Verifiers};
+
+    fn secret(value: &str) -> Zeroizing<String> {
+        Zeroizing::new(value.to_owned())
+    }
+
+    #[test]
+    fn a_verifier_is_redeemed_once_as_a_wiping_secret() {
+        let now = Instant::now();
+        let mut verifiers = Verifiers::default();
+        verifiers.stash("uid".to_owned(), secret("first"), now);
+        // The annotation is the point: what leaves the map wipes itself.
+        let redeemed: Zeroizing<String> = verifiers.redeem("uid", now).expect("stashed");
+        assert_eq!(redeemed.as_str(), "first");
+        assert!(verifiers.redeem("uid", now).is_none(), "single-use");
+    }
+
+    #[test]
+    fn a_repeated_authorization_replaces_the_stashed_verifier() {
+        let now = Instant::now();
+        let mut verifiers = Verifiers::default();
+        verifiers.stash("uid".to_owned(), secret("first"), now);
+        verifiers.stash("uid".to_owned(), secret("second"), now);
+        assert_eq!(verifiers.len(), 1);
+        assert_eq!(
+            verifiers.redeem("uid", now).expect("stashed").as_str(),
+            "second"
+        );
+    }
+
+    #[test]
+    fn a_verifier_is_redeemable_until_its_lifetime_ends() {
+        let then = Instant::now();
+        let mut verifiers = Verifiers::default();
+        verifiers.stash("uid".to_owned(), secret("first"), then);
+        let just_in_time = then + VERIFIER_LIFETIME - Duration::from_secs(1);
+        assert!(verifiers.redeem("uid", just_in_time).is_some());
+
+        verifiers.stash("uid".to_owned(), secret("first"), then);
+        assert!(
+            verifiers.redeem("uid", then + VERIFIER_LIFETIME).is_none(),
+            "a verifier at the end of its lifetime belongs to an abandoned consent"
+        );
+    }
+
+    #[test]
+    fn an_abandoned_verifier_is_evicted_by_another_accounts_stash() {
+        let then = Instant::now();
+        let mut verifiers = Verifiers::default();
+        verifiers.stash("abandoned".to_owned(), secret("first"), then);
+        verifiers.stash("recent".to_owned(), secret("second"), then);
+        let later = then + VERIFIER_LIFETIME;
+        verifiers.stash("next".to_owned(), secret("third"), later);
+        assert_eq!(verifiers.len(), 1, "only the fresh stash survives");
+        assert!(verifiers.redeem("next", later).is_some());
+    }
+
+    #[test]
+    fn an_abandoned_verifier_is_evicted_by_another_accounts_redeem() {
+        let then = Instant::now();
+        let mut verifiers = Verifiers::default();
+        verifiers.stash("abandoned".to_owned(), secret("first"), then);
+        assert!(
+            verifiers
+                .redeem("other", then + VERIFIER_LIFETIME)
+                .is_none()
+        );
+        assert_eq!(verifiers.len(), 0);
+    }
+
+    #[test]
+    fn the_lifetime_outlasts_the_recommended_code_lifetime() {
+        // RFC 6749 section 4.1.2 recommends at most ten minutes for the code
+        // alone; the consent page comes before it.
+        assert!(VERIFIER_LIFETIME > Duration::from_secs(10 * 60));
+    }
 }
