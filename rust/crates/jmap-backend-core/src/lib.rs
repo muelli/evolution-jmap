@@ -43,6 +43,7 @@
 //! its tests via the `rust-test-eds` target.
 
 pub mod api_token;
+pub mod callback;
 pub mod cancel;
 pub mod connect;
 pub mod error;

@@ -36,6 +36,7 @@ use glib_sys::{
     gchar, gpointer,
 };
 use gobject_sys::g_signal_connect_data;
+use jmap_backend_core::callback::{CHandler, gcallback};
 
 /// A main context of this test's own, pushed as the thread default for as long
 /// as it is held.
@@ -116,7 +117,14 @@ pub fn watch(folder: *mut CamelFolder) {
     // SAFETY: `folder` is a live GObject, the signal name is one `CamelFolder`
     // declares, and the handler has the signature that signal's marshaller
     // calls with.
-    unsafe { connect(folder.cast(), c"changed", on_changed as *const ()) };
+    unsafe {
+        connect(
+            folder.cast(),
+            c"changed",
+            on_changed
+                as unsafe extern "C" fn(*mut CamelFolder, *mut CamelFolderChangeInfo, gpointer),
+        )
+    };
 }
 
 unsafe extern "C" fn on_changed(
@@ -208,7 +216,14 @@ pub fn watch_store(store: *mut CamelStore) {
         // interface it implements declares, and `on_folder_info` has the
         // signature their shared marshaller calls with. The user data is the
         // static name itself — see `on_folder_info`.
-        unsafe { connect_with(store.cast(), signal, on_folder_info as *const ()) };
+        unsafe {
+            connect_with(
+                store.cast(),
+                signal,
+                on_folder_info
+                    as unsafe extern "C" fn(*mut CamelStore, *mut CamelFolderInfo, gpointer),
+            )
+        };
     }
     // SAFETY: as above, with the one signal whose marshaller passes the old
     // path before the info.
@@ -216,7 +231,13 @@ pub fn watch_store(store: *mut CamelStore) {
         connect_with(
             store.cast(),
             c"folder-renamed",
-            on_folder_renamed as *const (),
+            on_folder_renamed
+                as unsafe extern "C" fn(
+                    *mut CamelStore,
+                    *const gchar,
+                    *mut CamelFolderInfo,
+                    gpointer,
+                ),
         )
     };
 }
@@ -313,7 +334,7 @@ pub fn events(context: &Context) -> Vec<FolderEvent> {
 ///
 /// `instance` must be a live GObject, `signal` a signal it declares, and
 /// `handler` a function with the signature that signal's marshaller calls.
-unsafe fn connect(instance: *mut gobject_sys::GObject, signal: &CStr, handler: *const ()) {
+unsafe fn connect(instance: *mut gobject_sys::GObject, signal: &CStr, handler: impl CHandler) {
     // SAFETY: the contract above.
     unsafe { connect_data(instance, signal, handler, ptr::null_mut()) };
 }
@@ -324,7 +345,7 @@ unsafe fn connect(instance: *mut gobject_sys::GObject, signal: &CStr, handler: *
 ///
 /// As [`connect`], and `signal` must outlive the connection — which the
 /// `&'static CStr`s above do.
-unsafe fn connect_with(instance: *mut gobject_sys::GObject, signal: &CStr, handler: *const ()) {
+unsafe fn connect_with(instance: *mut gobject_sys::GObject, signal: &CStr, handler: impl CHandler) {
     // SAFETY: the contract above.
     unsafe {
         connect_data(
@@ -342,23 +363,14 @@ unsafe fn connect_with(instance: *mut gobject_sys::GObject, signal: &CStr, handl
 unsafe fn connect_data(
     instance: *mut gobject_sys::GObject,
     signal: &CStr,
-    handler: *const (),
+    handler: impl CHandler,
     data: gpointer,
 ) {
-    // SAFETY: the contract above. The transmute to `GCallback` is what every
-    // `g_signal_connect` in C is, spelled out — the marshaller casts it back to
-    // the signature the signal declares.
+    // SAFETY: the contract above. The marshaller casts the erased handler back
+    // to the signature the signal declares.
     unsafe {
-        let id = g_signal_connect_data(
-            instance,
-            signal.as_ptr(),
-            Some(std::mem::transmute::<*const (), unsafe extern "C" fn()>(
-                handler,
-            )),
-            data,
-            None,
-            0,
-        );
+        let id =
+            g_signal_connect_data(instance, signal.as_ptr(), gcallback(handler), data, None, 0);
         assert_ne!(id, 0, "nothing connected to {signal:?}");
     }
 }

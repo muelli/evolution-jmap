@@ -25,6 +25,7 @@ use gobject_sys::{
     g_object_set_property, g_object_unref, g_signal_connect_data, g_type_name, g_value_get_string,
     g_value_init, g_value_set_string, g_value_unset,
 };
+use jmap_backend_core::callback::{CHandler, gcallback};
 use jmap_config::oauth2::{Config, EXTENSION_NAME, PROPERTY_NAMES, apply, client_id, read};
 
 /// Writes one string property through the raw GObject API — the door EDS's
@@ -54,21 +55,16 @@ unsafe fn set_string_property(object: *mut GObject, name: &CStr, value: &CStr) {
 ///
 /// `handler` must have the signature `signal` declares, and `data` must stay
 /// alive for as long as emissions can reach it.
-unsafe fn connect(instance: *mut GObject, signal: &CStr, handler: *const (), data: *mut c_void) {
-    // SAFETY: the contract above. The transmute to `GCallback` is what every
-    // `g_signal_connect` in C is; the marshaller casts it back to the
-    // signature the signal declares.
+unsafe fn connect(
+    instance: *mut GObject,
+    signal: &CStr,
+    handler: impl CHandler,
+    data: *mut c_void,
+) {
+    // SAFETY: the contract above. The marshaller casts the erased handler back
+    // to the signature the signal declares.
     let id = unsafe {
-        g_signal_connect_data(
-            instance,
-            signal.as_ptr(),
-            Some(std::mem::transmute::<*const (), unsafe extern "C" fn()>(
-                handler,
-            )),
-            data,
-            None,
-            0,
-        )
+        g_signal_connect_data(instance, signal.as_ptr(), gcallback(handler), data, None, 0)
     };
     assert_ne!(id, 0, "nothing connected to {signal:?}");
 }
@@ -487,7 +483,7 @@ fn notifications_during(extension: *mut GObject, body: impl FnOnce()) -> Vec<Str
         connect(
             extension,
             c"notify",
-            record_notify as *const (),
+            record_notify as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, *mut c_void),
             ptr::from_ref(&seen).cast_mut().cast::<c_void>(),
         );
     }
@@ -743,7 +739,8 @@ fn another_thread_can_read_the_extension_while_notify_is_running() {
         connect(
             source.extension(),
             c"notify::client-id",
-            probe_from_another_thread as *const (),
+            probe_from_another_thread
+                as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, *mut c_void),
             ptr::from_ref(&probe).cast_mut().cast::<c_void>(),
         );
     }
@@ -815,7 +812,8 @@ fn a_notify_handler_can_read_the_extension_back_on_its_own_thread() {
         connect(
             source.extension(),
             c"notify::client-id",
-            read_on_the_emitting_thread as *const (),
+            read_on_the_emitting_thread
+                as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, *mut c_void),
             source.0.cast::<c_void>(),
         );
     }
@@ -877,7 +875,8 @@ fn a_notify_handler_can_write_another_property_of_the_same_extension() {
         connect(
             source.extension(),
             c"notify::client-id",
-            write_another_property as *const (),
+            write_another_property
+                as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, *mut c_void),
             ptr::null_mut(),
         );
     }
