@@ -276,3 +276,33 @@ if(PYTHON3_EXECUTABLE)
 			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-debian-copyright.cmake"
 	)
 endif()
+
+# The release SBOM's system-library half: ci/deb-dependencies.sh resolves the
+# .deb's Depends to installed versions where the package is built, ci/sbom.sh
+# folds them in on the release runner. Both run only on a tag, so they are
+# exercised here against throwaway packages whose Depends the test chooses.
+# Debian-family hosts only; the second test also needs the pinned SBOM
+# generator, which only the release workflow installs.
+find_program(DPKG_DEB_EXECUTABLE dpkg-deb)
+find_program(JQ_EXECUTABLE jq)
+if(DPKG_DEB_EXECUTABLE AND JQ_EXECUTABLE)
+	add_test(
+		NAME sbom-deb-dependencies
+		COMMAND ${CMAKE_COMMAND}
+			"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+			"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/sbom-deb-dependencies-test"
+			-DPART=dependencies
+			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-sbom.cmake"
+	)
+	find_program(CARGO_CYCLONEDX_EXECUTABLE cargo-cyclonedx)
+	if(CARGO_CYCLONEDX_EXECUTABLE)
+		add_test(
+			NAME sbom-reproducible
+			COMMAND ${CMAKE_COMMAND}
+				"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+				"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/sbom-reproducible-test"
+				-DPART=sbom
+				-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-sbom.cmake"
+		)
+	endif()
+endif()
