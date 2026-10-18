@@ -585,3 +585,13 @@ fn a_blocked_backend_test_times_out_and_fails_fast() {
         std::thread::park();
     });
 }
+
+#[test]
+fn watch_returns_the_same_account_watch_on_every_call() {
+    // `watch()` must read the instance's own field, not hand back a fresh
+    // one. A second call that claims the connection again, after the first
+    // call already claimed it, proves the two calls saw one `AccountWatch`.
+    let backend = JmapCollectionBackend::detached();
+    assert!(backend.watch().claim_connection());
+    assert!(!backend.watch().claim_connection());
+}
