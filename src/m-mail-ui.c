@@ -303,7 +303,7 @@ static GtkActionEntry mail_message_menu_entries[] = {
 
 static void
 m_mail_ui_update_actions_cb (EShellView *shell_view,
-			     GtkActionEntry *entries)
+			     gpointer user_data)
 {
 	EShellWindow *shell_window;
 	GtkActionGroup *action_group;

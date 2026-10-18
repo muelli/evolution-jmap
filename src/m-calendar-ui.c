@@ -229,7 +229,7 @@ static GtkActionEntry calendar_action_menu_entries[] = {
 
 static void
 m_calendar_ui_update_actions_cb (EShellView *shell_view,
-				 GtkActionEntry *entries)
+				 gpointer user_data)
 {
 	EShellWindow *shell_window;
 	GtkActionGroup *action_group;
