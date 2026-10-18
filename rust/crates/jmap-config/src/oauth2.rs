@@ -192,6 +192,13 @@ struct Fields {
     /// discovered OAuth 2.0 configuration — a human-paced event, and one
     /// EDS's own `source_set_property_from_key_file` already declines to
     /// perform when the value did not differ.
+    ///
+    /// A retired `client_secret` is deliberately not wiped, unlike a PKCE
+    /// verifier (`oauth2_service::Verifiers`). The current secret is an
+    /// ordinary extension property, so it already sits in plain text in the
+    /// account's `.source` key file and in every `GValue` EDS copies it into;
+    /// wiping an old copy here would protect nothing those do not expose. It is
+    /// also absent for the public clients this project registers in practice.
     retired: Vec<CString>,
 }
 
