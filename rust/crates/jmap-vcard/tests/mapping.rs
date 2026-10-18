@@ -11277,7 +11277,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11308,6 +11308,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "GEO:40.331575;-74.667232\r\n",
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
+        "KIND:group\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
         "XML:<contact><displayName>Dr. Albert Einstein</displayName></contact>\r\n",
         "CREATED:19940930T143510Z\r\n",
@@ -11384,6 +11385,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         parsed.directories.is_none(),
         "SOURCE must not project to directories in this profile"
     );
+    assert!(parsed.kind.is_none(), "KIND must not project to card.kind");
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
     let media = parsed.media.as_ref().expect("media map present");
@@ -11403,6 +11405,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("GEO:"), "GEO must not be emitted");
     assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
+    assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
     assert!(!emitted.contains("PRODID:"), "PRODID must not be emitted");
@@ -11501,6 +11504,29 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("MAILER:") && !emitted.contains("MAILER;"),
             "MAILER must not be emitted"
+        );
+    }
+
+    // KIND variants.
+    for kind_val in [
+        "KIND:individual",
+        "KIND:group",
+        "KIND:org",
+        "KIND:location",
+        "kind:application",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Kind User\r\n{kind_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse KIND");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Kind User")
+        );
+        assert!(parsed.kind.is_none(), "KIND must not project to card.kind");
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("KIND:") && !emitted.contains("KIND;"),
+            "KIND must not be emitted"
         );
     }
 
@@ -11801,7 +11827,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
 
 #[test]
 fn standard_properties_case_insensitivity_and_empty_values() {
-    // Verify that empty or whitespace-only lines for all 10 standard properties
+    // Verify that empty or whitespace-only lines for all 11 standard properties
     // are safely handled without panicking or creating empty structs.
 
     for empty_line in [
@@ -11813,6 +11839,8 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "tz:",
         "MAILER:",
         "mailer:   ",
+        "KIND:",
+        "kind:   ",
         "SOURCE:",
         "source:   ",
         "PRODID:",
