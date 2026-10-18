@@ -26,11 +26,16 @@ TIMEOUT_SECONDS = 90
 INBOX_PATTERN = re.compile(r"^Inbox \((\d+)\)$")
 
 
-def find_app(name):
+def find_app(names):
+    """`names` is an iterable of acceptable AT-SPI application names:
+    Evolution registers as "evolution" on Ubuntu 24.04 (3.52) but as its
+    GApplication id "org.gnome.Evolution" in the Fedora 3.60 image
+    ci/gui-smoke-fedora.sh runs in. Same fix the folder-popup and
+    populate-once assertions carry."""
     desktop = pyatspi.Registry.getDesktop(0)
     for i in range(desktop.childCount):
         app = desktop.getChildAtIndex(i)
-        if app is not None and app.name == name:
+        if app is not None and app.name in names:
             return app
     return None
 
@@ -84,6 +89,14 @@ def uncheck(checkbox):
         checkbox.queryAction().doAction(0)
 
 
+def find_button(node, name):
+    """The push-button role name differs by AT-SPI stack: "push button" on
+    Ubuntu 24.04, plain "button" in the Fedora 3.60 image's newer
+    at-spi2-core. So match the name alone, as the populate-once assertion
+    does."""
+    return find_descendant(node, role=None, name=name)
+
+
 def dismiss_transient_dialogs(evolution):
     """Best-effort: click through the one-time dialog a fresh, keyring-less
     profile shows on its first connection. Not part of what this test
@@ -101,10 +114,16 @@ def dismiss_transient_dialogs(evolution):
         checkbox = find_descendant(auth_dialog, role="check box")
         if checkbox is not None:
             uncheck(checkbox)
-        ok_button = find_descendant(auth_dialog, role="push button", name="OK")
+        ok_button = find_button(auth_dialog, "OK")
         if ok_button is not None:
             click(ok_button)
             print("dismissed: Mail authentication request")
+
+    # Only the Fedora 3.60 image asks this, once per fresh profile.
+    default_client_button = find_button(evolution, "Do not change settings")
+    if default_client_button is not None:
+        click(default_client_button)
+        print("dismissed: Do you want to make Evolution your default email client?")
 
 
 def account_inbox_count(evolution):
@@ -136,7 +155,7 @@ def main():
     deadline = time.monotonic() + TIMEOUT_SECONDS
     account_seen = False
     while time.monotonic() < deadline:
-        evolution = find_app("evolution")
+        evolution = find_app(("evolution", "org.gnome.Evolution"))
         if evolution is not None:
             dismiss_transient_dialogs(evolution)
 
