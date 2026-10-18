@@ -1,16 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structure-aware fuzzing of the JSCalendar ↔ iCalendar mapping using `proptest`.
+//! Structure-aware fuzzing of JSCalendar and iCalendar mapping using `proptest`.
 //!
 //! Asserts:
 //! 1. `event_to_ical` never panics on arbitrary `CalendarEvent` instances.
-//! 2. `ical_to_event` never panics on arbitrary strings or arbitrary iCalendar envelopes.
-//! 3. Round-trip stability: Emitting an event, parsing it back, and re-emitting reaches a fixed point.
-//! 4. Domain-specific fixpoint properties across dates/zones (incl. Windows timezones and
-//!    globally-unique TZIDs), recurrence rules, recurrence overrides (EXDATE, RDATE, detached
-//!    VEVENTs), alerts / VALARM, participants / organizer, physical and virtual locations,
-//!    attachments and image links, categories / keywords, and metadata.
+//! 2. `ical_to_event` never panics on arbitrary strings or envelopes.
+//! 3. Round-trip stability: Re-emitting an event reaches a fixed point.
+//! 4. Stability holds across dates, zones, recurrence rules, overrides, alerts,
+//!    locations, links, keywords, and metadata.
 
 use std::collections::BTreeMap;
 
@@ -172,7 +170,7 @@ fn arb_time_zone_string() -> impl Strategy<Value = String> {
         Just("E. South America Standard Time".to_string()),
         Just("UTC-11".to_string()),
         Just("UTC+12".to_string()),
-        // Globally-unique TZID forms (RFC 5545 §3.8.3.1)
+        // Globally-unique TZID forms (RFC 5545 3.8.3.1)
         Just("/mozilla.org/20070129_1/Europe/Berlin".to_string()),
         Just("/citadel.org/20080105_1/Europe/Paris".to_string()),
         Just("/freeassociation.sourceforge.net/Tzfile/Europe/Berlin".to_string()),
@@ -979,17 +977,14 @@ proptest! {
     fn prop_emitted_ical_lines_target_75_octets_and_are_valid_utf8(event in arb_calendar_event()) {
         let ical = event_to_ical(&event);
         for line in ical.split("\r\n") {
-            // Exactly the RFC 5545 §3.1 width: calcard's own writer overshoots
-            // on long properties like RRULE and when empty structured slots
-            // trail a value at the boundary (stalwartlabs/calcard#25), and
-            // `Component::to_ics`'s refold pass takes it back to 75.
+            // RFC 5545 3.1: Lines must not exceed 75 octets.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
             );
-            // Multi-byte UTF-8 code points must never be split across a fold
+            // Multi-byte UTF-8 code points must not be split across a fold.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",
@@ -1109,7 +1104,7 @@ proptest! {
             ..CalendarEvent::default()
         };
         let ical1 = event_to_ical(&event);
-        // Participants are drawn for output rendering and not read back into JSCalendar
+        // Participants are drawn for output and not read back into JSCalendar.
         let parsed1 = ical_to_event(&ical1).expect("participants ical1 parse");
         let ical2 = event_to_ical(&parsed1);
         let parsed2 = ical_to_event(&ical2).expect("participants ical2 parse");
@@ -1265,7 +1260,7 @@ proptest! {
 
         if let Ok(parsed1) = ical_to_event(&raw_ics) {
             let ical1 = event_to_ical(&parsed1);
-            // Unsupported alarm types (ACTION:EMAIL, ACTION:AUDIO) and vendor properties must be dropped cleanly
+            // Unsupported alarm types and vendor properties must be dropped cleanly.
             prop_assert!(!ical1.contains("ACTION:EMAIL"));
             prop_assert!(!ical1.contains("ACTION:AUDIO"));
             prop_assert!(!ical1.contains("X-VENDOR-CUSTOM-STATUS"));
@@ -1359,8 +1354,7 @@ proptest! {
     }
 }
 
-/// Regression test: a `CATEGORIES` tag ending in a space before an escaped character
-/// (here `;`) previously lost that space on subsequent parse in calcard.
+/// Test that a `CATEGORIES` tag retains spaces before escaped characters.
 #[test]
 fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:a ;\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -1380,8 +1374,7 @@ fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
     );
 }
 
-/// Regression test: a whitespace-only `CATEGORIES` tag reaches fixed-point
-/// stability on the first emit rather than drifting across parses.
+/// Test that a whitespace-only `CATEGORIES` tag reaches fixed-point stability.
 #[test]
 fn a_category_that_is_only_whitespace_reaches_fixed_point_on_the_first_emit() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\ \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -1397,8 +1390,7 @@ fn a_category_that_is_only_whitespace_reaches_fixed_point_on_the_first_emit() {
     );
 }
 
-/// Regression test: a `CATEGORIES` tag with trailing whitespace reaches fixed-point
-/// stability on the first emit rather than settling one round-trip later.
+/// Test that a `CATEGORIES` tag with trailing whitespace reaches fixed-point stability.
 #[test]
 fn a_category_with_trailing_whitespace_reaches_fixed_point_on_the_first_emit() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\0 \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";

@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BusyPeriod` → `VFREEBUSY`, the free/busy half of the calendar mapping.
+//! Tests the mapping from `BusyPeriod` to `VFREEBUSY`.
 //!
-//! The acceptance suite for what Evolution's meeting scheduler is handed when
-//! it asks a JMAP calendar for an attendee's free/busy. The shape is not ours
-//! to invent: `ECalMetaBackend`, the CalDAV backend and the Microsoft 365
-//! backend all answer `get_free_busy_sync` with a bare `VFREEBUSY` component
-//! rendered to an iCalendar string, and the assertions below pin this crate to
-//! the same one.
+//! Verifies the `VFREEBUSY` components returned to Evolution's meeting scheduler.
+//! `ECalMetaBackend`, CalDAV, and Microsoft 365 backends all answer `get_free_busy_sync`
+//! with a bare `VFREEBUSY` component rendered to an iCalendar string.
 
 use jmap_ical::{busy_periods_to_vfreebusy, free_busy_type};
 use jmap_proto::principals::BusyPeriod;
@@ -64,9 +61,7 @@ fn a_busy_period_becomes_a_freebusy_line_inside_the_requested_window() {
     );
 }
 
-/// Order is the server's. `Principal/getAvailability` returns the periods it
-/// has already merged and split; re-sorting here would only hide a server that
-/// did not.
+/// Preserves the order of periods returned by `Principal/getAvailability`.
 #[test]
 fn every_period_gets_its_own_line_in_the_order_given() {
     let ics = render(
@@ -91,10 +86,9 @@ fn every_period_gets_its_own_line_in_the_order_given() {
     );
 }
 
-/// An attendee with nothing on is not the same as an attendee we know nothing
-/// about, and the difference is what a scheduler needs: a component with a
-/// window and no `FREEBUSY` line states the first. `ECalMetaBackend`'s own
-/// implementation emits exactly that for an empty cache.
+/// An attendee with no busy periods still receives a `VFREEBUSY` component.
+///
+/// An empty list indicates no busy time in the query window.
 #[test]
 fn an_attendee_with_no_busy_periods_still_gets_a_component() {
     let ics = render("bob@example.com", &[]).expect("renders");
@@ -111,10 +105,7 @@ fn an_attendee_with_no_busy_periods_still_gets_a_component() {
     );
 }
 
-/// The three backends in the EDS tree all build the `ATTENDEE` by prepending
-/// `mailto:` to the string EDS handed them, so a bare address is what the
-/// vfunc's `users` list holds. Tolerating the prefix anyway costs one check
-/// and avoids `mailto:mailto:`.
+/// Ensures addresses that already contain `mailto:` are not prefixed again.
 #[test]
 fn an_attendee_that_already_names_a_scheme_is_not_prefixed_twice() {
     for attendee in ["mailto:bob@example.com", "MAILTO:bob@example.com"] {
@@ -133,16 +124,14 @@ fn the_draft_busy_statuses_map_onto_rfc_5545_fbtypes() {
     assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
 }
 
-/// `getAvailability` answers with busy periods only ("free" is not in
-/// its vocabulary), so unknown statuses are treated as busy.
+/// Unknown busy statuses are treated as busy.
 #[test]
 fn an_unknown_busy_status_is_still_busy() {
     assert_eq!(free_busy_type("something-draft-28-invented"), "BUSY");
     assert_eq!(free_busy_type(""), "BUSY");
 }
 
-/// RFC 3339 allows a fractional second and RFC 5545's DATE-TIME does not, so
-/// the fraction is dropped rather than the period.
+/// Truncates fractional seconds to match RFC 5545 DATE-TIME format.
 #[test]
 fn a_fractional_second_is_truncated_not_rejected() {
     let ics = render(
@@ -161,16 +150,15 @@ fn a_fractional_second_is_truncated_not_rejected() {
     );
 }
 
-/// An unreadable period refuses the whole component to avoid incorrectly reporting free time.
+/// Unreadable periods cause the entire component to be rejected.
 #[test]
 fn a_period_that_cannot_be_read_refuses_the_whole_component() {
     for (start, end) in [
         ("not-a-date", "2026-08-19T10:00:00Z"),
         ("2026-08-19T09:00:00Z", "not-a-date"),
-        // No `Z`: a JMAP UTCDate is always UTC, and a local time here would be
-        // a different instant with no way to tell which.
+        // UTCDate requires a trailing Z.
         ("2026-08-19T09:00:00", "2026-08-19T10:00:00Z"),
-        // Digits in the right places are not an instant.
+        // Out-of-range dates are rejected.
         ("2026-13-19T09:00:00Z", "2026-08-19T10:00:00Z"),
         ("2026-08-19T25:00:00Z", "2026-08-19T10:00:00Z"),
     ] {
@@ -204,7 +192,7 @@ fn a_window_that_cannot_be_read_refuses_the_whole_component() {
     );
 }
 
-/// A raw newline in the attendee string must be escaped so it cannot inject properties.
+/// Ensures attendee strings cannot inject additional iCalendar properties.
 #[test]
 fn an_attendee_cannot_inject_a_property_of_its_own() {
     let ics = render("bob@example.com\r\nSUMMARY:injected", &[]).expect("renders");

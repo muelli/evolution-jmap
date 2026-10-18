@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What offset from UTC a `VTIMEZONE` puts in force at a given instant.
+//! Calculates the UTC offset for a `VTIMEZONE` at a given instant.
 //!
-//! Resolves recurrence `UNTIL` conversions between UTC instants (RFC 5545 §3.3.10)
-//! and zoned local times (RFC 8984 §4.3.3) by reading the document's own `VTIMEZONE`
-//! definitions (RFC 5545 §3.6.5) rather than relying on an external zone database.
-//! Refuses unmappable or ambiguous transition rules cleanly.
+//! Resolves recurrence `UNTIL` conversions between UTC instants (RFC 5545 Section 3.3.10)
+//! and zoned local times (RFC 8984 Section 4.3.3).
+//! It reads the document's `VTIMEZONE` definitions (RFC 5545 Section 3.6.5) without an
+//! external timezone database.
+//! Refuses ambiguous or unmappable transition rules.
 
 use calcard::icalendar::ICalendarComponent;
 
@@ -15,14 +16,15 @@ use crate::event::{
     entry_texts, offset_seconds, to_local_date_time,
 };
 
-/// When the zone last changed its offset, and what that offset is: the
-/// `TZOFFSETTO` of the observance, or `TZOFFSETFROM` for the earliest transition.
+/// Time and offset for a timezone transition: `(timestamp, offset)`.
+///
+/// Contains `TZOFFSETTO` of the observance, or `TZOFFSETFROM` for the earliest transition.
 type Transition = (i64, i64);
 
-/// The offset from UTC in force at `utc` in the zone `observances` describe, as
-/// seconds east of UTC, or `None` if transitions cannot be resolved.
+/// Returns the UTC offset in seconds east of UTC at `utc` for the given observances.
 ///
-/// `utc` is a UTC instant spelled as a LocalDateTime (without trailing `Z`).
+/// Returns `None` if transitions cannot be resolved.
+/// `utc` is a UTC instant formatted as a local date-time without a trailing `Z`.
 pub(crate) fn offset_at(observances: &[&ICalendarComponent], utc: &str) -> Option<i64> {
     let (year, ..) = parts(utc)?;
     let target = seconds_at(utc)?;
@@ -46,14 +48,13 @@ pub(crate) fn offset_at(observances: &[&ICalendarComponent], utc: &str) -> Optio
     in_force.or(first).map(|(_, offset)| offset)
 }
 
-/// When one observance starts being in force, as UTC instants (see [`rule_onsets`]).
+/// Returns UTC instants when an observance takes effect (see [`rule_onsets`]).
 fn onsets(observance: &ICalendarComponent, from: i64, year: i64) -> Option<Vec<i64>> {
     let start = to_local_date_time(&component_text(observance, "DTSTART")?)?;
     let mut onsets = vec![seconds_at(&start)? - from];
     for date in component_entries(observance, "RDATE").flat_map(entry_texts) {
-        // A period says how long an occurrence lasts, which is not a thing a
-        // transition has; §3.8.5.2 admits the spelling and no zone uses it, so
-        // it is refused rather than read as its first half.
+        // RFC 5545 Section 3.8.5.2 permits period formats for RDATE.
+        // Transitions have zero duration, so period formats are refused.
         if date.contains('/') {
             return None;
         }
@@ -65,11 +66,10 @@ fn onsets(observance: &ICalendarComponent, from: i64, year: i64) -> Option<Vec<i
     Some(onsets)
 }
 
-/// The occurrences of one transition rule that could be the latest at or before
-/// an instant in `year`, as UTC instants.
+/// Returns transition occurrences for a rule near an instant in `year`.
 ///
-/// Searches [`SEARCH`] years back from `year`. Transitions outside this window
-/// or in unsupported shapes are refused.
+/// Searches [`SEARCH`] years before `year`.
+/// Refuses transitions outside this window or with unsupported formats.
 fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>> {
     let (start_year, start_month, start_day, of_day) = parts(start)?;
     let mut frequency: Option<&str> = None;
@@ -86,9 +86,8 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
             "UNTIL" => {
                 let local = to_local_date_time(value)?;
                 until_year = Some(parts(&local)?.0);
-                // §3.6.5's own examples state it as a UTC instant, which is
-                // what every producer writes; a value without the `Z` is a
-                // local time in the zone, dated like the `DTSTART` beside it.
+                // RFC 5545 Section 3.6.5 states UNTIL as a UTC instant with Z.
+                // Values without Z are local times with offset applied.
                 until = Some(match value.ends_with(['Z', 'z']) {
                     true => seconds_at(&local)?,
                     false => seconds_at(&local)? - from,
@@ -100,8 +99,8 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
             "BYHOUR" => by_hour = Some(value),
             "BYMINUTE" => by_minute = Some(value),
             "BYSECOND" => by_second = Some(value),
-            // §3.3.10 gives `WKST` meaning only with `WEEKLY` interval or `BYWEEKNO`.
-            // Unsupported here, ignored for compatibility with Exchange and Zimbra.
+            // RFC 5545 Section 3.3.10 defines WKST for WEEKLY or BYWEEKNO.
+            // Ignored here for compatibility with Exchange and Zimbra.
             "WKST" => {}
             _ => return None,
         }
@@ -110,7 +109,7 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
         return None;
     }
 
-    // One occurrence a year, so `COUNT` and `UNTIL` bound the years directly.
+    // The frequency is yearly, so COUNT and UNTIL limit years directly.
     let last = [
         Some(year),
         count.map(|count| start_year + count - 1),
@@ -128,13 +127,9 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
     for year in (earliest..=last).rev() {
         let day = match names.of(year, month) {
             Falls::On(day) => day,
-            // A year the rule states no day in is a year it does not happen in,
-            // not a rule that was misread: §3.3.10 says as much of a
-            // `BYMONTHDAY` the month is too short for, and the same holds of a
-            // fifth Sunday of a month with four.
+            // Skip years where the day does not occur, such as day 31 in short months.
             Falls::Never => continue,
-            // More than one day is a rule stating a set, which this module
-            // refuses whole rather than choosing from.
+            // Rules specifying multiple days are unsupported and refused.
             Falls::Set => return None,
         };
         let onset = seconds(year, month, day, of_day)? - from;
@@ -142,15 +137,14 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
             onsets.push(onset);
         }
     }
-    // Nothing found, and years the search did not reach: see the note above.
+    // Return onsets if non-empty or if the search started at the start year.
     (!onsets.is_empty() || earliest == start_year).then_some(onsets)
 }
 
-/// The time of day a rule's occurrences happen at: `DTSTART`'s time of day,
-/// with each field the rule restates replaced by the rule's value.
+/// Calculates the time of day for occurrences of a rule in seconds.
 ///
-/// Returns `None` if a field states multiple values, an out-of-range value,
-/// or a leap second (60).
+/// Replaces fields from `DTSTART` with values from the rule.
+/// Returns `None` for invalid or out-of-range values.
 fn restated(
     of_day: i64,
     hour: Option<&str>,
@@ -171,24 +165,25 @@ fn restated(
     )
 }
 
-/// How far back [`rule_onsets`] searches for a rule's occurrences (up to 40 years).
+/// Maximum years [`rule_onsets`] searches backwards for rule occurrences.
 const SEARCH: i64 = 40;
 
-/// How a transition rule names the day of the month it happens on.
+/// Specification of a transition day of the month.
 enum Day {
-    /// `BYDAY` with an ordinal: `-1SU` is the month's last Sunday, `2SU` its second.
+    /// `BYDAY` with an ordinal number, such as `-1SU` or `2SU`.
     Nth(i64, i64),
-    /// A `BYDAY` weekday limiting the dates a `BYMONTHDAY` lists (e.g. tzdata idioms).
+    /// `BYDAY` weekday matching a list of `BYMONTHDAY` values.
     WeekdayAmong(i64, Vec<i64>),
-    /// A single `BYMONTHDAY`, including negative offsets from month end.
+    /// Single `BYMONTHDAY`, including negative offsets from month end.
     OfMonth(i64),
-    /// No `BYxxx` for the day: takes it from `DTSTART`.
+    /// Day taken from `DTSTART` when no `BYxxx` rule is present.
     OfStart(i64),
 }
 
 impl Day {
-    /// What the rule's `BYDAY` and `BYMONTHDAY` state, or `None` for a pair
-    /// this cannot count a single transition out of.
+    /// Parses `BYDAY` and `BYMONTHDAY` into a [`Day`] variant.
+    ///
+    /// Returns `None` if the combination cannot be resolved to a single transition.
     fn named(by_day: Option<&str>, by_month_day: Option<&str>, start: i64) -> Option<Self> {
         Some(match (by_day, by_month_day) {
             (Some(token), Some(dates)) => Self::WeekdayAmong(
@@ -209,7 +204,7 @@ impl Day {
         })
     }
 
-    /// Which day of `month` in `year` this names.
+    /// Resolves the day of `month` in `year`.
     fn of(&self, year: i64, month: i64) -> Falls {
         let Some(length) = length_of(year, month) else {
             return Falls::Never;
@@ -243,18 +238,19 @@ impl Day {
     }
 }
 
-/// What a transition rule states for one year.
+/// Occurrence result for a transition rule in a specific year.
 enum Falls {
-    /// This day of the month, the one transition the year holds.
+    /// Transition occurs on this day of the month.
     On(i64),
-    /// No day: a year the rule does not happen in.
+    /// Transition does not occur in this year.
     Never,
-    /// More than one day: a set of transitions rather than a single onset.
+    /// Multiple transition days specified.
     Set,
 }
 
-/// The day of the week a two-letter `BYDAY` name states, numbered as
-/// [`WEEKDAYS`] is: `None` for anything that is not one of the seven.
+/// Converts a two-letter `BYDAY` name to a weekday index matching [`WEEKDAYS`].
+///
+/// Returns `None` if the name is not one of the seven weekdays.
 fn weekday_named(name: &str) -> Option<i64> {
     i64::try_from(
         WEEKDAYS
@@ -264,21 +260,20 @@ fn weekday_named(name: &str) -> Option<i64> {
     .ok()
 }
 
-/// The day of the week a date falls on, numbered as [`WEEKDAYS`] is: 0 is
-/// Monday. 1970-01-01, the epoch [`days_from_civil`] counts from, was a
-/// Thursday.
+/// Returns the weekday index matching [`WEEKDAYS`] where 0 is Monday.
+///
+/// The epoch 1970-01-01 was a Thursday (index 3).
 fn weekday(year: i64, month: i64, day: i64) -> i64 {
     (days_from_civil(year, month, day) + 3).rem_euclid(7)
 }
 
-/// [`days_in_month`] on the signed fields this module counts in, refusing a
-/// month no year has.
+/// Calls [`days_in_month`] for signed integers. Returns `None` for invalid months.
 fn length_of(year: i64, month: i64) -> Option<i64> {
     let length = days_in_month(u32::try_from(year).ok()?, u32::try_from(month).ok()?);
     (length > 0).then_some(i64::from(length))
 }
 
-/// A LocalDateTime as its year, month, day and seconds since its own midnight.
+/// Parses a local date-time into year, month, day, and seconds since midnight.
 fn parts(local: &str) -> Option<(i64, i64, i64, i64)> {
     let (date, time) = local.split_once('T')?;
     let field = |value: Option<&str>| value?.parse::<i64>().ok();
@@ -290,15 +285,13 @@ fn parts(local: &str) -> Option<(i64, i64, i64, i64)> {
     ))
 }
 
-/// A LocalDateTime as seconds from 1970-01-01T00:00:00 on its own wall clock:
-/// a number to compare and to shift, not an instant on any timeline until an
-/// offset has been taken off it.
+/// Converts a local date-time to wall-clock seconds from 1970-01-01T00:00:00.
 fn seconds_at(local: &str) -> Option<i64> {
     let (year, month, day, of_day) = parts(local)?;
     seconds(year, month, day, of_day)
 }
 
-/// The same, from fields, refusing a date that does not exist.
+/// Calculates wall-clock seconds from civil date fields. Returns `None` for invalid dates.
 fn seconds(year: i64, month: i64, day: i64, of_day: i64) -> Option<i64> {
     (1..=length_of(year, month)?)
         .contains(&day)

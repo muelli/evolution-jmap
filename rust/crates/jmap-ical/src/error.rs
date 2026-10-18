@@ -3,36 +3,30 @@
 
 //! Parse failures.
 
-/// Why a string could not be read as an iCalendar object.
+/// Describes why a string could not be parsed as an iCalendar object.
 ///
-/// The semantic mapping treats anything it does not recognise as absent
-/// rather than as an error, because an event that loses a property is still
-/// better than a calendar that refuses to open. It has exactly one failure of
-/// its own, [`NoEvent`](Self::NoEvent): a document with nothing in it to map.
+/// Unrecognised properties are treated as absent rather than errors.
+/// [`NoEvent`](Self::NoEvent) indicates that the document contains no event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ICalError {
     /// The input does not start with `BEGIN:VCALENDAR`.
     NotACalendar,
-    /// A `BEGIN` was never closed by a matching `END`.
+    /// A `BEGIN` tag has no matching `END` tag.
     Unterminated(String),
-    /// An `END` names a component other than the innermost open one.
+    /// An `END` tag names a component other than the innermost open component.
     Mismatched {
         /// The component that is open.
         expected: String,
-        /// The component the `END` line named.
+        /// The component named by the `END` line.
         found: String,
     },
-    /// Content follows the end of the calendar. Dropping it silently would
-    /// lose whole events when a stream carries more than one `VCALENDAR`.
+    /// Content follows the end of the calendar.
     Trailing(String),
-    /// Components nested past [`MAX_DEPTH`], naming the one that went too far.
-    /// The tree a parse returns is dropped recursively, so a document deeper
-    /// than the stack can hold would abort the process rather than fail.
+    /// Components nested beyond [`MAX_DEPTH`].
     ///
     /// [`MAX_DEPTH`]: crate::event::MAX_DEPTH
     TooDeep(String),
-    /// A well-formed calendar that holds no `VEVENT`: a `VTODO` or a bare
-    /// `VTIMEZONE`. There is no event to hand back and nothing to store.
+    /// The calendar object contains no `VEVENT` component.
     NoEvent,
 }
 

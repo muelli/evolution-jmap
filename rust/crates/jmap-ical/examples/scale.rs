@@ -1,15 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Real-size benchmark and profiling harness for `jmap-ical`.
+//! Benchmark and profiling harness for `jmap-ical`.
 //!
-//! Evaluates `ical_to_event` and `event_to_ical` across a realistic corpus of
-//! 10,000 events synthesized from the 12 production calendar export fixtures:
-//! - One third recurring with overrides and alarms (from Google and Thunderbird).
-//! - Several custom solidus-prefixed VTIMEZONE definitions.
-//! - Diverse single-day, multi-day, all-day, zero-duration, and DST-spanning events.
-//!
-//! Measures single-threaded elapsed time, throughput, and peak RSS.
+//! Evaluates `ical_to_event` and `event_to_ical` using a synthesized corpus
+//! of 10,000 events from production calendar fixtures.
+//! Measures single-threaded execution time, throughput, and peak memory usage.
 
 use std::env;
 use std::time::Instant;
@@ -46,7 +42,7 @@ fn extract_event_uid(ics: &str) -> String {
     String::new()
 }
 
-/// The resident set size this process has peaked at, read from `/proc`.
+/// Returns peak resident set size in kilobytes from `/proc/self/status`.
 pub fn peak_rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status.lines().find_map(|line| {
@@ -56,7 +52,7 @@ pub fn peak_rss_kb() -> Option<u64> {
     })
 }
 
-/// Category classification of an event in the benchmark corpus.
+/// Event categories in the benchmark corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventCategory {
     RecurringWithOverrides,
@@ -64,13 +60,13 @@ pub enum EventCategory {
     Standard,
 }
 
-/// An entry in the benchmark corpus.
+/// Benchmark corpus entry containing iCalendar text and category.
 pub struct CorpusEntry {
     pub ics: String,
     pub category: EventCategory,
 }
 
-/// Generates a corpus of `total_events` iCalendar documents.
+/// Constructs a benchmark corpus with `total_events` iCalendar entries.
 pub fn build_realistic_corpus(total_events: usize) -> Vec<CorpusEntry> {
     let mut corpus = Vec::with_capacity(total_events);
 
@@ -96,7 +92,7 @@ pub fn build_realistic_corpus(total_events: usize) -> Vec<CorpusEntry> {
 
     let mut event_idx = 0;
 
-    // 1. One third recurring with overrides and alarms (Google and Thunderbird Detached)
+    // 1. Recurring events with overrides and alarms.
     for i in 0..recurring_count {
         let (template, old_uid) = if i % 2 == 0 {
             (GOOGLE, &google_uid)
@@ -115,7 +111,7 @@ pub fn build_realistic_corpus(total_events: usize) -> Vec<CorpusEntry> {
         event_idx += 1;
     }
 
-    // 2. Custom VTIMEZONE definitions
+    // 2. Custom VTIMEZONE definitions.
     for i in 0..custom_tz_count {
         let zone_suffix = i % 10;
         let new_zone = format!("/example.org/Custom_Zone_{zone_suffix}");
@@ -132,7 +128,7 @@ pub fn build_realistic_corpus(total_events: usize) -> Vec<CorpusEntry> {
         event_idx += 1;
     }
 
-    // 3. Standard and diverse events across the remaining fixtures
+    // 3. Standard events across remaining fixtures.
     for i in 0..standard_count {
         let (template, old_uid) = &standard_fixtures[i % standard_fixtures.len()];
         let new_uid = format!("event-std-{event_idx}@example.org");
@@ -179,7 +175,7 @@ fn main() {
         (start_rss as f64) / 1024.0
     );
 
-    // Phase 0: Streaming round-trip pipeline (process and discard each event)
+    // Phase 0: Streaming round-trip pipeline.
     println!("\nPhase 0: Streaming round-trip (.ics -> JSCalendar -> .ics, discarded)...");
     let stream_start = Instant::now();
     for entry in &corpus {
@@ -199,7 +195,7 @@ fn main() {
         (stream_rss as f64) / 1024.0
     );
 
-    // Phase 1: Inbound mapping (.ics -> JSCalendar CalendarEvent)
+    // Phase 1: Inbound mapping from iCalendar to JSCalendar.
     println!("\nPhase 1: Inbound mapping (.ics -> JSCalendar CalendarEvent)...");
     let parse_start = Instant::now();
     let mut jmap_events = Vec::with_capacity(total_events);
@@ -240,7 +236,7 @@ fn main() {
         (mid_rss as f64) / 1024.0
     );
 
-    // Phase 2: Outbound mapping (JSCalendar CalendarEvent -> .ics)
+    // Phase 2: Outbound mapping from JSCalendar to iCalendar.
     println!("\nPhase 2: Outbound mapping (JSCalendar CalendarEvent -> .ics)...");
     let emit_start = Instant::now();
     let mut emitted_ics = Vec::with_capacity(total_events);
@@ -274,7 +270,7 @@ fn main() {
         (final_rss as f64) / 1024.0
     );
 
-    // Phase 3: Category breakdown
+    // Phase 3: Category breakdown.
     let mut rec_stats = CategoryStats::default();
     let mut ctz_stats = CategoryStats::default();
     let mut std_stats = CategoryStats::default();
@@ -336,7 +332,7 @@ fn main() {
         (std_stats.count as f64) / (std_stats.outbound_total_us / 1_000_000.0)
     );
 
-    // Phase 4: Sub-stage micro-profiling breakdown
+    // Phase 4: Sub-stage micro-profiling breakdown.
     println!("\nSub-Stage Micro-Profiling Breakdown:");
     let mut check_struct_us = 0.0;
     let mut calcard_parse_us = 0.0;
@@ -397,7 +393,7 @@ fn main() {
         (event_calendar_us + to_ics_us) / (sample_n as f64)
     );
 
-    // Full round-trip summary
+    // Full round-trip summary.
     let total_sec = parse_sec + emit_sec;
     let total_rate = (total_events as f64) / total_sec;
     let total_per_event_us = (total_sec * 1_000_000.0) / (total_events as f64);

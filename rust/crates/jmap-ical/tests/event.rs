@@ -5209,8 +5209,7 @@ fn a_zone_an_instance_cannot_name_is_flagged_rather_than_written_back() {
         let patch = json!({"timeZone": zone});
         assert!(!maps_override("2026-01-29T13:00:00", &patch), "{patch}");
 
-        // Nothing left to draw, so the occurrence is placed by a bare RDATE at
-        // the series' zone rather than moved to a zone we could not name.
+        // Placed by a bare RDATE at the series zone when the override zone is unrecognized.
         let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
         let ics = event_to_ical(&event);
         assert_eq!(vevents(&ics), 1, "{ics}");
@@ -5862,8 +5861,7 @@ fn properties_the_mapping_does_not_know_are_dropped_not_refused() {
     );
     let event = ical_to_event(ics).expect("parse");
     assert_eq!(event.title.as_deref(), Some("Dentist"));
-    // An unmapped property is a property we never write back, not a parse
-    // failure: an event that loses its guest list still opens.
+    // Unmapped properties are dropped on writeback, not treated as parse failures.
     assert!(event.extra.is_empty(), "{:?}", event.extra);
 }
 
@@ -6607,10 +6605,7 @@ fn a_definition_keyed_without_the_solidus_defines_the_zone_too() {
     assert!(ics.contains(CUSTOM_DEFINITION), "{ics}");
 }
 
-/// A zone that has a name needs no definition from us: libical resolves an IANA
-/// name out of its builtin table, `jmap-backend-cal` puts *that* definition in
-/// the object EDS caches, and a database is a better description of a zone than
-/// whatever a server was able to state about it.
+/// Named IANA zones require no in-document definition because libical resolves them directly.
 #[test]
 fn a_zone_with_a_name_of_its_own_is_left_to_the_reader() {
     let ics = event_to_ical(&defining(

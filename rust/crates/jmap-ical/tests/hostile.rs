@@ -1,18 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What a hostile JMAP server can make of the iCalendar the backend stores.
+//! Security tests for input sanitization and adversarial calendar payloads.
 //!
-//! Every string in a `CalendarEvent` came off the network, and three of them
-//! reach the wire without passing through `escape`: `duration` and a
-//! recurrence rule's `frequency` are emitted by `Property::raw` (their
-//! punctuation is structure, so escaping would destroy them), and `timeZone`
-//! becomes the `TZID` parameter of `DTSTART`, where a quoted value has no
-//! escape mechanism at all. The rendered object is handed straight to
-//! `i_cal_component_new_from_string`, so a string that can end a content line
-//! early is a string that can add a property to the user's calendar. Deeply
-//! nested components are the other hostile shape: they must not overflow the
-//! stack.
+//! Asserts that unescaped properties (`duration`, `frequency`, `timeZone`) cannot
+//! inject properties through line breaks. Asserts that deeply nested components
+//! do not overflow the stack.
 
 use jmap_ical::error::ICalError;
 use jmap_ical::{event_to_ical, scheduling_ical};
@@ -27,8 +20,7 @@ fn event() -> CalendarEvent {
     }
 }
 
-/// The property names this crate emits, in the order it emits them. Anything
-/// else on a line of its own came from a value.
+/// The property names emitted by this crate in emission order.
 fn line_names(ics: &str) -> Vec<String> {
     ics.split("\r\n")
         .filter(|line| !line.is_empty() && !line.starts_with(' '))
@@ -41,14 +33,7 @@ fn line_names(ics: &str) -> Vec<String> {
         .collect()
 }
 
-/// `duration` is kept verbatim because an ISO 8601 duration is punctuation all
-/// the way down. That is exactly what makes a CRLF in it an injection.
-///
-/// It is now stopped one step ahead of the strip that first answered it: a value
-/// carrying a line break is not a length, so the property is never written at
-/// all (see the mapping's `stated_duration`) rather than written with the break
-/// removed. The strip itself stays under test through the frequency and the
-/// `TZID` below, which have no such check in front of them.
+/// Values with line breaks in `duration` must not be written to iCalendar output.
 #[test]
 fn a_crlf_in_the_duration_cannot_add_a_property() {
     let ics = event_to_ical(&CalendarEvent {
@@ -68,7 +53,7 @@ fn a_crlf_in_the_duration_cannot_add_a_property() {
     );
 }
 
-/// An `RRULE`'s `FREQ` is the same shape of value, and the same hole.
+/// Recurrence rule frequency values must not inject content lines.
 #[test]
 fn a_crlf_in_a_recurrence_frequency_cannot_add_a_property() {
     let ics = event_to_ical(&CalendarEvent {
@@ -86,10 +71,7 @@ fn a_crlf_in_a_recurrence_frequency_cannot_add_a_property() {
     assert_eq!(ics.matches("\r\nRRULE").count(), 1);
 }
 
-/// `timeZone` reaches a *parameter*, where there is no escape at all: the value
-/// is either bare or double-quoted, and a quoted run ends at the next quote or
-/// at the end of the line. So the line break is the only thing to remove, and
-/// removing it is what keeps `DTSTART` one property.
+/// Time zone parameters must strip line breaks to prevent property injection.
 #[test]
 fn a_crlf_in_the_time_zone_cannot_add_a_property() {
     let ics = event_to_ical(&CalendarEvent {
@@ -104,10 +86,7 @@ fn a_crlf_in_the_time_zone_cannot_add_a_property() {
     assert_eq!(ics.matches("\r\nDTSTART").count(), 1);
 }
 
-/// A lone LF and a lone CR are the same attack: libical's unfolder splits on
-/// either, so neither may survive into a content line. Both raw values carry it
-/// here, so the assertion covers the duration (refused as a length) and the
-/// frequency, which is stripped, in one document.
+/// Lone LF and lone CR characters must not survive into content lines.
 #[test]
 fn a_bare_lf_or_cr_is_stripped_as_well() {
     for injected in ["\nSUMMARY:x", "\rSUMMARY:x", "\n\rSUMMARY:x"] {
@@ -132,9 +111,7 @@ fn a_bare_lf_or_cr_is_stripped_as_well() {
     }
 }
 
-/// The TEXT values, which do go through `escape`, keep their newline as `\n`
-/// rather than losing it: the strip is a backstop for the unescaped values,
-/// not a replacement for escaping.
+/// TEXT properties escape newlines as `\n` rather than stripping them.
 #[test]
 fn a_newline_in_a_text_value_is_still_escaped_rather_than_dropped() {
     let ics = event_to_ical(&CalendarEvent {
@@ -168,8 +145,7 @@ fn a_document_nested_past_the_limit_is_refused_rather_than_parsed() {
     );
 }
 
-/// ...and one at the limit still parses, so the cap is not in the way of the
-/// nesting the format actually uses.
+/// Documents nested at the maximum allowed depth parse successfully.
 #[test]
 fn a_document_nested_up_to_the_limit_still_parses() {
     let ics = nested(jmap_ical::MAX_DEPTH);
@@ -177,9 +153,7 @@ fn a_document_nested_up_to_the_limit_still_parses() {
     assert_eq!(calendar.components.len(), jmap_ical::MAX_DEPTH);
 }
 
-/// A depth that used to overflow the stack outright, as the regression the cap
-/// exists for. Without it this test aborts the whole test binary rather than
-/// failing, which is the point.
+/// Test that excessive nesting depth does not cause an unbounded stack overflow.
 #[test]
 fn a_pathologically_nested_document_neither_parses_nor_crashes() {
     let ics = nested(100_000);
@@ -189,7 +163,7 @@ fn a_pathologically_nested_document_neither_parses_nor_crashes() {
     ));
 }
 
-/// `depth` levels of component, `VCALENDAR` included, properly closed.
+/// Generates `depth` levels of properly closed components.
 fn nested(depth: usize) -> String {
     let mut ics = String::from("BEGIN:VCALENDAR\r\n");
     for _ in 1..depth {
@@ -202,13 +176,7 @@ fn nested(depth: usize) -> String {
     ics
 }
 
-/// A `DTEND` (or any DATE-TIME value) with a multi-byte UTF-8 character
-/// straddling byte offset 6 of its time part used to panic: the length check
-/// only counted bytes, so slicing `time[..6]` landed mid-character before the
-/// ASCII-digit check three lines down ever got a chance to reject the value
-/// cleanly. Found by `proptest_fuzz.rs`'s hostile-input fuzzer; pinned here
-/// as the exact minimal input it found, now that `to_local_date_time` checks
-/// `is_char_boundary` before slicing.
+/// Multi-byte UTF-8 characters at date-time slice boundaries must reject cleanly without panic.
 #[test]
 fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nDTEND: A\u{ac0}\u{20}\u{ae}T\u{10397}\u{fffc}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -228,8 +196,7 @@ fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
 
 use std::time::{Duration, Instant};
 
-/// Truncated and unterminated iCalendar documents must be rejected with typed ICalError,
-/// never panic, never hang, and never silently parse incomplete events.
+/// Truncated iCalendar documents must return an error and not panic or hang.
 #[test]
 fn truncated_and_unterminated_ical_rejection_matrix() {
     let not_calendar_cases = [
@@ -488,11 +455,7 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     }
 }
 
-/// The scheduling payload is the same rendering wrapped in a `METHOD`-bearing
-/// `VCALENDAR`, so it inherits the guarantee above, but `METHOD` and the
-/// `RECURRENCE-ID` that scopes a message to one occurrence are two values
-/// `event_to_ical` never writes, and both are written by
-/// `scheduling_ical`'s own callers. Neither may end a content line.
+/// Scheduling payloads must not permit line breaks in METHOD or RECURRENCE-ID parameters.
 #[test]
 fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
     let baseline = line_names(&scheduling_ical(&event(), "REQUEST", None));

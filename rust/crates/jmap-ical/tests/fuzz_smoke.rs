@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Smoke and regression tests for jmap-ical roundtrip fuzzer.
+//! Smoke and regression tests for roundtrip fuzzer.
 //!
-//! Asserts that parsing hostile or malformed iCalendar streams never panics,
-//! and verifies multi-stage fixed point stability (docs/ICAL-MAPPING.md Section 6).
+//! Asserts that parsing hostile streams never panics.
+//! Verifies multi-stage fixed point stability (docs/ICAL-MAPPING.md Section 6).
 
 use jmap_ical::{event_to_ical, ical_to_event};
 
