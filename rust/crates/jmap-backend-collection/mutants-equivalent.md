@@ -46,3 +46,23 @@ emits a `tracing` event of its own, already checked by
 debug-channel write is skipped. Observing the skip needs
 `SOURCE_REGISTRY_DEBUG` and a live EDS debug log, the same live-EDS-only
 territory as `Live`.
+
+## `src/populate.rs`
+
+`cargo mutants` skips the body of every `unsafe fn` by default (mutating
+unsafe code can produce undefined behaviour instead of a clean test
+failure), and `populate` itself is `pub unsafe fn populate<P: Populating +
+?Sized>(...)`. So the one function that holds this file's whole decision
+tree (which `Asked` variant, whether the account is `creatable`, the
+unidentified-source count) never offers cargo-mutants a single mutant: a
+`--list` run against this file finds only one candidate, inside the
+non-unsafe `Drop for Frozen`.
+
+This is a tool limitation, not a test gap: `tests/populate.rs` already
+drives every branch of `populate` through a mock `Populating` (oauth2
+silent auth, mail-only switched on, no-parts, both creatable directions,
+named user versus anonymous, one unidentified source, the freeze-lost and
+panic-during-populate paths). The single mutant cargo-mutants did find
+(`Frozen::drop` replaced with `()`) was already caught by
+`the_freeze_is_given_back_even_when_the_work_panics` and its neighbours;
+no new test was needed.
