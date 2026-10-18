@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Tests for `connect_sync` and source configuration resolution against `jmap-mockd`.
+//! Tests for `connect_sync` and source configuration resolution.
 
 use std::ffi::CString;
 use std::ptr;
@@ -36,12 +36,12 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Starts mock server; `default_calendar` is the one flagged `isDefault`.
+    /// Start mock server; `default_calendar` is the calendar marked `isDefault`.
     fn start(with_default: bool) -> Self {
         Self::start_with(MockServer::builder(), with_default)
     }
 
-    /// Seeds non-default calendar first to verify explicit default selection.
+    /// Seed non-default calendar first to verify explicit default selection.
     fn start_with(builder: jmap_mock::MockServerBuilder, with_default: bool) -> Self {
         let server = builder.start();
         let account_id = server.account_id();
@@ -61,8 +61,9 @@ impl Fixture {
         }
     }
 
-    /// Starts a mock server with a primary account and a second account.
-    /// Returns (fixture, second_account_id, second_calendar_id).
+    /// Start a mock server with a primary account and a second account.
+    ///
+    /// Return `(fixture, second_account_id, second_calendar_id)`.
     fn start_two_accounts() -> (Self, Id, Id) {
         let fixture = Self::start(true);
         let second_account_id = Id::from("second-account");
@@ -85,10 +86,10 @@ impl Fixture {
     }
 }
 
-/// `open_calendar` takes resolved credentials; this stands in for the caller
-/// that resolves them, which is `connect_with`. See the address book backend's
-/// copy of this helper for why it takes the password path, and
-/// `jmap-backend-core/tests/oauth2.rs` for the choice between the two.
+/// Connect to a calendar with resolved credentials.
+///
+/// This helper simulates `connect_with`.
+/// See `jmap-backend-core/tests/oauth2.rs` for credential selection details.
 fn open(
     config: &SourceConfig,
     password: Option<&str>,
@@ -96,7 +97,7 @@ fn open(
     connect::open_calendar(config, credentials(config.user.as_deref(), password)?)
 }
 
-/// `OpenCalendar` naming the calendar it opened is a useful failure message.
+/// Return the opened calendar name for assertion failure messages.
 fn expect_error(result: Result<connect::OpenCalendar, ConnectError>) -> ConnectError {
     match result {
         Ok(sync) => panic!("expected a failure, but opened {}", sync.calendar_id()),
@@ -123,7 +124,7 @@ fn a_source_that_names_a_calendar_gets_that_one() {
     assert_eq!(sync.calendar_id(), &fixture.other_calendar);
 }
 
-/// Verifies connecting to an unlisted calendar ID is rejected.
+/// Verify that connecting to an unlisted calendar ID fails.
 #[test]
 fn a_calendar_the_server_does_not_have_is_refused() {
     let fixture = Fixture::start(true);
@@ -145,7 +146,7 @@ fn an_account_with_no_default_calendar_is_an_error_not_a_guess() {
     }
 }
 
-/// Verifies an account offering no calendars capability is rejected.
+/// Verify that an account without calendar capability fails.
 #[test]
 fn an_account_that_offers_no_calendars_is_refused() {
     let server = MockServer::builder()
@@ -166,7 +167,7 @@ fn an_account_that_offers_no_calendars_is_refused() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
 }
 
-/// RFC 8620 §2: a server may omit primaryAccounts entirely if one personal account offers calendars.
+/// RFC 8620 §2: server may omit primaryAccounts if one account offers calendars.
 #[test]
 fn a_server_with_no_primary_accounts_resolves_the_sole_personal_calendars_account() {
     let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
@@ -186,7 +187,7 @@ fn a_user_name_with_no_password_asks_evolution_for_credentials() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
 
-/// Verifies access token is sent as bearer credentials.
+/// Verify that the client sends the access token as bearer credentials.
 #[test]
 fn an_access_token_is_sent_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
@@ -196,7 +197,7 @@ fn an_access_token_is_sent_as_bearer_credentials() {
     assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
 }
 
-/// Verifies 401 on a bearer token reclassifies to CredentialsRequired rather than Rejected.
+/// Verify that 401 on a bearer token maps to `CredentialsRequired`.
 #[test]
 fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
@@ -215,7 +216,7 @@ fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     assert_eq!(reclassified.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
 
-/// Verifies connect failures map to expected EDS EClientError codes.
+/// Verify that connect failures map to expected EDS `EClientError` codes.
 #[test]
 fn each_failure_carries_the_client_error_code_evolution_routes_on() {
     for (error, expected) in [
@@ -252,8 +253,7 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
                 e_client_error_quark(),
                 "domain for {error}"
             );
-            // `GError.code` is a plain int; the EClientError enum is
-            // unsigned, which is bindgen's reading of the C enum.
+            // `GError.code` is a signed integer; `EClientError` is unsigned in bindgen.
             assert_eq!((*gerror).code, expected as i32, "code for {error}");
             assert!(!(*gerror).message.is_null(), "no message for {error}");
             glib_sys::g_error_free(gerror);
@@ -271,8 +271,7 @@ fn the_password_is_sent_as_basic_credentials() {
     assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
 }
 
-/// EDS re-prompts on `REJECTED` and gives up on `ERROR`, so a wrong password
-/// has to be told apart from a broken server.
+/// Distinguish between wrong credentials (`REJECTED`) and server errors (`ERROR`).
 #[test]
 fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
     let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
@@ -286,7 +285,7 @@ fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
 #[test]
 fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
     let config = SourceConfig {
-        // Port 1 is reserved and nothing listens there.
+        // Port 1 is reserved and does not accept connections.
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
         resource_id: None,
@@ -297,42 +296,38 @@ fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
 }
 
 // ---------------------------------------------------------------------------
-// `connect_sync` from the ESource down, which is everything the subclass does
-// not do itself.
+// Tests for `connect_sync` from the `ESource` level.
 
-/// An `ESource` that is not backed by the registry. `e_source_new_with_uid`
-/// with a NULL D-Bus object is what EDS itself uses for a source read from a
-/// keyfile, so the extension machinery behaves as it does inside a backend.
+/// An `ESource` not backed by the registry.
+///
+/// A null D-Bus connection matches EDS behavior for keyfile sources.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
         let uid = CString::new("jmap-cal-connect-test").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a NULL
-        // GError out-parameter are the documented arguments.
+        // SAFETY: arguments match the documented EDS API contract.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
     fn authentication(&self) -> *mut ESourceAuthentication {
-        // SAFETY: the source is alive and the name is a header constant; the
-        // extension is created on demand and owned by the source.
+        // SAFETY: source is live and the extension name is a valid constant.
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
     }
 
-    /// Points the source at `origin`, which the mock server hands out as
-    /// `http://127.0.0.1:<port>`. TLS is switched off explicitly, which
-    /// `SourceConfig` only tolerates because the host is loopback.
+    /// Configure the source to target `origin`.
+    ///
+    /// The mock server uses loopback HTTP without TLS.
     fn at(self, origin: &str) -> Self {
         let (host, port) = origin
             .trim_start_matches("http://")
             .split_once(':')
             .expect("the mock origin has a port");
         let host = CString::new(host).expect("no NUL in a host");
-        // SAFETY: live extensions and a NUL-terminated string the setter
-        // copies.
+        // SAFETY: live extensions and a valid NUL-terminated string.
         unsafe {
             e_source_authentication_set_host(self.authentication(), host.as_ptr());
             e_source_authentication_set_port(self.authentication(), port.parse().expect("a port"));
@@ -344,10 +339,10 @@ impl TestSource {
         self
     }
 
-    /// Sets ESourceResource identity (calendar ID).
+    /// Set `ESourceResource` identity (calendar ID).
     fn identity(self, id: &str) -> Self {
         let id = CString::new(id).expect("no NUL in an identity");
-        // SAFETY: as `at`.
+        // SAFETY: live extensions and a valid NUL-terminated string.
         unsafe {
             e_source_resource_set_identity(
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast(),
@@ -359,14 +354,14 @@ impl TestSource {
 
     fn user(self, user: &str) -> Self {
         let user = CString::new(user).expect("no NUL in a user");
-        // SAFETY: as `at`.
+        // SAFETY: live extensions and a valid NUL-terminated string.
         unsafe { e_source_authentication_set_user(self.authentication(), user.as_ptr()) };
         self
     }
 
     fn method(self, method: &str) -> Self {
         let method = CString::new(method).expect("no NUL in a method");
-        // SAFETY: as `at`.
+        // SAFETY: live extensions and a valid NUL-terminated string.
         unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
         self
     }
@@ -379,12 +374,12 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: the reference from e_source_new_with_uid is given back once.
+        // SAFETY: release the reference from `e_source_new_with_uid`.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// Out-parameters passed by EDS to connect_sync.
+/// Output parameters passed by EDS to `connect_sync`.
 struct ConnectOuts {
     auth_result: ESourceAuthenticationResult,
     error: *mut GError,
@@ -400,7 +395,7 @@ impl Default for ConnectOuts {
 }
 
 impl ConnectOuts {
-    /// Asserts the reported domain and code, and frees the error.
+    /// Assert the reported domain and code, and free the error.
     unsafe fn take_error(&mut self, code: u32) {
         unsafe {
             assert!(!self.error.is_null(), "the call failed without an error");
@@ -413,8 +408,7 @@ impl ConnectOuts {
 }
 
 fn connect_from(source: &TestSource, outs: &mut ConnectOuts) -> Option<connect::OpenCalendar> {
-    // SAFETY: a live ESource, no credentials, no cancellable, and two writable
-    // out-parameters: what EDS passes on a first connect.
+    // SAFETY: live `ESource`, null credentials, and valid output parameters.
     unsafe {
         connect::connect(
             source.0,
@@ -441,7 +435,7 @@ fn connecting_from_a_source_opens_the_default_calendar_and_reports_accepted() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// Verifies Resource identity extension selects the target calendar.
+/// Verify that Resource identity extension selects the target calendar.
 #[test]
 fn the_resource_identity_selects_the_calendar() {
     let fixture = Fixture::start(true);
@@ -454,7 +448,7 @@ fn the_resource_identity_selects_the_calendar() {
     assert_eq!(sync.calendar_id(), &fixture.other_calendar);
 }
 
-/// Verifies user without password prompts before network request.
+/// Verify that user without password prompts before network request.
 #[test]
 fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     let source = TestSource::new().at("http://127.0.0.1:1").user("vera");
@@ -462,11 +456,11 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
 
     assert!(connect_from(&source, &mut outs).is_none());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    // SAFETY: the call failed, so it owns an error it handed over.
+    // SAFETY: the failed call populated a valid error pointer.
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// Verifies API token source sends bearer credentials from password parameter.
+/// Verify that API token source sends bearer credentials.
 #[test]
 fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
@@ -475,7 +469,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
         .method(API_TOKEN_METHOD.to_str().unwrap());
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: a live `ENamedParameters`, freed below.
+    // SAFETY: live `ENamedParameters`, freed below.
     let credentials = unsafe {
         let params = e_named_parameters_new();
         let value = CString::new("t0k3n").unwrap();
@@ -487,8 +481,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
         params
     };
 
-    // SAFETY: a live ESource, the credentials just built, no cancellable and
-    // two writable out-parameters: what EDS passes on re-connect.
+    // SAFETY: live `ESource`, valid credentials, and valid output parameters.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -498,7 +491,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
             &mut outs.error,
         )
     };
-    // SAFETY: this test owns the only reference.
+    // SAFETY: test owns the only reference.
     unsafe { e_named_parameters_free(credentials) };
 
     let sync = sync.expect("the connection was refused");
@@ -510,9 +503,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// The same prompt-before-sending rule the password path follows: an
-/// API-token account with no stored secret yet must not reach the server
-/// either.
+/// Verify that an API token account without secret does not contact server.
 #[test]
 fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
     let source = TestSource::new()
@@ -520,7 +511,7 @@ fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
         .method(API_TOKEN_METHOD.to_str().unwrap());
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: as `a_source_with_a_user_and_no_password_asks_for_one_before_connecting`.
+    // SAFETY: live `ESource`, null credentials, and valid output parameters.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -533,18 +524,17 @@ fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
 
     assert!(sync.is_none());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    // SAFETY: the call failed, so it owns an error it handed over.
+    // SAFETY: the failed call populated a valid error pointer.
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// An OAuth 2.0 source with no token (e.g. fresh account or no registered service)
-/// must fail with REQUIRED to trigger the consent window.
+/// Verify that an OAuth 2.0 source without token returns `REQUIRED`.
 #[test]
 fn an_oauth2_source_with_no_token_asks_for_consent_before_connecting() {
     let source = TestSource::new().at("http://127.0.0.1:1").method("OAuth2");
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: as above.
+    // SAFETY: live `ESource`, null credentials, and valid output parameters.
     let sync = unsafe {
         connect::connect(
             source.0,
@@ -557,11 +547,11 @@ fn an_oauth2_source_with_no_token_asks_for_consent_before_connecting() {
 
     assert!(sync.is_none());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    // SAFETY: the call failed, so it owns an error it handed over.
+    // SAFETY: the failed call populated a valid error pointer.
     unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
 }
 
-/// Verifies source with no host returns error rather than prompting.
+/// Verify that source without host returns error rather than prompting.
 #[test]
 fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
     let source = TestSource::new();
@@ -569,16 +559,16 @@ fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
 
     assert!(connect_from(&source, &mut outs).is_none());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
-    // SAFETY: as above.
+    // SAFETY: live `ESource`, null credentials, and valid output parameters.
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
 }
 
-/// Verifies NULL source returns error rather than dereferencing NULL.
+/// Verify that null source returns error without dereferencing null.
 #[test]
 fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
     let mut outs = ConnectOuts::default();
 
-    // SAFETY: a NULL ESource is explicitly allowed by `connect`.
+    // SAFETY: `connect` explicitly accepts a null `ESource`.
     let sync = unsafe {
         connect::connect(
             ptr::null_mut(),
@@ -591,7 +581,7 @@ fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
 
     assert!(sync.is_none());
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
-    // SAFETY: as above.
+    // SAFETY: the failed call populated a valid error pointer.
     unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
 }
 
@@ -700,13 +690,13 @@ fn connecting_from_a_source_with_account_id_opens_that_account() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// The account a collection child names in `[Resource] Identity` is the one
-/// opened. Only the keyfile reaches the factory a child is opened in, so this
-/// source carries nothing else: no object data, no extra extension.
+/// Verify that collection child opens the account named in `[Resource] Identity`.
+///
+/// The source carries keyfile configuration without object data.
 #[test]
 fn connecting_from_a_source_whose_identity_names_an_account_opens_that_accounts_calendar() {
     let (fixture, second_account_id, _) = Fixture::start_two_accounts();
-    // Not the second account's default, so the collection half is honoured too.
+    // Non-default calendar verifies that collection configuration applies.
     let shared = {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
@@ -754,15 +744,15 @@ fn connecting_from_a_source_with_unknown_account_id_fails() {
 fn source_account_id_reads_account_without_creating_missing_extension() {
     let source = TestSource::new();
     unsafe {
-        // Without an account configured, source_account_id is None
+        // Without account configuration, `source_account_id` is None.
         assert_eq!(connect::source_account_id(source.0), None);
-        // extension_if_present guarantees that JMAP Account extension is not created if absent
+        // `extension_if_present` avoids creating absent JMAP Account extension.
         assert_eq!(
             eds_sys::e_source_has_extension(source.0, c"JMAP Account".as_ptr()),
             glib_sys::GFALSE
         );
 
-        // When set on the source via set_source_account_id, it resolves
+        // `set_source_account_id` on the source resolves successfully.
         connect::set_source_account_id(source.0, "ext-acc-5678");
         assert_eq!(
             connect::source_account_id(source.0),
@@ -773,7 +763,7 @@ fn source_account_id_reads_account_without_creating_missing_extension() {
             glib_sys::GFALSE
         );
 
-        // When set on the Resource extension, it resolves without creating JMAP Account
+        // `Resource` extension resolves without creating JMAP Account.
         let source2 = TestSource::new();
         let resource = eds_sys::e_source_get_extension(
             source2.0,

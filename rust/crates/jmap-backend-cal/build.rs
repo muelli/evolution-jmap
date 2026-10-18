@@ -10,8 +10,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     for feature in EDS_FEATURES {
-        // Declared regardless of whether this EDS sets it, so `-D warnings`
-        // does not trip over the `#[cfg]`s it turns out not to satisfy.
+        // Declare cfg names so unused feature flags do not trigger compiler warnings.
         println!("cargo::rustc-check-cfg=cfg({feature})");
         let key = format!("DEP_EVOLUTION_DATA_SERVER_{}", feature.to_uppercase());
         println!("cargo:rerun-if-env-changed={key}");

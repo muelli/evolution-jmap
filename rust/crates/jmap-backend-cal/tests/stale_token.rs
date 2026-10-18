@@ -29,8 +29,7 @@ impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapCalBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: Referencing the registered class invokes class_init and returns the class struct.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
@@ -104,8 +103,7 @@ fn list_existing(class: &Class, backend: &mut Detached) -> Listed {
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
-    // SAFETY: a valid instance of ours, a NULL cancellable, and three
-    // writable, currently-NULL out-parameters: what EDS passes.
+    // SAFETY: Backend is valid, cancellable is null, and out-parameters are writable.
     let ok = unsafe {
         vfunc(
             backend.as_ptr(),

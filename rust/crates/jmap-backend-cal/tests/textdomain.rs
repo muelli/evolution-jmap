@@ -38,8 +38,7 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to an allocated class struct starting with GTypeModuleClass.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);

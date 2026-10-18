@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Tests pinning mutant-targeted behavior in `jmap-backend-cal::backend`.
+//! Tests mutant-targeted behavior in `jmap-backend-cal::backend`.
 
 use eds_sys::e_cal_meta_backend_get_type;
 use jmap_backend_cal::backend::{JmapCalBackend, parent_class};
@@ -107,7 +107,7 @@ fn push_lifecycle_store_is_pushing_stop_and_refresh_headers() {
     assert!(!backend.is_pushing());
     assert!(!backend.stop_push());
 
-    // Refreshing push headers on an inactive subscription is a safe no-op.
+    // Refresh push headers on an inactive subscription as a no-op.
     backend.refresh_push_headers(vec![(
         "Authorization".to_owned(),
         "Bearer stale-token".to_owned(),

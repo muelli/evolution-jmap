@@ -135,9 +135,7 @@ impl JmapCalBackend {
     /// Creates a detached test instance without GObject initialization.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, for
-        // which all-zero is a valid value, and an all-zero `Slot` is its
-        // documented empty state.
+        // SAFETY: Parent fields are zeroable integers or pointers. Zeroed Slot is empty.
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
         backend.last_known_color.init(RwLock::new(None));
@@ -164,22 +162,20 @@ impl JmapCalBackend {
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the ECalMetaBackend
-// instance and class structs respectively, and ECalMetaBackend derives from
-// GObject (via ECalBackendSync, ECalBackend and EBackend).
+// SAFETY: Both structs are #[repr(C)] and start with ECalMetaBackend structs.
+// ECalMetaBackend derives from GObject.
 unsafe impl ObjectSubclass for JmapCalBackend {
     const NAME: &'static CStr = c"ECalBackendJmap";
     type Instance = JmapCalBackend;
     type Class = JmapCalBackendClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the EDS type system initialises itself.
+        // SAFETY: Initializing the GType requires no preconditions.
         unsafe { e_cal_meta_backend_get_type() }
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; the slots below are all in that half.
+        // SAFETY: `class` points to an allocated class struct containing parent fields.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.connect_sync = Some(connect_sync);
         vfuncs.disconnect_sync = Some(disconnect_sync);
@@ -190,18 +186,16 @@ unsafe impl ObjectSubclass for JmapCalBackend {
         vfuncs.remove_component_sync = Some(remove_component_sync);
         vfuncs.source_changed = Some(source_changed);
 
-        // Installed on ECalBackendClass, over the meta backend's, to add the
-        // scheduling capabilities to its answer.
+        // Overrides parent property lookup to append scheduling capabilities.
         vfuncs.parent_class.parent_class.impl_get_backend_property = Some(get_backend_property);
 
-        // Installed on ECalBackendSyncClass where e_cal_backend_sync_get_free_busy looks it up.
+        // Overrides parent get_free_busy_sync slot.
         vfuncs.parent_class.get_free_busy_sync = Some(get_free_busy_sync);
 
-        // Installed on ECalBackendSyncClass over the meta backend's, which
-        // answers NOT_SUPPORTED, so a dismissed reminder reaches the server.
+        // Overrides parent discard_alarm_sync to forward dismissed alarms to the server.
         vfuncs.parent_class.discard_alarm_sync = Some(discard_alarm_sync);
 
-        // Installed on EBackendClass to provide account host reachability monitoring.
+        // Installs host reachability callback on EBackendClass.
         vfuncs
             .parent_class
             .parent_class
@@ -210,8 +204,7 @@ unsafe impl ObjectSubclass for JmapCalBackend {
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: `instance` points at a zeroed instance struct of ours, and a
-        // zeroed `Slot` is an empty one.
+        // SAFETY: `instance` points to an allocated instance struct with empty slots.
         unsafe {
             (*instance).session.init(RwLock::new(None));
             (*instance).last_known_color.init(RwLock::new(None));
@@ -220,11 +213,10 @@ unsafe impl ObjectSubclass for JmapCalBackend {
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // Clearing push stops its worker thread before dropping connection resources.
-        // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive.
+        // Stop push worker thread before dropping connection resources.
+        // SAFETY: Instance is finalizing and no active references remain.
         unsafe { (*instance).push.clear() };
-        // SAFETY: as above. Without this the connection and socket outlive the calendar.
+        // SAFETY: Instance is finalizing and no active references remain.
         unsafe {
             (*instance).session.clear();
             (*instance).last_known_color.clear();
@@ -234,7 +226,7 @@ unsafe impl ObjectSubclass for JmapCalBackend {
 
 /// Returns the parent class struct for chaining up vfuncs.
 pub fn parent_class() -> Option<&'static ECalMetaBackendClass> {
-    // SAFETY: the contract above.
+    // SAFETY: Resolves parent class pointer from registered GType.
     unsafe {
         subclass::parent_class::<ECalMetaBackendClass>(
             <JmapCalBackend as ObjectSubclass>::parent_type(),
@@ -255,9 +247,7 @@ unsafe extern "C" fn connect_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours, a
-    // NULL-or-valid ENamedParameters and GCancellable, and out-parameters that
-    // are NULL or writable.
+    // SAFETY: `meta_backend` is a valid instance pointer, out-parameters are writable, and cancellable is valid or null.
     unsafe {
         guard_bool("connect_sync", error, || {
             let Some(backend) = instance(meta_backend) else {
@@ -278,9 +268,7 @@ unsafe extern "C" fn connect_sync(
                 return GFALSE;
             };
 
-            // The account switch is read afresh for every change, by
-            // `itip_for`, so the sync layer is always allowed to ask and
-            // each change says whether it does.
+            // Server scheduling is enabled on sync; individual changes evaluate the account switch.
             let sync = open.sync.with_server_scheduling(true);
             tracing::debug!(
                 account_id = sync.account_id().as_str(),
@@ -305,12 +293,12 @@ unsafe extern "C" fn disconnect_sync(
     _cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         guard_bool("disconnect_sync", error, || {
             // No-op if already disconnected.
             if let Some(backend) = instance(meta_backend) {
-                // Push must be stopped before dropping connection credentials.
+                // Stop push before dropping connection credentials.
                 let unsubscribed = backend.stop_push();
                 let dropped = backend.drop_connection();
                 tracing::debug!(dropped, unsubscribed, "calendar backend disconnected");
@@ -327,7 +315,7 @@ unsafe extern "C" fn list_existing_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         with_connection(
             "list_existing_sync",
@@ -339,7 +327,7 @@ unsafe extern "C" fn list_existing_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn get_changes_sync(
     meta_backend: *mut ECalMetaBackend,
     last_sync_tag: *const gchar,
@@ -352,7 +340,7 @@ unsafe extern "C" fn get_changes_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         with_connection(
             "get_changes_sync",
@@ -373,7 +361,7 @@ unsafe extern "C" fn get_changes_sync(
                 ) {
                     Outcome::Reported => GTRUE,
                     Outcome::Failed => GFALSE,
-                    // Fall back to parent list implementation when changes cannot be delta-synced.
+                    // Chain up to parent list implementation when delta sync cannot be calculated.
                     Outcome::ListInstead => {
                         match parent_class().and_then(|class| class.get_changes_sync) {
                             Some(chain_up) => chain_up(
@@ -388,7 +376,7 @@ unsafe extern "C" fn get_changes_sync(
                                 cancellable,
                                 error,
                             ),
-                            // Fails offline if parent vfunc is missing.
+                            // Fail offline if parent vfunc is missing.
                             None => fail_offline(error),
                         }
                     }
@@ -407,7 +395,7 @@ unsafe extern "C" fn load_component_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         with_connection(
             "load_component_sync",
@@ -419,23 +407,22 @@ unsafe extern "C" fn load_component_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn save_component_sync(
     meta_backend: *mut ECalMetaBackend,
     overwrite_existing: gboolean,
-    // Last-writer-wins conflict resolution.
+    // Conflicts resolve using last-write-wins.
     _conflict_resolution: EConflictResolution,
     instances: *const GSList,
     _extra: *const gchar,
-    // Operation flags: whether the user chose not to send iTIP.
+    // Operation flags indicate whether user suppressed iTIP dispatch.
     opflags: ECalOperationFlags,
     out_new_uid: *mut *mut gchar,
     out_new_extra: *mut *mut gchar,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`, and `instances` is EDS's own list of
-    // `ECalComponent *`.
+    // SAFETY: Follows safety requirements of connect_sync, with instances pointing to valid ECalComponent list.
     unsafe {
         with_connection(
             "save_component_sync",
@@ -443,7 +430,7 @@ unsafe extern "C" fn save_component_sync(
             cancellable,
             error,
             |sync, error| {
-                // ECalBackend implements ETimezoneCache, resolving zones for incoming appointments.
+                // ECalBackend implements ETimezoneCache, resolving timezones for appointments.
                 ops::save_component(
                     sync,
                     overwrite_existing,
@@ -459,7 +446,7 @@ unsafe extern "C" fn save_component_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn remove_component_sync(
     meta_backend: *mut ECalMetaBackend,
     _conflict_resolution: EConflictResolution,
@@ -470,7 +457,7 @@ unsafe extern "C" fn remove_component_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as `connect_sync`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         with_connection(
             "remove_component_sync",
@@ -486,10 +473,9 @@ unsafe extern "C" fn remove_component_sync(
 ///
 /// # Safety
 ///
-/// `meta_backend` must be NULL or a valid instance of this type with a
-/// configured ESource.
+/// `meta_backend` must be null or point to a valid instance with configured ESource.
 unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         guard("source_changed", (), || {
             notify_capabilities(meta_backend.cast());
@@ -510,8 +496,7 @@ unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
             };
 
             let source = e_backend_get_source(meta_backend.cast());
-            // SAFETY: `source` is the `ESource` of a valid instance, per this
-            // function's own safety contract.
+            // SAFETY: `source` belongs to a valid backend instance.
             let current = marshal::selectable_color(source);
 
             let mut baseline = write(baseline_slot);
@@ -524,7 +509,7 @@ unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
 }
 
 /// Queries free/busy intervals, falling back to parent cache computation if disconnected.
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn get_free_busy_sync(
     backend: *mut ECalBackendSync,
     cal: *mut EDataCal,
@@ -535,13 +520,11 @@ unsafe extern "C" fn get_free_busy_sync(
     out_freebusy: *mut *mut GSList,
     error: *mut *mut GError,
 ) {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours, a
-    // NULL-or-valid GCancellable and user list, and out-parameters that are
-    // NULL or writable.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         guard_value("get_free_busy_sync", error, (), || {
             let _cancel = observe(cancellable);
-            // Release read lock before chaining up to parent cache computation.
+            // Drop read lock before chaining up to parent cache search.
             let outcome = {
                 let session = instance(backend.cast()).and_then(JmapCalBackend::session);
                 let guard = session.map(read);
@@ -555,7 +538,7 @@ unsafe extern "C" fn get_free_busy_sync(
                 && let Some(chain_up) =
                     parent_class().and_then(|class| class.parent_class.get_free_busy_sync)
             {
-                // Parent expects clean error state when chaining up.
+                // Clear error state before chaining up to parent.
                 chain_up(
                     backend,
                     cal,
@@ -571,19 +554,10 @@ unsafe extern "C" fn get_free_busy_sync(
     }
 }
 
-/// Dismisses one reminder the way EDS's CalDAV backend does: sets the
-/// `ACKNOWLEDGED` of the cached component's alarm `auid` to now and saves
-/// the component through the meta backend, which sends it to the server as
-/// the alert's `acknowledged` (RFC 8984 section 4.5.2) and keeps it for
-/// later when offline.
+/// Dismisses one reminder by setting alarm acknowledged timestamp in cached component.
 ///
-/// Evolution's reminder watcher names the occurrence that fired. An
-/// occurrence the cache holds no detached copy of has its reminder on the
-/// master, so the master is acknowledged for the whole series. The
-/// operation flags pass through as given: `alerts` is a per-user property,
-/// which a server does not tell the guests about (draft-ietf-jmap-calendars
-/// section 5.9.2).
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+/// Saves the modified component through meta backend, sending acknowledged state to server (RFC 8984 §4.5.2).
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn discard_alarm_sync(
     backend: *mut ECalBackendSync,
     cal: *mut EDataCal,
@@ -594,9 +568,7 @@ unsafe extern "C" fn discard_alarm_sync(
     opflags: ECalOperationFlags,
     error: *mut *mut GError,
 ) {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours,
-    // NULL-or-valid strings and GCancellable, and an `error` that is NULL
-    // or a valid, currently-NULL `GError **`.
+    // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         guard_value("discard_alarm_sync", error, (), || {
             let Some((component, occurrence)) =
@@ -640,14 +612,11 @@ unsafe extern "C" fn discard_alarm_sync(
     }
 }
 
-/// The cached component `uid` at `rid`, or the series' master when the
-/// cache holds no detached occurrence at `rid`, with whether it is the
-/// occurrence. The component is a new reference, the caller's to drop.
+/// Returns the cached component at `rid`, or the master instance if unexploded.
 ///
 /// # Safety
 ///
-/// `backend` must be a valid instance of this type, `uid` and `rid` NULL or
-/// NUL-terminated, and `cancellable` NULL or a valid `GCancellable`.
+/// `backend` must point to a valid instance; strings and cancellable must be valid or null.
 unsafe fn cached_component(
     backend: *mut ECalMetaBackend,
     uid: *const gchar,
@@ -657,19 +626,16 @@ unsafe fn cached_component(
     if uid.is_null() {
         return None;
     }
-    // SAFETY: a valid instance, by this function's contract. The cache is a
-    // new reference or NULL.
+    // SAFETY: `backend` is a valid instance. Returned cache is a new reference or null.
     let cache = unsafe { e_cal_meta_backend_ref_cache(backend) };
     if cache.is_null() {
         return None;
     }
-    // SAFETY: NULL or NUL-terminated, by this function's contract.
+    // SAFETY: `rid` is null or a valid NUL-terminated string.
     let occurrence = !rid.is_null() && unsafe { *rid } != 0;
     let mut component: *mut ECalComponent = ptr::null_mut();
     let lookup = |rid: *const gchar, out: &mut *mut ECalComponent| {
-        // SAFETY: the live cache referenced above, a NUL-terminated uid,
-        // a NULL-or-valid rid and cancellable, and a writable out-pointer;
-        // a miss is only a FALSE, so no error is asked for.
+        // SAFETY: Lookups query the valid cache reference with valid strings.
         unsafe {
             e_cal_cache_get_component(cache, uid, rid, out, cancellable, ptr::null_mut()) != GFALSE
         }
@@ -681,7 +647,7 @@ unsafe fn cached_component(
     } else {
         None
     };
-    // SAFETY: the reference taken above, not used again.
+    // SAFETY: Drops the referenced cache object.
     unsafe { g_object_unref(cache.cast()) };
     found
 }
@@ -690,11 +656,9 @@ unsafe fn cached_component(
 ///
 /// # Safety
 ///
-/// As [`set_raw_gerror`].
+/// Follows safety requirements of [`set_raw_gerror`].
 unsafe fn fail_not_found(error: *mut *mut GError) {
-    // SAFETY: the code is one of the enum's own values, and a NULL message
-    // asks EDS for its own translated wording; `error` satisfies the
-    // contract by this function's.
+    // SAFETY: Error code is valid and null message requests default translated text.
     unsafe {
         set_raw_gerror(
             error,
@@ -703,17 +667,12 @@ unsafe fn fail_not_found(error: *mut *mut GError) {
     }
 }
 
-/// Answers the meta backend's capabilities plus, while the account switch is
-/// on, the three that tell Evolution the server sends meeting invitations
-/// (`docs/MEETING-SCHEDULING.md` rule 3). Every other property is the
-/// meta backend's own answer.
+/// Returns backend capabilities, adding server scheduling when account switch is active.
 unsafe extern "C" fn get_backend_property(
     backend: *mut ECalBackend,
     prop_name: *const gchar,
 ) -> *mut gchar {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours and
-    // a NUL-terminated property name. The parent's answer is newly allocated
-    // and ours to free or pass on.
+    // SAFETY: `backend` is a valid instance and `prop_name` is null or NUL-terminated.
     unsafe {
         guard("get_backend_property", ptr::null_mut(), || {
             let inherited = match parent_class()
@@ -735,19 +694,17 @@ unsafe extern "C" fn get_backend_property(
     }
 }
 
-/// Tells clients the capabilities may have changed, since the account switch
-/// that adds three of them lives in the source.
+/// Notifies clients that backend capabilities changed.
 ///
 /// # Safety
 ///
-/// As [`backend_source`]: a detached test instance is skipped.
+/// Follows safety requirements of [`backend_source`].
 unsafe fn notify_capabilities(backend: *mut ECalBackend) {
-    // SAFETY: forwarded from this function's own contract.
+    // SAFETY: Forwards preconditions from caller.
     if unsafe { backend_source(backend.cast()) }.is_null() {
         return;
     }
-    // SAFETY: a constructed backend, checked just above, and a property
-    // name that is ours; both strings are copied by the call.
+    // SAFETY: `backend` is constructed and property name is static string.
     unsafe {
         let value = get_backend_property(backend, CAPABILITIES_PROPERTY.as_ptr());
         e_cal_backend_notify_property_changed(backend, CAPABILITIES_PROPERTY.as_ptr(), value);
@@ -755,16 +712,15 @@ unsafe fn notify_capabilities(backend: *mut ECalBackend) {
     }
 }
 
-/// Whether this change may ask the server to tell the guests: the account
-/// switch, read now, and the change's own `opflags`.
+/// Determines if operation sends iTIP messages based on account switch and flags.
 ///
 /// # Safety
 ///
-/// As [`backend_source`].
+/// Follows safety requirements of [`backend_source`].
 unsafe fn itip_for(meta_backend: *mut ECalMetaBackend, opflags: ECalOperationFlags) -> Itip {
-    // SAFETY: forwarded from this function's own contract.
+    // SAFETY: Forwards preconditions from caller.
     let source = unsafe { backend_source(meta_backend.cast()) };
-    // SAFETY: NULL or the backend's own source, alive for the call.
+    // SAFETY: `source` is null or a live ESource reference.
     let on = unsafe { scheduling::server_handles_invitations(source) };
     scheduling::itip(on, opflags)
 }
@@ -772,13 +728,11 @@ unsafe fn itip_for(meta_backend: *mut ECalMetaBackend, opflags: ECalOperationFla
 // ---------------------------------------------------------------------------
 // the shared shape
 
-/// Runs `f` against the live connection under panic guard, cancellation, and OAuth retry.
+/// Runs `f` against live connection under panic guard, cancellation, and OAuth retry.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be NULL or a valid instance of this type, `cancellable`
-/// NULL or a valid `GCancellable` that outlives the call, and `error` NULL or a
-/// valid, currently-NULL `GError **`.
+/// `meta_backend` must be null or point to a valid instance.
 unsafe fn with_connection(
     context: &str,
     meta_backend: *mut ECalMetaBackend,
@@ -792,7 +746,7 @@ unsafe fn with_connection(
             let Some(session) = instance(meta_backend).and_then(JmapCalBackend::session) else {
                 return fail_offline(error);
             };
-            // Read guard held across attempts since token refresh updates credentials in-place.
+            // Hold read lock across retries; token refresh updates credentials in place.
             let guard = read(session);
             let Some(sync) = guard.as_ref() else {
                 return fail_offline(error);
@@ -809,17 +763,13 @@ unsafe fn with_connection(
 /// JMAP data types subscribed for push notifications.
 const PUSHED_TYPES: &[&str] = &["CalendarEvent", "Calendar"];
 
-/// Subscribes to JMAP push notifications if supported by the server.
+/// Subscribes to JMAP push notifications if supported by server.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be a valid instance of this type. Detached test
-/// instances must not be passed here as push takes a GWeakRef.
+/// `meta_backend` must point to a valid GObject-derived instance.
 unsafe fn start_push(meta_backend: *mut ECalMetaBackend, sync: &CalSync) -> Option<PushRefresh> {
-    // SAFETY: a valid instance of a type derived from `GObject`, referenced
-    // by EDS for the length of the vfunc this runs inside; the trampoline
-    // below is handed the same pointer back and only casts it to the type it
-    // came from.
+    // SAFETY: `meta_backend` points to a live GObject instance during vfunc execution.
     unsafe {
         push::start_for(
             meta_backend.cast(),
@@ -831,13 +781,13 @@ unsafe fn start_push(meta_backend: *mut ECalMetaBackend, sync: &CalSync) -> Opti
     }
 }
 
-/// Schedules a refresh in response to a push notification.
+/// Schedules a refresh in response to push notification.
 ///
 /// # Safety
 ///
-/// `object` must be a live `ECalMetaBackend`.
+/// `object` must point to a live `ECalMetaBackend`.
 unsafe extern "C" fn schedule_refresh(object: *mut gobject_sys::GObject) {
-    // SAFETY: forwarded to the caller by this function's own contract.
+    // SAFETY: `object` points to a live ECalMetaBackend per function contract.
     unsafe { e_cal_meta_backend_schedule_refresh(object.cast()) };
 }
 
@@ -845,32 +795,26 @@ unsafe extern "C" fn schedule_refresh(object: *mut gobject_sys::GObject) {
 ///
 /// # Safety
 ///
-/// `meta_backend` must be a valid instance of this type and `cancellable` NULL
-/// or a valid `GCancellable`.
+/// `meta_backend` must point to a valid instance and `cancellable` be valid or null.
 unsafe fn refresh_credentials(
     meta_backend: *mut ECalMetaBackend,
     sync: &CalSync,
     cancellable: *mut GCancellable,
 ) -> bool {
-    // SAFETY: a valid instance of a type derived from `EBackend`, or one of
-    // this crate's detached test instances, which is exactly what
-    // `backend_source` exists to tell apart. The source is borrowed, not
-    // owned.
+    // SAFETY: `meta_backend` is a valid EBackend instance.
     let source = unsafe { backend_source(meta_backend.cast()) };
-    // SAFETY: NULL or a valid `ESource`, which is what `source_uses_oauth2`
-    // and `access_token` each ask for.
+    // SAFETY: `source` is null or a valid ESource pointer.
     if source.is_null() || !unsafe { source_uses_oauth2(source) } {
         return false;
     }
 
-    // SAFETY: a valid `ESource`, checked non-NULL above, and a cancellable
-    // satisfying the contract by this function's own.
+    // SAFETY: `source` is checked non-null and cancellable matches caller contract.
     match unsafe { access_token(source, cancellable) } {
         Ok(token) => {
             tracing::debug!("refreshed the calendar connection's OAuth 2.0 access token");
             sync.client().set_credentials(Credentials::bearer(token));
             if let Some(header) = sync.client().authorization_header()
-                // SAFETY: forwarded from this function's own contract.
+                // SAFETY: Forwards preconditions from caller.
                 && let Some(backend) = unsafe { instance(meta_backend) }
             {
                 backend.refresh_push_headers(vec![("Authorization".to_owned(), header)]);
@@ -888,26 +832,23 @@ unsafe fn refresh_credentials(
     }
 }
 
-/// The Rust view of an instance pointer EDS handed us.
+/// Converts EDS backend pointer to a Rust reference.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be NULL or point at an instance of this type. EDS only
-/// dispatches a class's vfuncs on instances of that class, so the cast is the
-/// same one every `G_DEFINE_TYPE` backend makes.
+/// `meta_backend` must be null or point to a valid instance of this type.
 unsafe fn instance<'a>(meta_backend: *mut ECalMetaBackend) -> Option<&'a JmapCalBackend> {
     unsafe { meta_backend.cast::<JmapCalBackend>().as_ref() }
 }
 
-/// Sets E_CLIENT_ERROR_REPOSITORY_OFFLINE on `error`.
+/// Sets `E_CLIENT_ERROR_REPOSITORY_OFFLINE` on `error`.
 ///
 /// # Safety
 ///
-/// As [`set_raw_gerror`].
+/// Follows safety requirements of [`set_raw_gerror`].
 unsafe fn fail_offline(error: *mut *mut GError) -> gboolean {
     let message = cstring_lossy("the JMAP calendar is not connected");
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call; `error` satisfies the contract by this function's.
+    // SAFETY: Error code is valid and message string is copied.
     unsafe {
         set_raw_gerror(
             error,
@@ -937,15 +878,13 @@ unsafe extern "C" fn get_destination_address(
     port: *mut guint16,
 ) -> gboolean {
     guard("get_destination_address", GFALSE, || {
-        // `(transfer none)`, and NULL only for a backend EDS did not
-        // construct from a source.
-        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        // SAFETY: EDS passes a valid backend pointer for the duration of the call.
         let source = unsafe { e_backend_get_source(backend) };
         if source.is_null() {
             return GFALSE;
         }
 
-        // SAFETY: a valid account source, only read from, alive for the call.
+        // SAFETY: `source` is a valid account source pointer.
         let Some((address_host, address_port)) = (unsafe { destination_address(source) }) else {
             return GFALSE;
         };
@@ -956,9 +895,7 @@ unsafe extern "C" fn get_destination_address(
             "resolved destination address for calendar backend"
         );
 
-        // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
-        // only on this success path; ownership of the duplicated string
-        // passes to EDS, which frees it with `g_free`.
+        // SAFETY: `host` and `port` are valid out-parameters written on success path.
         unsafe {
             *host = dup_string(&address_host);
             *port = address_port;

@@ -41,8 +41,7 @@ impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapCalBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: Referencing the registered class invokes class_init and returns the class struct.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
@@ -252,8 +251,7 @@ fn class_init_installs_get_free_busy_on_the_sync_class_where_it_is_dispatched() 
     );
 }
 
-/// A dismissed reminder must reach the server: `ECalMetaBackend`'s own
-/// `discard_alarm_sync` answers NOT_SUPPORTED, so the slot has to be ours.
+/// Verifies `class_init` overrides `discard_alarm_sync` on `ECalBackendSyncClass`.
 #[test]
 fn class_init_installs_discard_alarm_over_the_meta_backends() {
     let class = Class::get();

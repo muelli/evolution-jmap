@@ -3,8 +3,7 @@
 
 //! Structured tracing tests for `jmap-backend-cal`.
 //!
-//! Asserts structured fields attached to `tracing` events during calendar
-//! operations.
+//! Test structured fields on tracing events during calendar operations.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -221,7 +220,7 @@ fn get_changes_traces_structured_fields() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    // First, list existing to get the state tag under capture guard
+    // List existing entries to get the state tag under the capture guard.
     let mut sync_tag: *mut gchar = ptr::null_mut();
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
