@@ -11277,8 +11277,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, LANG, EXPERTISE, MEMBER, SOURCE, XML, CREATED, PRODID,
-    // REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, LANG, EXPERTISE, HOBBY, INTEREST, MEMBER, SOURCE,
+    // XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11312,6 +11312,8 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "KIND:group\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
+        "HOBBY;LEVEL=high;INDEX=1:reading\r\n",
+        "INTEREST;LEVEL=medium;INDEX=2:rock&roll music\r\n",
         "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
         "MEMBER:mailto:alice@example.com\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
@@ -11397,7 +11399,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     );
     assert!(
         parsed.personal_info.is_none(),
-        "EXPERTISE must not project to personal_info in this profile"
+        "EXPERTISE/HOBBY/INTEREST must not project to personal_info in this profile"
     );
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
@@ -11423,6 +11425,14 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(
         !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
         "EXPERTISE must not be emitted"
+    );
+    assert!(
+        !emitted.contains("HOBBY:") && !emitted.contains("HOBBY;"),
+        "HOBBY must not be emitted"
+    );
+    assert!(
+        !emitted.contains("INTEREST:") && !emitted.contains("INTEREST;"),
+        "INTEREST must not be emitted"
     );
     assert!(!emitted.contains("MEMBER:"), "MEMBER must not be emitted");
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
@@ -11599,6 +11609,59 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
             "EXPERTISE must not be emitted"
+        );
+    }
+
+    // HOBBY variants.
+    for hobby_val in [
+        "HOBBY;LEVEL=high;INDEX=1:reading",
+        "HOBBY;INDEX=2;LEVEL=medium:sewing",
+        "HOBBY;PREF=1;LEVEL=average:mountain biking",
+        "HOBBY;TYPE=work;LEVEL=low:board games",
+        "hobby;level=none:gardening",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Hobby User\r\n{hobby_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse HOBBY");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Hobby User")
+        );
+        assert!(
+            parsed.personal_info.is_none(),
+            "HOBBY must not project to personal_info"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("HOBBY:") && !emitted.contains("HOBBY;"),
+            "HOBBY must not be emitted"
+        );
+    }
+
+    // INTEREST variants.
+    for interest_val in [
+        "INTEREST;LEVEL=medium;INDEX=1:r&b music",
+        "INTEREST;INDEX=2;LEVEL=high:rock&roll music",
+        "INTEREST;PREF=1;LEVEL=average:astrophotography",
+        "INTEREST;TYPE=work;LEVEL=low:linguistics",
+        "interest;level=none:folk dance",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Interest User\r\n{interest_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse INTEREST");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Interest User")
+        );
+        assert!(
+            parsed.personal_info.is_none(),
+            "INTEREST must not project to personal_info"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("INTEREST:") && !emitted.contains("INTEREST;"),
+            "INTEREST must not be emitted"
         );
     }
 
@@ -11942,6 +12005,14 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "expertise:   ",
         "EXPERTISE;LEVEL=high:",
         "EXPERTISE;INDEX=1:",
+        "HOBBY:",
+        "hobby:   ",
+        "HOBBY;LEVEL=high:",
+        "HOBBY;INDEX=1:",
+        "INTEREST:",
+        "interest:   ",
+        "INTEREST;LEVEL=medium:",
+        "INTEREST;INDEX=2:",
         "KIND:",
         "kind:   ",
         "MEMBER:",

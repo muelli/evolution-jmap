@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:HOBBY INTEREST Section Probe
+UID:hobby-interest-rfc9555-1
+HOBBY;LEVEL=high;INDEX=1:reading
+HOBBY;INDEX=2;LEVEL=medium:sewing
+INTEREST;LEVEL=medium;INDEX=1:r&b music
+INTEREST;INDEX=2;LEVEL=high:rock&roll music
+END:VCARD
