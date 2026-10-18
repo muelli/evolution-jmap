@@ -86,24 +86,43 @@ pub struct AccountLink {
     /// [`AccountLink::call`]. `None` for a method whose credential does not
     /// expire (a stored password, an API token), where a 401 means the
     /// credential is wrong rather than old.
-    refreshable: Option<RefreshableSource>,
+    refreshable: Option<SendSource>,
 }
 
-/// An owned `ESource` reference an [`AccountLink`] may carry across threads.
+/// An owned `ESource` reference that may cross onto a worker thread, or sit
+/// in an [`AccountLink`] shared between threads. Dropping it releases the
+/// reference, on whichever thread drops it.
 ///
 /// `ESource` is a GObject: reference counting is atomic, and the getters used
-/// here take the source's own property lock, which is the same ground the EDS
-/// backends read their sources on from worker threads.
-struct RefreshableSource(*mut ESource);
+/// through it take the source's own property lock, which is the same ground
+/// the EDS backends read their sources on from worker threads.
+pub(crate) struct SendSource(*mut ESource);
 
 // SAFETY: see the type's own doc: refcounting is thread-safe and every call
 // made through the pointer is one EDS itself makes off its worker threads.
-unsafe impl Send for RefreshableSource {}
-unsafe impl Sync for RefreshableSource {}
+unsafe impl Send for SendSource {}
+unsafe impl Sync for SendSource {}
 
-impl Drop for RefreshableSource {
+impl SendSource {
+    /// Take over `source`, a reference the caller owns.
+    ///
+    /// # Safety
+    ///
+    /// `source` must be a live `ESource` and the reference must be the
+    /// caller's to give away: the wrapper releases it once, on drop.
+    pub(crate) unsafe fn adopt(source: *mut ESource) -> Self {
+        Self(source)
+    }
+
+    /// The source, alive for as long as `self` is.
+    pub(crate) fn as_ptr(&self) -> *mut ESource {
+        self.0
+    }
+}
+
+impl Drop for SendSource {
     fn drop(&mut self) {
-        // SAFETY: the reference `connect_account` took, released once.
+        // SAFETY: the reference `adopt` took over, released once.
         unsafe { gobject_sys::g_object_unref(self.0.cast()) };
     }
 }
@@ -151,9 +170,9 @@ impl AccountLink {
         let Some(source) = self.refreshable.as_ref() else {
             return false;
         };
-        // SAFETY: a live source, kept referenced by `RefreshableSource` for as
-        // long as this link; no cancellable, this thread is ours to block.
-        match unsafe { oauth2::access_token(source.0, ptr::null_mut()) } {
+        // SAFETY: a live source, kept referenced by `SendSource` for as long
+        // as this link; no cancellable, this thread is ours to block.
+        match unsafe { oauth2::access_token(source.as_ptr(), ptr::null_mut()) } {
             Ok(token) => {
                 tracing::debug!("refreshed the UI module's OAuth 2.0 access token");
                 self.client.set_credentials(Credentials::bearer(token));
@@ -226,7 +245,7 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let refreshable = is_oauth2.then(|| {
         // SAFETY: `source` is valid for this call by the function's contract;
         // the reference taken here is owned by the link until it drops.
-        RefreshableSource(unsafe { gobject_sys::g_object_ref(source.cast()) }.cast())
+        unsafe { SendSource::adopt(gobject_sys::g_object_ref(source.cast()).cast()) }
     });
 
     Ok(AccountLink {
@@ -318,5 +337,49 @@ mod describe_tests {
              sign-in prompt (signing in again cannot fix a dropped redirect \
              header), got: {message}"
         );
+    }
+}
+
+#[cfg(test)]
+mod send_source_tests {
+    use std::ffi::CString;
+    use std::ptr;
+
+    use eds_sys::e_source_new_with_uid;
+    use gobject_sys::{GObject, g_object_ref, g_object_unref};
+
+    use super::SendSource;
+
+    fn ref_count(object: *mut GObject) -> u32 {
+        // SAFETY: a live GObject; `ref_count` is its public, atomically
+        // updated counter, read once.
+        unsafe { (*object).ref_count }
+    }
+
+    #[test]
+    fn a_send_source_releases_its_reference_on_the_thread_that_drops_it() {
+        let uid = CString::new("jmap-ui-send-source-test").expect("no NUL in a literal");
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
+        // out-parameter are the documented arguments.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        let object = source.cast::<GObject>();
+
+        // SAFETY: a live source; the new reference is handed to the wrapper.
+        let shared = unsafe { SendSource::adopt(g_object_ref(object.cast()).cast()) };
+        assert_eq!(shared.as_ptr(), source);
+        assert_eq!(ref_count(object), 2);
+
+        std::thread::spawn(move || {
+            let shared = shared;
+            assert_eq!(ref_count(shared.as_ptr().cast()), 2);
+        })
+        .join()
+        .expect("the worker thread panicked");
+
+        assert_eq!(ref_count(object), 1, "the worker's drop released one ref");
+        // SAFETY: the reference `e_source_new_with_uid` returned.
+        unsafe { g_object_unref(object.cast()) };
     }
 }

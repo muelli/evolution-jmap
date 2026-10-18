@@ -65,12 +65,18 @@ jobs:
           ctest --test-dir build --output-on-failure -R '^package-deb'
           cmake --build build --target package
           ls -l build/*.deb
+          # Here, not in the release job: only this image has the libraries
+          # the package was linked against, so only here can their installed
+          # versions be read for the SBOM.
+          ci/deb-dependencies.sh build/*.deb build/deb-dependencies.json
 
       - name: Upload the package for the release job
         uses: actions/upload-artifact@v4
         with:
           name: deb
-          path: build/*.deb
+          path: |
+            build/*.deb
+            build/deb-dependencies.json
           if-no-files-found: error
 
   release:
@@ -116,7 +122,7 @@ jobs:
           # attest step (dist/*) and the release step (dist/*) all cover it
           # unchanged — attested set stays == published set.
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-          ci/sbom.sh deb/*.deb "dist/evolution-jmap-${GITHUB_REF_NAME}.cdx.json"
+          ci/sbom.sh deb/*.deb deb/deb-dependencies.json "dist/evolution-jmap-${GITHUB_REF_NAME}.cdx.json"
           (cd dist && sha256sum * > SHA256SUMS)
           cat dist/SHA256SUMS
 

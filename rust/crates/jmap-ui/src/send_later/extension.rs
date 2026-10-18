@@ -84,7 +84,7 @@ use jmap_backend_core::trampoline::guard;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
 use crate::dispatch;
-use crate::link::{self, AccountLink};
+use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::send_later::submit;
 
@@ -612,14 +612,13 @@ unsafe fn gate(composer: *mut GObject) {
         }
     }
 
-    let source = SendSource(connect_source);
+    // SAFETY: the reference level 1 took, handed over.
+    let source = unsafe { SendSource::adopt(connect_source) };
     let work = move || {
-        let source = source;
         // SAFETY: the reference level 1 took is the worker's for the whole
         // closure, released right after.
-        let outcome = unsafe { link::connect_account(source.0) };
-        // SAFETY: releasing the worker's reference.
-        unsafe { g_object_unref(source.0.cast()) };
+        let outcome = unsafe { link::connect_account(source.as_ptr()) };
+        drop(source);
         (generation, outcome)
     };
     let finish = |composer: *mut GObject, (generation, outcome)| {
@@ -725,13 +724,6 @@ unsafe fn transport_of(
     let transport = unsafe { e_source_registry_ref_source(registry, transport_uid.as_ptr()) };
     (!transport.is_null()).then_some(transport)
 }
-
-/// A source reference the worker thread may hold; see `vacation::page` on why
-/// this is sound.
-struct SendSource(*mut ESource);
-// SAFETY: GObject refcounting is thread-safe and ESource getters take the
-// source's property lock.
-unsafe impl Send for SendSource {}
 
 /// The level-2 answer, applied only if no newer gate superseded it.
 ///
