@@ -18,7 +18,7 @@ use calcard::{Entry, Parser};
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
-    Relation, Title,
+    Relation, SchedulingAddress, Title,
 };
 use serde_json::{Map, Value, json};
 
@@ -347,6 +347,11 @@ fn maps_link_kind(kind: Option<&str>) -> bool {
 /// Whether a calendar has a URI and a mapped calendar kind.
 pub fn states_calendar(calendar: &Calendar) -> bool {
     !calendar.uri.is_empty() && calendar_property(calendar.kind.as_deref()).is_some()
+}
+
+/// Whether a scheduling address has a URI a `CALADRURI` line can state.
+pub fn states_scheduling_address(address: &SchedulingAddress) -> bool {
+    !address.uri.is_empty()
 }
 
 /// The vCard property a mapped calendar kind is stated on.
@@ -1118,6 +1123,21 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
+    // Emit scheduling addresses on `CALADRURI` lines with stable keys.
+    for (key, address) in card.scheduling_addresses.iter().flatten() {
+        if !states_scheduling_address(address) {
+            continue;
+        }
+        entries.push(
+            VCardEntry::new(VCardProperty::Caladruri)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(address.uri.clone()),
+        );
+    }
+
     // Emit the contact photo on `PHOTO`.
     // Inline media keeps subtype metadata; references use `VALUE=uri`.
     // Selection rules come from libebook-contacts 3.52; see [`photo`] for
@@ -1464,6 +1484,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut anniversaries: BTreeMap<String, Anniversary> = BTreeMap::new();
     let mut links = BTreeMap::new();
     let mut calendars = BTreeMap::new();
+    let mut scheduling_addresses = BTreeMap::new();
     let mut media = BTreeMap::new();
     let mut online_services = BTreeMap::new();
     let mut related_to = BTreeMap::new();
@@ -1726,6 +1747,19 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 calendars.insert(entry_key(entry, "c", &calendars), calendar);
             }
+            "CALADRURI" => {
+                let uri = entry_text(entry);
+                if uri.is_empty() {
+                    continue;
+                }
+                let address = SchedulingAddress {
+                    uri,
+                    pref: entry_has_type(entry, "PREF").then_some(1),
+                    extra: BTreeMap::new(),
+                    ..SchedulingAddress::default()
+                };
+                scheduling_addresses.insert(entry_key(entry, "s", &scheduling_addresses), address);
+            }
             "PHOTO" => {
                 let Some(photo) = read_photo(entry) else {
                     continue;
@@ -1951,6 +1985,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
         calendars: (!calendars.is_empty()).then_some(calendars),
+        scheduling_addresses: (!scheduling_addresses.is_empty()).then_some(scheduling_addresses),
         // vCard 3.0 exposes media only through `PHOTO`, so other media kinds
         // stay absent here and are preserved through save-path extras.
         media: (!media.is_empty()).then_some(media),

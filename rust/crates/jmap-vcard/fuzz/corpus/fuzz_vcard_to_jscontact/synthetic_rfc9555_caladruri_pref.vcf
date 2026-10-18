@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:urn:uuid:synthetic-rfc9555-caladruri-pref-0001
+FN:Alex Mercer
+N:Mercer;Alex;;;
+CALADRURI;X-JMAP-KEY=s1;PREF=1:mailto:alex-calendar@example.test
+CALADRURI;TYPE=PREF:https://calendar.example.test/users/alex
+CALADRURI;X-JMAP-KEY=s3:mailto:team-calendar@example.test
+END:VCARD

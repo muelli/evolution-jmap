@@ -3,7 +3,8 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALADRURI, CALURI, FBURL, PHOTO,
+//! CATEGORIES and the
 //! `X-` lines EDS keeps instant-messaging handles and the spouse on.
 
 use std::collections::BTreeMap;
@@ -12,7 +13,7 @@ use base64::Engine;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
-    Relation, Title,
+    Relation, SchedulingAddress, Title,
 };
 use jmap_vcard::{
     VCardError, address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
@@ -2045,6 +2046,22 @@ fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
     }
 }
 
+fn one_scheduling_address(key: &str, uri: &str) -> ContactCard {
+    ContactCard {
+        scheduling_addresses: Some(
+            [(
+                key.to_owned(),
+                SchedulingAddress {
+                    uri: uri.to_owned(),
+                    ..SchedulingAddress::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
 #[test]
 fn maps_calendars_onto_the_caluri_and_fburl_lines() {
     // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`; both use `X-JMAP-KEY`.
@@ -2178,6 +2195,93 @@ fn calendars_emit_the_eds_profile_without_pref_or_media_type_parameters() {
     assert_eq!(
         line(&vcard, "FBURL"),
         "FBURL;X-JMAP-KEY=c2:https://vera.example/fb/vera.ifb"
+    );
+}
+
+#[test]
+fn maps_scheduling_addresses_onto_caladruri_lines() {
+    // `CALADRURI` carries scheduling addresses with `X-JMAP-KEY` identity.
+    let vcard = card_to_vcard(&one_scheduling_address(
+        "s1",
+        "mailto:vera-calendar@example.com",
+    ));
+    assert_eq!(
+        line(&vcard, "CALADRURI"),
+        "CALADRURI;X-JMAP-KEY=s1:mailto:vera-calendar@example.com"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let scheduling = card.scheduling_addresses.expect("schedulingAddresses");
+    assert_eq!(scheduling.keys().collect::<Vec<_>>(), vec!["s1"]);
+    assert_eq!(scheduling["s1"].uri, "mailto:vera-calendar@example.com");
+}
+
+#[test]
+fn a_scheduling_address_that_points_nowhere_is_skipped_in_both_directions() {
+    // Empty scheduling URIs are treated as absent entries.
+    let vcard = card_to_vcard(&one_scheduling_address("s1", ""));
+    assert!(!vcard.contains("\r\nCALADRURI"), "{vcard}");
+
+    // Empty `CALADRURI` lines from imports are dropped.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALADRURI;X-JMAP-KEY=s1:\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    assert_eq!(card.scheduling_addresses, None);
+}
+
+#[test]
+fn invents_a_key_for_a_scheduling_address_that_has_none() {
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALADRURI:mailto:vera-calendar@example.com\r\n",
+        "CALADRURI;X-JMAP-KEY=s7:https://calendar.example/vera\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let scheduling = card.scheduling_addresses.expect("schedulingAddresses");
+    assert_eq!(scheduling["s1"].uri, "mailto:vera-calendar@example.com");
+    assert_eq!(scheduling["s7"].uri, "https://calendar.example/vera");
+}
+
+#[test]
+fn scheduling_addresses_read_pref_parameters() {
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALADRURI;X-JMAP-KEY=s1;PREF=1:mailto:vera-calendar@example.com\r\n",
+        "CALADRURI;X-JMAP-KEY=s2;TYPE=PREF:https://calendar.example/vera\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let scheduling = card.scheduling_addresses.expect("schedulingAddresses");
+    assert_eq!(scheduling["s1"].pref, Some(1));
+    assert_eq!(scheduling["s2"].pref, Some(1));
+}
+
+#[test]
+fn scheduling_addresses_emit_the_eds_profile_without_pref_parameters() {
+    let mut scheduling = BTreeMap::new();
+    scheduling.insert(
+        "s1".to_owned(),
+        SchedulingAddress {
+            uri: "mailto:vera-calendar@example.com".to_owned(),
+            pref: Some(1),
+            ..SchedulingAddress::default()
+        },
+    );
+    let card = ContactCard {
+        scheduling_addresses: Some(scheduling),
+        ..ContactCard::default()
+    };
+
+    let vcard = unfolded(&card_to_vcard(&card));
+    assert_eq!(
+        line(&vcard, "CALADRURI"),
+        "CALADRURI;X-JMAP-KEY=s1:mailto:vera-calendar@example.com"
     );
 }
 
