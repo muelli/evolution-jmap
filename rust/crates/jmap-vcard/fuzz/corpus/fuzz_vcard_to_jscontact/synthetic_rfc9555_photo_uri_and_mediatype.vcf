@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-rfc9555-photo-uri-and-mediatype-0001
+FN:Casey Harper
+N:Harper;Casey;;;
+PHOTO;PREF=1;MEDIATYPE=image/png:https://cdn.example.test/casey.png
+PHOTO;MEDIATYPE=image/jpeg:data:image/jpeg;base64,aGVsbG8tcGhvdG8=
+PHOTO;TYPE=home:data:image/heic;base64,aGVsbG8tcGhvdG8=
+END:VCARD
