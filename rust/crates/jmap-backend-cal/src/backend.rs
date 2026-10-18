@@ -9,14 +9,22 @@ use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, ECalBackend, ECalBackendSync, ECalMetaBackend,
-    ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
-    ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
-    e_cal_backend_notify_property_changed, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
-    e_cal_meta_backend_schedule_refresh, e_client_error_create, time_t,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CAL_OBJ_MOD_ALL, E_CAL_OBJ_MOD_THIS,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, ECalBackend, ECalBackendSync, ECalComponent,
+    ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal,
+    ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent,
+    e_backend_get_source, e_cal_backend_notify_property_changed, e_cal_backend_set_writable,
+    e_cal_backend_sync_modify_objects, e_cal_cache_get_component, e_cal_client_error_create,
+    e_cal_component_get_as_string, e_cal_meta_backend_get_type, e_cal_meta_backend_ref_cache,
+    e_cal_meta_backend_schedule_refresh, e_cal_util_set_alarm_acknowledged, e_client_error_create,
+    e_util_free_nullable_object_slist, time_t,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, g_free, gboolean, gchar, guint16};
+use glib_sys::{
+    GError, GFALSE, GSList, GTRUE, GType, g_free, g_slist_free_full, g_slist_prepend, gboolean,
+    gchar, guint16,
+};
+use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
@@ -188,6 +196,10 @@ unsafe impl ObjectSubclass for JmapCalBackend {
 
         // Installed on ECalBackendSyncClass where e_cal_backend_sync_get_free_busy looks it up.
         vfuncs.parent_class.get_free_busy_sync = Some(get_free_busy_sync);
+
+        // Installed on ECalBackendSyncClass over the meta backend's, which
+        // answers NOT_SUPPORTED, so a dismissed reminder reaches the server.
+        vfuncs.parent_class.discard_alarm_sync = Some(discard_alarm_sync);
 
         // Installed on EBackendClass to provide account host reachability monitoring.
         vfuncs
@@ -556,6 +568,138 @@ unsafe extern "C" fn get_free_busy_sync(
                 );
             }
         })
+    }
+}
+
+/// Dismisses one reminder the way EDS's CalDAV backend does: sets the
+/// `ACKNOWLEDGED` of the cached component's alarm `auid` to now and saves
+/// the component through the meta backend, which sends it to the server as
+/// the alert's `acknowledged` (RFC 8984 section 4.5.2) and keeps it for
+/// later when offline.
+///
+/// Evolution's reminder watcher names the occurrence that fired. An
+/// occurrence the cache holds no detached copy of has its reminder on the
+/// master, so the master is acknowledged for the whole series. The
+/// operation flags pass through as given: `alerts` is a per-user property,
+/// which a server does not tell the guests about (draft-ietf-jmap-calendars
+/// section 5.9.2).
+#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+unsafe extern "C" fn discard_alarm_sync(
+    backend: *mut ECalBackendSync,
+    cal: *mut EDataCal,
+    cancellable: *mut GCancellable,
+    uid: *const gchar,
+    rid: *const gchar,
+    auid: *const gchar,
+    opflags: ECalOperationFlags,
+    error: *mut *mut GError,
+) {
+    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours,
+    // NULL-or-valid strings and GCancellable, and an `error` that is NULL
+    // or a valid, currently-NULL `GError **`.
+    unsafe {
+        guard_value("discard_alarm_sync", error, (), || {
+            let Some((component, occurrence)) =
+                cached_component(backend.cast(), uid, rid, cancellable)
+            else {
+                return fail_not_found(error);
+            };
+            if auid.is_null() || e_cal_util_set_alarm_acknowledged(component, auid, 0) == GFALSE {
+                g_object_unref(component.cast());
+                return fail_not_found(error);
+            }
+
+            let objects = g_slist_prepend(
+                ptr::null_mut(),
+                e_cal_component_get_as_string(component).cast(),
+            );
+            let scope = if occurrence {
+                E_CAL_OBJ_MOD_THIS
+            } else {
+                E_CAL_OBJ_MOD_ALL
+            };
+            let mut old_components: *mut GSList = ptr::null_mut();
+            let mut new_components: *mut GSList = ptr::null_mut();
+            e_cal_backend_sync_modify_objects(
+                backend,
+                cal,
+                cancellable,
+                objects,
+                scope,
+                opflags,
+                &mut old_components,
+                &mut new_components,
+                error,
+            );
+            e_util_free_nullable_object_slist(old_components);
+            e_util_free_nullable_object_slist(new_components);
+            g_slist_free_full(objects, Some(g_free));
+            g_object_unref(component.cast());
+            tracing::debug!(occurrence, "dismissed a reminder");
+        })
+    }
+}
+
+/// The cached component `uid` at `rid`, or the series' master when the
+/// cache holds no detached occurrence at `rid`, with whether it is the
+/// occurrence. The component is a new reference, the caller's to drop.
+///
+/// # Safety
+///
+/// `backend` must be a valid instance of this type, `uid` and `rid` NULL or
+/// NUL-terminated, and `cancellable` NULL or a valid `GCancellable`.
+unsafe fn cached_component(
+    backend: *mut ECalMetaBackend,
+    uid: *const gchar,
+    rid: *const gchar,
+    cancellable: *mut GCancellable,
+) -> Option<(*mut ECalComponent, bool)> {
+    if uid.is_null() {
+        return None;
+    }
+    // SAFETY: a valid instance, by this function's contract. The cache is a
+    // new reference or NULL.
+    let cache = unsafe { e_cal_meta_backend_ref_cache(backend) };
+    if cache.is_null() {
+        return None;
+    }
+    // SAFETY: NULL or NUL-terminated, by this function's contract.
+    let occurrence = !rid.is_null() && unsafe { *rid } != 0;
+    let mut component: *mut ECalComponent = ptr::null_mut();
+    let lookup = |rid: *const gchar, out: &mut *mut ECalComponent| {
+        // SAFETY: the live cache referenced above, a NUL-terminated uid,
+        // a NULL-or-valid rid and cancellable, and a writable out-pointer;
+        // a miss is only a FALSE, so no error is asked for.
+        unsafe {
+            e_cal_cache_get_component(cache, uid, rid, out, cancellable, ptr::null_mut()) != GFALSE
+        }
+    };
+    let found = if lookup(rid, &mut component) {
+        Some((component, occurrence))
+    } else if occurrence && lookup(ptr::null(), &mut component) {
+        Some((component, false))
+    } else {
+        None
+    };
+    // SAFETY: the reference taken above, not used again.
+    unsafe { g_object_unref(cache.cast()) };
+    found
+}
+
+/// Sets `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND` on `error`.
+///
+/// # Safety
+///
+/// As [`set_raw_gerror`].
+unsafe fn fail_not_found(error: *mut *mut GError) {
+    // SAFETY: the code is one of the enum's own values, and a NULL message
+    // asks EDS for its own translated wording; `error` satisfies the
+    // contract by this function's.
+    unsafe {
+        set_raw_gerror(
+            error,
+            e_cal_client_error_create(E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ptr::null()),
+        );
     }
 }
 

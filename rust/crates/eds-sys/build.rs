@@ -395,6 +395,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // source that passes it, and the alternative to a test is trusting that two
     // hosts written in different places stayed the same string.
     "e_util_can_use_collection_as_credential_source",
+    // How a dismissed reminder is recorded, and how the component lists a
+    // `modify_objects_sync` hands back are freed: the calendar backend's
+    // `discard_alarm_sync` does what EDS's CalDAV backend does with both.
+    // Named exactly, for the reason above.
+    "e_cal_util_set_alarm_acknowledged",
+    "e_util_free_nullable_object_slist",
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",
