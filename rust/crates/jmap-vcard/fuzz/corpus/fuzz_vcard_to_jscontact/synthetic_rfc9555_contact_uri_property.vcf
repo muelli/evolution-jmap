@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:CONTACT-URI Section Probe
+UID:contact-uri-rfc9555-1
+URL;X-JMAP-KEY=l1:https://directory.example/people/alice
+CONTACT-URI:https://directory.example/people/alice/contact
+CONTACT-URI;TYPE=work;PREF=1:https://directory.example/people/alice/support
+END:VCARD

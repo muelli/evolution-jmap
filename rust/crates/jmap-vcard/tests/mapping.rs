@@ -11278,7 +11278,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
     // GEO, TZ, MAILER, KIND, GENDER, LANG, EXPERTISE, HOBBY, INTEREST, MEMBER,
-    // SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // CONTACT-URI, SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS,
+    // SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11317,6 +11318,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "INTEREST;LEVEL=medium;INDEX=2:rock&roll music\r\n",
         "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
         "MEMBER:mailto:alice@example.com\r\n",
+        "CONTACT-URI:https://directory.example/contact/albert\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
         "XML:<contact><displayName>Dr. Albert Einstein</displayName></contact>\r\n",
         "CREATED:19940930T143510Z\r\n",
@@ -11437,6 +11439,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "INTEREST must not be emitted"
     );
     assert!(!emitted.contains("MEMBER:"), "MEMBER must not be emitted");
+    assert!(
+        !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
+        "CONTACT-URI must not be emitted"
+    );
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
     assert!(!emitted.contains("PRODID:"), "PRODID must not be emitted");
@@ -11717,6 +11723,29 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("MEMBER:") && !emitted.contains("MEMBER;"),
             "MEMBER must not be emitted"
+        );
+    }
+
+    // CONTACT-URI variants.
+    for contact_uri_val in [
+        "CONTACT-URI:https://directory.example/people/alice",
+        "CONTACT-URI;PREF=1:https://directory.example/people/alice/support",
+        "CONTACT-URI;TYPE=work:https://directory.example/people/alice/work",
+        "CONTACT-URI;TYPE=work,home;PREF=2:https://directory.example/people/alice/mixed",
+        "contact-uri:https://directory.example/case-insensitive",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Contact URI User\r\n{contact_uri_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse CONTACT-URI");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Contact URI User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
+            "CONTACT-URI must not be emitted"
         );
     }
 
@@ -12054,6 +12083,10 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "MEMBER:   ",
         "member:",
         "MEMBER;VALUE=uri:",
+        "CONTACT-URI:",
+        "CONTACT-URI:   ",
+        "contact-uri:",
+        "CONTACT-URI;TYPE=work:",
         "SOURCE:",
         "source:   ",
         "PRODID:",
@@ -12087,6 +12120,43 @@ fn standard_properties_case_insensitivity_and_empty_values() {
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Test\r\nEND:VCARD\r\n"
         );
     }
+}
+
+#[test]
+fn contact_uri_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:contact-uri-profile-boundary-1\r\n",
+        "FN:Contact URI Profile Boundary\r\n",
+        "URL;X-JMAP-KEY=l1:https://example.org/people/profile\r\n",
+        "CONTACT-URI:https://example.org/people/contact\r\n",
+        "contact-uri;PREF=1;TYPE=work:https://example.org/people/support\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse contact-uri profile boundary card");
+    let links = parsed.links.as_ref().expect("links map");
+    assert_eq!(links.len(), 1, "only URL link should remain mapped");
+    assert_eq!(
+        links["l1"].uri, "https://example.org/people/profile",
+        "URL line must remain intact"
+    );
+    assert_eq!(links["l1"].kind, None, "URL maps to homepage link kind");
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("URL;X-JMAP-KEY=l1:https://example.org/people/profile"),
+        "Mapped URL payload must survive"
+    );
+    assert!(
+        !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
+        "CONTACT-URI must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
 }
 
 #[test]
