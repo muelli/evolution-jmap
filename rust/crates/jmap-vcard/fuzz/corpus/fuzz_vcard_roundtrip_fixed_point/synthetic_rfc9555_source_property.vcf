@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:SOURCE Section Probe
+UID:source-rfc9555-1
+SOURCE:https://directory.example.com/addrbook/jdoe/Jean%20Dupont.vcf
+END:VCARD
