@@ -252,6 +252,27 @@ fn class_init_installs_get_free_busy_on_the_sync_class_where_it_is_dispatched() 
     );
 }
 
+/// A dismissed reminder must reach the server: `ECalMetaBackend`'s own
+/// `discard_alarm_sync` answers NOT_SUPPORTED, so the slot has to be ours.
+#[test]
+fn class_init_installs_discard_alarm_over_the_meta_backends() {
+    let class = Class::get();
+    let parent = parent_class().expect("ECalMetaBackendClass is initialised");
+
+    let ours = class
+        .sync_vfuncs()
+        .discard_alarm_sync
+        .expect("discard_alarm_sync is not installed");
+    assert_ne!(
+        ours as usize,
+        parent
+            .parent_class
+            .discard_alarm_sync
+            .expect("ECalMetaBackend installs one") as usize,
+        "the slot still holds ECalMetaBackend's implementation",
+    );
+}
+
 /// Verifies the parent class offers a get_free_busy_sync to chain up to.
 #[test]
 fn the_parent_class_offers_a_get_free_busy_sync_to_chain_up_to() {

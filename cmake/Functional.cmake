@@ -163,6 +163,16 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
+	# Dismissing a reminder the way Evolution's reminder watcher does. See
+	# tests/functional/cal-discard-alarm-client.c.
+	add_executable(functional-cal-discard-alarm-client
+		tests/functional/cal-discard-alarm-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-discard-alarm-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-discard-alarm-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-discard-alarm-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-discard-alarm-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# The same calls against a real server with two accounts, split into a
 	# create run and a settle run so the guest's side can be read in between.
 	# See tests/functional/cal-scheduling-live-client.c.
@@ -693,6 +703,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_SCHEDULING_CLIENT=$<TARGET_FILE:functional-cal-scheduling-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# A dismissed reminder, through a real, running backend instance: the
+	# backend's `discard_alarm_sync` writes the VALARM's ACKNOWLEDGED and the
+	# mock stores the alert's `acknowledged`, for a one-off event and for an
+	# occurrence of a series.
+	add_test(
+		NAME functional-cal-discard-alarm
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-discard-alarm
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-discard-alarm PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_DISCARD_ALARM_CLIENT=$<TARGET_FILE:functional-cal-discard-alarm-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# Track E Path A's `get_free_busy_sync` through a real, running backend
