@@ -135,6 +135,16 @@ jobs:
         with:
           subject-path: dist/*
 
+      # Binds the SBOM to the package it describes, so `gh attestation verify
+      # --predicate-type https://cyclonedx.org/bom` on the .deb proves which
+      # SBOM belongs to it. The SBOM file is itself under dist/, so it also
+      # carries the build provenance above and ships with the release.
+      - name: Attest the package's SBOM (Sigstore/Rekor)
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: dist/*.deb
+          sbom-path: dist/evolution-jmap-${{ github.ref_name }}.cdx.json
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
