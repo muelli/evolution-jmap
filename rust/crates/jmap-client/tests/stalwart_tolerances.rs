@@ -15,7 +15,7 @@ use jmap_proto::mail::Mailbox;
 use jmap_proto::methods::GetResponse;
 use jmap_proto::session;
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// unauthenticated GET to the session resource.
 const STALWART_UNAUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:calendars:parse":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:contacts:parse":{},"urn:ietf:params:jmap:filenode":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:principals:availability":{},"urn:ietf:params:jmap:submission":{},"urn:ietf:params:jmap:vacationresponse":{},"urn:ietf:params:jmap:sieve":{"implementation":"Stalwart v1.0.0"},"urn:ietf:params:jmap:blob":{},"urn:ietf:params:jmap:quota":{},"urn:ietf:params:jmap:emailpush":{},"urn:ietf:params:jmap:webpush-vapid":{"applicationServerKey":"BBfUuHEbvaeQ4FgVQ-ndazP3KL_-znnUXe2JUxO4kQgYGDKqdr6AbNQxmkWonaZMsXlibHLz9N8ocHKnus4wO24"},"urn:ietf:params:jmap:websocket":{"url":"wss://mail.example.internal/jmap/ws","supportsPush":true}},"accounts":{},"primaryAccounts":{},"username":"","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}","state":"0"}"#;
 
@@ -96,7 +96,7 @@ fn authenticated_session_reports_not_anonymous() {
     );
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// Mailbox/set create with whitespace-padded name.
 /// Stalwart stores the trimmed name ("Padded Name"), but omits the name property
 /// from the created map, returning only the identifier.
@@ -146,7 +146,7 @@ fn finding_16_mailbox_set_create_omitted_trimmed_name_tolerated() {
     );
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// CalendarEventNotification/set destroy with an unformatted ID.
 /// Stalwart silently drops the unformatted ID from both destroyed and notDestroyed.
 const STALWART_NOTIFICATION_SET_DESTROY_DROPPING_ID: &str = r#"{"methodResponses":[["CalendarEventNotification/set",{"accountId":"d333333"},"c0"]],"sessionState":"aa288e37"}"#;
@@ -193,7 +193,7 @@ fn finding_20_calendar_event_notification_destroy_dropped_id_tolerated_as_not_fo
     }
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// ParticipantIdentity/get.
 /// Stalwart returns accountId, list, and notFound, but omits the mandatory state property
 /// required by RFC 8620 Section 5.1 and draft-ietf-jmap-calendars Section 3.1.
@@ -279,7 +279,7 @@ fn finding_19_participant_identity_get_with_list_omits_state_tolerated() {
     assert_eq!(identity.is_default, Some(true));
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) for session with
+/// Exact wire JSON returned by live Stalwart 0.16.22 for session with
 /// currentUserPrincipalId set to the account identifier.
 const STALWART_AUTHENTICATED_SESSION_WITH_PRINCIPALS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:principals":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:principals":{"currentUserPrincipalId":"d333333"}}}},"primaryAccounts":{"urn:ietf:params:jmap:principals":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
 
@@ -418,12 +418,12 @@ fn finding_18_principal_get_tolerates_account_id_as_principal_id() {
     assert!(list_unknown.is_empty());
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// CalendarEvent/set create when timeZones property is supplied.
 /// Stalwart rejects the call with invalidProperties: ["timeZones"].
 const STALWART_CALENDAR_EVENT_SET_TIMEZONES_REJECTED: &str = r#"{"methodResponses":[["CalendarEvent/set",{"accountId":"d333333","oldState":"spq","newState":"spq","notCreated":{"new":{"type":"invalidProperties","description":"Invalid property.","properties":["timeZones"]}}},"c0"]],"sessionState":"aa288e37"}"#;
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// CalendarEvent/parse for an uploaded iCalendar blob containing a custom VTIMEZONE.
 /// Stalwart represents the custom timezone under iCalendar convertedProperties
 /// rather than RFC 8984 Section 4.7.2 timeZones.
@@ -555,7 +555,7 @@ fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
     assert!(time_zones.contains_key("/custom/zone1"));
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// CalendarEvent/parse for a blob containing two distinct top-level VEVENTs
 /// (different UIDs): Stalwart returns one array element per event under the
 /// single blob id, confirmed live against `stalwart-runner`.
@@ -597,12 +597,12 @@ fn finding_13_calendar_event_parse_reports_multi_event_blob_as_not_parsable() {
     );
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// ContactCard/set create when onlineServices has no uri.
 /// Stalwart accepts the creation and returns the allocated id.
 const STALWART_CONTACT_CARD_SET_CREATED: &str = r#"{"methodResponses":[["ContactCard/set",{"accountId":"d333333","oldState":"snu","newState":"sqeaq","created":{"new":{"id":"y"}}},"c0"]],"sessionState":"9f961f52"}"#;
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// ContactCard/get for a card created with onlineServices lacking uri.
 /// Stalwart discards onlineServices on storage, omitting it from the retrieved card.
 const STALWART_CONTACT_CARD_GET_DISCARDING_ONLINE_SERVICES: &str = r#"{"methodResponses":[["ContactCard/get",{"accountId":"d333333","state":"sqeaq","list":[{"name":{"full":"Alice Probe"},"@type":"Card","version":"1.0","id":"y","addressBookIds":{"b":true}}],"notFound":[]},"c0"]],"sessionState":"9f961f52"}"#;
@@ -711,7 +711,7 @@ fn finding_14_contact_card_get_tolerates_online_service_without_uri() {
     assert!(s1.uri.is_none());
 }
 
-/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// ContactCard/parse for an uploaded vCard containing EMAIL;TYPE=home,internet:...
 /// Stalwart promotes TYPE=internet to an unrecognized context ("internet": true).
 const STALWART_CONTACT_CARD_PARSE_RESPONSE_WITH_INTERNET_CONTEXT: &str = r#"{"methodResponses":[["ContactCard/parse",{"accountId":"d333333","parsed":{"blob1":{"emails":{"k1":{"address":"user@example.com","contexts":{"private":true,"internet":true}}},"@type":"Card","version":"1.0","vCard":{"properties":[["version",{},"unknown","4.0"]]},"name":{"full":"Probe Card"}}}},"c0"]],"sessionState":"9f961f52"}"#;

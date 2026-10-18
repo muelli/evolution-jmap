@@ -136,3 +136,54 @@ fn changelog_exists_and_documents_unreleased_breaking_changes() {
         "CHANGELOG must document planned breaking change for Client::upload_blob"
     );
 }
+
+fn collect_rs_files(dir: &Path, acc: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, acc);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                acc.push(path);
+            }
+        }
+    }
+}
+
+#[test]
+fn no_stale_stalwart_v1_references_in_client_or_tests() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let mut files = Vec::new();
+    for subdir in &["src", "tests"] {
+        let dir = Path::new(manifest_dir).join(subdir);
+        collect_rs_files(&dir, &mut files);
+    }
+
+    let mut violations = Vec::new();
+    for file in files {
+        if file.ends_with("tests/readme.rs") {
+            continue;
+        }
+        let content = fs::read_to_string(&file).expect("source file must be readable");
+        for (line_idx, line) in content.lines().enumerate() {
+            // Ignore the literal wire response constant containing Stalwart's hardcoded sieve capability string
+            if line.contains("STALWART_UNAUTHENTICATED_SESSION") {
+                continue;
+            }
+            if line.contains("Stalwart v1.0.0") {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    file.display(),
+                    line_idx + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Found stale 'Stalwart v1.0.0' references:\n{}",
+        violations.join("\n")
+    );
+}
