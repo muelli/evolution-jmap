@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 63's open question: `jmap-backend-collection`'s `source_changed`
+ * The question: `jmap-backend-collection`'s `source_changed`
  * module connects the account source's own "changed" signal so that editing
  * a broken account's host gets a fresh populate/authenticate instead of
  * sitting dead until something else reconnects it

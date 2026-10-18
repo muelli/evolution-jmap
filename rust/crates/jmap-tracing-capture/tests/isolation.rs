@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Stress-proves the property item 103 exists to restore: concurrent
+//! Stress-proves that concurrent
 //! captures on different threads, racing to touch the same callsite for the
 //! first time in this process, never lose or cross-deliver an event.
 

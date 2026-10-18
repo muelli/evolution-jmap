@@ -120,7 +120,7 @@ fn a_server_issuing_a_secret_anyway_has_it_carried_into_the_config() {
 
 #[test]
 fn registration_asks_for_the_scopes_this_client_uses_and_no_others() {
-    // Two real-deployment lessons (Fastmail, `docs/OAUTH-FASTMAIL.md`):
+    // Two real-deployment lessons (Fastmail):
     // a registration naming no `scope` is issued an *empty* default, which
     // RFC 6749 §3.3 lets a scope-less authorization request fall back to — a
     // token with no JMAP access at all. And a registration naming *every*

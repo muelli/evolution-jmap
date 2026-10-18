@@ -229,7 +229,7 @@ fn with_no_cached_listing_nothing_is_reported_as_structural() {
     assert!(!store.folder_list_changed_structurally());
 }
 
-/// The property item 55 exists to fix: RFC 8621 puts `totalEmails` and
+/// RFC 8621 puts `totalEmails` and
 /// `unreadEmails` on the `Mailbox` object itself, so a delivery bumps the
 /// account's `Mailbox` state exactly as visibly as a folder being created
 /// would — but the shape of the tree does not move. Camel's folder list must

@@ -2121,7 +2121,7 @@ fn reparsed_object(lines: &str) -> String {
 ///
 /// This is the first mapped property that is a **child component**, so more of it
 /// rests on libical than a content line does: `jmap-ical` writes a `VALARM` per
-/// alert, and the key of the `alerts` entry rides on the RFC 9074 §6 `UID` inside
+/// alert, and the key of the `alerts` entry rides on the RFC 9074 §4 `UID` inside
 /// it: a property RFC 5545 never gave a `VALARM`, and one nothing in `jmap-ical`
 /// can check the survival of, since calcard is what parses there. If libical
 /// dropped the alarm, the reminder would be gone by the time EDS handed the

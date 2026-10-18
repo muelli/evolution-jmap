@@ -187,7 +187,7 @@ impl<T> Drop for Slot<T> {
 /// constructors entirely.
 ///
 /// This is the shared plumbing behind the `detached()` test doubles across
-/// the backend crates (`docs/UNSAFE-AUDIT.md` Pattern A): each builds an
+/// the backend crates: each builds an
 /// instance outside the GObject type system because a real one needs
 /// infrastructure — a running `evolution-source-registry`, a `CamelSession`,
 /// a `GtkWidget`'s display — that neither the test VM nor CI has.

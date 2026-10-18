@@ -655,7 +655,7 @@ pub fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Co
 
     let (offset, related) = drawn_trigger(alert.get("trigger")?)?;
     let mut valarm = Component::new("VALARM")
-        // RFC 9074 §6 gives a VALARM a UID, which is where the key of the entry
+        // RFC 9074 §4 gives a VALARM a UID, which is where the key of the entry
         // rides so that a save states the reminder the server holds under the
         // name the server gave it.
         .with(make_entry("UID", key))
@@ -1051,7 +1051,7 @@ fn stated_offset(value: &str) -> Option<String> {
 
 /// The reminders the component carries, as a JSCalendar `alerts` map.
 ///
-/// Keyed by each `VALARM`'s RFC 9074 §6 `UID` where it has one this mapping would
+/// Keyed by each `VALARM`'s RFC 9074 §4 `UID` where it has one this mapping would
 /// draw back: that is the key the entry had server-side, so a round trip is the
 /// identity. Evolution's appointment editor writes an `X-EVOLUTION-ALARM-UID`
 /// instead, so a reminder the user has just added arrives with no key at all; the
@@ -1288,7 +1288,7 @@ pub fn maps_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value)
 ///
 /// The two differ over one field. `timeZone` is refused above because a
 /// PatchObject naming `recurrenceOverrides` has no way to carry the RFC 8984
-/// §4.7.2 entry a custom identifier is only legal beside (§1.4.9), but a save
+/// §4.7.2 entry a custom identifier is only legal beside (§1.4.8), but a save
 /// that patches `timeZones` in the same request does, and then the identifier
 /// is as sendable as an IANA name is. So a caller willing to send the
 /// definition asks this instead, and must actually send it: what makes the
@@ -1591,7 +1591,7 @@ pub fn instance_calendar(event: &CalendarEvent, method: &str, recurrence_id: &st
 /// one out of its builtin table, and `jmap_backend_cal` puts that definition into
 /// the object EDS caches, which is a better description of a zone than whatever a
 /// server managed to state about it. What no reader can look up is RFC 8984
-/// §1.4.9's other form of a `TimeZoneId`: a custom identifier beginning with a
+/// §1.4.8's other form of a `TimeZoneId`: a custom identifier beginning with a
 /// solidus, which the event defines in its own `timeZones` (§4.7.2) and nowhere
 /// else: what a server has to invent for the zone an Exchange invitation carries
 /// its own `VTIMEZONE` for. A `DTSTART` naming one and defining nothing is a wall

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * ROADMAP item 112, step (c), against a real server with two accounts: the
+ * Against a real server with two accounts: the
  * organizer's side of a meeting, driven the way Evolution's comp editor
  * drives it, through a real, running `evolution-calendar-factory`.
  *

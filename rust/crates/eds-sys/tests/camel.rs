@@ -432,10 +432,6 @@ fn the_interface_has_no_default_behind_any_of_its_three_methods() {
 /// unchanged — and if a Camel release ever starts filling in `priv_` or
 /// defaulting `url_hash`, this is where it surfaces rather than as a
 /// mysteriously mutated `&'static`.
-///
-/// Originally `docs/AUDIT-FFI.md`'s F8, on the branch that check was written
-/// on; the squash that brought F1–F4 to master left it behind, which is
-/// `docs/AUDIT-FFI-20260810.md`'s F12.
 #[test]
 fn registering_a_provider_does_not_write_back_into_the_struct() {
     // SAFETY: as in the round-trip test above; `provider` outlives the call and

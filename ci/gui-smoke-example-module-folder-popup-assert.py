@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Item 74's other live-Evolution caveat: the packaged example-module's merged
+"""Live-Evolution check: the packaged example-module's merged
 mail-folder-popup item ("My Maildir Folder Action...", src/m-mail-ui.c) must
 actually appear in the folder tree's real context menu.
 

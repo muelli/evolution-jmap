@@ -1,46 +1,47 @@
 # Roadmap
 
-Goal: a **secure, easy to use, natively integrated** way to use JMAP from
-GNOME Evolution, covering mail, contacts and calendars, structured like
-evolution-ews, written in Rust, developed test-first against the in-repo mock
-server (`jmap-mockd`), and shipped as installable artifacts.
+Goal: a secure, easy-to-use and natively integrated way to use JMAP from GNOME
+Evolution for mail, contacts and calendars. The structure of the project is
+like evolution-ews. The code is in Rust. Development is test-first against the
+mock server in the repository (`jmap-mockd`).
 
 ## Where it stands
 
-All ten original milestones are complete and **v0.5.0 is released**, built
-reproducibly with Sigstore provenance. Against a real Fastmail account, in
-real Evolution: mail (read, send, folders), contacts, calendars and the
-collection account all work end to end, with OAuth 2.0 sign-in, silent token
-refresh, JMAP Push, server-side free/busy in the meeting scheduler, and
-create/delete of calendars and address books from Evolution's own dialogs.
+v0.5.0 was released on 2026-10-15. Mail, contacts, calendars and the
+collection account work end to end in Evolution against real JMAP servers.
+This includes OAuth 2.0 sign-in, JMAP Push and server-side free/busy in the
+meeting scheduler. It also includes the creation and deletion of calendars and
+address books from the own dialogs of Evolution. `NEWS.md` lists the changes
+in each release.
 
-## Direction
+## Next
 
-Rough order of what matters next; none of it is a commitment.
+This list shows the rough order. No item is a commitment.
 
-- **Sharing** (JMAP Principals): reading other principals' collections and
-  free/busy works; write-side sharing (`shareWith`, `ShareNotification`) is
-  deliberately parked until the drafts settle.
-- **Hardening against real servers**: the client is strict about RFC 8414
-  issuer matching by design; deployments whose advertised hostname does not
-  match how clients reach them are refused, and the docs say what to fix.
-- **JMAP-only UI features** (`jmap-ui`): the vacation autoresponder, scheduled
-  send and snooze ship as an out-of-tree Evolution module, the way
-  evolution-ews ships its Out-of-Office page. Making these first-class in
-  Evolution itself (GNOME/evolution#411, #374) and adding the extension points
-  that would need (a message-popup placeholder, a shared reader-actions
-  extension) remain upstream asks this module now has a working case for.
-- **Upstream work this project feeds**: a named `CamelSasl` for OAuth-only
-  providers (GNOME/evolution#3382), and the diagnostics and leak reports filed
-  from here (glib#4041, evolution-data-server!243).
-- **Newer Evolution/EDS**: the code builds and tests against both the pinned
-  EDS 3.52 and 3.60; a full port forward waits until the plugin's basics are
-  boring.
+- **Meeting attendees**: keep attendee lists and replies in sync with the
+  invitations that the server sends.
+- **Shared calendars and address books**: show the collections that other
+  principals share with the user. If the user has no write rights, show them
+  read-only.
+- **JMAP-only UI features** (`jmap-ui`): vacation autoresponder, scheduled
+  send and snooze. They ship as an out-of-tree Evolution module, in the same
+  way as the Out-of-Office page of evolution-ews. To make them part of
+  Evolution itself, an upstream request exists (GNOME/evolution#411, #374).
+- **Upstream work**: a named `CamelSasl` for OAuth-only providers
+  (GNOME/evolution#3382).
+- **Newer Evolution/EDS**: the project builds and tests the code against the
+  pinned EDS 3.52. The `eds-version-matrix` CI job also tests a newer Fedora
+  EDS.
 
 ## Contributing
 
-`ci/checks.sh` is the single definition of green: REUSE lint, rustfmt,
-clippy with warnings denied, and the full test suite. The functional suite
-under `cmake/Functional.cmake` drives real EDS factories headlessly. Crates
-that need EDS headers stay out of the default workspace members, so a plain
-`cargo test` works without them.
+`ci/checks.sh` is the single definition of green. It runs these checks:
+
+- REUSE lint
+- rustfmt
+- clippy with warnings denied
+- the test suite
+
+The functional suite in `cmake/Functional.cmake` drives real EDS factories
+headlessly. Crates that need EDS headers are not default workspace members.
+A plain `cargo test` therefore works without the headers.

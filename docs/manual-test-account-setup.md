@@ -1,60 +1,47 @@
 # Manual test: the JMAP account setup UI
 
-M7's `module-jmap-configuration.so` is the one module in this repository
-Evolution's own shell loads rather than a data-server process, and the one
-whose vfuncs build GTK widgets — `insert_widgets` needs a display connection
-this project's CI and VM do not have, so nothing here has ever run it and
-looked at the result. This is that look.
+The shell of Evolution loads `module-jmap-configuration.so`. A data server
+process does not load it. The module builds GTK widgets in `insert_widgets`.
+This recipe checks those widgets in a real account assistant.
 
-It talks to `jmap-mockd`, not to a real server, so it can be run on a laptop
-with nothing installed and no account anywhere.
+The recipe uses `jmap-mockd`, not a real server. You do not need an account.
 
-## What is already checked without you
+## What automated tests already cover
 
-`rust/crates/jmap-config/tests/backend.rs` drives every vfunc except
-`insert_widgets` itself directly against the `EMailConfigServiceBackendClass`
-struct, with no display required: `new_collection` offers a fresh JMAP
-account, `setup_defaults` fills it from the identity page's address,
-`check_complete` refuses to commit one with no address or an unusable server,
-and `commit_changes` writes the mail account/identity/transport sources the
-collection backend (`docs/manual-test-collection-backend.md`) then fans
-address books and calendars out from. `tests/oauth2_module.rs` and
-`rust/crates/jmap-functional/tests/config-lookup.rs` cover the "Look Up
-Account Details" step's `JmapConfigLookup` worker end to end against a real
-`EConfigLookup`, including OAuth 2.0 discovery and registration against
-`jmap-mockd --oauth2` — that step's *network* behaviour is proven; only
-seeing it inside the actual assistant window is left to this recipe.
+- `rust/crates/jmap-config/tests/backend.rs` calls every
+  `EMailConfigServiceBackendClass` vfunc except `insert_widgets`. It needs no
+  display:
+  - `new_collection` offers a JMAP account.
+  - `setup_defaults` fills the account from the identity address.
+  - `check_complete` refuses an account with no address or an unusable
+    server.
+  - `commit_changes` writes the mail account, the identity and the transport
+    sources.
+- `rust/crates/jmap-config/tests/oauth2_module.rs` and
+  `rust/crates/jmap-functional/tests/config-lookup.rs` run the "Look Up
+  Account Details" worker against a real `EConfigLookup`. This includes OAuth
+  2.0 discovery and registration against `jmap-mockd --oauth2`.
 
-What no test can do is construct the widgets `insert_widgets` builds, see
-that they show what `setup_defaults` offered, or watch editing one flip
-*Next* from insensitive to sensitive. That is what steps 3–5 below check.
+This recipe checks what you can see. The widgets show what `setup_defaults`
+offered. If you edit a field, *Next* becomes sensitive or insensitive at once.
 
 ## Prerequisites
 
-- Evolution Data Server 3.52 or newer, *installed*, and Evolution itself —
-  the development headers are enough to build, but this recipe runs the
-  actual shell and account assistant.
-- The address book, calendar, mail (Camel) and collection-backend components
-  installed too (`--component book-backend`, `cal-backend`, `camel-provider`,
-  `collection-backend`), so an account committed in step 5 is one whose
-  children actually open rather than sources with no backend behind them.
-  Optional for steps 3–4 alone, which only look at the *Receiving Email*
-  page.
-- A session bus, for the same reason `docs/manual-test-collection-backend.md`
-  needs one: the registry the assistant talks to expects a session, even
-  though the account below names no user and asks libsecret for nothing.
+- Evolution Data Server 3.52 or newer, and Evolution, installed.
+- The components `book-backend`, `cal-backend`, `camel-provider` and
+  `collection-backend` installed. They are necessary so that the account that
+  step 5 commits opens. Steps 3 and 4 need only the configuration module.
+- A D-Bus session bus.
 
 ## 1. Start the mock server
 
 ```console
-$ cargo run -p evolution-jmap-mock --bin jmap-mockd -- --oauth2
+$ cargo run --manifest-path rust/Cargo.toml -p evolution-jmap-mock --bin jmap-mockd -- --oauth2
 jmap-mockd listening on http://127.0.0.1:8080
 ```
 
-`--oauth2` turns on the RFC 8414/7591 discovery endpoints the "Look Up
-Account Details" step (step 4) needs; leave it off if you are only looking
-at the plain server-settings fields (steps 3 and 5). Leave it running in its
-own terminal.
+`--oauth2` turns on the RFC 8414 and RFC 7591 endpoints that step 4 needs.
+If you test only the manual fields (steps 3 and 5), omit it.
 
 ## 2. Build and install the module
 
@@ -64,16 +51,13 @@ $ cmake --build build
 $ sudo cmake --install build --component config-module
 ```
 
-That installs `module-jmap-configuration.so` into
-`pkg-config --variable=moduledir evolution-shell-3.0` — on Debian and
-Ubuntu, `/usr/share/evolution/${VERSION}/modules` or similar, whatever that
-command prints. Unlike the registry modules, there is no environment
-variable to redirect this one at a scratch tree: Evolution's shell loads
-every `.so` in the one directory it knows, so installing anywhere else means
-it is never found at all.
+This installs `module-jmap-configuration.so` into
+`pkg-config --variable=moduledir evolution-shell-3.0` (on Debian and Ubuntu,
+`/usr/lib/evolution/modules`). Evolution loads modules only from that
+directory. A scratch-tree option does not exist.
 
-If you already have another Evolution profile you care about, consider
-running this against a scratch one instead of your real mail:
+To keep your real mail profile out of the test, set these variables in every
+terminal before each command below:
 
 ```console
 $ export XDG_CONFIG_HOME=/tmp/jmap-config-test/config
@@ -81,159 +65,107 @@ $ export XDG_DATA_HOME=/tmp/jmap-config-test/data
 $ export XDG_CACHE_HOME=/tmp/jmap-config-test/cache
 ```
 
-set before every command below, in every terminal, including the registry
-restart in step 4's collection-backend prerequisites if you get that far.
-
-## 3. Open the assistant and reach the JMAP provider
+## 3. Open the assistant and select JMAP
 
 ```console
 $ pkill -f evolution-source-registry
 $ evolution &
 ```
 
-*Edit → Preferences → Mail Accounts → Add*, or the first-run assistant on a
-profile with no accounts yet. On the *Restore or set up a new mail account*
-page (or wherever Evolution's version puts it), pick set up a new account,
-then type an address on the identity page — `alice@example.com` is fine, it
-does not have to resolve to anything for this step.
+1. Open *Edit ▸ Preferences ▸ Mail Accounts ▸ Add*. On an empty profile, you
+   can use the first-run assistant.
+2. Choose to set up a new account.
+3. On the identity page, type an address, for example `alice@example.com`.
 
-**What "it worked" means:** the *Receiving Email* page's provider combo
-lists an entry named "JMAP", with the one-line description
-`rust/crates/jmap-mail/src/provider.rs`'s `DESCRIPTION` names, and picking it
-is what makes the rest of this recipe possible. Its absence is `NAME` in
-`jmap_mail::provider` not matching the string `check_complete` and friends
-were registered under, or the module not being loaded at all — check
-`journalctl --user -f` or Evolution's own debug output
-(`EDS_DEBUG=1 evolution &`) for a load failure before assuming the widgets
-are the bug.
+**What "it worked" means:** the server type list of the *Receiving Email* page
+has "JMAP", with the description "For reading and storing mail on JMAP
+servers." (`NAME` and `DESCRIPTION` in `rust/crates/jmap-mail/src/provider.rs`).
+If the entry is missing, look for a module load failure in
+`journalctl --user -f` before you suspect the widgets.
 
-## 4. The "Look Up Account Details" step
+## 4. "Look Up Account Details"
 
-Still on the identity page, or wherever this Evolution version puts the
-button, look for **Look Up Account Details** (evolution-ews's Exchange
-autodiscovery uses the same button; JMAP shares the mechanism, not the
-provider). Click it with `jmap-mockd --oauth2` running.
+Make sure that `jmap-mockd --oauth2` runs. On the identity page, click
+**Look Up Account Details**.
 
-**What "it worked" means:** the assistant's own progress spinner runs
-briefly, then offers a result naming the mock's collection settings —
-`rust/crates/jmap-functional/tests/config-lookup.rs` is the automated version
-of exactly this network round trip, so if this hangs or comes back empty,
-run that test first to tell a UI-only bug from a discovery-logic one.
-Accepting the result is expected to carry you to a *Receiving Email* page
-already filled in, which folds into step 5's checks below.
+**What "it worked" means:** the assistant offers a JMAP result that uses OAuth
+2.0. If you accept it, the *Receiving Email* page is filled in. Step 5 checks
+this page. If the lookup hangs or finds nothing, first run
+`rust/crates/jmap-functional/tests/config-lookup.rs`. This separates a UI bug
+from a discovery bug.
 
-This step needs `servers` (the `EConfigLookup`'s target list) to name a host
-the lookup worker can actually reach — the automated test hands it the
-mock's own origin directly. The assistant UI has no field for this; if it
-does not offer a way to point discovery at `127.0.0.1:8080` in your
-Evolution version, skip to step 5 and fill the fields in by hand instead —
-that is the fallback path this whole recipe exists to prove works too.
+The lookup needs a server that it can reach. The automated test gives the
+origin of the mock server to the lookup directly. The assistant derives the
+server from the address. If your Evolution cannot point the lookup at
+`127.0.0.1:8080`, go to step 5 and fill in the fields by hand.
 
-### Troubleshooting: OAuth 2.0 against a self-hosted deployment
+### Troubleshooting: no OAuth 2.0 offered by a self-hosted server
 
-If this step reaches a self-hosted server rather than the mock or a known
-provider, and the assistant comes back *without* offering OAuth 2.0 — no
-error dialog, just a *Receiving Email* page with Authentication still on
-**Password** — check the deployment's advertised hostname before assuming
-this repository is at fault.
+Use this section if a self-hosted server returns no OAuth 2.0. In this case,
+no error occurs. The *Receiving Email* page shows **Password**. Check the
+advertised hostname of the server.
 
-`jmap-client`'s RFC 8414 discovery refuses a metadata document whose stated
-`issuer` does not exactly match the address it was fetched from (§3.3): a
-server that lets its issuer be spoofed lets *any* deployment claim to be
-any other one, so this check stays strict by design and has no opt-in to
-relax it. `jmap-config`'s lookup worker treats that refusal, like any other
-discovery failure, as "OAuth 2.0 not available here" and logs it only at
-debug level (`config_lookup.rs`) rather than surfacing a dialog — run with
-`EVOLUTION_JMAP_LOG=debug` (see `journalctl --user -f`) and look for
-`requires them to be identical` to confirm this is what happened, versus
-some other discovery failure.
+`jmap-client` refuses OAuth metadata if the `issuer` is not exactly the same as
+the address from which the client fetched it (RFC 8414 §3.3). This check has no
+opt-out. The lookup treats the refusal as "OAuth 2.0 not available". It logs
+the refusal only at debug level. To find it, do these steps:
 
-**The fix is on the server, not in Evolution:** a self-hosted deployment's
-advertised issuer/hostname must be the same address clients actually reach
-it on. A JMAP server left at its installer's default hostname (e.g.
-Stalwart's `SystemSettings.defaultHostname` still reading `example.com`
-while actually reached at a different address) will hit this every time;
-correcting that setting on the server is the fix, and Password
-authentication against the same server is unaffected in the meantime.
+1. Run Evolution with `EVOLUTION_JMAP_LOG=debug`.
+2. Look for `requires them to be identical` in `journalctl --user -f`.
 
-## 5. The server-settings page
+**Fix the server, not Evolution.** The advertised issuer of the server must be
+the address that clients use. For example, this check fails on a Stalwart
+server whose `SystemSettings.defaultHostname` is still `example.com`. Password
+sign-in to the same server still works.
 
-However you arrived at the *Receiving Email* page — by hand or via step 4 —
-it should show, top to bottom:
+## 5. The server settings page
 
-- **Server**, **Port**, **Username** entries, in that order, each with a
-  mnemonic label (`_Server`, `_Port`, `_Username` — <kbd>Alt</kbd>+the
-  underlined letter should focus the entry).
-- An **Authentication** combo below them, defaulting to **Password**, with
-  **OAuth 2.0** as its other choice.
-- A **Use a secure connection (TLS)** check button below that.
-- A status line below that, blank when the account is one *Next* would
-  accept.
+The *Receiving Email* page shows these items from top to bottom:
 
-Edit the fields to point at the mock and clear its refusal:
+- **Server**, **Port** and **Username** entries with mnemonics (`_Server`,
+  `_Port`, `_Username`).
+- An **Authentication** combo box: **Password**, **OAuth 2.0** and **API
+  Token**.
+- A **Use a secure connection (TLS)** check button.
+- A status line. It is empty if *Next* accepts the account.
 
-1. Set **Server** to `127.0.0.1`, **Port** to `8080`, and *uncheck* **Use a
-   secure connection (TLS)** — the mock speaks plain HTTP on loopback, and
-   `jmap-backend-core`'s TLS rule (M3) refuses plaintext to anything else.
-2. Leave **Username** as whatever the identity address offered, or clear it
-   — either is a legitimate account (`jmap-mockd` accepts an anonymous
-   connection unless started with `--basic`/`--bearer`).
+Point the page at the mock server:
+
+1. Set **Server** to `127.0.0.1`.
+2. Set **Port** to `8080`.
+3. Clear **Use a secure connection (TLS)**. The mock server speaks plain HTTP.
+   The backend allows plain HTTP only for a loopback address.
+4. Leave **Username** as offered, or clear it. The mock server accepts
+   anonymous connections, unless you start it with `--basic` or `--bearer`.
 
 **What "it worked" means:**
 
-- The three entries, the authentication combo and the check button appear at
-  all, filled in with what the identity's address implied (`Server` starts
-  as the address's domain, `Username` as the address itself, and
-  **Authentication** starts on **Password** for a fresh account) —
-  `jmap-config`'s `setup_defaults` doing its job, now visible rather than
-  only asserted in `tests/backend.rs`.
-- Switching **Authentication** to **OAuth 2.0** and finishing the assistant
-  writes `Method=JMAP` under `[Authentication]` in the committed account's
-  `.source` file (find it under
-  `$XDG_CONFIG_HOME/evolution/sources/*.source` — the one whose
-  `BackendName=jmap`); switching back to **Password** and finishing writes
-  `Method=none` there instead. Nothing here proves the OAuth 2.0 sign-in
-  itself works — see "What this does not cover" below.
-- The status line reads `This account has no email address yet.` if you
-  clear the identity page's address and come back, or
-  `"<whatever you typed>" is not an email address.` for something that is
-  not one (an address with no `@`) — `complete::status_message`'s exact
-  strings, worth checking verbatim since a translator will see them
-  literally.
-- Typing a non-loopback host with TLS unchecked (e.g. `mail.example.com`
-  with **Use a secure connection** off) makes the status line non-empty
-  with a message naming the refusal, and greys out *Next* — clearing it
-  (checking TLS, or pointing the host back at `127.0.0.1`) makes the message
-  disappear and *Next* sensitive again, live, with no page revisit needed.
-  This is the one behaviour no `cargo test` here can see: the `notify`
-  handler `insert_entries` connects on `[Authentication]`/`[Security]`
-  actually firing and updating the label GTK is showing.
-- Finishing the assistant with the mock's settings above commits an account
-  that, once the collection, book, calendar and camel-provider components
-  are installed and the registry restarted, behaves exactly as
-  `docs/manual-test-collection-backend.md` describes for a hand-written
-  `.source` file of the same shape — because `commit_changes` writes
-  precisely that file.
+- The fields start with the values that the identity address implies.
+  **Server** is the domain of the address. **Username** is the address.
+  **Authentication** is **Password**.
+- If you finish with **Password**, the module writes `Method=none` under
+  `[Authentication]` in the `.source` file of the account. This is the file in
+  `$XDG_CONFIG_HOME/evolution/sources/` with `BackendName=jmap`. **API Token**
+  writes `Method=bearer`.
+- If you choose **OAuth 2.0** by hand, without step 4, *Next* stays
+  insensitive. The status line says: OAuth 2.0 can't be set up manually. Go
+  back and use "Look Up Account Details" instead.
+- If the identity address is empty, the status line reads `This account has no
+  email address yet.`. If you typed text without an `@`, the status line reads
+  `"<what you typed>" is not an email address.`.
+- If the host is not a loopback address and TLS is off (for example
+  `mail.example.com`), the status line explains the refusal. *Next* becomes
+  insensitive. If you turn TLS on, or go back to `127.0.0.1`, the message
+  clears and *Next* becomes sensitive again. You do not leave the page. No
+  `cargo test` can see this live update.
+- If you finish with the settings of the mock server, the assistant commits an
+  account. This account behaves like the hand-written account in
+  `docs/manual-test-collection-backend.md`.
 
-Anything short of the above is a bug in this repository, not in the recipe —
-report it as you would any other bug in this project.
+Any other result is a bug in this repository. Report it.
 
 ## What this does not cover
 
-- **Whether choosing OAuth 2.0 here actually connects.** The combo writes
-  `[Authentication] Method`, which is what `EOAuth2Service::can_process`'s
-  default implementation and `e_source_get_oauth2_access_token_sync` key
-  off of — but nothing on this page drives `discover_and_register` (that is
-  what step 4's "Look Up Account Details" does). Picking **OAuth 2.0** by
-  hand without running that step no longer reaches a committed account
-  though: `check_complete` (`complete::check`) now refuses to go sensitive
-  while `[Authentication] Method` names OAuth 2.0 and no `[JMAP OAuth2]`
-  client is registered, with the status label saying so
-  (`OAuth2NotRegistered`, tested in `tests/backend.rs`). What is still
-  worth eyeballing on the first real run is the label actually appearing —
-  the `notify` wiring that repaints it is real-Evolution-only, per the
-  section above.
-- **The consent browser round trip.** Even once discovery has registered a
-  client, watching a real authorization prompt and `REDIRECT_URI` land back
-  in Evolution needs a real OAuth2 provider, not the mock, and is out of
-  scope for this document.
+This recipe does not cover the browser consent round trip of a real OAuth 2.0
+sign-in. That test needs a real OAuth 2.0 provider. The mock server is not
+sufficient.

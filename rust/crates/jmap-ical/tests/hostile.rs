@@ -10,9 +10,9 @@
 //! becomes the `TZID` parameter of `DTSTART`, where a quoted value has no
 //! escape mechanism at all. The rendered object is handed straight to
 //! `i_cal_component_new_from_string`, so a string that can end a content line
-//! early is a string that can add a property to the user's calendar.
-//!
-//! See `docs/AUDIT-FFI.md`, findings F2 and F4.
+//! early is a string that can add a property to the user's calendar. Deeply
+//! nested components are the other hostile shape: they must not overflow the
+//! stack.
 
 use jmap_ical::error::ICalError;
 use jmap_ical::{event_to_ical, scheduling_ical};
@@ -148,7 +148,7 @@ fn a_newline_in_a_text_value_is_still_escaped_rather_than_dropped() {
 }
 
 // ---------------------------------------------------------------------------
-// F4: nesting depth
+// Nesting depth
 
 /// A document nested deeply enough aborts the process on a safe code path.
 ///
@@ -489,12 +489,10 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
 }
 
 /// The scheduling payload is the same rendering wrapped in a `METHOD`-bearing
-/// `VCALENDAR`, so it inherits F2's guarantee, but `METHOD` and the
+/// `VCALENDAR`, so it inherits the guarantee above, but `METHOD` and the
 /// `RECURRENCE-ID` that scopes a message to one occurrence are two values
 /// `event_to_ical` never writes, and both are written by
 /// `scheduling_ical`'s own callers. Neither may end a content line.
-///
-/// See `docs/AUDIT-FFI-20260911.md`, the re-verification of F1/F2.
 #[test]
 fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
     let baseline = line_names(&scheduling_ical(&event(), "REQUEST", None));

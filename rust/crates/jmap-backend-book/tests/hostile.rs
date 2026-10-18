@@ -5,9 +5,9 @@
 //! C that consumes it.
 //!
 //! `jmap-vcard`'s own `tests/hostile.rs` pins the text this crate renders. This
-//! file checks what `EVCard` makes of that text.
-//!
-//! See `docs/AUDIT-FFI.md`, findings F1 and F7.
+//! file checks what `EVCard` makes of that text: a server-chosen map key must
+//! not inject vCard properties, and the connection an instance holds must be
+//! `Send + Sync`.
 
 use std::collections::BTreeMap;
 use std::ffi::CStr;

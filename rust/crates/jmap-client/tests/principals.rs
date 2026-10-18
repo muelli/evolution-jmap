@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Principal lookup against the mock server (RFC 9670): the shared floor
-//! for scheduling and per-source sharing. See docs/PRINCIPALS-DESIGN.md.
+//! for scheduling and per-source sharing.
 
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
