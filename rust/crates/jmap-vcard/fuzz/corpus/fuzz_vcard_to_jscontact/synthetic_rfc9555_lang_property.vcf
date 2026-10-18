@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:LANG Section Probe
+UID:lang-rfc9555-1
+LANG;TYPE=work;PREF=1:en
+LANG;TYPE=home:fr
+END:VCARD

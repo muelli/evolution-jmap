@@ -11277,8 +11277,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, MEMBER, SOURCE, XML, CREATED, PRODID, REV,
-    // SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, LANG, MEMBER, SOURCE, XML, CREATED, PRODID,
+    // REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11310,6 +11310,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
+        "LANG;TYPE=WORK;PREF=1:en\r\n",
         "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
         "MEMBER:mailto:alice@example.com\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
@@ -11389,6 +11390,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "SOURCE must not project to directories in this profile"
     );
     assert!(parsed.kind.is_none(), "KIND must not project to card.kind");
+    assert!(
+        parsed.preferred_languages.is_none(),
+        "LANG must not project to preferred_languages in this profile"
+    );
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
     let media = parsed.media.as_ref().expect("media map present");
@@ -11409,6 +11414,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
+    assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
     assert!(!emitted.contains("MEMBER:"), "MEMBER must not be emitted");
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
@@ -11531,6 +11537,32 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("KIND:") && !emitted.contains("KIND;"),
             "KIND must not be emitted"
+        );
+    }
+
+    // LANG variants.
+    for lang_val in [
+        "LANG;TYPE=work;PREF=1:en",
+        "LANG;TYPE=home:fr",
+        "LANG;PREF=2:de-AT",
+        "LANG;TYPE=work,home:zh-Hant",
+        "lang;type=work:en-US",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Lang User\r\n{lang_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse LANG");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Lang User")
+        );
+        assert!(
+            parsed.preferred_languages.is_none(),
+            "LANG must not project to preferred_languages"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("LANG:") && !emitted.contains("LANG;"),
+            "LANG must not be emitted"
         );
     }
 
@@ -11866,6 +11898,10 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "tz:",
         "MAILER:",
         "mailer:   ",
+        "LANG:",
+        "LANG:   ",
+        "lang:",
+        "LANG;TYPE=work:",
         "KIND:",
         "kind:   ",
         "MEMBER:",
