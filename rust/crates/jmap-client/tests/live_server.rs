@@ -508,16 +508,16 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::all_changes` after each mutation, same as
 /// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]:
 /// `jmap-book-sync`'s own polling loop drives `ContactCard/changes`
-/// (`lib.rs:206`), and a real server's state tokens and
+/// (`BookSync::get_changes`), and a real server's state tokens and
 /// created/updated/destroyed classification for this type had no
 /// live-server coverage until now.
 ///
 /// Also checks `Client::contact_query` right after the create and right
 /// after the destroy: `jmap-book-sync`'s `list_existing_sync` enumerates an
 /// address book via exactly `ContactCardQueryFilter::in_address_book`
-/// (`lib.rs:88`), the backend's actual listing path, which (unlike
-/// `get`/`set`/`changes` above) had no live-server coverage at all before
-/// this test.
+/// (`BookSync::list_existing`), the backend's actual listing path, which
+/// (unlike `get`/`set`/`changes` above) had no live-server coverage at all
+/// before this test.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -741,10 +741,10 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
 ///
 /// Also checks `Client::event_query` right after the create and right after
 /// the destroy: `jmap-cal-sync::list_existing_sync` enumerates a calendar via
-/// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:101`), the
-/// backend's actual listing path, which (unlike `get`/`set`/`changes`
-/// above) had no live-server coverage at all before this test. Mirrors the
-/// `ContactCard/query` check
+/// exactly `CalendarEventQueryFilter::in_calendar`
+/// (`CalSync::list_existing`), the backend's actual listing path, which
+/// (unlike `get`/`set`/`changes` above) had no live-server coverage at all
+/// before this test. Mirrors the `ContactCard/query` check
 /// [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
 /// already makes for the address-book listing path.
 #[test]
