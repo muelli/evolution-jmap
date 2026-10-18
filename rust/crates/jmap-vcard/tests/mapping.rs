@@ -11306,9 +11306,9 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, GENDER, LANG, EXPERTISE, HOBBY, INTEREST, MEMBER,
-    // CONTACT-URI, SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS,
-    // SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, GENDER, LANG, SOCIALPROFILE, EXPERTISE, HOBBY,
+    // INTEREST, MEMBER, CONTACT-URI, SOURCE, XML, CREATED, PRODID, REV,
+    // SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11342,6 +11342,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "KIND:group\r\n",
         "GENDER:M\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
+        "SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@albert\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
         "HOBBY;LEVEL=high;INDEX=1:reading\r\n",
         "INTEREST;LEVEL=medium;INDEX=2:rock&roll music\r\n",
@@ -11455,6 +11456,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
     assert!(!emitted.contains("GENDER:"), "GENDER must not be emitted");
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
+    assert!(
+        !emitted.contains("SOCIALPROFILE:") && !emitted.contains("SOCIALPROFILE;"),
+        "SOCIALPROFILE must not be emitted"
+    );
     assert!(
         !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
         "EXPERTISE must not be emitted"
@@ -11649,6 +11654,29 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("LANG:") && !emitted.contains("LANG;"),
             "LANG must not be emitted"
+        );
+    }
+
+    // SOCIALPROFILE variants.
+    for socialprofile_val in [
+        "SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@lang-user",
+        "SOCIALPROFILE;SERVICE-TYPE=Signal;USERNAME=lang-user:lang-user.42",
+        "SOCIALPROFILE;TYPE=work;PREF=1:https://social.example/work/lang-user",
+        "SOCIALPROFILE;VALUE=text;SERVICE-TYPE=Matrix:@lang-user:matrix.example",
+        "socialprofile;service-type=LinkedIn:https://example.com/in/lang-user",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Social Profile User\r\n{socialprofile_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse SOCIALPROFILE");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Social Profile User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("SOCIALPROFILE:") && !emitted.contains("SOCIALPROFILE;"),
+            "SOCIALPROFILE must not be emitted"
         );
     }
 
@@ -12091,6 +12119,10 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "LANG:   ",
         "lang:",
         "LANG;TYPE=work:",
+        "SOCIALPROFILE:",
+        "SOCIALPROFILE:   ",
+        "socialprofile:",
+        "SOCIALPROFILE;SERVICE-TYPE=Mastodon:",
         "EXPERTISE:",
         "expertise:   ",
         "EXPERTISE;LEVEL=high:",

@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:SOCIALPROFILE Section Probe
+UID:socialprofile-rfc9555-1
+SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@probe
+SOCIALPROFILE;SERVICE-TYPE=Signal;USERNAME=probe-user:probe-user.77
+SOCIALPROFILE;VALUE=text;SERVICE-TYPE=Matrix:@probe-user:matrix.example
+END:VCARD
