@@ -12090,6 +12090,56 @@ fn standard_properties_case_insensitivity_and_empty_values() {
 }
 
 #[test]
+fn geo_tz_lines_with_adr_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:geo-tz-profile-boundary-1\r\n",
+        "FN:Geo TZ Profile Boundary\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK,PREF:;;1 Infinite Loop;Cupertino;CA;95014;USA\r\n",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK,PREF:1 Infinite Loop\\nCupertino\\, CA 95014\\nUSA\r\n",
+        "GEO;X-JMAP-KEY=a1:geo:37.3317,-122.0307\r\n",
+        "TZ;X-JMAP-KEY=a1:America/Los_Angeles\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse geo/tz profile boundary card");
+    let addresses = parsed.addresses.as_ref().expect("address map");
+    assert_eq!(addresses.len(), 1);
+
+    let work = &addresses["a1"];
+    assert!(work.components.is_some(), "ADR components must be kept");
+    assert_eq!(
+        work.coordinates, None,
+        "GEO must not project to coordinates"
+    );
+    assert_eq!(work.time_zone, None, "TZ must not project to time_zone");
+    assert!(
+        work.extra.contains_key("pref"),
+        "ADR preference flag must still be preserved"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted
+            .contains("ADR;X-JMAP-KEY=a1;TYPE=WORK,PREF:;;1 Infinite Loop;Cupertino;CA;95014;USA"),
+        "Mapped ADR payload must survive"
+    );
+    assert!(
+        !emitted.contains("GEO:") && !emitted.contains("GEO;"),
+        "GEO must not be emitted"
+    );
+    assert!(
+        !emitted.contains("TZ:") && !emitted.contains("TZ;"),
+        "TZ must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
 fn phone_mobile_type_synonym_and_permutations_characterization() {
     // `TYPE=MOBILE` should parse as mobile and normalize back to `TYPE=CELL`.
     let vcard = concat!(
