@@ -63,7 +63,7 @@ use jmap_proto::Id;
 use jmap_proto::mail::SnoozeDetails;
 
 use crate::dispatch;
-use crate::link::{self, AccountLink};
+use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::session_cache;
 
@@ -437,15 +437,14 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
                 }
                 return;
             };
-            let source = SendSource(source);
+            // SAFETY: the reference `connect_source_of` took, handed over.
+            let source = unsafe { SendSource::adopt(source) };
             let fetch_uid = uid.clone();
             let work = move || {
-                let source = source;
                 // SAFETY: the reference `connect_source_of` took is the
                 // worker's for the whole closure.
-                let outcome = unsafe { link::connect_account(source.0) };
-                // SAFETY: releasing the worker's reference.
-                unsafe { g_object_unref(source.0.cast()) };
+                let outcome = unsafe { link::connect_account(source.as_ptr()) };
+                drop(source);
                 (fetch_uid, outcome)
             };
             let finish =
@@ -570,12 +569,6 @@ unsafe fn connect_source_of(reader: *mut EMailReader) -> Option<*mut ESource> {
     }
 }
 
-/// A source reference the worker thread may hold; see `vacation::page`.
-struct SendSource(*mut ESource);
-// SAFETY: GObject refcounting is thread-safe and ESource getters take the
-// source's property lock.
-unsafe impl Send for SendSource {}
-
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::hour", (), || unsafe {
@@ -672,14 +665,13 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
     let Some(source) = (unsafe { connect_source_of(reader) }) else {
         return;
     };
-    let source = SendSource(source);
+    // SAFETY: the reference `connect_source_of` took, handed over.
+    let source = unsafe { SendSource::adopt(source) };
 
     let work = move || {
-        let source = source;
         // SAFETY: the reference `connect_source_of` took is the worker's.
-        let outcome = unsafe { link::connect_account(source.0) };
-        // SAFETY: releasing the worker's reference.
-        unsafe { g_object_unref(source.0.cast()) };
+        let outcome = unsafe { link::connect_account(source.as_ptr()) };
+        drop(source);
         outcome.and_then(|link| snooze_all(&link, &uids, &until))
     };
     let finish = |_owner: *mut GObject, outcome: Result<usize, String>| match outcome {

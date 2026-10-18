@@ -55,7 +55,7 @@ use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, 
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::dispatch;
-use crate::link::{self, AccountLink};
+use crate::link::{self, AccountLink, SendSource};
 use crate::vacation::form::VacationForm;
 use crate::vacation::io;
 
@@ -295,15 +295,6 @@ unsafe extern "C" fn on_toggled(_button: *mut GObject, page: gpointer) {
     });
 }
 
-/// A ref to `source` that may cross onto the worker thread: `GObject`
-/// reference counting is thread-safe, and `ESource` getters take the
-/// source's own property lock, the same grounds the EDS backends read
-/// sources off their worker threads on.
-struct SendSource(*mut ESource);
-// SAFETY: see above; the wrapper only hands the pointer to code that treats
-// it as a live ESource.
-unsafe impl Send for SendSource {}
-
 /// Instantiate the (registered) page for the account `connect_source`
 /// configures and start its load. NULL when the type is missing, which means
 /// [`crate::module::load`] never ran: reported, since a silently absent page
@@ -331,19 +322,15 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
 
     // SAFETY: a valid source per this function's contract; the reference is
     // the worker's, released there.
-    let source = SendSource(unsafe { g_object_ref(connect_source.cast()) }.cast());
+    let source = unsafe { SendSource::adopt(g_object_ref(connect_source.cast()).cast()) };
     let work = move || {
-        // Moved whole, so the Send wrapper (not its raw field) is what the
-        // closure captures.
-        let source = source;
         // SAFETY: the reference `create` took keeps the source alive for the
         // whole of this closure.
-        let outcome = unsafe { link::connect_account(source.0) }.and_then(|link| {
+        let outcome = unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
             let response = io::load(&link)?;
             Ok((Arc::new(link), VacationForm::from_response(&response)))
         });
-        // SAFETY: the worker owns the reference `create` took.
-        unsafe { g_object_unref(source.0.cast()) };
+        drop(source);
         outcome
     };
     let finish = |page: *mut GObject, outcome| {
