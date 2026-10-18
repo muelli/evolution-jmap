@@ -63,19 +63,13 @@
 //! `check_complete` and `commit_changes` already read and write it, plus a
 //! status label showing [`Incomplete`](crate::complete::Incomplete)'s refusal
 //! reason (empty, and hidden, once the account is one a commit would accept).
-//! What is still missing is only:
-//!
-//! - **Verification in a real Evolution.** GTK 3 will not construct a widget
-//!   without a display connection, so nothing on this machine has run
-//!   `insert_widgets` and looked at the result — see its own docs for exactly
-//!   what a human still has to confirm.
-//! - **The consent browser round trip.** The authentication combo lets a
-//!   user *say* an account is OAuth 2.0; it does not by itself prove EDS's
-//!   `ECredentialsPrompterImplOAuth2` reaches a real provider and back for
-//!   this project's registered client — that needs a human and a real
-//!   deployment, the same gap
-//!   [`config_lookup`](crate::config_lookup)'s own docs name for its half of
-//!   OAuth 2.0 setup.
+//! What is still missing is only **the consent browser round trip.** The
+//! authentication combo lets a user *say* an account is OAuth 2.0; it does not
+//! by itself prove EDS's `ECredentialsPrompterImplOAuth2` reaches a real
+//! provider and back for this project's registered client — that needs a
+//! human and a real deployment, the same gap
+//! [`config_lookup`](crate::config_lookup)'s own docs name for its half of
+//! OAuth 2.0 setup.
 //!
 //! ## The state this leaves the dialog in, said plainly
 //!
@@ -551,13 +545,19 @@ unsafe fn insert_entries(
             gtk_grid_attach(grid.cast(), entry, 1, row as i32, 1, 1);
         }
 
-        // SAFETY: `authentication` is NULL or the collection's own extension
-        // (created above, and owned by `collection`), and `entry` is a live
-        // `GtkEntry` with a string `text` property; the binding this creates
-        // is `(transfer none)`, owned by the two objects it joins, and
-        // outlives this call on its own. For `RowKind::Port` the target
-        // property is `guint16`, not a string, which is exactly what
-        // `port_to_text`/`text_to_port` bridge — their own docs give the
+        // A NULL extension would make GLib refuse the binding with a
+        // critical: leave the entry unbound, as the `notify` loop below
+        // leaves it unwatched.
+        if authentication.is_null() {
+            continue;
+        }
+        // SAFETY: `authentication` is the collection's own extension, just
+        // checked non-NULL (created above, and owned by `collection`), and
+        // `entry` is a live `GtkEntry` with a string `text` property; the
+        // binding this creates is `(transfer none)`, owned by the two objects
+        // it joins, and outlives this call on its own. For `RowKind::Port`
+        // the target property is `guint16`, not a string, which is exactly
+        // what `port_to_text`/`text_to_port` bridge; their own docs give the
         // `GBindingTransformFunc` contract this satisfies.
         match kind {
             RowKind::Text => unsafe {
@@ -613,19 +613,21 @@ unsafe fn insert_entries(
         gtk_grid_attach(grid.cast(), auth_label.cast(), 0, auth_row, 1, 1);
         gtk_grid_attach(grid.cast(), auth_combo.cast(), 1, auth_row, 1, 1);
     }
-    // SAFETY: `authentication` is NULL or the collection's own extension
-    // (created above, and owned by `collection`); `auth_combo` is a live
-    // `GtkComboBox` (a `GtkComboBoxText` is one) with a string `active-id`
-    // property, and `AUTH_CHOICES` gave it exactly the three ids `method` can
-    // hold, so no transform is needed here either.
-    unsafe {
-        e_binding_bind_property(
-            authentication,
-            c"method".as_ptr(),
-            auth_combo.cast(),
-            c"active-id".as_ptr(),
-            G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
-        );
+    if !authentication.is_null() {
+        // SAFETY: `authentication` is the collection's own extension, just
+        // checked non-NULL (created above, and owned by `collection`);
+        // `auth_combo` is a live `GtkComboBox` (a `GtkComboBoxText` is one) with
+        // a string `active-id` property, and `AUTH_CHOICES` gave it exactly the
+        // three ids `method` can hold, so no transform is needed here either.
+        unsafe {
+            e_binding_bind_property(
+                authentication,
+                c"method".as_ptr(),
+                auth_combo.cast(),
+                c"active-id".as_ptr(),
+                G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+            );
+        }
     }
 
     // The security toggle: one check button spanning both columns, on the row
@@ -637,18 +639,20 @@ unsafe fn insert_entries(
     // SAFETY: `check` was just constructed above and is a `GtkWidget`; `grid`
     // is the live grid every other row was attached to.
     unsafe { gtk_grid_attach(grid.cast(), check, 0, auth_row + 1, 2, 1) };
-    // SAFETY: `security` is NULL or the collection's own extension (created
-    // above, and owned by `collection`), and `check` is a live
-    // `GtkToggleButton` with a boolean `active` property — the same shape as
-    // `ESourceSecurity:secure`, so no transform is needed here either.
-    unsafe {
-        e_binding_bind_property(
-            security,
-            c"secure".as_ptr(),
-            check.cast(),
-            c"active".as_ptr(),
-            G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
-        );
+    if !security.is_null() {
+        // SAFETY: `security` is the collection's own extension, just checked
+        // non-NULL (created above, and owned by `collection`), and `check` is a
+        // live `GtkToggleButton` with a boolean `active` property, the same shape
+        // as `ESourceSecurity:secure`, so no transform is needed here either.
+        unsafe {
+            e_binding_bind_property(
+                security,
+                c"secure".as_ptr(),
+                check.cast(),
+                c"active".as_ptr(),
+                G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+            );
+        }
     }
 
     // The status label: a single label spanning both columns, on the row

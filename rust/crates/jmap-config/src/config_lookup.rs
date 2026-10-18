@@ -89,29 +89,33 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
-    EExtension, EExtensionClass, ENamedParameters, e_extension_get_extensible,
-    e_extension_get_type, e_named_parameters_get,
+    EExtension, EExtensionClass, ENamedParameters, ESource, ESourceCollection,
+    e_extension_get_extensible, e_extension_get_type, e_named_parameters_get,
+    e_source_backend_get_backend_name, e_source_collection_get_type,
 };
 use evo_sys::{
     E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS, E_CONFIG_LOOKUP_PARAM_SERVERS,
-    E_CONFIG_LOOKUP_RESULT_COLLECTION, EConfigLookup, EConfigLookupResult, EConfigLookupWorker,
-    EConfigLookupWorkerInterface, e_config_lookup_add_result, e_config_lookup_get_type,
-    e_config_lookup_register_worker, e_config_lookup_result_simple_add_boolean,
-    e_config_lookup_result_simple_add_string, e_config_lookup_result_simple_add_uint,
-    e_config_lookup_result_simple_new, e_config_lookup_worker_get_type,
+    E_CONFIG_LOOKUP_RESULT_COLLECTION, E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP,
+    E_CONFIG_LOOKUP_SOURCE_COLLECTION, EConfigLookup, EConfigLookupResult, EConfigLookupWorker,
+    EConfigLookupWorkerInterface, e_config_lookup_add_result, e_config_lookup_get_source,
+    e_config_lookup_get_type, e_config_lookup_register_worker,
+    e_config_lookup_result_simple_add_boolean, e_config_lookup_result_simple_add_string,
+    e_config_lookup_result_simple_add_uint, e_config_lookup_result_simple_new,
+    e_config_lookup_worker_get_type,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GTRUE, GType, gchar};
+use glib_sys::{GTRUE, GType, gchar, gint};
 use gobject_sys::{GObject, GObjectClass};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{self, N_, translate_with};
+use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{self, InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 use jmap_client::transport::UreqTransport;
 
-use crate::account::BACKEND_NAME;
+use crate::account::{self, Account, BACKEND_NAME};
 use crate::oauth2::{self, Config};
 use crate::oauth2_setup::discover_and_register;
 
@@ -125,6 +129,17 @@ use crate::oauth2_setup::discover_and_register;
 /// redirect scheme to contain at least one dot and reject registration
 /// otherwise.
 pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
+
+/// The priority of the one result a successful lookup adds. Lower is higher
+/// priority, and this must be STRICTLY better than `e-config-lookup-result.h`'s
+/// PRIORITY_IMAP and PRIORITY_SMTP (both 1000): the page picks a backend only
+/// on `priority < selected`, so a tie loses to candidate order. Observed live
+/// (2026-08-23, Fastmail): at 1000 the receiving page stayed on ISPDB's imapx
+/// while the sending page flipped to jmap, a broken hybrid. A result built
+/// from the provider's own SRV record plus a completed RFC 7591 registration
+/// is the provider's answer, not a generic guess, so it outranks ISPDB's by
+/// the same margin evolution-ews's Exchange autodiscovery uses.
+const PRIORITY: gint = E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP as gint - 100;
 
 /// The host RFC 8414 discovery is asked of, and later written as
 /// `[Authentication] host` in a positive result — a bare domain, not a
@@ -243,6 +258,76 @@ fn parse_target(host: &str) -> Option<Target> {
         port,
         secure,
     })
+}
+
+/// The server a re-run lookup probes first, in the `servers` shape
+/// [`parse_target`] reads: the host, port and TLS choice of the JMAP account
+/// the lookup is for, as a previous lookup or the server settings page left
+/// it. evolution-ews seeds its own autodiscovery from the account's prior
+/// settings the same way.
+///
+/// `None`, so the probe falls back to [`probe_host`]'s email-domain path,
+/// unless all of these hold:
+///
+/// - the account is a JMAP one (`backend_name`): the assistant hands every
+///   worker the same collection, and another backend's host is not one to
+///   ask for JMAP discovery;
+/// - its identity is the address being looked up: a user who changed the
+///   address wants the new domain discovered, not the old host reused;
+/// - its host is not the bare email domain: that is what the server page
+///   offers by default, and probing it directly would skip the `_jmap._tcp`
+///   SRV lookup a provider like Fastmail is only found through.
+fn prior_server(email: &str, backend_name: Option<&str>, account: &Account) -> Option<String> {
+    if backend_name != Some(BACKEND_NAME) || !account.identity.eq_ignore_ascii_case(email) {
+        return None;
+    }
+    let host = account.connection.host.as_str();
+    let domain = email.rsplit_once('@').map(|(_, domain)| domain);
+    if host.is_empty() || domain.is_some_and(|domain| domain.eq_ignore_ascii_case(host)) {
+        return None;
+    }
+    let scheme = if account.connection.secure {
+        "https"
+    } else {
+        "http"
+    };
+    // RFC 3986: an IPv6 literal is bracketed so its colons are not read as a
+    // port separator.
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    Some(match account.connection.port {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+/// [`prior_server`] for the collection source the assistant answers
+/// `e_config_lookup_get_source` with.
+///
+/// # Safety
+///
+/// `source` must be NULL or a valid `ESource`. It is only read from.
+unsafe fn prior_server_of(source: *mut ESource, email: &str) -> Option<String> {
+    if source.is_null() {
+        return None;
+    }
+    // SAFETY: no arguments; registers the extension type the lookup below
+    // needs, as `account::read` does for its own.
+    unsafe { e_source_collection_get_type() };
+    // SAFETY: a valid source, just checked non-NULL, and a header constant
+    // naming an extension of the type it is read as.
+    let collection = unsafe {
+        extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION)
+    }?;
+    // SAFETY: a live extension, and an `ESourceCollection` is an
+    // `ESourceBackend`; the string is NULL or owned by the extension.
+    let backend_name = unsafe { read_string(e_source_backend_get_backend_name(collection.cast())) };
+    // SAFETY: a valid source, as above.
+    let account = unsafe { account::read(source) };
+    prior_server(email, backend_name.as_deref(), &account)
 }
 
 /// The instance struct: nothing but [`EExtension`]'s own state — everything
@@ -431,16 +516,7 @@ unsafe fn add_result(
     let result = unsafe {
         e_config_lookup_result_simple_new(
             E_CONFIG_LOOKUP_RESULT_COLLECTION,
-            // Lower is higher priority, and this must be STRICTLY better than
-            // `e-config-lookup-result.h`'s PRIORITY_IMAP and PRIORITY_SMTP
-            // (both 1000): the page picks a backend only on `priority <
-            // selected`, so a tie loses to candidate order. Observed live
-            // (2026-08-23, Fastmail): at 1000 the receiving page stayed on
-            // ISPDB's imapx while the sending page flipped to jmap — a broken
-            // hybrid. A result built from the provider's own SRV record plus
-            // a completed RFC 7591 registration is the provider's answer, not
-            // a generic guess, so it outranks ISPDB's.
-            900,
+            PRIORITY,
             GTRUE,
             protocol.as_ptr(),
             i18n::translate_static(N_(c"JMAP account (OAuth 2.0)")),
@@ -584,7 +660,18 @@ unsafe extern "C" fn run(
         let Some(email) = param(params, E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS) else {
             return;
         };
-        let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS);
+        // A server the user named wins; failing that, a re-run seeds from the
+        // host the account already names (see `prior_server`).
+        let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS).or_else(|| {
+            // SAFETY: `config_lookup` is the live lookup this worker runs
+            // for; the source it answers is NULL or one the assistant keeps
+            // alive while the lookup runs (`transfer none`).
+            let source = unsafe {
+                e_config_lookup_get_source(config_lookup, E_CONFIG_LOOKUP_SOURCE_COLLECTION)
+            };
+            // SAFETY: NULL or a valid source, as just said.
+            unsafe { prior_server_of(source, &email) }
+        });
         // RFC 8620 §2.2: the provider may publish its JMAP host as a
         // `_jmap._tcp` record rather than answer at the bare email domain, and
         // this worker is where that matters most — it is what decides whether
@@ -647,7 +734,17 @@ unsafe extern "C" fn run(
 mod tests {
     use jmap_client::resolver::{NoSrvResolver, Resolver, SrvTarget};
 
-    use super::{REDIRECT_URI, parse_target, probe_host};
+    use std::ffi::CString;
+    use std::ptr;
+
+    use eds_sys::e_source_new_with_uid;
+    use evo_sys::{E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP, E_CONFIG_LOOKUP_RESULT_PRIORITY_SMTP};
+    use gobject_sys::g_object_unref;
+    use jmap_collection_sync::Parts;
+    use jmap_collection_sync::child_source::Connection;
+
+    use super::{PRIORITY, REDIRECT_URI, parse_target, prior_server, prior_server_of, probe_host};
+    use crate::account::{self, Account};
 
     #[test]
     fn redirect_uri_scheme_is_dotted_reverse_dns() {
@@ -833,5 +930,139 @@ mod tests {
     #[test]
     fn an_empty_authority_has_no_target_to_reach() {
         assert!(parse_target("https://").is_none());
+    }
+
+    #[test]
+    fn the_result_outranks_imap_and_smtp_by_the_margin_ews_uses() {
+        let imap = E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP as i32;
+        let smtp = E_CONFIG_LOOKUP_RESULT_PRIORITY_SMTP as i32;
+        // Lower is better, and a tie loses to candidate order (see `PRIORITY`).
+        assert_eq!(PRIORITY, imap - 100);
+        assert!(PRIORITY < smtp);
+    }
+
+    /// A JMAP account for `alice@example.com`, as a previous lookup or the
+    /// server settings page left it.
+    fn prior(host: &str, port: Option<u16>, secure: bool) -> Account {
+        Account {
+            identity: "alice@example.com".to_owned(),
+            connection: Connection {
+                host: host.to_owned(),
+                port,
+                user: Some("alice@example.com".to_owned()),
+                auth_method: None,
+                secure,
+            },
+            parts: Parts {
+                mail: true,
+                contacts: true,
+                calendars: true,
+            },
+            oauth2_registered: false,
+        }
+    }
+
+    #[test]
+    fn a_rerun_probes_the_host_the_account_already_names() {
+        let account = prior("jmap.example.net", None, true);
+        let server = prior_server("alice@example.com", Some("jmap"), &account);
+        assert_eq!(server.as_deref(), Some("https://jmap.example.net"));
+    }
+
+    #[test]
+    fn a_rerun_keeps_the_accounts_port_and_plaintext_choice() {
+        let account = prior("127.0.0.1", Some(8080), false);
+        let server = prior_server("alice@example.com", Some("jmap"), &account)
+            .expect("a named host seeds the probe");
+        assert_eq!(server, "http://127.0.0.1:8080");
+        let target = parse_target(&server).expect("the seed parses back");
+        assert_eq!(
+            (target.host.as_str(), target.port, target.secure),
+            ("127.0.0.1", 8080, false)
+        );
+    }
+
+    #[test]
+    fn a_rerun_brackets_an_ipv6_host_so_its_port_parses_back() {
+        let account = prior("2001:db8::1", Some(8443), true);
+        let server = prior_server("alice@example.com", Some("jmap"), &account)
+            .expect("a named host seeds the probe");
+        let target = parse_target(&server).expect("the seed parses back");
+        assert_eq!(
+            (target.host.as_str(), target.port, target.secure),
+            ("2001:db8::1", 8443, true)
+        );
+    }
+
+    #[test]
+    fn the_bare_email_domain_is_left_to_srv_discovery() {
+        // The server page offers the email domain by default; seeding from it
+        // would skip the `_jmap._tcp` lookup a provider like Fastmail needs.
+        let account = prior("Example.COM", None, true);
+        assert_eq!(
+            prior_server("alice@example.com", Some("jmap"), &account),
+            None
+        );
+    }
+
+    #[test]
+    fn another_backends_account_does_not_seed_the_probe() {
+        let account = prior("outlook.office365.com", None, true);
+        assert_eq!(
+            prior_server("alice@example.com", Some("ews"), &account),
+            None
+        );
+        assert_eq!(prior_server("alice@example.com", None, &account), None);
+    }
+
+    #[test]
+    fn a_changed_email_address_does_not_reuse_the_old_host() {
+        let account = prior("jmap.example.net", None, true);
+        assert_eq!(
+            prior_server("bob@example.org", Some("jmap"), &account),
+            None
+        );
+    }
+
+    #[test]
+    fn the_email_address_matches_case_insensitively() {
+        let account = prior("jmap.example.net", None, true);
+        assert_eq!(
+            prior_server("Alice@Example.com", Some("jmap"), &account).as_deref(),
+            Some("https://jmap.example.net")
+        );
+    }
+
+    #[test]
+    fn an_account_with_no_host_does_not_seed_the_probe() {
+        let account = prior("", None, true);
+        assert_eq!(
+            prior_server("alice@example.com", Some("jmap"), &account),
+            None
+        );
+    }
+
+    #[test]
+    fn a_rerun_reads_the_seed_from_the_collection_source() {
+        let uid = CString::new("jmap-config-lookup-prior").expect("no NUL in a literal");
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
+        // out-parameter are the documented arguments.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+
+        // SAFETY: `source` is live until the unref below; `apply` writes
+        // `[Collection] backend-name = jmap` along with the account.
+        let server = unsafe {
+            account::apply(source, &prior("jmap.example.net", Some(443), true));
+            prior_server_of(source, "alice@example.com")
+        };
+        // SAFETY: NULL is "no source", which the assistant may answer.
+        let none = unsafe { prior_server_of(ptr::null_mut(), "alice@example.com") };
+        // SAFETY: the one reference `e_source_new_with_uid` handed over.
+        unsafe { g_object_unref(source.cast()) };
+
+        assert_eq!(server.as_deref(), Some("https://jmap.example.net:443"));
+        assert_eq!(none, None);
     }
 }

@@ -49,6 +49,9 @@ const ALLOWED_TYPES: &[&str] = &[
     "EMailConfigServiceBackend.*",
     "EConfigLookupWorker.*",
     "EConfigLookupResult.*",
+    // `e_config_lookup_get_source`'s argument: which of the assistant's
+    // sources a worker asks for. A plain C enum, like `ECalClientSourceType`.
+    "EConfigLookupSourceKind",
     "ESourceConfigBackend.*",
     // jmap-ui's vacation page implements this interface; `interface_init`
     // writes `submit`/`submit_finish` into its fields, so the layout matters.
@@ -64,8 +67,13 @@ const ALLOWED_TYPES: &[&str] = &[
 ];
 
 /// `e-config-lookup.h`'s `#define`d parameter names `EConfigLookupWorker::run`
-/// reads its email address and server list under, generated as `&CStr`.
-const ALLOWED_VARS: &[&str] = &["E_CONFIG_LOOKUP_PARAM_.*"];
+/// reads its email address and server list under, generated as `&CStr`, and
+/// `e-config-lookup-result.h`'s result priorities, which `run()`'s own
+/// priority is derived from.
+const ALLOWED_VARS: &[&str] = &[
+    "E_CONFIG_LOOKUP_PARAM_.*",
+    "E_CONFIG_LOOKUP_RESULT_PRIORITY_.*",
+];
 
 /// The class's own accessors, and the one thing asked of the page it extends.
 /// The page is not subclassed, so it is named a function at a time rather
@@ -85,6 +93,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_config_lookup_get_type",
     "e_config_lookup_register_worker",
     "e_config_lookup_add_result",
+    // The account a re-run lookup is for: `run()` seeds its probe from the
+    // host that account already names.
+    "e_config_lookup_get_source",
     // `EConfigLookupResultSimple`'s constructor and the setters `run()` uses:
     // a string per `[Collection]`/`[Authentication]`/`[Security]`/
     // `[JMAP OAuth2]` field, a boolean for the three `*-enabled` flags, a
