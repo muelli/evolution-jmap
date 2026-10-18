@@ -121,6 +121,8 @@ use eds_sys::{CamelSaslXOAuth2, CamelSaslXOAuth2Class, camel_sasl_xoauth2_get_ty
 use glib_sys::GFALSE;
 use glib_sys::{GType, gchar};
 #[cfg(not(eds_oauth2_dynamic))]
+use jmap_backend_core::forever::Forever;
+#[cfg(not(eds_oauth2_dynamic))]
 use jmap_backend_core::i18n::N_;
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 #[cfg(not(eds_oauth2_dynamic))]
@@ -169,9 +171,8 @@ const NAME: &CStr = N_(c"OAuth2 (JMAP)");
 #[cfg(not(eds_oauth2_dynamic))]
 const DESCRIPTION: &CStr = N_(c"Uses an OAuth 2.0 access token to connect to the JMAP server.");
 
-/// The mechanism as Camel describes it, as a pointer Camel and this module
-/// both hold — the same shape, and for the same reasons, as
-/// [`crate::provider`]'s own `Registered`.
+/// The mechanism as Camel describes it, a pointer Camel and this module both
+/// hold, like [`crate::provider`]'s own registered provider.
 ///
 /// The struct is heap-allocated once and leaked. Both halves of that are
 /// forced. *Leaked*, because Camel keeps the pointer: it is reached through
@@ -182,20 +183,7 @@ const DESCRIPTION: &CStr = N_(c"Uses an OAuth 2.0 access token to connect to the
 /// [`NAME`] — so the `static` this would otherwise obviously be
 /// would put it in `.rodata` and turn registration into a segfault.
 #[cfg(not(eds_oauth2_dynamic))]
-struct AuthType(*mut CamelServiceAuthType);
-
-// SAFETY: the pointer is set once, under the OnceLock, and what it points at
-// is leaked — nothing can free it or move it. Camel writes the two
-// translatable fields exactly once, from inside `camel_provider_register`,
-// which this module reaches from `provider::register` before the provider
-// (and so the auth type) is visible to anything else.
-#[cfg(not(eds_oauth2_dynamic))]
-unsafe impl Send for AuthType {}
-#[cfg(not(eds_oauth2_dynamic))]
-unsafe impl Sync for AuthType {}
-
-#[cfg(not(eds_oauth2_dynamic))]
-static AUTH_TYPE: OnceLock<AuthType> = OnceLock::new();
+static AUTH_TYPE: OnceLock<Forever<CamelServiceAuthType>> = OnceLock::new();
 
 /// The instance struct. Nothing of our own: the mechanism is a *declaration*,
 /// and what declares it is the class.
@@ -318,16 +306,23 @@ pub const MECHANISM: &CStr = OAUTH2_AUTH_METHOD;
 pub fn auth_type() -> *mut CamelServiceAuthType {
     AUTH_TYPE
         .get_or_init(|| {
-            AuthType(Box::into_raw(Box::new(CamelServiceAuthType {
-                name: NAME.as_ptr(),
-                description: DESCRIPTION.as_ptr(),
-                // The string both of Evolution's lookups key on — see the
-                // module docs.
-                authproto: OAUTH2_AUTH_METHOD.as_ptr(),
-                need_password: GFALSE,
-            })))
+            // SAFETY: leaked, so nothing can free it or move it. Camel writes
+            // the two translatable fields exactly once, from inside
+            // `camel_provider_register`, which this module reaches from
+            // `provider::register` before the provider (and so the auth type)
+            // is visible to anything else.
+            unsafe {
+                Forever::new(Box::into_raw(Box::new(CamelServiceAuthType {
+                    name: NAME.as_ptr(),
+                    description: DESCRIPTION.as_ptr(),
+                    // The string both of Evolution's lookups key on, see the
+                    // module docs.
+                    authproto: OAUTH2_AUTH_METHOD.as_ptr(),
+                    need_password: GFALSE,
+                })))
+            }
         })
-        .0
+        .as_ptr()
 }
 
 /// Where the mechanism is upstream's, so is the struct that describes it:

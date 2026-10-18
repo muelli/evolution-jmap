@@ -63,7 +63,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar, gssize};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::{fail, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::{guard, guard_ptr};
@@ -112,7 +112,11 @@ unsafe extern "C" fn get_message_sync(
             // Reported as the missing message it describes rather than asserted:
             // a vfunc is not the place to take the process down.
             let Some(uid) = read_string(message_uid) else {
-                return fail(error, &StoreError::NoMessage(String::new()));
+                return fail(
+                    error,
+                    &StoreError::NoMessage(String::new()),
+                    StoreError::to_gerror,
+                );
             };
             let uid = Id::new(uid);
 
@@ -128,12 +132,12 @@ unsafe extern "C" fn get_message_sync(
             }
 
             let Some(store) = parent_store(folder) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
 
             let source = match store.message_source(&uid) {
                 Ok(source) => source,
-                Err(failure) => return fail(error, &failure),
+                Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
             // Kept before it is parsed, not after: what is worth keeping is the
             // bytes the server sent, and a message this parser rejects is one
@@ -306,16 +310,4 @@ unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage
         }
         message.into_raw()
     }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> *mut CamelMimeMessage {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    ptr::null_mut()
 }

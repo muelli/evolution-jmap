@@ -126,8 +126,7 @@ use eds_sys::{
     e_source_collection_get_type, e_source_collection_set_calendar_enabled,
     e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
     e_source_collection_set_mail_enabled, e_source_get_extension, e_source_get_uid,
-    e_source_has_extension, e_source_security_get_secure, e_source_security_get_type,
-    e_source_security_set_method,
+    e_source_security_get_secure, e_source_security_get_type, e_source_security_set_method,
 };
 // The token-cache-key setter: whichever one the installed EDS actually has —
 // see the module comment on `credential-name`/`credential-store-id`.
@@ -137,7 +136,7 @@ use eds_sys::e_source_authentication_set_credential_name as set_credential_id;
 use eds_sys::e_source_authentication_set_credential_store_id as set_credential_id;
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_backend_core::oauth2::{OAUTH2_AUTH_METHOD, OAUTH2_METHOD};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -355,53 +354,45 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         e_source_security_get_type();
     }
 
-    // SAFETY: a valid source by this function's contract, and header constants;
-    // where an extension is present, the getter returns the source's own, which
-    // it owns and which outlives the call. Every string getter returns NULL or
-    // a NUL-terminated string owned by the extension.
-    let (identity, parts) = unsafe {
-        if e_source_has_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()) == GFALSE {
-            (None, None)
-        } else {
-            let collection: *mut ESourceCollection =
-                e_source_get_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
-            (
-                read_string(e_source_collection_get_identity(collection)),
-                Some(Parts {
-                    mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
-                    contacts: e_source_collection_get_contacts_enabled(collection) != GFALSE,
-                    calendars: e_source_collection_get_calendar_enabled(collection) != GFALSE,
-                }),
-            )
-        }
+    // SAFETY: a valid source by this function's contract, and each header
+    // constant names an extension of the type it is read as.
+    let collection =
+        unsafe { extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION) };
+    // SAFETY: as above.
+    let security =
+        unsafe { extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY) };
+    // SAFETY: as above.
+    let auth = unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     };
 
-    // SAFETY: as above.
-    let secure = unsafe {
-        if e_source_has_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()) == GFALSE {
-            true
-        } else {
-            let security: *mut ESourceSecurity =
-                e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
-            e_source_security_get_secure(security) != GFALSE
-        }
-    };
+    // SAFETY: a live extension, by `extension_if_present`'s contract. Every
+    // string getter returns NULL or a NUL-terminated string owned by the
+    // extension.
+    let (identity, parts) = collection.map_or((None, None), |collection| unsafe {
+        (
+            read_string(e_source_collection_get_identity(collection)),
+            Some(Parts {
+                mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
+                contacts: e_source_collection_get_contacts_enabled(collection) != GFALSE,
+                calendars: e_source_collection_get_calendar_enabled(collection) != GFALSE,
+            }),
+        )
+    });
 
     // SAFETY: as above.
-    let (host, port, user, auth_method) = unsafe {
-        if e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) == GFALSE {
-            (None, 0, None, None)
-        } else {
-            let auth: *mut ESourceAuthentication =
-                e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
-            (
-                read_string(e_source_authentication_get_host(auth)),
-                e_source_authentication_get_port(auth),
-                read_string(e_source_authentication_get_user(auth)),
-                read_string(e_source_authentication_get_method(auth)),
-            )
-        }
-    };
+    let secure =
+        security.is_none_or(|security| unsafe { e_source_security_get_secure(security) != GFALSE });
+
+    // SAFETY: as above.
+    let (host, port, user, auth_method) = auth.map_or((None, 0, None, None), |auth| unsafe {
+        (
+            read_string(e_source_authentication_get_host(auth)),
+            e_source_authentication_get_port(auth),
+            read_string(e_source_authentication_get_user(auth)),
+            read_string(e_source_authentication_get_method(auth)),
+        )
+    });
 
     // SAFETY: a valid source by this function's contract; `oauth2::read`
     // creates nothing and answers `Config::default()` (client id absent) for

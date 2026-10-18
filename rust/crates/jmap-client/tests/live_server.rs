@@ -1254,7 +1254,7 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
 /// confirms `isActive: false`, activates it via `onSuccessActivateScript`
 /// and confirms `isActive: true`, then destroys it.
 ///
-/// Two of this test's assertions pin real Stalwart v1.0.0 behaviour that
+/// Two of this test's assertions pin real Stalwart behaviour that
 /// diverges from RFC 9661, found while first writing this probe (a plain
 /// `onSuccessActivateScript: null` silently did nothing, so `keep_going`
 /// below had no way to reach a destroyable state until the divergence was
@@ -1328,8 +1328,8 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
         "the script does not show isActive: true after onSuccessActivateScript"
     );
 
-    // RFC 9661's own deactivation path: a documented no-op against Stalwart
-    // v1.0.0. See this test's doc comment.
+    // RFC 9661's own deactivation path: a documented no-op against Stalwart.
+    // See this test's doc comment.
     client
         .sieve_script_deactivate(&account_id)
         .expect("SieveScript/set deactivate (RFC shape) was rejected outright");
@@ -1638,7 +1638,7 @@ fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
 /// via [`EventSourceSubscription::drop_connection`], creates a mailbox during the
 /// disconnection gap, and verifies client reconnection behavior.
 ///
-/// On live Stalwart v1.0.0, the server emits no `id:` headers on SSE state events and
+/// On live Stalwart, the server emits no `id:` headers on SSE state events and
 /// does not replay missed events on reconnection. `EventSourceSubscription` surfaces
 /// [`EventSourceItem::Reconnected`], informing the caller of the gap so that the caller
 /// can perform a full resync. This test verifies that the gap notification is delivered,
@@ -1708,7 +1708,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
     let gap_stream_change = subscription.recv_timeout(Duration::from_secs(1));
     assert!(
         gap_stream_change.is_none(),
-        "Stalwart v1.0.0 sends no id lines and does not replay missed events on reconnect"
+        "Stalwart sends no id lines and does not replay missed events on reconnect"
     );
 
     // 5. Caller performs the required resync to recover missed changes.
@@ -4659,7 +4659,7 @@ fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calcu
 }
 
 /// STALWART-RFC-FINDINGS.md: Unauthenticated GET to the session
-/// resource on Stalwart v1.0.0 returns HTTP 200 OK with empty `accounts: {}`
+/// resource on Stalwart returns HTTP 200 OK with empty `accounts: {}`
 /// and `username: ""` rather than HTTP 401 Unauthorized with a WWW-Authenticate
 /// header. Verifies that `Client::connect` with `Credentials::none()` tolerates
 /// the response, deserializes the session, and accurately reports `is_anonymous()`.
@@ -4690,7 +4690,7 @@ fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
 }
 
 /// STALWART-RFC-FINDINGS.md: Mailbox/set create with whitespace-padded
-/// name trims the stored name on Stalwart v1.0.0, but omits the name property from
+/// name trims the stored name on Stalwart, but omits the name property from
 /// the `created` map, returning only `{"id": "<id>"}`. Verifies that `Client::mailbox_create`
 /// tolerates the omitted name, falls back to the requested name trimmed of whitespace,
 /// and returns the expected name matching what is stored on the server.
@@ -4743,7 +4743,7 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
 }
 
 /// STALWART-RFC-FINDINGS.md: CalendarEventNotification/set destroy
-/// with an unformatted ID silently drops it from the response map on Stalwart v1.0.0
+/// with an unformatted ID silently drops it from the response map on Stalwart
 /// rather than returning a notFound SetError in notDestroyed (RFC 8620 Section 5.3).
 /// Verifies that Client::calendar_event_notification_destroy tolerates the omitted ID
 /// and reports notFound instead of failing with a protocol error.
@@ -5302,7 +5302,7 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
     );
     assert!(
         fetched_card.online_services.is_none(),
-        "Stalwart v1.0.0 discards onlineServices entries lacking a uri upon storage (Finding 14)"
+        "Stalwart discards onlineServices entries lacking a uri upon storage (Finding 14)"
     );
 
     // 3. Clean up created contact:
@@ -5535,7 +5535,7 @@ fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
     assert_eq!(fetched_dir.list_as, Some(1));
     assert!(
         fetched_dir.label.is_none(),
-        "Stalwart v1.0.0 drops Directory.label on storage (Finding 26)"
+        "Stalwart drops Directory.label on storage (Finding 26)"
     );
 
     // Clean up created contact:
@@ -5627,7 +5627,7 @@ fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
     assert_eq!(
         contexts.get("internet"),
         Some(&serde_json::Value::Bool(true)),
-        "Stalwart v1.0.0 promotes TYPE=internet to context key 'internet' (Finding 15)"
+        "Stalwart promotes TYPE=internet to context key 'internet' (Finding 15)"
     );
 }
 
@@ -5679,7 +5679,7 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
         .expect("session core capability must advertise maxSizeUpload");
     assert_eq!(
         upload_limit, 50_000_000,
-        "Stalwart v1.0.0 advertises maxSizeUpload of 50 MB (50,000,000 bytes)"
+        "Stalwart advertises maxSizeUpload of 50 MB (50,000,000 bytes)"
     );
 
     // 1. Upload and download blobs of 1 MB, 10 MB, and 50 MB (the limit).

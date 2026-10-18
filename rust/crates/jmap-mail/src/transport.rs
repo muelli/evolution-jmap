@@ -59,11 +59,10 @@ use eds_sys::{
     camel_service_ref_session, camel_service_ref_settings, camel_transport_get_type,
 };
 use glib_sys::GType;
-use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
-use jmap_backend_core::marshal::dispatched_borrow;
+use jmap_backend_core::marshal::{checked_borrow_ptr, dispatched_borrow};
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
@@ -268,11 +267,9 @@ impl JmapTransport {
     fn service(&self) -> Option<*mut CamelService> {
         let ptr = ptr::from_ref(self).cast::<CamelService>().cast_mut();
         // SAFETY: `ptr` is `self` reinterpreted as its leading `GTypeInstance`
-        // field, checked against the target type before it is read any
-        // further, per the doc comment above.
-        let is_service =
-            unsafe { g_type_check_instance_is_a(ptr.cast(), camel_service_get_type()) };
-        (is_service != 0).then_some(ptr)
+        // field, which `checked_borrow_ptr` checks against the target type
+        // before it is read any further, per the doc comment above.
+        unsafe { checked_borrow_ptr(ptr, camel_service_get_type()) }
     }
 
     /// Fetches a fresh OAuth 2.0 access token for the account and installs it

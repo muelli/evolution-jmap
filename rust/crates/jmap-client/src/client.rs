@@ -354,7 +354,7 @@ impl Client {
     /// Whether the session document returned by the server is anonymous
     /// (empty username and no accessible accounts).
     ///
-    /// Stalwart v1.0.0 answers unauthenticated requests to the session
+    /// Stalwart answers unauthenticated requests to the session
     /// resource with HTTP 200 OK and an anonymous empty-accounts session
     /// rather than HTTP 401 Unauthorized with a WWW-Authenticate challenge
     /// (RFC 8620 Section 2 and Section 8.1). Callers can check this predicate

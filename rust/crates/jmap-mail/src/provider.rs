@@ -28,6 +28,7 @@ use eds_sys::{
 };
 use glib_sys::g_list_append;
 use gobject_sys::G_TYPE_INVALID;
+use jmap_backend_core::forever::Forever;
 use jmap_backend_core::i18n::{DOMAIN, N_};
 
 use crate::sasl::{auth_type, sasl_type};
@@ -104,20 +105,8 @@ const URL_FLAGS: CamelProviderURLFlags = (CAMEL_URL_NEED_HOST
     | CAMEL_URL_ALLOW_AUTH
     | CAMEL_URL_ALLOW_PASSWORD) as CamelProviderURLFlags;
 
-/// A registered provider, as a pointer Camel and this module both hold.
-///
-/// The `OnceLock` needs `Sync` and a raw pointer is not; the pointer is
-/// published once and only ever read afterwards, and what it points at is
-/// never freed.
-struct Registered(*mut CamelProvider);
-
-// SAFETY: the pointer is set once, under the OnceLock, and the struct it
-// points at is leaked — nothing can free it or move it, and nothing writes to
-// it after registration.
-unsafe impl Send for Registered {}
-unsafe impl Sync for Registered {}
-
-static PROVIDER: OnceLock<Registered> = OnceLock::new();
+/// The registered provider, a pointer Camel and this module both hold.
+static PROVIDER: OnceLock<Forever<CamelProvider>> = OnceLock::new();
 
 /// Builds the provider and hands it to Camel, once per process.
 ///
@@ -230,10 +219,13 @@ pub fn register() -> &'static CamelProvider {
         // later `camel_provider_get`; every pointer in it is 'static.
         let provider = Box::into_raw(provider);
         unsafe { camel_provider_register(provider) };
-        Registered(provider)
+        // SAFETY: leaked, so nothing can free it or move it, and nothing
+        // writes to it after registration, which happens before it is
+        // published.
+        unsafe { Forever::new(provider) }
     });
 
     // SAFETY: the pointer came from `Box::into_raw` above, was never freed,
     // and is not written to after registration.
-    unsafe { &*registered.0 }
+    unsafe { &*registered.as_ptr() }
 }
