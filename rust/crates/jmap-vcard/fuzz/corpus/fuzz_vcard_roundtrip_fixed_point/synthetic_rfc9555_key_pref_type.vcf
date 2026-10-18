@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:KEY Section Probe
+UID:key-rfc9555-1
+KEY;X-JMAP-KEY=k1;PREF=1;TYPE=work:https://keys.example.com/jane.cer
+KEY;TYPE=X509;ENCODING=b:QUJDREVGRw==
+END:VCARD
