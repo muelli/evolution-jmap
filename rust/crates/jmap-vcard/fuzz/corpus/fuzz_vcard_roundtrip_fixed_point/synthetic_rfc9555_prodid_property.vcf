@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:PRODID Section Probe
+UID:prodid-rfc9555-1
+PRODID:-//Acme Contacts//RFC9555 Probe 1.0//EN
+END:VCARD
