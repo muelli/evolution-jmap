@@ -732,3 +732,106 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod kind_noun_tests {
+    use super::*;
+
+    /// A name for each kind, not the same word for both: without this test a
+    /// `kind_noun` that always answers one fixed string still compiles.
+    #[test]
+    fn kind_noun_names_each_kind() {
+        assert_eq!(kind_noun(ChildKind::AddressBook), "address book");
+        assert_eq!(kind_noun(ChildKind::Calendar), "calendar");
+    }
+}
+
+#[cfg(test)]
+mod create_error_display_tests {
+    use crate::authenticate::LoginError;
+    use jmap_backend_core::source::SourceError;
+    use jmap_collection_sync::CreateFailure;
+
+    use super::*;
+
+    /// `CreateError`'s `Display` writes something for every variant; without
+    /// this test a `Display` that writes nothing still compiles and a
+    /// refused create reports as an empty error message.
+    #[test]
+    fn every_variant_displays_a_non_empty_message() {
+        let unknown_kind = CreateError::UnknownKind;
+        assert!(!unknown_kind.to_string().is_empty());
+
+        let login = CreateError::Login(LoginError::Account(SourceError::MissingHost));
+        assert_eq!(login.to_string(), SourceError::MissingHost.to_string());
+
+        let unserved = CreateError::Server(CreateFailure::Unserved(ChildKind::Calendar));
+        assert!(unserved.to_string().contains("calendar"));
+
+        let unwritable = CreateError::Unwritable(
+            ChildKind::AddressBook,
+            UnwritableSetting::UnknownProperty {
+                group: "Authentication",
+                key: "Host",
+            },
+        );
+        assert!(unwritable.to_string().contains("address book"));
+    }
+}
+
+#[cfg(test)]
+mod create_error_to_gerror_tests {
+    use super::*;
+
+    /// `UnknownKind` (and every variant but `Login` and a server `Client`
+    /// failure) goes through `invalid_arg_gerror`; without this test
+    /// `to_gerror` can be replaced with a function that always answers the
+    /// null pointer and nothing notices.
+    #[test]
+    fn unknown_kind_carries_the_invalid_arg_code_and_its_own_message() {
+        let error = CreateError::UnknownKind;
+        let gerror = error.to_gerror();
+        assert!(!gerror.is_null());
+        // SAFETY: a freshly allocated GError this test owns.
+        unsafe {
+            assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+            assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
+            let message = read_string((*gerror).message).unwrap();
+            assert_eq!(message, error.to_string());
+            glib_sys::g_error_free(gerror);
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_critical_tests {
+    use jmap_tracing_capture::capture;
+
+    use super::*;
+
+    /// With an account id, the line carries it as a structured field;
+    /// without this test `report_critical` can drop its body and nothing
+    /// notices.
+    #[test]
+    fn with_an_account_id_the_line_carries_it() {
+        let (_, entries) = capture(|| report_critical(Some("account-1"), "boom".to_owned()));
+        assert!(
+            entries
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "account-1"),
+            "expected an account_id=account-1 field, got {entries:?}"
+        );
+    }
+
+    /// With no account id, the line is still logged, just without that
+    /// field.
+    #[test]
+    fn with_no_account_id_the_line_is_still_logged() {
+        let (_, entries) = capture(|| report_critical(None, "boom".to_owned()));
+        assert!(!entries.is_empty(), "expected a critical entry, got none");
+        assert!(
+            entries.iter().all(|(_, name, _)| name != "account_id"),
+            "did not expect an account_id field, got {entries:?}"
+        );
+    }
+}
