@@ -53,6 +53,9 @@ gio-sys = { workspace = true }
 # `jmap-backend-core`'s subclass helpers.
 gobject-sys = { workspace = true }
 tracing = { workspace = true }
+# The PKCE verifiers `oauth2_service` stashes between the two halves of a
+# consent flow are wiped when they are replaced, redeemed or evicted.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 # Self dev-dependency to turn on `testing` (and so `detached()`) for this

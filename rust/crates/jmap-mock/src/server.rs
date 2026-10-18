@@ -943,7 +943,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                 id.clone(),
                 Account {
                     name: account.name.clone(),
-                    is_personal: true,
+                    is_personal: account.is_personal,
                     is_read_only: false,
                     account_capabilities,
                     extra: Default::default(),

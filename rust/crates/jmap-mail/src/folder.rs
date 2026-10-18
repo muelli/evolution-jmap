@@ -33,6 +33,7 @@
 //! The vfuncs a folder answers to — its summary, its messages — are not here
 //! yet; this is the type, and what one is constructed from.
 
+use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::ptr;
 
@@ -40,11 +41,13 @@ use std::ptr;
 use eds_sys::camel_pstring_strdup;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
-    CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
-    CamelService, CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
-    camel_offline_folder_get_type, camel_service_get_user_cache_dir,
+    CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED,
+    CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN,
+    CAMEL_MESSAGE_USER, CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder,
+    CamelOfflineFolderClass, CamelService, CamelStore, camel_folder_get_parent_store,
+    camel_folder_set_flags, camel_offline_folder_get_type, camel_service_get_user_cache_dir,
 };
-use glib_sys::{GType, gchar};
+use glib_sys::{GType, gchar, gint};
 #[cfg(camel_folder_search_object)]
 use glib_sys::{g_ptr_array_new, g_ptr_array_set_size};
 use gobject_sys::g_object_new;
@@ -265,6 +268,26 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: as above.
         unsafe { crate::cache::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
+        // And how two of its uids are ordered. `CamelFolder` fills this slot
+        // in with a compare that parses both uids as decimal numbers, which is
+        // IMAP's uid and not a JMAP id: every id that does not start with a
+        // digit parses as 0, so every pair compares equal and `sort_uids`,
+        // which sorts with this compare, leaves its array in whatever order it
+        // came. A JMAP id is an opaque string (RFC 8620 section 1.2), so the
+        // only order it has is the bytes'.
+        //
+        // SAFETY: as above.
+        unsafe { (*class.cast::<CamelFolderClass>()).cmp_uids = Some(cmp_uids) };
+
+        // And which flags a message keeps between sessions. `CamelFolder`
+        // fills this slot in with one that answers 0, which tells a caller
+        // that nothing set on a message is kept, not even its read state.
+        //
+        // SAFETY: as above.
+        unsafe {
+            (*class.cast::<CamelFolderClass>()).get_permanent_flags = Some(get_permanent_flags)
+        };
+
         // And what the folder answers when it is asked which of its messages
         // match an expression — which is not only the search bar: every
         // message-list view is one ("Unread Messages", "Hide Deleted
@@ -320,6 +343,43 @@ unsafe impl ObjectSubclass for JmapFolder {
             (*instance).cache.clear();
         };
     }
+}
+
+/// `CamelFolderClass.cmp_uids`: orders two uids by their bytes, the way
+/// `strcmp` would. A NULL uid compares equal to anything, which is what the
+/// default answers after its `g_return_val_if_fail`.
+unsafe extern "C" fn cmp_uids(
+    _folder: *mut CamelFolder,
+    uid1: *const gchar,
+    uid2: *const gchar,
+) -> gint {
+    if uid1.is_null() || uid2.is_null() {
+        return 0;
+    }
+    // SAFETY: Camel hands over two NUL-terminated uids that it keeps alive
+    // for the length of the call.
+    let (uid1, uid2) = unsafe { (CStr::from_ptr(uid1), CStr::from_ptr(uid2)) };
+    match uid1.cmp(uid2) {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+/// `CamelFolderClass.get_permanent_flags`: the flags the server keeps as
+/// keywords (RFC 8621 section 4.1.1), with `USER` for the labels, which are
+/// keywords too. Plus `DELETED`, which JMAP has no keyword for but Camel's
+/// summary keeps until the expunge, as IMAPX and evolution-ews also answer.
+extern "C" fn get_permanent_flags(_folder: *mut CamelFolder) -> u32 {
+    CAMEL_MESSAGE_ANSWERED
+        | CAMEL_MESSAGE_DELETED
+        | CAMEL_MESSAGE_DRAFT
+        | CAMEL_MESSAGE_FLAGGED
+        | CAMEL_MESSAGE_SEEN
+        | CAMEL_MESSAGE_FORWARDED
+        | CAMEL_MESSAGE_JUNK
+        | CAMEL_MESSAGE_NOTJUNK
+        | CAMEL_MESSAGE_USER
 }
 
 /// `CamelFolderClass.search_by_expression`, up to EDS 3.52: which of this

@@ -69,6 +69,26 @@ impl ChildKind {
     pub fn resource_id(self, collection: &Id) -> String {
         format!("{}:{}", self.prefix(), collection)
     }
+
+    /// The resource id of `collection` in the shared `account`:
+    /// `<kind>:<accountId>/<collectionId>`. The part after the colon is the
+    /// child's `[Resource] Identity`, which the book and calendar backends
+    /// split back into the account and the collection. JMAP ids cannot hold a
+    /// `/` (RFC 8620 §1.2), so the split is unambiguous.
+    pub fn shared_resource_id(self, account: &Id, collection: &Id) -> String {
+        format!("{}:{account}/{collection}", self.prefix())
+    }
+}
+
+/// The account and collection of a shared child's identity
+/// (`<accountId>/<collectionId>`), or `None` for a primary child's bare id.
+///
+/// The same rule as the backends' own reading: exactly one `/` with something
+/// on both sides. Anything else is left whole, as a primary id.
+pub fn split_shared_identity(identity: &str) -> Option<(&str, &str)> {
+    let (account, collection) = identity.split_once('/')?;
+    (!account.is_empty() && !collection.is_empty() && !collection.contains('/'))
+        .then_some((account, collection))
 }
 
 /// One `ESource` a populate creates, with everything its keyfile needs.
@@ -140,9 +160,27 @@ impl Fanout {
             .into_iter()
             .flat_map(|account| children(ChildKind::Calendar, account, &self.calendars));
 
+        // Shared children after the user's own, account by account in the
+        // order the session lists them.
+        let shared = self.shared.iter().flat_map(|listing| {
+            [ChildKind::AddressBook, ChildKind::Calendar]
+                .into_iter()
+                .filter(|kind| self.parts.wants(*kind))
+                .flat_map(move |kind| {
+                    listing
+                        .listing(kind)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(move |resource| {
+                            Child::for_shared_resource(kind, &listing.account, resource)
+                        })
+                })
+        });
+
         let mut seen: Vec<String> = Vec::new();
         books
             .chain(calendars)
+            .chain(shared)
             .filter(|child| {
                 let fresh = !seen.contains(&child.resource_id);
                 if fresh {
@@ -188,6 +226,38 @@ impl Child {
     }
 }
 
+impl Child {
+    /// The child source one collection of the shared `account` becomes.
+    ///
+    /// The display name carries the owner, `<collection> (<account name>)`,
+    /// so a shared "Calendar" is not mistaken for the user's own. Rights
+    /// narrow as for the user's own collections. It is offered for deletion
+    /// only when `myRights.mayDelete` says so: deleting it removes the owner's
+    /// collection for everyone, so a server that states no rights does not get
+    /// the permissive default the user's own collections get.
+    pub fn for_shared_resource(
+        kind: ChildKind,
+        account: &ServiceAccount,
+        resource: &Resource,
+    ) -> Self {
+        Self {
+            resource_id: kind.shared_resource_id(&account.id, &resource.id),
+            display_name: format!("{} ({})", resource.name, account.name),
+            remote_deletable: resource.deletable == Some(true),
+            ..Self::for_resource(kind, account, resource)
+        }
+    }
+
+    /// What `[Resource] Identity` carries for this child: the resource id
+    /// minus its kind, i.e. the bare collection id for the user's own
+    /// collections and `<accountId>/<collectionId>` for a shared one.
+    pub fn identity(&self) -> &str {
+        self.resource_id
+            .split_once(':')
+            .map_or(self.collection_id.as_str(), |(_, identity)| identity)
+    }
+}
+
 /// Reads `resource_id` back into the child it names.
 ///
 /// `None` is a resource id this backend did not write — a child of some other
@@ -224,6 +294,7 @@ mod tests {
 
     use crate::layout::{CollectionLayout, MailService};
     use crate::parts::Parts;
+    use crate::resources::SharedListing;
 
     fn account(id: &str) -> ServiceAccount {
         ServiceAccount {
@@ -247,6 +318,7 @@ mod tests {
     /// A fan-out of one account serving both collection kinds.
     fn fanout(address_books: Vec<Resource>, calendars: Vec<Resource>) -> Fanout {
         Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
@@ -348,6 +420,7 @@ mod tests {
         // Contacts and calendars resolve independently in `CollectionLayout`,
         // and a child that carries the wrong `accountId` fails every call.
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
@@ -368,6 +441,7 @@ mod tests {
         let mut contacts = account("A1");
         contacts.read_only = true;
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
@@ -414,6 +488,7 @@ mod tests {
         let mut writable_looking = resource("AB1", "Says writable");
         writable_looking.writable = Some(true);
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
@@ -474,6 +549,7 @@ mod tests {
         // no contacts and when the account holds no address book; neither is an
         // error and neither is a child.
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
@@ -495,6 +571,7 @@ mod tests {
         // cannot check. The module comment says so; this says so where it would
         // be noticed if someone added mail children without settling it.
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: Some(MailService {
@@ -509,5 +586,118 @@ mod tests {
         };
 
         assert!(fanout.children().is_empty());
+    }
+
+    fn shared(
+        id: &str,
+        books: Option<Vec<Resource>>,
+        calendars: Option<Vec<Resource>>,
+    ) -> SharedListing {
+        SharedListing {
+            account: ServiceAccount {
+                id: Id::new(id),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            address_books: books,
+            calendars,
+        }
+    }
+
+    #[test]
+    fn a_shared_collection_becomes_a_child_named_with_its_owner_after_the_users_own() {
+        let mut locked = resource("C1", "Team");
+        locked.writable = Some(false);
+        let mut fanout = fanout(vec![resource("AB1", "Personal")], vec![]);
+        fanout.shared = vec![shared(
+            "A2",
+            Some(vec![resource("AB1", "Contacts")]),
+            Some(vec![locked]),
+        )];
+
+        let children = fanout.children();
+        assert_eq!(
+            children
+                .iter()
+                .map(|child| (child.resource_id.as_str(), child.display_name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("addressbook:AB1", "Personal"),
+                ("addressbook:A2/AB1", "Contacts (bob@example.com)"),
+                ("calendar:A2/C1", "Team (bob@example.com)"),
+            ],
+            "the owner's AB1 is not the user's AB1: ids are per account"
+        );
+
+        let calendar = &children[2];
+        assert_eq!(calendar.account_id, Id::new("A2"));
+        assert_eq!(calendar.collection_id, Id::new("C1"));
+        assert_eq!(calendar.identity(), "A2/C1");
+        assert!(calendar.read_only, "myRights says it may not be written");
+        assert_eq!(children[0].identity(), "AB1");
+    }
+
+    #[test]
+    fn a_shared_collection_is_remote_deletable_only_when_my_rights_grants_it() {
+        let with = |id, deletable| {
+            let mut calendar = resource(id, "Team");
+            calendar.deletable = deletable;
+            calendar
+        };
+        let mut fanout = fanout(vec![], vec![]);
+        fanout.shared = vec![shared(
+            "A2",
+            None,
+            Some(vec![
+                with("C1", Some(true)),
+                with("C2", Some(false)),
+                with("C3", None),
+            ]),
+        )];
+
+        assert_eq!(
+            fanout
+                .children()
+                .iter()
+                .map(|child| (child.resource_id.as_str(), child.remote_deletable))
+                .collect::<Vec<_>>(),
+            [
+                ("calendar:A2/C1", true),
+                ("calendar:A2/C2", false),
+                // Unlike the user's own, absent rights do not offer the
+                // owner's collection for deletion.
+                ("calendar:A2/C3", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shared_kind_the_user_switched_off_or_that_was_not_listed_has_no_children() {
+        let mut fanout = fanout(vec![], vec![]);
+        fanout.parts = Parts {
+            contacts: false,
+            ..Parts::ALL
+        };
+        fanout.shared = vec![
+            shared("A2", Some(vec![resource("AB1", "Contacts")]), None),
+            shared("A3", None, Some(vec![resource("C1", "Team")])),
+        ];
+
+        assert_eq!(
+            fanout
+                .children()
+                .iter()
+                .map(|child| child.resource_id.as_str())
+                .collect::<Vec<_>>(),
+            ["calendar:A3/C1"]
+        );
+    }
+
+    #[test]
+    fn a_shared_identity_is_split_only_when_both_halves_are_there() {
+        assert_eq!(split_shared_identity("A2/C1"), Some(("A2", "C1")));
+        for whole in ["C1", "/C1", "A2/", "A/B/C", ""] {
+            assert_eq!(split_shared_identity(whole), None, "{whole:?}");
+        }
     }
 }

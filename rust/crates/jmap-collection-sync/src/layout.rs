@@ -131,6 +131,65 @@ impl CollectionLayout {
     }
 }
 
+/// An account shared with this login, and which collection kinds it offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedService {
+    /// The owner's account. Its `name` is the server's display string for the
+    /// account (RFC 8620 §1.6.2 gives "the email address representing the
+    /// owner" as the example), which is what tells the user whose it is.
+    pub account: ServiceAccount,
+    pub contacts: bool,
+    pub calendars: bool,
+}
+
+impl SharedService {
+    /// Whether the account offers collections of `kind`.
+    pub fn offers(&self, kind: ChildKind) -> bool {
+        match kind {
+            ChildKind::AddressBook => self.contacts,
+            ChildKind::Calendar => self.calendars,
+        }
+    }
+}
+
+impl CollectionLayout {
+    /// The accounts shared with this login that offer contacts or calendars,
+    /// in the session's account id order.
+    ///
+    /// Only `isPersonal: false` accounts: a second personal account is not a
+    /// share, and the layout above already decides which personal account is
+    /// used. A kind is offered only when the server and the account both list
+    /// its capability, and not when the server names this account as primary
+    /// for it.
+    pub fn shared_accounts(session: &Session) -> Vec<SharedService> {
+        let offers = |id: &Id, capability: &str| {
+            session.capabilities.contains_key(capability)
+                && session
+                    .accounts
+                    .get(id)
+                    .is_some_and(|account| account.account_capabilities.contains_key(capability))
+                && session.resolve_primary_account(capability) != Some(id)
+        };
+        session
+            .accounts
+            .iter()
+            .filter(|(_, account)| !account.is_personal)
+            .filter_map(|(id, account)| {
+                let shared = SharedService {
+                    account: ServiceAccount {
+                        id: id.clone(),
+                        name: account.name.clone(),
+                        read_only: account.is_read_only,
+                    },
+                    contacts: offers(id, CAPABILITY_CONTACTS),
+                    calendars: offers(id, CAPABILITY_CALENDARS),
+                };
+                (shared.contacts || shared.calendars).then_some(shared)
+            })
+            .collect()
+    }
+}
+
 /// The account serving `capability`, if this login has one.
 ///
 /// The inference (server capability, then `primaryAccounts`, then the sole
@@ -292,6 +351,84 @@ mod tests {
         let mail = named.mail.unwrap();
         assert_eq!(mail.account.id, Id::new("shared"));
         assert!(mail.can_send);
+    }
+
+    #[test]
+    fn a_shared_account_offering_calendars_and_contacts_is_listed_with_its_owner() {
+        let mut shared = account("bob@example.com", ALL);
+        shared["isPersonal"] = json!(false);
+        shared["isReadOnly"] = json!(true);
+        let accounts = json!({"a": account("Vera", ALL), "b": shared});
+
+        assert_eq!(
+            CollectionLayout::shared_accounts(&session(ALL, accounts, json!({}))),
+            [SharedService {
+                account: ServiceAccount {
+                    id: Id::new("b"),
+                    name: "bob@example.com".to_owned(),
+                    read_only: true,
+                },
+                contacts: true,
+                calendars: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_personal_account_is_never_a_shared_one() {
+        // Two personal accounts and no primary entry: the layout serves none
+        // of them, and neither is a share either.
+        let accounts = json!({"a": account("Vera", ALL), "b": account("Vera at work", ALL)});
+        assert_eq!(
+            CollectionLayout::shared_accounts(&session(ALL, accounts, json!({}))),
+            []
+        );
+    }
+
+    #[test]
+    fn a_shared_kind_needs_both_the_server_and_the_account_capability() {
+        let mut calendars_only = account("bob@example.com", &[CAPABILITY_CALENDARS]);
+        calendars_only["isPersonal"] = json!(false);
+        let mut mail_only = account("carol@example.com", &[CAPABILITY_MAIL]);
+        mail_only["isPersonal"] = json!(false);
+        let accounts = json!({"a": account("Vera", ALL), "b": calendars_only, "c": mail_only});
+
+        let shared = CollectionLayout::shared_accounts(&session(ALL, accounts.clone(), json!({})));
+        assert_eq!(shared.len(), 1, "a mail-only share is out of scope");
+        assert_eq!(shared[0].account.id, Id::new("b"));
+        assert!(shared[0].offers(ChildKind::Calendar));
+        assert!(!shared[0].offers(ChildKind::AddressBook));
+
+        // The server does not implement calendars: the account's word alone
+        // would make every request an unknownCapability.
+        assert_eq!(
+            CollectionLayout::shared_accounts(&session(
+                &[CAPABILITY_MAIL, CAPABILITY_CONTACTS],
+                accounts,
+                json!({})
+            )),
+            []
+        );
+    }
+
+    #[test]
+    fn a_shared_account_named_as_primary_is_not_listed_twice() {
+        let mut shared = account("Support", ALL);
+        shared["isPersonal"] = json!(false);
+        let accounts = json!({"a": account("Vera", ALL), "s": shared});
+
+        let named = session(ALL, accounts, json!({CAPABILITY_CALENDARS: "s"}));
+        assert_eq!(
+            CollectionLayout::from_session(&named).calendars.unwrap().id,
+            Id::new("s")
+        );
+        let shared = CollectionLayout::shared_accounts(&named);
+        assert_eq!(shared.len(), 1);
+        assert!(
+            !shared[0].calendars,
+            "its calendars are already the layout's own"
+        );
+        assert!(shared[0].contacts);
     }
 
     #[test]

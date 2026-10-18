@@ -645,13 +645,22 @@ The mapping reads only `ACTION:DISPLAY` with a duration `TRIGGER` and a
 The offset keeps its sign and drops a leading `+`. The mapping writes zero as
 `PT0S` or `-PT0S`.
 
+`ACKNOWLEDGED` (RFC 9074 §6.1) maps to `acknowledged` (RFC 8984 §4.5.2) in both
+directions. Both properties tell that the user dismissed the reminder at that
+instant. The value is a UTC date-time. The mapping writes it back with an upper
+case `Z`, so a save does not patch the value to itself. EDS writes this property
+when the user dismisses a reminder (`e_cal_util_set_alarm_acknowledged`). A
+series thus keeps its reminders for the later occurrences.
+
 The mapping drops these items on read:
 
 - `ACTION:AUDIO`, `EMAIL` and `PROCEDURE`
 - `TRIGGER;VALUE=DATE-TIME`
 - `REPEAT` and the `DURATION` of the alarm (the mapping keeps only the first
   trigger)
-- `ACKNOWLEDGED`
+- an `ACKNOWLEDGED` with a `TZID`, or one that does not name an instant
+  (RFC 9074 §6.1 does not allow it; the reminder then fires again, which is a
+  smaller loss than to lose the reminder)
 - the own `DESCRIPTION` and `SUMMARY` of the alarm
 - vendor properties
 
@@ -666,8 +675,9 @@ into one entry.
 
 The save replaces `alerts` whole. It does this only if `maps_alerts` is true for
 the event of the server. Without this rule, the save would delete an alert that
-the line cannot show (mail, sound, absolute trigger, `acknowledged`, any extra
-member). An acknowledged alert would also come back undismissed.
+the line cannot show (mail, sound, absolute trigger, an `acknowledged` that is
+not a UTC date-time, any extra member). The mapping draws `@type`, `trigger`,
+`action` and `acknowledged`.
 
 Why the mapping does not do more:
 

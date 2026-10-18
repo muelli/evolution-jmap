@@ -126,6 +126,7 @@ fn resource(id: &str) -> Resource {
 /// vectors gated the way [`Fanout::discover`] would have gated them.
 fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
     Fanout {
+        shared: Vec::new(),
         parts,
         layout: CollectionLayout {
             mail: None,

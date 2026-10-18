@@ -9,7 +9,7 @@
 eds-sys 24
 evo-sys 0
 example-module 64
-jmap-backend-book 95
+jmap-backend-book 98
 jmap-backend-book-module 4
 jmap-backend-cal 152
 jmap-backend-cal-module 4
@@ -24,7 +24,7 @@ jmap-config 225
 jmap-config-module 4
 jmap-functional 1
 jmap-ical 0
-jmap-mail 534
+jmap-mail 535
 jmap-mail-sync 0
 jmap-mock 0
 jmap-proto 0

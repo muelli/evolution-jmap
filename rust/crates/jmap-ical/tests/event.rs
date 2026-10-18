@@ -1868,6 +1868,94 @@ fn a_reminder_relative_to_the_start_says_so_no_more_than_the_default_does() {
 }
 
 #[test]
+fn a_dismissed_reminder_says_when_it_was_dismissed() {
+    // RFC 8984 §4.5.2's `acknowledged` and RFC 9074 §6.1's ACKNOWLEDGED are the
+    // same instant, and what both mean is the same rule: a reminder triggered on
+    // or before it is not shown again. That is how EDS's reminder watcher reads
+    // the property, so a weekly meeting dismissed once still reminds next week.
+    let mut dismissed = quarter_of_an_hour_before();
+    dismissed["acknowledged"] = json!("2026-01-15T12:46:00Z");
+    let event = reminded([("k1", dismissed)]);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "ACKNOWLEDGED"),
+        "ACKNOWLEDGED:20260115T124600Z"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").alerts,
+        event.alerts,
+        "the dismissal survives the round trip"
+    );
+    assert!(maps_alerts(&event));
+}
+
+#[test]
+fn a_dismissal_with_no_instant_to_name_is_not_drawn() {
+    // RFC 9074 §6.1 writes the property in UTC only, so a local time or a
+    // fraction of a second has no ACKNOWLEDGED to be. Left off, it would be
+    // deleted by the next save and the reminder would fire again.
+    for acknowledged in [
+        json!("2026-01-15T12:46:00"),
+        json!("2026-01-15T12:46:00.5Z"),
+        json!("yesterday"),
+        json!(""),
+        Value::Null,
+        json!(1_768_481_160),
+    ] {
+        let mut dismissed = quarter_of_an_hour_before();
+        dismissed["acknowledged"] = acknowledged.clone();
+        let event = reminded([("k1", dismissed)]);
+
+        assert!(!maps_alerts(&event), "{acknowledged} was called covered");
+        assert!(
+            without(&event_to_ical(&event), "BEGIN:VALARM"),
+            "{acknowledged} was drawn"
+        );
+    }
+}
+
+#[test]
+fn a_dismissal_the_alarm_states_in_utc_is_read() {
+    // Lower case and an explicit VALUE are the same property; a time in a zone
+    // or a value that is no instant is not one RFC 9074 §6.1 admits, and the
+    // reminder is read without it, since firing again is the smaller loss than
+    // losing the reminder.
+    for (line, acknowledged) in [
+        (
+            "ACKNOWLEDGED:20260824T120000Z",
+            Some("2026-08-24T12:00:00Z"),
+        ),
+        (
+            "ACKNOWLEDGED;VALUE=DATE-TIME:20260824T120000Z",
+            Some("2026-08-24T12:00:00Z"),
+        ),
+        (
+            "acknowledged:20260824T120000z",
+            Some("2026-08-24T12:00:00Z"),
+        ),
+        ("ACKNOWLEDGED;TZID=Europe/Berlin:20260824T140000", None),
+        ("ACKNOWLEDGED:20261324T120000Z", None),
+        ("ACKNOWLEDGED:NOT_A_VALID_DATE_TIME", None),
+        ("ACKNOWLEDGED:", None),
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:ack\r\nDTSTART:20260115T100000Z\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\n\
+             {line}\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let mut expected = quarter_of_an_hour_before();
+        if let Some(acknowledged) = acknowledged {
+            expected["acknowledged"] = json!(acknowledged);
+        }
+
+        let alerts = ical_to_event(&ics).expect("parse").alerts;
+        assert_eq!(alerts, Some([("k1".to_owned(), expected)].into()), "{line}");
+    }
+}
+
+#[test]
 fn an_event_with_no_reminders_carries_no_valarm() {
     let ics = event_to_ical(&fixture_event());
 
@@ -1891,10 +1979,9 @@ fn a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn() {
         // A trigger at an absolute instant (RFC 8984 §4.5.2), which is not the
         // duration this mapping writes.
         json!({"@type": "Alert", "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T12:45:00Z"}}),
-        // A reminder the user has already dismissed or snoozed (RFC 9074 §6.1),
-        // which a VALARM states and this mapping does not write: replacing the
-        // property would un-dismiss it.
-        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "acknowledged": "2026-01-15T12:46:00Z"}),
+        // A dismissal at a local time, which RFC 9074 §6.1's ACKNOWLEDGED cannot
+        // state: replacing the property would un-dismiss it.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "acknowledged": "2026-01-15T12:46:00"}),
         // Something else about the alert that is not drawn at all.
         json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "relatedTo": {}}),
         // Not an Alert, not an object, and no trigger at all.
@@ -2098,10 +2185,10 @@ fn a_reminder_one_instance_could_not_show_is_flagged_rather_than_drawn() {
     // down, asked of the same `drawn_alert`: an alert left off the instance's
     // component is one the next save deletes from that occurrence.
     let mut dismissed = quarter_of_an_hour_before();
-    dismissed["acknowledged"] = json!("2026-01-29T12:46:00Z");
+    dismissed["acknowledged"] = json!("2026-01-29T12:46:00");
     for alerts in [
-        // A reminder the user has already dismissed (RFC 9074 §6.1), which a
-        // VALARM cannot say.
+        // A dismissal at a local time, which RFC 9074 §6.1's ACKNOWLEDGED cannot
+        // state.
         json!({"k2": dismissed}),
         // A reminder that sends mail, and one that fires at an instant rather than
         // at an offset: neither of which this mapping writes.
@@ -10329,7 +10416,6 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
                 "X-APPLE-STRUCTURED-LOCATION",
                 "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR",
                 "X-WR-ALARMUID",
-                "ACKNOWLEDGED",
             ],
         },
         RealExporterTestCase {
@@ -10957,8 +11043,8 @@ fn real_exporter_fixture_apple_calendar_macos_detailed_roundtrip() {
     // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
     assert!(
-        !export1.contains("ACKNOWLEDGED"),
-        "ACKNOWLEDGED must be dropped on export"
+        export1.contains("ACKNOWLEDGED:20260824T120000Z\r\n"),
+        "ACKNOWLEDGED must be kept on export"
     );
     assert!(
         !export1.contains("X-WR-ALARMUID"),
@@ -11935,7 +12021,7 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert_eq!(evo_reparsed.alerts, evo_event.alerts);
     assert_eq!(event_to_ical(&evo_reparsed), evo_out);
 
-    // 2. Apple Calendar Export: 3 VALARMs (-P1D with ACKNOWLEDGED/X-WR-ALARMUID, -PT2H, -PT15M; AUDIO and absolute trigger dropped)
+    // 2. Apple Calendar Export: 3 VALARMs (-P1D with ACKNOWLEDGED/X-WR-ALARMUID, -PT2H, -PT15M; AUDIO and absolute trigger dropped, ACKNOWLEDGED kept)
     let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
     let apple_event = ical_to_event(apple_ics).expect("parse apple export");
     let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
@@ -11958,7 +12044,7 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert!(apple_out.contains("UID:E451D045-FA1B-475D-85B6-06F6F505A321\r\n"));
     assert!(apple_out.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
     assert!(apple_out.contains("UID:apple-alarm-offset-15m\r\n"));
-    assert!(!apple_out.contains("ACKNOWLEDGED"));
+    assert_eq!(apple_out.matches("ACKNOWLEDGED:").count(), 1);
     assert!(!apple_out.contains("X-WR-ALARMUID"));
     assert!(!apple_out.contains("ACTION:AUDIO"));
     assert!(!apple_out.contains("VALUE=DATE-TIME"));
@@ -12270,7 +12356,7 @@ fn alerts_audit_action_types_and_trigger_types_decision_matrix() {
     );
     assert!(!maps_alerts(&abs_event), "AbsoluteTrigger must be refused");
 
-    // Acknowledged timestamp on alert
+    // Acknowledged timestamp on alert: drawn as RFC 9074 §6.1 ACKNOWLEDGED
     let mut ack_event = valid_event.clone();
     ack_event.alerts = Some(
         [(
@@ -12285,8 +12371,8 @@ fn alerts_audit_action_types_and_trigger_types_decision_matrix() {
         .into(),
     );
     assert!(
-        !maps_alerts(&ack_event),
-        "acknowledged alert must be refused"
+        maps_alerts(&ack_event),
+        "acknowledged alert must be covered"
     );
 }
 
@@ -13807,7 +13893,7 @@ fn real_exporter_corpus_alarm_shapes_roundtrip_characterization() {
     assert!(apple_export1.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
     assert!(apple_export1.contains("UID:apple-alarm-offset-15m\r\n"));
     assert!(apple_export1.contains("DESCRIPTION:Design Systems Workshop\r\n"));
-    assert!(!apple_export1.contains("ACKNOWLEDGED"));
+    assert!(apple_export1.contains("ACKNOWLEDGED:20260824T120000Z\r\n"));
     assert!(!apple_export1.contains("X-WR-ALARMUID"));
     assert!(!apple_export1.contains("ACTION:AUDIO"));
     assert!(!apple_export1.contains("VALUE=DATE-TIME"));
@@ -14023,7 +14109,7 @@ fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
         "maps_alerts must refuse AbsoluteTrigger"
     );
 
-    // 4. Acknowledged timestamp (RFC 9074 §6.1 / snoozed alert) -> refused to prevent un-dismissing
+    // 4. Acknowledged timestamp (RFC 9074 §6.1 / snoozed alert) -> drawn as ACKNOWLEDGED
     let mut ack_event = base_event.clone();
     ack_event.alerts = Some(BTreeMap::from([(
         "a1".to_owned(),
@@ -14038,8 +14124,8 @@ fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
         }),
     )]));
     assert!(
-        !maps_alerts(&ack_event),
-        "maps_alerts must refuse acknowledged alert"
+        maps_alerts(&ack_event),
+        "maps_alerts must cover acknowledged alert"
     );
 
     // 5. Custom description on Alert -> refused to prevent clobbering
@@ -16606,10 +16692,11 @@ fn valarm_multiple_alarms_complex_streams_and_id_collision_fidelity() {
 }
 
 #[test]
-fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
+fn valarm_acknowledged_format_variations_and_mapping_boundaries_matrix() {
     // 1. Inbound parsing of RFC 9074 §6.1 ACKNOWLEDGED:
-    // Exporters emit varied ACKNOWLEDGED forms. Parser must safely ignore ACKNOWLEDGED
-    // and preserve the display alarm without contaminating CalendarEvent.extra.
+    // Exporters emit varied ACKNOWLEDGED forms. Parser reads the UTC ones into
+    // Alert.acknowledged and preserves the display alarm without contaminating
+    // CalendarEvent.extra either way.
     for (name, ack_line) in [
         ("standard_utc", "ACKNOWLEDGED:20260824T120000Z\r\n"),
         (
@@ -16673,7 +16760,7 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
         None
     );
 
-    // 2. Outbound export and refusal boundaries:
+    // 2. Outbound export and mapping boundaries:
     // Event with single alert carrying acknowledged timestamp:
     let single_ack_event = reminded([(
         "k1",
@@ -16684,13 +16771,12 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
             "acknowledged": "2026-08-24T12:00:00Z",
         }),
     )]);
-    assert!(!maps_alerts(&single_ack_event));
-    assert!(without(&event_to_ical(&single_ack_event), "BEGIN:VALARM"));
+    assert!(maps_alerts(&single_ack_event));
+    assert!(event_to_ical(&single_ack_event).contains("ACKNOWLEDGED:20260824T120000Z\r\n"));
 
-    // Multi-alarm event where 1 of 3 alerts has acknowledged:
-    // Crucial safety boundary: maps_alerts must return false for the ENTIRE event,
-    // and event_to_ical must emit only the 2 unacknowledged alarms.
-    // Refusing the whole event prevents jmap-cal-sync from saving alerts and un-dismissing k2.
+    // Multi-alarm event where 1 of 3 alerts has acknowledged: all three are
+    // drawn and only k2 carries ACKNOWLEDGED, so a save writes the dismissal
+    // back with the set instead of un-dismissing k2.
     let partial_ack_event = reminded([
         ("k1", quarter_of_an_hour_before()),
         (
@@ -16712,15 +16798,24 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
         ),
     ]);
     assert!(
-        !maps_alerts(&partial_ack_event),
-        "multi-alarm event with one acknowledged alert must be refused by maps_alerts"
+        maps_alerts(&partial_ack_event),
+        "multi-alarm event with one acknowledged alert must be covered by maps_alerts"
     );
     let partial_ics = event_to_ical(&partial_ack_event);
-    assert_eq!(partial_ics.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert_eq!(partial_ics.matches("BEGIN:VALARM\r\n").count(), 3);
     assert!(partial_ics.contains("UID:k1\r\n"));
+    assert!(partial_ics.contains("UID:k2\r\n"));
     assert!(partial_ics.contains("UID:k3\r\n"));
-    assert!(!partial_ics.contains("UID:k2\r\n"));
-    assert!(!partial_ics.contains("ACKNOWLEDGED"));
+    assert_eq!(
+        partial_ics
+            .matches("ACKNOWLEDGED:20260824T110000Z\r\n")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ical_to_event(&partial_ics).expect("reparse").alerts,
+        partial_ack_event.alerts
+    );
 
     // 3. Recurrence overrides where an instance has an acknowledged alert:
     let override_with_ack = json!({
@@ -16735,14 +16830,14 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
         }
     });
     assert!(
-        !maps_override("2026-01-22T13:00:00", &override_with_ack),
-        "recurrence override with acknowledged alert must be refused by maps_override"
+        maps_override("2026-01-22T13:00:00", &override_with_ack),
+        "recurrence override with acknowledged alert must be covered by maps_override"
     );
 
     // 4. Value variations of acknowledged field in JSCalendar:
-    // All variations of acknowledged outside absent/None must be refused.
+    // Every variation that is not a UTCDateTime must be refused.
     for (name, ack_val) in [
-        ("valid_utc_string", json!("2026-08-24T12:00:00Z")),
+        ("lowercase_zulu", json!("2026-08-24T12:00:00z")),
         ("local_string", json!("2026-08-24T12:00:00")),
         ("empty_string", json!("")),
         ("null_value", Value::Null),
@@ -17424,14 +17519,12 @@ END:VCALENDAR\r\n";
 }
 
 #[test]
-fn differential_oracle_valarm_acknowledged_dropped_on_import_and_refused_by_maps_alerts() {
+fn differential_oracle_valarm_acknowledged_maps_to_alert_acknowledged_like_stalwart() {
     // Compared with Stalwart's own CalendarEvent/parse:
     // RFC 9074 section 6.1 defines ACKNOWLEDGED timestamp for dismissed/snoozed alarms.
     // Stalwart v1.0.0 maps ACKNOWLEDGED to Alert.acknowledged (RFC 8984 section 4.5.2).
-    // In contrast, jmap-ical drops ACKNOWLEDGED on import without polluting extra.
-    // Outbound safety: maps_alerts returns false for any event where an alert has
-    // acknowledged set, preventing whole-property replacement from un-dismissing
-    // snoozed alarms on the JMAP server.
+    // jmap-ical maps it the same way in both directions, so a whole-property
+    // replacement carries the dismissal back instead of un-dismissing the alarm.
     let ics = "BEGIN:VCALENDAR\r\n\
 VERSION:2.0\r\n\
 PRODID:-//Example Exporter//EN\r\n\
@@ -17455,19 +17548,19 @@ END:VCALENDAR\r\n";
     let alerts = event.alerts.as_ref().expect("alerts present");
     let alert = alerts.get("alarm-ack-1").expect("alarm-ack-1 parsed");
     assert_eq!(
-        alert.get("acknowledged"),
-        None,
-        "ACKNOWLEDGED must be dropped on import"
+        alert["acknowledged"], "2026-09-04T12:00:00Z",
+        "ACKNOWLEDGED must be read on import"
     );
 
-    // Dropped ACKNOWLEDGED does not pollute extra
+    // ACKNOWLEDGED does not pollute extra
     assert!(!event.extra.contains_key("ACKNOWLEDGED"));
     assert!(!event.extra.contains_key("acknowledged"));
 
-    // Event parsed without acknowledged passes maps_alerts
+    // Event parsed with acknowledged passes maps_alerts and draws it back
     assert!(maps_alerts(&event));
+    assert!(event_to_ical(&event).contains("ACKNOWLEDGED:20260904T120000Z\r\n"));
 
-    // Server-side event carrying acknowledged is refused by maps_alerts
+    // Server-side event carrying acknowledged is covered as well
     let mut server_event = event.clone();
     let mut server_alerts = alerts.clone();
     server_alerts.insert(
@@ -17484,8 +17577,8 @@ END:VCALENDAR\r\n";
     );
     server_event.alerts = Some(server_alerts);
     assert!(
-        !maps_alerts(&server_event),
-        "maps_alerts must refuse acknowledged alerts to prevent clobbering snooze state"
+        maps_alerts(&server_event),
+        "maps_alerts must cover acknowledged alerts, which the document states"
     );
 }
 
@@ -44146,9 +44239,9 @@ fn differential_oracle_alerts_valarm_display_action_acknowledged_and_override_re
     assert!(alerts.contains_key("alarm-uid-42"));
     let alert = &alerts["alarm-uid-42"];
     assert_eq!(alert["action"], "display");
-    assert_eq!(alert.get("acknowledged"), None);
+    assert_eq!(alert["acknowledged"], "2026-08-24T12:00:00Z");
     assert_eq!(alert["trigger"]["offset"], "-PT15M");
-    // Since acknowledged is dropped on import, the parsed event passes maps_alerts
+    // The acknowledged instant is read and drawn back, so the event passes maps_alerts
     assert!(maps_alerts(&ev));
 
     // 2. Non-display actions (ACTION:AUDIO, ACTION:EMAIL) are filtered out

@@ -508,16 +508,16 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::all_changes` after each mutation, same as
 /// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]:
 /// `jmap-book-sync`'s own polling loop drives `ContactCard/changes`
-/// (`lib.rs:206`), and a real server's state tokens and
+/// (`BookSync::get_changes`), and a real server's state tokens and
 /// created/updated/destroyed classification for this type had no
 /// live-server coverage until now.
 ///
 /// Also checks `Client::contact_query` right after the create and right
 /// after the destroy: `jmap-book-sync`'s `list_existing_sync` enumerates an
 /// address book via exactly `ContactCardQueryFilter::in_address_book`
-/// (`lib.rs:88`), the backend's actual listing path, which (unlike
-/// `get`/`set`/`changes` above) had no live-server coverage at all before
-/// this test.
+/// (`BookSync::list_existing`), the backend's actual listing path, which
+/// (unlike `get`/`set`/`changes` above) had no live-server coverage at all
+/// before this test.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -741,10 +741,10 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
 ///
 /// Also checks `Client::event_query` right after the create and right after
 /// the destroy: `jmap-cal-sync::list_existing_sync` enumerates a calendar via
-/// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:101`), the
-/// backend's actual listing path, which (unlike `get`/`set`/`changes`
-/// above) had no live-server coverage at all before this test. Mirrors the
-/// `ContactCard/query` check
+/// exactly `CalendarEventQueryFilter::in_calendar`
+/// (`CalSync::list_existing`), the backend's actual listing path, which
+/// (unlike `get`/`set`/`changes` above) had no live-server coverage at all
+/// before this test. Mirrors the `ContactCard/query` check
 /// [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
 /// already makes for the address-book listing path.
 #[test]
@@ -5152,6 +5152,92 @@ END:VCALENDAR\r\n";
         parse_res.not_parsable.as_deref(),
         Some([blob_id].as_slice()),
         "a multi-event blob must be reported as notParsable"
+    );
+}
+
+/// Finding 21: `ContactCard/parse` silently drops all cards past the first in a multi-VCARD blob.
+///
+/// When a `.vcf` blob containing multiple concatenated `VCARD` components (RFC 6350 Section 3.3)
+/// is uploaded and passed to `ContactCard/parse`, Stalwart parses only the first component
+/// into a bare `Card` object in `parsed`. The subsequent cards are silently discarded,
+/// leaving no trace in `parsed` and without reporting the blob in `notParsable`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_parse_silently_drops_cards_past_the_first_in_multi_vcard_blob_through_the_real_api()
+{
+    let Some(client) = connect_for_write() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CONTACTS_PARSE)
+    {
+        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+        return;
+    }
+
+    let suffix = unique_suffix();
+    let uid1 = format!("multi-vcard-probe-1-{}", suffix);
+    let uid2 = format!("multi-vcard-probe-2-{}", suffix);
+    let full_name_1 = format!("First Card {}", suffix);
+    let full_name_2 = format!("Second Card {}", suffix);
+    let vcf = format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:4.0\r\n\
+         UID:{uid1}\r\n\
+         FN:{full_name_1}\r\n\
+         N:Probe;First;;;\r\n\
+         END:VCARD\r\n\
+         BEGIN:VCARD\r\n\
+         VERSION:4.0\r\n\
+         UID:{uid2}\r\n\
+         FN:{full_name_2}\r\n\
+         N:Probe;Second;;;\r\n\
+         END:VCARD\r\n"
+    );
+
+    let upload = client
+        .upload_blob(&account_id, "text/vcard", vcf.into_bytes())
+        .expect("blob upload must succeed against the real server");
+
+    let parse_res = client
+        .contact_card_parse(&ContactCardParseRequest::new(
+            account_id.clone(),
+            [upload.blob_id.clone()],
+        ))
+        .expect("contact_card_parse succeeds on wire");
+
+    let parsed_map = parse_res
+        .parsed
+        .expect("Stalwart returns a parsed map containing only the first card");
+    let first_card = parsed_map
+        .get(&upload.blob_id)
+        .expect("uploaded blobId must be present in parsed map");
+    assert_eq!(
+        first_card.uid.as_deref(),
+        Some(uid1.as_str()),
+        "first card must be parsed"
+    );
+    assert_eq!(
+        first_card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name_1.as_str()),
+        "first card name must match"
+    );
+
+    // Finding 21: the second vCard in the multi-card blob was silently dropped.
+    // Stalwart does not report the blob in notParsable:
+    assert!(
+        parse_res
+            .not_parsable
+            .as_ref()
+            .is_none_or(|np| !np.contains(&upload.blob_id)),
+        "Finding 21: Stalwart does not report the multi-vCard blob in notParsable despite dropping the second card"
     );
 }
 
