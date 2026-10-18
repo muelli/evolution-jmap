@@ -9,6 +9,7 @@ use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
     cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
 };
+use jmap_backend_core::i18n::translate_with;
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_string};
 use jmap_book_sync::{BookSync, SyncError};
 use jmap_proto::State;
@@ -427,5 +428,24 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         // A vCard Evolution handed us that the mapping cannot read: the
         // argument was bad, not the server.
         SyncError::VCard(_) => invalid_arg_gerror(&failure.to_string()),
+        SyncError::PhotoTooLarge { photo_octets } => invalid_arg_gerror(&translate_with(
+            // TRANSLATORS: shown when a contact could not be saved because of its picture. %1$s is the picture's size, such as "1.2 MB".
+            c"The server cannot store a contact with a picture this large (%1$s), so the contact was not saved. Choose a smaller picture and save it again.",
+            &[format_size(*photo_octets).as_str()],
+        )),
+    }
+}
+
+/// `octets` as the user's desktop states a file size ("1.2 MB"), localised.
+fn format_size(octets: u64) -> String {
+    // SAFETY: g_format_size takes any value and returns a new, NUL-terminated
+    // string that the caller frees with g_free; it is copied out first.
+    unsafe {
+        let text = glib_sys::g_format_size(octets);
+        let size = std::ffi::CStr::from_ptr(text)
+            .to_string_lossy()
+            .into_owned();
+        glib_sys::g_free(text.cast());
+        size
     }
 }

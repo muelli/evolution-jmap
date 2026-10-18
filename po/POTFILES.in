@@ -49,6 +49,7 @@
 #   them deliberately: translating them makes bug reports unreadable and gains
 #   no user anything.
 
+rust/crates/jmap-backend-book/src/ops.rs
 rust/crates/jmap-backend-cal/src/ops.rs
 rust/crates/jmap-backend-core/src/connect.rs
 rust/crates/jmap-backend-core/src/oauth2.rs

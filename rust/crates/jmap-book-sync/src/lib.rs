@@ -135,7 +135,7 @@ impl BookSync {
                         %error,
                         "contact card create failed"
                     );
-                    return Err(error.into());
+                    return Err(refused(&card, error));
                 }
             };
             // RFC 8620 §5.3 only requires the server to report properties
@@ -171,7 +171,7 @@ impl BookSync {
                 %error,
                 "contact card update failed"
             );
-            return Err(error.into());
+            return Err(refused(&card, error));
         }
         self.load_contact(uid)
     }
@@ -339,9 +339,82 @@ fn revision_of(vcard: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// What to report for a save of `card` that the server refused with `error`.
+///
+/// A refusal for size is reported as [`SyncError::PhotoTooLarge`] when the
+/// card's inline photo is most of the card, because then the photo is what
+/// the user has to change. RFC 9610 advertises no limit on a card's size, so
+/// this cannot be checked before sending; the refusal is the first the client
+/// hears of the limit. Any other refusal, or one for a card that is mostly
+/// something else, keeps the server's own error.
+fn refused(card: &ContactCard, error: jmap_client::Error) -> SyncError {
+    let photos: Vec<&str> = card
+        .media
+        .iter()
+        .flat_map(|media| media.values())
+        .filter(|media| media.kind.as_deref() == Some("photo"))
+        .map(|media| media.uri.as_str())
+        .filter(|uri| uri.starts_with("data:"))
+        .collect();
+    let inline_octets: usize = photos.iter().map(|uri| uri.len()).sum();
+    let card_octets = serde_json::to_vec(card).map_or(0, |json| json.len());
+    if inline_octets == 0 || inline_octets * 2 < card_octets || !is_refused_for_size(&error) {
+        return error.into();
+    }
+    let photo_octets = photos.iter().map(|uri| decoded_octets(uri)).sum();
+    SyncError::PhotoTooLarge { photo_octets }
+}
+
+/// Whether `error` refuses a request or an object for its size.
+fn is_refused_for_size(error: &jmap_client::Error) -> bool {
+    use jmap_proto::error::set;
+    match error {
+        // RFC 8620 section 5.3: the object exceeds a server limit.
+        jmap_client::Error::Set(error) if error.error_type == set::TOO_LARGE => true,
+        // Real Stalwart (0.16) refuses a card over its own limit (512 KiB) as
+        // `invalidProperties` with no `properties`, and says why only in the
+        // description: "Contact size 844872 exceeds the maximum allowed size
+        // of 524288 bytes."
+        jmap_client::Error::Set(error) if error.error_type == set::INVALID_PROPERTIES => {
+            error.properties.as_deref().is_none_or(<[String]>::is_empty)
+                && error
+                    .description
+                    .as_deref()
+                    .is_some_and(|text| text.contains("exceeds the maximum allowed size"))
+        }
+        // RFC 8620 section 2: over `maxSizeRequest`. The client refuses this
+        // before sending; the server's own refusal is the same limit.
+        jmap_client::Error::RequestTooLarge { .. } => true,
+        jmap_client::Error::Http {
+            status: 400,
+            problem: Some(problem),
+        } => {
+            problem.error_type == "urn:ietf:params:jmap:error:limit"
+                && problem.extra.get("limit").and_then(Value::as_str) == Some("maxSizeRequest")
+        }
+        _ => false,
+    }
+}
+
+/// The size of the content a `data:` URI carries (RFC 2397), decoded from
+/// base64 when it says so. Approximate for anything but base64, which is
+/// what every inline `PHOTO` is.
+fn decoded_octets(uri: &str) -> u64 {
+    let Some((header, payload)) = uri.split_once(',') else {
+        return 0;
+    };
+    if !header.ends_with(";base64") {
+        return payload.len() as u64;
+    }
+    let payload = payload.trim_end_matches('=');
+    (payload.len() as u64 * 3) / 4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jmap_proto::error::{RequestError, SetError, set};
+    use serde_json::json;
 
     /// Revisions outlive the process in the EDS cache, so the digest is
     /// pinned to the published FNV-1a 64-bit test vectors: any drift would
@@ -351,5 +424,54 @@ mod tests {
         assert_eq!(revision_of(""), "cbf29ce484222325");
         assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
         assert_eq!(revision_of("foobar"), "85944171f73967e8");
+    }
+
+    #[test]
+    fn real_stalwarts_contact_size_refusal_is_one_for_size() {
+        let error =
+            jmap_client::Error::Set(SetError::new(set::INVALID_PROPERTIES).with_description(
+                "Contact size 844872 exceeds the maximum allowed size of 524288 bytes.",
+            ));
+        assert!(is_refused_for_size(&error));
+    }
+
+    #[test]
+    fn invalid_properties_naming_a_property_is_not_one_for_size() {
+        let mut refusal = SetError::new(set::INVALID_PROPERTIES).with_description(
+            "Contact size 844872 exceeds the maximum allowed size of 524288 bytes.",
+        );
+        refusal.properties = Some(vec!["name".into()]);
+        assert!(!is_refused_for_size(&jmap_client::Error::Set(refusal)));
+        let other = SetError::new(set::INVALID_PROPERTIES).with_description("bad name");
+        assert!(!is_refused_for_size(&jmap_client::Error::Set(other)));
+    }
+
+    #[test]
+    fn only_the_max_size_request_limit_problem_is_one_for_size() {
+        let problem = |limit: &str| jmap_client::Error::Http {
+            status: 400,
+            problem: Some({
+                let mut problem = RequestError::new("urn:ietf:params:jmap:error:limit");
+                problem.extra.insert("limit".into(), json!(limit));
+                problem
+            }),
+        };
+        assert!(is_refused_for_size(&problem("maxSizeRequest")));
+        assert!(!is_refused_for_size(&problem("maxCallsInRequest")));
+        assert!(!is_refused_for_size(&jmap_client::Error::Http {
+            status: 400,
+            problem: None,
+        }));
+    }
+
+    #[test]
+    fn a_data_uri_measures_its_decoded_content() {
+        assert_eq!(
+            decoded_octets("data:image/jpeg;base64,aGVsbG8tcGhvdG8="),
+            11
+        );
+        assert_eq!(decoded_octets("data:image/jpeg;base64,aGVsbG8="), 5);
+        assert_eq!(decoded_octets("data:,hello"), 5);
+        assert_eq!(decoded_octets("data:nothing"), 0);
     }
 }

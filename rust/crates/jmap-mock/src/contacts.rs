@@ -223,6 +223,7 @@ pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Val
 
 pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<ContactCard> = parse_arguments(arguments)?;
+    let max_contact_size = state.max_contact_size;
     let account = account_mut(state, &request.account_id)?;
 
     // Split borrows: validation reads address_books while `simple_set` mutates contact_cards.
@@ -237,6 +238,16 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
         if card.id.is_some() {
             return Err(SetError::new(error::set::INVALID_PROPERTIES)
                 .with_description("id is set by the server and must not be given in a create"));
+        }
+        if let Some(limit) = max_contact_size {
+            let size = serde_json::to_vec(card).map_or(0, |json| json.len() as u64);
+            if size > limit {
+                return Err(
+                    SetError::new(error::set::TOO_LARGE).with_description(format!(
+                        "{size} octets is more than the {limit} a card may take"
+                    )),
+                );
+            }
         }
         let Some(book_ids) = card
             .address_book_ids

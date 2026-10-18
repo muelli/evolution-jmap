@@ -55,6 +55,9 @@ pub struct ServerState {
     pub terse_submission_create: bool,
     /// Whether `ContactCard/set` create returns only `id` in `created`.
     pub terse_contact_create: bool,
+    /// Optional largest `ContactCard` a create may file, in octets of its
+    /// JSON; a bigger one is refused as `tooLarge` (RFC 8620 section 5.3).
+    pub max_contact_size: Option<u64>,
     /// Whether new `AddressBook` and `Calendar` objects default to `isSubscribed: false`.
     pub new_collections_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
@@ -101,6 +104,7 @@ impl ServerState {
             reject_download_accept_json: false,
             terse_submission_create: false,
             terse_contact_create: false,
+            max_contact_size: None,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
             without_scheduling: false,
