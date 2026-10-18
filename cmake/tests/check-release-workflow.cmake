@@ -8,7 +8,7 @@
 #
 # A release workflow can only be *executed* by pushing a tag, so the first
 # time anyone finds out it is wrong is the moment a release is already
-# half-published. The three properties below do not need it to run, and each
+# half-published. The four properties below do not need it to run, and each
 # of them is one an ordinary edit can break silently:
 #
 # 1. Everything the release publishes is attested, and everything attested is
@@ -27,6 +27,12 @@
 #    .deb's dependencies are derived by dpkg-shlibdeps from the EDS in that
 #    image, so a release built in a stale one would declare dependencies
 #    against a distribution nobody is testing against.
+# 4. The package's SBOM is attested against the package. The SBOM file is a
+#    release artifact like any other, so (1) already gives it provenance; what
+#    (1) cannot show is which package it describes. An `actions/attest-sbom`
+#    step whose subject is the .deb and whose SBOM is the one collected in
+#    dist/ is what lets `gh attestation verify --predicate-type
+#    https://cyclonedx.org/bom` answer that.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -56,12 +62,29 @@ string(REPLACE "\n" ";" _lines "${_release_text_escaped}")
 # are in the wild, so both are read, and the entries are compared as written:
 # two globs that happen to cover the same files today are exactly the drift
 # this is meant to catch.
+#
+# Only the build provenance step's subjects count here. Other attest actions
+# take a `subject-path:` too, and the SBOM one (4) names just the package, so
+# reading every `subject-path:` in the file would mix a deliberate subset
+# into the set that has to equal what is published. A step starts at a list
+# entry whose first key is one a step can open with; the action it runs is
+# its `uses:`.
 set(_attested)
 set(_in_subject_block FALSE)
 set(_subject_indent "")
 set(_found_subject_path FALSE)
+set(_step_action "")
 foreach(_line IN LISTS _lines)
-	if(_line MATCHES "^([ \t]*)subject-path:[ \t]*(.*)$")
+	if(_line MATCHES "^[ \t]*-[ \t]+(name|uses|run|id|if|with|env):")
+		set(_step_action "")
+	endif()
+	if(_line MATCHES "^[ \t]*-?[ \t]*uses:[ \t]*([^ \t#]+)")
+		set(_step_action "${CMAKE_MATCH_1}")
+	endif()
+	# The step test comes first: a second MATCHES in the same condition would
+	# overwrite the CMAKE_MATCH_<n> the key's own match leaves.
+	if(_step_action MATCHES "^actions/attest-build-provenance@"
+			AND _line MATCHES "^([ \t]*)subject-path:[ \t]*(.*)$")
 		set(_found_subject_path TRUE)
 		set(_subject_indent "${CMAKE_MATCH_1}")
 		set(_value "${CMAKE_MATCH_2}")
@@ -87,9 +110,9 @@ endforeach()
 
 if(NOT _found_subject_path)
 	message(FATAL_ERROR
-		"${RELEASE_WORKFLOW} has no subject-path:, so it attests nothing; every "
-		"published artifact is meant to carry Sigstore provenance (see "
-		"docs/verifying-artifacts.md)")
+		"${RELEASE_WORKFLOW} has no actions/attest-build-provenance step with a "
+		"subject-path:, so it attests nothing; every published artifact is meant "
+		"to carry Sigstore provenance (see docs/verifying-artifacts.md)")
 endif()
 
 # What `gh release create` uploads. Taken as the tokens naming something under
@@ -227,7 +250,65 @@ if(NOT _release_pins)
 		"package it publishes is not built in the environment CI tests in")
 endif()
 
+#
+# 4. The SBOM is attested against the package.
+#
+# Single-line values only: the SBOM step names one package glob and one file,
+# and a block scalar here would be a change worth a reviewer's look anyway.
+set(_step_action "")
+set(_sbom_subjects)
+set(_sbom_paths)
+foreach(_line IN LISTS _lines)
+	if(_line MATCHES "^[ \t]*-[ \t]+(name|uses|run|id|if|with|env):")
+		set(_step_action "")
+	endif()
+	if(_line MATCHES "^[ \t]*-?[ \t]*uses:[ \t]*([^ \t#]+)")
+		set(_step_action "${CMAKE_MATCH_1}")
+	endif()
+	if(NOT _step_action MATCHES "^actions/attest-sbom@")
+		continue()
+	endif()
+	# Whole values: the SBOM's name carries `${{ github.ref_name }}`, spaces
+	# and all.
+	if(_line MATCHES "^[ \t]*(subject-path|sbom-path):[ \t]*(.*)$")
+		set(_key "${CMAKE_MATCH_1}")
+		string(STRIP "${CMAKE_MATCH_2}" _value)
+		if(_key STREQUAL "subject-path")
+			list(APPEND _sbom_subjects "${_value}")
+		else()
+			list(APPEND _sbom_paths "${_value}")
+		endif()
+	endif()
+endforeach()
+
+set(_sbom_covers_package FALSE)
+foreach(_subject IN LISTS _sbom_subjects)
+	if(_subject MATCHES "^dist/.*\\.deb$")
+		set(_sbom_covers_package TRUE)
+	endif()
+endforeach()
+set(_sbom_is_released FALSE)
+foreach(_path IN LISTS _sbom_paths)
+	if(_path MATCHES "^dist/.*\\.cdx\\.json$")
+		set(_sbom_is_released TRUE)
+	endif()
+endforeach()
+
+if(NOT _sbom_covers_package)
+	message(FATAL_ERROR
+		"${RELEASE_WORKFLOW} has no actions/attest-sbom step whose subject-path: "
+		"is the .deb in dist/, so nothing ties the published SBOM to the package "
+		"it describes")
+endif()
+if(NOT _sbom_is_released)
+	message(FATAL_ERROR
+		"the actions/attest-sbom step in ${RELEASE_WORKFLOW} does not attest a "
+		"CycloneDX SBOM from dist/ (sbom-path: dist/....cdx.json), so the SBOM it "
+		"signs is not the one the release publishes")
+endif()
+
 list(GET _digests 0 _digest)
 list(LENGTH _attested _attested_count)
 message(STATUS "release workflow: attests and publishes ${_attested_count} path pattern(s): ${_attested}")
 message(STATUS "  shared CI image pinned at @${_digest} by every config that names it")
+message(STATUS "  SBOM ${_sbom_paths} attested against ${_sbom_subjects}")
