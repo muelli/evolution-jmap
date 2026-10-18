@@ -35,7 +35,7 @@ use jmap_proto::Id;
 
 use crate::api_token::source_uses_api_token;
 use crate::cancel::observe;
-use crate::error::{cstring_lossy, set_raw_gerror};
+use crate::error::{cstring_lossy, invalid_arg_gerror, set_raw_gerror};
 use crate::i18n::{translate, translate_with};
 use crate::marshal::password as stored_password;
 use crate::oauth2::{access_token, source_uses_oauth2};
@@ -577,14 +577,11 @@ fn finish_connect<T>(
 }
 
 fn no_source_gerror(kind: Collection) -> *mut GError {
-    let message = cstring_lossy(&translate_with(
+    invalid_arg_gerror(&translate_with(
         // TRANSLATORS: %1$s is "address book" or "calendar".
         c"the %1$s backend has no account to connect to",
         &[kind.noun().as_str()],
-    ));
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+    ))
 }
 
 /// Writes an `out_auth_result` the caller may not have asked for.

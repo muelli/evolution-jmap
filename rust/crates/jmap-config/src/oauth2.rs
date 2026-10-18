@@ -56,9 +56,9 @@ use std::{mem, ptr};
 
 use eds_sys::{
     ESource, ESourceExtension, ESourceExtensionClass, e_source_extension_get_type,
-    e_source_get_extension, e_source_has_extension,
+    e_source_get_extension,
 };
-use glib_sys::{GFALSE, GType};
+use glib_sys::GType;
 use gobject_sys::{
     G_PARAM_READWRITE, G_PARAM_USER_SHIFT, G_TYPE_STRING, GObject, GObjectClass, GParamFlags,
     GParamSpec, GValue, g_object_class_install_property, g_object_get_property,
@@ -67,6 +67,7 @@ use gobject_sys::{
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::instance::Slot;
+use jmap_backend_core::marshal::extension_if_present;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
@@ -526,13 +527,12 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
 pub unsafe fn read(source: *mut ESource) -> Config {
     ensure_registered();
 
-    // SAFETY: `source` is valid by this function's contract.
-    if unsafe { e_source_has_extension(source, EXTENSION_NAME.as_ptr()) } == GFALSE {
+    // SAFETY: `source` is valid by this function's contract, and whichever
+    // class answers to `EXTENSION_NAME` is a `GObject`.
+    let Some(extension) = (unsafe { extension_if_present::<GObject>(source, EXTENSION_NAME) })
+    else {
         return Config::default();
-    }
-
-    // SAFETY: the extension is present, so this returns the source's own.
-    let extension = unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) };
+    };
     // SAFETY: a live extension of whichever class answers to `EXTENSION_NAME`
     // on this build; both install every name in `PROPERTY_NAMES` as a
     // readable string property.
@@ -647,15 +647,14 @@ unsafe fn borrowed(
 
     ensure_registered();
 
-    // SAFETY: `source` is valid by this function's contract.
-    if unsafe { e_source_has_extension(source, EXTENSION_NAME.as_ptr()) } == GFALSE {
+    // SAFETY: `source` is valid by this function's contract, and on a build
+    // without the dynamic service `EXTENSION_NAME` is this module's `Extension`.
+    // A present extension is the source's own, whose `instance_init` has
+    // already run.
+    let Some(extension) = (unsafe { extension_if_present::<Extension>(source, EXTENSION_NAME) })
+    else {
         return ptr::null();
-    }
-
-    // SAFETY: the extension is present, so this returns the source's own,
-    // whose `instance_init` has already run.
-    let extension =
-        unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) }.cast::<Extension>();
+    };
     let fields = unsafe { &*extension }
         .fields
         .get()
