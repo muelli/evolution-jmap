@@ -11277,7 +11277,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, LANG, MEMBER, SOURCE, XML, CREATED, PRODID,
+    // GEO, TZ, MAILER, KIND, LANG, EXPERTISE, MEMBER, SOURCE, XML, CREATED, PRODID,
     // REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
@@ -11311,6 +11311,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
+        "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
         "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
         "MEMBER:mailto:alice@example.com\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
@@ -11394,6 +11395,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         parsed.preferred_languages.is_none(),
         "LANG must not project to preferred_languages in this profile"
     );
+    assert!(
+        parsed.personal_info.is_none(),
+        "EXPERTISE must not project to personal_info in this profile"
+    );
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
     let media = parsed.media.as_ref().expect("media map present");
@@ -11415,6 +11420,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
+    assert!(
+        !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
+        "EXPERTISE must not be emitted"
+    );
     assert!(!emitted.contains("MEMBER:"), "MEMBER must not be emitted");
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
@@ -11563,6 +11572,33 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("LANG:") && !emitted.contains("LANG;"),
             "LANG must not be emitted"
+        );
+    }
+
+    // EXPERTISE variants.
+    for expertise_val in [
+        "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature",
+        "EXPERTISE;INDEX=1;LEVEL=expert:chemistry",
+        "EXPERTISE;PREF=1;LEVEL=average:large language models",
+        "EXPERTISE;TYPE=work;LEVEL=high:discrete mathematics",
+        "expertise;level=low:cooperative board games",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Expertise User\r\n{expertise_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse EXPERTISE");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Expertise User")
+        );
+        assert!(
+            parsed.personal_info.is_none(),
+            "EXPERTISE must not project to personal_info"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
+            "EXPERTISE must not be emitted"
         );
     }
 
@@ -11902,6 +11938,10 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "LANG:   ",
         "lang:",
         "LANG;TYPE=work:",
+        "EXPERTISE:",
+        "expertise:   ",
+        "EXPERTISE;LEVEL=high:",
+        "EXPERTISE;INDEX=1:",
         "KIND:",
         "kind:   ",
         "MEMBER:",

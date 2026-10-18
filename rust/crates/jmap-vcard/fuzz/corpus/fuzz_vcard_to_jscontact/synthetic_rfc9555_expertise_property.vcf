@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:EXPERTISE Section Probe
+UID:expertise-rfc9555-1
+EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature
+EXPERTISE;INDEX=1;LEVEL=expert:chemistry
+END:VCARD
