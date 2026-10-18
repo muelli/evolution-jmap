@@ -126,3 +126,17 @@ done
 ```sh
 cargo +nightly fuzz check
 ```
+
+`cargo test` in `rust/` does not compile the fuzz harnesses. Each `fuzz/`
+directory is a separate workspace. `ci/fuzz-build.sh` builds every harness and
+runs each target once on its committed corpus. It fails if a harness does not
+build or if a corpus input makes a target crash. To check only some crates,
+give their directories:
+
+```sh
+ci/fuzz-build.sh rust/crates/jmap-ical
+```
+
+The script installs the nightly toolchain and `cargo-fuzz` if they are
+missing. `.github/workflows/fuzz-build.yml` runs it each Monday and on
+`workflow_dispatch`.

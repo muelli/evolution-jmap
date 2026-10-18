@@ -161,6 +161,33 @@ view and a calendar in the Calendar view.
 
 Any other result is a bug in this repository. Report it.
 
+## Shared address books and calendars
+
+Another user can share an address book or a calendar with the account
+(RFC 9670). The JMAP session then lists the account of that user with
+`isPersonal: false`. The backend makes one child source for each address book
+and calendar in each such account. Mail in a shared account does not appear.
+
+- The name of the child is `<collection> (<owner>)`. `<owner>` is the `name`
+  of the shared account in the session. Usually it is the email address of
+  the owner.
+- The child is read-only if the shared account is read-only or if `myRights`
+  of the collection does not give write access.
+- "Delete" is available only if `myRights.mayDelete` is `true`. A delete
+  removes the collection of the owner for every user.
+- The child appears also if `isSubscribed` is `false`. A sharee often cannot
+  change `isSubscribed`, and Evolution has no control for it.
+- If the owner withdraws the share, the next populate removes the child.
+
+`[Resource] Identity` of a shared child is `<accountId>/<collectionId>`.
+The address book and calendar backends use it to find the account. An
+identity is unique only for one kind of collection: a server can give an
+address book and a calendar the same id.
+
+`jmap-mockd` starts with no shared accounts. The test
+`functional-collection-shared-live-stalwart` (`docs/functional-tests.md`)
+checks this behaviour with two accounts on a real server.
+
 ## A second run: the mail sources
 
 The collection backend does not create mail sources, but it gives them their

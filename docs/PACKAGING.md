@@ -118,7 +118,8 @@ ci/rpm.sh
 
 If `podman` is installed, `ci/rpm.sh` runs in a pinned Fedora container and
 installs the build dependencies there. It builds into `build-rpm/`, runs
-`cpack -G RPM` and runs `rpmlint` on the result. To build on the host, use
+`cpack -G RPM` and runs `rpmlint --strict` on the result. With `--strict`, a
+warning also makes the command fail, as a lintian tag does for the `.deb`. To build on the host, use
 `ci/rpm.sh --host`. This command stops if `rpmbuild` or `rpmlint` is missing.
 
 If `rpmbuild` and `rpmlint` are both installed at configure time, CTest has
@@ -130,7 +131,10 @@ ctest --test-dir build-rpm --output-on-failure -R '^package-rpm$|^package-rpm-li
 ```
 
 `package-rpm` builds the tree and runs `cpack -G RPM`. `package-rpm-lint` runs
-after it. It fails if there is no RPM or if `rpmlint` reports a problem.
+after it. It fails if there is no RPM or if `rpmlint --strict` reports a
+problem.
+
+The `rpm` job in `.github/workflows/ci.yml` runs `ci/rpm.sh` on every push.
 
 ## Flatpak: an extension for `org.gnome.Evolution`
 
@@ -175,6 +179,17 @@ extensions. It builds with cargo offline.
    flatpak info --show-extensions org.gnome.Evolution
    ```
 
+`ci/flatpak.sh` does steps 1 to 3 with one command. It uses a private Flatpak
+installation in `build-flatpak/installation`, so it does not change your own
+installation. It then checks in the sandbox of `org.gnome.Evolution` that
+each JMAP module is in the extension and that `ldd` finds every library that
+the modules link. A module that was built against a different EDS fails this
+check. `ci/flatpak.sh --check` does only the check, on the last build. The
+first run downloads several GB.
+
+`.github/workflows/flatpak-build.yml` runs `ci/flatpak.sh` each Monday and on
+`workflow_dispatch`.
+
 The extension branch must be the same as the branch of the Evolution
 application. A Flathub submission also needs these items. None of them exists
 yet:
@@ -202,5 +217,5 @@ release, see `docs/verifying-artifacts.md`.
 | `debian/copyright` and third-party notices | Generated and checked by CTest |
 | `debian/watch` | Not tested |
 | Crate vendoring for Debian | Not started |
-| CPack RPM, `rpmlint` | Done (`ci/rpm.sh`, `package-rpm` tests) |
-| Flatpak extension | Builds from source locally; not submitted to Flathub |
+| CPack RPM, `rpmlint --strict` | Done (`ci/rpm.sh` on every push, `package-rpm` tests) |
+| Flatpak extension | Builds from source (`ci/flatpak.sh`, weekly in CI); not submitted to Flathub |

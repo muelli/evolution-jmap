@@ -128,8 +128,24 @@ osv-scanner --sbom=evolution-jmap-*.cdx.json
 
 The SBOM is reproducible: its timestamp is `SOURCE_DATE_EPOCH` and it has no
 random serial number. The crates are exact `pkg:cargo` Package-URLs. The
-system libraries are `pkg:deb/ubuntu` names with the `Depends` version
-constraints. They are not resolved versions.
+system libraries are `pkg:deb/ubuntu` Package-URLs, one for each package in
+the `Depends` of the `.deb`. Each one has the version that was installed on
+the build runner when the release workflow built the `.deb`. `ci/sbom.sh`
+stops if these versions were recorded for a different `Depends` line.
+Releases up to v0.5.0 have the `Depends` version constraints instead.
+
+Releases after v0.5.0 also bind the SBOM to the `.deb` with
+[`actions/attest-sbom`](https://github.com/actions/attest-sbom). This command
+proves which SBOM belongs to the `.deb`:
+
+```bash
+gh attestation verify evolution-jmap_*.deb --repo muelli/evolution-jmap \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+For the `.deb`, the attestation API then returns two attestations: the build
+provenance and the SBOM. The cosign command in section 2 uses the first one.
+Do the cosign check on `jmap-mockd`.
 
 ## 6. Runtime smoke test on a clean system
 

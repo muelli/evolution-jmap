@@ -73,10 +73,27 @@ machine do not collide.
 The scripts use plain `pyatspi`, not `dogtail`. The scripts use one fixed tree
 shape. They do not need the extra layer of dogtail.
 
+### On Evolution 3.60
+
+Ubuntu 24.04 has Evolution 3.52. To run the same test against Evolution and
+EDS 3.60, use this command:
+
+```console
+$ ci/gui-smoke-fedora.sh
+```
+
+If `podman` is installed, the script runs in the pinned Fedora image that
+`ci/rpm.sh` also uses. It builds the tree into `build-gui-smoke-fedora/`,
+installs the Camel provider and runs `ci/gui-smoke.sh`. You do not need root.
+`ci/install-deps-gui-smoke-rpm.sh` installs the packages in the image. Use
+`ci/gui-smoke-fedora.sh --host` in a job that already runs in that image. The
+artifacts of a failed run go to `build-gui-smoke-fedora/artifacts`, or to
+`GUI_SMOKE_ARTIFACTS` if you set it.
+
 ## CI
 
-The `gui-smoke` job in `.github/workflows/ci.yml` and the three sibling jobs
-below run on `workflow_dispatch` or on a pull request with the label
+The `gui-smoke` job in `.github/workflows/ci.yml`, the `gui-smoke-fedora` job
+and the three sibling jobs below run on `workflow_dispatch` or on a pull request with the label
 `run-gui-smoke-test`. They run on a plain `ubuntu-24.04` runner. They are
 slower than the rest of the suite. They therefore do not run on every push.
 They are not in `.gitlab-ci.yml`.

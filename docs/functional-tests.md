@@ -113,6 +113,7 @@ comment of each file explains what the file asserts and why.
 | `functional-cal-color` | A change of the colour of a calendar in EDS reaches the server. |
 | `functional-cal-free-busy` | `get_free_busy_sync` through a running backend. |
 | `functional-cal-scheduling` | Which party sends the invitations of a meeting to the guests. |
+| `functional-cal-discard-alarm` | A dismissed reminder becomes `ACKNOWLEDGED` on the alarm and `acknowledged` on the server, for a single event and for an occurrence of a series. |
 | `functional-mail` | Camel loads the provider through its `.urls` file, opens the store and lists the Inbox. |
 | `functional-transport` | Camel sends through the transport that the identity names. A transport without an `[Authentication]` group cannot send. |
 | `functional-config-lookup` | The "Look Up Account Details" worker (`JmapConfigLookup`), including OAuth 2.0 discovery, against a real `EConfigLookup`. |
@@ -155,6 +156,20 @@ therefore reports them as ignored. To run one of them, do these steps:
 3. Run that `cargo test` command with `-- --ignored`.
 
 `live-stalwart-config-lookup.rs` needs `STALWART_URL` instead.
+
+| CTest name | Checks |
+| --- | --- |
+| `functional-book-live-stalwart`, `functional-cal-live-stalwart` | The backend connects to the server. A contact or a plain event that is added through EDS reaches the server and reads back. These tests do less than `functional-book` and `functional-cal`. |
+| `functional-mail-live-stalwart` | Camel opens the store and finds the folders by their role. A message is put in, its flags change, it moves between folders and it is expunged. A message is sent through the transport. |
+| `functional-book-changes-live-stalwart`, `functional-cal-changes-live-stalwart` | A second connect on the same cache reaches `get_changes_sync`. |
+| `functional-cal-attendees-live-stalwart` | The guests of an event that is made in EDS reach the server. |
+| `functional-cal-attendees-remote-live-stalwart` | The guests that another client wrote on the server appear in EDS. |
+| `functional-cal-scheduling-live-stalwart` | The server, not Evolution, sends the invitation one time to a guest in a second account. The answer of the guest comes back to the calendar of the organizer. |
+| `functional-cal-free-busy-live-stalwart` | `get_free_busy_sync` against the server. |
+| `functional-collection-live-stalwart` | The registry creates the child sources of a real account. |
+| `functional-collection-shared-live-stalwart` | Address books and calendars that a second account shares appear as children. They go when the share is withdrawn. |
+| `functional-config-lookup-live-stalwart` | "Look Up Account Details" against the server. |
+| `functional-book-scale-live-stalwart`, `functional-cal-scale-live-stalwart`, `functional-mail-scale-live-stalwart` | The test puts many cards, events or messages on the server, then measures the first open in EDS or Camel. |
 
 `.source` keyfiles allow plain HTTP only to a loopback address.
 `spawn_loopback_proxy` (`rust/crates/jmap-functional/src/lib.rs`) therefore
