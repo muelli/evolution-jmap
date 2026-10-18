@@ -3581,6 +3581,16 @@ fn quarter_of_an_hour_before() -> serde_json::Value {
     })
 }
 
+/// A reminder at an absolute instant (RFC 8984 §4.5.2's AbsoluteTrigger), which
+/// the VALARMs this mapping draws do not state.
+fn at_an_instant() -> serde_json::Value {
+    json!({
+        "@type": "Alert",
+        "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T08:45:00Z"},
+        "action": "display",
+    })
+}
+
 /// The `VALARM` Evolution's own editor writes for such a reminder: no RFC 9074
 /// `UID`, an `X-EVOLUTION-ALARM-UID` of its own, and the summary repeated as the
 /// text to display.
@@ -3678,19 +3688,16 @@ fn clearing_the_reminder_removes_the_property() {
 
 #[test]
 fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
-    // RFC 9074 §6.1's ACKNOWLEDGED says the user has already dismissed this
-    // reminder, and the VALARM this mapping writes does not carry it — so the
-    // alert was never drawn, and a set replaced whole would un-dismiss it along
-    // with deleting what the user never saw.
+    // A reminder at an absolute instant (RFC 8984 §4.5.2's AbsoluteTrigger) is
+    // one the VALARM this mapping writes does not carry, so the alert was never
+    // drawn, and a set replaced whole would delete what the user never saw.
     let fixture = Fixture::start();
-    let mut dismissed = quarter_of_an_hour_before();
-    dismissed["acknowledged"] = json!("2026-01-15T08:46:00Z");
-    let alerts = json!({"k1": quarter_of_an_hour_before(), "k2": dismissed});
+    let alerts = json!({"k1": quarter_of_an_hour_before(), "k2": at_an_instant()});
     let (id, icalendar) = reminded(&fixture, alerts.clone());
     assert_eq!(
         icalendar.matches("BEGIN:VALARM").count(),
         1,
-        "the dismissed reminder was drawn\n{icalendar}"
+        "the reminder at an instant was drawn\n{icalendar}"
     );
 
     let edited = icalendar
@@ -3711,6 +3718,43 @@ fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
         stored.title.as_deref(),
         Some("Standup (short)"),
         "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant() {
+    // What EDS does to dismiss a reminder (`e_cal_util_set_alarm_acknowledged`,
+    // as its CalDAV backend's `discard_alarm_sync` uses it) is to write RFC 9074
+    // §6.1's ACKNOWLEDGED onto the VALARM and save the component. RFC 8984
+    // §4.5.2's `acknowledged` is the same instant, and other clients read it to
+    // stop showing the same reminder.
+    let fixture = Fixture::start();
+    let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+
+    let edited = icalendar.replace(
+        "TRIGGER:-PT15M\r\n",
+        "TRIGGER:-PT15M\r\nACKNOWLEDGED:20260115T084700Z\r\n",
+    );
+    assert_ne!(edited, icalendar, "{icalendar}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let mut dismissed = quarter_of_an_hour_before();
+    dismissed["acknowledged"] = json!("2026-01-15T08:47:00Z");
+    let stored = fixture.event(&id);
+    assert_eq!(stored.alerts, Some([("k1".to_owned(), dismissed)].into()));
+
+    // And the dismissal is shown back, so the next unrelated save keeps it.
+    let shown = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    assert!(
+        shown.contains("ACKNOWLEDGED:20260115T084700Z\r\n"),
+        "{shown}"
     );
 }
 
@@ -3764,16 +3808,14 @@ fn setting_a_reminder_on_one_occurrence_reaches_the_server_as_an_override() {
 #[test]
 fn a_reminder_one_occurrence_could_not_show_leaves_the_overrides_alone() {
     // The `a_reminder_the_component_could_not_show_leaves_the_whole_set_alone`
-    // rule one level down. This instance's set holds a reminder the user has
-    // already dismissed, which no VALARM says, so the occurrence could only be
-    // placed by a bare RDATE — and `recurrenceOverrides` goes back replaced whole,
-    // so sending what was drawn would un-dismiss that reminder along with deleting
-    // the whole override.
+    // rule one level down. This instance's set holds a reminder at an absolute
+    // instant, which no VALARM here says, so the occurrence could only be placed
+    // by a bare RDATE, and `recurrenceOverrides` goes back replaced whole, so
+    // sending what was drawn would delete that reminder along with the whole
+    // override.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
-    let mut dismissed = quarter_of_an_hour_before();
-    dismissed["acknowledged"] = json!("2026-01-22T08:46:00Z");
-    let overrides = json!({"2026-01-22T09:00:00": {"alerts": {"k2": dismissed}}});
+    let overrides = json!({"2026-01-22T09:00:00": {"alerts": {"k2": at_an_instant()}}});
     fixture.patch(
         &id,
         json!({

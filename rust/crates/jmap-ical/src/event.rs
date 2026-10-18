@@ -619,15 +619,29 @@ pub fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Co
     if !names_map_entry(key) {
         return None;
     }
-    // Every member of the object has to be one of the three drawn, because the
+    // Every member of the object has to be one of the four drawn, because the
     // property goes back replaced whole: what is not on the document is what the
     // next save removes.
-    if !alert
-        .keys()
-        .all(|member| matches!(member.as_str(), "@type" | "trigger" | "action"))
-    {
+    if !alert.keys().all(|member| {
+        matches!(
+            member.as_str(),
+            "@type" | "trigger" | "action" | "acknowledged"
+        )
+    }) {
         return None;
     }
+    // RFC 9074 §6.1 states a dismissal in UTC only, which is RFC 8984 §1.4.4's
+    // UTCDateTime with no fraction. The `Z` has to be the upper case one the
+    // reader writes back, or every save would patch the value to itself.
+    let acknowledged = match alert.get("acknowledged") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|value| value.ends_with('Z'))
+                .and_then(to_utc_date_time)?,
+        ),
+    };
     if !is_type(alert.get("@type"), "Alert") {
         return None;
     }
@@ -647,6 +661,13 @@ pub fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Co
         .with(make_entry("UID", key))
         .with(make_entry("ACTION", ical))
         .with(make_entry("TRIGGER", &offset).with_named_params("RELATED", related));
+    // When the user dismissed it: RFC 8984 §4.5.2 and RFC 9074 §6.1 both mean
+    // that a reminder triggered on or before this instant is not shown again,
+    // and EDS's reminder watcher reads the property that way, so a series keeps
+    // reminding at its later occurrences.
+    if let Some(acknowledged) = acknowledged {
+        valarm = valarm.with(make_entry("ACKNOWLEDGED", &acknowledged));
+    }
     if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
         valarm = valarm.with(make_entry("DESCRIPTION", summary));
     }
@@ -1117,11 +1138,21 @@ pub fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
         }
         Some(_) => return None,
     }
-    Some(json!({
+    let mut alert = json!({
         "@type": "Alert",
         "trigger": Value::Object(trigger),
         "action": jscalendar,
-    }))
+    });
+    // A dismissal in a zone, or one that names no instant, is not one RFC 9074
+    // §6.1 admits. The reminder is read without it: firing again is a smaller
+    // loss than losing the reminder.
+    if let Some(acknowledged) = component_entry(valarm, "ACKNOWLEDGED")
+        .filter(|entry| entry_param(entry, "TZID").is_none())
+        .and_then(|entry| from_utc_date_time(&entry_raw_value(entry)))
+    {
+        alert["acknowledged"] = json!(acknowledged);
+    }
+    Some(alert)
 }
 
 /// Whether a recurrence rule survives the trip through iCalendar.
@@ -4221,6 +4252,17 @@ pub fn is_utc(zone: &str) -> bool {
 pub fn to_utc_date_time(value: &str) -> Option<String> {
     let local = value.strip_suffix(['Z', 'z'])?;
     to_ical_date_time(local).map(|stamp| format!("{stamp}Z"))
+}
+
+/// `20260115T130000Z` → `2026-01-15T13:00:00Z`, the way back from
+/// [`to_utc_date_time`], or `None` for a value that is not a UTC DATE-TIME
+/// naming an instant that exists.
+pub fn from_utc_date_time(value: &str) -> Option<String> {
+    let local = value.strip_suffix(['Z', 'z'])?;
+    if local.len() != 15 || local.as_bytes()[8] != b'T' {
+        return None;
+    }
+    to_local_date_time(local).map(|stamp| format!("{stamp}Z"))
 }
 
 /// `2026-01-15T13:00:00` → `20260115T130000`.

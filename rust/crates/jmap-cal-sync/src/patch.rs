@@ -49,9 +49,8 @@
 //!   the "an unshown entry is not the user's to delete" rule is kept where
 //!   leaving an entry unnamed is not available — see `diff_keywords`.
 //! - **`alerts` is a map replaced whole, and a second property decides
-//!   whether anything reads it.** A `VALARM` cannot say that the user already
-//!   dismissed the reminder, or that it fires at an absolute instant, or that
-//!   it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
+//!   whether anything reads it.** A `VALARM` as drawn here cannot say that a
+//!   reminder fires at an absolute instant, or that it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
 //!   is ignored altogether. Either way the reminders were not shown, so they
 //!   are not written — see `diff_alerts`.
 //! - **`recurrenceRule` is one property, not a merge point** (jscalendarbis
@@ -695,9 +694,9 @@ fn diff_keywords(
 /// default of no reminders.
 ///
 /// [`maps_alerts`] is asked of the event the **server** holds, and it is asked
-/// about more than the map: an alert the `VALARM` could not show — one the user
-/// has already dismissed, one that fires at an absolute instant, one that sends
-/// mail — was never drawn, so replacing the property would delete it, and an
+/// about more than the map: an alert the `VALARM` could not show (one that fires
+/// at an absolute instant, one that sends mail, one dismissed at no UTC instant)
+/// was never drawn, so replacing the property would delete it, and an
 /// event whose `useDefaultAlerts` says the property is ignored has nothing worth
 /// writing there at all. The *edited* side needs no such check: every alert on it
 /// was read off a `VALARM` this crate would draw again, key included.
