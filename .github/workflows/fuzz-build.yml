@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Weekly build of every cargo-fuzz harness, plus one replay of each
+# harness's committed corpus. The harnesses are separate workspaces that
+# the every-push CI never compiles, so this is the only place an API change
+# that breaks one turns red. The logic is in ci/fuzz-build.sh, which runs
+# the same way locally. Not on every push: it needs a nightly toolchain and
+# an AddressSanitizer build of each harness (about 8 minutes cold).
+# Dispatch by hand with: gh workflow run fuzz-build.yml
+
+name: Fuzz build
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fuzz-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fuzz-build
+          workspaces: |
+            rust/crates/jmap-client/fuzz
+            rust/crates/jmap-ical/fuzz
+            rust/crates/jmap-proto/fuzz
+            rust/crates/jmap-vcard/fuzz
+      - run: ci/fuzz-build.sh
