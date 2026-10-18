@@ -1276,6 +1276,103 @@ fn moving_an_events_reminder_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a reminded `VEVENT`, then saves the dismissal the way EDS writes one
+/// (RFC 9074 §6.1 `ACKNOWLEDGED` added to the `VALARM`, which is what
+/// `e_cal_util_set_alarm_acknowledged` does), and confirms the server stored it
+/// as RFC 8984 §4.5.2's `acknowledged` under the same key: the reloaded event
+/// shows it back, on the one reminder, at the same instant. `tests/save.rs`'s
+/// `dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant` is the
+/// `jmap-mockd` counterpart.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn dismissing_an_events_reminder_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-dismiss-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-dismiss-{}", unique_suffix());
+    let alarm_uid = format!("agent-calsync-dismiss-alarm-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         RRULE:FREQ=WEEKLY\r\n\
+         BEGIN:VALARM\r\n\
+         UID:{alarm_uid}\r\n\
+         ACTION:DISPLAY\r\n\
+         TRIGGER:-PT15M\r\n\
+         END:VALARM\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    assert!(
+        !saved.icalendar.contains("ACKNOWLEDGED"),
+        "{}",
+        saved.icalendar
+    );
+
+    let dismissed = saved.icalendar.replace(
+        "TRIGGER:-PT15M\r\n",
+        "TRIGGER:-PT15M\r\nACKNOWLEDGED:20260922T104600Z\r\n",
+    );
+    assert_ne!(dismissed, saved.icalendar, "{}", saved.icalendar);
+    sync.save_component(&dismissed, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the dismissed event failed");
+
+    assert_eq!(
+        reloaded.icalendar.matches("BEGIN:VALARM").count(),
+        1,
+        "the dismissal must land on the server's own reminder: {}",
+        reloaded.icalendar
+    );
+    let (uid_after, trigger_after) = valarm_uid_and_trigger(&reloaded.icalendar)
+        .expect("the reloaded event should still carry its VALARM");
+    assert_eq!(
+        uid_after,
+        format!("UID:{alarm_uid}"),
+        "{}",
+        reloaded.icalendar
+    );
+    assert_eq!(trigger_after, "TRIGGER:-PT15M", "{}", reloaded.icalendar);
+    assert_eq!(
+        reloaded
+            .icalendar
+            .matches("ACKNOWLEDGED:20260922T104600Z\r\n")
+            .count(),
+        1,
+        "the server must keep the dismissal: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// The `ATTENDEE` line for `address`, unfolded, `None` if there is none.
 fn attendee_line<'a>(icalendar: &'a str, address: &str) -> Option<&'a str> {
     icalendar
