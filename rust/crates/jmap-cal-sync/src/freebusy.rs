@@ -173,11 +173,13 @@ mod tests {
 
     #[test]
     fn only_a_notfound_method_error_is_not_found() {
-        assert!(is_not_found(&Error::Method(jmap_proto::error::MethodError {
-            error_type: "notFound".into(),
-            description: None,
-            extra: Default::default(),
-        })));
+        assert!(is_not_found(&Error::Method(
+            jmap_proto::error::MethodError {
+                error_type: "notFound".into(),
+                description: None,
+                extra: Default::default(),
+            }
+        )));
         assert!(!is_not_found(&Error::Method(
             jmap_proto::error::MethodError {
                 error_type: "forbidden".into(),
