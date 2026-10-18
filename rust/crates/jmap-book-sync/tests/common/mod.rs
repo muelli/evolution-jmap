@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
+use jmap_mock::{MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
 use serde_json::Value;
@@ -25,7 +25,12 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::start_with(MockServer::builder())
+    }
+
+    /// As [`Fixture::start`], on a server `builder` has configured.
+    pub fn start_with(builder: MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         let (ours, theirs) = {
             let state = server.state();

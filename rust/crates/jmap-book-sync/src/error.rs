@@ -19,6 +19,19 @@ pub enum SyncError {
     VCard(VCardError),
     /// No card on the server has this identifier.
     NotFound(String),
+    /// The server refused the card as too large, and its inline photo is
+    /// what makes it large.
+    ///
+    /// Its own case rather than the server's error left in
+    /// [`SyncError::Client`] because a `PHOTO` is the one part of a vCard
+    /// that is big enough for this and that the user can change: the
+    /// sentence `jmap_backend_book::ops` translates tells them to choose a
+    /// smaller picture, which "set error: tooLarge" does not.
+    PhotoTooLarge {
+        /// The picture's own size, decoded, as the user's image file
+        /// measures it.
+        photo_octets: u64,
+    },
 }
 
 impl SyncError {
@@ -61,6 +74,10 @@ impl std::fmt::Display for SyncError {
             Self::Client(error) => write!(f, "{error}"),
             Self::VCard(error) => write!(f, "{error}"),
             Self::NotFound(uid) => write!(f, "no contact with identifier {uid}"),
+            Self::PhotoTooLarge { photo_octets } => write!(
+                f,
+                "the server refused the contact as too large; its photo is {photo_octets} octets"
+            ),
         }
     }
 }
@@ -70,7 +87,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::VCard(error) => Some(error),
-            Self::NotFound(_) => None,
+            Self::NotFound(_) | Self::PhotoTooLarge { .. } => None,
         }
     }
 }

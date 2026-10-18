@@ -76,6 +76,7 @@ pub struct MockServerBuilder {
     reject_download_accept_json: bool,
     terse_submission_create: bool,
     terse_contact_create: bool,
+    max_contact_size: Option<u64>,
     new_collections_default_unsubscribed: bool,
     terse_calendar_event_create: bool,
     without_scheduling: bool,
@@ -247,6 +248,13 @@ impl MockServerBuilder {
         self
     }
 
+    /// Refuse a `ContactCard/set` create whose card is more than `bytes`
+    /// octets of JSON as `tooLarge`, as a server with a per-card limit does.
+    pub fn max_contact_size(mut self, bytes: u64) -> Self {
+        self.max_contact_size = Some(bytes);
+        self
+    }
+
     /// Default new `AddressBook` and `Calendar` objects to `isSubscribed: false`.
     pub fn new_collections_default_unsubscribed(mut self) -> Self {
         self.new_collections_default_unsubscribed = true;
@@ -318,6 +326,7 @@ impl MockServerBuilder {
         state.reject_download_accept_json = self.reject_download_accept_json;
         state.terse_submission_create = self.terse_submission_create;
         state.terse_contact_create = self.terse_contact_create;
+        state.max_contact_size = self.max_contact_size;
         state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         state.terse_calendar_event_create = self.terse_calendar_event_create;
         state.without_scheduling = self.without_scheduling;
@@ -396,6 +405,7 @@ impl MockServer {
             reject_download_accept_json: false,
             terse_submission_create: false,
             terse_contact_create: false,
+            max_contact_size: None,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
             without_scheduling: false,
