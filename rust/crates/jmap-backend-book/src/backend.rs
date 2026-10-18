@@ -168,9 +168,8 @@ impl JmapBookBackend {
     /// Detached instance for tests without requiring a running D-Bus registry daemon.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, for
-        // which all-zero is a valid value, and an all-zero `Slot` is its
-        // documented empty state.
+        // SAFETY: Parent fields are pointers or integers with valid all-zero states.
+        // An all-zero `Slot` represents the documented empty state.
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
         backend.push.init(Mutex::new(None));
@@ -192,22 +191,19 @@ impl JmapBookBackend {
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the EBookMetaBackend
-// instance and class structs respectively, and EBookMetaBackend derives from
-// GObject (via EBookBackendSync, EBookBackend and EBackend).
+// SAFETY: Structs are #[repr(C)] and lead with EBookMetaBackend structs. EBookMetaBackend derives from GObject.
 unsafe impl ObjectSubclass for JmapBookBackend {
     const NAME: &'static CStr = c"EBookBackendJmap";
     type Instance = JmapBookBackend;
     type Class = JmapBookBackendClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the EDS type system initialises itself.
+        // SAFETY: No arguments; EDS type system initialises itself.
         unsafe { e_book_meta_backend_get_type() }
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; the slots below are all in that half.
+        // SAFETY: `class` points to a freshly allocated class struct; slots are in the parent class struct.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.connect_sync = Some(connect_sync);
         vfuncs.disconnect_sync = Some(disconnect_sync);
@@ -227,8 +223,7 @@ unsafe impl ObjectSubclass for JmapBookBackend {
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: `instance` points at a zeroed instance struct of ours, and a
-        // zeroed `Slot` is an empty one.
+        // SAFETY: `instance` points to a zeroed instance struct, and a zeroed Slot is empty.
         unsafe { (*instance).session.init(RwLock::new(None)) };
         // SAFETY: as above.
         unsafe { (*instance).push.init(Mutex::new(None)) };
@@ -236,17 +231,16 @@ unsafe impl ObjectSubclass for JmapBookBackend {
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // Stop push thread first before clearing the session to avoid callbacks during finalize.
-        // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive.
+        // SAFETY: Instance is finalizing; no borrows handed out by get remain alive.
         unsafe { (*instance).push.clear() };
-        // SAFETY: As above; drops the connection and closes its socket.
+        // SAFETY: Drops the connection and closes the socket during finalization.
         unsafe { (*instance).session.clear() };
     }
 }
 
 /// Returns the parent `EBookMetaBackendClass` for chaining up vfuncs.
 pub fn parent_class() -> Option<&'static EBookMetaBackendClass> {
-    // SAFETY: the contract above.
+    // SAFETY: Forwarded to parent_class helper.
     unsafe {
         subclass::parent_class::<EBookMetaBackendClass>(
             <JmapBookBackend as ObjectSubclass>::parent_type(),
@@ -267,9 +261,7 @@ unsafe extern "C" fn connect_sync(
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours, a
-    // NULL-or-valid ENamedParameters and GCancellable, and out-parameters that
-    // are NULL or writable.
+    // SAFETY: Valid instance pointer, valid or NULL parameters, and writable out-parameters.
     unsafe {
         guard_bool("connect_sync", error, || {
             let Some(backend) = instance(meta_backend) else {
@@ -348,7 +340,7 @@ unsafe extern "C" fn list_existing_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // Matches the EDS vfunc signature.
 unsafe extern "C" fn get_changes_sync(
     meta_backend: *mut EBookMetaBackend,
     last_sync_tag: *const gchar,
@@ -426,7 +418,7 @@ unsafe extern "C" fn load_contact_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // Matches the EDS vfunc signature.
 unsafe extern "C" fn save_contact_sync(
     meta_backend: *mut EBookMetaBackend,
     overwrite_existing: gboolean,
@@ -461,7 +453,7 @@ unsafe extern "C" fn save_contact_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // Matches the EDS vfunc signature.
 unsafe extern "C" fn remove_contact_sync(
     meta_backend: *mut EBookMetaBackend,
     _conflict_resolution: EConflictResolution,
@@ -531,10 +523,8 @@ const PUSHED_TYPES: &[&str] = &["ContactCard", "AddressBook"];
 ///
 /// `meta_backend` must be a valid, live GObject instance.
 unsafe fn start_push(meta_backend: *mut EBookMetaBackend, sync: &BookSync) -> Option<PushRefresh> {
-    // SAFETY: a valid instance of a type derived from `GObject`, referenced
-    // by EDS for the length of the vfunc this runs inside; the trampoline
-    // below is handed the same pointer back and only casts it to the type it
-    // came from.
+    // SAFETY: Valid GObject-derived instance referenced by EDS.
+    // The trampoline receives this pointer and casts it to the origin type.
     unsafe {
         push::start_for(
             meta_backend.cast(),
@@ -600,7 +590,7 @@ unsafe fn refresh_credentials(
     }
 }
 
-/// The Rust view of an instance pointer EDS handed us.
+/// Returns the Rust view of an instance pointer from EDS.
 ///
 /// # Safety
 ///
@@ -651,7 +641,7 @@ unsafe extern "C" fn get_destination_address(
     guard("get_destination_address", GFALSE, || {
         // `(transfer none)`, and NULL only for a backend EDS did not
         // construct from a source.
-        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        // SAFETY: EDS provides a valid backend instance alive for the call.
         let source = unsafe { e_backend_get_source(backend) };
         if source.is_null() {
             return GFALSE;
@@ -668,9 +658,7 @@ unsafe extern "C" fn get_destination_address(
             "resolved destination address for address book backend"
         );
 
-        // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
-        // only on this success path; ownership of the duplicated string
-        // passes to EDS, which frees it with `g_free`.
+        // SAFETY: `host` and `port` are out-parameters; caller takes ownership of host string.
         unsafe {
             *host = dup_string(&address_host);
             *port = address_port;

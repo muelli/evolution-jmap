@@ -47,8 +47,7 @@ pub unsafe fn list_existing(
     );
     let (state, contacts) = match sync.list_existing() {
         Ok(listed) => listed,
-        // SAFETY: `error` satisfies set_raw_gerror's contract by this
-        // function's own.
+        // SAFETY: `error` satisfies set_raw_gerror contract.
         Err(failure) => {
             tracing::debug!(
                 account_id,
@@ -68,10 +67,8 @@ pub unsafe fn list_existing(
         "listed existing address book contacts"
     );
 
-    // SAFETY: as above for the out-parameters; both allocations are GLib ones
-    // ownership of which passes to the caller. All outputs are built into locals
-    // first and published in a single step so no out-parameter is written before
-    // every fallible allocation is complete (audit F6).
+    // SAFETY: Out-parameters satisfy caller contracts. Both allocations are GLib ones transferring ownership to caller.
+    // Build outputs into locals first and publish in a single step.
     unsafe {
         let existing_objects =
             (!out_existing_objects.is_null()).then(|| marshal::info_list(&contacts));
@@ -95,7 +92,7 @@ pub unsafe fn list_existing(
 /// # Safety
 ///
 /// As [`list_existing`], and `last_sync_tag` must be NULL or a valid NUL-terminated string.
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+#[allow(clippy::too_many_arguments)] // Matches the EDS vfunc signature.
 pub unsafe fn get_changes(
     sync: &BookSync,
     last_sync_tag: *const gchar,
@@ -142,7 +139,7 @@ pub unsafe fn get_changes(
                 ?failure,
                 "getting address book changes failed"
             );
-            // SAFETY: `error` satisfies the contract by this function's own.
+            // SAFETY: `error` satisfies caller contract.
             unsafe { set_raw_gerror(error, to_gerror(&failure)) };
             return Outcome::Failed;
         }
@@ -157,10 +154,8 @@ pub unsafe fn get_changes(
         "reported address book changes"
     );
 
-    // SAFETY: as above for the out-parameters; the allocations are GLib ones
-    // ownership of which passes to the caller. All outputs are built into locals
-    // first and published in a single step so no out-parameter is written before
-    // every fallible allocation is complete (audit F6).
+    // SAFETY: Out-parameters satisfy caller contracts. Allocations transfer ownership to caller.
+    // Build outputs into locals first and publish in a single step.
     unsafe {
         let modified =
             (!out_modified_objects.is_null()).then(|| marshal::info_list(&changes.changed));
@@ -258,9 +253,7 @@ pub unsafe fn load_contact(
         "loaded contact"
     );
 
-    // SAFETY: `out_contact` satisfies the contract by this function's own; the
-    // reference taken by `contact_from_vcard` passes to the caller, or is
-    // dropped again if the caller did not want it.
+    // SAFETY: `out_contact` satisfies caller contract. Reference from contact_from_vcard transfers to caller or is dropped.
     unsafe {
         if out_contact.is_null() {
             marshal::contact_unref(contact);
@@ -425,8 +418,7 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
                 e_book_client_error_create(E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, message.as_ptr())
             }
         }
-        // A vCard Evolution handed us that the mapping cannot read: the
-        // argument was bad, not the server.
+        // Unreadable vCard represents an invalid argument.
         SyncError::VCard(_) => invalid_arg_gerror(&failure.to_string()),
         SyncError::PhotoTooLarge { photo_octets } => invalid_arg_gerror(&translate_with(
             // TRANSLATORS: shown when a contact could not be saved because of its picture. %1$s is the picture's size, such as "1.2 MB".

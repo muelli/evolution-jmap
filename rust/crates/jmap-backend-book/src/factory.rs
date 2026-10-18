@@ -15,10 +15,10 @@ use crate::backend::JmapBookBackend;
 /// Backend name matched against `BackendName` in address book source files.
 pub const FACTORY_NAME: &CStr = c"jmap";
 
-/// The factory EDS asks for a [`JmapBookBackend`].
+/// Factory for [`JmapBookBackend`].
 #[repr(C)]
 pub struct JmapBookFactory {
-    /// GObject's; the base class keeps everything this type has.
+    /// Base class retains the instance state.
     parent: EBookBackendFactory,
 }
 
@@ -44,16 +44,14 @@ fn backend_type() -> GType {
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the EBookBackendFactory
-// instance and class structs respectively, and EBookBackendFactory derives
-// from GObject (via EBackendFactory and EExtension).
+// SAFETY: Structs are #[repr(C)] and lead with EBookBackendFactory structs. EBookBackendFactory derives from GObject.
 unsafe impl ObjectSubclass for JmapBookFactory {
     const NAME: &'static CStr = c"EBookBackendJmapFactory";
     type Instance = JmapBookFactory;
     type Class = JmapBookFactoryClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the EDS type system initialises itself.
+        // SAFETY: No arguments; type initialises itself.
         unsafe { e_book_backend_factory_get_type() }
     }
 
@@ -63,8 +61,7 @@ unsafe impl ObjectSubclass for JmapBookFactory {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; both fields are in that half.
+        // SAFETY: `class` points to a freshly allocated class struct; both fields are in the parent struct.
         let factory = unsafe { &mut (*class).parent_class };
         factory.factory_name = FACTORY_NAME.as_ptr();
         factory.backend_type = backend_type();

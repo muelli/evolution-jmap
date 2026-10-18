@@ -26,8 +26,7 @@ pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
         let object = cstring_lossy(&info.vcard);
-        // SAFETY: the three pointers are valid for the call, which copies
-        // each of them; a NULL `extra` is explicitly allowed.
+        // SAFETY: Pointers are valid for the call, which copies them; NULL extra is allowed.
         let node = unsafe {
             e_book_meta_backend_info_new(
                 uid.as_ptr(),
@@ -36,8 +35,7 @@ pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
                 ptr::null(),
             )
         };
-        // SAFETY: `list` is a valid GSList (initially the empty one) and
-        // `node` is a fresh allocation ownership of which passes to it.
+        // SAFETY: `list` is a valid GSList and `node` is a fresh allocation.
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
@@ -48,12 +46,11 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
     let mut list = ptr::null_mut();
     for uid in uids.iter().rev() {
         let uid = cstring_lossy(uid);
-        // SAFETY: `uid` is valid for the call, which copies it; NULL is
-        // allowed for the other three.
+        // SAFETY: `uid` is valid for the call, which copies it; NULL is allowed for other fields.
         let node = unsafe {
             e_book_meta_backend_info_new(uid.as_ptr(), ptr::null(), ptr::null(), ptr::null())
         };
-        // SAFETY: as in `info_list`.
+        // SAFETY: As in `info_list`.
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
@@ -65,8 +62,7 @@ pub fn contact_from_vcard(vcard: &str) -> *mut EContact {
         return ptr::null_mut();
     }
     let text = cstring_lossy(vcard);
-    // SAFETY: `text` is a valid NUL-terminated string for the duration of the
-    // call, which copies what it needs.
+    // SAFETY: `text` is a valid NUL-terminated string for the duration of the call.
     unsafe { e_contact_new_from_vcard(text.as_ptr()) }
 }
 
@@ -87,8 +83,7 @@ pub unsafe fn vcard_from_contact(contact: *mut EContact) -> Option<String> {
     if contact.is_null() {
         return None;
     }
-    // SAFETY: EContact derives from EVCard, so the cast is the C upcast, and
-    // the returned string is a GLib allocation this call takes ownership of.
+    // SAFETY: EContact derives from EVCard; caller takes ownership of the returned string.
     unsafe {
         let raw = e_vcard_to_string_vcard_30(contact.cast::<EVCard>());
         if raw.is_null() {
@@ -109,8 +104,7 @@ pub unsafe fn contact_uid(contact: *mut EContact) -> Option<String> {
     if contact.is_null() {
         return None;
     }
-    // SAFETY: the returned string is owned by the contact and is valid at
-    // least until it is mutated, which nothing here does.
+    // SAFETY: The returned string is valid until the contact is mutated.
     let uid = unsafe { e_contact_get_const(contact, E_CONTACT_UID).cast::<gchar>() };
     if uid.is_null() {
         return None;
@@ -125,11 +119,10 @@ pub unsafe fn contact_uid(contact: *mut EContact) -> Option<String> {
 ///
 /// # Safety
 ///
-/// `contact` must be NULL or a valid `EContact` this caller owns a reference
-/// to.
+/// `contact` must be NULL or a valid `EContact` reference owned by caller.
 pub unsafe fn contact_unref(contact: *mut EContact) {
     if !contact.is_null() {
-        // SAFETY: EContact is a GObject and the caller owns the reference.
+        // SAFETY: EContact is a GObject and caller owns the reference.
         unsafe { g_object_unref(contact.cast()) }
     }
 }

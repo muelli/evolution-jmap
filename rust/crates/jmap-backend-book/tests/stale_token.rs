@@ -29,8 +29,7 @@ impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapBookBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: The registered type class reference provides the backend class struct.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
@@ -86,7 +85,7 @@ impl Listed {
 
 impl Drop for Listed {
     fn drop(&mut self) {
-        // SAFETY: both are what the vfunc handed over, or NULL.
+        // SAFETY: Valid GError pointer or null from vfunc.
         unsafe {
             if !self.error.is_null() {
                 g_error_free(self.error);
@@ -104,7 +103,7 @@ fn list_existing(class: &Class, backend: &mut Detached) -> Listed {
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
-    // SAFETY: valid instance of ours, NULL cancellable, and writable out-parameters.
+    // SAFETY: Valid instance pointer, null cancellable, and writable out-parameters.
     let ok = unsafe {
         vfunc(
             backend.as_ptr(),
@@ -188,21 +187,18 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
     let fixture = Fixture::start();
     let mut backend = fixture.detached(GOOD);
 
-    // The connection is good to begin with, so the failure below is the
-    // rotation and nothing else.
+    // Initial connection succeeds before token rotation.
     let listed = list_existing(&class, &mut backend);
     assert!(listed.ok, "a live token was refused");
     assert_eq!(listed.count, 1);
 
-    // The server now accepts a different token; the pooled connection still
-    // carries the old one.
+    // Rotate server token; the pooled connection retains the old token.
     fixture.server.set_bearer_token(FRESH);
     let before = fixture.server.unauthorized_responses();
     let listed = list_existing(&class, &mut backend);
     listed.assert_is_an_authentication_failure();
 
-    // A detached instance has no ESource, so refresh reports nothing to refresh
-    // and does not retry.
+    // Detached instances lack an ESource; refresh does not retry.
     assert_eq!(
         fixture.server.unauthorized_responses() - before,
         1,
@@ -244,7 +240,7 @@ fn a_failure_that_is_not_a_401_is_still_reported_unchanged() {
     let listed = list_existing(&class, &mut backend);
     assert!(!listed.ok);
     assert!(!listed.error.is_null());
-    // SAFETY: a live GError the struct owns and frees.
+    // SAFETY: Valid GError pointer owned by the struct.
     unsafe {
         assert_eq!((*listed.error).domain, e_client_error_quark());
         assert_eq!(

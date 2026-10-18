@@ -21,10 +21,9 @@ use jmap_backend_book::factory::JmapBookFactory;
 use jmap_backend_book::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// A `GTypeModule` standing in for the `EModule` EDS would load us as.
+/// A `GTypeModule` standing in for the `EModule` loaded by EDS.
 ///
-/// `EModule`'s own `load` dlopens a shared object, resolves `e_module_load` in
-/// it and calls it; this does the same without a file to open.
+/// Simulates `EModule` loading without requiring a file.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -48,8 +47,7 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to a freshly allocated class struct leading with GTypeModuleClass.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -168,9 +166,7 @@ fn the_entry_point_registers_a_book_backend_factory() {
     );
 }
 
-/// The name is the contract with the `.source` file: EDS looks an address book
-/// up by the `BackendName` in its `[Address Book]` group, and a factory that
-/// answers to anything else is an account that reports no available backend.
+/// Verifies the factory matches the `BackendName` expected by address book sources.
 #[test]
 fn the_factory_answers_to_the_backend_name_a_source_file_asks_for() {
     let class = FactoryClass::get();

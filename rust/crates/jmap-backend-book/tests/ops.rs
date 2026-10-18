@@ -1,16 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `EBookMetaBackend` vfunc bodies, called the way EDS calls them:
-//! out-parameters that start NULL, a `GError **` that starts NULL, and a
-//! return value that says which of the two was written.
-//!
-//! Every test runs against `jmap-mockd`, so the assertions are about what the
-//! server was actually told, not about what the code meant to say. What is
-//! deliberately *not* here is a live `EBookMetaBackend` instance: constructing
-//! one needs an `ESourceRegistry`, which needs a running
-//! `evolution-source-registry` on the session bus. Keeping the vfunc bodies in
-//! a layer that takes a `&BookSync` is what lets them be tested at all.
+//! Tests for `EBookMetaBackend` vfunc bodies called over `BookSync`.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -32,8 +23,7 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
 
-/// A mock server with two address books, so "only this book" stays
-/// observable, and the `BookSync` over the one the backend syncs.
+/// Mock server fixture providing two address books and `BookSync`.
 struct Fixture {
     server: MockServer,
     account_id: Id,
@@ -298,9 +288,7 @@ fn load_contact_yields_an_econtact_keyed_by_the_jmap_id() {
     }
 }
 
-/// `EBookMetaBackend` matches on this exact domain and code to decide that a
-/// card is gone rather than that the sync failed, so a not-found reported any
-/// other way is a cache entry that never goes away.
+/// Verifies contact not found returns `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND`.
 #[test]
 fn loading_an_unknown_contact_reports_contact_not_found_and_writes_nothing() {
     let fixture = Fixture::start();
@@ -704,10 +692,7 @@ fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
 // ---------------------------------------------------------------------------
 // the error mapping itself
 
-/// Each `SyncError` has to reach Evolution as the domain and code it routes
-/// on: `REPOSITORY_OFFLINE` is what makes the meta backend serve its cache,
-/// `CONTACT_NOT_FOUND` is what makes it drop a card, and a vCard we cannot map
-/// is a bad argument rather than a server fault.
+/// Verifies `SyncError` variants map to expected `GError` domains and codes.
 #[test]
 fn each_sync_error_carries_the_code_evolution_routes_on() {
     let cases: Vec<(SyncError, u32, i32)> = vec![

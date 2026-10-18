@@ -47,8 +47,7 @@ pub unsafe fn set_source_account_id(source: *mut ESource, account_id: &str) {
 
 /// Reads the JMAP account ID from `source`, if configured.
 ///
-/// Returns `None` when absent, signaling that the backend should fall back
-/// to the primary account for the capability.
+/// Returns `None` when absent to fall back to the primary account.
 ///
 /// # Safety
 ///
@@ -57,7 +56,7 @@ pub unsafe fn source_account_id(source: *mut ESource) -> Option<String> {
     if source.is_null() {
         return None;
     }
-    // SAFETY: caller guarantees source is a valid ESource pointer.
+    // SAFETY: Caller guarantees source is a valid ESource pointer.
     unsafe {
         let read_obj = |obj: *mut gobject_sys::GObject, keys: &[&CStr]| -> Option<String> {
             if obj.is_null() {
@@ -145,9 +144,7 @@ pub fn open_book(
 
 /// Connects to the configured JMAP account and resolves the target address book.
 ///
-/// The account is `account_id` when given, else the one the source's
-/// `[Resource] Identity` names (see [`SourceConfig::account_id`]), else the
-/// primary account for the capability.
+/// The account is `account_id` when given, else the source resource identity, else the primary account.
 pub fn open_book_with_account(
     config: &SourceConfig,
     credentials: Credentials,
@@ -205,8 +202,7 @@ pub unsafe fn connect(
     out_auth_result: *mut ESourceAuthenticationResult,
     error: *mut *mut GError,
 ) -> Option<OpenBook> {
-    // SAFETY: the arguments satisfy `connect_with`'s contract by this
-    // function's, which is the same one.
+    // SAFETY: Arguments satisfy the connect_with contract.
     unsafe {
         let account_id = source_account_id(source);
         connect_with(
