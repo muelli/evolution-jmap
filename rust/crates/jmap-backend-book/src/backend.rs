@@ -6,13 +6,55 @@
 //! Bridges instance and class structs to [`ops`], managing connection and push lifecycles.
 
 use std::ffi::CStr;
-use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::ptr;
+use std::sync::{
+    Mutex, MutexGuard, OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, EBookMetaBackend, EBookMetaBackendClass,
-    EConflictResolution, EContact, ENamedParameters, ESourceAuthenticationResult,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_CONTACT_ADDRESS, E_CONTACT_ADDRESS_HOME,
+    E_CONTACT_ADDRESS_LABEL_HOME, E_CONTACT_ADDRESS_LABEL_OTHER, E_CONTACT_ADDRESS_LABEL_WORK,
+    E_CONTACT_ADDRESS_OTHER, E_CONTACT_ADDRESS_WORK, E_CONTACT_ANNIVERSARY, E_CONTACT_ASSISTANT,
+    E_CONTACT_BIRTH_DATE, E_CONTACT_BLOG_URL, E_CONTACT_CALENDAR_URI, E_CONTACT_CATEGORIES,
+    E_CONTACT_CATEGORY_LIST, E_CONTACT_EMAIL, E_CONTACT_EMAIL_1, E_CONTACT_EMAIL_2,
+    E_CONTACT_EMAIL_3, E_CONTACT_EMAIL_4, E_CONTACT_FAMILY_NAME, E_CONTACT_FILE_AS,
+    E_CONTACT_FREEBUSY_URL, E_CONTACT_FULL_NAME, E_CONTACT_GIVEN_NAME, E_CONTACT_HOMEPAGE_URL,
+    E_CONTACT_IM_AIM, E_CONTACT_IM_AIM_HOME_1, E_CONTACT_IM_AIM_HOME_2, E_CONTACT_IM_AIM_HOME_3,
+    E_CONTACT_IM_AIM_WORK_1, E_CONTACT_IM_AIM_WORK_2, E_CONTACT_IM_AIM_WORK_3,
+    E_CONTACT_IM_GADUGADU, E_CONTACT_IM_GADUGADU_HOME_1, E_CONTACT_IM_GADUGADU_HOME_2,
+    E_CONTACT_IM_GADUGADU_HOME_3, E_CONTACT_IM_GADUGADU_WORK_1, E_CONTACT_IM_GADUGADU_WORK_2,
+    E_CONTACT_IM_GADUGADU_WORK_3, E_CONTACT_IM_GOOGLE_TALK, E_CONTACT_IM_GOOGLE_TALK_HOME_1,
+    E_CONTACT_IM_GOOGLE_TALK_HOME_2, E_CONTACT_IM_GOOGLE_TALK_HOME_3,
+    E_CONTACT_IM_GOOGLE_TALK_WORK_1, E_CONTACT_IM_GOOGLE_TALK_WORK_2,
+    E_CONTACT_IM_GOOGLE_TALK_WORK_3, E_CONTACT_IM_GROUPWISE, E_CONTACT_IM_GROUPWISE_HOME_1,
+    E_CONTACT_IM_GROUPWISE_HOME_2, E_CONTACT_IM_GROUPWISE_HOME_3, E_CONTACT_IM_GROUPWISE_WORK_1,
+    E_CONTACT_IM_GROUPWISE_WORK_2, E_CONTACT_IM_GROUPWISE_WORK_3, E_CONTACT_IM_ICQ,
+    E_CONTACT_IM_ICQ_HOME_1, E_CONTACT_IM_ICQ_HOME_2, E_CONTACT_IM_ICQ_HOME_3,
+    E_CONTACT_IM_ICQ_WORK_1, E_CONTACT_IM_ICQ_WORK_2, E_CONTACT_IM_ICQ_WORK_3, E_CONTACT_IM_JABBER,
+    E_CONTACT_IM_JABBER_HOME_1, E_CONTACT_IM_JABBER_HOME_2, E_CONTACT_IM_JABBER_HOME_3,
+    E_CONTACT_IM_JABBER_WORK_1, E_CONTACT_IM_JABBER_WORK_2, E_CONTACT_IM_JABBER_WORK_3,
+    E_CONTACT_IM_MATRIX, E_CONTACT_IM_MATRIX_HOME_1, E_CONTACT_IM_MATRIX_HOME_2,
+    E_CONTACT_IM_MATRIX_HOME_3, E_CONTACT_IM_MATRIX_WORK_1, E_CONTACT_IM_MATRIX_WORK_2,
+    E_CONTACT_IM_MATRIX_WORK_3, E_CONTACT_IM_MSN, E_CONTACT_IM_MSN_HOME_1, E_CONTACT_IM_MSN_HOME_2,
+    E_CONTACT_IM_MSN_HOME_3, E_CONTACT_IM_MSN_WORK_1, E_CONTACT_IM_MSN_WORK_2,
+    E_CONTACT_IM_MSN_WORK_3, E_CONTACT_IM_SKYPE, E_CONTACT_IM_SKYPE_HOME_1,
+    E_CONTACT_IM_SKYPE_HOME_2, E_CONTACT_IM_SKYPE_HOME_3, E_CONTACT_IM_SKYPE_WORK_1,
+    E_CONTACT_IM_SKYPE_WORK_2, E_CONTACT_IM_SKYPE_WORK_3, E_CONTACT_IM_YAHOO,
+    E_CONTACT_IM_YAHOO_HOME_1, E_CONTACT_IM_YAHOO_HOME_2, E_CONTACT_IM_YAHOO_HOME_3,
+    E_CONTACT_IM_YAHOO_WORK_1, E_CONTACT_IM_YAHOO_WORK_2, E_CONTACT_IM_YAHOO_WORK_3,
+    E_CONTACT_MANAGER, E_CONTACT_NAME, E_CONTACT_NICKNAME, E_CONTACT_NOTE, E_CONTACT_OFFICE,
+    E_CONTACT_ORG, E_CONTACT_ORG_UNIT, E_CONTACT_PHONE_ASSISTANT, E_CONTACT_PHONE_BUSINESS,
+    E_CONTACT_PHONE_BUSINESS_2, E_CONTACT_PHONE_BUSINESS_FAX, E_CONTACT_PHONE_CALLBACK,
+    E_CONTACT_PHONE_CAR, E_CONTACT_PHONE_COMPANY, E_CONTACT_PHONE_HOME, E_CONTACT_PHONE_HOME_2,
+    E_CONTACT_PHONE_HOME_FAX, E_CONTACT_PHONE_ISDN, E_CONTACT_PHONE_MOBILE, E_CONTACT_PHONE_OTHER,
+    E_CONTACT_PHONE_OTHER_FAX, E_CONTACT_PHONE_PAGER, E_CONTACT_PHONE_PRIMARY,
+    E_CONTACT_PHONE_RADIO, E_CONTACT_PHONE_TELEX, E_CONTACT_PHONE_TTYTDD, E_CONTACT_PHOTO,
+    E_CONTACT_ROLE, E_CONTACT_SPOUSE, E_CONTACT_TEL, E_CONTACT_TITLE, E_CONTACT_UID,
+    E_CONTACT_VIDEO_URL, EBackend, EBookBackend, EBookMetaBackend, EBookMetaBackendClass,
+    EConflictResolution, EContact, EContactField, ENamedParameters, ESourceAuthenticationResult,
     GTlsCertificateFlags, e_backend_get_source, e_book_backend_set_writable,
     e_book_meta_backend_get_type, e_book_meta_backend_schedule_refresh, e_client_error_create,
+    e_contact_field_name,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint16, guint32};
@@ -174,6 +216,8 @@ unsafe impl ObjectSubclass for JmapBookBackend {
         vfuncs.load_contact_sync = Some(load_contact_sync);
         vfuncs.save_contact_sync = Some(save_contact_sync);
         vfuncs.remove_contact_sync = Some(remove_contact_sync);
+        // Override EBookBackendClass::impl_get_backend_property for supported-fields and required-fields.
+        vfuncs.parent_class.parent_class.impl_get_backend_property = Some(get_backend_property);
         // Override EBackendClass::get_destination_address using account authentication host.
         vfuncs
             .parent_class
@@ -633,4 +677,195 @@ unsafe extern "C" fn get_destination_address(
         }
         GTRUE
     })
+}
+
+/// The property name for required contact fields in EDS.
+pub const REQUIRED_FIELDS_PROPERTY: &CStr = c"required-fields";
+/// The property name for supported contact fields in EDS.
+pub const SUPPORTED_FIELDS_PROPERTY: &CStr = c"supported-fields";
+
+/// Fields mapped between JSContact and EDS (RFC 9553, RFC 9610, docs/VCARD-MAPPING.md).
+pub const SUPPORTED_FIELD_IDS: &[EContactField] = &[
+    E_CONTACT_UID,
+    E_CONTACT_FILE_AS,
+    E_CONTACT_FULL_NAME,
+    E_CONTACT_GIVEN_NAME,
+    E_CONTACT_FAMILY_NAME,
+    E_CONTACT_NICKNAME,
+    E_CONTACT_EMAIL_1,
+    E_CONTACT_EMAIL_2,
+    E_CONTACT_EMAIL_3,
+    E_CONTACT_EMAIL_4,
+    E_CONTACT_ADDRESS_LABEL_HOME,
+    E_CONTACT_ADDRESS_LABEL_WORK,
+    E_CONTACT_ADDRESS_LABEL_OTHER,
+    E_CONTACT_PHONE_ASSISTANT,
+    E_CONTACT_PHONE_BUSINESS,
+    E_CONTACT_PHONE_BUSINESS_2,
+    E_CONTACT_PHONE_BUSINESS_FAX,
+    E_CONTACT_PHONE_CALLBACK,
+    E_CONTACT_PHONE_CAR,
+    E_CONTACT_PHONE_COMPANY,
+    E_CONTACT_PHONE_HOME,
+    E_CONTACT_PHONE_HOME_2,
+    E_CONTACT_PHONE_HOME_FAX,
+    E_CONTACT_PHONE_ISDN,
+    E_CONTACT_PHONE_MOBILE,
+    E_CONTACT_PHONE_OTHER,
+    E_CONTACT_PHONE_OTHER_FAX,
+    E_CONTACT_PHONE_PAGER,
+    E_CONTACT_PHONE_PRIMARY,
+    E_CONTACT_PHONE_RADIO,
+    E_CONTACT_PHONE_TELEX,
+    E_CONTACT_PHONE_TTYTDD,
+    E_CONTACT_ORG,
+    E_CONTACT_ORG_UNIT,
+    E_CONTACT_OFFICE,
+    E_CONTACT_TITLE,
+    E_CONTACT_ROLE,
+    E_CONTACT_MANAGER,
+    E_CONTACT_ASSISTANT,
+    E_CONTACT_HOMEPAGE_URL,
+    E_CONTACT_BLOG_URL,
+    E_CONTACT_CATEGORIES,
+    E_CONTACT_CALENDAR_URI,
+    E_CONTACT_FREEBUSY_URL,
+    E_CONTACT_VIDEO_URL,
+    E_CONTACT_SPOUSE,
+    E_CONTACT_NOTE,
+    E_CONTACT_IM_AIM_HOME_1,
+    E_CONTACT_IM_AIM_HOME_2,
+    E_CONTACT_IM_AIM_HOME_3,
+    E_CONTACT_IM_AIM_WORK_1,
+    E_CONTACT_IM_AIM_WORK_2,
+    E_CONTACT_IM_AIM_WORK_3,
+    E_CONTACT_IM_GROUPWISE_HOME_1,
+    E_CONTACT_IM_GROUPWISE_HOME_2,
+    E_CONTACT_IM_GROUPWISE_HOME_3,
+    E_CONTACT_IM_GROUPWISE_WORK_1,
+    E_CONTACT_IM_GROUPWISE_WORK_2,
+    E_CONTACT_IM_GROUPWISE_WORK_3,
+    E_CONTACT_IM_JABBER_HOME_1,
+    E_CONTACT_IM_JABBER_HOME_2,
+    E_CONTACT_IM_JABBER_HOME_3,
+    E_CONTACT_IM_JABBER_WORK_1,
+    E_CONTACT_IM_JABBER_WORK_2,
+    E_CONTACT_IM_JABBER_WORK_3,
+    E_CONTACT_IM_YAHOO_HOME_1,
+    E_CONTACT_IM_YAHOO_HOME_2,
+    E_CONTACT_IM_YAHOO_HOME_3,
+    E_CONTACT_IM_YAHOO_WORK_1,
+    E_CONTACT_IM_YAHOO_WORK_2,
+    E_CONTACT_IM_YAHOO_WORK_3,
+    E_CONTACT_IM_MSN_HOME_1,
+    E_CONTACT_IM_MSN_HOME_2,
+    E_CONTACT_IM_MSN_HOME_3,
+    E_CONTACT_IM_MSN_WORK_1,
+    E_CONTACT_IM_MSN_WORK_2,
+    E_CONTACT_IM_MSN_WORK_3,
+    E_CONTACT_IM_ICQ_HOME_1,
+    E_CONTACT_IM_ICQ_HOME_2,
+    E_CONTACT_IM_ICQ_HOME_3,
+    E_CONTACT_IM_ICQ_WORK_1,
+    E_CONTACT_IM_ICQ_WORK_2,
+    E_CONTACT_IM_ICQ_WORK_3,
+    E_CONTACT_ADDRESS,
+    E_CONTACT_ADDRESS_HOME,
+    E_CONTACT_ADDRESS_WORK,
+    E_CONTACT_ADDRESS_OTHER,
+    E_CONTACT_CATEGORY_LIST,
+    E_CONTACT_PHOTO,
+    E_CONTACT_NAME,
+    E_CONTACT_EMAIL,
+    E_CONTACT_IM_AIM,
+    E_CONTACT_IM_GROUPWISE,
+    E_CONTACT_IM_JABBER,
+    E_CONTACT_IM_YAHOO,
+    E_CONTACT_IM_MSN,
+    E_CONTACT_IM_ICQ,
+    E_CONTACT_BIRTH_DATE,
+    E_CONTACT_ANNIVERSARY,
+    E_CONTACT_IM_GADUGADU_HOME_1,
+    E_CONTACT_IM_GADUGADU_HOME_2,
+    E_CONTACT_IM_GADUGADU_HOME_3,
+    E_CONTACT_IM_GADUGADU_WORK_1,
+    E_CONTACT_IM_GADUGADU_WORK_2,
+    E_CONTACT_IM_GADUGADU_WORK_3,
+    E_CONTACT_IM_GADUGADU,
+    E_CONTACT_TEL,
+    E_CONTACT_IM_SKYPE_HOME_1,
+    E_CONTACT_IM_SKYPE_HOME_2,
+    E_CONTACT_IM_SKYPE_HOME_3,
+    E_CONTACT_IM_SKYPE_WORK_1,
+    E_CONTACT_IM_SKYPE_WORK_2,
+    E_CONTACT_IM_SKYPE_WORK_3,
+    E_CONTACT_IM_SKYPE,
+    E_CONTACT_IM_GOOGLE_TALK_HOME_1,
+    E_CONTACT_IM_GOOGLE_TALK_HOME_2,
+    E_CONTACT_IM_GOOGLE_TALK_HOME_3,
+    E_CONTACT_IM_GOOGLE_TALK_WORK_1,
+    E_CONTACT_IM_GOOGLE_TALK_WORK_2,
+    E_CONTACT_IM_GOOGLE_TALK_WORK_3,
+    E_CONTACT_IM_GOOGLE_TALK,
+    E_CONTACT_IM_MATRIX_HOME_1,
+    E_CONTACT_IM_MATRIX_HOME_2,
+    E_CONTACT_IM_MATRIX_HOME_3,
+    E_CONTACT_IM_MATRIX_WORK_1,
+    E_CONTACT_IM_MATRIX_WORK_2,
+    E_CONTACT_IM_MATRIX_WORK_3,
+    E_CONTACT_IM_MATRIX,
+];
+
+/// Comma-separated list of field names supported by this backend.
+pub fn supported_fields() -> &'static str {
+    static SUPPORTED: OnceLock<String> = OnceLock::new();
+    SUPPORTED.get_or_init(|| {
+        let mut names = Vec::with_capacity(SUPPORTED_FIELD_IDS.len());
+        for &field in SUPPORTED_FIELD_IDS {
+            // SAFETY: field is a valid EContactField constant; e_contact_field_name returns a static C string.
+            unsafe {
+                let name_ptr = e_contact_field_name(field);
+                if !name_ptr.is_null() {
+                    let cstr = CStr::from_ptr(name_ptr);
+                    if let Ok(name) = cstr.to_str() {
+                        names.push(name);
+                    }
+                }
+            }
+        }
+        names.join(",")
+    })
+}
+
+/// Comma-separated list of required field names. JSContact requires no specific contact field.
+pub fn required_fields() -> &'static str {
+    ""
+}
+
+/// Answers backend property values, advertising supported-fields and required-fields.
+unsafe extern "C" fn get_backend_property(
+    backend: *mut EBookBackend,
+    prop_name: *const gchar,
+) -> *mut gchar {
+    // SAFETY: EDS contract: valid backend instance and NUL-terminated property name.
+    unsafe {
+        guard("get_backend_property", ptr::null_mut(), || {
+            if !prop_name.is_null() {
+                let name = CStr::from_ptr(prop_name);
+                if name == REQUIRED_FIELDS_PROPERTY {
+                    return dup_string(required_fields());
+                }
+                if name == SUPPORTED_FIELDS_PROPERTY {
+                    return dup_string(supported_fields());
+                }
+            }
+
+            match parent_class()
+                .and_then(|class| class.parent_class.parent_class.impl_get_backend_property)
+            {
+                Some(chain_up) => chain_up(backend, prop_name),
+                None => ptr::null_mut(),
+            }
+        })
+    }
 }

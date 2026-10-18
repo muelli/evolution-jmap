@@ -53,6 +53,11 @@ impl Class {
         unsafe { &(*self.0).parent_class }
     }
 
+    /// The `EBookBackendClass` half where `impl_get_backend_property` lives.
+    fn book_vfuncs(&self) -> &eds_sys::EBookBackendClass {
+        &self.vfuncs().parent_class.parent_class
+    }
+
     /// The `EBackendClass` half where `get_destination_address` lives.
     fn backend_vfuncs(&self) -> &EBackendClass {
         &self.vfuncs().parent_class.parent_class.parent_class
@@ -610,4 +615,122 @@ fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_i
         "the slot still holds EDS's default, which never sees a host this crate never sets \
          as the backend's connectable"
     );
+}
+
+// ---------------------------------------------------------------------------
+// get_backend_property
+
+#[test]
+fn class_init_installs_get_backend_property_over_the_meta_backends() {
+    let class = Class::get();
+    let ours = class
+        .book_vfuncs()
+        .impl_get_backend_property
+        .expect("class_init installed no impl_get_backend_property");
+    let theirs = parent_class()
+        .expect("the parent class is registered")
+        .parent_class
+        .parent_class
+        .impl_get_backend_property
+        .expect("the meta backend answers properties, so there is one to chain up to");
+    assert_ne!(ours as usize, theirs as usize);
+}
+
+#[test]
+fn get_backend_property_returns_empty_string_for_required_fields() {
+    let class = Class::get();
+    let vfuncs = class.book_vfuncs();
+    let mut backend = Detached::new();
+
+    unsafe {
+        let prop = vfuncs.impl_get_backend_property.unwrap()(
+            backend.as_ptr().cast(),
+            c"required-fields".as_ptr(),
+        );
+        assert!(!prop.is_null());
+        let str_val = CStr::from_ptr(prop).to_str().unwrap();
+        assert_eq!(str_val, "");
+        glib_sys::g_free(prop.cast());
+    }
+}
+
+#[test]
+fn get_backend_property_returns_jscontact_fields_for_supported_fields() {
+    let class = Class::get();
+    let vfuncs = class.book_vfuncs();
+    let mut backend = Detached::new();
+
+    unsafe {
+        let prop = vfuncs.impl_get_backend_property.unwrap()(
+            backend.as_ptr().cast(),
+            c"supported-fields".as_ptr(),
+        );
+        assert!(!prop.is_null());
+        let str_val = CStr::from_ptr(prop).to_str().unwrap();
+        let fields: Vec<&str> = str_val.split(',').collect();
+
+        // Mapped fields must be included
+        assert!(fields.contains(&"full_name"));
+        assert!(fields.contains(&"given_name"));
+        assert!(fields.contains(&"family_name"));
+        assert!(fields.contains(&"nickname"));
+        assert!(fields.contains(&"email_1"));
+        assert!(fields.contains(&"email_2"));
+        assert!(fields.contains(&"business_phone"));
+        assert!(fields.contains(&"mobile_phone"));
+        assert!(fields.contains(&"address_home"));
+        assert!(fields.contains(&"address_work"));
+        assert!(fields.contains(&"org"));
+        assert!(fields.contains(&"title"));
+        assert!(fields.contains(&"role"));
+        assert!(fields.contains(&"note"));
+        assert!(fields.contains(&"homepage_url"));
+        assert!(fields.contains(&"birth_date"));
+        assert!(fields.contains(&"anniversary"));
+        assert!(fields.contains(&"categories"));
+        assert!(fields.contains(&"photo"));
+        assert!(fields.contains(&"im_aim_home_1"));
+        assert!(fields.contains(&"im_matrix_work_1"));
+
+        // Unmapped / dropped-by-design fields must be excluded
+        assert!(!fields.contains(&"mailer"));
+        assert!(!fields.contains(&"logo"));
+        assert!(!fields.contains(&"x509_cert"));
+        assert!(!fields.contains(&"pgp_cert"));
+        assert!(!fields.contains(&"geo"));
+        assert!(!fields.contains(&"wants_html"));
+        assert!(!fields.contains(&"is_list"));
+        assert!(!fields.contains(&"list_show_addresses"));
+        assert!(!fields.contains(&"sip"));
+        assert!(!fields.contains(&"im_twitter"));
+        assert!(!fields.contains(&"ics_calendar"));
+        assert!(!fields.contains(&"rev"));
+
+        glib_sys::g_free(prop.cast());
+    }
+}
+
+#[test]
+fn e_contact_field_id_resolves_every_supported_field_name() {
+    let class = Class::get();
+    let vfuncs = class.book_vfuncs();
+    let mut backend = Detached::new();
+
+    unsafe {
+        let prop = vfuncs.impl_get_backend_property.unwrap()(
+            backend.as_ptr().cast(),
+            c"supported-fields".as_ptr(),
+        );
+        assert!(!prop.is_null());
+        let str_val = CStr::from_ptr(prop).to_str().unwrap();
+        for name in str_val.split(',') {
+            let c_name = CString::new(name).unwrap();
+            let field_id = eds_sys::e_contact_field_id(c_name.as_ptr());
+            assert!(
+                (eds_sys::E_CONTACT_FIELD_FIRST..eds_sys::E_CONTACT_FIELD_LAST).contains(&field_id),
+                "field name '{name}' must resolve to a valid EContactField"
+            );
+        }
+        glib_sys::g_free(prop.cast());
+    }
 }

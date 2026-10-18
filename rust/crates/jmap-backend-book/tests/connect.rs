@@ -806,3 +806,50 @@ fn connecting_from_a_source_with_unknown_account_id_fails() {
     assert!(!outs.error.is_null());
     unsafe { outs.take_error(eds_sys::E_CLIENT_ERROR_OTHER_ERROR) };
 }
+
+#[test]
+fn source_account_id_reads_account_without_creating_missing_extension() {
+    let source = TestSource::new();
+    unsafe {
+        // Without an account configured, source_account_id is None
+        assert_eq!(connect::source_account_id(source.0), None);
+        // extension_if_present guarantees that JMAP Account extension is not created if absent
+        assert_eq!(
+            eds_sys::e_source_has_extension(source.0, c"JMAP Account".as_ptr()),
+            glib_sys::GFALSE
+        );
+
+        // When set on the source via set_source_account_id, it resolves
+        connect::set_source_account_id(source.0, "ext-acc-5678");
+        assert_eq!(
+            connect::source_account_id(source.0),
+            Some("ext-acc-5678".to_string())
+        );
+        assert_eq!(
+            eds_sys::e_source_has_extension(source.0, c"JMAP Account".as_ptr()),
+            glib_sys::GFALSE
+        );
+
+        // When set on the Resource extension, it resolves without creating JMAP Account
+        let source2 = TestSource::new();
+        let resource = eds_sys::e_source_get_extension(
+            source2.0,
+            eds_sys::E_SOURCE_EXTENSION_RESOURCE.as_ptr(),
+        );
+        let val = CString::new("resource-acc-1234").unwrap();
+        gobject_sys::g_object_set_data_full(
+            resource.cast(),
+            c"AccountId".as_ptr(),
+            val.into_raw().cast(),
+            Some(glib_sys::g_free),
+        );
+        assert_eq!(
+            connect::source_account_id(source2.0),
+            Some("resource-acc-1234".to_string())
+        );
+        assert_eq!(
+            eds_sys::e_source_has_extension(source2.0, c"JMAP Account".as_ptr()),
+            glib_sys::GFALSE
+        );
+    }
+}

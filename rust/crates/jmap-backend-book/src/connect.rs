@@ -91,11 +91,14 @@ pub unsafe fn source_account_id(source: *mut ESource) -> Option<String> {
             return Some(val);
         }
 
-        if eds_sys::e_source_has_extension(source, c"JMAP Account".as_ptr()) != glib_sys::GFALSE {
-            let ext = eds_sys::e_source_get_extension(source, c"JMAP Account".as_ptr());
-            if let Some(val) = read_obj(ext.cast(), &keys) {
-                return Some(val);
-            }
+        let ext = jmap_backend_core::marshal::extension_if_present::<gobject_sys::GObject>(
+            source,
+            c"JMAP Account",
+        );
+        if let Some(ext) = ext
+            && let Some(val) = read_obj(ext, &keys)
+        {
+            return Some(val);
         }
 
         None
