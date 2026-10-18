@@ -11277,8 +11277,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, LANG, EXPERTISE, HOBBY, INTEREST, MEMBER, SOURCE,
-    // XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, KIND, GENDER, LANG, EXPERTISE, HOBBY, INTEREST, MEMBER,
+    // SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11310,6 +11310,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
+        "GENDER:M\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
         "HOBBY;LEVEL=high;INDEX=1:reading\r\n",
@@ -11421,6 +11422,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
+    assert!(!emitted.contains("GENDER:"), "GENDER must not be emitted");
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
     assert!(
         !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
@@ -11556,6 +11558,36 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("KIND:") && !emitted.contains("KIND;"),
             "KIND must not be emitted"
+        );
+    }
+
+    // GENDER variants.
+    for gender_val in [
+        "GENDER:M",
+        "GENDER:F",
+        "GENDER:O",
+        "GENDER:N",
+        "GENDER:U",
+        "GENDER:;non-binary",
+        "GENDER:M;masculine identity",
+        "gender:f;female identity",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Gender User\r\n{gender_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse GENDER");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Gender User")
+        );
+        assert!(
+            parsed.personal_info.is_none(),
+            "GENDER must not project to personal_info"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("GENDER:") && !emitted.contains("GENDER;"),
+            "GENDER must not be emitted"
         );
     }
 
@@ -12015,6 +12047,9 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "INTEREST;INDEX=2:",
         "KIND:",
         "kind:   ",
+        "GENDER:",
+        "GENDER:   ",
+        "gender:",
         "MEMBER:",
         "MEMBER:   ",
         "member:",
