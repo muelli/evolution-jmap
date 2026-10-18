@@ -1,48 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! How many octets of response body this client will hold in memory.
+//! Memory limits for buffered HTTP response bodies.
 //!
-//! JMAP bounds what a client *sends* and nothing else: RFC 8620 §2 puts
-//! `maxSizeRequest` on a request to `apiUrl` and `maxSizeUpload` on an upload,
-//! both checked before sending (see [`Client::api_call`] and
-//! [`Client::upload_blob`]). Because the session document gives no limit for
-//! response bodies, a client that buffers responses whole must define ceilings.
-//!
-//! These ceilings bound single buffered response bodies to avoid unbounded
-//! allocations while remaining comfortably above expected server payloads.
-//!
-//! [`Client::api_call`]: crate::Client::api_call
-//! [`Client::upload_blob`]: crate::Client::upload_blob
+//! RFC 8620 Section 2 defines `maxSizeRequest` and `maxSizeUpload` for outgoing data.
+//! The specification does not define limits for response payloads.
+//! This module defines size caps to prevent unbounded memory allocation.
 
-/// The most octets of JSON this client will take as one answer: the session
-/// document, every response from `apiUrl`, and upload response descriptors.
+/// Maximum byte limit for JSON API responses.
 ///
-/// Bounded by the account's `maxSizeRequest` and `maxObjectsInGet`. Message
-/// bodies are handled as blobs with their own ceiling below.
+/// Applies to session documents, `apiUrl` responses, and upload descriptors.
+/// Message bodies download as blobs under [`MAX_BLOB_BYTES`].
 pub const MAX_API_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The most octets an RFC 8414 authorization-server metadata document may be.
+/// Maximum byte limit for OAuth authorization server metadata documents (RFC 8414).
 ///
-/// Kept well below [`MAX_API_RESPONSE_BYTES`] because discovery occurs prior to
-/// authentication (see [`crate::oauth`]). Real metadata documents are typically
-/// a few kilobytes.
+/// Kept small because discovery occurs before authentication (see [`crate::oauth`]).
 pub const MAX_OAUTH_METADATA_BYTES: u64 = 1024 * 1024;
 
-/// The most octets an RFC 7591 dynamic client registration response may be.
-///
-/// Same reasoning and limit as [`MAX_OAUTH_METADATA_BYTES`].
+/// Maximum byte limit for OAuth dynamic client registration responses (RFC 7591).
 pub const MAX_OAUTH_REGISTRATION_BYTES: u64 = 1024 * 1024;
 
-/// The most octets an RFC 6749 §5 token endpoint response (success or error)
-/// may be.
-///
-/// Same reasoning and limit as [`MAX_OAUTH_METADATA_BYTES`].
+/// Maximum byte limit for OAuth token endpoint responses (RFC 6749 Section 5).
 pub const MAX_OAUTH_TOKEN_BYTES: u64 = 1024 * 1024;
 
-/// The most octets one blob download may be when the caller has no better
-/// number.
+/// Default byte limit for blob downloads when size is unspecified.
 ///
-/// When available, callers should use the message's stated `size` from
-/// `Email/get` (RFC 8621 §4.1.1). This constant serves as a fallback.
+/// Callers should prefer the stated `size` from `Email/get` when available (RFC 8621 Section 4.1.1).
 pub const MAX_BLOB_BYTES: u64 = 256 * 1024 * 1024;

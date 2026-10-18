@@ -1495,16 +1495,8 @@ fn sieve_script_query_filters_by_name_and_is_active_against_the_real_server() {
         .expect("SieveScript/set destroy failed against the real server");
 }
 
-/// `SieveScript/validate` (RFC 9661 §2.6) against a real server's actual
-/// Sieve parser: nothing before this test ever sent genuinely invalid Sieve
-/// content to a live server (`jmap-client/tests/sieve.rs` only runs against
-/// `jmap-mockd`, which has no parser and always answers valid). This is
-/// also the regression test for a real client bug this probe found
-/// (`STALWART-RFC-FINDINGS.md`): the old
-/// `SieveScriptValidateResponse` declared `isValid` as a mandatory wire
-/// field, but RFC 9661 §2.6's response has only `accountId` and `error`; a
-/// real server (confirmed here against Stalwart) never sends `isValid` at
-/// all, so every real validate call used to fail to deserialize.
+/// Validates invalid Sieve script syntax against a real server parser per RFC 9661 section 2.6.
+/// Verifies that responses without an `isValid` field deserialize correctly.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn sieve_script_validate_against_a_real_parser_catches_genuinely_invalid_syntax() {
@@ -1550,21 +1542,11 @@ fn sieve_script_validate_against_a_real_parser_catches_genuinely_invalid_syntax(
     );
 }
 
-/// JMAP Push (RFC 8620 §7) against a real server. Opens an `EventSource`
-/// subscription for the write-test account via
-/// [`jmap_client::eventsource::EventSourceSubscription`], creates a mailbox,
-/// and confirms a `StateChange` naming `Mailbox` for this account arrives
-/// over the wire. Every other exercise of this module was against either a
-/// hand-rolled test TCP server (`eventsource.rs`'s own `#[cfg(test)]`
-/// module) or `jmap-mockd`'s fixed push loop
-/// (`jmap-backend-core/src/push.rs`'s tests): chunked-transfer framing,
-/// TLS negotiation, and the exact `event: state`/`data:` shape a real
-/// server sends had no live coverage until now.
+/// Tests JMAP Push subscriptions per RFC 8620 section 7 against a real server.
 ///
-/// Sleeps briefly after connecting before triggering the mutation: an SSE
-/// stream carries no backlog, so a change made before the subscription's
-/// `GET` is actually accepted by the server would never be seen, unlike a
-/// `/changes` poll which always catches up from a state token.
+/// Subscribes to event source changes and creates a mailbox.
+/// Confirms that a `StateChange` event for `Mailbox` arrives on the stream.
+/// Pauses briefly after subscription to ensure the server registers the listener.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
@@ -1889,28 +1871,12 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
     }
 }
 
-/// `Blob/lookup` (RFC 9404 section 4.3) against a real server: `Blob/get`,
-/// `Blob/upload` and `Blob/copy` (above) all have real-server coverage, but
-/// `blob_lookup` was only ever called from `examples/blob-capability-probe.rs`,
-/// a manual probe whose own check only asked whether the call was accepted,
-/// not what it actually reported, and was never run as part of this suite.
+/// Tests `Blob/lookup` per RFC 9404 section 4.3 against a real server.
 ///
-/// Imports a message via [`Client::email_import`], whose returned `blobId`
-/// differs from the blob that was uploaded to produce it (the server
-/// re-stores its own blob; see `email_import`'s own doc comment), so the
-/// *imported* email's blob id, not the one this test uploaded, is the one
-/// `Blob/lookup` should report a match against. Confirms both halves:
-/// before import, the uploaded (as yet unreferenced) blob answers an empty
-/// `matchedIds` rather than being vacuously absent, and after import, the
-/// email's own blob id answers `matchedIds["Email"]` naming the new email.
-///
-/// Also pins a real server deviation rather than assuming this client can
-/// rely on it: RFC 9404 section 4.3.1's own example shows a blob id the
-/// server has never seen must be echoed back in `notFound`
-/// (`"notFound": ["not-a-blob"]`). Real Stalwart drops such an id from both
-/// `list` and `notFound` instead, confirmed over raw HTTP before this test
-/// was written. See `STALWART-RFC-FINDINGS.md` in the harness
-/// repo.
+/// Imports an email and queries references for the resulting blob identifier.
+/// Confirms that unreferenced blobs return empty `matchedIds`.
+/// Confirms that referenced blobs return the matching email identifier.
+/// Unknown blob identifiers return neither in `list` nor in `notFound` on Stalwart.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_api() {
@@ -2132,23 +2098,11 @@ fn quota_used_reflects_a_real_email_import() {
     );
 }
 
-/// `Client::quota_query` (RFC 9425 §4.4, `Quota/query`) had never been
-/// exercised against a real server through this crate's own method:
-/// `jmap-client/tests/quota.rs` only checks it against `jmap-mockd`, which
-/// necessarily honours whatever filter it is given. A real Stalwart server
-/// does not: `STALWART-RFC-FINDINGS.md` recorded, by reading
-/// Stalwart's own source and then confirming live over raw HTTP, that
-/// `Quota/query` ignores its filter entirely and always answers every
-/// `Quota` id the account has. This pins that same behaviour through the
-/// actual `Client::quota_query` call this codebase ships, not raw HTTP: a
-/// filter that cannot possibly match (a `name` substring no real quota
-/// would ever contain) still returns the quota's id. If this ever starts
-/// failing, Stalwart may have fixed `Quota/query`; update findings and
-/// this test together.
+/// Tests `Client::quota_query` per RFC 9425 section 4.4 against a real server.
 ///
-/// Needs the same per-account `octets` quota as `quota_used_reflects_a_
-/// real_email_import` (`docs/manual-test-live-server.md` step 3b); skipped,
-/// not failed, under the same conditions that test is.
+/// Stalwart ignores `Quota/query` filters and returns all account quota identifiers.
+/// This test confirms that behavior using a non-matching name filter.
+/// Requires an account octets quota per `docs/manual-test-live-server.md`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn quota_query_ignores_its_filter_against_the_real_server() {
@@ -2806,22 +2760,11 @@ fn address_book_share_grant_and_revoke_deliver_a_real_share_notification() {
         .expect("AddressBook/set destroy failed against the real server (cleanup)");
 }
 
-/// `ShareNotification/query` (RFC 9670 section 4) against a real server:
-/// `Client::share_notification_query` has mock-only server-side coverage
-/// (`jmap-mock/src/principals.rs`'s own `share_notification_query`) and
-/// protocol-level filter serialization tests
-/// (`jmap-proto/tests/principals.rs`), but no test anywhere, mock or live,
-/// had ever actually called the method. Shares an address book with the
-/// recipient (same setup as
-/// [`address_book_share_grant_and_revoke_deliver_a_real_share_notification`])
-/// and confirms the real server's query narrows by `objectType` and by a
-/// `before` date window the same way the mock does.
+/// Tests `ShareNotification/query` per RFC 9670 section 4 against a real server.
 ///
-/// Also pins a real server deviation rather than assuming this client can
-/// rely on it: `objectType` and `before` both narrow correctly, but `after`
-/// does not. A cutoff in the future, which ought to exclude every existing
-/// notification, still returns one created well before it. See
-/// `STALWART-RFC-FINDINGS.md` in the harness repo.
+/// Shares an address book with a recipient account.
+/// Verifies that query filtering works for `objectType` and `before` date cutoffs.
+/// Stalwart ignores `after` date cutoffs on notifications.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn share_notification_query_filters_by_object_type_and_date_window() {
@@ -2951,12 +2894,9 @@ fn share_notification_query_filters_by_object_type_and_date_window() {
         "querying before a date well after the notification's own creation wrongly excluded it"
     );
 
-    // Known Stalwart deviation (STALWART-RFC-FINDINGS.md,
-    // harness repo): unlike `before` above, the `after` filter argument is
-    // silently ignored, so a cutoff in the future (which ought to exclude
-    // every existing notification) still returns this one. Pinning the
-    // actual behaviour rather than the RFC-correct one, so a server fix
-    // shows up here as a test failure to update, not a silent pass.
+    // Stalwart ignores the `after` filter argument.
+    // A cutoff date in the future still returns the notification.
+    // Pins this server behavior so any future server fix triggers a test failure.
     let after_cutoff_in_the_future = recipient
         .share_notification_query(
             &recipient_account_id,
@@ -4617,17 +4557,9 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .expect("cleanup destroy id2 failed");
 }
 
-/// STALWART-RFC-FINDINGS.md: a `/changes` call carrying an
-/// unrecognized `sinceState` answers `invalidArguments`, not RFC 8620 §5.2's
-/// own `cannotCalculateChanges`. `jmap-client/src/error.rs`'s
-/// `Error::is_unrecognized_changes_state` exists to paper over exactly this
-/// and is unit-tested against a synthetic `MethodError` built to match the
-/// shape findings recorded, but nothing before this test had ever driven a
-/// garbage `sinceState` through the real `Client::changes` against a genuine
-/// Stalwart response to confirm the predicate actually recognizes it.
-///
-/// Read-only: a nonsense `sinceState` queries state, it never changes it, so
-/// this runs against the shared read account rather than the write-test one.
+/// Verifies that an unrecognized `sinceState` error matches `Error::is_unrecognized_changes_state`.
+/// Stalwart returns `invalidArguments` instead of RFC 8620 section 5.2 `cannotCalculateChanges`.
+/// Runs against the shared read-only account.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calculate_changes() {
@@ -4658,11 +4590,9 @@ fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calcu
     );
 }
 
-/// STALWART-RFC-FINDINGS.md: Unauthenticated GET to the session
-/// resource on Stalwart returns HTTP 200 OK with empty `accounts: {}`
-/// and `username: ""` rather than HTTP 401 Unauthorized with a WWW-Authenticate
-/// header. Verifies that `Client::connect` with `Credentials::none()` tolerates
-/// the response, deserializes the session, and accurately reports `is_anonymous()`.
+/// Tests unauthenticated session discovery against a real server.
+/// Stalwart returns HTTP 200 with empty accounts rather than HTTP 401 Unauthorized.
+/// Confirms that `Client::connect` with `Credentials::none()` succeeds and reports `is_anonymous()`.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
@@ -4689,11 +4619,9 @@ fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
     assert!(client.primary_account(CAPABILITY_MAIL).is_err());
 }
 
-/// STALWART-RFC-FINDINGS.md: Mailbox/set create with whitespace-padded
-/// name trims the stored name on Stalwart, but omits the name property from
-/// the `created` map, returning only `{"id": "<id>"}`. Verifies that `Client::mailbox_create`
-/// tolerates the omitted name, falls back to the requested name trimmed of whitespace,
-/// and returns the expected name matching what is stored on the server.
+/// Tests creating a mailbox with whitespace padding against a real server.
+/// Stalwart trims whitespace and omits the name property from the create response.
+/// Confirms that `Client::mailbox_create` returns the trimmed name.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
@@ -4742,11 +4670,9 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .expect("Mailbox/set destroy failed");
 }
 
-/// STALWART-RFC-FINDINGS.md: CalendarEventNotification/set destroy
-/// with an unformatted ID silently drops it from the response map on Stalwart
-/// rather than returning a notFound SetError in notDestroyed (RFC 8620 Section 5.3).
-/// Verifies that Client::calendar_event_notification_destroy tolerates the omitted ID
-/// and reports notFound instead of failing with a protocol error.
+/// Tests destroying calendar event notifications with an unformatted identifier.
+/// Stalwart drops the identifier from the response map instead of returning `notDestroyed`.
+/// Confirms that `calendar_event_notification_destroy` converts this to `notFound`.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_real_api() {
@@ -4781,12 +4707,9 @@ fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_r
     }
 }
 
-/// STALWART-RFC-FINDINGS.md: ParticipantIdentity/get response omits
-/// mandatory state property required by RFC 8620 Section 5.1 and
-/// draft-ietf-jmap-calendars Section 3.1.
-/// Verifies that Client::participant_identities tolerates the omitted state field,
-/// while confirming that raw wire responses omit state and fail strict GetResponse
-/// deserialization.
+/// Tests that `Client::participant_identities` tolerates omitted `state` fields.
+/// Stalwart omits the required `state` property from `ParticipantIdentity/get` responses.
+/// Raw responses omit state and fail strict `GetResponse` deserialization.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api() {
@@ -4842,12 +4765,9 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
     }
 }
 
-/// STALWART-RFC-FINDINGS.md: Session capability currentUserPrincipalId
-/// advertises the account ID instead of the principal ID, causing Principal/get to
-/// report notFound.
-/// Verifies that Client::current_user_principal and Client::current_user_principal_id
-/// resolve the true principal object ("b") and principal identifier, and that
-/// Client::principal_get tolerates the advertised account ID.
+/// Tests resolving the current user principal when `currentUserPrincipalId` is the account identifier.
+/// Confirms that `current_user_principal` resolves the principal object.
+/// Confirms that `principal_get` accepts the advertised account identifier.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api() {
@@ -4927,12 +4847,9 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
     assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
 }
 
-/// STALWART-RFC-FINDINGS.md: CalendarEvent/set rejects the standard
-/// JSCalendar timeZones property (RFC 8984 Section 4.7.2) with invalidProperties,
-/// and CalendarEvent/parse converts custom VTIMEZONE definitions into iCalendar
-/// convertedProperties rather than RFC 8984 timeZones.
-/// Verifies that Client::event_create surfaces the invalidProperties SetError cleanly,
-/// and that CalendarEvent/parse output is passed through intact to the client.
+/// Tests that `CalendarEvent/set` handles time zone property rejection cleanly.
+/// Stalwart rejects RFC 8984 section 4.7.2 `timeZones` properties with `invalidProperties`.
+/// Confirms that `Client::event_create` surfaces the `invalidProperties` error.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
@@ -5782,17 +5699,9 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
     }
 }
 
-/// STALWART-RFC-FINDINGS.md: `CalendarEvent/set` accepts the
-/// `participants` property on both create and a whole-value update without
-/// any error, but the server never persists it: a subsequent `CalendarEvent/get`
-/// (even naming `participants` explicitly in `properties`) reports the event
-/// with no `participants` at all, as if none were ever sent.
-///
-/// This matters beyond the wire: `jmap-cal-sync`'s own `push` deliberately
-/// reloads a just-created event from the server rather than trusting the
-/// terse create echo (see `jmap-cal-sync/src/lib.rs`'s comment on
-/// `load_component`), so every attendee a user adds to a new meeting in
-/// Evolution is silently gone again the moment that reload runs.
+/// Tests that `CalendarEvent/set` silently drops `participants`.
+/// Stalwart accepts `participants` on create and update without error.
+/// Subsequent `CalendarEvent/get` calls return events without `participants`.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn calendar_event_set_silently_drops_participants_through_the_real_api() {

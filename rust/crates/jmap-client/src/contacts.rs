@@ -54,9 +54,9 @@ impl Client {
         ))
     }
 
-    /// Patch an address book (`AddressBook/set` update) with a raw JSON Patch
-    /// object, the same shape `Client::mailbox_update` takes, so callers can
-    /// write typed fields such as `shareWith` (RFC 9610 §2).
+    /// Update an address book (`AddressBook/set`) with a JSON Patch object.
+    ///
+    /// Callers can update properties such as `shareWith` (RFC 9610 Section 2).
     pub fn address_book_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<AddressBook>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.address_book_set(&request)?;
@@ -96,8 +96,9 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Create a contact card; returns the stored card (with server-set id,
-    /// uid, …).
+    /// Create a contact card.
+    ///
+    /// Returns the stored card with server-assigned properties such as `id` and `uid`.
     pub fn contact_create(
         &self,
         account_id: &Id,
@@ -118,15 +119,12 @@ impl Client {
         ))
     }
 
-    /// Fetch contact cards by id.
+    /// Fetch contact cards by identifier.
     ///
-    /// Sent in chunks when the number of IDs exceeds the server's
-    /// `maxObjectsInGet` limit (RFC 8620 §2). A server naming no
-    /// `maxObjectsInGet` is sent the list whole.
+    /// Splits requests into chunks when the ID count exceeds `maxObjectsInGet` (RFC 8620 Section 2).
+    /// Sends the full list at once if the server reports no limit.
     ///
-    /// Always makes at least one call, even for an empty `ids`: callers like
-    /// [`Client::contact_state`] ask for no cards at all just to read the
-    /// current state, and that still has to reach the server.
+    /// Always executes at least one call. Methods like [`Client::contact_state`] pass empty IDs to fetch the current state.
     pub fn contact_get(
         &self,
         account_id: &Id,
@@ -217,12 +215,11 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// `ContactCard/parse` (RFC 9610 §3.4): reads an uploaded vCard blob
-    /// into a `ContactCard`, without filing it into any address book.
-    /// Tolerates server implementations that wrap the parsed card in a
-    /// single-element array; a blob that parses to more than one card
-    /// reports as `notParsable` rather than silently keeping just the
-    /// first (see `demote_multi_element_parsed_blobs`).
+    /// Parse an uploaded vCard blob into a `ContactCard` (RFC 9610 Section 3.4).
+    ///
+    /// The card is not added to an address book.
+    /// Unwraps single-element arrays returned by non-conforming servers.
+    /// Blobs that parse into multiple cards are marked as `notParsable`.
     pub fn contact_card_parse(
         &self,
         request: &ContactCardParseRequest,
@@ -232,7 +229,7 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// The current `ContactCard` state string (cheap `/get` with no ids).
+    /// Fetch the current `ContactCard` state string.
     pub fn contact_state(&self, account_id: &Id) -> Result<jmap_proto::State, Error> {
         Ok(self.contact_get(account_id, &[])?.state)
     }
@@ -253,16 +250,11 @@ pub(crate) fn set_failure(set_error: Option<&SetError>) -> Error {
     }
 }
 
-/// Stalwart wraps a `/parse` blob's result in a JSON array rather than the
-/// bare object the spec models (observed on both `CalendarEvent/parse` and
-/// `ContactCard/parse`), with one array element per distinct top-level
-/// entry it found in the blob: a single element for the common case, but
-/// more than one for a blob that bundles several events or cards. The typed
-/// response here models exactly one parsed value per blob id, so a
-/// single-element array is unwrapped transparently; an array holding zero
-/// or more than one element cannot be represented that way without
-/// silently discarding entries, so its blob id is moved to `notParsable`
-/// instead of letting only the first element survive.
+/// Normalize array-wrapped parse results from servers such as Stalwart.
+///
+/// Some servers wrap parsed items in a JSON array instead of an object.
+/// If an array contains exactly one item, this function unwraps it.
+/// If an array contains zero or multiple items, this function moves the ID to `notParsable`.
 pub(crate) fn demote_multi_element_parsed_blobs(arguments: &mut Value) {
     let Some(obj) = arguments.as_object_mut() else {
         return;

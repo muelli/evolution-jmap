@@ -9,92 +9,69 @@ use jmap_proto::error::{MethodError, RequestError, SetError};
 pub enum Error {
     /// Network/transport failure (DNS, connect, TLS, I/O).
     Transport(String),
-    /// Non-success HTTP status; carries the parsed problem details when the
-    /// server sent any (RFC 8620 §3.6.1).
+    /// Non-success HTTP status.
+    ///
+    /// Includes parsed problem details when provided (RFC 8620 Section 3.6.1).
     Http {
         status: u16,
         problem: Option<RequestError>,
     },
-    /// A method-level `error` response (RFC 8620 §3.6.2).
+    /// Method-level error response (RFC 8620 Section 3.6.2).
     Method(MethodError),
-    /// A per-record `/set` failure (RFC 8620 §5.3), e.g. a rejected create.
+    /// Per-record `/set` failure (RFC 8620 Section 5.3), such as a rejected create.
     Set(SetError),
-    /// Response could not be (de)serialized.
+    /// Serialization or deserialization error.
     Json(serde_json::Error),
-    /// Structurally valid JSON that violates the protocol (e.g. missing
-    /// response for a call id).
+    /// Valid JSON that violates the protocol, such as a missing response for a call ID.
     Protocol(String),
     /// The operation was cancelled via [`crate::transport::CancelFlag`].
     Cancelled,
-    /// More octets than the session's `maxSizeUpload` (RFC 8620 §6.1): the
-    /// one failure here the server was never asked about.
+    /// Payload exceeds `maxSizeUpload` (RFC 8620 Section 6.1).
     ///
-    /// Its own variant rather than a `Protocol` string because it is the one
-    /// thing a caller can act on: the size and the limit are both numbers a
-    /// layer above can put in front of the user, or use to decide to send the
-    /// attachment as a link instead. Flattened into prose they would have to be
-    /// parsed back out.
+    /// The client detects this limit locally without querying the server.
+    /// Callers can inspect the size and limit values to show progress or link the file.
     TooLarge { size: u64, limit: u64 },
-    /// More octets in one request to `apiUrl` than the session's
-    /// `maxSizeRequest` (RFC 8620 §2).
+    /// Request size exceeds `maxSizeRequest` (RFC 8620 Section 2).
     ///
-    /// Distinct from [`Self::TooLarge`] because an upload that is too big
-    /// cannot be made smaller by the caller, while an oversized request can
-    /// nearly always be split into several requests. This variant is returned
-    /// when a single id alone exceeds the limit.
+    /// Unlike blob uploads, callers can usually split oversized requests into batches.
+    /// Returns this error when a single ID alone exceeds the limit.
     RequestTooLarge { size: u64, limit: u64 },
-    /// The server's answer was longer than the octets that request said it
-    /// would take (see [`crate::limits`]), and was abandoned unread rather than
-    /// buffered.
+    /// Response exceeds the expected byte limit (see [`crate::limits`]).
     ///
-    /// Only the limit is reported because the body was never read to the end.
-    /// Distinct from [`Self::Transport`] because retrying will not resolve it
-    /// (the same message will be the same length next time).
+    /// The client aborts reading rather than buffering excessive data.
+    /// Only the limit is known because the full body was not read.
     ResponseTooLarge { limit: u64 },
-    /// An OAuth 2.0 token endpoint refused a grant (RFC 6749 §5.2).
+    /// OAuth 2.0 token endpoint refused a grant (RFC 6749 Section 5.2).
     ///
-    /// Its own variant rather than [`Self::Http`] with no problem: every
-    /// refusal at a token endpoint answers HTTP 400, so the status carries
-    /// none of the reason; only the body's `error` does, and `invalid_grant`
-    /// (re-authenticate) is distinct from `invalid_client`.
+    /// Token endpoints return HTTP 400 for multiple distinct failure conditions.
+    /// The response error code distinguishes cases such as `invalid_grant` from `invalid_client`.
     OAuthTokenRefused {
         error: String,
         description: Option<String>,
     },
-    /// A blob download was redirected to a different origin than the one the
-    /// session's own `downloadUrl` named.
+    /// Blob download redirected to an unexpected origin.
     ///
-    /// The transport drops `Authorization` on a cross-host redirect
-    /// (`UreqTransport::new`'s `redirect_auth_headers`, `SameHost`), RFC
-    /// 7235's safe default, but it still follows the redirect. An unrelated
-    /// 200 response (e.g. a captive portal or catch-all page) would otherwise
-    /// be stored as if it were the message. `download_blob` checks the origin
-    /// actually reached against the requested one and refuses a mismatch.
+    /// The transport drops credentials on cross-host redirects per RFC 7235.
+    /// The client rejects redirected responses to prevent accepting untrusted content.
     ///
-    /// `rebase_note` is set when `ClientBuilder::rebase_urls_to_origin`
-    /// rewritten `downloadUrl`'s origin before this request.
+    /// `rebase_note` contains origin details when URL rebasing was active.
     CrossOriginRedirect {
         requested: String,
         followed: String,
         rebase_note: Option<String>,
     },
-    /// A request was redirected to a different origin than requested, credentials
-    /// were withheld by the transport to prevent leaking them to an untrusted
-    /// origin (RFC 7235), and the target server answered HTTP 401 Unauthorized.
+    /// Cross-origin redirect omitted credentials and received HTTP 401.
     ///
-    /// Distinct from [`Error::Http`] with status 401: a 401 on a redirected request
-    /// where credentials were deliberately withheld is a connection or redirection
-    /// failure, not a rejected token or stale credentials, so callers must not
-    /// escalate to interactive user consent.
+    /// The transport withholds credentials on cross-origin redirects per RFC 7235.
+    /// This represents a connection routing failure rather than an invalid token.
+    /// Callers must not trigger re-authentication prompts for this error.
     RedirectCredentialsWithheld { requested: String, followed: String },
 }
 
 impl Error {
-    /// Whether the server refused an incremental sync because the state it was
-    /// given is too old, or was never one of its own (RFC 8620 §5.2).
+    /// Return true if the server refused incremental sync due to state mismatch (RFC 8620 Section 5.2).
     ///
-    /// Not an error: callers list the collection in full and carry on, so the
-    /// check is exposed here rather than requiring string matching.
+    /// Callers fall back to a full sync when this occurs.
     pub fn is_cannot_calculate_changes(&self) -> bool {
         matches!(
             self,
@@ -103,30 +80,22 @@ impl Error {
         )
     }
 
-    /// Whether the server rejected the request with HTTP 401.
+    /// Return true if the server rejected the request with HTTP 401.
     ///
-    /// Indicates an expired or invalid bearer token on long-lived connections.
-    /// The single source of truth that backend callers delegate to.
+    /// Indicates an expired or invalid bearer token.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Http { status: 401, .. })
     }
 
-    /// Whether the request was redirected to a different origin, credentials
-    /// were withheld by the transport, and the target server answered HTTP 401.
+    /// Return true if credentials were withheld during cross-origin redirect and resulted in HTTP 401.
     pub fn is_redirect_credentials_withheld(&self) -> bool {
         matches!(self, Self::RedirectCredentialsWithheld { .. })
     }
 
-    /// Whether a `/changes` call's `sinceState` was rejected as
-    /// `invalidArguments` rather than RFC 8620 §5.2's `cannotCalculateChanges`.
+    /// Return true if `/changes` returned `invalidArguments` for an unknown state.
     ///
-    /// Some servers answer `invalidArguments` for unrecognized state strings
-    /// instead of the RFC's standard error type.
-    ///
-    /// Its own predicate rather than folded into
-    /// [`Self::is_cannot_calculate_changes`]'s meaning: that one answers a
-    /// standard condition for any caller, while this one is a server
-    /// quirk identified by description text in `/changes` responses.
+    /// Some non-conforming servers return `invalidArguments` instead of `cannotCalculateChanges` (RFC 8620 Section 5.2).
+    /// This method inspects the error description to identify this behavior.
     pub fn is_unrecognized_changes_state(&self) -> bool {
         matches!(
             self,
@@ -166,8 +135,7 @@ impl std::fmt::Display for Error {
                     error.error_type,
                     error.description.as_deref().unwrap_or("no description")
                 )?;
-                // The property list is often the only diagnostic a strict
-                // server sends: dropping it turns a precise rejection into a mystery.
+                // Include invalid properties in error output when present.
                 if let Some(properties) = error
                     .properties
                     .as_deref()

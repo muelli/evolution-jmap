@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Live verification for the server-side search work (roadmap items 46/47/49)
-// against a real JMAP server: seeds a couple of emails, then confirms the
-// server evaluates our `EmailQueryFilter` (body / from / subject), returns a
-// `SearchSnippet`, and answers `Quota/get`. Prints PASS/FAIL per check and
-// exits non-zero on any failure.
+// Live verification for server-side search against a real JMAP server.
+// Seeds test emails and confirms that the server evaluates `EmailQueryFilter` fields.
+// Also confirms `SearchSnippet` and `Quota/get` responses.
+// Prints PASS or FAIL per check and exits non-zero on any failure.
 //
 // Usage:
 //   cargo run -p evolution-jmap-client --example search-capability-probe -- \
@@ -34,7 +33,7 @@ fn main() {
     let c = Client::connect(&origin, Credentials::basic(user, pass)).expect("connect");
     let account = c.primary_account(MAIL).expect("a mail account");
 
-    // Inbox id.
+    // Inbox identifier.
     let inbox = c
         .mailbox_get(&account)
         .expect("Mailbox/get")
@@ -45,7 +44,7 @@ fn main() {
         .id
         .expect("inbox id");
 
-    // Seed two emails with distinct, uncommon body words and senders.
+    // Seeds two emails with distinct body text and sender addresses.
     for (from, subject, body) in [
         (
             "alice@example.net",
@@ -64,7 +63,7 @@ fn main() {
         c.email_import(&account, &EmailImport::new(up.blob_id, inbox.clone()))
             .expect("import");
     }
-    // Give the full-text index a moment.
+    // Waits for the server full-text index.
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     let mut fail = 0;
@@ -80,7 +79,7 @@ fn main() {
         );
     };
 
-    // 1. body full-text search: the flagship path.
+    // 1. Full-text search on message body.
     let hits = c
         .email_query(
             &account,
@@ -96,7 +95,7 @@ fn main() {
         format!("body:kumquat -> {} hit(s), expected 1", hits.ids.len()),
     );
 
-    // 2. from search.
+    // 2. Search on from header.
     let from_hits = c
         .email_query(
             &account,
@@ -112,7 +111,7 @@ fn main() {
         format!("from:bob -> {} hit(s), expected 1", from_hits.ids.len()),
     );
 
-    // 3. subject search.
+    // 3. Search on subject header.
     let subj = c
         .email_query(
             &account,
@@ -128,7 +127,7 @@ fn main() {
         format!("subject:Quarterly -> {} hit(s), expected 1", subj.ids.len()),
     );
 
-    // 4. SearchSnippet on the body hit.
+    // 4. SearchSnippet on the body match.
     if let Some(id) = hits.ids.first() {
         let snips = c
             .search_snippet_get(
@@ -149,10 +148,8 @@ fn main() {
         );
     }
 
-    // 5. Quota/get: The call being accepted and answering a
-    // well-formed list is the check; a fresh account with no configured limit
-    // legitimately reports zero Quota objects (Stalwart returns one only when
-    // a limit is set), so an empty list is a pass, not a failure.
+    // 5. Quota/get: Verifies that the server accepts the call and returns a valid list.
+    // An account without configured limits returns zero quota objects.
     let quotas = c.quotas(&account).expect("Quota/get");
     check(
         "quota Quota/get accepted (item 49)",
@@ -163,7 +160,7 @@ fn main() {
         ),
     );
 
-    // Cleanup: destroy the seeded emails so the probe is idempotent.
+    // Cleans up seeded test emails.
     let all = c
         .email_query(&account, EmailQueryFilter::default(), None, None, 0)
         .expect("query all");

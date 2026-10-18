@@ -87,8 +87,7 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Create a calendar event; returns the stored event (with server-set
-    /// id, uid, …).
+    /// Create a calendar event and return the stored record.
     pub fn event_create(
         &self,
         account_id: &Id,
@@ -97,10 +96,10 @@ impl Client {
         self.event_create_with_scheduling(account_id, event, false)
     }
 
-    /// [`Client::event_create`], asking the server to invite the event's
-    /// participants itself when `send_scheduling_messages` is true (see
-    /// [`Client::event_set`]). A refusal to schedule is the record's
-    /// `SetError`, typically `noSupportedScheduleMethods`.
+    /// Create a calendar event and request participant invitations.
+    ///
+    /// Sends scheduling messages when `send_scheduling_messages` is true.
+    /// Returns a [`SetError`] when the server refuses scheduling.
     pub fn event_create_with_scheduling(
         &self,
         account_id: &Id,
@@ -122,11 +121,10 @@ impl Client {
         ))
     }
 
-    /// Fetch calendar events by id.
+    /// Fetch calendar events by ID (RFC 8620 §2).
     ///
-    /// Sent in chunks when the number of IDs exceeds the server's
-    /// `maxObjectsInGet` limit (RFC 8620 §2). Always makes at least one call
-    /// when `ids` is empty.
+    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// Executes at least one call when `ids` is empty.
     pub fn event_get(
         &self,
         account_id: &Id,
@@ -179,8 +177,9 @@ impl Client {
         self.event_update_with_scheduling(account_id, id, patch, false)
     }
 
-    /// [`Client::event_update`], asking the server to tell the participants
-    /// about the change itself when `send_scheduling_messages` is true.
+    /// Update a calendar event and request participant notifications.
+    ///
+    /// Sends scheduling updates when `send_scheduling_messages` is true.
     pub fn event_update_with_scheduling(
         &self,
         account_id: &Id,
@@ -208,8 +207,9 @@ impl Client {
         self.event_destroy_with_scheduling(account_id, id, false)
     }
 
-    /// [`Client::event_destroy`], asking the server to send the participants
-    /// their cancellation itself when `send_scheduling_messages` is true.
+    /// Destroy a calendar event and request cancellation messages.
+    ///
+    /// Sends cancellation notices when `send_scheduling_messages` is true.
     pub fn event_destroy_with_scheduling(
         &self,
         account_id: &Id,
@@ -230,13 +230,10 @@ impl Client {
         ))
     }
 
-    /// `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7): reads an
-    /// uploaded iCalendar blob into a JSCalendar `CalendarEvent`. Tolerates
-    /// Stalwart wrapping the parsed event in a single-element array; a blob
-    /// that holds more than one distinct top-level event (confirmed live:
-    /// Stalwart returns one array element per event) reports as
-    /// `notParsable` rather than silently keeping just the first (see
-    /// `demote_multi_element_parsed_blobs`).
+    /// Parse an uploaded iCalendar blob into a [`CalendarEvent`] (draft-ietf-jmap-calendars §5.7).
+    ///
+    /// Accepts single-element array responses.
+    /// Marks blobs with multiple distinct events as not parsable.
     pub fn event_parse(
         &self,
         request: &CalendarEventParseRequest,
@@ -257,12 +254,9 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// `CalendarEvent/set` (draft-ietf-jmap-calendars §5.9), including the
-    /// draft's `sendSchedulingMessages`: ask for it and the server sends the
-    /// iTIP invitations, cancellations and replies §5.9.2 calls for once the
-    /// change is applied. The plain create/update/destroy helpers above never
-    /// ask, which is the draft's own default; their `_with_scheduling`
-    /// siblings ask when told to.
+    /// Modify calendar events (`CalendarEvent/set`, draft-ietf-jmap-calendars §5.9).
+    ///
+    /// Supports the `sendSchedulingMessages` parameter for iTIP scheduling.
     pub fn event_set(
         &self,
         request: &CalendarEventSetRequest,
@@ -271,8 +265,7 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// `false` leaves the argument out altogether rather than sending the
-    /// draft's own default, so a server that does not know it is never asked.
+    // Omits `sendSchedulingMessages` when false for server compatibility.
     fn event_set_scheduling(
         &self,
         request: SetRequest<CalendarEvent>,
@@ -286,10 +279,9 @@ impl Client {
         })
     }
 
-    /// Fetch all `CalendarEventNotification`s visible to this credential
-    /// (draft-ietf-jmap-calendars §8): one appears for each
-    /// create/update/destroy of an event on a calendar shared with this
-    /// principal, made by someone else.
+    /// Fetch all calendar event notifications for this account (draft-ietf-jmap-calendars §8).
+    ///
+    /// Notifications report remote changes on shared calendars.
     pub fn calendar_event_notifications(
         &self,
         account_id: &Id,
@@ -316,9 +308,9 @@ impl Client {
         Ok(response.ids)
     }
 
-    /// Dismiss a `CalendarEventNotification`: destroy is the only mutation
-    /// the draft allows on this type (create/update are always rejected as
-    /// `forbidden`, since the object is entirely server-created).
+    /// Dismiss a calendar event notification.
+    ///
+    /// Destroy is the only supported mutation on notifications (draft §8).
     pub fn calendar_event_notification_destroy(
         &self,
         account_id: &Id,
@@ -338,13 +330,11 @@ impl Client {
         if let Some(err) = response.not_destroyed.as_ref().and_then(|map| map.get(id)) {
             return Err(Error::Set(err.clone()));
         }
-        // If the server omitted the requested ID from both destroyed and
-        // notDestroyed, treat it as notFound.
+        // Treat omitted IDs as notFound.
         Err(Error::Set(SetError::new("notFound")))
     }
 
-    /// Fetch all participant identities (`ParticipantIdentity/get` with
-    /// `ids: null`, draft-ietf-jmap-calendars-28 §3.1).
+    /// Fetch all participant identities (`ParticipantIdentity/get`, draft-ietf-jmap-calendars §3.1).
     pub fn participant_identities(
         &self,
         account_id: &Id,
@@ -405,9 +395,9 @@ impl Client {
         ))
     }
 
-    /// Destroy a participant identity. Fails with `cannotDestroyDefault` if
-    /// it is the current default: make another one default first via
-    /// [`Client::participant_identity_set_default`].
+    /// Destroy a participant identity.
+    ///
+    /// Fails with `cannotDestroyDefault` if the identity is default.
     pub fn participant_identity_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = ParticipantIdentitySetRequest::new(
             SetRequest::<ParticipantIdentity>::new(account_id.clone()).destroy(id.clone()),
@@ -425,10 +415,9 @@ impl Client {
         ))
     }
 
-    /// Make `id` the default participant identity, demoting whichever one
-    /// was default before (draft-ietf-jmap-calendars-28 §3.2
-    /// `onSuccessSetIsDefault`). Silently does nothing if `id` does not
-    /// name a live identity.
+    /// Make an identity the default participant identity (draft-ietf-jmap-calendars §3.2).
+    ///
+    /// Demotes the previous default identity.
     pub fn participant_identity_set_default(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = ParticipantIdentitySetRequest::new(SetRequest::new(account_id.clone()))
             .setting_default(id.to_string());

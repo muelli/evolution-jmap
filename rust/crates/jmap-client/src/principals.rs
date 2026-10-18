@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Principal operations (RFC 9670): resolving an email/name to a principal
-//! id and its capability bag, the shared floor for scheduling and
-//! per-source sharing.
+//! Principal operations (RFC 9670).
+//!
+//! Resolves email addresses and names to principal identifiers and capabilities.
 
 use jmap_proto::Id;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
@@ -19,8 +19,7 @@ use crate::error::Error;
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS];
 
-/// `getAvailability` is a calendars-draft extension on a principals object,
-/// so its `using` set must name both capabilities (design §4.2).
+/// Availability queries require both principals and calendars capabilities.
 const AVAILABILITY_USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS, CAPABILITY_CALENDARS];
 
 impl Client {
@@ -34,11 +33,8 @@ impl Client {
 
     /// Fetch principals by id (`Principal/get` with `ids`).
     ///
-    /// When a single ID is requested and matches either `account_id` or the
-    /// advertised `currentUserPrincipalId` in the session document, but the server
-    /// reports it as `notFound` because it advertised the account ID instead of the
-    /// principal ID, this method falls back to resolving the account owner's true
-    /// principal by username or email.
+    /// When a server advertises an account ID for `currentUserPrincipalId`, `Principal/get` fails with `notFound`.
+    /// In this case, the method falls back to resolving the owner principal by username or email.
     pub fn principal_get(&self, account_id: &Id, ids: &[Id]) -> Result<Vec<Principal>, Error> {
         let request = GetRequest::ids(account_id.clone(), ids.to_vec());
         let arguments = self.single_call(USING, "Principal/get", &request)?;
@@ -79,12 +75,9 @@ impl Client {
 
     /// Fetch the current user's principal object (RFC 9670 Section 2).
     ///
-    /// Reads `currentUserPrincipalId` from the account's `urn:ietf:params:jmap:principals`
-    /// capability and queries `Principal/get`. When the server advertises its account
-    /// identifier instead of a principal identifier, `Principal/get` returns `notFound`
-    /// for that ID. In that case, this method falls back to querying the user's
-    /// principal by username or email via `Principal/query` and matching against
-    /// [`principals`](Self::principals).
+    /// Reads `currentUserPrincipalId` from the account capability and queries `Principal/get`.
+    /// If the server advertises an account ID instead, `Principal/get` returns `notFound`.
+    /// In that case, this method resolves the owner principal by username or email.
     pub fn current_user_principal(&self, account_id: &Id) -> Result<Option<Principal>, Error> {
         if !self
             .session()
@@ -116,18 +109,14 @@ impl Client {
 
     /// Resolve the current user's principal identifier (RFC 9670 Section 2).
     ///
-    /// Returns the true principal identifier corresponding to the account owner,
-    /// resolving past servers that report an account ID for `currentUserPrincipalId`.
+    /// Resolves past servers that incorrectly advertise an account ID for `currentUserPrincipalId`.
     pub fn current_user_principal_id(&self, account_id: &Id) -> Result<Option<Id>, Error> {
         Ok(self.current_user_principal(account_id)?.and_then(|p| p.id))
     }
 
-    /// Helper to resolve the owner principal when currentUserPrincipalId is missing or
-    /// points to the account ID.
+    /// Resolve the owner principal when `currentUserPrincipalId` is missing or invalid.
     ///
-    /// `Principal/query`'s own "text"/"email" filters match by substring
-    /// containment (RFC 9670 Section 2.4.1), so candidates are verified with
-    /// [`principal_identifies_username`].
+    /// Query filters match by substring, so candidates are verified with [`principal_identifies_username`].
     fn resolve_owner_principal(&self, account_id: &Id) -> Result<Option<Principal>, Error> {
         let username = &self.session().username;
         if !username.is_empty() {
@@ -163,9 +152,7 @@ impl Client {
         Ok(None)
     }
 
-    /// Resolve `filter` and return the first candidate whose own email or
-    /// name actually identifies `username`, not merely the first one the
-    /// query happened to return.
+    /// Return the first candidate principal that matches `username` exactly.
     fn find_verified_principal(
         &self,
         account_id: &Id,
@@ -178,8 +165,7 @@ impl Client {
             .find(|p| principal_identifies_username(p, username))
     }
 
-    /// Resolve principals matching `filter` (`Principal/query`), e.g. by
-    /// email, to turn a meeting attendee's address into a principal id.
+    /// Query matching principal identifiers (`Principal/query`).
     pub fn principal_query(
         &self,
         account_id: &Id,
@@ -191,9 +177,7 @@ impl Client {
         Ok(response.ids)
     }
 
-    /// Fetch all `ShareNotification`s visible to this credential (RFC 9670
-    /// §4): one appears for each `shareWith` grant, widen, narrow, or
-    /// revoke a caller was the recipient of.
+    /// Fetch all share notifications visible to this account (RFC 9670 Section 4).
     pub fn share_notifications(&self, account_id: &Id) -> Result<Vec<ShareNotification>, Error> {
         let arguments = self.single_call(
             USING,
@@ -217,10 +201,9 @@ impl Client {
         Ok(response.ids)
     }
 
-    /// `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2): the
-    /// busy periods `principal_id` has between `utc_start` (inclusive) and
-    /// `utc_end` (exclusive), e.g. to render an attendee's free/busy in a
-    /// meeting scheduler.
+    /// Fetch principal availability (`Principal/getAvailability`, draft-ietf-jmap-calendars Section 2.2).
+    ///
+    /// Returns busy periods between `utc_start` (inclusive) and `utc_end` (exclusive).
     pub fn get_availability(
         &self,
         account_id: &Id,
@@ -245,10 +228,9 @@ impl Client {
     }
 }
 
-/// Whether `principal` identifies `username` (the session's login identity)
-/// by exact matching rather than substring containment: `username` equals the
-/// principal's email, or (when `username` carries no `@`) the local part of its
-/// email, or its display name.
+/// Return true if `principal` matches `username` exactly.
+///
+/// Compares against the principal email, username local part, or display name.
 fn principal_identifies_username(principal: &Principal, username: &str) -> bool {
     if username.is_empty() {
         return false;

@@ -1,18 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Snoozing mail: `Email.snoozed`, the vendor extension Cyrus implements
-//! (draft-ietf-extra-email-snooze expired without an RFC).
+//! Mail snoozing extensions (`Email.snoozed`).
 //!
-//! Cyrus gates the capability behind `jmap_nonstandard_extensions`. Stalwart
-//! implements the mailbox role only. This client path is written to the
-//! extension as specified and exercised against the mock.
+//! Implements Cyrus message snoozing extension mechanisms.
 //!
-//! Everything snooze-shaped in this client lives here and in
-//! [`jmap_proto::mail::SnoozeDetails`]. Callers should check
-//! [`jmap_proto::session::Account::has_capability`] with
-//! [`CAPABILITY_CYRUS_MAIL`]: a server without it has no wake-up machinery,
-//! and offering snooze there would strand messages in a folder nothing empties.
+//! Callers should verify that the account has [`CAPABILITY_CYRUS_MAIL`].
+//! Servers without this capability lack automated message wake-up machinery.
 
 use jmap_proto::Id;
 use jmap_proto::mail::{Email, Mailbox, SnoozeDetails, role};
@@ -26,13 +20,10 @@ use crate::error::Error;
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_CYRUS_MAIL];
 
 impl Client {
-    /// Snooze one message: an `Email/set` update writing `snoozed` and moving
-    /// the message into `snoozed_mailbox_id` (only there, replacing `mailboxIds`),
-    /// removing the message from the inbox until it wakes. Setting `snoozed` on a
-    /// message not entering the snoozed mailbox is refused server-side.
+    /// Snooze a message via `Email/set`.
     ///
-    /// The server wakes the message at `details.until`, moving it to
-    /// `details.move_to_mailbox_id` (its inbox when absent).
+    /// Sets `snoozed` details and moves the message into `snoozed_mailbox_id`.
+    /// The server wakes the message at `details.until` and moves it to `details.move_to_mailbox_id`.
     pub fn snooze_email(
         &self,
         account_id: &Id,
@@ -65,9 +56,9 @@ impl Client {
         ))
     }
 
-    /// The account's snoozed-role mailbox, created (named "Snoozed") when the
-    /// account has none: the storage location RFC 9979 §8.1 standardizes
-    /// even though the snoozing mechanism itself is vendor territory.
+    /// Return or create the account's snoozed-role mailbox (RFC 9979 Section 8.1).
+    ///
+    /// If no mailbox has role `snoozed`, creates a new mailbox named "Snoozed".
     pub fn snoozed_mailbox(&self, account_id: &Id) -> Result<Mailbox, Error> {
         if let Some(mailbox) = self
             .mailbox_get(account_id)?

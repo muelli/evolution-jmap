@@ -1,22 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! How many octets of response body this client will take, and whose number
-//! that is.
+//! Tests client response body limits.
 //!
-//! Nothing in JMAP bounds a *response*: RFC 8620 §2 gives the session document
-//! `maxSizeRequest` and `maxSizeUpload`, both about what the client sends, and
-//! there is no counterpart for what comes back. So the ceiling is this
-//! repository's to choose, and until it did the number in force was `ureq`'s
-//! `MAX_BODY_SIZE` (10 MiB), applied by the convenience method the transport
-//! happened to call. A limit nobody chose is a limit nobody can defend: it made
-//! one photo attachment the largest message this provider could open, and said
-//! so nowhere.
-//!
-//! Every request now carries the ceiling its response is held to, and these
-//! tests are about that number being ours: that it is large enough for mail the
-//! old one refused, that going over it is refused *by name* rather than
-//! truncated, and that a body of exactly the ceiling is inside it.
+//! RFC 8620 bounds request and upload sizes but leaves response ceilings to client implementation.
+//! Every request specifies an explicit maximum response size.
+//! Exceeding the ceiling returns `Error::ResponseTooLarge` rather than silent truncation.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,17 +14,10 @@ use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportErro
 use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::MockServer;
 
-/// Bigger than `ureq`'s 10 MiB default and not a round number of them, so a
-/// download that stops at the default cannot pass by coincidence.
+/// Test blob size exceeding 10 MiB to verify large download handling.
 const OVER_THE_OLD_DEFAULT: usize = 11 * 1024 * 1024 + 7;
 
-/// A [`Transport`] that notes the ceiling on every request and then does the
-/// request for real.
-///
-/// Wrapping the real transport rather than faking one keeps the session
-/// document the mock's: what is being asked here is which number the *client*
-/// puts on each request, and a fake that had to invent a session document would
-/// bury that in fixture.
+/// [`Transport`] wrapper that records the response ceiling on each request.
 struct Recording {
     inner: UreqTransport,
     seen: Arc<Mutex<Vec<(String, u64)>>>,
@@ -51,14 +33,12 @@ impl Transport for Recording {
     }
 }
 
-/// A blob of `size` octets that is not all one byte, so a short read shows up
-/// as a length *and* as content.
+/// Creates a test blob of `size` bytes with varying octet values.
 fn payload(size: usize) -> Vec<u8> {
     (0..size).map(|n| (n % 251) as u8).collect()
 }
 
-/// The message that used not to fit. A blob past `ureq`'s default arrives
-/// whole: every octet of it, not a prefix.
+/// Verifies that blobs larger than 10 MiB download completely.
 #[test]
 fn a_blob_larger_than_the_dependency_default_arrives_whole() {
     let server = MockServer::builder().start();
@@ -82,9 +62,7 @@ fn a_blob_larger_than_the_dependency_default_arrives_whole() {
     assert_eq!(downloaded, data);
 }
 
-/// Over the ceiling is an error the caller can recognise, carrying the number
-/// it went over: not a transport string it would have to match on, and not a
-/// short body.
+/// Verifies that responses exceeding the ceiling return `Error::ResponseTooLarge`.
 #[test]
 fn a_body_over_the_ceiling_is_refused_by_the_number_it_passed() {
     let server = MockServer::builder().start();
@@ -106,10 +84,7 @@ fn a_body_over_the_ceiling_is_refused_by_the_number_it_passed() {
     }
 }
 
-/// The boundary, which is a real trap rather than pedantry: `ureq`'s limiting
-/// reader fails on the read *after* the last octet allowed, so a limit handed
-/// straight through would reject a body of exactly that length. The ceiling
-/// means "this many octets are fine", so exactly the ceiling arrives.
+/// Verifies that a response body exactly matching the ceiling is accepted.
 #[test]
 fn a_body_of_exactly_the_ceiling_arrives() {
     let server = MockServer::builder().start();
@@ -132,10 +107,7 @@ fn a_body_of_exactly_the_ceiling_arrives() {
     assert_eq!(downloaded, data);
 }
 
-/// Every request states a ceiling, and for the JSON ones it is this crate's
-/// [`limits::MAX_API_RESPONSE_BYTES`] rather than whatever a dependency would
-/// have applied. The session fetch counts: it is the first request an account
-/// ever makes, and it was under the invisible limit like all the others.
+/// Verifies that API requests apply [`limits::MAX_API_RESPONSE_BYTES`].
 #[test]
 fn every_request_states_the_ceiling_its_response_is_held_to() {
     let server = MockServer::builder().start();
@@ -165,8 +137,7 @@ fn every_request_states_the_ceiling_its_response_is_held_to() {
     );
     assert_eq!(session.1, limits::MAX_API_RESPONSE_BYTES);
 
-    // The upload's *response* is a JSON blob descriptor, so it is held to the
-    // API ceiling too; the download is held to what its caller asked for.
+    // Upload responses use the API ceiling, while downloads use the caller ceiling.
     let download = seen.last().expect("the download was made");
     assert_eq!(download.1, 4096);
     assert!(

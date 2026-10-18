@@ -1,57 +1,44 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Substituting values into the session's URL templates.
+//! Substitutes values into session URL templates.
 //!
-//! RFC 8620 §6.1 and §6.2 describe `uploadUrl` and `downloadUrl` as templates
-//! with named variables, and require that "the client MUST URI-encode" each
-//! value it puts in one. That obligation is not decoration. Every value
-//! substituted here arrives from somewhere else: `accountId` and `blobId` come
-//! off the wire, from the session document and from `Email/get`, and
-//! [`jmap_proto::Id`] is a newtype over `String` with no grammar check, so a
-//! `#` truncates the URL at a fragment, a `?` opens a query string and a `/`
-//! invents a path segment. `name` is a caller's label, which for this crate is
-//! a message uid. In each case the unencoded string does not address the blob
-//! it was read from; it addresses a different URL, chosen by whoever wrote the
-//! value.
+//! RFC 8620 section 6.1 and section 6.2 describe `uploadUrl` and `downloadUrl` as templates.
+//! The client must percent-encode each substituted variable value.
+//! Values like `accountId` and `blobId` arrive from the network without validation.
+//! Unencoded delimiters like `#`, `?`, or `/` would change URL structure unexpectedly.
 //!
-//! The escaping is the strictest of the RFC 3986 sets on purpose. A template
-//! may place a variable in a path segment (`/download/{accountId}/{blobId}`)
-//! or in a query value (`?accept={type}`), and this crate does not parse the
-//! template to find out which; percent-encoding everything outside
-//! §2.3's unreserved set is the one answer that is correct in both.
+//! The encoder uses the strict RFC 3986 unreserved character set.
+//! A template variable can appear in either a path segment or a query parameter.
+//! Percent-encoding all characters outside the unreserved set works correctly in both positions.
 
 use std::borrow::Cow;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-/// RFC 3986 §2.3's unreserved set (`ALPHA / DIGIT / "-" / "." / "_" / "~"`),
-/// expressed as what to escape rather than what to keep.
+/// RFC 3986 section 2.3 unreserved set (`ALPHA / DIGIT / "-" / "." / "_" / "~"`).
+///
+/// Defines bytes to escape instead of bytes to keep.
 const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
 
-/// Percent-encode a value for substitution into a URL template.
+/// Percent-encodes a value for substitution into a URL template.
 ///
-/// Unreserved characters pass through; every other byte becomes `%XX`, in
-/// uppercase hex per RFC 3986 §2.1. `percent-encoding` encodes by octet, so a
-/// multi-byte UTF-8 character becomes one escape per byte, which is what
-/// makes non-ASCII right.
+/// Unreserved characters pass through unchanged.
+/// Other bytes become uppercase hex escapes per RFC 3986 section 2.1.
+/// The encoder encodes multi-byte UTF-8 octets individually.
 pub(crate) fn encode_template_value(value: &str) -> String {
     utf8_percent_encode(value, UNRESERVED).to_string()
 }
 
-/// Replace `url`'s scheme and authority with `origin`'s, keeping its path and
-/// query untouched.
+/// Replaces `url`'s scheme and authority with `origin`'s, keeping path and query untouched.
 ///
-/// Backs [`crate::ClientBuilder::rebase_urls_to_origin`]: a real deployment's
-/// session document is authoritative about the *path* its endpoints live at,
-/// but a client that reached the session through a different scheme/host
-/// than the document names (a reverse proxy, NAT boundary, or a configured
-/// public hostname the client cannot route to) needs the option to keep
-/// talking to the origin that worked rather than the one the server states.
+/// Backs [`crate::ClientBuilder::rebase_urls_to_origin`].
+/// A session document defines authoritative paths for endpoints.
+/// Reverse proxies or NAT boundaries may require connecting through an alternate origin.
 pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     let path_and_beyond = match url.find("://") {
         Some(scheme_end) => {
@@ -66,13 +53,10 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
 }
 
-/// The scheme+authority prefix of `url`: everything before its first `/`
-/// after `://`, or the whole string if it has none.
+/// Scheme and authority prefix of `url`.
 ///
-/// A host and the same host with one trailing dot are treated as the same
-/// origin (e.g. `https://example.com.` and `https://example.com`), so DNS
-/// root labels do not cause cross-origin credential dropping or redirect
-/// mismatch errors.
+/// Treats a host with a trailing dot as equivalent to one without.
+/// This prevents DNS root label differences from causing origin mismatches.
 pub(crate) fn origin_of(url: &str) -> Cow<'_, str> {
     match url.find("://") {
         Some(scheme_end) => {
@@ -131,8 +115,9 @@ pub(crate) fn origin_of(url: &str) -> Cow<'_, str> {
     }
 }
 
-/// Whether two URLs name the same scheme, host, and port, treating a host and
-/// the same host with one trailing dot as the same origin.
+/// Checks whether two URLs have the same scheme, host, and port.
+///
+/// Normalizes trailing root dots before comparing hosts.
 pub(crate) fn same_origin(a: &str, b: &str) -> bool {
     origin_of(a) == origin_of(b)
 }
@@ -161,10 +146,8 @@ pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<Stri
         Some(q) => &current_url[..q],
         None => current_url,
     };
-    // `url_without_query` can be shorter than `path_start` when the query
-    // marker precedes the scheme (a hostile or prior-hop `current_url`), so
-    // `get` rather than index: no path region there reads the same as none
-    // found.
+    // A query marker before the scheme can make `url_without_query` shorter than `path_start`.
+    // Safe slicing with `get` avoids indexing past the end of the string.
     let last_slash = url_without_query
         .get(path_start..)
         .and_then(|rest| rest.rfind('/'))
@@ -202,8 +185,7 @@ mod tests {
 
     #[test]
     fn a_reserved_character_in_a_query_position_is_escaped_too() {
-        // `&` and `=` are legal in a path segment and would split a query
-        // string; the strict set means one encoder serves both positions.
+        // Strict encoding escapes query delimiters so one encoder serves both path and query.
         assert_eq!(encode_template_value("a&b=c"), "a%26b%3Dc");
         assert_eq!(encode_template_value("application/octet-stream"), {
             "application%2Foctet-stream"
@@ -356,9 +338,7 @@ mod tests {
 
     #[test]
     fn resolve_redirect_does_not_panic_when_the_query_marker_precedes_the_scheme() {
-        // `current_url` can be a prior hop's own resolved redirect, so it is
-        // not guaranteed to be a well-formed URL: a `?` before the `://` made
-        // `url_without_query` shorter than `path_start`, indexing past its end.
+        // A malformed URL with a `?` before `://` must not index out of bounds.
         let _ = resolve_redirect("?://", "");
     }
 
@@ -429,23 +409,14 @@ mod tests {
     }
 
     proptest! {
-        // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
-        // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's
-        // session document (see `Client::connect`'s `rebase_origin` calls):
-        // a malicious or merely buggy server controls both arguments
-        // entirely. Arbitrary Unicode, not just ASCII attack strings: a
-        // multi-byte character straddling where `rebase_origin` slices for
-        // `://` or the first `/` is exactly the kind of input manual
-        // inspection is least trustworthy about.
+        // Verifies that arbitrary Unicode inputs do not panic `rebase_origin`.
+        // A server controls both template URLs and origin strings.
         #[test]
         fn rebase_origin_never_panics_on_hostile_input(url in ".*", origin in ".*") {
             let _ = rebase_origin(&url, &origin);
         }
 
-        // `url` stands in for `HttpResponse::final_url`, which a transport
-        // builds from whatever a server's `Location` header names across
-        // however many redirects it followed, as untrusted as `rebase_origin`'s
-        // own arguments above.
+        // Verifies that arbitrary server redirect locations do not panic `origin_of`.
         #[test]
         fn origin_of_never_panics_on_hostile_input(url in ".*") {
             let _ = origin_of(&url);
@@ -461,9 +432,7 @@ mod tests {
             let _ = resolve_redirect(&base, &loc);
         }
 
-        // `value` stands in for a server-supplied `blobId`/`accountId`, or
-        // this crate's own `name` (a message uid), substituted into a
-        // `downloadUrl`/`uploadUrl` template.
+        // Verifies that arbitrary values do not panic `encode_template_value`.
         #[test]
         fn encode_template_value_never_panics_on_hostile_input(value in ".*") {
             let _ = encode_template_value(&value);

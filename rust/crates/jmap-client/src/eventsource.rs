@@ -1,31 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Push: a long-lived `EventSource` (SSE) reader (RFC 8620 §7.1, §7.3).
+//! JMAP Push: a long-lived `EventSource` (SSE) reader (RFC 8620 Section 7.1 and 7.3).
 //!
-//! [`crate::transport::Transport`] is a unary request/response abstraction:
-//! deliberately so, so a libsoup-backed transport can drop in later without
-//! touching protocol logic, but a push connection is the opposite shape: one
-//! request whose response body never ends. So this reads the wire itself,
-//! on a dedicated thread per subscription, rather than going through
-//! `Transport`. It speaks both plain `http://` (the mock, and every URL this
-//! codebase builds today) and `https://` (`rustls` over the same raw
-//! `TcpStream`, since `ureq`'s own TLS backend is exactly that already: one
-//! layer below the unary request/response API this module deliberately
-//! bypasses, not a second implementation of it).
+//! Push connections stream responses indefinitely rather than using single request/response cycles.
+//! This module reads directly from sockets on a dedicated thread per subscription.
+//! It supports plain `http://` and TLS-encrypted `https://` connections.
 //!
-//! [`expand_url`] turns the session object's `eventSourceUrl` (an RFC 6570
-//! URI template, per RFC 8620 §7.3) into the URL to open.
-//! [`EventSourceSubscription::start`] connects, reads chunked-transfer SSE
-//! frames, and forwards every `event: state` block's `data:` as a parsed
-//! [`StateChange`]. A `ping` (or any other) event is read and discarded: it
-//! exists only to prove the connection is still alive. Both a clean end (the
-//! server closed the stream, as `closeafter=state` does) and a broken one
-//! (a network error, a non-200 status) are reasons to reconnect, with
-//! exponential backoff, until [`CancelFlag::cancel`] is called. [`Drop`]
-//! calls it too, and also shuts down whatever socket the background thread
-//! currently holds, so tearing a subscription down can never block on a dead
-//! or merely idle push connection.
+//! [`expand_url`] resolves `eventSourceUrl` templates (RFC 8620 Section 7.3).
+//! [`EventSourceSubscription::start`] connects and processes SSE frames.
+//! Parsed `event: state` payloads are forwarded as [`StateChange`] events.
+//! Keep-alive `ping` events are discarded.
+//! Reconnections use exponential backoff until cancelled.
+//! Dropping a subscription cancels the loop and shuts down the active socket.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -71,15 +58,13 @@ impl Default for EventSourceTimeouts {
     }
 }
 
-/// RFC 8620 §7.3's `types` value meaning "push every type", as opposed to a
-/// comma-separated list of the ones the subscriber cares about.
+/// Special `types` value requesting all event types (RFC 8620 Section 7.3).
 pub const ALL_TYPES: &str = "*";
 
-/// A subscription's request headers (typically `Authorization`), shared
-/// between the [`EventSourceSubscription`] the caller holds and whatever
-/// runs its reconnect loop, so a [`set`](Self::set) after a credential
-/// refresh is read fresh by the very next reconnect attempt instead of
-/// requiring the subscription to be torn down and restarted.
+/// Subscription request headers shared with the reconnect loop.
+///
+/// Updating headers via [`set`](Self::set) applies them to future reconnect attempts.
+/// This avoids tearing down and restarting the subscription.
 #[derive(Clone)]
 pub struct SharedHeaders(Arc<Mutex<Vec<(String, String)>>>);
 
@@ -89,9 +74,9 @@ impl SharedHeaders {
         Self(Arc::new(Mutex::new(headers)))
     }
 
-    /// Replace every header sent on future connection attempts. Takes effect
-    /// on the next reconnect; a connection already in flight keeps whatever
-    /// it was sent with.
+    /// Replace headers for future connection attempts.
+    ///
+    /// Takes effect on the next reconnect attempt. Active connections remain unchanged.
     pub fn set(&self, headers: Vec<(String, String)>) {
         *self.0.lock().expect("shared headers lock poisoned") = headers;
     }
@@ -178,14 +163,11 @@ impl EventSourceSubscription {
         }
     }
 
-    /// Start listening on `url` (a full `GET` target: the session's
-    /// `eventSourceUrl` already put through [`expand_url`]). A missing port is
-    /// defaulted from the scheme, since a real server's `eventSourceUrl`
-    /// names none.
+    /// Start listening on `url`.
     ///
-    /// `headers` are sent on every connection attempt, read fresh each time
-    /// rather than fixed for the life of the subscription; see
-    /// [`set_headers`](Self::set_headers).
+    /// `url` is an expanded `eventSourceUrl` (see [`expand_url`]).
+    /// Ports default from the URL scheme if not specified.
+    /// Headers are re-read on every reconnect attempt (see [`set_headers`](Self::set_headers)).
     pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
         Self::start_with_timeouts(url, headers, cancel, EventSourceTimeouts::default())
     }
@@ -237,21 +219,18 @@ impl EventSourceSubscription {
         }
     }
 
-    /// Replace the headers (typically `Authorization`) sent on future
-    /// reconnect attempts: e.g. after a
-    /// [`Client::set_credentials`](crate::Client::set_credentials) installs
-    /// a fresh OAuth 2.0 access token on the backend's connection, so a
-    /// subscription refused with a stale token picks up the new one on its
-    /// next reconnect rather than looping on the same failure until the
-    /// backend itself reconnects.
+    /// Replace headers sent on future reconnect attempts.
+    ///
+    /// Callers can update authentication tokens after credential refreshes.
+    /// The next reconnect attempt uses the new headers.
     pub fn set_headers(&self, headers: Vec<(String, String)>) {
         self.headers.set(headers);
     }
 
-    /// Stop listening: cancel, shut down the current socket (if any) so a
-    /// blocking read on it returns immediately, and join the background
-    /// thread. Idempotent; also runs on [`Drop`]. Calling it explicitly is
-    /// only useful to observe completion at a chosen point.
+    /// Stop listening and join the background thread.
+    ///
+    /// Cancels subscription, shuts down the active socket, and waits for thread exit.
+    /// Idempotent. Also called automatically on [`Drop`].
     pub fn stop(&mut self) {
         self.cancel.cancel();
         if let Some(stream) = self.socket.lock().expect("socket lock poisoned").take() {
@@ -364,9 +343,8 @@ fn connect_and_stream(
     stream.set_read_timeout(Some(timeouts.read_head))?;
     stream.set_write_timeout(Some(timeouts.connect))?;
 
-    // Stored before the TLS handshake (if any): `shutdown()` on this clone
-    // aborts the handshake or any in-flight read/write on the other clone
-    // `Conn` goes on to own, since both are handles onto the same socket.
+    // Store a socket handle before starting the TLS handshake.
+    // Calling `shutdown()` on this clone aborts pending I/O operations.
     *ctx.socket.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
     if cancel.is_cancelled() {
         return Ok(());
@@ -437,9 +415,9 @@ fn connect_and_stream(
     stream_events(&mut body, cancel, sender, &ctx.last_id_slot)
 }
 
-/// The two shapes a connection can take once a scheme is known: `Read`/
-/// `Write` just dispatch to whichever one this attempt picked, so everything
-/// downstream (`ChunkedBody`, the SSE line reader) stays scheme-agnostic.
+/// Connection abstraction for plain TCP and TLS streams.
+///
+/// Dispatches `Read` and `Write` calls to the underlying stream type.
 enum Conn {
     Plain(TcpStream),
     Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
@@ -470,14 +448,11 @@ impl Write for Conn {
     }
 }
 
-/// The process-wide TLS client config: the real webpki CA roots, plus (test
-/// builds only) the one self-signed root this crate's own `tests/fixtures`
-/// TLS test server uses, never compiled into a shipped binary, since it is
-/// behind `#[cfg(test)]`. Installing a default crypto provider a second time
-/// (another `rustls` user in the same process already did) returns `Err`
-/// rather than panicking, so it is ignored rather than unwrapped, using the same
-/// "tolerant of being called again" idiom `jmap_backend_core::logging::init`
-/// and `i18n::bind` already use for their own once-per-process setup.
+/// Shared process-wide TLS client configuration.
+///
+/// Loads system CA trust anchors via `webpki-roots`.
+/// Test builds include an additional self-signed certificate fixture.
+/// Provider installation errors are ignored if already initialized.
 fn tls_config() -> &'static Arc<ClientConfig> {
     static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     CONFIG.get_or_init(|| {
@@ -499,10 +474,9 @@ fn tls_config() -> &'static Arc<ClientConfig> {
     })
 }
 
-/// A URL this module can act on: which scheme (`tls`), the authority as the
-/// URL wrote it (what goes in the `Host:` header), the `host:port` to dial,
-/// the bare host for TLS SNI/certificate-name checking, and the request
-/// target.
+/// Parsed URL components for opening an event source connection.
+///
+/// Includes scheme, dial target, authority, host name, and request path.
 struct UrlParts {
     tls: bool,
     authority: String,
@@ -526,17 +500,12 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     } else {
         "/".to_owned()
     };
-    // A plain `rsplit_once` is enough: no IPv6 literal (`[::1]:port`) support
-    // is needed or attempted here, since the URLs this reaches are a mock's
-    // `127.0.0.1:port` and a real server's `eventSourceUrl`, which names a
-    // DNS host.
+    // Extract optional port number from the authority.
+    // IPv6 literal syntax is not handled.
     let (host, dial) = match authority.rsplit_once(':') {
         Some((host, _port)) => (host.to_owned(), authority.clone()),
-        // A real server's `eventSourceUrl` names no port (RFC 3986 leaves
-        // it to the scheme) and `TcpStream::connect` has no scheme to
-        // consult, so fill the default in here rather than fail to dial.
-        // Only for dialling: `Host:` keeps the authority the URL wrote, so
-        // a server that routes on it sees what it advertised.
+        // Default the port when omitted from the URL (RFC 3986).
+        // The Host header preserves the original authority string.
         None => (
             authority.clone(),
             format!("{authority}:{}", if tls { 443 } else { 80 }),
@@ -551,36 +520,22 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     })
 }
 
-/// Expand a session object's `eventSourceUrl`, which RFC 8620 §7.3 specifies
-/// as a level-1 URI template (RFC 6570) that MUST contain the variables
-/// `types`, `closeafter` and `ping`.
+/// Expand a session object's `eventSourceUrl` (RFC 8620 Section 7.3).
 ///
-/// An empty `types` asks for every type, which is the `*` §7.3 defines for
-/// exactly that. `close_after_state` picks between the `state` and `no`
-/// values §7.3 allows; `ping_seconds` is the interval the server should send
-/// a `ping` event on, `0` meaning "do not".
+/// RFC 8620 Section 7.3 specifies a URI template containing `types`, `closeafter`, and `ping` (RFC 6570).
+/// An empty `types` slice requests all event types (`*`).
+/// `close_after_state` toggles between `state` and `no`.
+/// `ping_seconds` sets the ping interval in seconds (zero disables pings).
 ///
-/// A server that advertises a URL naming *none* of the three variables has
-/// not followed §7.3 (`jmap-mock` is one such, deliberately, since its
-/// session document predates this), so rather than send a request with no
-/// parameters at all, they are appended as an ordinary query string. That is
-/// a guess, but the only one available, and it is what the template would
-/// have produced.
-///
-/// Values are percent-encoded, so nothing substituted here can smuggle in a
-/// further query parameter. Two characters are deliberately left literal:
-/// `,`, which is §7.3's own separator inside `types`, and `*`, its
-/// "every type" value. Both are `sub-delims` and so legal unencoded in a
-/// query (RFC 3986 §3.4); encoding them would be equally correct for a server
-/// that percent-decodes and silently wrong for one that does not.
+/// If the template contains none of the three variables, parameters are appended as query arguments.
+/// Variable values are percent-encoded except for `,` and `*` (RFC 3986 Section 3.4).
 pub fn expand_url(
     template: &str,
     types: &[&str],
     close_after_state: bool,
     ping_seconds: u32,
 ) -> String {
-    /// Everything outside RFC 3986's `unreserved` set, less the two
-    /// characters documented above.
+    // Non-alphanumeric characters allowed unencoded in query values.
     const KEEP: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
         .remove(b'-')
         .remove(b'.')
@@ -620,9 +575,9 @@ pub fn expand_url(
     expanded
 }
 
-/// Read the status line and headers, checking the response is chunked:
-/// the only framing this reader knows how to consume, and the only one an
-/// indefinite stream (no `Content-Length` is possible) can arrive as.
+/// Read the status line and headers.
+///
+/// Verifies HTTP 200 and chunked transfer encoding.
 fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
     let mut status_line = String::new();
     reader.read_line(&mut status_line)?;
@@ -655,12 +610,10 @@ fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
     }
 }
 
-/// Read SSE frames (RFC 8620 §7.3 example: `event: state` / `data: {…}`,
-/// blank-line terminated) off `reader`, forwarding a `state` event's `data`
-/// (parsed as a [`StateChange`]) to `sender`. Returns `Ok(())` on a clean
-/// end (terminal chunk / EOF) as readily as on cancellation: both just mean
-/// "stop reading", and [`run`] treats every `Ok`/`Err` return alike, as a
-/// reason to reconnect.
+/// Stream SSE frames from the response body (RFC 8620 Section 7.3).
+///
+/// Forwards parsed `StateChange` records to `sender`.
+/// Returns `Ok(())` when reading stops due to end-of-stream or cancellation.
 fn stream_events(
     reader: &mut impl BufRead,
     cancel: &CancelFlag,
@@ -711,10 +664,9 @@ fn stream_events(
     }
 }
 
-/// Decodes an HTTP/1.1 chunked-transfer body (RFC 9112 §7.1) on the fly, so
-/// the SSE parser above can just read lines without knowing chunk
-/// boundaries exist. Deliberately does not assume one SSE frame is one
-/// chunk: true of `jmap-mock`'s own writer, not guaranteed by the spec.
+/// Decode an HTTP/1.1 chunked-transfer body on the fly (RFC 9112 Section 7.1).
+///
+/// Does not assume that individual SSE frames align with chunk boundaries.
 struct ChunkedBody<R> {
     inner: R,
     remaining_in_chunk: usize,
@@ -766,10 +718,8 @@ impl<R: BufRead> Read for ChunkedBody<R> {
         let want = buf.len().min(self.remaining_in_chunk);
         let n = self.inner.read(&mut buf[..want])?;
         if n == 0 {
-            // The connection closed mid-chunk: an incomplete body, not a
-            // graceful end, but the caller treats every non-`Err` return
-            // from `stream_events` alike, so surfacing it as EOF here is
-            // enough for the reconnect loop to act on.
+            // Connection closed mid-chunk.
+            // Surface as EOF so the reconnect loop can retry.
             self.finished = true;
             return Ok(0);
         }
@@ -916,9 +866,7 @@ mod tests {
 
     #[test]
     fn chunked_body_reassembles_a_line_split_across_two_chunks() {
-        // The SSE parser reads lines; this proves it still gets a whole
-        // one even when the chunk boundary falls inside it: "event:" (6
-        // bytes) in the first chunk, " state\n" (7 bytes) in the second.
+        // Verify line reassembly when chunk boundaries split a single line.
         let raw = b"6\r\nevent:\r\n7\r\n state\n\r\n0\r\n\r\n";
         let mut reader = BufReader::new(ChunkedBody::new(BufReader::new(Cursor::new(raw))));
         let mut line = String::new();
@@ -1009,13 +957,8 @@ mod tests {
             first
         );
 
-        // The connection above just closed, but its dead subscriber is
-        // only pruned lazily, on the next failed broadcast (see
-        // `EventSourceHub::broadcast`), so `wait_for_event_source_
-        // subscriber` (count > 0) would see the stale entry and return
-        // immediately, racing ahead of the actual reconnect. Wait for a
-        // *second* registered subscriber instead, as
-        // `jmap-mock/tests/eventsource.rs`'s own multi-subscriber test does.
+        // Dead subscribers are pruned lazily on the next broadcast.
+        // Wait for a second subscriber to ensure the reconnect succeeded.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let count = server
@@ -1074,9 +1017,8 @@ mod tests {
         )]);
         let subscription = EventSourceSubscription::start(url, headers, CancelFlag::new());
 
-        // The stale token is refused, so no subscriber connects, proving
-        // the reconnect loop is actually retrying with the header this
-        // subscription started with, not by some other route.
+        // The stale token is rejected.
+        // This confirms the reconnect loop retries with initial headers.
         let deadline = Instant::now() + Duration::from_secs(5);
         while server.unauthorized_responses() == 0 {
             assert!(
@@ -1104,12 +1046,9 @@ mod tests {
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
     }
 
-    /// A minimal one-shot TLS server: accepts one connection, discards
-    /// whatever the client sends (only this module's own `GET` request is
-    /// ever expected), and writes back one chunked `event: state` frame
-    /// using the same key/cert pair `tls_config`'s `#[cfg(test)]` half
-    /// trusts. Proves the real handshake and chunked-SSE decode work
-    /// together over TLS, not just that each is independently correct.
+    /// Minimal one-shot TLS server for testing.
+    ///
+    /// Accepts a connection, sends a chunked `event: state` frame, and closes.
     fn start_tls_test_server(state_change_frame: &'static str) -> std::net::SocketAddr {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
         use rustls::{ServerConfig, ServerConnection};
@@ -1134,9 +1073,7 @@ mod tests {
             let server_conn = ServerConnection::new(config).expect("server tls session");
             let mut tls = StreamOwned::new(server_conn, stream);
 
-            // Read (and discard) the request up to its terminating blank
-            // line: enough to know the client is done sending, without a
-            // full HTTP parser this one-shot server doesn't need.
+            // Discard request bytes up to the terminating blank line.
             let mut request = Vec::new();
             let mut byte = [0u8; 1];
             while !request.ends_with(b"\r\n\r\n") {

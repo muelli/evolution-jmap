@@ -7,10 +7,10 @@
 //!
 //! Talks to a JMAP server over HTTP: session discovery
 //! (`/.well-known/jmap`), method batching against the API endpoint, and blob
-//! upload/download. HTTP is abstracted behind the [`Transport`] trait so the
-//! default `ureq` implementation can later be replaced by a libsoup-backed
-//! one inside Evolution Data Server processes; [`CancelFlag`] is the seam
-//! that will map to `GCancellable`.
+//! upload and download.
+//!
+//! The [`Transport`] trait abstracts HTTP request execution.
+//! The [`CancelFlag`] type provides cancellation support.
 //!
 //! [`Transport`]: transport::Transport
 //! [`CancelFlag`]: transport::CancelFlag

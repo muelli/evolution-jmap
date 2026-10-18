@@ -38,9 +38,7 @@ fn expect_created<T: Clone>(response: &SetResponse<T>, creation_id: &str) -> Res
     )
 }
 
-/// The same question of the two maps alone, for a method that creates without
-/// being a `/set`: `Email/import` (RFC 8621 §4.8), whose response carries
-/// `created` and `notCreated` and none of the rest of the `/set` shape.
+/// Extract created item from maps returned by methods like `Email/import` (RFC 8621 Section 4.8).
 fn creation_outcome<T: Clone>(
     created: Option<&BTreeMap<String, T>>,
     not_created: Option<&BTreeMap<String, SetError>>,
@@ -97,17 +95,12 @@ fn backfill_submission_created(
     arguments
 }
 
-/// The `EmailSubmission/set` half of sending: submit `email_id` through
-/// `identity_id`, and patch the message once the server accepts it.
+/// Build an `EmailSubmission/set` request.
 ///
-/// `email_id` is a `#draft` creation reference when the draft is being created
-/// in the same request and the message's real id when it is not: the one place
-/// the two forms of [`Client::send_email`] differ. The `on_success_update` key
-/// stays a creation reference either way: it names the *submission*, which is
-/// always created by this very call.
+/// `email_id` is either a `#draft` reference or an existing message ID.
+/// `on_success_update` patches the message after the server accepts the submission.
 ///
-/// `envelope` is the SMTP envelope the message is to go out with. `None`
-/// instructs the server to derive recipients from message headers (RFC 8621 §7).
+/// `envelope` is the optional SMTP envelope. When omitted, the server derives recipients from headers (RFC 8621 Section 7).
 fn submission_request(
     account_id: &Id,
     identity_id: &Id,
@@ -140,11 +133,10 @@ fn submission_request(
 }
 
 impl Client {
-    /// Fetch all mailboxes of an account (`Mailbox/get` with `ids: null`).
+    /// Fetch all mailboxes for an account (`Mailbox/get` with `ids: null`).
     ///
-    /// The whole response, not just the list: its `state` is what
-    /// `Mailbox/changes` is asked from, and a folder list without the state it
-    /// was current at is one that can only ever be re-fetched in full.
+    /// Returns the full response containing the mailbox list and state string.
+    /// The state string is required for incremental sync via `Mailbox/changes`.
     pub fn mailbox_get(&self, account_id: &Id) -> Result<GetResponse<Mailbox>, Error> {
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_MAIL],
@@ -154,17 +146,10 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Ask the server to make a mailbox (`Mailbox/set` create); answers the
-    /// one it made.
+    /// Create a mailbox (`Mailbox/set`).
     ///
-    /// Answered with the object rather than with nothing because the id is the
-    /// server's to hand out: a folder the caller cannot name afterwards is one
-    /// it would have to go looking for by name, in a list where the name is
-    /// unique only among siblings.
-    ///
-    /// A refusal is [`Error::Set`] with the server's own reason: RFC 8621 §2's
-    /// `invalidProperties` for a name a sibling already has, a `parentId` that
-    /// is not a mailbox, or a role the account has already given away.
+    /// Returns the created mailbox, including its server-assigned ID.
+    /// Returns [`Error::Set`] if rejected (RFC 8621 Section 2).
     pub fn mailbox_create(&self, account_id: &Id, mailbox: &Mailbox) -> Result<Mailbox, Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).create("new", mailbox.clone());
         let response = self.mailbox_set(&request)?;
@@ -191,13 +176,9 @@ impl Client {
         Ok(created)
     }
 
-    /// Change a mailbox (`Mailbox/set` update): its name, where it hangs, or
-    /// whether it is subscribed.
+    /// Update mailbox properties (`Mailbox/set`).
     ///
-    /// A `PatchObject` (RFC 8620 §5.3) rather than a whole `Mailbox`, for the
-    /// reason [`Client::email_update`] takes one: most of what a `Mailbox`
-    /// carries is the server's (most notably message counts), and sending it
-    /// back would be a client telling a server what it has just been told.
+    /// Takes a JSON Patch object (RFC 8620 Section 5.3) containing modified properties.
     pub fn mailbox_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.mailbox_set(&request)?;
@@ -213,13 +194,10 @@ impl Client {
         ))
     }
 
-    /// Remove a mailbox (`Mailbox/set` destroy).
+    /// Destroy a mailbox (`Mailbox/set`).
     ///
-    /// The two refusals worth expecting are RFC 8621 §2.5's own:
-    /// `mailboxHasChild` and `mailboxHasEmail`, which arrive as
-    /// [`Error::Set`] and are the server declining rather than failing: what
-    /// is inside the folder is the user's to decide about, and this client
-    /// sends no `onDestroyRemoveEmails`.
+    /// Returns [`Error::Set`] if the server refuses removal (RFC 8621 Section 2.5).
+    /// Common rejection codes include `mailboxHasChild` and `mailboxHasEmail`.
     pub fn mailbox_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).destroy(id.clone());
         let response = self.mailbox_set(&request)?;
@@ -241,12 +219,9 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Fetch the account's `VacationResponse` (RFC 8621 §8.1).
+    /// Fetch the account vacation responder settings (RFC 8621 Section 8.1).
     ///
-    /// Returned as the object itself rather than a list or a [`GetResponse`]:
-    /// this is a singleton, so `list` always holds exactly the one object a
-    /// server that follows RFC 8621 answers even before any client has ever
-    /// set anything.
+    /// Returns the singleton vacation response object.
     pub fn vacation_response_get(&self, account_id: &Id) -> Result<VacationResponse, Error> {
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
@@ -284,18 +259,11 @@ impl Client {
         ))
     }
 
-    /// `Email/query`: matching email ids.
+    /// Query matching email IDs (`Email/query`).
     ///
-    /// `position` is the offset into the result set the answer should start at
-    /// (RFC 8620 §5.5): 0 for the first page. A server may answer with fewer
-    /// ids than were asked for whether or not the client set a `limit`, and
-    /// reports the cap it applied in [`QueryResponse::limit`], so a caller that
-    /// wants the whole result set asks again from where the last answer ended.
-    ///
-    /// `filter` takes a plain [`EmailQueryFilter`] or a
-    /// [`Filter<EmailQueryFilter>`] AND/OR/NOT tree (RFC 8620 §5.5): the
-    /// former converts via [`Filter::condition`], so every existing caller
-    /// passing a flat filter keeps compiling unchanged.
+    /// `position` is the zero-based result offset for pagination (RFC 8620 Section 5.5).
+    /// Servers can return fewer items than requested and report the cap in [`QueryResponse::limit`].
+    /// `filter` accepts flat conditions or structured AND/OR/NOT trees.
     pub fn email_query(
         &self,
         account_id: &Id,
@@ -313,22 +281,13 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// The account's `Email` state, without fetching a single message.
+    /// Fetch current `Email` state string without downloading messages.
     ///
-    /// `Email/get` naming no ids at all: RFC 8620 §5.1 has the response carry
-    /// the type's current state whatever the list came back as, so an empty
-    /// request is the one way to learn a state without paying for the objects
-    /// it describes. `Email/changes` is asked from this.
-    ///
-    /// Why a caller wants it *before* it wants the messages: a state read after
-    /// a listing was taken already covers whatever arrived while it was being
-    /// taken, and a delta asked from it would never mention those messages
-    /// again.
+    /// Issues an empty `Email/get` request (RFC 8620 Section 5.1).
+    /// Callers use this state as the baseline for future `Email/changes` requests.
     pub fn email_state(&self, account_id: &Id) -> Result<State, Error> {
         let mut request = GetRequest::ids(account_id.clone(), std::iter::empty::<Id>());
-        // Asked for explicitly, so that a server which answers a property list
-        // it does not understand with an error cannot be handed `null`, and so
-        // that nothing here depends on the empty id list being honoured.
+        // Request only the id property to minimize response payload size.
         request.properties = Some(vec!["id".to_owned()]);
         let arguments =
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/get", &request)?;
@@ -625,16 +584,11 @@ impl Client {
         Ok(response.list)
     }
 
-    /// Fetch search snippets for the given Email ids (`SearchSnippet/get`,
-    /// RFC 8621 §5.1): the subject/body text a `filter` matched, HTML-escaped
-    /// and `<mark>`-wrapped, for highlighting search results. `filter` should
-    /// be the same filter passed to [`Client::email_query`] to get these ids
-    /// in the first place; `None` asks for no highlighting at all, per the
-    /// RFC's `filter: FilterOperator|FilterCondition|null`.
+    /// Fetch search snippets for email IDs (`SearchSnippet/get`, RFC 8621 Section 5.1).
     ///
-    /// An id naming no Email is silently absent from the result, the same as
-    /// [`Client::thread_get`] treats a missing id: RFC 8621 §5.1's
-    /// `notFound` carries no other information a caller could act on here.
+    /// Snippets contain matching text wrapped in HTML `<mark>` tags.
+    /// `filter` specifies the query criteria used to locate matching text.
+    /// Omitted or invalid IDs do not produce snippet entries.
     pub fn search_snippet_get(
         &self,
         account_id: &Id,
@@ -753,9 +707,7 @@ impl Client {
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", email_set)?;
         let email_response: SetResponse<Email> = serde_json::from_value(arguments)?;
         let created_email = expect_created(&email_response, DRAFT)?;
-        // The id the chained form never needs: `#draft` resolves only inside
-        // the request that created the draft, so the second request has to name
-        // the message the server actually made.
+        // The second request must use the server-assigned message ID.
         let email_id = created_email
             .id
             .clone()
@@ -816,25 +768,11 @@ impl Client {
         expect_created(&response, SUBMISSION)
     }
 
-    /// [`Client::submit_email`], asking the server to hold the message and
-    /// release it later: SMTP FUTURERELEASE (RFC 4865), carried as the
-    /// [`Schedule`]'s `mailFrom.parameters` entry on `envelope`. The server
-    /// answers with `undoStatus: "pending"` and the release time in `sendAt`
-    /// (which is server-set, the reason this method does not take one), and
-    /// [`Client::cancel_email_submission`] can still call it back until then.
+    /// Submit email with delayed release via SMTP FUTURERELEASE (RFC 4865).
     ///
-    /// The envelope is not optional here as it is on the plain submit: the
-    /// parameter needs a `mailFrom` to sit on, and only the caller knows the
-    /// sender address that belongs there.
-    ///
-    /// A server offers this when its submission account capability names a
-    /// non-zero `maxDelayedSend`
-    /// ([`jmap_proto::session::Account::max_delayed_send`]) and FUTURERELEASE
-    /// among its `submissionExtensions`
-    /// ([`jmap_proto::mail::SubmissionCapability::supports_future_release`]). Nothing here
-    /// checks either before sending: a server that never advertised support
-    /// refuses on its own terms, the same as any other capability-gated
-    /// request.
+    /// Attaches the schedule parameters to the SMTP envelope.
+    /// The server sets `undoStatus: "pending"` and assigns the `sendAt` timestamp.
+    /// Callers can cancel pending submissions using [`Client::cancel_email_submission`].
     pub fn submit_email_at(
         &self,
         account_id: &Id,
@@ -959,28 +897,15 @@ impl Client {
         self.upload_blob_slice(account_id, content_type, &data)
     }
 
-    /// Download a blob's raw bytes via the session's `downloadUrl` template
-    /// (RFC 8620 §6.2).
+    /// Download raw blob bytes using the session's `downloadUrl` template (RFC 8620 Section 6.2).
     ///
-    /// The `name` is a label for the download, not part of its identity: the
-    /// blob is addressed by `account_id` and `blob_id` alone, and the name is
-    /// only what the server may echo as the `Content-Disposition` filename.
-    /// It still has to be encoded: a label is no less able to reshape a URL
-    /// than an id is.
+    /// `account_id` and `blob_id` identify the blob.
+    /// `name` supplies an optional download filename.
+    /// All template parameters are percent-encoded.
     ///
-    /// Every substituted value is percent-encoded: see `crate::url` for why
-    /// that matters when the values are the server's own.
-    ///
-    /// `max_bytes` is how many octets of answer the caller will take. Callers
-    /// with no known size pass [`crate::limits::MAX_BLOB_BYTES`]. Over-limit
-    /// responses return [`Error::ResponseTooLarge`].
-    ///
-    /// Refuses a response that arrived via a redirect to a different origin
-    /// than `downloadUrl` itself named ([`Error::CrossOriginRedirect`]): a
-    /// blob is raw bytes with no expected shape.
-    ///
-    /// Declares `Accept: */*`, not `application/json`: every other request
-    /// this client makes answers with JSON, but a blob download does not.
+    /// `max_bytes` sets the maximum accepted response size.
+    /// Returns [`Error::ResponseTooLarge`] if the response exceeds this limit.
+    /// Redirects to differing origins return [`Error::CrossOriginRedirect`].
     pub fn download_blob(
         &self,
         account_id: &Id,
