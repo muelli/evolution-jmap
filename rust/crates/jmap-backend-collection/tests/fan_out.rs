@@ -256,6 +256,7 @@ fn resource(id: &str) -> Resource {
 /// [`Fanout::discover`] would have gated them.
 fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
     Fanout {
+        shared: Vec::new(),
         parts,
         layout: CollectionLayout {
             mail: None,
@@ -451,6 +452,7 @@ fn each_child_is_written_with_the_server_the_account_names() {
 /// only ever builds them with `None` in every field but the name.
 fn fanout_of(resources: Vec<Resource>) -> Fanout {
     Fanout {
+        shared: Vec::new(),
         parts: Parts::ALL,
         layout: CollectionLayout {
             mail: None,

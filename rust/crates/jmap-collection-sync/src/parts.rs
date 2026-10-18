@@ -63,7 +63,7 @@
 //! is the same rule ("prevent lost of already known calendars when the discover
 //! failed", as the WebDAV backend puts it), reached by not having the object.
 
-use crate::children::{ChildKind, parse_resource_id};
+use crate::children::{ChildKind, parse_resource_id, split_shared_identity};
 use crate::resources::Fanout;
 
 /// Which of an account's three parts the user has switched on.
@@ -160,9 +160,27 @@ impl Fanout {
     /// whose kind was not listed (its part is off, or the login no longer offers
     /// it), are both kept.
     pub fn is_obsolete(&self, resource_id: &str) -> bool {
-        let Some((kind, _)) = parse_resource_id(resource_id) else {
+        let Some((kind, identity)) = parse_resource_id(resource_id) else {
             return false;
         };
+        if let Some((account, _)) = split_shared_identity(identity.as_str()) {
+            // A shared child is gone when its account left the session (the
+            // last grant was withdrawn), or when its account was listed and
+            // the collection was not. A listing that was not sent, or failed,
+            // concludes nothing.
+            return self.parts.wants(kind)
+                && self
+                    .shared
+                    .iter()
+                    .find(|listing| listing.account.id.as_str() == account)
+                    .is_none_or(|listing| {
+                        listing.listing(kind).is_some()
+                            && self
+                                .children()
+                                .iter()
+                                .all(|child| child.resource_id != resource_id)
+                    });
+        }
         self.listed(kind)
             && self
                 .children()
@@ -178,7 +196,7 @@ mod tests {
     use jmap_proto::Id;
 
     use crate::layout::{CollectionLayout, ServiceAccount};
-    use crate::resources::Resource;
+    use crate::resources::{Resource, SharedListing};
 
     fn account(id: &str) -> ServiceAccount {
         ServiceAccount {
@@ -203,6 +221,7 @@ mod tests {
     /// the vectors gated the way [`Fanout::discover`] would have gated them.
     fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
         Fanout {
+            shared: Vec::new(),
             parts,
             layout: CollectionLayout {
                 mail: None,
@@ -275,6 +294,7 @@ mod tests {
             ..Parts::ALL
         };
         let fanout = Fanout {
+            shared: Vec::new(),
             calendars: vec![resource("Cal1")],
             ..fanout(parts, &["AB1"], &[])
         };
@@ -297,6 +317,7 @@ mod tests {
         // document resolved no account for them, so no `AddressBook/get` was
         // sent and the empty vector is ignorance rather than an empty account.
         let fanout = Fanout {
+            shared: Vec::new(),
             layout: CollectionLayout {
                 mail: None,
                 contacts: None,
@@ -352,6 +373,7 @@ mod tests {
         // server has no address books" would delete every contacts child of an
         // account whose server was mid-upgrade.
         let fanout = Fanout {
+            shared: Vec::new(),
             layout: CollectionLayout {
                 mail: None,
                 contacts: None,
@@ -377,5 +399,62 @@ mod tests {
             );
             assert!(parse_resource_id(foreign).is_none(), "sanity: {foreign:?}");
         }
+    }
+
+    fn shared(id: &str, calendars: Option<&[&str]>) -> SharedListing {
+        SharedListing {
+            account: account(id),
+            address_books: None,
+            calendars: calendars.map(|ids| ids.iter().map(|id| resource(id)).collect()),
+        }
+    }
+
+    #[test]
+    fn a_shared_collection_the_owner_stopped_sharing_is_obsolete() {
+        let mut fanout = fanout(Parts::ALL, &[], &[]);
+        fanout.shared = vec![shared("A2", Some(&["C1"]))];
+
+        assert!(!fanout.is_obsolete("calendar:A2/C1"));
+        assert!(
+            fanout.is_obsolete("calendar:A2/C9"),
+            "the account was listed and no longer has it"
+        );
+        assert!(
+            fanout.is_obsolete("calendar:A3/C1"),
+            "the account left the session: its last grant was withdrawn"
+        );
+    }
+
+    #[test]
+    fn a_shared_child_whose_listing_was_not_sent_or_failed_is_kept() {
+        let mut unlisted = fanout(Parts::ALL, &[], &[]);
+        unlisted.shared = vec![shared("A2", None)];
+        assert!(!unlisted.is_obsolete("calendar:A2/C1"));
+        assert!(
+            !unlisted.is_obsolete("addressbook:A2/AB1"),
+            "address books of A2 were not listed either"
+        );
+
+        // Switched off: dormant, as for the user's own collections, even when
+        // the account is gone.
+        let mut off = fanout(
+            Parts {
+                calendars: false,
+                ..Parts::ALL
+            },
+            &[],
+            &[],
+        );
+        off.shared = Vec::new();
+        assert!(!off.is_obsolete("calendar:A3/C1"));
+    }
+
+    #[test]
+    fn a_malformed_shared_identity_is_judged_as_the_users_own() {
+        // `/C1` is not a share; it is a collection id of the user's own
+        // account, and the user's calendars were listed without it.
+        let fanout = fanout(Parts::ALL, &[], &["C1"]);
+        assert!(fanout.is_obsolete("calendar:/C1"));
+        assert!(!fanout.is_obsolete("calendar:C1"));
     }
 }

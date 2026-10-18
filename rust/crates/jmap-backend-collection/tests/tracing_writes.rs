@@ -587,6 +587,7 @@ fn remove_obsolete_traces_obsolete_count() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let fanout = Fanout {
+            shared: Vec::new(),
             parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
