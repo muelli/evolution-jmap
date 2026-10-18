@@ -700,6 +700,42 @@ fn connecting_from_a_source_with_account_id_opens_that_account() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
+/// The account a collection child names in `[Resource] Identity` is the one
+/// opened. Only the keyfile reaches the factory a child is opened in, so this
+/// source carries nothing else: no object data, no extra extension.
+#[test]
+fn connecting_from_a_source_whose_identity_names_an_account_opens_that_accounts_calendar() {
+    let (fixture, second_account_id, _) = Fixture::start_two_accounts();
+    // Not the second account's default, so the collection half is honoured too.
+    let shared = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&second_account_id).unwrap();
+        account.seed_calendar("Shared", false)
+    };
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .identity(&format!("{second_account_id}/{shared}"));
+    let mut outs = ConnectOuts::default();
+
+    let sync = connect_from(&source, &mut outs).expect("the connection was refused");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.calendar_id(), &shared);
+    assert!(outs.error.is_null());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+#[test]
+fn a_config_whose_resource_names_an_account_opens_that_accounts_calendar() {
+    let (fixture, second_account_id, second_default) = Fixture::start_two_accounts();
+    let mut config = fixture.config();
+    config.resource_id = Some(format!("{second_account_id}/{second_default}"));
+
+    let sync = open(&config, None).expect("connected to the second account");
+    assert_eq!(sync.account_id(), &second_account_id);
+    assert_eq!(sync.calendar_id(), &second_default);
+}
+
 #[test]
 fn connecting_from_a_source_with_unknown_account_id_fails() {
     let fixture = Fixture::start(true);

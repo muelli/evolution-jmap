@@ -132,6 +132,14 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
    delete need not load the event first to find out.
    The server picks REQUEST/CANCEL or REPLY from `isOrigin`, so the same flag
    serves the organizer's edits and a guest's accept or decline.
+   A guest answers either in the event editor (an edit of the copy the server
+   delivered) or from the invitation mail. The invitation view hands the
+   mailed invitation to `receive_objects` under the meeting's own `UID`, which
+   the local cache (keyed by JMAP id) does not know, so `ECalMetaBackend`
+   creates. The server already delivered that meeting into the calendar, and
+   Stalwart refuses a second event with the same `uid`, so a create whose
+   `UID` this calendar already holds is saved into that event instead, and the
+   answer reaches the organizer the same way as from the editor.
 4. **Switch off.** No capability is advertised, `sendSchedulingMessages` is
    never sent, guests are still synced as data, and Evolution mails them as it
    does today.
@@ -157,10 +165,13 @@ EDS 3.52 and Evolution 3.52 (GNOME 46) sources.
   `Unreachable` for `noSupportedScheduleMethods`, naming the event's
   non-`mailto:` addresses (the server does not say which guest it could not
   reach, and a delete names nobody, since it does not load the event), and
-  `NotImplemented` for `invalidArguments`. Tests: `tests/scheduling.rs` (mock) and
+  `NotImplemented` for `invalidArguments`. A create first asks the server for an
+  event in this calendar with the same `uid` and, when there is one, patches
+  it (rule 3's invitation-mail answer). Tests: `tests/scheduling.rs` (mock) and
   `tests/live_server_scheduling.rs` (two accounts on one real server: with the
   switch on the guest's calendar gets the meeting exactly once and then its
-  cancellation; with it off, nothing).
+  cancellation; with it off, nothing; a guest's accept, from the editor or
+  from the invitation mail, keeps one copy and reaches the organizer).
 - `jmap-backend-cal`: `scheduling.rs` reads the switch from the calendar's
   source, where EDS's CalDAV backend keeps the same option:
   `[WebDAV Backend] CalendarAutoSchedule`. An absent group means on (rule 1);

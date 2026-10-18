@@ -106,6 +106,11 @@ pub struct SourceConfig {
     /// keyfile field with two meanings, so it is named after the field rather
     /// than after either meaning. Absent means "the account's default", which
     /// the backend resolves at connect time.
+    ///
+    /// Held verbatim: a collection another user shares with this one lives in
+    /// that user's account, and its source spells the field
+    /// `<accountId>/<collectionId>`. Read it through [`Self::account_id`] and
+    /// [`Self::collection_id`], which split it.
     pub resource_id: Option<String>,
     /// Whether this account opts into rebasing the session's advertised URLs
     /// onto the origin actually connected through — see
@@ -176,6 +181,41 @@ impl SourceError {
 }
 
 impl SourceConfig {
+    /// The JMAP account the collection lives in, when the source names one;
+    /// `None` means the primary account for the backend's capability.
+    ///
+    /// The account rides in `[Resource] Identity` rather than in a key of its
+    /// own because that field is a registered `ESource` property: it is
+    /// written to the `.source` keyfile and so reaches the address book or
+    /// calendar factory, which is a different process from the registry that
+    /// created the source. JMAP ids are drawn from `A-Za-z0-9-_` (RFC 8620
+    /// §1.2), so a `/` cannot be part of either half.
+    pub fn account_id(&self) -> Option<&str> {
+        self.split_resource().0
+    }
+
+    /// The address book or calendar id, without any account prefix; `None`
+    /// means "the account's default", as for [`Self::resource_id`].
+    pub fn collection_id(&self) -> Option<&str> {
+        self.resource_id.as_deref().map(|_| self.split_resource().1)
+    }
+
+    /// `[Resource] Identity` as (account, collection). Anything but exactly
+    /// two non-empty halves is kept whole as a collection id, so the server
+    /// refuses it under the name the keyfile holds instead of the backend
+    /// guessing at which part was meant.
+    fn split_resource(&self) -> (Option<&str>, &str) {
+        let resource = self.resource_id.as_deref().unwrap_or_default();
+        match resource.split_once('/') {
+            Some((account, collection))
+                if !account.is_empty() && !collection.is_empty() && !collection.contains('/') =>
+            {
+                (Some(account), collection)
+            }
+            _ => (None, resource),
+        }
+    }
+
     /// Reads `source`'s JMAP account settings.
     ///
     /// # Safety
