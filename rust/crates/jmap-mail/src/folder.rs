@@ -41,9 +41,11 @@ use std::ptr;
 use eds_sys::camel_pstring_strdup;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
-    CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
-    CamelService, CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
-    camel_offline_folder_get_type, camel_service_get_user_cache_dir,
+    CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED,
+    CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN,
+    CAMEL_MESSAGE_USER, CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder,
+    CamelOfflineFolderClass, CamelService, CamelStore, camel_folder_get_parent_store,
+    camel_folder_set_flags, camel_offline_folder_get_type, camel_service_get_user_cache_dir,
 };
 use glib_sys::{GType, gchar, gint};
 #[cfg(camel_folder_search_object)]
@@ -277,6 +279,15 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: as above.
         unsafe { (*class.cast::<CamelFolderClass>()).cmp_uids = Some(cmp_uids) };
 
+        // And which flags a message keeps between sessions. `CamelFolder`
+        // fills this slot in with one that answers 0, which tells a caller
+        // that nothing set on a message is kept, not even its read state.
+        //
+        // SAFETY: as above.
+        unsafe {
+            (*class.cast::<CamelFolderClass>()).get_permanent_flags = Some(get_permanent_flags)
+        };
+
         // And what the folder answers when it is asked which of its messages
         // match an expression — which is not only the search bar: every
         // message-list view is one ("Unread Messages", "Hide Deleted
@@ -353,6 +364,22 @@ unsafe extern "C" fn cmp_uids(
         Ordering::Equal => 0,
         Ordering::Greater => 1,
     }
+}
+
+/// `CamelFolderClass.get_permanent_flags`: the flags the server keeps as
+/// keywords (RFC 8621 section 4.1.1), with `USER` for the labels, which are
+/// keywords too. Plus `DELETED`, which JMAP has no keyword for but Camel's
+/// summary keeps until the expunge, as IMAPX and evolution-ews also answer.
+extern "C" fn get_permanent_flags(_folder: *mut CamelFolder) -> u32 {
+    CAMEL_MESSAGE_ANSWERED
+        | CAMEL_MESSAGE_DELETED
+        | CAMEL_MESSAGE_DRAFT
+        | CAMEL_MESSAGE_FLAGGED
+        | CAMEL_MESSAGE_SEEN
+        | CAMEL_MESSAGE_FORWARDED
+        | CAMEL_MESSAGE_JUNK
+        | CAMEL_MESSAGE_NOTJUNK
+        | CAMEL_MESSAGE_USER
 }
 
 /// `CamelFolderClass.search_by_expression`, up to EDS 3.52: which of this

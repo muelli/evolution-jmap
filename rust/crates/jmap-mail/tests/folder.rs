@@ -24,10 +24,12 @@ use std::ffi::CStr;
 
 use common::Account;
 use eds_sys::{
-    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CamelFolder, CamelStore,
-    camel_folder_cmp_uids, camel_folder_get_display_name, camel_folder_get_flags,
-    camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_get_type,
-    camel_folder_sort_uids, camel_offline_folder_get_type,
+    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_MESSAGE_ANSWERED,
+    CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FORWARDED,
+    CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_USER, CamelFolder,
+    CamelStore, camel_folder_cmp_uids, camel_folder_get_display_name, camel_folder_get_flags,
+    camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_get_permanent_flags,
+    camel_folder_get_type, camel_folder_sort_uids, camel_offline_folder_get_type,
 };
 use glib_sys::{GFALSE, g_ptr_array_add, g_ptr_array_new, g_ptr_array_unref, gchar};
 use gobject_sys::{g_object_unref, g_type_is_a, g_type_name};
@@ -262,4 +264,32 @@ fn uids_compare_as_strings_not_as_numbers() {
         g_ptr_array_unref(array);
         g_object_unref(folder.cast());
     }
+}
+
+/// The flags a folder can keep on a message between sessions: the ones the
+/// server keeps as keywords (with the user's labels, `USER`), plus `DELETED`,
+/// which Camel's own summary keeps until the expunge. Camel's default answers
+/// 0, which tells a caller nothing survives, not even the read state.
+#[test]
+fn permanent_flags_are_the_ones_the_server_keeps() {
+    let account = Account::open();
+    let folder = folder_of(&account, &mailbox("Inbox", "Inbox", None));
+
+    // SAFETY: `folder` is a live folder this test owns.
+    let flags = unsafe { camel_folder_get_permanent_flags(folder) };
+    assert_eq!(
+        flags,
+        CAMEL_MESSAGE_ANSWERED
+            | CAMEL_MESSAGE_DELETED
+            | CAMEL_MESSAGE_DRAFT
+            | CAMEL_MESSAGE_FLAGGED
+            | CAMEL_MESSAGE_SEEN
+            | CAMEL_MESSAGE_FORWARDED
+            | CAMEL_MESSAGE_JUNK
+            | CAMEL_MESSAGE_NOTJUNK
+            | CAMEL_MESSAGE_USER
+    );
+
+    // SAFETY: the test's own reference.
+    unsafe { g_object_unref(folder.cast()) };
 }
