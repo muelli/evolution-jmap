@@ -210,6 +210,15 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# The same consumer, waiting for the children a share from another
+	# account adds (and, once withdrawn, for them to go), named by their
+	# `[Resource] Identity`. See the client's own header.
+	add_executable(functional-collection-shared-client tests/functional/collection-shared-client.c)
+	target_include_directories(functional-collection-shared-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-collection-shared-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-collection-shared-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-collection-shared-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# The live-edit reproduction client: the same registry, but this client
 	# edits the account's port and commits it with e_source_write_sync
 	# instead of only watching for children, to answer whether
@@ -772,6 +781,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
+	# Calendars and address books another real account shares with the
+	# user: they appear as children of the user's account through a real
+	# registry and go again once the share is withdrawn. Two Stalwart
+	# accounts, so `#[ignore]`d like the leg above.
+	add_test(
+		NAME functional-collection-shared-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-collection-shared
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection-shared-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_SHARED_CLIENT=$<TARGET_FILE:functional-collection-shared-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# The write half: "New Address Book"/"Delete" through the same registry,
