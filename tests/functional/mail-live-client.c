@@ -31,6 +31,12 @@
  *     attempt ends in the authentication-required state the base class's own
  *     retry loop drives `test_session_get_password` through -- see
  *     `run_password_prompt_phase`.
+ *   - `scale` shares only the connect, and then times a folder's first open
+ *     in Evolution against an inbox the harness already filled: the open
+ *     itself (the first sync), a delta refresh, and a summary read for every
+ *     message, which is what the message list does next. It appends
+ *     nothing, so the count it reports is the server's alone -- see
+ *     `run_scale_phase`.
  *
  * One program rather than three because the setup the later phases need -- a
  * connected store with one known message in the inbox -- is exactly what
@@ -108,7 +114,8 @@ typedef enum {
 	PHASE_RECEIVE,
 	PHASE_FLAGS,
 	PHASE_TRANSFER,
-	PHASE_PASSWORD_PROMPT
+	PHASE_PASSWORD_PROMPT,
+	PHASE_SCALE
 } MailPhase;
 
 typedef struct _TestSession {
@@ -300,6 +307,82 @@ message_body (CamelMimeMessage *message,
 	g_object_unref (stream);
 
 	return g_strstrip (text);
+}
+
+/* The `scale` phase: a folder's first open, the way Evolution's message list
+ * makes it, timed on an inbox the harness filled before this process started.
+ *
+ * Three steps, timed apart because they cost differently. Opening the inbox
+ * is where the first sync happens: jmap-mail's `get_folder_sync` refreshes a
+ * folder whose summary holds no state yet, so every row is fetched and
+ * written into the summary there. The `refresh_info_sync` after it is the
+ * delta refresh every later open makes, nothing new on the server. The loop
+ * last reads one `CamelMessageInfo` per uid, which is what the message list
+ * does to draw its rows. `prefix` is the harness's per-run subject prefix:
+ * the count of messages carrying it is what the harness asserts, because a
+ * throwaway account can hold mail from other runs as well. */
+static gboolean
+run_scale_phase (CamelStore *store,
+		 const gchar *prefix)
+{
+	GError *error = NULL;
+	CamelFolder *inbox;
+	GPtrArray *uids;
+	gint64 started;
+	guint index;
+	guint matching = 0;
+
+	started = g_get_monotonic_time ();
+	inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+	if (!inbox) {
+		fail ("inbox", error);
+		return FALSE;
+	}
+	g_print ("open-ms=%" G_GINT64_FORMAT "\n",
+		 (g_get_monotonic_time () - started) / 1000);
+
+	started = g_get_monotonic_time ();
+	if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+		g_object_unref (inbox);
+		fail ("refresh", error);
+		return FALSE;
+	}
+	g_print ("refresh-ms=%" G_GINT64_FORMAT "\n",
+		 (g_get_monotonic_time () - started) / 1000);
+
+	started = g_get_monotonic_time ();
+	uids = folder_dup_uids (inbox);
+	for (index = 0; index < uids->len; index++) {
+		CamelMessageInfo *message_info;
+		const gchar *message_subject;
+
+		message_info = camel_folder_get_message_info (inbox, uids->pdata[index]);
+		if (!message_info) {
+			g_printerr ("summary: no message info for listed uid '%s'\n",
+				    (const gchar *) uids->pdata[index]);
+			folder_free_uids (inbox, uids);
+			g_object_unref (inbox);
+			return FALSE;
+		}
+
+		message_subject = camel_message_info_get_subject (message_info);
+		if (message_subject && g_str_has_prefix (message_subject, prefix))
+			matching++;
+		g_clear_object (&message_info);
+	}
+	g_print ("summary-ms=%" G_GINT64_FORMAT "\n",
+		 (g_get_monotonic_time () - started) / 1000);
+	g_print ("inbox-count=%u\n", uids->len);
+	g_print ("inbox-matching=%u\n", matching);
+	folder_free_uids (inbox, uids);
+
+	/* Camel's queued `folder_changed` emissions refer to the folder, so
+	 * they are drained while it is still alive; see the end of main. */
+	while (g_main_context_iteration (NULL, FALSE))
+		;
+	g_object_unref (inbox);
+
+	return TRUE;
 }
 
 /* A connected store on this account, with its summary database and message
@@ -752,6 +835,8 @@ main (int argc,
 		phase_id = PHASE_TRANSFER;
 	} else if (g_strcmp0 (phase, "password-prompt") == 0) {
 		phase_id = PHASE_PASSWORD_PROMPT;
+	} else if (g_strcmp0 (phase, "scale") == 0) {
+		phase_id = PHASE_SCALE;
 	} else {
 		g_printerr ("%s: unknown phase '%s'\n", argv[0], phase);
 		return 2;
@@ -821,6 +906,22 @@ main (int argc,
 
 		report_sorted ("folders", names);
 		g_ptr_array_unref (names);
+	}
+
+	if (phase_id == PHASE_SCALE) {
+		gboolean scaled = run_scale_phase (store, subject);
+
+		/* The same drain and teardown as the end of this function,
+		 * for the reason given there. */
+		while (g_main_context_iteration (NULL, FALSE))
+			;
+
+		g_object_unref (store);
+		g_object_unref (session);
+		g_object_unref (account_source);
+		g_object_unref (registry);
+
+		return scaled ? 0 : 1;
 	}
 
 	/* The three purpose folders by their JMAP role rather than by name.

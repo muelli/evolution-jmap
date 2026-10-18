@@ -932,6 +932,26 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT=$<TARGET_FILE:functional-transport-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
+	# The mail twin of functional-book-scale-live-stalwart and
+	# functional-cal-scale-live-stalwart: seeds a real-sized inbox directly
+	# over JMAP, then times the Camel provider's first open of it through
+	# functional-mail-live-client's `scale` phase. A registration of its own,
+	# not part of functional-mail-live-stalwart, because it wants a throwaway
+	# account of its own: it leaves every message it seeds behind. `#[ignore]`d
+	# like the other live-server legs, and a generous timeout for the seeding.
+	add_test(
+		NAME functional-mail-scale-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-mail-scale
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail-scale-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 1800
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
 	# The send half, which stages the same module and the same `.urls` file
 	# under the same two variable names: it is one provider, and a test that
 	# was given a module of its own could pass against a build the receiving
