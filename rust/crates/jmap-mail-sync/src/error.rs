@@ -112,6 +112,20 @@ impl From<jmap_client::Error> for SyncError {
 #[cfg(test)]
 mod tests {
     use super::SyncError;
+    use std::error::Error as _;
+
+    #[test]
+    fn only_a_client_error_has_a_source() {
+        assert!(
+            SyncError::Client(jmap_client::Error::Http {
+                status: 401,
+                problem: None,
+            })
+            .source()
+            .is_some()
+        );
+        assert!(SyncError::NoOutgoingFolder.source().is_none());
+    }
 
     #[test]
     fn only_a_client_401_is_unauthorized() {
