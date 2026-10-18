@@ -2854,6 +2854,35 @@ fn reads_the_tags_of_every_categories_line() {
     );
 }
 
+#[test]
+fn categories_pref_parameter_is_read_and_not_emitted() {
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Categories Profile\r\n",
+        "CATEGORIES;PREF=1:internet,IETF,Industry,Information Technology\r\n",
+        "categories;pref=2:Open Source,contacts\\, sync\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let keywords = card.keywords.as_ref().expect("keywords");
+    assert_eq!(keywords.len(), 6);
+    assert!(keywords.contains_key("internet"));
+    assert!(keywords.contains_key("IETF"));
+    assert!(keywords.contains_key("Industry"));
+    assert!(keywords.contains_key("Information Technology"));
+    assert!(keywords.contains_key("Open Source"));
+    assert!(keywords.contains_key("contacts, sync"));
+    assert!(keywords.values().all(|value| value == &json!(true)));
+
+    let emitted = card_to_vcard(&card);
+    assert_eq!(emitted.matches("\r\nCATEGORIES:").count(), 1);
+    assert!(!emitted.contains("PREF="));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(reparsed.keywords, card.keywords);
+}
+
 fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
     ContactCard {
         online_services: Some(

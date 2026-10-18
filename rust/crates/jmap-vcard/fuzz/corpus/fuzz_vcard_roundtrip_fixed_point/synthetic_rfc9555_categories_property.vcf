@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:CATEGORIES Section Probe
+UID:categories-rfc9555-1
+CATEGORIES;PREF=1:internet,IETF,Industry,Information Technology
+CATEGORIES;PREF=2:Open Source,contacts\, sync
+END:VCARD
