@@ -116,6 +116,7 @@ use gobject_sys::{
     GParamSpec, GValue, g_object_get_data, g_object_set_data, g_signal_connect_object,
     g_value_get_string, g_value_get_uint, g_value_set_string, g_value_set_uint,
 };
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate};
 #[cfg(feature = "testing")]
@@ -709,10 +710,7 @@ unsafe fn insert_entries(
             // callback's signature matches what a `notify` handler is
             // actually invoked with (the emitting `GObject`, the changed
             // property's `GParamSpec`, and the connection's own data
-            // pointer), so the transmute of its type to `GCallback` — an
-            // erased function pointer — is the same one every GObject
-            // binding spells this, `cancel.rs`'s own `g_cancellable_connect`
-            // call included.
+            // pointer).
             // `g_signal_connect_object` rather than `g_signal_connect_data`:
             // see `insert_widgets`'s docs on why nothing here tracks the
             // handler id.
@@ -720,10 +718,10 @@ unsafe fn insert_entries(
                 g_signal_connect_object(
                     extension,
                     c"notify".as_ptr(),
-                    Some(std::mem::transmute::<
-                        unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
-                        unsafe extern "C" fn(),
-                    >(on_extension_changed)),
+                    gcallback(
+                        on_extension_changed
+                            as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
+                    ),
                     page.cast(),
                     G_CONNECT_DEFAULT,
                 );

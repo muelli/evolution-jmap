@@ -55,6 +55,7 @@ use gobject_sys::{
 };
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard;
@@ -225,9 +226,7 @@ pub(crate) unsafe fn install(
             g_signal_connect_data(
                 action.cast(),
                 c"activate".as_ptr(),
-                Some(std::mem::transmute::<ActivateFn, unsafe extern "C" fn()>(
-                    *handler,
-                )),
+                gcallback(*handler),
                 owner.cast(),
                 None,
                 0,

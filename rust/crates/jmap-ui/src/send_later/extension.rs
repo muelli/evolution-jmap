@@ -75,6 +75,7 @@ use gobject_sys::{
     GObject, GObjectClass, GParamSpec, g_object_get_data, g_object_set_data_full, g_object_unref,
     g_signal_connect_data,
 };
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_backend_core::mime::write_message;
@@ -329,10 +330,7 @@ unsafe fn build_menu(
             g_signal_connect_data(
                 action.cast(),
                 c"activate".as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut GtkAction, gpointer),
-                    unsafe extern "C" fn(),
-                >(on_activate)),
+                gcallback(on_activate as unsafe extern "C" fn(*mut GtkAction, gpointer)),
                 composer.cast(),
                 None,
                 0,
@@ -497,10 +495,10 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         g_signal_connect_data(
             table.cast(),
             c"notify::identity-uid".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
-                unsafe extern "C" fn(),
-            >(on_identity_changed)),
+            gcallback(
+                on_identity_changed
+                    as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
+            ),
             composer.cast(),
             None,
             0,

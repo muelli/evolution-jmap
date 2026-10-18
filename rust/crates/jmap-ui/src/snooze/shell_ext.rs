@@ -41,6 +41,7 @@ use evo_sys::{
 };
 use glib_sys::{GType, gpointer};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -115,10 +116,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             g_signal_connect_data(
                 view.cast(),
                 signal.as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut GObject, gpointer),
-                    unsafe extern "C" fn(),
-                >(handler)),
+                gcallback(handler),
                 std::ptr::null_mut(),
                 None,
                 0,
@@ -152,10 +150,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         g_signal_connect_data(
             view.cast(),
             c"update-actions".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, gpointer),
-                unsafe extern "C" fn(),
-            >(on_update_actions)),
+            gcallback(on_update_actions as unsafe extern "C" fn(*mut GObject, gpointer)),
             std::ptr::null_mut(),
             None,
             0,

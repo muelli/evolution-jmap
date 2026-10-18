@@ -23,6 +23,7 @@ use evo_sys::{
 use evo_sys::{EMailBrowser, e_mail_browser_get_type};
 use glib_sys::{GType, gpointer, guint};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 
@@ -107,10 +108,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         g_signal_connect_data(
             browser.cast(),
             c"update-actions".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, guint, gpointer),
-                unsafe extern "C" fn(),
-            >(on_update_actions)),
+            gcallback(on_update_actions as unsafe extern "C" fn(*mut GObject, guint, gpointer)),
             std::ptr::null_mut(),
             None,
             0,

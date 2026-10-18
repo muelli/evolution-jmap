@@ -10,8 +10,9 @@
 //! `VOID__VOID` (`e-shell-view.c:1090-1097`). Two signals of the same name,
 //! two different handler signatures, and `jmap-ui` connects to both.
 //!
-//! Every `g_signal_connect_data` in this crate transmutes a handler to
-//! `unsafe extern "C" fn()`, which is what C does too and what makes the
+//! Every `g_signal_connect_data` in this crate erases a handler to
+//! `unsafe extern "C" fn()` (`jmap_backend_core::callback::gcallback`), which
+//! is what C's `G_CALLBACK()` does too and what makes the
 //! arity a thing only a reader can check. This test is the check: it builds a
 //! signal shaped exactly like the reader's and shows the marshaller calling a
 //! handler with three arguments (instance, the signal's own `guint`, then
@@ -28,6 +29,7 @@ use gobject_sys::{
     g_object_new_with_properties, g_object_unref, g_signal_connect_data, g_signal_emit_by_name,
     g_signal_new,
 };
+use jmap_backend_core::callback::gcallback;
 
 static SECOND_ARG: AtomicUsize = AtomicUsize::new(0);
 static THIRD_ARG: AtomicUsize = AtomicUsize::new(0);
@@ -76,10 +78,7 @@ fn a_uint_carrying_signal_puts_its_argument_before_the_user_data() {
         g_signal_connect_data(
             object,
             c"jmap-probe-update-actions".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, u32, gpointer),
-                unsafe extern "C" fn(),
-            >(three_args)),
+            gcallback(three_args as unsafe extern "C" fn(*mut GObject, u32, gpointer)),
             USER_DATA as *mut c_void,
             None,
             0,

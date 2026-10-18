@@ -49,6 +49,7 @@ use gobject_sys::{
     GObject, GObjectClass, GTypeInstance, g_object_get, g_object_get_data, g_object_ref,
     g_object_set, g_object_set_data_full, g_object_unref, g_signal_connect_data, g_type_from_name,
 };
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
@@ -245,10 +246,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         g_signal_connect_data(
             enabled.cast(),
             c"toggled".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, gpointer),
-                unsafe extern "C" fn(),
-            >(on_toggled)),
+            gcallback(on_toggled as unsafe extern "C" fn(*mut GObject, gpointer)),
             page.cast(),
             None,
             0,

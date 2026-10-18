@@ -41,6 +41,7 @@ use glib_sys::{
     GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, gpointer, guint16,
 };
 use gobject_sys::{G_CONNECT_DEFAULT, g_signal_connect_object};
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 #[cfg(feature = "testing")]
@@ -336,17 +337,13 @@ unsafe fn watch_of(backend: *mut ECollectionBackend) -> Option<&'static AccountW
 unsafe fn connect_account_changed(source: *mut ESource, backend: *mut ECollectionBackend) {
     // SAFETY: the contract above, and `on_account_changed`'s signature is what
     // a handler for a parameterless signal is really called with (the emitting
-    // instance, then the connection's own data) — the transmute to the erased
-    // `GCallback` is the one every GObject binding spells this with, and
-    // `tests/source_changed.rs` holds the arity against the linked library.
+    // instance, then the connection's own data), and `tests/source_changed.rs`
+    // holds the arity against the linked library.
     unsafe {
         g_signal_connect_object(
             source.cast(),
             c"changed".as_ptr(),
-            Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut ESource, gpointer),
-                unsafe extern "C" fn(),
-            >(on_account_changed)),
+            gcallback(on_account_changed as unsafe extern "C" fn(*mut ESource, gpointer)),
             backend.cast(),
             G_CONNECT_DEFAULT,
         );

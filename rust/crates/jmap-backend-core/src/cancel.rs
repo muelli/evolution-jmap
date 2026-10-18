@@ -32,6 +32,8 @@ use glib_sys::gpointer;
 use jmap_client::CancelFlag;
 use jmap_client::transport::CancelScope;
 
+use crate::callback::gcallback;
+
 /// One operation's cancellable, bridged and installed for as long as the
 /// operation runs.
 ///
@@ -109,16 +111,12 @@ impl CancelBridge {
         let data = Box::into_raw(Box::new(flag.clone())).cast::<std::ffi::c_void>();
 
         // SAFETY: `cancellable` is a valid GCancellable per this function's
-        // contract. GCallback is an erased function pointer, which is why the
-        // transmute is how GIO's own bindings spell this; `on_cancelled` has
-        // the signature the "cancelled" signal actually invokes.
+        // contract, and `on_cancelled` has the signature the "cancelled"
+        // signal actually invokes.
         let handler = unsafe {
             g_cancellable_connect(
                 cancellable,
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut GCancellable, gpointer),
-                    unsafe extern "C" fn(),
-                >(on_cancelled)),
+                gcallback(on_cancelled as unsafe extern "C" fn(*mut GCancellable, gpointer)),
                 data,
                 Some(destroy_flag),
             )

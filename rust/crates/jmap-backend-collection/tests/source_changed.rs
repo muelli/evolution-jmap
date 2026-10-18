@@ -40,6 +40,7 @@ use gobject_sys::{
 };
 use jmap_backend_collection::backend::JmapCollectionBackend;
 use jmap_backend_collection::source_changed::login_fingerprint;
+use jmap_backend_core::callback::gcallback;
 
 mod common;
 use common::with_timeout;
@@ -186,10 +187,7 @@ fn a_connection_made_against_an_object_stops_firing_once_it_is_gone() {
             g_signal_connect_object(
                 source.0.cast(),
                 c"changed".as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut ESource, gpointer),
-                    unsafe extern "C" fn(),
-                >(probe)),
+                gcallback(probe as unsafe extern "C" fn(*mut ESource, gpointer)),
                 watched,
                 G_CONNECT_DEFAULT,
             );
@@ -262,10 +260,7 @@ fn the_flag_populate_writes_comes_back_as_an_edit_of_the_account() {
             g_signal_connect_object(
                 source.0.cast(),
                 c"changed".as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut ESource, gpointer),
-                    unsafe extern "C" fn(),
-                >(own_write_probe)),
+                gcallback(own_write_probe as unsafe extern "C" fn(*mut ESource, gpointer)),
                 watched,
                 G_CONNECT_DEFAULT,
             );
