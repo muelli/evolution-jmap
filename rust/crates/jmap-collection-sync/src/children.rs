@@ -231,9 +231,10 @@ impl Child {
     ///
     /// The display name carries the owner, `<collection> (<account name>)`,
     /// so a shared "Calendar" is not mistaken for the user's own. Rights
-    /// narrow as for the user's own collections. Deleting a shared collection
-    /// from Evolution is not wired yet, so the child is never offered as
-    /// remotely deletable.
+    /// narrow as for the user's own collections. It is offered for deletion
+    /// only when `myRights.mayDelete` says so: deleting it removes the owner's
+    /// collection for everyone, so a server that states no rights does not get
+    /// the permissive default the user's own collections get.
     pub fn for_shared_resource(
         kind: ChildKind,
         account: &ServiceAccount,
@@ -242,7 +243,7 @@ impl Child {
         Self {
             resource_id: kind.shared_resource_id(&account.id, &resource.id),
             display_name: format!("{} ({})", resource.name, account.name),
-            remote_deletable: false,
+            remote_deletable: resource.deletable == Some(true),
             ..Self::for_resource(kind, account, resource)
         }
     }
@@ -633,11 +634,41 @@ mod tests {
         assert_eq!(calendar.collection_id, Id::new("C1"));
         assert_eq!(calendar.identity(), "A2/C1");
         assert!(calendar.read_only, "myRights says it may not be written");
-        assert!(
-            !calendar.remote_deletable,
-            "deleting a share from Evolution is not wired yet"
-        );
         assert_eq!(children[0].identity(), "AB1");
+    }
+
+    #[test]
+    fn a_shared_collection_is_remote_deletable_only_when_my_rights_grants_it() {
+        let with = |id, deletable| {
+            let mut calendar = resource(id, "Team");
+            calendar.deletable = deletable;
+            calendar
+        };
+        let mut fanout = fanout(vec![], vec![]);
+        fanout.shared = vec![shared(
+            "A2",
+            None,
+            Some(vec![
+                with("C1", Some(true)),
+                with("C2", Some(false)),
+                with("C3", None),
+            ]),
+        )];
+
+        assert_eq!(
+            fanout
+                .children()
+                .iter()
+                .map(|child| (child.resource_id.as_str(), child.remote_deletable))
+                .collect::<Vec<_>>(),
+            [
+                ("calendar:A2/C1", true),
+                ("calendar:A2/C2", false),
+                // Unlike the user's own, absent rights do not offer the
+                // owner's collection for deletion.
+                ("calendar:A2/C3", false),
+            ]
+        );
     }
 
     #[test]

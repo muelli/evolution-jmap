@@ -339,6 +339,37 @@ fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
 }
 
 #[test]
+fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Deleting a shared collection deletes the owner's collection for
+        // everyone. A cached shared child reaches `child_added` before any
+        // server contact, so the funnel's permissive default must not apply
+        // to it: only a fan-out, which reads `myRights.mayDelete`, may offer
+        // it.
+        let held = ServerSide::new();
+        let shared = Child {
+            resource_id: ChildKind::Calendar.shared_resource_id(&Id::new("A2"), &Id::new("C1")),
+            ..child(ChildKind::Calendar, "C1")
+        };
+        // SAFETY: a live source.
+        unsafe { apply(held.source, &shared.settings(&connection())) }
+            .expect("a shared child this backend wrote");
+
+        // SAFETY: a live `EServerSideSource` this test holds a reference to.
+        let offered = unsafe { offer_deletion(held.source) };
+
+        assert!(!offered);
+        assert!(!held.offered_for_deletion());
+        // Still ours: once a fan-out has offered it, the delete knows what
+        // to destroy and in which account.
+        // SAFETY: as above.
+        let doomed = unsafe { doomed_of(held.source) }.expect("a child this backend wrote");
+        assert_eq!(doomed.collection_id, Id::new("A2/C1"));
+    });
+}
+
+#[test]
 fn deleting_a_child_takes_its_collection_off_the_server() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

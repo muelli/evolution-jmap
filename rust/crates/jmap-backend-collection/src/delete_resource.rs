@@ -91,7 +91,9 @@ use jmap_backend_core::error::{invalid_arg_gerror, to_gerror};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{self, ConnectTarget};
 use jmap_client::Credentials;
-use jmap_collection_sync::{DeleteFailure, Doomed, delete_collection, parse_resource_id};
+use jmap_collection_sync::{
+    DeleteFailure, Doomed, delete_collection, parse_resource_id, split_shared_identity,
+};
 
 use crate::create_resource::collection_of;
 use crate::resource_id::resource_id_of;
@@ -153,6 +155,13 @@ impl fmt::Display for DeleteError {
                 // the JMAP server behind an account offers no account of that
                 // kind at all, so the collection cannot be there to delete.
                 c"this account's JMAP server has no %1$s to delete",
+                &[collection_of(*kind).noun().as_str()],
+            )),
+            Self::Server(DeleteFailure::Unshared(kind)) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is "address book" or "calendar". Shown when
+                // the user deletes a JMAP address book or calendar that someone
+                // shared with them, and that person no longer shares it.
+                c"this %1$s is no longer shared with this JMAP account, so it cannot be deleted",
                 &[collection_of(*kind).noun().as_str()],
             )),
             Self::Server(failure) => failure.fmt(f),
@@ -238,7 +247,11 @@ pub unsafe fn doomed_of(source: *mut ESource) -> Option<Doomed> {
 pub unsafe fn offer_deletion(child: *mut ESource) -> bool {
     // SAFETY: the caller's contract is `doomed_of`'s, NULL included.
     let doomed = unsafe { doomed_of(child) };
-    let deletable = doomed.is_some();
+    // A shared child is left to the fan-out, which offers it only when the
+    // owner's `myRights.mayDelete` allows it: deleting it removes the owner's
+    // collection for everyone, so the identity alone is not enough.
+    let deletable =
+        doomed.is_some_and(|doomed| split_shared_identity(doomed.collection_id.as_str()).is_none());
     tracing::debug!(
         remote_deletable = deletable,
         "evaluating child source remote-deletable offer"

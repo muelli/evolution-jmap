@@ -13,6 +13,8 @@
 //! This file confirms that `Fanout::discover`, which a real populate calls,
 //! finds a shared collection through the owner's `isPersonal: false` account
 //! in the recipient's session, and lets it go once the grant is withdrawn.
+//! It also confirms that the recipient's delete of a shared collection goes to
+//! the owner's account and succeeds only where the grant includes `mayDelete`.
 //!
 //! ## Running it
 //!
@@ -28,7 +30,7 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_collection_sync::{Fanout, Parts};
+use jmap_collection_sync::{ChildKind, DeleteFailure, Doomed, Fanout, Parts, delete_collection};
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
@@ -296,4 +298,169 @@ fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() 
     owner
         .calendar_destroy(&owner_calendars_account, &calendar_id)
         .expect("Calendar/set destroy failed against the real server (cleanup)");
+}
+
+/// Deleting a shared collection from the recipient's side, as Evolution's
+/// "Delete" on a shared child does.
+///
+/// The owner shares a calendar with `mayDelete` and an address book without
+/// it. The recipient's children offer only the calendar for deletion, a
+/// delete of the calendar through the child's own identity removes it from
+/// the owner's account, and a delete of the book (forced past the flag) is the
+/// server's refusal, with the book still there.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_shared_collection_is_deleted_in_the_owners_account_only_with_may_delete() {
+    let Some((owner, _)) = connect_owner() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the shared-delete test");
+        return;
+    };
+    let Some((recipient, recipient_address)) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared-delete test"
+        );
+        return;
+    };
+    if !recipient
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the shared-delete test"
+        );
+        return;
+    }
+
+    let owner_contacts_account = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let owner_calendars_account = owner
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_contacts_account,
+            PrincipalQueryFilter::email(&recipient_address),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner cannot resolve the recipient's principal id by email");
+
+    let suffix = unique_suffix();
+    let book_id = owner
+        .address_book_create(
+            &owner_contacts_account,
+            &AddressBook::new(format!("agent-collectionsync-keep-book-{suffix}")),
+        )
+        .expect("AddressBook/set create failed against the real server")
+        .id
+        .expect("the server named the new book");
+    let calendar_id = owner
+        .calendar_create(
+            &owner_calendars_account,
+            &jmap_proto::calendars::Calendar::new(format!(
+                "agent-collectionsync-doomed-cal-{suffix}"
+            )),
+        )
+        .expect("Calendar/set create failed against the real server")
+        .id
+        .expect("the server named the new calendar");
+
+    owner
+        .address_book_update(
+            &owner_contacts_account,
+            &book_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {
+                "mayRead": true, "mayWrite": true
+            }}}),
+        )
+        .expect("AddressBook/set shareWith failed against the real server");
+    owner
+        .calendar_update(
+            &owner_calendars_account,
+            &calendar_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {
+                "mayReadItems": true, "mayReadFreeBusy": true, "mayDelete": true
+            }}}),
+        )
+        .expect("Calendar/set shareWith failed against the real server");
+
+    let (recipient, _) = connect_recipient().expect("connected once already");
+    let fanout = Fanout::discover(&recipient, Parts::ALL)
+        .expect("discovery failed for the recipient after the grants");
+    let children = fanout.children();
+    let child = |resource_id: String| {
+        children
+            .iter()
+            .find(|child| child.resource_id == resource_id)
+            .unwrap_or_else(|| panic!("no child {resource_id}"))
+            .clone()
+    };
+    let book = child(format!("addressbook:{owner_contacts_account}/{book_id}"));
+    let calendar = child(format!("calendar:{owner_calendars_account}/{calendar_id}"));
+    eprintln!(
+        "remote-deletable: book {}, calendar {}",
+        book.remote_deletable, calendar.remote_deletable
+    );
+
+    let refused = delete_collection(
+        &recipient,
+        &Doomed {
+            kind: ChildKind::AddressBook,
+            collection_id: jmap_proto::Id::new(book.identity()),
+        },
+    );
+    eprintln!("the recipient deleting the book shared without mayDelete: {refused:?}");
+    let deleted = delete_collection(
+        &recipient,
+        &Doomed {
+            kind: ChildKind::Calendar,
+            collection_id: jmap_proto::Id::new(calendar.identity()),
+        },
+    );
+    eprintln!("the recipient deleting the calendar shared with mayDelete: {deleted:?}");
+
+    // Listed directly rather than through a discovery, which drops the
+    // owner's own collections that Stalwart creates unsubscribed.
+    let calendar_left = owner
+        .calendars(&owner_calendars_account)
+        .expect("Calendar/get failed for the owner")
+        .iter()
+        .any(|held| held.id.as_ref() == Some(&calendar_id));
+    let book_left = owner
+        .address_books(&owner_contacts_account)
+        .expect("AddressBook/get failed for the owner")
+        .iter()
+        .any(|held| held.id.as_ref() == Some(&book_id));
+
+    // Clean up before asserting, so a failure leaves nothing behind.
+    owner
+        .address_book_destroy(&owner_contacts_account, &book_id)
+        .expect("AddressBook/set destroy failed against the real server (cleanup)");
+    if calendar_left {
+        owner
+            .calendar_destroy(&owner_calendars_account, &calendar_id)
+            .expect("Calendar/set destroy failed against the real server (cleanup)");
+    }
+
+    assert!(
+        calendar.remote_deletable,
+        "the calendar was shared with mayDelete"
+    );
+    assert!(
+        !book.remote_deletable,
+        "the book was shared without mayDelete"
+    );
+    assert!(
+        matches!(refused, Err(DeleteFailure::Client(_))),
+        "the server must refuse deleting a book shared without mayDelete: {refused:?}"
+    );
+    assert!(book_left, "the book shared without mayDelete was destroyed");
+    deleted.expect("deleting the calendar shared with mayDelete failed");
+    assert!(
+        !calendar_left,
+        "the shared calendar is still in the owner's account"
+    );
 }

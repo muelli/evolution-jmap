@@ -37,7 +37,7 @@
 use jmap_client::Client;
 use jmap_proto::Id;
 
-use crate::children::ChildKind;
+use crate::children::{ChildKind, split_shared_identity};
 use crate::layout::CollectionLayout;
 
 /// The collection a delete is about: which kind, and which one of that kind.
@@ -46,8 +46,9 @@ use crate::layout::CollectionLayout;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Doomed {
     pub kind: ChildKind,
-    /// The JMAP id of the collection, which is what `[Resource] Identity`
-    /// carries on the child source.
+    /// What `[Resource] Identity` carries on the child source: the JMAP id of
+    /// one of the user's own collections, or `<accountId>/<collectionId>` for
+    /// one shared with the user.
     pub collection_id: Id,
 }
 
@@ -61,6 +62,9 @@ pub enum DeleteFailure {
     /// The login holds no JMAP account serving collections of that kind, so
     /// there is nothing there to delete.
     Unserved(ChildKind),
+    /// The collection is a shared one, and the account it was shared from no
+    /// longer shares collections of that kind with this login.
+    Unshared(ChildKind),
     /// The server refused the destroy, or could not be reached.
     Client(jmap_client::Error),
 }
@@ -82,6 +86,14 @@ impl std::fmt::Display for DeleteFailure {
                     ChildKind::Calendar => "calendars",
                 }
             ),
+            Self::Unshared(kind) => write!(
+                f,
+                "the account this {} was shared from no longer shares it with this login",
+                match kind {
+                    ChildKind::AddressBook => "address book",
+                    ChildKind::Calendar => "calendar",
+                }
+            ),
             Self::Client(error) => error.fmt(f),
         }
     }
@@ -95,15 +107,38 @@ impl std::error::Error for DeleteFailure {}
 /// and a create resolve it, and for a sharper reason than either: falling back
 /// to the session's primary account would send a destroy naming this id to an
 /// account in which that id is some *other* collection.
+///
+/// A shared collection's identity, `<accountId>/<collectionId>`, names its
+/// account. The destroy goes there, and only if the session still lists that
+/// account as shared with this login and offering this kind. A withdrawn share
+/// is [`DeleteFailure::Unshared`], never a retry against the primary account.
 pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteFailure> {
-    let layout = CollectionLayout::from_session(client.session());
+    let session = client.session();
     let kind = doomed.kind;
-    let collection_id = doomed.collection_id.to_string();
-    let account = layout.account_for(doomed.kind).ok_or_else(|| {
-        let error = DeleteFailure::Unserved(doomed.kind);
-        tracing::warn!(?kind, collection_id, %error, "collection destroy failed");
+    let identity = doomed.collection_id.to_string();
+    let refuse = |error: DeleteFailure| {
+        tracing::warn!(?kind, collection_id = identity, %error, "collection destroy failed");
         error
-    })?;
+    };
+    let (account, collection) = match split_shared_identity(&identity) {
+        Some((shared, collection)) => {
+            let account = CollectionLayout::shared_accounts(session)
+                .into_iter()
+                .find(|service| service.account.id.as_str() == shared && service.offers(kind))
+                .map(|service| service.account)
+                .ok_or_else(|| refuse(DeleteFailure::Unshared(kind)))?;
+            (account, Id::new(collection))
+        }
+        None => {
+            let layout = CollectionLayout::from_session(session);
+            let account = layout
+                .account_for(kind)
+                .cloned()
+                .ok_or_else(|| refuse(DeleteFailure::Unserved(kind)))?;
+            (account, doomed.collection_id.clone())
+        }
+    };
+    let collection_id = collection.to_string();
 
     let account_id = account.id.to_string();
     tracing::debug!(account_id, ?kind, collection_id, "destroying collection");
@@ -111,14 +146,14 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
     match doomed.kind {
         ChildKind::AddressBook => {
             client
-                .address_book_destroy(&account.id, &doomed.collection_id)
+                .address_book_destroy(&account.id, &collection)
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
                 })?;
         }
         ChildKind::Calendar => {
             client
-                .calendar_destroy(&account.id, &doomed.collection_id)
+                .calendar_destroy(&account.id, &collection)
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
                 })?;
