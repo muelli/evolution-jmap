@@ -11277,7 +11277,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    // GEO, TZ, MAILER, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11308,6 +11308,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "GEO:40.331575;-74.667232\r\n",
         "TZ:-05:00\r\n",
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
+        "CREATED:19940930T143510Z\r\n",
         "PRODID:-//Institute for Advanced Study//IAS Contacts 3.0//EN\r\n",
         "REV:2026-08-22T00:07:47Z\r\n",
         "SORT-STRING:Einstein\r\n",
@@ -11492,6 +11493,29 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("MAILER:") && !emitted.contains("MAILER;"),
             "MAILER must not be emitted"
+        );
+    }
+
+    // CREATED variants.
+    for created_val in [
+        "CREATED:19940930T143510Z",
+        "CREATED:2024-01-15T12:00:00Z",
+        "CREATED:2024-01-15T12:00:00.123Z",
+        "CREATED;VALUE=date-time:2024-01-15T12:00:00Z",
+        "created:2026-08-22T00:00:00Z",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Created User\r\n{created_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse CREATED");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Created User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("CREATED:") && !emitted.contains("CREATED;"),
+            "CREATED must not be emitted"
         );
     }
 
