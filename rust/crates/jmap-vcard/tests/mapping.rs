@@ -2143,7 +2143,7 @@ fn calendars_read_pref_and_media_type_parameters() {
 }
 
 #[test]
-fn calendars_emit_pref_and_media_type_parameters() {
+fn calendars_emit_the_eds_profile_without_pref_or_media_type_parameters() {
     let mut calendars = BTreeMap::new();
     calendars.insert(
         "c1".to_owned(),
@@ -2173,11 +2173,11 @@ fn calendars_emit_pref_and_media_type_parameters() {
     let vcard = unfolded(&card_to_vcard(&card));
     assert_eq!(
         line(&vcard, "CALURI"),
-        "CALURI;X-JMAP-KEY=c1;MEDIATYPE=text/calendar;TYPE=PREF:https://vera.example/cal/vera.ics"
+        "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/vera.ics"
     );
     assert_eq!(
         line(&vcard, "FBURL"),
-        "FBURL;X-JMAP-KEY=c2;MEDIATYPE=text/calendar;TYPE=PREF:https://vera.example/fb/vera.ifb"
+        "FBURL;X-JMAP-KEY=c2:https://vera.example/fb/vera.ifb"
     );
 }
 

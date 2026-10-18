@@ -1108,29 +1108,12 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         } else {
             VCardProperty::Fburl
         };
-        let mut params = vec![VCardParameter::new(
-            VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            VCardParameterValue::Text(key.clone()),
-        )];
-        if let Some(media_type) = calendar
-            .media_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(VCardParameter::new(
-                VCardParameterName::Other("MEDIATYPE".to_owned()),
-                VCardParameterValue::Text(media_type.to_owned()),
-            ));
-        }
-        if calendar.pref.is_some() {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
-        }
         entries.push(
             VCardEntry::new(prop)
-                .with_params(params)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
                 .with_value(calendar.uri.clone()),
         );
     }
