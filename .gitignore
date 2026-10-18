@@ -10,3 +10,6 @@
 /debian/files
 /debian/*.debhelper.log
 /debian/*.substvars
+
+# ci/rpm.sh build tree
+/build-rpm/

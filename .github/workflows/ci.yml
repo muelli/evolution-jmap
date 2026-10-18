@@ -70,6 +70,18 @@ jobs:
       - uses: actions/checkout@v4
       - run: ci/reproducible.sh
 
+  # The RPM: ci/rpm.sh builds it in the pinned Fedora image (rootless
+  # podman, which the hosted runner ships) and fails on any rpmlint error,
+  # the same command a developer runs locally. Every push, like `build`:
+  # nothing else here builds against Fedora's EDS or runs rpmlint.
+  rpm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/rpm.sh
+
   # M9 layer 1 (docs/functional-tests.md): real EDS daemons against
   # jmap-mockd. Needs evolution-data-server + dbus-daemon, not just the dev
   # headers `build` installs, so it is its own job rather than a step there.

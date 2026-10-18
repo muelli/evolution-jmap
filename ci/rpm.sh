@@ -22,26 +22,7 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 		bash -lc '
 			set -euo pipefail
 			trap '\''chown -R "${HOST_UID}:${HOST_GID}" "${PWD}"'\'' EXIT
-			dnf -y install \
-				cmake \
-				clang-devel \
-				ninja-build \
-				gcc \
-				pkgconf-pkg-config \
-				rust \
-				cargo \
-				rpm-build \
-				rpmlint \
-				evolution-data-server-devel \
-				evolution-devel \
-				glib2-devel \
-				gtk4-devel \
-				json-glib-devel \
-				krb5-devel \
-				libadwaita-devel \
-				libsoup3-devel \
-				gettext \
-				python3
+			./ci/install-deps-rpm.sh
 			./ci/rpm.sh --host
 		'
 fi
@@ -67,4 +48,5 @@ if [[ "${rpm_count}" -eq 0 ]]; then
 	exit 1
 fi
 
-rpmlint "${build_dir}"/*.rpm
+# --strict: a warning fails too, as any lintian tag fails the .deb gate.
+rpmlint --strict "${build_dir}"/*.rpm
