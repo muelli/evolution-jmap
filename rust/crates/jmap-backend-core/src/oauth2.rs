@@ -125,6 +125,7 @@ use gio_sys::{
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
+use crate::forever::Forever;
 use crate::i18n::{translate, translate_with};
 use crate::marshal::{extension_if_present, read_string};
 
@@ -208,25 +209,12 @@ pub const EDS_HAS_DYNAMIC_OAUTH2: bool = false;
 #[cfg(eds_oauth2_dynamic)]
 pub const EDS_HAS_DYNAMIC_OAUTH2: bool = true;
 
-/// The process's `EOAuth2Services`, kept alive for as long as the process is —
+/// The process's `EOAuth2Services`, kept alive for as long as the process is:
 /// see the module docs on why holding one is part of asking the question
-/// safely.
-///
-/// A raw pointer rather than a wrapper with a `Drop`, deliberately: there is no
-/// point in the process's life at which releasing this would be an improvement,
-/// and a release is exactly the thing whose absence makes the singleton safe to
-/// query. Everything below only ever reads it.
-struct Services(*mut EOAuth2Services);
-
-// SAFETY: the pointer is only ever handed back to EDS's own accessors, and the
-// ones this module calls take the instance's `property_lock` around every read
-// of the service list (`e-oauth2-services.c`). The pointer itself is written
-// once, under `OnceLock`, and read-only afterwards.
-unsafe impl Send for Services {}
-// SAFETY: as `Send`.
-unsafe impl Sync for Services {}
-
-static SERVICES: OnceLock<Services> = OnceLock::new();
+/// safely. A [`Forever`], deliberately never released: a release is exactly
+/// the thing whose absence makes the singleton safe to query. Everything below
+/// only ever reads it.
+static SERVICES: OnceLock<Forever<EOAuth2Services>> = OnceLock::new();
 
 /// The held `EOAuth2Services`, created on the first question.
 ///
@@ -239,11 +227,16 @@ static SERVICES: OnceLock<Services> = OnceLock::new();
 /// [`access_token`], which is only ever reached *after* a question has been
 /// asked and so after this has run.
 fn services() -> *mut EOAuth2Services {
-    // SAFETY: no arguments; the reference this returns is transfer-full and is
-    // deliberately never given back.
     SERVICES
-        .get_or_init(|| Services(unsafe { e_oauth2_services_new() }))
-        .0
+        .get_or_init(|| {
+            // SAFETY: no arguments; the reference this returns is
+            // transfer-full and is deliberately never given back. The pointer
+            // is only ever handed back to EDS's own accessors, and the ones
+            // this module calls take the instance's `property_lock` around
+            // every read of the service list (`e-oauth2-services.c`).
+            unsafe { Forever::new(e_oauth2_services_new()) }
+        })
+        .as_ptr()
 }
 
 /// The process's `ESourceCredentialsProvider`, and the `ESourceRegistry` it
@@ -253,23 +246,14 @@ fn services() -> *mut EOAuth2Services {
 /// keeps only a `GWeakRef` to the registry it is given
 /// (`e-source-credentials-provider.c`), so a provider whose registry has been
 /// released is a provider whose every lookup returns NULL. Holding both is the
-/// same deliberate never-release as [`Services`] above, and for a stronger
+/// same deliberate never-release as [`SERVICES`] above, and for a stronger
 /// reason: an `ESourceRegistry` is a D-Bus client that loads the whole source
 /// list on construction, so building one per question would put a round trip in
 /// front of every connect.
 struct Credentials {
-    provider: *mut ESourceCredentialsProvider,
-    _registry: *mut eds_sys::ESourceRegistry,
+    provider: Forever<ESourceCredentialsProvider>,
+    _registry: Forever<eds_sys::ESourceRegistry>,
 }
-
-// SAFETY: the provider pointer is only ever handed to
-// `e_source_credentials_provider_ref_credentials_source`, which takes the
-// registry's own lock around the source lookups it makes and returns a
-// reference of its own. Both pointers are written once, under `OnceLock`, and
-// read-only afterwards; the registry's is never dereferenced here at all.
-unsafe impl Send for Credentials {}
-// SAFETY: as `Send`.
-unsafe impl Sync for Credentials {}
 
 static CREDENTIALS: OnceLock<Credentials> = OnceLock::new();
 
@@ -308,19 +292,31 @@ fn credentials_provider() -> *mut ESourceCredentialsProvider {
                         g_error_free(error);
                     }
                 }
-                return Credentials {
-                    provider: ptr::null_mut(),
-                    _registry: ptr::null_mut(),
+                // SAFETY: NULL, which nothing dereferences.
+                return unsafe {
+                    Credentials {
+                        provider: Forever::new(ptr::null_mut()),
+                        _registry: Forever::new(ptr::null_mut()),
+                    }
                 };
             }
             // SAFETY: a live registry from the call above.
             let provider = unsafe { e_source_credentials_provider_new(registry) };
-            Credentials {
-                provider,
-                _registry: registry,
+            // SAFETY: both references are kept and never given back. The
+            // provider pointer is only ever handed to
+            // `e_source_credentials_provider_ref_credentials_source`, which
+            // takes the registry's own lock around the source lookups it
+            // makes and returns a reference of its own; the registry's is
+            // never dereferenced here at all.
+            unsafe {
+                Credentials {
+                    provider: Forever::new(provider),
+                    _registry: Forever::new(registry),
+                }
             }
         })
         .provider
+        .as_ptr()
 }
 
 /// The source whose stored credentials `source` actually uses: its collection,

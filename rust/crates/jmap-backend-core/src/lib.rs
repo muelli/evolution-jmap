@@ -47,6 +47,7 @@ pub mod callback;
 pub mod cancel;
 pub mod connect;
 pub mod error;
+pub mod forever;
 pub mod i18n;
 pub mod instance;
 pub mod logging;
