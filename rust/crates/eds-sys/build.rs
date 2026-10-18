@@ -525,6 +525,10 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // the `sort_uids` one that calls it, so a test orders uids the way Camel's
     // callers do. Both exist unchanged from 3.52 through master.
     "camel_folder_(cmp|sort)_uids",
+    // The wrapper around the `get_permanent_flags` vfunc this provider
+    // overrides, so a test asks the way Camel's callers do. Unchanged from
+    // 3.52 through master.
+    "camel_folder_get_permanent_flags",
     "camel_folder_changed",
     // The wrapper around the `get_quota_info_sync` vfunc this provider
     // overrides, named for the same reason as `camel_folder_refresh_info_sync`
