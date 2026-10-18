@@ -31,6 +31,13 @@
 //!   both mean the same thing by it: this collection exists, and the user has
 //!   said they do not want it. Creating a source for it puts a calendar the
 //!   user removed back in their sidebar at every populate.
+//! - **Except in a shared account.** The calendars draft (-33 §4) has a share
+//!   start out unsubscribed, a subscription is something the sharee sets from
+//!   a client, Evolution has no place to set it, and Stalwart refuses it
+//!   (`forbidden`) to a sharee without write rights, which the draft allows
+//!   (§4.3, "The server MAY forbid users from subscribing"). Honouring the flag
+//!   there would hide every read-only share for good, so a shared collection
+//!   is shown whatever `isSubscribed` says.
 //! - **An absent `isSubscribed` is a subscription.** The property is optional
 //!   in both specifications, and a server that says nothing has not said no —
 //!   reading silence as "unsubscribed" would empty the sidebar of every server
@@ -45,7 +52,8 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{Calendar, CalendarRights};
 use jmap_proto::contacts::{AddressBook, AddressBookRights};
 
-use crate::layout::CollectionLayout;
+use crate::children::ChildKind;
+use crate::layout::{CollectionLayout, ServiceAccount};
 use crate::parts::Parts;
 
 /// One address book or calendar, as a child source is made from it.
@@ -96,6 +104,33 @@ pub struct Fanout {
     /// account holds no address book — a fresh account is not an error.
     pub address_books: Vec<Resource>,
     pub calendars: Vec<Resource>,
+    /// The accounts shared with this login that offer contacts or calendars
+    /// ([`CollectionLayout::shared_accounts`]), each with what was listed in
+    /// it. Every such account in the session is here, listed or not, so that
+    /// an account missing from this vector means the share is gone.
+    pub shared: Vec<SharedListing>,
+}
+
+/// The collections of one shared account, as far as they were listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedListing {
+    pub account: ServiceAccount,
+    /// `None` when the address books were not listed: the account does not
+    /// offer contacts, the user switched contacts off, or the listing failed.
+    /// Only `Some` lets a populate conclude that a collection is gone.
+    pub address_books: Option<Vec<Resource>>,
+    /// As [`SharedListing::address_books`], for calendars.
+    pub calendars: Option<Vec<Resource>>,
+}
+
+impl SharedListing {
+    /// What was listed of `kind`, if it was.
+    pub fn listing(&self, kind: ChildKind) -> Option<&[Resource]> {
+        match kind {
+            ChildKind::AddressBook => self.address_books.as_deref(),
+            ChildKind::Calendar => self.calendars.as_deref(),
+        }
+    }
 }
 
 impl Fanout {
@@ -114,19 +149,43 @@ impl Fanout {
         let layout = CollectionLayout::from_session(client.session());
 
         let address_books = match layout.contacts.as_ref().filter(|_| parts.contacts) {
-            Some(account) => resources(client.address_books(&account.id)?),
+            Some(account) => resources(client.address_books(&account.id)?, Subscription::Honoured),
             None => Vec::new(),
         };
         let calendars = match layout.calendars.as_ref().filter(|_| parts.calendars) {
-            Some(account) => resources(client.calendars(&account.id)?),
+            Some(account) => resources(client.calendars(&account.id)?, Subscription::Honoured),
             None => Vec::new(),
         };
+
+        // A shared account that cannot be listed costs its own children
+        // nothing and the rest of the populate nothing: the owner may have
+        // withdrawn the grant between the session fetch and the listing, and
+        // a share is not the user's own data. Its listing stays `None`, which
+        // keeps its existing children rather than removing them.
+        let shared = CollectionLayout::shared_accounts(client.session())
+            .into_iter()
+            .map(|service| {
+                let account = service.account;
+                let address_books = (service.contacts && parts.contacts)
+                    .then(|| client.address_books(&account.id))
+                    .and_then(|listing| shared_resources(&account, "address books", listing));
+                let calendars = (service.calendars && parts.calendars)
+                    .then(|| client.calendars(&account.id))
+                    .and_then(|listing| shared_resources(&account, "calendars", listing));
+                SharedListing {
+                    account,
+                    address_books,
+                    calendars,
+                }
+            })
+            .collect();
 
         Ok(Self {
             parts,
             layout,
             address_books,
             calendars,
+            shared,
         })
     }
 }
@@ -147,12 +206,42 @@ pub fn shown_name(name: &str, id: &Id) -> String {
     }
 }
 
+/// The child-worthy collections of a shared account's listing, or `None` with
+/// a warning when the listing failed.
+fn shared_resources<C: Collection>(
+    account: &ServiceAccount,
+    what: &str,
+    listing: Result<Vec<C>, jmap_client::Error>,
+) -> Option<Vec<Resource>> {
+    match listing {
+        Ok(listing) => Some(resources(listing, Subscription::Ignored)),
+        Err(error) => {
+            tracing::warn!(
+                account_id = %account.id,
+                %error,
+                "could not list the {what} of a shared account; keeping its children"
+            );
+            None
+        }
+    }
+}
+
+/// Whether a listing drops the collections with `isSubscribed: false`: yes for
+/// the user's own accounts, no for shared ones (see the module comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Subscription {
+    Honoured,
+    Ignored,
+}
+
 /// The child-worthy collections of a `/get` listing, in the order the server
 /// asked for them to be shown.
-fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
+fn resources<C: Collection>(listing: Vec<C>, subscription: Subscription) -> Vec<Resource> {
     let mut resources: Vec<(u32, Resource)> = listing
         .into_iter()
-        .filter(|collection| collection.is_subscribed() != Some(false))
+        .filter(|collection| {
+            subscription == Subscription::Ignored || collection.is_subscribed() != Some(false)
+        })
         .filter_map(|collection| {
             let id = collection.id()?.clone();
             let name = shown_name(collection.name(), &id);
@@ -282,7 +371,7 @@ mod tests {
     }
 
     fn names(listing: Vec<AddressBook>) -> Vec<String> {
-        resources(listing)
+        resources(listing, Subscription::Honoured)
             .into_iter()
             .map(|resource| resource.name)
             .collect()
@@ -311,7 +400,7 @@ mod tests {
         // `name` is required by both specifications, so this is a server out of
         // spec — but the alternative to a fallback is a blank row in Evolution's
         // sidebar, which the user cannot tell from another blank row.
-        let resources = resources(vec![book(Some("AB7"), "   ")]);
+        let resources = resources(vec![book(Some("AB7"), "   ")], Subscription::Honoured);
         assert_eq!(resources[0].name, "AB7");
     }
 
@@ -324,7 +413,10 @@ mod tests {
         let mut first = book(Some("AB5"), "Personal");
         first.sort_order = Some(5);
 
-        let resources = resources(vec![same_name_late, first, same_name_early]);
+        let resources = resources(
+            vec![same_name_late, first, same_name_early],
+            Subscription::Honoured,
+        );
         assert_eq!(
             resources
                 .iter()
@@ -342,7 +434,7 @@ mod tests {
         default.is_default = Some(true);
         let plain = book(Some("AB2"), "Shared");
 
-        let resources = resources(vec![default, plain]);
+        let resources = resources(vec![default, plain], Subscription::Honoured);
         assert!(resources[0].is_default);
         assert!(
             !resources[1].is_default,
@@ -356,7 +448,7 @@ mod tests {
         // `None` here is what keeps `Child::for_resource` on the account-wide
         // fallback rather than concluding anything about this one collection.
         assert_eq!(
-            resources(vec![book(Some("AB1"), "Personal")])[0].writable,
+            resources(vec![book(Some("AB1"), "Personal")], Subscription::Honoured)[0].writable,
             None
         );
 
@@ -365,7 +457,10 @@ mod tests {
             may_write: Some(false),
             ..AddressBookRights::default()
         });
-        assert_eq!(resources(vec![locked])[0].writable, Some(false));
+        assert_eq!(
+            resources(vec![locked], Subscription::Honoured)[0].writable,
+            Some(false)
+        );
 
         let calendar_own_only = Calendar {
             id: Some(Id::new("Cal1")),
@@ -377,7 +472,10 @@ mod tests {
             }),
             ..Calendar::default()
         };
-        assert_eq!(resources(vec![calendar_own_only])[0].writable, Some(true));
+        assert_eq!(
+            resources(vec![calendar_own_only], Subscription::Honoured)[0].writable,
+            Some(true)
+        );
     }
 
     #[test]
@@ -386,7 +484,7 @@ mod tests {
         // an absent `myRights`, or one that says nothing about `mayDelete`,
         // must not be mistaken for the server actually stating a rights answer.
         assert_eq!(
-            resources(vec![book(Some("AB1"), "Personal")])[0].deletable,
+            resources(vec![book(Some("AB1"), "Personal")], Subscription::Honoured)[0].deletable,
             None
         );
 
@@ -395,7 +493,10 @@ mod tests {
             may_delete: Some(false),
             ..AddressBookRights::default()
         });
-        assert_eq!(resources(vec![undeletable])[0].deletable, Some(false));
+        assert_eq!(
+            resources(vec![undeletable], Subscription::Honoured)[0].deletable,
+            Some(false)
+        );
 
         let calendar = Calendar {
             id: Some(Id::new("Cal1")),
@@ -406,7 +507,10 @@ mod tests {
             }),
             ..Calendar::default()
         };
-        assert_eq!(resources(vec![calendar])[0].deletable, Some(true));
+        assert_eq!(
+            resources(vec![calendar], Subscription::Honoured)[0].deletable,
+            Some(true)
+        );
     }
 
     #[test]
@@ -421,12 +525,12 @@ mod tests {
             ..Calendar::default()
         };
         assert_eq!(
-            resources(vec![calendar])[0].color,
+            resources(vec![calendar], Subscription::Honoured)[0].color,
             Some("#ff8800".to_owned())
         );
 
         assert_eq!(
-            resources(vec![book(Some("AB1"), "Personal")])[0].color,
+            resources(vec![book(Some("AB1"), "Personal")], Subscription::Honoured)[0].color,
             None
         );
     }
@@ -438,6 +542,26 @@ mod tests {
             name: "Work".to_owned(),
             ..Calendar::default()
         };
-        assert_eq!(resources(vec![calendar])[0].color, None);
+        assert_eq!(
+            resources(vec![calendar], Subscription::Honoured)[0].color,
+            None
+        );
+    }
+
+    #[test]
+    fn a_shared_collection_is_kept_whatever_its_subscription_says() {
+        let mut unsubscribed = book(Some("AB1"), "Team");
+        unsubscribed.is_subscribed = Some(false);
+
+        assert_eq!(
+            resources(vec![unsubscribed.clone()], Subscription::Honoured),
+            [],
+            "the user's own unsubscribed collection stays hidden"
+        );
+        assert_eq!(
+            resources(vec![unsubscribed], Subscription::Ignored)[0].name,
+            "Team",
+            "a share starts unsubscribed and Evolution cannot subscribe to it"
+        );
     }
 }

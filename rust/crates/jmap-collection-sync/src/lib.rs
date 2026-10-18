@@ -57,6 +57,6 @@ pub use child_source::{BACKEND_NAME, Connection, Setting, resource_id_for};
 pub use children::{Child, ChildKind, parse_resource_id};
 pub use create::{CreateFailure, Requested, create_collection};
 pub use delete::{DeleteFailure, Doomed, delete_collection};
-pub use layout::{CollectionLayout, MailService, ServiceAccount};
+pub use layout::{CollectionLayout, MailService, ServiceAccount, SharedService};
 pub use parts::Parts;
-pub use resources::{Fanout, Resource};
+pub use resources::{Fanout, Resource, SharedListing};

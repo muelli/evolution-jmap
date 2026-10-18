@@ -197,7 +197,7 @@ impl Child {
             // Without this the child has no resource id, and a child with no
             // resource id is one EDS deletes from the cache — see the module
             // comment.
-            Setting::new(EXTENSION_RESOURCE, "Identity", self.collection_id.as_str()),
+            Setting::new(EXTENSION_RESOURCE, "Identity", self.identity()),
             Setting::new(EXTENSION_AUTHENTICATION, "Host", &*connection.host),
         ];
         if let Some(port) = connection.port {
