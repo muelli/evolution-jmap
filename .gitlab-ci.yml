@@ -63,3 +63,13 @@ reproducible:
   cache: []
   script:
     - ci/reproducible.sh
+
+# GitHub's rpm job runs ci/rpm.sh under podman; here the job itself runs in
+# the same pinned Fedora image, so ci/rpm.sh builds and lints on the host.
+rpm:
+  stage: build
+  image: docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+  cache: []
+  script:
+    - ci/install-deps-rpm.sh
+    - ci/rpm.sh --host

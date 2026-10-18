@@ -76,13 +76,14 @@ if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
 			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
 	)
 
+	# --strict: a warning fails too, as any lintian tag fails the .deb gate.
 	add_test(
 		NAME package-rpm-lint
 		COMMAND ${CMAKE_COMMAND} -E env
 			"BUILD_DIR=${CMAKE_BINARY_DIR}"
 			"RPMLINT_EXECUTABLE=${RPMLINT_EXECUTABLE}"
 			bash -lc
-			"set -euo pipefail; shopt -s nullglob; set -- \"$BUILD_DIR\"/*.rpm; if [ \"$#\" -eq 0 ]; then echo 'package-rpm-lint: no RPM packages produced' >&2; exit 1; fi; \"$RPMLINT_EXECUTABLE\" \"$@\""
+			"set -euo pipefail; shopt -s nullglob; set -- \"$BUILD_DIR\"/*.rpm; if [ \"$#\" -eq 0 ]; then echo 'package-rpm-lint: no RPM packages produced' >&2; exit 1; fi; \"$RPMLINT_EXECUTABLE\" --strict \"$@\""
 	)
 
 	set_tests_properties(package-rpm-lint PROPERTIES DEPENDS package-rpm)
