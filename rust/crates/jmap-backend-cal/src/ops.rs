@@ -13,7 +13,7 @@ use jmap_backend_core::error::{
     cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
 };
 use jmap_backend_core::i18n::{translate, translate_with};
-use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
+use jmap_backend_core::marshal::{dup_string, read_string, set_out_list, set_out_string};
 use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
 use jmap_proto::State;
 
@@ -70,10 +70,20 @@ pub unsafe fn list_existing(
         "listed existing calendar components"
     );
 
-    // SAFETY: Out-parameter allocations transfer ownership to caller.
+    // SAFETY: Out-parameter allocations transfer ownership to caller. All outputs
+    // are built into locals first and published in a single step so no out-parameter
+    // is written before every fallible allocation is complete (audit F6).
     unsafe {
-        set_out_string(out_new_sync_tag, state.as_str());
-        set_out_list(out_existing_objects, || marshal::info_list(&components));
+        let existing_objects =
+            (!out_existing_objects.is_null()).then(|| marshal::info_list(&components));
+        let new_sync_tag = (!out_new_sync_tag.is_null()).then(|| dup_string(state.as_str()));
+
+        if let Some(list) = existing_objects {
+            *out_existing_objects = list;
+        }
+        if let Some(tag) = new_sync_tag {
+            *out_new_sync_tag = tag;
+        }
     }
     GTRUE
 }
@@ -149,19 +159,30 @@ pub unsafe fn get_changes(
         "reported calendar changes"
     );
 
-    // SAFETY: Out-parameter allocations transfer ownership to caller.
+    // SAFETY: Out-parameter allocations transfer ownership to caller. All outputs
+    // are built into locals first and published in a single step so no out-parameter
+    // is written before every fallible allocation is complete (audit F6).
     unsafe {
-        set_out_string(out_new_sync_tag, changes.new_state.as_str());
+        let modified =
+            (!out_modified_objects.is_null()).then(|| marshal::info_list(&changes.changed));
+        let removed =
+            (!out_removed_objects.is_null()).then(|| marshal::removed_info_list(&changes.removed));
+        let new_sync_tag =
+            (!out_new_sync_tag.is_null()).then(|| dup_string(changes.new_state.as_str()));
+
+        if let Some(list) = modified {
+            *out_modified_objects = list;
+        }
+        if let Some(list) = removed {
+            *out_removed_objects = list;
+        }
+        if let Some(tag) = new_sync_tag {
+            *out_new_sync_tag = tag;
+        }
         // Paging occurs inside CalSync::get_changes; signal completion to EDS.
         if !out_repeat.is_null() {
             *out_repeat = GFALSE;
         }
-        set_out_list(out_modified_objects, || {
-            marshal::info_list(&changes.changed)
-        });
-        set_out_list(out_removed_objects, || {
-            marshal::removed_info_list(&changes.removed)
-        });
     }
     Outcome::Reported
 }

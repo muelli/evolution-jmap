@@ -241,6 +241,31 @@ fn out_parameters_the_caller_did_not_ask_for_are_skipped() {
     }
 }
 
+#[test]
+fn list_existing_populates_requested_out_parameters_when_others_are_null() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+
+    let mut error: *mut GError = ptr::null_mut();
+    let mut tag: *mut gchar = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::list_existing(&fixture.sync(), &mut tag, ptr::null_mut(), &mut error);
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        assert!(!take_string(&mut tag).is_empty());
+    }
+
+    let mut objects: *mut GSList = ptr::null_mut();
+    unsafe {
+        let ok = ops::list_existing(&fixture.sync(), ptr::null_mut(), &mut objects, &mut error);
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        assert_eq!(g_slist_length(objects), 1);
+        g_slist_free_full(objects, Some(e_book_meta_backend_info_free));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // load_contact_sync
 
@@ -583,6 +608,96 @@ fn a_state_the_server_cannot_diff_from_falls_back_to_a_full_listing() {
 
         assert!(matches!(outcome, Outcome::ListInstead), "{outcome:?}");
         assert!(error.is_null(), "the fallback is not a failure");
+    }
+}
+
+#[test]
+fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
+    let fixture = Fixture::start();
+    let doomed = fixture.seed(&fixture.ours, "Ines Tollow", "ines@example.com");
+    let sync = fixture.sync();
+    let (state, _) = sync.list_existing().unwrap();
+    let tag = CString::new(state.as_str()).unwrap();
+
+    let created = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    sync.remove_contact(doomed.as_str()).unwrap();
+
+    let mut error: *mut GError = ptr::null_mut();
+
+    // All out-parameters NULL.
+    unsafe {
+        let outcome = ops::get_changes(
+            &sync,
+            tag.as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+        assert!(error.is_null());
+    }
+
+    // Only sync tag and repeat requested.
+    let mut new_tag: *mut gchar = ptr::null_mut();
+    let mut repeat: gboolean = GTRUE;
+    unsafe {
+        let outcome = ops::get_changes(
+            &sync,
+            tag.as_ptr(),
+            &mut new_tag,
+            &mut repeat,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+        assert!(error.is_null());
+        assert_eq!(repeat, GFALSE);
+        assert!(!take_string(&mut new_tag).is_empty());
+    }
+
+    // Only modified list requested.
+    let mut modified: *mut GSList = ptr::null_mut();
+    unsafe {
+        let outcome = ops::get_changes(
+            &sync,
+            tag.as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut modified,
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+        assert!(error.is_null());
+        assert_eq!(g_slist_length(modified), 1);
+        assert_eq!(nth_info(modified, 0).0, created.to_string());
+        g_slist_free_full(modified, Some(e_book_meta_backend_info_free));
+    }
+
+    // Only removed list requested.
+    let mut removed: *mut GSList = ptr::null_mut();
+    unsafe {
+        let outcome = ops::get_changes(
+            &sync,
+            tag.as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut removed,
+            &mut error,
+        );
+        assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+        assert!(error.is_null());
+        assert_eq!(g_slist_length(removed), 1);
+        assert_eq!(nth_info(removed, 0).0, doomed.to_string());
+        g_slist_free_full(removed, Some(e_book_meta_backend_info_free));
     }
 }
 
