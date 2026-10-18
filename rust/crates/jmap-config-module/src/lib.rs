@@ -4,19 +4,19 @@
 //! `module-jmap-configuration.so`: the two C symbols Evolution's shell
 //! resolves, and nothing else.
 //!
-//! A `cdylib` and nothing else, holding two `#[unsafe(no_mangle)]` functions
-//! that delegate to [`jmap_config::module`] and [`jmap_ui::module`] — the
-//! account-setup extensions and the UI-feature extensions ride in one module,
-//! the way evolution-ews ships one. The full argument for the split is
-//! in `jmap-backend-collection-module`, where the collision that forced it
-//! happened — and this crate's library is the other half of that collision: its
-//! tests link `jmap-backend-collection`'s rlib, both rlibs defined
-//! `e_module_load`, and in one link the two became one entry point answering
-//! for both.
+//! This is a `cdylib` and nothing else. It holds two `#[unsafe(no_mangle)]`
+//! functions that delegate to [`jmap_config::module`] and [`jmap_ui::module`].
+//! The account-setup extensions and the UI-feature extensions ride in one
+//! module, the way evolution-ews ships one. The full argument for the split
+//! is in `jmap-backend-collection-module`, where the collision that forced
+//! it happened. This crate's library is the other half of that collision:
+//! its tests link `jmap-backend-collection`'s rlib. Both rlibs defined
+//! `e_module_load`, so in one link the two became one entry point that
+//! answered for both.
 //!
 //! Nothing but delegation lives here, so there is nothing to drift from the
-//! bodies the tests call — and no `guard`, because the bodies are guarded where
-//! they are written.
+//! bodies the tests call. It needs no `guard`, because the bodies are
+//! guarded where they are written.
 
 use gobject_sys::GTypeModule;
 
