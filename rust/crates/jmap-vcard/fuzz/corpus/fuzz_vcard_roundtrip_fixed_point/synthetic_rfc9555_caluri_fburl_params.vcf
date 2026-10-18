@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:synthetic-rfc9555-caluri-fburl-params-0001
+FN:Alex Mercer
+N:Mercer;Alex;;;
+CALURI;PREF=1:https://calendar.example.test/users/alex/main.ics
+CALURI;MEDIATYPE=text/calendar:https://calendar.example.test/users/alex/team.ics
+FBURL;PREF=2:https://calendar.example.test/users/alex/freebusy.ifb
+FBURL;MEDIATYPE=text/calendar:https://calendar.example.test/users/alex/project.ifb
+END:VCARD
