@@ -28,3 +28,22 @@ Five mutants, all `Unviable` (none compile), no action needed:
   `Some(Zeroizing::from_iter(["xyzzy".into()]))` or
   `Some(Zeroizing::from("xyzzy".into()))`: each is a type or arity mismatch
   against `Zeroizing<String>`.
+
+## `src/oauth2.rs`
+
+`crates/jmap-config/src/oauth2.rs:450:5` (`ensure_registered`'s
+`#[cfg(eds_oauth2_dynamic)]` arm): the body survives replaced with `()`,
+reported MISSED rather than Unviable. Spurious for the same reason as
+`jmap-mail/src/sasl.rs`'s `sasl_type`/`auth_type` entries: `eds_oauth2_dynamic`
+needs `e_source_oauth2_client_get_type`, upstream `Since: 3.64`, unreleased,
+so no EDS this project builds against today sets it. Confirmed with
+`cargo build -p jmap-config -vv`: no `--cfg eds_oauth2_dynamic` reaches
+rustc here. The `#[cfg(not(eds_oauth2_dynamic))]` arm a few lines above
+(`register_static::<Extension>()`) is what every binary built today
+actually runs, and its own mutant is caught. cargo-mutants enumerates
+mutation sites from the source text without evaluating `#[cfg]`, so it
+still generates a mutant for the inactive arm; since that code is not
+compiled at all, the mutation changes nothing observable and the mutant
+always reports MISSED, regardless of test coverage. Not fixable by a test
+until an EDS exposing the marker symbol is the one being built against;
+re-check then.
