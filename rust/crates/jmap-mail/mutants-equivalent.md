@@ -66,6 +66,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
   checked only the `NEED_HOST` bit, which sits in the first pair and was
   never the one zeroed by a mutation further along the chain.
 
+## `src/settings.rs`
+
+- `crates/jmap-mail/src/settings.rs:126:9` (`<impl ObjectSubclass for
+  JmapSettings>::interfaces`), `replace ... with
+  vec![Default::default()]`. Does not compile: `InterfaceDecl` has no
+  `Default` impl, the same pattern as `jmap-config`'s `oauth2_service.rs`
+  and `config_lookup.rs` `interfaces` mutants. Confirmed with `cargo check
+  -p jmap-mail` against the mutated source.
+
 ## `src/sasl.rs`
 
 - `crates/jmap-mail/src/sasl.rs:283:5` (`sasl_type`) and `:353:5`
