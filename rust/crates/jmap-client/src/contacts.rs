@@ -88,12 +88,12 @@ impl Client {
         ))
     }
 
-    fn address_book_set(
+    /// Modify address books (`AddressBook/set`, RFC 9610 Section 2.3).
+    pub fn address_book_set(
         &self,
         request: &SetRequest<AddressBook>,
     ) -> Result<SetResponse<AddressBook>, Error> {
-        let arguments = self.single_call(USING, "AddressBook/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+        self.set_chunked(USING, "AddressBook/set", request)
     }
 
     /// Create a contact card.
@@ -234,12 +234,12 @@ impl Client {
         Ok(self.contact_get(account_id, &[])?.state)
     }
 
-    fn contact_set(
+    /// Modify contact cards (`ContactCard/set`, RFC 9610 Section 3).
+    pub fn contact_set(
         &self,
         request: &SetRequest<ContactCard>,
     ) -> Result<SetResponse<ContactCard>, Error> {
-        let arguments = self.single_call(USING, "ContactCard/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+        self.set_chunked(USING, "ContactCard/set", request)
     }
 }
 

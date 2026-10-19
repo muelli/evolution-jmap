@@ -8,6 +8,7 @@ use std::sync::{PoisonError, RwLock};
 use std::time::Duration;
 
 use jmap_proto::error::RequestError;
+use jmap_proto::methods::{SetRequest, SetResponse};
 use jmap_proto::request::{Invocation, Request};
 use jmap_proto::response::Response;
 use jmap_proto::session::{self, Session};
@@ -389,6 +390,27 @@ impl Client {
         self.session()
             .max_calls_in_request()
             .is_none_or(|limit| calls <= limit)
+    }
+
+    /// Execute a `/set` method call, splitting requests across `maxObjectsInSet`.
+    pub(crate) fn set_chunked<T>(
+        &self,
+        using: &[&str],
+        method: &str,
+        request: &SetRequest<T>,
+    ) -> Result<SetResponse<T>, Error>
+    where
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let limit = self
+            .session()
+            .max_objects_in_set()
+            .and_then(|l| usize::try_from(l).ok());
+
+        crate::set::execute_set_chunked(request, limit, |chunk_req| {
+            let arguments = self.single_call(using, method, chunk_req)?;
+            Ok(serde_json::from_value(arguments)?)
+        })
     }
 
     /// Extract arguments from an invocation, mapping `error` responses to

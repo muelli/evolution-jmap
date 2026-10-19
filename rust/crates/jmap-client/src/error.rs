@@ -66,9 +66,17 @@ pub enum Error {
     /// This represents a connection routing failure rather than an invalid token.
     /// Callers must not trigger re-authentication prompts for this error.
     RedirectCredentialsWithheld { requested: String, followed: String },
+    /// Creation reference broken by `maxObjectsInSet` chunk boundary (RFC 8620 Section 5.3).
+    ///
+    /// The client cannot resolve the reference before creating the referenced object.
+    ChunkBoundaryReferenceBroken { creation_id: String, reason: String },
 }
 
 impl Error {
+    /// Return true if a chunk boundary broke a creation-id reference.
+    pub fn is_chunk_boundary_reference_broken(&self) -> bool {
+        matches!(self, Self::ChunkBoundaryReferenceBroken { .. })
+    }
     /// Return true if the server refused incremental sync due to state mismatch (RFC 8620 Section 5.2).
     ///
     /// Callers fall back to a full sync when this occurs.
@@ -187,6 +195,13 @@ impl std::fmt::Display for Error {
                 f,
                 "request redirected from {requested} to a different origin \
                  ({followed}); credentials were withheld and the server answered 401"
+            ),
+            Error::ChunkBoundaryReferenceBroken {
+                creation_id,
+                reason,
+            } => write!(
+                f,
+                "creation reference #{creation_id} broken by chunk boundary: {reason}"
             ),
         }
     }
