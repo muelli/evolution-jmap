@@ -70,6 +70,14 @@ pub enum Error {
     ///
     /// The client cannot resolve the reference before creating the referenced object.
     ChunkBoundaryReferenceBroken { creation_id: String, reason: String },
+    /// Rate limit or resource limit exceeded (HTTP 429 or RFC 8620 limit).
+    ///
+    /// For non-idempotent operations, the client surfaces this error without retrying.
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+        method: Option<String>,
+        problem: Option<RequestError>,
+    },
 }
 
 impl Error {
@@ -114,6 +122,41 @@ impl Error {
                         .as_deref()
                         .is_some_and(|description| description.to_lowercase().contains("state"))
         )
+    }
+
+    /// Return true if the failure was caused by rate limiting or resource limits.
+    ///
+    /// Matches [`Error::RateLimited`], HTTP 429, request limit problems,
+    /// method limit errors, or set rate limit errors.
+    pub fn is_rate_limited(&self) -> bool {
+        match self {
+            Self::RateLimited { .. } => true,
+            Self::Http { status: 429, .. } => true,
+            Self::Http {
+                problem: Some(problem),
+                ..
+            } => problem.error_type == jmap_proto::error::request::LIMIT,
+            Self::Method(method_error) => method_error.error_type == "limit",
+            Self::Set(set_error) => {
+                set_error.error_type == jmap_proto::error::set::RATE_LIMIT
+                    || set_error.error_type == "limit"
+            }
+            _ => false,
+        }
+    }
+
+    /// Return the `Retry-After` duration if specified by the server.
+    pub fn rate_limit_retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::RateLimited { retry_after, .. } => *retry_after,
+            Self::Http {
+                problem: Some(problem),
+                ..
+            } => crate::client::extract_problem_retry_after(problem),
+            Self::Method(method_error) => crate::client::extract_method_retry_after(method_error),
+            Self::Set(set_error) => crate::client::extract_set_error_retry_after(set_error),
+            _ => None,
+        }
     }
 }
 
@@ -203,6 +246,23 @@ impl std::fmt::Display for Error {
                 f,
                 "creation reference #{creation_id} broken by chunk boundary: {reason}"
             ),
+            Error::RateLimited {
+                retry_after,
+                method,
+                problem,
+            } => {
+                write!(f, "rate limit exceeded (HTTP 429 / limit)")?;
+                if let Some(method) = method {
+                    write!(f, " on {method}")?;
+                }
+                if let Some(retry_after) = retry_after {
+                    write!(f, ", retry after {}s", retry_after.as_secs())?;
+                }
+                if let Some(detail) = problem.as_ref().and_then(|p| p.detail.as_deref()) {
+                    write!(f, ": {detail}")?;
+                }
+                Ok(())
+            }
         }
     }
 }

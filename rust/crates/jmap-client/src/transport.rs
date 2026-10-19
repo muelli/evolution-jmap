@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Cooperative cancellation flag shared between an operation and its caller.
 #[derive(Debug, Clone, Default)]
@@ -33,6 +34,9 @@ thread_local! {
     /// The flag this thread's current operation is cancelled through, if it
     /// installed one. See [`CancelScope`].
     static OBSERVED: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };
+
+    /// The `Retry-After` duration observed on this thread.
+    static OBSERVED_RETRY_AFTER: RefCell<Option<Duration>> = const { RefCell::new(None) };
 }
 
 /// Return the cancellation flag active on this thread.
@@ -40,6 +44,27 @@ thread_local! {
 /// Returns `None` if no [`CancelScope`] is installed.
 pub fn observed() -> Option<CancelFlag> {
     OBSERVED.with(|observed| observed.borrow().clone())
+}
+
+/// Return the `Retry-After` duration observed on this thread.
+pub fn observed_retry_after() -> Option<Duration> {
+    OBSERVED_RETRY_AFTER.with(|observed| *observed.borrow())
+}
+
+/// Set the observed `Retry-After` duration on the current thread.
+pub fn set_observed_retry_after(duration: Option<Duration>) {
+    OBSERVED_RETRY_AFTER.with(|observed| *observed.borrow_mut() = duration);
+}
+
+/// Parse a `Retry-After` header value into a [`Duration`].
+///
+/// Accepts integer seconds per RFC 7231 Section 7.1.3 and RFC 9110 Section 10.2.3.
+pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
+    let trimmed = header_value.trim();
+    if let Ok(seconds) = trimmed.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    None
 }
 
 /// RAII guard setting a thread-local cancellation flag for an operation.
@@ -269,6 +294,13 @@ mod ureq_transport {
                     .get("content-type")
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_owned);
+
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(super::parse_retry_after);
+                super::set_observed_retry_after(retry_after);
 
                 tracing::trace!(
                     status,

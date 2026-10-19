@@ -943,8 +943,30 @@ impl Client {
             .session()
             .upload_url
             .replace("{accountId}", &encode_template_value(account_id.as_str()));
-        let response =
-            self.execute_with_content_type(HttpMethod::Post, &url, Some(data), Some(content_type))?;
+        let response = match self.execute_with_content_type(
+            HttpMethod::Post,
+            &url,
+            Some(data),
+            Some(content_type),
+        ) {
+            Ok(response) => response,
+            Err(Error::Http {
+                status: 429,
+                problem,
+            }) => {
+                let retry_after = crate::transport::observed_retry_after().or_else(|| {
+                    problem
+                        .as_ref()
+                        .and_then(crate::client::extract_problem_retry_after)
+                });
+                return Err(Error::RateLimited {
+                    retry_after,
+                    method: Some("upload".to_string()),
+                    problem,
+                });
+            }
+            Err(err) => return Err(err),
+        };
         Ok(serde_json::from_slice(&response.body)?)
     }
 
@@ -982,7 +1004,8 @@ impl Client {
             .replace("{blobId}", &encode_template_value(blob_id.as_str()))
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
-        let response = self.execute_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
+        let response =
+            self.execute_idempotent_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
         if !crate::url::same_origin(&url, &response.final_url) {
             return Err(Error::CrossOriginRedirect {
                 requested: crate::url::origin_of(&url).into_owned(),
