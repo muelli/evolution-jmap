@@ -59,3 +59,10 @@ compiled at all, the mutation changes nothing observable and the mutant
 always reports MISSED, regardless of test coverage. Not fixable by a test
 until an EDS exposing the marker symbol is the one being built against;
 re-check then.
+
+## `src/backend.rs`
+
+`JmapConfigServiceBackend::detached`'s body survives replaced with
+`Box::new(Default::default())` only as an `Unviable` mutant:
+`JmapConfigServiceBackend` has no `Default` impl, so it does not compile.
+No action needed.
