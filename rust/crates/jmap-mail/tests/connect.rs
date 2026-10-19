@@ -15,16 +15,18 @@
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
-    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID,
-    camel_folder_error_quark, camel_service_error_quark,
+    CAMEL_FOLDER_ERROR_INVALID, CAMEL_FOLDER_ERROR_INVALID_UID,
+    CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
+    CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER, camel_folder_error_quark,
+    camel_service_error_quark, camel_store_error_quark,
 };
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::store::JmapStore;
-use jmap_mail_sync::{MailSync, SyncError};
+use jmap_mail_sync::{FolderRole, MailSync, SyncError};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
@@ -367,6 +369,9 @@ fn each_failure_carries_the_camel_service_error_code_evolution_routes_on() {
             StoreError::OAuth2("no token".to_owned()),
             CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
         ),
+        // Camel's own cue to reconnect and ask again, not to show the
+        // account as broken.
+        (StoreError::Disconnected, CAMEL_SERVICE_ERROR_NOT_CONNECTED),
     ] {
         let gerror = error.to_gerror();
         assert!(!gerror.is_null(), "no GError for {error}");
@@ -453,6 +458,63 @@ fn a_cancelled_connect_is_reported_in_glibs_own_domain() {
     unsafe {
         assert_eq!((*gerror).domain, gio_sys::g_io_error_quark());
         assert_eq!((*gerror).code, gio_sys::G_IO_ERROR_CANCELLED);
+        glib_sys::g_error_free(gerror);
+    }
+}
+
+/// `NoQuota` and `NoLocalFile` report "nothing to report" in GLib's own
+/// domain, the same code `camel-imapx-folder.c` uses for quotas turned off,
+/// not in the service domain a wildcard match would wrongly fall back to.
+#[test]
+fn no_quota_and_no_local_file_are_reported_in_glibs_own_domain() {
+    for error in [StoreError::NoQuota, StoreError::NoLocalFile] {
+        let gerror = error.to_gerror();
+        // SAFETY: an owned GError, freed below.
+        unsafe {
+            assert_eq!((*gerror).domain, gio_sys::g_io_error_quark(), "{error}");
+            assert_eq!((*gerror).code, gio_sys::G_IO_ERROR_NOT_SUPPORTED, "{error}");
+            glib_sys::g_error_free(gerror);
+        }
+    }
+}
+
+/// A folder or role the account does not have is the store's domain, not the
+/// service's: nothing is wrong with the connection, only one folder is
+/// missing.
+#[test]
+fn a_missing_folder_or_role_is_reported_in_camels_store_domain() {
+    for error in [
+        StoreError::NoFolder("Archive/2020".to_owned()),
+        StoreError::NoRole(FolderRole::Trash),
+    ] {
+        let gerror = error.to_gerror();
+        // SAFETY: an owned GError, freed below.
+        unsafe {
+            assert_eq!((*gerror).domain, camel_store_error_quark(), "{error}");
+            assert_eq!(
+                (*gerror).code,
+                CAMEL_STORE_ERROR_NO_FOLDER as i32,
+                "{error}"
+            );
+            glib_sys::g_error_free(gerror);
+        }
+    }
+}
+
+/// A message over `maxSizeUpload` is the message's own fault, not the
+/// account's: reported like a message Camel itself could not write out,
+/// never as a service error that would mark a working account broken.
+#[test]
+fn a_message_over_the_size_limit_is_reported_in_camels_folder_domain() {
+    let error = StoreError::Client(Error::TooLarge {
+        size: 20_000_000,
+        limit: 10_000_000,
+    });
+    let gerror = error.to_gerror();
+    // SAFETY: an owned GError, freed below.
+    unsafe {
+        assert_eq!((*gerror).domain, camel_folder_error_quark());
+        assert_eq!((*gerror).code, CAMEL_FOLDER_ERROR_INVALID as i32);
         glib_sys::g_error_free(gerror);
     }
 }
