@@ -30,14 +30,16 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
-    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT, ESource, ESourceBackend,
-    ESourceMailAccount, ESourceMailSubmission, e_collection_backend_factory_prepare_mail,
+    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT,
+    ECollectionBackendFactoryClass, ESource, ESourceBackend, ESourceMailAccount,
+    ESourceMailSubmission, e_collection_backend_factory_prepare_mail,
     e_source_backend_get_backend_name, e_source_get_extension, e_source_get_uid,
     e_source_has_extension, e_source_mail_account_get_identity_uid,
     e_source_mail_submission_get_transport_uid, e_source_new,
 };
 use glib_sys::GFALSE;
-use gobject_sys::{g_object_unref, g_type_create_instance};
+use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref, g_type_create_instance};
+use jmap_backend_collection::backend::JmapCollectionBackend;
 use jmap_backend_collection::factory::JmapCollectionFactory;
 use jmap_backend_collection::prepare_mail::MAIL_BACKEND_NAME;
 use jmap_backend_collection::resource_id::resource_id_of;
@@ -357,6 +359,45 @@ fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
                 "{what} was read as a child this backend created"
             );
         }
+    });
+}
+
+/// This file's own `Prepared::new()` is the one place in this crate's tests
+/// that references the factory through `register_static` alone, with no
+/// `module::load` to call `remember_backend_type` first -- the case
+/// `factory::backend_type`'s doc comment names as happening in a test. That
+/// makes this the only place that can catch `class_init_types` failing to
+/// register the backend type before `class_init` asks for it a second time
+/// from under GLib's class-initialisation lock, where a miss logs a critical
+/// and leaves `backend_type` zero rather than retrying.
+#[test]
+fn the_backend_type_is_valid_when_the_factory_is_registered_alone() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = register_static::<JmapCollectionFactory>();
+        assert_ne!(gtype, 0, "the factory type is not registered");
+
+        // SAFETY: the type is registered; referencing its class runs
+        // class_init, which writes `backend_type`, and the class leads with
+        // ECollectionBackendFactoryClass.
+        let class = unsafe { g_type_class_ref(gtype) }.cast::<ECollectionBackendFactoryClass>();
+        assert!(!class.is_null(), "the factory class failed to initialise");
+        // SAFETY: a live, referenced class.
+        let backend_type = unsafe { (*class).backend_type };
+
+        // Called standalone, outside any class_init, so it registers the
+        // backend if nothing already has -- the authoritative value `class`
+        // should already carry.
+        let expected = register_static::<JmapCollectionBackend>();
+        assert_ne!(expected, 0, "the backend type does not register at all");
+        assert_eq!(
+            backend_type, expected,
+            "class_init wrote no valid backend type, so new_backend would \
+             build nothing for an account found this way"
+        );
+
+        // SAFETY: the reference taken above, given back once.
+        unsafe { g_type_class_unref(class.cast()) };
     });
 }
 

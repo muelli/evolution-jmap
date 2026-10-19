@@ -136,3 +136,17 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
         factory.prepare_mail = Some(prepare_mail_trampoline);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{backend_type, remember_backend_type};
+
+    /// A value `register_static::<JmapCollectionBackend>()` could never produce
+    /// on its own, so a pass here is the recorded value coming back, not the
+    /// fallback happening to land on the same number.
+    #[test]
+    fn remember_backend_type_is_what_backend_type_then_reports() {
+        remember_backend_type(0xdead_beef);
+        assert_eq!(backend_type(), 0xdead_beef);
+    }
+}
