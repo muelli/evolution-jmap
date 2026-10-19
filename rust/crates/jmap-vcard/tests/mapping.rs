@@ -22732,3 +22732,66 @@ fn derived_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn calscale_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:CALSCALE Profile Probe\r\n",
+        "BDAY;CALSCALE=chinese:20211003\r\n",
+        "ANNIVERSARY;CALSCALE=gregorian:20220708\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse CALSCALE profile probe");
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries map");
+
+    let birth = anniversaries
+        .values()
+        .find(|anniversary| anniversary.kind == "birth")
+        .expect("birth anniversary");
+    assert_eq!(
+        birth.date,
+        Some(json!({"@type": "PartialDate", "year": 2021, "month": 10, "day": 3}))
+    );
+    assert!(
+        birth.extra.is_empty(),
+        "profile does not retain RFC 9555 CALSCALE metadata on BDAY"
+    );
+
+    let wedding = anniversaries
+        .values()
+        .find(|anniversary| anniversary.kind == "wedding")
+        .expect("wedding anniversary");
+    assert_eq!(
+        wedding.date,
+        Some(json!({"@type": "PartialDate", "year": 2022, "month": 7, "day": 8}))
+    );
+    assert!(
+        wedding.extra.is_empty(),
+        "profile does not retain RFC 9555 CALSCALE metadata on ANNIVERSARY"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let bday_line = line(&emitted, "BDAY;");
+    assert!(bday_line.contains("X-JMAP-KEY="));
+    assert!(bday_line.ends_with(":2021-10-03"));
+
+    let anniversary_line = line(&emitted, "ANNIVERSARY;");
+    assert!(anniversary_line.contains("X-JMAP-KEY="));
+    assert!(anniversary_line.ends_with(":2022-07-08"));
+    assert!(
+        emitted.contains("X-EVOLUTION-ANNIVERSARY;"),
+        "wedding anniversaries must keep X-EVOLUTION-ANNIVERSARY compatibility line"
+    );
+    assert!(
+        !emitted.contains("CALSCALE="),
+        "non-projected CALSCALE parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized CALSCALE profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
