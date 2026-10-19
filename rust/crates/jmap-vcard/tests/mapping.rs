@@ -22699,3 +22699,36 @@ fn note_metadata_parameters_are_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn derived_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "N:Probe;Derived;;;\r\n",
+        "FN;DERIVED=TRUE:Probe Derived\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse DERIVED profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("Probe Derived"));
+    assert!(name.components.is_some(), "N components must remain mapped");
+    assert!(
+        !name.extra.contains_key("derived"),
+        "profile does not retain RFC 9555 DERIVED metadata on FN"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("N:Probe;Derived;;;\r\n"));
+    assert!(emitted.contains("FN:Probe Derived\r\n"));
+    assert!(
+        !emitted.contains("DERIVED="),
+        "non-projected DERIVED parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized DERIVED profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
