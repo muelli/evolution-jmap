@@ -15,8 +15,8 @@ Debian or Ubuntu (`.deb` release asset):
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify evolution-jmap_*_amd64.deb --repo muelli/evolution-jmap
-sudo apt install ./evolution-jmap_*_amd64.deb
+gh attestation verify evolution-jmap_*_$(dpkg --print-architecture).deb --repo muelli/evolution-jmap
+sudo apt install ./evolution-jmap_*_$(dpkg --print-architecture).deb
 evolution --force-shutdown
 ```
 
@@ -113,7 +113,11 @@ Open the account settings. Look for the `Vacation Responder` page of the JMAP ac
 
 ### Scheduled send
 
-In the composer, open `File`, then `Send Later`. The presets include in one hour, tomorrow morning and next Monday morning.
+In the composer, open `File`, then `Send Later`. The menu offers these presets:
+
+- `In One Hour`
+- The next local `08:00`, `12:00`, `18:00` and `21:00`. The menu labels each one Today, Tomorrow or a weekday name.
+- The next workday (Monday to Friday) at `09:00`
 
 The menu is enabled only if both conditions are true:
 
@@ -135,10 +139,12 @@ Snooze needs the Cyrus snooze capability. Stalwart and Fastmail do not offer it.
 ## Logs and debug output
 
 - Runtime logs go to journald when it is available. Otherwise they go to stderr.
-- To get detailed module logs, start Evolution with `EVOLUTION_JMAP_LOG=debug`.
-- To get more GLib process logs, also set `G_MESSAGES_DEBUG=all`.
+- Each Evolution process reads `EVOLUTION_JMAP_LOG` when it starts. If Evolution is running, close it first.
+- To get detailed module logs, restart Evolution with this command:
+  `EVOLUTION_JMAP_LOG=debug G_MESSAGES_DEBUG=all evolution`
 - To watch the live user-session logs, run `journalctl --user -f`.
-- The account source files are in `~/.config/evolution/sources/`.
+- If journald is not available (for example in some containers), start Evolution from a terminal. Read stderr in that terminal.
+- The account source files are in `${XDG_CONFIG_HOME:-~/.config}/evolution/sources/`.
 
 ## Uninstall
 
