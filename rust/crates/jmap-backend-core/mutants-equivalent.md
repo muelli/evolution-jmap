@@ -84,3 +84,22 @@ dependency registered overrides this method to call the dependency's own
 `register_static` for the side effect (`Declaring` in this file's tests);
 the default is only reached by a type with no such dependency, for which
 one dummy `GType` in an otherwise-unread vec changes nothing observable.
+
+## `src/resolver_thread.rs`
+
+`lookup_first_service_target`'s body survives replaced with `None`, and the
+`!targets.is_null()` guard before `g_resolver_free_targets` survives with
+the `!` deleted. Both are only reachable with a *successful* SRV lookup: a
+non-NULL `targets` list from `g_resolver_lookup_service`. Every lookup in
+this crate's hermetic tests resolves `.invalid` domains (RFC 6761), which
+never succeed, so `targets` is always NULL and both mutants are silent:
+the full-body replacement skips work that would have produced the same
+`None` anyway, and the deleted `!` only changes behaviour on the non-NULL
+branch nothing here reaches. `jmap-backend-core/tests/resolver.rs` already
+draws this exact line: its one test against a real SRV record,
+`fastmail_publishes_its_jmap_host_via_srv`, is `#[ignore]`d because it
+needs live DNS egress and asserts a third party's record, so cargo-mutants'
+plain `cargo test` never runs it either. Closing this gap for real needs a
+fake `GResolver` (a GObject subclass overriding `lookup_service`) to force
+the success path hermetically, which is its own `unsafe`/vtable-correctness
+undertaking, not a one-file mutation-testing session.

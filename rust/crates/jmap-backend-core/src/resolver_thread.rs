@@ -340,10 +340,16 @@ mod tests {
             .expect("the slow job eventually completes on its own worker");
     }
 
+    /// Serializes tests that read `ResolverPool::next` directly: it is a
+    /// process-global counter, so two such tests running concurrently in the
+    /// same test binary could observe each other's increments.
+    static POOL_NEXT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Round-robin dispatch actually spreads jobs across every worker,
     /// rather than, say, always landing on worker 0.
     #[test]
     fn round_robin_dispatch_reaches_every_worker() {
+        let _guard = POOL_NEXT_TEST_LOCK.lock().expect("lock not poisoned");
         let pool = get_resolver_pool().expect("resolver pool starts");
         let seen = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
@@ -368,6 +374,27 @@ mod tests {
             seen.lock().expect("lock not poisoned").len(),
             pool.workers.len(),
             "round-robin dispatch should reach every worker in the pool"
+        );
+    }
+
+    /// `resolve_srv` must actually dispatch to a worker, not just report "no
+    /// record" on its own: a failed lookup and a short-circuited one return
+    /// the same `None`, so this checks the round-robin counter instead of the
+    /// result, which only moves if `next_worker` really ran.
+    #[test]
+    fn resolve_srv_dispatches_through_the_pool_even_when_the_lookup_fails() {
+        let _guard = POOL_NEXT_TEST_LOCK.lock().expect("lock not poisoned");
+        let pool = get_resolver_pool().expect("resolver pool starts");
+        let before = pool.next.load(Ordering::Relaxed);
+
+        let domain = CString::new("no-jmap-here.evolution-jmap-test.invalid")
+            .expect("domain has no interior NUL");
+        assert_eq!(resolve_srv(c"jmap", c"tcp", domain), None);
+
+        let after = pool.next.load(Ordering::Relaxed);
+        assert_ne!(
+            before, after,
+            "resolve_srv must advance the round-robin counter, not short-circuit before dispatch"
         );
     }
 }
