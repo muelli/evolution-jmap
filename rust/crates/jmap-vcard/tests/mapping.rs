@@ -22545,3 +22545,59 @@ fn vcardname_source_property_identity_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn grouped_property_identity_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Grouped Property Probe\r\n",
+        "item1.URL:https://example.test/work\r\n",
+        "item2.URL:https://example.test/blog\r\n",
+        "item3.EMAIL:grouped@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse grouped-property profile probe");
+    let links = parsed.links.as_ref().expect("links map");
+    assert_eq!(links.len(), 2, "both grouped URL lines must remain mapped");
+    assert!(
+        links.values().all(|link| link.extra.is_empty()),
+        "profile does not retain RFC 9555 group metadata on URL"
+    );
+    assert!(
+        links
+            .values()
+            .any(|link| link.uri == "https://example.test/work"),
+        "work URL must survive"
+    );
+    assert!(
+        links
+            .values()
+            .any(|link| link.uri == "https://example.test/blog"),
+        "blog URL must survive"
+    );
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "grouped EMAIL line must remain mapped");
+    assert_eq!(emails["e1"].address, "grouped@example.test");
+    assert!(
+        emails["e1"].extra.is_empty(),
+        "profile does not retain RFC 9555 group metadata on EMAIL"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://example.test/work"));
+    assert!(emitted.contains("URL;X-JMAP-KEY=l2:https://example.test/blog"));
+    assert!(emitted.contains("EMAIL;X-JMAP-KEY=e1:grouped@example.test"));
+    assert!(
+        !emitted.contains("item1.") && !emitted.contains("item2.") && !emitted.contains("item3."),
+        "grouped property identity must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized grouped-property probe");
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(
+        emitted, re_emitted,
+        "profile reaches fixed point after one pass"
+    );
+}

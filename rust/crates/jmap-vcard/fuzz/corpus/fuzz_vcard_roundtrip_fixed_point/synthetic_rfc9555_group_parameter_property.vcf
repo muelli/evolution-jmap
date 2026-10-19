@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:group-param-rfc9555-1
+FN:Group Parameter Section Probe
+item1.URL:https://example.test/work
+item2.URL:https://example.test/blog
+item3.EMAIL:grouped@example.test
+END:VCARD
