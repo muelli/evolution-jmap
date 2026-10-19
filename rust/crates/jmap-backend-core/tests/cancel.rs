@@ -95,6 +95,25 @@ fn a_null_cancellable_leaves_the_operation_around_it_observed() {
     assert!(observed().expect("the outer scope survived").is_cancelled());
 }
 
+/// Dropping the bridge disconnects the GIO handler. A cancellation that
+/// arrives afterward must not reach a flag cloned out before the drop,
+/// proving the handler is gone rather than merely leaked.
+#[test]
+fn dropping_the_bridge_disconnects_the_handler() {
+    let cancellable = unsafe { g_cancellable_new() };
+    let bridge = unsafe { CancelBridge::new(cancellable) };
+    let flag = bridge.flag().clone();
+
+    drop(bridge);
+    unsafe { g_cancellable_cancel(cancellable) };
+    assert!(
+        !flag.is_cancelled(),
+        "the handler fired after the bridge that connected it was dropped"
+    );
+
+    unsafe { g_object_unref(cancellable.cast()) };
+}
+
 /// The flag is handed to the client by value, so it has to keep working (and
 /// keep pointing at the same shared state) after being cloned out.
 #[test]
