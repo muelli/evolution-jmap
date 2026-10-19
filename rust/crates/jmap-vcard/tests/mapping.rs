@@ -92,6 +92,37 @@ fn a_card_without_a_jscontact_uid_omits_the_extra_property() {
 }
 
 #[test]
+fn uid_parsing_is_case_insensitive_and_stabilizes_duplicate_uid_lines() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "uid:server-id-primary\r\n",
+        "UID:server-id-secondary\r\n",
+        "x-jmap-uid:urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa\r\n",
+        "FN:Vera\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse mixed-case duplicate UID vcard");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "server-id-primary");
+    assert_eq!(
+        card.uid.as_deref(),
+        Some("urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa")
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("UID:server-id-primary\r\n"));
+    assert!(!emitted.contains("UID:server-id-secondary\r\n"));
+    assert!(emitted.contains("X-JMAP-UID:urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa\r\n"));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized UID vcard");
+    assert_eq!(reparsed.id.as_ref().unwrap().as_str(), "server-id-primary");
+    assert_eq!(
+        reparsed.uid.as_deref(),
+        Some("urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa")
+    );
+}
+
+#[test]
 fn a_vcard_from_evolution_has_no_jmap_id_yet() {
     // Evolution invents this UID locally, so callers must not treat it as a JMAP id.
     let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:pas-id-6890AB\r\nFN:Vera\r\nEND:VCARD\r\n";
