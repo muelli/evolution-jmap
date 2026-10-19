@@ -29,6 +29,18 @@ Five mutants, all `Unviable` (none compile), no action needed:
   `Some(Zeroizing::from("xyzzy".into()))`: each is a type or arity mismatch
   against `Zeroizing<String>`.
 
+## `src/config_lookup.rs`
+
+Three mutants, all `Unviable` (none compile), no action needed:
+- `probe_host`'s `&&` (line 178, the `if let Some(servers) = servers && let
+  Some(first) = ...` let chain) replaced with `||`: `||` is not a supported
+  operator in a let-chain condition at all, a hard compiler error, not a
+  logic change to test against.
+- `parse_target`'s body replaced with `Some(Default::default())`: `Target`
+  has no `Default` impl.
+- `<impl ObjectSubclass for JmapConfigLookup>::interfaces`'s body replaced
+  with `vec![Default::default()]`: `InterfaceDecl` has no `Default` impl.
+
 ## `src/oauth2.rs`
 
 `crates/jmap-config/src/oauth2.rs:450:5` (`ensure_registered`'s
