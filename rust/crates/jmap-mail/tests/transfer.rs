@@ -85,6 +85,9 @@ mod common;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::mpsc::channel;
+use std::thread;
+use std::time::Duration;
 
 use common::Account;
 use common::signals::{Context, Emission, emissions, watch};
@@ -92,8 +95,9 @@ use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_refresh_info_sync,
-    camel_folder_summary_get, camel_folder_transfer_messages_to_sync, camel_message_info_set_flags,
+    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
+    camel_folder_refresh_info_sync, camel_folder_summary_get,
+    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_set_flags,
     camel_service_error_quark, camel_store_get_folder_sync,
 };
 use glib_sys::{
@@ -375,6 +379,17 @@ impl Drop for Fixture {
     }
 }
 
+/// A raw folder pointer, sent to a background thread.
+///
+/// Sound for the same reason `transfer_race.rs`'s own copy is: the folder is a
+/// real `CamelFolder` GObject, kept alive by the fixture for as long as the
+/// background thread using it runs.
+#[derive(Clone, Copy)]
+struct FolderPtr(*mut CamelFolder);
+// SAFETY: the folder outlives every use of this wrapper, and every use goes
+// through Camel's own thread-safe locking functions.
+unsafe impl Send for FolderPtr {}
+
 /// One of the account's folders, opened the way Camel opens one.
 fn open(account: &Account, path: &str) -> *mut CamelFolder {
     let path = CString::new(path).expect("a path with no NUL");
@@ -590,6 +605,36 @@ fn a_moved_message_leaves_the_folder_it_came_from() {
     assert!(
         listed(fixture.inbox).is_empty(),
         "the moved message is still in the folder it left"
+    );
+}
+
+/// `transfer_messages_to_sync` takes `camel_folder_lock` on the source folder
+/// itself, because Camel's own wrapper does not (this module's header
+/// explains why). A lock a transfer takes and never releases would wedge
+/// every later operation on that folder, so a lock taken from another thread
+/// right after a transfer must still return.
+#[test]
+fn a_transfer_releases_the_source_folders_lock() {
+    let fixture = Fixture::start();
+
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
+
+    let inbox = FolderPtr(fixture.inbox);
+    let (done_tx, done_rx) = channel();
+    thread::spawn(move || {
+        let inbox = inbox;
+        // SAFETY: a live folder, locked and unlocked in balance.
+        unsafe {
+            camel_folder_lock(inbox.0);
+            camel_folder_unlock(inbox.0);
+        }
+        let _ = done_tx.send(());
+    });
+
+    assert!(
+        done_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
+        "camel_folder_lock on the source folder never returned after the transfer; \
+         transfer_messages_to_sync left it locked"
     );
 }
 
