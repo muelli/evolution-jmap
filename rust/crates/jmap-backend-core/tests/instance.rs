@@ -88,6 +88,33 @@ fn clearing_an_empty_slot_is_a_no_op() {
     );
 }
 
+/// `Slot`'s `Drop` impl is only reached outside a GObject instance struct,
+/// where the slot is ordinary Rust-owned memory. These tests build exactly
+/// that: a bare `Slot` that goes out of scope without a manual `clear`.
+#[test]
+fn dropping_a_filled_slot_drops_the_value() {
+    static DROPS: AtomicU32 = AtomicU32::new(0);
+    {
+        let slot = Slot::new();
+        assert!(slot.init(Spy(&DROPS)));
+        assert_eq!(DROPS.load(Ordering::SeqCst), 0);
+    }
+    assert_eq!(
+        DROPS.load(Ordering::SeqCst),
+        1,
+        "dropping the slot did not drop its value"
+    );
+}
+
+#[test]
+fn dropping_an_empty_slot_does_not_call_drop_on_anything() {
+    static DROPS: AtomicU32 = AtomicU32::new(0);
+    {
+        let _never_filled: Slot<Spy> = Slot::new();
+    }
+    assert_eq!(DROPS.load(Ordering::SeqCst), 0);
+}
+
 /// Initialising twice is a bug in the caller, and the recovery has to be the
 /// conservative one: the value already in the slot may be borrowed by another
 /// thread, so it stays and the newcomer is dropped rather than leaked.
