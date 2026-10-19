@@ -350,15 +350,21 @@ impl Client {
     }
 
     /// Fetch all participant identities (`ParticipantIdentity/get`, draft-ietf-jmap-calendars §3.1).
+    ///
+    /// Returns an empty list if the server answers `unknownMethod`.
     pub fn participant_identities(
         &self,
         account_id: &Id,
     ) -> Result<Vec<ParticipantIdentity>, Error> {
-        let arguments = self.single_call(
+        let arguments = match self.single_call(
             USING,
             "ParticipantIdentity/get",
             &GetRequest::all(account_id.clone()),
-        )?;
+        ) {
+            Ok(arguments) => arguments,
+            Err(err) if err.is_unknown_method() => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
         let response: ParticipantIdentityGetResponse = serde_json::from_value(arguments)?;
         Ok(response.list)
     }

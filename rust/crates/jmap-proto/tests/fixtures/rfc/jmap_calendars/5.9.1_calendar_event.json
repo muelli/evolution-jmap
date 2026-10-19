@@ -1,4 +1,4 @@
-// Source: draft-ietf-jmap-calendars-32 §5.9.1 (Figure 1: A CalendarEvent object), October 2026
+// Source: draft-ietf-jmap-calendars-33 §5.9.1 (Figure 1: A CalendarEvent object), October 2026
 {
   "id": "123",
   "title": "FooBar team meeting",

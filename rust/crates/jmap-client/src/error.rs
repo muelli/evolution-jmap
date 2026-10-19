@@ -96,6 +96,15 @@ impl Error {
         )
     }
 
+    /// Return true if the server returned `unknownMethod` (RFC 8620 Section 3.6.2).
+    pub fn is_unknown_method(&self) -> bool {
+        matches!(
+            self,
+            Self::Method(error)
+                if error.error_type == jmap_proto::error::method::UNKNOWN_METHOD
+        )
+    }
+
     /// Return true if the server rejected the request with HTTP 401.
     ///
     /// Indicates an expired or invalid bearer token.
