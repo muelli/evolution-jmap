@@ -280,3 +280,52 @@ fn participant_identity_roundtrips_calendar_address_and_send_to() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].calendar_address.as_deref(), Some(ALICE));
 }
+
+use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, TransportError};
+
+const FASTMAIL_UNKNOWN_METHOD_RESPONSE: &str =
+    r#"{"methodResponses":[["error",{"type":"unknownMethod"},"c0"]],"sessionState":"xyz"}"#;
+
+struct MockFastmailParticipantIdentityTransport;
+
+impl Transport for MockFastmailParticipantIdentityTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => {
+                r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:calendars":{}},"accounts":{"acc1":{"name":"user@fastmail.com","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:calendars":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:calendars":"acc1"},"username":"user@fastmail.com","apiUrl":"https://api.fastmail.com/jmap/api/","downloadUrl":"https://api.fastmail.com/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://api.fastmail.com/jmap/upload/{accountId}/","eventSourceUrl":"https://api.fastmail.com/jmap/eventsource/","state":"0"}"#.as_bytes().to_vec()
+            }
+            HttpMethod::Post => FASTMAIL_UNKNOWN_METHOD_RESPONSE.as_bytes().to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn is_unknown_method_identifies_unknown_method_error() {
+    let err = Error::Method(jmap_proto::error::MethodError::new(
+        jmap_proto::error::method::UNKNOWN_METHOD,
+    ));
+    assert!(err.is_unknown_method());
+
+    let other = Error::Method(jmap_proto::error::MethodError::new("invalidArguments"));
+    assert!(!other.is_unknown_method());
+}
+
+#[test]
+fn participant_identities_degrades_cleanly_on_unknown_method() {
+    let client = Client::builder()
+        .transport(MockFastmailParticipantIdentityTransport)
+        .connect("https://api.fastmail.com", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = jmap_proto::Id::new("acc1");
+    let identities = client
+        .participant_identities(&account_id)
+        .expect("participant_identities must degrade cleanly to empty list on unknownMethod");
+    assert!(identities.is_empty());
+}

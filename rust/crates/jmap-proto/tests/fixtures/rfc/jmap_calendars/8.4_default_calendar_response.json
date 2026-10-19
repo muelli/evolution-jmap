@@ -1,4 +1,4 @@
-// Source: draft-ietf-jmap-calendars-32 §8.4 (Figure 17: "methodResponses" Property of a JMAP Response), October 2026
+// Source: draft-ietf-jmap-calendars-33 §8.4 (Figure 17: "methodResponses" Property of a JMAP Response), October 2026
 [
   [
     "Calendar/set",

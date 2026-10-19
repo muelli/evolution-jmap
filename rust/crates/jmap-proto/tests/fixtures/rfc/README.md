@@ -19,15 +19,15 @@ themselves send.
 | `rfc9610/` | RFC 9610, JMAP for Contacts | December 2024 |
 | `rfc9553/` | RFC 9553, JSContact | May 2024 |
 | `rfc8984/` | RFC 8984, JSCalendar | July 2021 |
-| `jmap_calendars/` | draft-ietf-jmap-calendars-32, JMAP for Calendars | 5 October 2026 |
+| `jmap_calendars/` | draft-ietf-jmap-calendars-33, JMAP for Calendars | 14 October 2026 |
 | `rfc9425/` | RFC 9425, JMAP for Quotas | June 2023 |
 | `rfc9670/` | RFC 9670, JMAP Sharing (principals) | November 2024 |
 | `rfc9661/` | RFC 9661, JMAP for Sieve Scripts | September 2024 |
 | `rfc9404/` | RFC 9404, JMAP Blob Management | August 2023 |
 
-The calendars fixtures come from draft -32. `jmap_proto::calendars` cites draft
--28 for its property names. Draft -28 and draft -32 define the same properties
-and the same section structure. Only the example values changed. The -32
+The calendars fixtures come from draft -33. `jmap_proto::calendars` cites draft
+-28 for its property names. Draft -28 and draft -33 define the same properties
+and the same section structure. Only the example values changed. The -33
 examples therefore check that model.
 
 ## How they differ from the specification text
@@ -318,7 +318,7 @@ RFC 8984 errata:
 2. **RFC 8984 §5.3.1 Group `entries` array representation**:
    RFC 8984 §5.3.1 defines `entries: (Event|Task)[]` as an array of JSCalendar objects. `CalendarGroup.entries` in `calendars.rs` is the untagged enum `GroupEntries`. It accepts that array and also a map.
 
-## 6. draft-ietf-jmap-calendars-32: JMAP for Calendars (5 October 2026)
+## 6. draft-ietf-jmap-calendars-33: JMAP for Calendars (14 October 2026)
 
 draft-ietf-jmap-calendars defines the data model and the methods to synchronize calendar objects and to manage calendars through JMAP.
 

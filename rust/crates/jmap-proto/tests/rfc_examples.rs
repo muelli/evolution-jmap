@@ -1903,14 +1903,14 @@ fn rfc8984_sec_6_10_recurring_event_participants() {
 }
 
 // ===========================================================================
-// draft-ietf-jmap-calendars (October 2026 / draft-32)
+// draft-ietf-jmap-calendars (October 2026 / draft-33)
 // ===========================================================================
 
 #[test]
 fn jmap_calendars_sec_5_9_1_calendar_event() {
     let (note, event, _) =
         load_rfc_fixture::<CalendarEvent>("jmap_calendars/5.9.1_calendar_event.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&event);
     assert_eq!(event.id.as_ref().map(|id| id.as_str()), Some("123"));
     assert_eq!(event.title.as_deref(), Some("FooBar team meeting"));
@@ -1922,7 +1922,7 @@ fn jmap_calendars_sec_5_9_1_calendar_event() {
 fn jmap_calendars_sec_5_9_1_patch_zoe_decline() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_zoe_decline.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -1932,7 +1932,7 @@ fn jmap_calendars_sec_5_9_1_patch_zoe_decline() {
 fn jmap_calendars_sec_5_9_1_recurrence_overrides() {
     let (note, event, _) =
         load_rfc_fixture::<CalendarEvent>("jmap_calendars/5.9.1_recurrence_overrides.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&event);
     assert!(event.recurrence_overrides.is_some());
 }
@@ -1941,7 +1941,7 @@ fn jmap_calendars_sec_5_9_1_recurrence_overrides() {
 fn jmap_calendars_sec_5_9_1_patch_tom_restore() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_tom_restore.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -1951,7 +1951,7 @@ fn jmap_calendars_sec_5_9_1_patch_tom_restore() {
 fn jmap_calendars_sec_5_9_1_patch_invalid_remove() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_invalid_remove.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -1961,7 +1961,7 @@ fn jmap_calendars_sec_5_9_1_patch_invalid_remove() {
 fn jmap_calendars_sec_5_9_1_patch_tom_remove_instance() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/5.9.1_patch_tom_remove_instance.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §5.9.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §5.9.1"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -1971,7 +1971,7 @@ fn jmap_calendars_sec_5_9_1_patch_tom_remove_instance() {
 fn jmap_calendars_sec_8_1_initial_data_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.1_initial_data_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.1"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 4);
     assert_eq!(calls[0].name, "Calendar/get");
@@ -1984,7 +1984,7 @@ fn jmap_calendars_sec_8_1_initial_data_request() {
 fn jmap_calendars_sec_8_1_initial_data_response() {
     let (note, responses, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.1_initial_data_response.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.1"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.1"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 4);
     assert_eq!(responses[0].name, "Calendar/get");
@@ -1997,7 +1997,7 @@ fn jmap_calendars_sec_8_1_initial_data_response() {
 fn jmap_calendars_sec_8_2_create_event_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.2_create_event_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.2"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.2"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -2013,7 +2013,7 @@ fn jmap_calendars_sec_8_2_create_event_request() {
 fn jmap_calendars_sec_8_2_create_event_response() {
     let (note, responses, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.2_create_event_response.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.2"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.2"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/set");
@@ -2032,7 +2032,7 @@ fn jmap_calendars_sec_8_2_create_event_response() {
 fn jmap_calendars_sec_8_3_push_alert_notification() {
     let (note, alert, _) =
         load_rfc_fixture::<CalendarAlert>("jmap_calendars/8.3_push_alert_notification.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.3"));
     assert_roundtrip(&alert);
     assert_eq!(alert.account_id.as_str(), "a0x9");
     assert_eq!(
@@ -2049,7 +2049,7 @@ fn jmap_calendars_sec_8_3_push_alert_notification() {
 fn jmap_calendars_sec_8_3_get_event_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_get_event_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.3"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/get");
@@ -2066,7 +2066,7 @@ fn jmap_calendars_sec_8_3_get_event_request() {
 fn jmap_calendars_sec_8_3_get_event_response() {
     let (note, responses, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_get_event_response.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.3"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/get");
@@ -2084,7 +2084,7 @@ fn jmap_calendars_sec_8_3_get_event_response() {
 fn jmap_calendars_sec_8_3_snooze_alert_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.3_snooze_alert_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.3"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.3"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/set");
@@ -2094,7 +2094,7 @@ fn jmap_calendars_sec_8_3_snooze_alert_request() {
 fn jmap_calendars_sec_8_4_default_calendar_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.4_default_calendar_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.4"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.4"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "Calendar/set");
@@ -2111,7 +2111,7 @@ fn jmap_calendars_sec_8_4_default_calendar_request() {
 fn jmap_calendars_sec_8_4_default_calendar_response() {
     let (note, responses, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.4_default_calendar_response.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.4"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.4"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "Calendar/set");
@@ -2125,7 +2125,7 @@ fn jmap_calendars_sec_8_4_default_calendar_response() {
 fn jmap_calendars_sec_8_5_parse_ical_request() {
     let (note, calls, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.5_parse_ical_request.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.5"));
     assert_roundtrip(&calls);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "CalendarEvent/parse");
@@ -2142,7 +2142,7 @@ fn jmap_calendars_sec_8_5_parse_ical_request() {
 fn jmap_calendars_sec_8_5_parse_ical_parsed_response() {
     let (note, responses, _) =
         load_rfc_fixture::<Vec<Invocation>>("jmap_calendars/8.5_parse_ical_parsed_response.json");
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.5"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/parse");
@@ -2153,7 +2153,7 @@ fn jmap_calendars_sec_8_5_parse_ical_not_found_response() {
     let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>(
         "jmap_calendars/8.5_parse_ical_not_found_response.json",
     );
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.5"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/parse");
@@ -2164,7 +2164,7 @@ fn jmap_calendars_sec_8_5_parse_ical_not_parsable_response() {
     let (note, responses, _) = load_rfc_fixture::<Vec<Invocation>>(
         "jmap_calendars/8.5_parse_ical_not_parsable_response.json",
     );
-    assert!(note.contains("draft-ietf-jmap-calendars-32 §8.5"));
+    assert!(note.contains("draft-ietf-jmap-calendars-33 §8.5"));
     assert_roundtrip(&responses);
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].name, "CalendarEvent/parse");
