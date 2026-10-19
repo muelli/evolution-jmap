@@ -64,3 +64,23 @@ under a sanitizer or leak checker (`ci/checks.sh` has none) or as
 UB-dependent heap corruption that may or may not crash a given run. Pinning
 this needs memory instrumentation this project does not have, not a
 better test of this file's logic.
+
+## `src/subclass.rs`
+
+`ObjectSubclass::interfaces`'s default body survives replaced with `vec![]`.
+The default already is `Vec::new()`, which `vec![]` builds too: the two
+expressions construct the same empty `Vec`. No test can tell them apart
+because there is nothing to tell apart.
+
+`ObjectSubclass::class_init_types`'s default body survives replaced with
+`vec![]` and with `vec![Default::default()]` (a one-element vec holding a
+`GType` of 0). The default is `Vec::new()`, so the first is the same
+equivalence as `interfaces` above. The second differs in value but not in
+effect: `register`'s doc comment states the contract this type exists
+under, "the list is the accessors' *effect*, not their values", and
+`register` itself only ever binds the call to `_class_init_types`, an
+underscore-prefixed binding it never reads. A type that needs a real
+dependency registered overrides this method to call the dependency's own
+`register_static` for the side effect (`Declaring` in this file's tests);
+the default is only reached by a type with no such dependency, for which
+one dummy `GType` in an otherwise-unread vec changes nothing observable.
