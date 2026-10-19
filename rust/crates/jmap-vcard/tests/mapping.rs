@@ -22651,3 +22651,51 @@ fn sort_as_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn note_metadata_parameters_are_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Note Metadata Probe\r\n",
+        "NOTE;ALTID=1;LANGUAGE=en;AUTHOR=\"mailto:author@example.test\";AUTHOR-NAME=\"Author Example\";CREATED=20221123T150132Z:Probe note text\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse NOTE metadata profile probe");
+    let notes = parsed.notes.as_ref().expect("notes map");
+    assert_eq!(notes.len(), 1, "one NOTE line must remain mapped");
+
+    let note = notes.get("n1").expect("first note entry");
+    assert_eq!(note.note, "Probe note text");
+    assert!(
+        note.author.is_none(),
+        "profile does not retain RFC 9555 AUTHOR metadata on NOTE"
+    );
+    assert!(
+        note.created.is_none(),
+        "profile does not retain RFC 9555 CREATED metadata on NOTE"
+    );
+    assert!(
+        note.extra.is_empty(),
+        "profile does not retain RFC 9555 NOTE metadata parameters"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let note_line = line(&emitted, "NOTE;");
+    assert!(note_line.contains("X-JMAP-KEY=n1"));
+    assert!(note_line.ends_with(":Probe note text"));
+    assert!(
+        !emitted.contains("AUTHOR=")
+            && !emitted.contains("AUTHOR-NAME=")
+            && !emitted.contains("CREATED=")
+            && !emitted.contains("ALTID=")
+            && !emitted.contains("LANGUAGE="),
+        "non-projected NOTE metadata parameters must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized NOTE metadata profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
