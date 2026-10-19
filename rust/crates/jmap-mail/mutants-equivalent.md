@@ -97,3 +97,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
   observable and the mutant always reports MISSED, regardless of test
   coverage. Nothing here is fixable by a test until an EDS exposing the
   marker symbol is the one being built against; re-check then.
+
+## `src/manage.rs`
+
+- `crates/jmap-mail/src/manage.rs:150:5`, `:171:5`, `:201:5`
+  (`create_folder`, `delete_folder`, `rename_folder`), all `replace ...
+  with Ok(Default::default())`. Does not compile: `FolderInfo`
+  (`jmap-mail-sync`'s `folder.rs`) derives `Debug, Clone, PartialEq, Eq`
+  but not `Default`, the same pattern as this crate's other
+  `Ok(Default::default())`/`Default::default()` mutants. Confirmed with
+  `cargo check -p jmap-mail`.
