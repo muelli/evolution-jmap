@@ -222,7 +222,11 @@ pub unsafe fn rebase_urls(source: *mut ESource) -> bool {
 mod tests {
     use std::ffi::CString;
 
-    use eds_sys::{e_source_get_extension, e_source_new_with_uid};
+    use eds_sys::{
+        e_source_get_extension, e_source_new_with_uid, e_source_parameter_to_key,
+        e_source_to_string,
+    };
+    use glib_sys::g_free;
     use gobject_sys::{g_object_set_property, g_object_unref, g_value_init, g_value_unset};
 
     use super::*;
@@ -259,6 +263,20 @@ mod tests {
             }
             self
         }
+
+        /// The source as EDS itself would write it to disk: the `.source`
+        /// keyfile an Evolution restart reads back.
+        fn serialised(&self) -> String {
+            // SAFETY: a live source; `e_source_to_string` is `(transfer
+            // full)`, and the result is NUL-terminated, read and freed here.
+            unsafe {
+                let text = e_source_to_string(self.0, ptr::null_mut());
+                assert!(!text.is_null(), "e_source_to_string returned NULL");
+                let owned = CStr::from_ptr(text).to_string_lossy().into_owned();
+                g_free(text.cast());
+                owned
+            }
+        }
     }
 
     impl Drop for TestSource {
@@ -278,6 +296,36 @@ mod tests {
     fn a_source_with_rebase_urls_true_rebases() {
         let source = TestSource::new().set(true);
         assert!(unsafe { rebase_urls(source.0) });
+    }
+
+    #[test]
+    fn rebase_urls_true_persists_into_the_keyfile_an_evolution_restart_reads_back() {
+        // `rebase_urls` only means something across restarts if the flag it
+        // reads actually reaches the account's `.source` file: a property
+        // without `E_SOURCE_PARAM_SETTING` would still pass every other test
+        // here while silently resetting to `false` on every boot.
+        let source = TestSource::new().set(true);
+
+        let text = source.serialised();
+
+        let group = format!("[{}]", EXTENSION_NAME.to_string_lossy());
+        assert!(
+            text.contains(&group),
+            "the extension wrote no {group} group into the keyfile:\n{text}"
+        );
+        // SAFETY: a NUL-terminated property name; the result is
+        // `(transfer full)`.
+        let key = unsafe {
+            let raw = e_source_parameter_to_key(PROPERTY_NAME.as_ptr());
+            assert!(!raw.is_null(), "e_source_parameter_to_key returned NULL");
+            let key = CStr::from_ptr(raw).to_string_lossy().into_owned();
+            g_free(raw.cast());
+            key
+        };
+        assert!(
+            text.contains(&format!("{key}=true")),
+            "{key} did not persist into the keyfile:\n{text}"
+        );
     }
 
     #[test]
