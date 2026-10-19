@@ -85,6 +85,25 @@ dependency registered overrides this method to call the dependency's own
 the default is only reached by a type with no such dependency, for which
 one dummy `GType` in an otherwise-unread vec changes nothing observable.
 
+## `src/i18n.rs`
+
+Three mutants in `placeholder` time out rather than fail cleanly: the whole
+body replaced with `Some((1, 0))`, `end += 1` replaced with `end *= 1`, and
+`end + 2` replaced with `end - 2`. Each makes `substitute`'s loop advance
+`rest` by zero bytes (or not at all) on every pass over a `%`, so the scan
+over the template never terminates. `cargo-mutants` reports these as
+`TIMEOUT`, not `MISSED`: the mutant does not pass silently, the test run is
+killed because the behaviour diverged so badly it hung. No action needed
+beyond this note; the two other `placeholder` mutants the same run first
+found (`||` turned into `&&`, and `end + 2` turned into `end * 2`) were real
+gaps and are now caught by
+`jmap-backend-core::i18n::tests::digits_without_a_dollar_s_suffix_are_not_a_placeholder`
+and `a_valid_placeholder_gives_its_position_and_byte_length`.
+
+`N_`'s body survives replaced with `Box::leak(Box::new(Default::default()))`
+only as an `Unviable` mutant: `&CStr` has no `Default`, so it does not
+compile. No action needed.
+
 ## `src/resolver_thread.rs`
 
 `lookup_first_service_target`'s body survives replaced with `None`, and the
