@@ -184,3 +184,15 @@ once `jmap-functional` grows a real-`EMailSession` proof for the transport's
 send-retry path (there is one for the store's fetch path,
 `mail-stale-token.rs`, and none yet for a send), the same way the
 `eds_oauth2_dynamic` entry above is re-checked once that EDS symbol exists.
+
+## `src/connect.rs`
+
+- `crates/jmap-mail/src/connect.rs:204:9`, `:213:9`, `:241:9` (the three
+  `From` impls for `StoreError`), `:341:9` (`reclassify_oauth2_rejection`),
+  `:460:5` (`password_credentials`), `:473:5` (`bearer_credentials`), and
+  `:499:5` (`open_mail`), all `replace ... with Default::default()` (or
+  `Ok(Default::default())`). Does not compile: neither `StoreError` nor
+  `jmap_client::Credentials` nor `jmap_mail_sync::MailSync` derives
+  `Default`, the same recurring pattern as this crate's other Default-mutant
+  entries. Confirmed with `cargo check -p jmap-mail` against each mutated
+  source.
