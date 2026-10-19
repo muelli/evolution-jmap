@@ -22601,3 +22601,53 @@ fn grouped_property_identity_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn sort_as_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Sort As Probe\r\n",
+        "N;SORT-AS=ProbeSort:Probe;Person;;;\r\n",
+        "ORG;SORT-AS=ProbeOrgSort,ProbeUnitSort:Probe Org;Research Unit\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse SORT-AS profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("Sort As Probe"));
+    assert!(
+        !name.extra.contains_key("sortAs"),
+        "profile does not retain RFC 9555 SORT-AS metadata on N"
+    );
+
+    let organizations = parsed.organizations.as_ref().expect("organizations map");
+    let organization = organizations.get("o1").expect("first organization");
+    assert_eq!(organization.name.as_deref(), Some("Probe Org"));
+    assert!(
+        organization.extra.is_empty(),
+        "profile does not retain RFC 9555 SORT-AS metadata on ORG"
+    );
+
+    let units = organization.units.as_ref().expect("org units");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].name, "Research Unit");
+    assert!(
+        units[0].extra.is_empty(),
+        "profile does not retain RFC 9555 SORT-AS metadata on ORG unit"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let org_line = line(&emitted, "ORG;");
+    assert!(org_line.contains("X-JMAP-KEY=o1"));
+    assert!(org_line.ends_with(":Probe Org;Research Unit"));
+    assert!(
+        !emitted.contains("SORT-AS="),
+        "non-projected SORT-AS parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized SORT-AS profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
