@@ -22467,3 +22467,35 @@ fn vcardparams_extension_parameters_drop_after_parse_and_emit_in_eds_profile() {
     let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
     assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
 }
+
+#[test]
+fn vcardprops_extension_properties_drop_after_parse_and_emit_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Property Probe\r\n",
+        "item1.X-FOO;X-BAR=Hello:World!\r\n",
+        "EMAIL;TYPE=WORK:property@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(source).expect("parse extension-property profile probe");
+    let emails = card.emails.as_ref().expect("emails map");
+    assert_eq!(emails["e1"].address, "property@example.test");
+    assert!(
+        card.extra.is_empty(),
+        "profile does not retain RFC 9555 vCardProps metadata"
+    );
+
+    let emitted = card_to_vcard(&card);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK"));
+    assert!(email_line.ends_with(":property@example.test"));
+    assert!(
+        !emitted.contains("item1.X-FOO") && !emitted.contains("X-BAR=Hello"),
+        "non-projected extension properties must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
+}

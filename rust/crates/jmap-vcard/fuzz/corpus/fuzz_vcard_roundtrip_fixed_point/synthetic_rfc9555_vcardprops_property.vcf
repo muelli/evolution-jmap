@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:vCardProps Section Probe
+item1.X-FOO;X-BAR=Hello:World!
+EMAIL;TYPE=WORK:property@example.test
+END:VCARD
