@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-18 11:03+0000\n"
+"POT-Creation-Date: 2026-10-19 20:57+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,7 +18,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 
 #. TRANSLATORS: shown when a contact could not be saved because of its picture. %1$s is the picture's size, such as "1.2 MB".
-#: rust/crates/jmap-backend-book/src/ops.rs:433
+#: rust/crates/jmap-backend-book/src/ops.rs:425
 #, c-format
 msgid ""
 "The server cannot store a contact with a picture this large (%1$s), so the "
@@ -26,14 +26,14 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:460
+#: rust/crates/jmap-backend-cal/src/ops.rs:454
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
 "not saved. Check that each guest has a valid email address."
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
-#: rust/crates/jmap-backend-cal/src/ops.rs:464
+#: rust/crates/jmap-backend-cal/src/ops.rs:458
 #, c-format
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
@@ -41,7 +41,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
-#: rust/crates/jmap-backend-cal/src/ops.rs:469
+#: rust/crates/jmap-backend-cal/src/ops.rs:463
 msgid ""
 "This server does not send meeting invitations itself, so the change was not "
 "saved. Turn off “Server handles meeting invitations” for this calendar, and "
@@ -49,7 +49,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:479
+#: rust/crates/jmap-backend-cal/src/ops.rs:473
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -59,7 +59,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:484
+#: rust/crates/jmap-backend-cal/src/ops.rs:478
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -478,7 +478,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
 #: rust/crates/jmap-ui/src/send_later/extension.rs:100
-#: rust/crates/jmap-ui/src/snooze/action.rs:79
+#: rust/crates/jmap-ui/src/snooze/action.rs:80
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
@@ -507,7 +507,7 @@ msgid "The chosen time is further ahead than the server accepts"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/send_later/extension.rs:109
-#: rust/crates/jmap-ui/src/snooze/action.rs:83
+#: rust/crates/jmap-ui/src/snooze/action.rs:84
 msgid "The local calendar could not name the chosen time"
 msgstr ""
 
@@ -582,46 +582,46 @@ msgid ""
 "%1$s)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:75
+#: rust/crates/jmap-ui/src/snooze/action.rs:76
 msgid "The folder does not belong to a JMAP account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:76
+#: rust/crates/jmap-ui/src/snooze/action.rs:77
 msgid "Checking whether the account’s server offers snooze…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:77
+#: rust/crates/jmap-ui/src/snooze/action.rs:78
 msgid "The account’s server does not offer snooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:80
+#: rust/crates/jmap-ui/src/snooze/action.rs:81
 msgid "The server hides the message until then and wakes it in the inbox"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/snooze/action.rs:82
+#: rust/crates/jmap-ui/src/snooze/action.rs:83
 #, c-format
 msgid "The message could not be snoozed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:134
+#: rust/crates/jmap-ui/src/snooze/action.rs:135
 msgid "For One _Hour"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:137
+#: rust/crates/jmap-ui/src/snooze/action.rs:138
 msgid "Until _Tomorrow Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:142
+#: rust/crates/jmap-ui/src/snooze/action.rs:143
 msgid "Until Next _Monday Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:212
-#: rust/crates/jmap-ui/src/snooze/action.rs:296
+#: rust/crates/jmap-ui/src/snooze/action.rs:213
+#: rust/crates/jmap-ui/src/snooze/action.rs:297
 msgid "S_nooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:698
+#: rust/crates/jmap-ui/src/snooze/action.rs:699
 msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
