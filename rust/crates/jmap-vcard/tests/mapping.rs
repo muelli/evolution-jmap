@@ -12488,6 +12488,78 @@ fn gramgender_and_pronouns_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
 }
 
 #[test]
+fn x_ablabel_group_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:x-ablabel-profile-boundary-1\r\n",
+        "FN:X-ABLabel Profile Boundary\r\n",
+        "item1.TEL:+1-555-0199\r\n",
+        "item1.X-ABLabel:Direct Line\r\n",
+        "item2.EMAIL:team@example.com\r\n",
+        "item2.X-ABLabel:Project Alias\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse X-ABLabel profile boundary card");
+
+    let phones = parsed.phones.as_ref().expect("phone map");
+    assert_eq!(phones.len(), 1, "one grouped phone must remain mapped");
+    let phone = phones.values().next().expect("grouped phone entry");
+    assert_eq!(phone.number, "+1-555-0199");
+    assert_eq!(phone.label(), Some("Direct Line"));
+
+    let emails = parsed.emails.as_ref().expect("email map");
+    assert_eq!(emails.len(), 1, "one grouped email must remain mapped");
+    let email = emails.values().next().expect("grouped email entry");
+    assert_eq!(email.address, "team@example.com");
+    assert_eq!(email.label(), Some("Project Alias"));
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("TEL;X-JMAP-KEY=p1:+1-555-0199"),
+        "Mapped TEL payload must survive"
+    );
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY=e1:team@example.com"),
+        "Mapped EMAIL payload must survive"
+    );
+    assert!(
+        !emitted.contains("X-ABLabel:") && !emitted.contains("X-ABLABEL:"),
+        "X-ABLabel annotations must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+
+    let reparsed_phone = reparsed
+        .phones
+        .as_ref()
+        .expect("reparsed phone map")
+        .values()
+        .next()
+        .expect("reparsed phone entry");
+    assert_eq!(
+        reparsed_phone.label(),
+        None,
+        "label metadata from grouped X-ABLabel does not survive vCard 3.0 profile export"
+    );
+    let reparsed_email = reparsed
+        .emails
+        .as_ref()
+        .expect("reparsed email map")
+        .values()
+        .next()
+        .expect("reparsed email entry");
+    assert_eq!(
+        reparsed_email.label(),
+        None,
+        "email label metadata from grouped X-ABLabel does not survive vCard 3.0 profile export"
+    );
+}
+
+#[test]
 fn geo_tz_lines_with_adr_stay_parse_safe_and_unmapped_in_eds_profile() {
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
