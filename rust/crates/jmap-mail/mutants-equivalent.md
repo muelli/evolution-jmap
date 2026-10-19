@@ -107,3 +107,80 @@ SPDX-License-Identifier: GPL-3.0-or-later
   but not `Default`, the same pattern as this crate's other
   `Ok(Default::default())`/`Default::default()` mutants. Confirmed with
   `cargo check -p jmap-mail`.
+
+## `src/transport.rs`
+
+Found scoped to `tests/transport.rs` alone, then re-checked against
+`tests/transport.rs` plus `tests/transport_stale_token.rs` together (the
+file this crate's convention usually runs mutants against is only the
+same-named test file, but `transport_stale_token.rs` exercises
+`refresh_credentials`/`inspect_connection` directly and the first pass's
+missed list was shorter once it was included). `replace
+JmapTransport::refresh_credentials -> bool with true` and `replace
+JmapTransport::inspect_connection -> Option<R> with None` were caught once
+`transport_stale_token.rs` ran; record this for whoever sweeps a file next
+whose behaviour a sibling `tests/*_stale_token.rs` or `tests/send_retry.rs`
+file also drives, so the mutants run is not scoped to the one file that
+shares its name.
+
+Seven mutants stay genuinely out of scope, all for one reason this crate
+already states twice: the OAuth 2.0 refresh and the `Connected` short-circuit
+only do anything once Camel has a real `CamelService`/`CamelSession`, which
+this crate's test doubles never build.
+
+- `crates/jmap-mail/src/transport.rs:268:9` (`service`), `replace ... with
+  None` and `replace ... with Some(Default::default())`. Every test that
+  reaches `refresh_credentials` uses `JmapTransport::detached()`
+  (`tests/transport_stale_token.rs`), whose real `service()` already answers
+  `None` the same way the first mutant does — there is no `CamelService` to
+  check the type of. A `common::Transport` instance does have one, but
+  nothing downstream of `service()` tells the two cases apart without
+  reaching a configured OAuth 2.0 account's token fetch (see the next
+  entries), so a test built only to make `service()` return `Some` would
+  prove nothing `is_connected`/`drop_connection`'s own tests do not already
+  cover.
+- `crates/jmap-mail/src/transport.rs:285:9` (`refresh_credentials`), `replace
+  ... with false` (`replace ... with true` is caught by
+  `transport_stale_token.rs`'s
+  `a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from`).
+  Every path this crate can drive without a real `CamelSession` already
+  returns `false` for real — no service, or a service whose settings do not
+  name OAuth 2.0 — so a mutant that forces `false` changes nothing
+  observable. Reaching the branch that would return `true` needs
+  `camel_session_get_oauth2_access_token_sync` to succeed, and that vfunc
+  slot is unimplemented on the plain `CamelSession` `tests/common` builds;
+  `tests/oauth2.rs`'s own module doc already states this exact limitation
+  for `oauth2::access_token`: only `EMailSession` fills the slot in, and
+  that is Evolution's own subclass, covered on the live-EDS side instead.
+- `crates/jmap-mail/src/transport.rs:295:12`, `delete !` (inverts `if
+  !uses_oauth2 { return false }`). Reaching this line at all needs a real
+  `service()` (see above); once reached, both the real code and the mutant
+  fall through to the same `camel_service_ref_session` call and the same
+  `oauth2::access_token` failure for the reason just given, so both answer
+  `false` and a test cannot tell them apart without the live `EMailSession`
+  neither this crate nor `jmap-functional` builds for the transport's send
+  path today (`jmap-functional`'s own stale-token coverage,
+  `mail-stale-token.rs`, is the store's fetch path, not a send).
+- `crates/jmap-mail/src/transport.rs:381:9` (`<impl Connected for
+  JmapTransport>::release_connection`), `replace ... with ()`. Only called
+  from `jmap_mail::service::disconnect_sync`, Camel's own `disconnect_sync`
+  vfunc body; every test for this file calls the inherent
+  `JmapTransport::drop_connection` directly rather than dispatching that
+  vfunc, because dispatching it for real needs the same `CamelSession` this
+  file's other entries do not have. `tests/service.rs`'s own module doc
+  states the identical limitation for the store's side of the same vfunc
+  pair: "what is testable without a `CamelSession`" stops at `authenticate`
+  and `report_authentication`, not `connect_sync`/`disconnect_sync`
+  themselves.
+- `crates/jmap-mail/src/transport.rs:385:9` (`<impl Connected for
+  JmapTransport>::holds_connection`), `replace ... with true` and `replace
+  ... with false`. Same as `release_connection`: only read from
+  `jmap_mail::service::connect_sync`'s own vfunc body (the short-circuit that
+  skips reconnecting an already-live service), which no test here dispatches
+  for the same `CamelSession` reason.
+
+None of the seven need a `mutants.out`/disk note beyond this file; re-check
+once `jmap-functional` grows a real-`EMailSession` proof for the transport's
+send-retry path (there is one for the store's fetch path,
+`mail-stale-token.rs`, and none yet for a send), the same way the
+`eds_oauth2_dynamic` entry above is re-checked once that EDS symbol exists.
