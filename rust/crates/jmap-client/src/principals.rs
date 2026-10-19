@@ -33,14 +33,35 @@ impl Client {
 
     /// Fetch principals by id (`Principal/get` with `ids`).
     ///
+    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
     /// When a server advertises an account ID for `currentUserPrincipalId`, `Principal/get` fails with `notFound`.
     /// In this case, the method falls back to resolving the owner principal by username or email.
     pub fn principal_get(&self, account_id: &Id, ids: &[Id]) -> Result<Vec<Principal>, Error> {
-        let request = GetRequest::ids(account_id.clone(), ids.to_vec());
-        let arguments = self.single_call(USING, "Principal/get", &request)?;
-        let response: GetResponse<Principal> = serde_json::from_value(arguments)?;
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(ids.len().max(1));
 
-        if ids.len() == 1 && response.list.is_empty() && response.not_found.contains(&ids[0]) {
+        let mut fetched = Vec::with_capacity(ids.len());
+        let mut not_found_list = Vec::new();
+        let mut rest = ids;
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+            let request = GetRequest::ids(account_id.clone(), chunk.to_vec());
+            let arguments = self.single_call(USING, "Principal/get", &request)?;
+            let response: GetResponse<Principal> = serde_json::from_value(arguments)?;
+            fetched.extend(response.list);
+            not_found_list.extend(response.not_found);
+            rest = remaining;
+            if rest.is_empty() {
+                break;
+            }
+        }
+
+        if ids.len() == 1 && fetched.is_empty() && not_found_list.contains(&ids[0]) {
             let requested_id = &ids[0];
             let advertised_id = self
                 .session()
@@ -62,7 +83,7 @@ impl Client {
             }
         }
 
-        Ok(response.list)
+        Ok(fetched)
     }
 
     /// Fetch a single principal by ID via `Principal/get`.

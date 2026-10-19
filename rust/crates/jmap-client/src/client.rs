@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{PoisonError, RwLock};
 use std::time::Duration;
 
-use jmap_proto::error::RequestError;
+use jmap_proto::error::{MethodError, RequestError, SetError};
+use jmap_proto::methods::{SetRequest, SetResponse};
 use jmap_proto::request::{Invocation, Request};
 use jmap_proto::response::Response;
 use jmap_proto::session::{self, Session};
@@ -75,6 +76,8 @@ pub struct ClientBuilder {
     cancel: Option<CancelFlag>,
     rebase_urls_to_origin: bool,
     resolver: Box<dyn Resolver>,
+    max_rate_limit_retries: u32,
+    max_retry_after: Duration,
 }
 
 impl std::fmt::Debug for ClientBuilder {
@@ -84,6 +87,8 @@ impl std::fmt::Debug for ClientBuilder {
             .field("connect_timeout", &self.connect_timeout)
             .field("read_timeout", &self.read_timeout)
             .field("rebase_urls_to_origin", &self.rebase_urls_to_origin)
+            .field("max_rate_limit_retries", &self.max_rate_limit_retries)
+            .field("max_retry_after", &self.max_retry_after)
             .finish_non_exhaustive()
     }
 }
@@ -98,6 +103,8 @@ impl Default for ClientBuilder {
             cancel: None,
             rebase_urls_to_origin: rebase_urls_from_env(),
             resolver: Box::new(NoSrvResolver),
+            max_rate_limit_retries: 3,
+            max_retry_after: Duration::from_secs(30),
         }
     }
 }
@@ -155,6 +162,22 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the maximum number of attempts for idempotent operations on rate limits (HTTP 429).
+    ///
+    /// Defaults to 3 attempts. Setting to 1 or 0 disables automatic retries.
+    pub fn max_rate_limit_retries(mut self, retries: u32) -> Self {
+        self.max_rate_limit_retries = retries;
+        self
+    }
+
+    /// Set the maximum backoff delay for rate limit retries.
+    ///
+    /// Defaults to 30 seconds.
+    pub fn max_retry_after(mut self, max: Duration) -> Self {
+        self.max_retry_after = max;
+        self
+    }
+
     /// Fetch the session object from `origin` (scheme + host + port) and
     /// return a ready client.
     pub fn connect(self, origin: &str, credentials: Credentials) -> Result<Client, Error> {
@@ -191,6 +214,8 @@ impl ClientBuilder {
             next_call_id: AtomicU64::new(0),
             rebase_origin: self.rebase_urls_to_origin.then_some(origin),
             rebase_note: None,
+            max_rate_limit_retries: self.max_rate_limit_retries,
+            max_retry_after: self.max_retry_after,
         };
         client.refresh_session()?;
         Ok(client)
@@ -219,6 +244,8 @@ pub struct Client {
     rebase_origin: Option<String>,
     // Records download URL origin rewrites.
     rebase_note: Option<String>,
+    pub(crate) max_rate_limit_retries: u32,
+    pub(crate) max_retry_after: Duration,
 }
 
 impl std::fmt::Debug for Client {
@@ -258,7 +285,14 @@ impl Client {
 
     /// Refresh the session resource (RFC 8620 §2).
     pub fn refresh_session(&mut self) -> Result<(), Error> {
-        let response = self.execute(HttpMethod::Get, &self.session_url.clone(), None)?;
+        let response = self.execute_idempotent_within(
+            HttpMethod::Get,
+            &self.session_url.clone(),
+            None,
+            None,
+            "application/json",
+            limits::MAX_API_RESPONSE_BYTES,
+        )?;
         let mut session: Session = serde_json::from_slice(&response.body)?;
         if let Some(origin) = &self.rebase_origin {
             let advertised_download_origin =
@@ -329,9 +363,101 @@ impl Client {
         format!("c{}", self.next_call_id.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Return true if the method name represents an idempotent operation.
+    pub fn is_method_idempotent(method: &str) -> bool {
+        let name = method.rsplit_once('/').map(|(_, m)| m).unwrap_or(method);
+        matches!(
+            name,
+            "get" | "query" | "changes" | "queryChanges" | "echo" | "getAvailability"
+        )
+    }
+
+    /// Return true if every method call in the request is idempotent.
+    pub fn is_request_idempotent(request: &Request) -> bool {
+        !request.method_calls.is_empty()
+            && request
+                .method_calls
+                .iter()
+                .all(|call| Self::is_method_idempotent(&call.name))
+    }
+
+    /// Compute the backoff delay for an attempt, capped to `max_retry_after`.
+    pub(crate) fn compute_backoff(&self, retry_after: Option<Duration>, attempt: u32) -> Duration {
+        if let Some(duration) = retry_after {
+            return duration.min(self.max_retry_after);
+        }
+        let factor = 1u64.checked_shl(attempt.saturating_sub(1)).unwrap_or(8);
+        let millis = 500 * factor;
+        Duration::from_millis(millis).min(self.max_retry_after)
+    }
+
+    /// Sleep for `duration` in small intervals while checking the cancellation flag.
+    pub(crate) fn sleep_with_cancel(&self, duration: Duration) -> Result<(), Error> {
+        let cancel = self.cancel_for_request();
+        if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
+            return Err(Error::Cancelled);
+        }
+        if duration.is_zero() {
+            return Ok(());
+        }
+        let start = std::time::Instant::now();
+        while start.elapsed() < duration {
+            if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
+                return Err(Error::Cancelled);
+            }
+            let remaining = duration.saturating_sub(start.elapsed());
+            let chunk = remaining.min(Duration::from_millis(20));
+            std::thread::sleep(chunk);
+        }
+        if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
+            return Err(Error::Cancelled);
+        }
+        Ok(())
+    }
+
+    /// Execute an idempotent HTTP request with automatic rate limit backoff and retry.
+    pub(crate) fn execute_idempotent_within(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        body: Option<&[u8]>,
+        content_type: Option<&str>,
+        accept: &str,
+        max_response_bytes: u64,
+    ) -> Result<HttpResponse, Error> {
+        let max_attempts = self.max_rate_limit_retries.max(1);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.execute_within(method, url, body, content_type, accept, max_response_bytes) {
+                Ok(response) => return Ok(response),
+                Err(Error::Http {
+                    status: 429,
+                    problem,
+                }) => {
+                    let retry_after = crate::transport::observed_retry_after()
+                        .or_else(|| problem.as_ref().and_then(extract_problem_retry_after));
+                    if attempt < max_attempts {
+                        let backoff = self.compute_backoff(retry_after, attempt);
+                        tracing::debug!(attempt, ?backoff, "backing off after rate limit");
+                        self.sleep_with_cancel(backoff)?;
+                        continue;
+                    }
+                    return Err(Error::RateLimited {
+                        retry_after,
+                        method: None,
+                        problem,
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     /// Send a request envelope to the API endpoint (RFC 8620 §3).
     ///
     /// Rejects requests that exceed `maxSizeRequest` with [`Error::RequestTooLarge`].
+    /// Automatically retries idempotent calls on HTTP 429 and limit errors.
     pub fn api_call(&self, request: &Request) -> Result<Response, Error> {
         let api_url = self.session().api_url.clone();
         let body = serde_json::to_vec(request)?;
@@ -343,11 +469,52 @@ impl Client {
                 limit,
             });
         }
-        // Trace request and response bodies when enabled.
         tracing::trace!(body = %String::from_utf8_lossy(&body), "JMAP request body");
-        let response = self.execute(HttpMethod::Post, &api_url, Some(&body))?;
-        tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
-        Ok(serde_json::from_slice(&response.body)?)
+
+        let is_idempotent = Self::is_request_idempotent(request);
+        let max_attempts = if is_idempotent {
+            self.max_rate_limit_retries.max(1)
+        } else {
+            1
+        };
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.execute(HttpMethod::Post, &api_url, Some(&body)) {
+                Ok(response) => {
+                    tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
+                    return Ok(serde_json::from_slice(&response.body)?);
+                }
+                Err(Error::Http {
+                    status: 429,
+                    problem,
+                }) => {
+                    let retry_after = crate::transport::observed_retry_after()
+                        .or_else(|| problem.as_ref().and_then(extract_problem_retry_after));
+
+                    if is_idempotent && attempt < max_attempts {
+                        let backoff = self.compute_backoff(retry_after, attempt);
+                        tracing::debug!(attempt, ?backoff, "backing off after rate limit error");
+                        self.sleep_with_cancel(backoff)?;
+                        continue;
+                    }
+
+                    let non_idempotent_method = request
+                        .method_calls
+                        .iter()
+                        .find(|c| !Self::is_method_idempotent(&c.name))
+                        .map(|c| c.name.clone());
+
+                    return Err(Error::RateLimited {
+                        retry_after,
+                        method: non_idempotent_method,
+                        problem,
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     /// Execute a single method call and return the response arguments.
@@ -373,13 +540,53 @@ impl Client {
         arguments: &impl serde::Serialize,
         call_id: &str,
     ) -> Result<Value, Error> {
-        let request = Request::new(using.iter().copied()).call(method, arguments, call_id)?;
-        let response = self.api_call(&request)?;
-        let invocation = response
-            .responses_for(call_id)
-            .next()
-            .ok_or_else(|| Error::Protocol(format!("no response for call id {call_id}")))?;
-        Self::unwrap_invocation(invocation, method)
+        let is_idempotent = Self::is_method_idempotent(method);
+        let max_attempts = if is_idempotent {
+            self.max_rate_limit_retries.max(1)
+        } else {
+            1
+        };
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let request = Request::new(using.iter().copied()).call(method, arguments, call_id)?;
+            let response = self.api_call(&request)?;
+            let invocation = response
+                .responses_for(call_id)
+                .next()
+                .ok_or_else(|| Error::Protocol(format!("no response for call id {call_id}")))?;
+
+            if invocation.is_error() {
+                let method_error: MethodError = invocation.parse()?;
+                if method_error.error_type == "limit" {
+                    let retry_after = crate::transport::observed_retry_after()
+                        .or_else(|| extract_method_retry_after(&method_error));
+
+                    if is_idempotent && attempt < max_attempts {
+                        let backoff = self.compute_backoff(retry_after, attempt);
+                        tracing::debug!(attempt, ?backoff, "backing off after method limit error");
+                        self.sleep_with_cancel(backoff)?;
+                        continue;
+                    }
+
+                    return Err(Error::RateLimited {
+                        retry_after,
+                        method: Some(method.to_string()),
+                        problem: None,
+                    });
+                }
+                return Err(Error::Method(method_error));
+            }
+
+            if invocation.name != method {
+                return Err(Error::Protocol(format!(
+                    "expected response to {method}, got {}",
+                    invocation.name
+                )));
+            }
+            return Ok(invocation.arguments.clone());
+        }
     }
 
     /// Check if the server permits `calls` method calls in one request.
@@ -389,6 +596,27 @@ impl Client {
         self.session()
             .max_calls_in_request()
             .is_none_or(|limit| calls <= limit)
+    }
+
+    /// Execute a `/set` method call, splitting requests across `maxObjectsInSet`.
+    pub(crate) fn set_chunked<T>(
+        &self,
+        using: &[&str],
+        method: &str,
+        request: &SetRequest<T>,
+    ) -> Result<SetResponse<T>, Error>
+    where
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let limit = self
+            .session()
+            .max_objects_in_set()
+            .and_then(|l| usize::try_from(l).ok());
+
+        crate::set::execute_set_chunked(request, limit, |chunk_req| {
+            let arguments = self.single_call(using, method, chunk_req)?;
+            Ok(serde_json::from_value(arguments)?)
+        })
     }
 
     /// Extract arguments from an invocation, mapping `error` responses to
@@ -550,6 +778,45 @@ impl Client {
             ),
         )
     }
+}
+
+/// Extract the `Retry-After` duration from a problem error when present.
+pub(crate) fn extract_problem_retry_after(problem: &RequestError) -> Option<Duration> {
+    problem
+        .extra
+        .get("retryAfter")
+        .or_else(|| problem.extra.get("retry_after"))
+        .and_then(|val| {
+            val.as_u64()
+                .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
+        .map(Duration::from_secs)
+}
+
+/// Extract the `Retry-After` duration from a method error when present.
+pub(crate) fn extract_method_retry_after(method_error: &MethodError) -> Option<Duration> {
+    method_error
+        .extra
+        .get("retryAfter")
+        .or_else(|| method_error.extra.get("retry_after"))
+        .and_then(|val| {
+            val.as_u64()
+                .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
+        .map(Duration::from_secs)
+}
+
+/// Extract the `Retry-After` duration from a set error when present.
+pub(crate) fn extract_set_error_retry_after(set_error: &SetError) -> Option<Duration> {
+    set_error
+        .extra
+        .get("retryAfter")
+        .or_else(|| set_error.extra.get("retry_after"))
+        .and_then(|val| {
+            val.as_u64()
+                .or_else(|| val.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
+        .map(Duration::from_secs)
 }
 
 #[cfg(test)]

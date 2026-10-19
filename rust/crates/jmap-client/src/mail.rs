@@ -213,10 +213,12 @@ impl Client {
         ))
     }
 
-    fn mailbox_set(&self, request: &SetRequest<Mailbox>) -> Result<SetResponse<Mailbox>, Error> {
-        let arguments =
-            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Mailbox/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+    /// Modify mailboxes (`Mailbox/set`, RFC 8621 Section 2.5).
+    pub fn mailbox_set(
+        &self,
+        request: &SetRequest<Mailbox>,
+    ) -> Result<SetResponse<Mailbox>, Error> {
+        self.set_chunked(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Mailbox/set", request)
     }
 
     /// Fetch the account vacation responder settings (RFC 8621 Section 8.1).
@@ -470,6 +472,11 @@ impl Client {
         Ok(in_query_order(&query_response.ids, emails))
     }
 
+    /// Modify emails (`Email/set`, RFC 8621 Section 4.6).
+    pub fn email_set(&self, request: &SetRequest<Email>) -> Result<SetResponse<Email>, Error> {
+        self.set_chunked(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", request)
+    }
+
     /// Apply a patch to one message (`Email/set` with a single `update`).
     ///
     /// A `PatchObject` (RFC 8620 §5.3), not a whole `Email`: mutable fields
@@ -479,9 +486,7 @@ impl Client {
     /// `notFound` if the message was destroyed before update.
     pub fn email_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<Email>::new(account_id.clone()).update(id.clone(), patch);
-        let arguments =
-            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", &request)?;
-        let response: SetResponse<Email> = serde_json::from_value(arguments)?;
+        let response = self.email_set(&request)?;
 
         if response
             .updated
@@ -511,9 +516,7 @@ impl Client {
     /// [`Error::Set`].
     pub fn email_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<Email>::new(account_id.clone()).destroy(id.clone());
-        let arguments =
-            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", &request)?;
-        let response: SetResponse<Email> = serde_json::from_value(arguments)?;
+        let response = self.email_set(&request)?;
 
         if response
             .destroyed
@@ -569,23 +572,43 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Fetch Threads by id (`Thread/get`, RFC 8621 §3.1). Ids come from
-    /// `Email::thread_id`; an id naming no thread is silently absent from the
-    /// result, the same as [`Client::email_get`] treats a missing `Email` id.
+    /// Fetch Threads by id (`Thread/get`, RFC 8621 §3.1).
+    ///
+    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// An ID naming no thread is silently absent from the result.
     pub fn thread_get(
         &self,
         account_id: &Id,
         ids: impl IntoIterator<Item = impl Into<Id>>,
     ) -> Result<Vec<Thread>, Error> {
-        let request = GetRequest::ids(account_id.clone(), ids);
-        let arguments =
-            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
-        let response: GetResponse<Thread> = serde_json::from_value(arguments)?;
-        Ok(response.list)
+        let all_ids: Vec<Id> = ids.into_iter().map(Into::into).collect();
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(all_ids.len().max(1));
+
+        let mut fetched = Vec::with_capacity(all_ids.len());
+        let mut rest = all_ids.as_slice();
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+            let request = GetRequest::ids(account_id.clone(), chunk.iter().cloned());
+            let arguments =
+                self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
+            let response: GetResponse<Thread> = serde_json::from_value(arguments)?;
+            fetched.extend(response.list);
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(fetched);
+            }
+        }
     }
 
     /// Fetch search snippets for email IDs (`SearchSnippet/get`, RFC 8621 Section 5.1).
     ///
+    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
     /// Snippets contain matching text wrapped in HTML `<mark>` tags.
     /// `filter` specifies the query criteria used to locate matching text.
     /// Omitted or invalid IDs do not produce snippet entries.
@@ -595,17 +618,37 @@ impl Client {
         email_ids: impl IntoIterator<Item = impl Into<Id>>,
         filter: Option<impl Into<Filter<EmailQueryFilter>>>,
     ) -> Result<Vec<SearchSnippet>, Error> {
-        let mut request = SearchSnippetGetRequest::new(account_id.clone(), email_ids);
-        if let Some(filter) = filter {
-            request = request.with_filter(filter);
+        let all_ids: Vec<Id> = email_ids.into_iter().map(Into::into).collect();
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(all_ids.len().max(1));
+
+        let filter_val: Option<Filter<EmailQueryFilter>> = filter.map(Into::into);
+        let mut fetched = Vec::with_capacity(all_ids.len());
+        let mut rest = all_ids.as_slice();
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+            let mut request =
+                SearchSnippetGetRequest::new(account_id.clone(), chunk.iter().cloned());
+            if let Some(f) = &filter_val {
+                request = request.with_filter(f.clone());
+            }
+            let arguments = self.single_call(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "SearchSnippet/get",
+                &request,
+            )?;
+            let response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
+            fetched.extend(response.list);
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(fetched);
+            }
         }
-        let arguments = self.single_call(
-            &[CAPABILITY_CORE, CAPABILITY_MAIL],
-            "SearchSnippet/get",
-            &request,
-        )?;
-        let response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
-        Ok(response.list)
     }
 
     /// Fetch the account's sending identities (`Identity/get`).
@@ -826,21 +869,40 @@ impl Client {
     }
 
     /// Fetch EmailSubmissions by id (`EmailSubmission/get`, RFC 8621 §7.4).
-    /// An id naming no submission is silently absent from the result, the
-    /// same as [`Client::thread_get`] treats a missing `Thread` id.
+    ///
+    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// An ID naming no submission is silently absent from the result.
     pub fn email_submission_get(
         &self,
         account_id: &Id,
         ids: impl IntoIterator<Item = impl Into<Id>>,
     ) -> Result<Vec<EmailSubmission>, Error> {
-        let request = GetRequest::ids(account_id.clone(), ids);
-        let arguments = self.single_call(
-            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
-            "EmailSubmission/get",
-            &request,
-        )?;
-        let response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
-        Ok(response.list)
+        let all_ids: Vec<Id> = ids.into_iter().map(Into::into).collect();
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(all_ids.len().max(1));
+
+        let mut fetched = Vec::with_capacity(all_ids.len());
+        let mut rest = all_ids.as_slice();
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+            let request = GetRequest::ids(account_id.clone(), chunk.iter().cloned());
+            let arguments = self.single_call(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+                "EmailSubmission/get",
+                &request,
+            )?;
+            let response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+            fetched.extend(response.list);
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(fetched);
+            }
+        }
     }
 
     /// Resolve submission ids matching `filter` (`EmailSubmission/query`, RFC
@@ -881,8 +943,30 @@ impl Client {
             .session()
             .upload_url
             .replace("{accountId}", &encode_template_value(account_id.as_str()));
-        let response =
-            self.execute_with_content_type(HttpMethod::Post, &url, Some(data), Some(content_type))?;
+        let response = match self.execute_with_content_type(
+            HttpMethod::Post,
+            &url,
+            Some(data),
+            Some(content_type),
+        ) {
+            Ok(response) => response,
+            Err(Error::Http {
+                status: 429,
+                problem,
+            }) => {
+                let retry_after = crate::transport::observed_retry_after().or_else(|| {
+                    problem
+                        .as_ref()
+                        .and_then(crate::client::extract_problem_retry_after)
+                });
+                return Err(Error::RateLimited {
+                    retry_after,
+                    method: Some("upload".to_string()),
+                    problem,
+                });
+            }
+            Err(err) => return Err(err),
+        };
         Ok(serde_json::from_slice(&response.body)?)
     }
 
@@ -920,7 +1004,8 @@ impl Client {
             .replace("{blobId}", &encode_template_value(blob_id.as_str()))
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
-        let response = self.execute_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
+        let response =
+            self.execute_idempotent_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
         if !crate::url::same_origin(&url, &response.final_url) {
             return Err(Error::CrossOriginRedirect {
                 requested: crate::url::origin_of(&url).into_owned(),

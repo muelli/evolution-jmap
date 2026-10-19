@@ -96,6 +96,7 @@ pub mod oauth;
 mod principals;
 mod quota;
 pub mod resolver;
+pub(crate) mod set;
 mod sieve;
 mod snooze;
 pub mod transport;

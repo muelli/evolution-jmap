@@ -82,9 +82,12 @@ impl Client {
         ))
     }
 
-    fn calendar_set(&self, request: &SetRequest<Calendar>) -> Result<SetResponse<Calendar>, Error> {
-        let arguments = self.single_call(USING, "Calendar/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+    /// Modify calendars (`Calendar/set`, draft §4.3).
+    pub fn calendar_set(
+        &self,
+        request: &SetRequest<Calendar>,
+    ) -> Result<SetResponse<Calendar>, Error> {
+        self.set_chunked(USING, "Calendar/set", request)
     }
 
     /// Create a calendar event and return the stored record.
@@ -261,8 +264,20 @@ impl Client {
         &self,
         request: &CalendarEventSetRequest,
     ) -> Result<SetResponse<CalendarEvent>, Error> {
-        let arguments = self.single_call(USING, "CalendarEvent/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+        let limit = self
+            .session()
+            .max_objects_in_set()
+            .and_then(|l| usize::try_from(l).ok());
+
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+            let chunk_req = if let Some(send) = request.send_scheduling_messages {
+                CalendarEventSetRequest::new(chunk_set.clone()).send_scheduling_messages(send)
+            } else {
+                CalendarEventSetRequest::new(chunk_set.clone())
+            };
+            let arguments = self.single_call(USING, "CalendarEvent/set", &chunk_req)?;
+            Ok(serde_json::from_value(arguments)?)
+        })
     }
 
     // Omits `sendSchedulingMessages` when false for server compatibility.
@@ -429,8 +444,17 @@ impl Client {
         &self,
         request: &ParticipantIdentitySetRequest,
     ) -> Result<SetResponse<ParticipantIdentity>, Error> {
-        let arguments = self.single_call(USING, "ParticipantIdentity/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+        let limit = self
+            .session()
+            .max_objects_in_set()
+            .and_then(|l| usize::try_from(l).ok());
+
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+            let mut chunk_req = ParticipantIdentitySetRequest::new(chunk_set.clone());
+            chunk_req.on_success_set_is_default = request.on_success_set_is_default.clone();
+            let arguments = self.single_call(USING, "ParticipantIdentity/set", &chunk_req)?;
+            Ok(serde_json::from_value(arguments)?)
+        })
     }
 }
 

@@ -152,11 +152,22 @@ impl Client {
         self.sieve_script_validate(account_id, uploaded.blob_id)
     }
 
-    fn sieve_script_set(
+    /// Modify Sieve scripts (`SieveScript/set`, RFC 9661 Section 2.4).
+    pub fn sieve_script_set(
         &self,
         request: &SieveScriptSetRequest,
     ) -> Result<SetResponse<SieveScript>, Error> {
-        let arguments = self.single_call(USING, "SieveScript/set", request)?;
-        Ok(serde_json::from_value(arguments)?)
+        let limit = self
+            .session()
+            .max_objects_in_set()
+            .and_then(|l| usize::try_from(l).ok());
+
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+            let mut chunk_req = SieveScriptSetRequest::new(chunk_set.clone());
+            chunk_req.on_success_activate_script = request.on_success_activate_script.clone();
+            chunk_req.on_success_deactivate_script = request.on_success_deactivate_script;
+            let arguments = self.single_call(USING, "SieveScript/set", &chunk_req)?;
+            Ok(serde_json::from_value(arguments)?)
+        })
     }
 }
