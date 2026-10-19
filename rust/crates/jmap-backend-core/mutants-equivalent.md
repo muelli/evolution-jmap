@@ -33,6 +33,21 @@ leak checker (`ci/checks.sh` has no ASAN or valgrind pass) that would
 surface the leak. Pinning this would need memory instrumentation this
 project does not have, not a better test of this file's logic.
 
+## `src/logging.rs`
+
+`init` and `install` both survive replaced with `()`. Neither can be pinned
+by a test in this crate's own test binary: `tracing` allows exactly one
+global dispatcher per process, and several other files in this crate
+(`connect.rs`, `resolver.rs`, `source.rs`, `trampoline.rs`) call
+`evolution_jmap_tracing_capture::capture`, which claims that one slot for
+itself on its first use so every test can get its own scoped capture
+afterward. By the time any test here could check whether `install`'s
+`try_init()` call actually ran, the slot is already taken, by
+`jmap-tracing-capture`'s router if nothing else, regardless of whether
+`install` itself ran or was skipped. Telling the two apart needs a fresh
+process with no capture call ahead of it, which is what a module's real
+entry point gives it and a shared test binary cannot.
+
 ## `src/weak.rs`
 
 `<impl Drop for WeakBackend>::drop` survives replaced with `()`. The body
