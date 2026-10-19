@@ -15,7 +15,8 @@ use std::ffi::CString;
 use std::ptr;
 
 use eds_sys::{
-    CamelAddress, camel_address_new, camel_internet_address_add, camel_internet_address_new,
+    CAMEL_SERVICE_ERROR_INVALID, CamelAddress, camel_address_new, camel_internet_address_add,
+    camel_internet_address_new, camel_service_error_quark,
 };
 use gobject_sys::g_object_unref;
 use jmap_mail::envelope::{EnvelopeError, read_envelope};
@@ -319,4 +320,62 @@ fn the_envelope_preserves_special_characters_in_quoted_names_and_subaddresses() 
 
     release(from);
     release(recipients);
+}
+
+/// Every variant's displayed sentence names what is actually wrong, including
+/// the 1-based position `UnusableRecipient` reports for an entry with no
+/// display name: Camel's `index` is 0-based, and the sentence must not repeat
+/// it unchanged or combine it with the wrong arithmetic.
+#[test]
+fn the_display_text_names_the_failure() {
+    assert!(
+        EnvelopeError::NotInternet("sender")
+            .to_string()
+            .contains("sender")
+    );
+    assert!(
+        EnvelopeError::NotInternet("recipients")
+            .to_string()
+            .contains("recipients")
+    );
+    assert!(!EnvelopeError::NoSender.to_string().is_empty());
+    assert!(!EnvelopeError::NoRecipients.to_string().is_empty());
+    assert!(
+        EnvelopeError::UnusableRecipient {
+            index: 0,
+            name: Some("Nobody In Particular".to_owned()),
+        }
+        .to_string()
+        .contains("Nobody In Particular")
+    );
+
+    // A nameless entry at Camel's index 2 must be reported as recipient 3,
+    // the 1-based position: `index + 1`, not `index * 1` (which would read 2)
+    // or any other arithmetic that happens to agree at index 0 or 1.
+    let message = EnvelopeError::UnusableRecipient {
+        index: 2,
+        name: None,
+    }
+    .to_string();
+    assert!(
+        message.contains('3'),
+        "expected the 1-based position 3 in {message:?}"
+    );
+}
+
+/// `to_gerror` must actually build a `GError` in the transport's own domain,
+/// not hand back a null pointer or an empty struct.
+#[test]
+fn to_gerror_builds_a_real_camel_service_error() {
+    let error = EnvelopeError::NoSender;
+    let gerror = error.to_gerror();
+    assert!(!gerror.is_null());
+
+    // SAFETY: `to_gerror` handed over an owned GError, freed below.
+    unsafe {
+        assert_eq!((*gerror).domain, camel_service_error_quark());
+        assert_eq!((*gerror).code, CAMEL_SERVICE_ERROR_INVALID as i32);
+        assert!(!(*gerror).message.is_null());
+        glib_sys::g_error_free(gerror);
+    }
 }

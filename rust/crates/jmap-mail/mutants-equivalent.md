@@ -5,6 +5,20 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Genuinely Equivalent Mutants in `jmap-mail`
 
+## `src/changes.rs`
+
+- `crates/jmap-mail/src/changes.rs:159:9`: `<impl Drop for Changes>::drop`
+  survives replaced with `()`. The body frees the owned
+  `CamelFolderChangeInfo` with `camel_folder_change_info_free`; under the
+  mutant, a `Changes` dropped without being handed to
+  `camel_folder_changed` (an early return, same as `jmap-backend-core`'s
+  `mime.rs` `Unwritable::drop`) would leak that allocation instead of
+  freeing it. No test can tell the two apart: `camel_folder_change_info_free`
+  deallocates memory and has no other observable effect, and this project
+  runs no sanitizer or leak checker (`ci/checks.sh` has no ASAN or valgrind
+  pass). Pinning this needs memory instrumentation this project does not
+  have, not a better test of this file's logic.
+
 ## `src/folder_info.rs`
 
 - `crates/jmap-mail/src/folder_info.rs:183:60`, `184:62`, `185:58`, `186:60`,
