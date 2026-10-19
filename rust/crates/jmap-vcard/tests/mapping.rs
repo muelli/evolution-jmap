@@ -22418,3 +22418,52 @@ fn photo_non_image_mediatype_and_data_uri_roundtrip_fixpoint_matrix() {
         }
     }
 }
+
+#[test]
+fn vcardparams_extension_parameters_drop_after_parse_and_emit_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Parameter Probe\r\n",
+        "EMAIL;TYPE=HOME;X-FOO=alpha;PID=1.1:param@example.test\r\n",
+        "TEL;TYPE=WORK,VOICE;X-BAR=beta;INDEX=2:+1-555-0100\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(source).expect("parse extension-parameter profile probe");
+    let emails = card.emails.as_ref().expect("emails map");
+    assert_eq!(emails["e1"].address, "param@example.test");
+    assert_eq!(emails["e1"].pref, None);
+    assert!(
+        emails["e1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardParams metadata on EMAIL"
+    );
+
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones["p1"].number, "+1-555-0100");
+    assert_eq!(phones["p1"].pref, None);
+    assert!(
+        phones["p1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardParams metadata on TEL"
+    );
+
+    let emitted = card_to_vcard(&card);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=HOME"));
+    assert!(email_line.ends_with(":param@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK"));
+    assert!(tel_line.ends_with(":+1-555-0100"));
+    assert!(
+        !emitted.contains("X-FOO=")
+            && !emitted.contains("PID=")
+            && !emitted.contains("X-BAR=")
+            && !emitted.contains("INDEX="),
+        "non-projected parameters must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
+}
