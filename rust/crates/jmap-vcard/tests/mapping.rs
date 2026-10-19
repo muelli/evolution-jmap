@@ -11306,8 +11306,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, GENDER, LANG, SOCIALPROFILE, EXPERTISE, HOBBY,
-    // INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
+    // GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, SOCIALPROFILE, EXPERTISE,
+    // HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
     // SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
@@ -11341,6 +11341,9 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
         "GENDER:M\r\n",
+        "GRAMGENDER:NEUTER\r\n",
+        "PRONOUNS;PREF=1:xe/xir\r\n",
+        "PRONOUNS;PREF=2:they/them\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
         "SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@albert\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
@@ -11436,6 +11439,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         parsed.personal_info.is_none(),
         "EXPERTISE/HOBBY/INTEREST must not project to personal_info in this profile"
     );
+    assert!(
+        parsed.speak_to_as.is_none(),
+        "GRAMGENDER/PRONOUNS must not project to speak_to_as in this profile"
+    );
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
     let media = parsed.media.as_ref().expect("media map present");
@@ -11457,6 +11464,14 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
     assert!(!emitted.contains("GENDER:"), "GENDER must not be emitted");
+    assert!(
+        !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+        "GRAMGENDER must not be emitted"
+    );
+    assert!(
+        !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+        "PRONOUNS must not be emitted"
+    );
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
     assert!(
         !emitted.contains("SOCIALPROFILE:") && !emitted.contains("SOCIALPROFILE;"),
@@ -11634,6 +11649,60 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("GENDER:") && !emitted.contains("GENDER;"),
             "GENDER must not be emitted"
+        );
+    }
+
+    // GRAMGENDER variants.
+    for gramgender_val in [
+        "GRAMGENDER:NEUTER",
+        "GRAMGENDER:FEMININE",
+        "GRAMGENDER:MASCULINE",
+        "GRAMGENDER:COMMON",
+        "gramgender:neuter",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Gramgender User\r\n{gramgender_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse GRAMGENDER");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Gramgender User")
+        );
+        assert!(
+            parsed.speak_to_as.is_none(),
+            "GRAMGENDER must not project to speak_to_as"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+            "GRAMGENDER must not be emitted"
+        );
+    }
+
+    // PRONOUNS variants.
+    for pronouns_val in [
+        "PRONOUNS;PREF=1:xe/xir",
+        "PRONOUNS;PREF=2:they/them",
+        "PRONOUNS;LANGUAGE=en:they/them",
+        "PRONOUNS;TYPE=work;PREF=3:ze/zir",
+        "pronouns;pref=1:elle/ella",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Pronouns User\r\n{pronouns_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse PRONOUNS");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Pronouns User")
+        );
+        assert!(
+            parsed.speak_to_as.is_none(),
+            "PRONOUNS must not project to speak_to_as"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+            "PRONOUNS must not be emitted"
         );
     }
 
@@ -12173,6 +12242,13 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "GENDER:",
         "GENDER:   ",
         "gender:",
+        "GRAMGENDER:",
+        "GRAMGENDER:   ",
+        "gramgender:",
+        "PRONOUNS:",
+        "PRONOUNS:   ",
+        "pronouns:",
+        "PRONOUNS;PREF=1:",
         "MEMBER:",
         "MEMBER:   ",
         "member:",
@@ -12292,6 +12368,48 @@ fn org_directory_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
     assert!(
         !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("ORG-DIRECTORY;"),
         "ORG-DIRECTORY must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
+fn gramgender_and_pronouns_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:gramgender-pronouns-profile-boundary-1\r\n",
+        "FN:GRAMGENDER PRONOUNS Profile Boundary\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Alex\r\n",
+        "GRAMGENDER:NEUTER\r\n",
+        "PRONOUNS;PREF=1:xe/xir\r\n",
+        "pronouns;PREF=2:they/them\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse GRAMGENDER/PRONOUNS profile boundary card");
+    let nicknames = parsed.nicknames.as_ref().expect("nickname map");
+    assert_eq!(nicknames.len(), 1, "only NICKNAME should remain mapped");
+    assert_eq!(nicknames["k1"].name.as_str(), "Alex");
+    assert!(
+        parsed.speak_to_as.is_none(),
+        "GRAMGENDER and PRONOUNS must not project to speak_to_as in this profile"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("NICKNAME;X-JMAP-KEY=k1:Alex"),
+        "Mapped NICKNAME payload must survive"
+    );
+    assert!(
+        !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+        "GRAMGENDER must not be emitted"
+    );
+    assert!(
+        !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+        "PRONOUNS must not be emitted"
     );
 
     let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
