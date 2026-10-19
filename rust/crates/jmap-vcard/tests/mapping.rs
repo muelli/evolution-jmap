@@ -12405,6 +12405,43 @@ fn contact_uri_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
 }
 
 #[test]
+fn clientpidmap_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:clientpidmap-profile-boundary-1\r\n",
+        "FN:CLIENTPIDMAP Profile Boundary\r\n",
+        "NOTE;X-JMAP-KEY=n1:Mapped note survives\r\n",
+        "CLIENTPIDMAP:1;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0556\r\n",
+        "clientpidmap:2;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0557\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse CLIENTPIDMAP profile boundary card");
+    let notes = parsed.notes.as_ref().expect("note map");
+    assert_eq!(notes.len(), 1, "only mapped NOTE line should remain");
+    assert_eq!(notes["n1"].note.as_str(), "Mapped note survives");
+    assert!(
+        parsed.extra.is_empty(),
+        "CLIENTPIDMAP must not project into card extra data"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("NOTE;X-JMAP-KEY=n1:Mapped note survives"),
+        "Mapped NOTE payload must survive"
+    );
+    assert!(
+        !emitted.contains("CLIENTPIDMAP:") && !emitted.contains("clientpidmap:"),
+        "CLIENTPIDMAP must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
 fn org_directory_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
