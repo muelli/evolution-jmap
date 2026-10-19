@@ -287,7 +287,6 @@ unsafe fn read_target(target: *mut GSrvTarget) -> Option<SrvTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     #[test]
     fn the_pool_has_more_than_one_worker() {
@@ -298,11 +297,14 @@ mod tests {
         );
     }
 
-    /// Regression test: before this module had a pool, every
-    /// lookup shared one GMainContext, so a slow one delayed every other
-    /// one behind it. Proven here with plain closures and no real DNS, so
-    /// it is fast and deterministic: a job that sleeps on one worker must
-    /// not delay a job dispatched to a different worker.
+    /// Regression test: before this module had a pool, every lookup shared
+    /// one GMainContext, so a slow one delayed every other one behind it.
+    /// Proven here with plain closures and no real DNS, and by order, not by
+    /// a wall-clock margin: the slow job blocks on a gate this test holds,
+    /// so the fast job on the other worker can only answer before the gate
+    /// opens if it truly ran independently. A generous timeout only guards
+    /// against a hang; it does not bound how long the fast job is allowed
+    /// to take, so CPU load cannot make this test flake.
     #[test]
     fn a_slow_job_on_one_worker_does_not_delay_a_job_on_another() {
         let pool = get_resolver_pool().expect("resolver pool starts");
@@ -313,30 +315,34 @@ mod tests {
         let slow_worker = &pool.workers[0];
         let fast_worker = &pool.workers[1];
 
-        const SLOW: Duration = Duration::from_millis(300);
-        let start = Instant::now();
+        const HANG_TIMEOUT: Duration = Duration::from_secs(10);
 
+        // The gate: the slow job parks here until the test releases it,
+        // which only happens after the fast job has already answered.
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(0);
         let (slow_tx, slow_rx) = std::sync::mpsc::sync_channel::<()>(1);
         invoke_on_worker(slow_worker, move || {
-            std::thread::sleep(SLOW);
+            release_rx.recv().expect("test releases the slow job");
             let _ = slow_tx.send(());
         });
 
-        let (fast_tx, fast_rx) = std::sync::mpsc::sync_channel::<Instant>(1);
+        let (fast_tx, fast_rx) = std::sync::mpsc::sync_channel::<()>(1);
         invoke_on_worker(fast_worker, move || {
-            let _ = fast_tx.send(Instant::now());
+            let _ = fast_tx.send(());
         });
 
-        let fast_done = fast_rx
-            .recv_timeout(SLOW)
+        fast_rx
+            .recv_timeout(HANG_TIMEOUT)
             .expect("the fast job must answer without waiting for the slow one's worker");
-        assert!(
-            fast_done.duration_since(start) < SLOW / 2,
-            "the fast job waited on the slow job's worker instead of running on its own"
-        );
 
+        // The fast job has answered, and the slow job is still parked on
+        // the gate (release_tx has not sent yet): open it now and confirm
+        // it finishes too, proving the fast answer was not just a fluke.
+        release_tx
+            .send(())
+            .expect("slow job still waiting on the gate");
         slow_rx
-            .recv_timeout(SLOW * 2)
+            .recv_timeout(HANG_TIMEOUT)
             .expect("the slow job eventually completes on its own worker");
     }
 
