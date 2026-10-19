@@ -11306,7 +11306,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, SOCIALPROFILE, EXPERTISE,
+    // GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, LANGUAGE, SOCIALPROFILE, EXPERTISE,
     // HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
     // SORT-STRING, CLASS, SOUND, LOGO.
 
@@ -11345,6 +11345,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "PRONOUNS;PREF=1:xe/xir\r\n",
         "PRONOUNS;PREF=2:they/them\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
+        "LANGUAGE:de-AT\r\n",
         "SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@albert\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
         "HOBBY;LEVEL=high;INDEX=1:reading\r\n",
@@ -11436,6 +11437,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "LANG must not project to preferred_languages in this profile"
     );
     assert!(
+        parsed.language.is_none(),
+        "LANGUAGE must not project to language in this profile"
+    );
+    assert!(
         parsed.personal_info.is_none(),
         "EXPERTISE/HOBBY/INTEREST must not project to personal_info in this profile"
     );
@@ -11473,6 +11478,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "PRONOUNS must not be emitted"
     );
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
+    assert!(
+        !emitted.contains("LANGUAGE:") && !emitted.contains("LANGUAGE;"),
+        "LANGUAGE must not be emitted"
+    );
     assert!(
         !emitted.contains("SOCIALPROFILE:") && !emitted.contains("SOCIALPROFILE;"),
         "SOCIALPROFILE must not be emitted"
@@ -11729,6 +11738,33 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("LANG:") && !emitted.contains("LANG;"),
             "LANG must not be emitted"
+        );
+    }
+
+    // LANGUAGE variants.
+    for language_val in [
+        "LANGUAGE:de-AT",
+        "LANGUAGE:en-US",
+        "LANGUAGE:zh-Hant",
+        "LANGUAGE:x-klingon",
+        "language:fr",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Language User\r\n{language_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse LANGUAGE");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Language User")
+        );
+        assert!(
+            parsed.language.is_none(),
+            "LANGUAGE must not project to language"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("LANGUAGE:") && !emitted.contains("LANGUAGE;"),
+            "LANGUAGE must not be emitted"
         );
     }
 
@@ -12221,6 +12257,9 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "LANG:   ",
         "lang:",
         "LANG;TYPE=work:",
+        "LANGUAGE:",
+        "LANGUAGE:   ",
+        "language:",
         "SOCIALPROFILE:",
         "SOCIALPROFILE:   ",
         "socialprofile:",
