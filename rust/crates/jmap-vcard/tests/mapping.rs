@@ -22499,3 +22499,49 @@ fn vcardprops_extension_properties_drop_after_parse_and_emit_in_eds_profile() {
     let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
     assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
 }
+
+#[test]
+fn vcardname_source_property_identity_is_not_retained_in_eds_profile() {
+    let mut online_services = BTreeMap::new();
+    online_services.insert(
+        "s1".to_owned(),
+        OnlineService {
+            service: Some("Jabber".to_owned()),
+            user: Some("alice@jabber.example".to_owned()),
+            extra: [("vCardName".to_owned(), json!("socialprofile"))].into(),
+            ..OnlineService::default()
+        },
+    );
+    let source = ContactCard {
+        online_services: Some(online_services),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&source);
+    let service_line = line(&emitted, "X-JABBER;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE=HOME"));
+    assert!(service_line.ends_with(":alice@jabber.example"));
+    assert!(
+        !emitted.contains("IMPP:") && !emitted.contains("SOCIALPROFILE"),
+        "profile does not emit source-property identity as RFC 9555 vCardName metadata"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    let services = reparsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s1"].user.as_deref(), Some("alice@jabber.example"));
+    assert!(
+        services["s1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardName metadata"
+    );
+
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(
+        emitted, re_emitted,
+        "profile reaches fixed point after one pass"
+    );
+}
