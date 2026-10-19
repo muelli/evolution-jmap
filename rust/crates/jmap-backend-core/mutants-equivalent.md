@@ -32,3 +32,20 @@ and has no other observable effect, and this project runs no sanitizer or
 leak checker (`ci/checks.sh` has no ASAN or valgrind pass) that would
 surface the leak. Pinning this would need memory instrumentation this
 project does not have, not a better test of this file's logic.
+
+## `src/weak.rs`
+
+`<impl Drop for WeakBackend>::drop` survives replaced with `()`. The body
+calls `g_weak_ref_clear`, which GLib's own documentation requires: a
+`GWeakRef` registers its own address with the object it watches, and that
+registration is only removed by `g_weak_ref_clear` (or by setting a new
+target). Skipping it under the mutant does not stop the struct's `Box` from
+being freed when `WeakBackend` is dropped (Rust's drop glue still runs on
+the field after the empty `drop` body returns), so the object is left
+pointing at memory that is already gone: if it is later disposed, GLib
+writes into that freed allocation. No test in this crate can observe the
+difference without actually exercising that write, which only shows up
+under a sanitizer or leak checker (`ci/checks.sh` has none) or as
+UB-dependent heap corruption that may or may not crash a given run. Pinning
+this needs memory instrumentation this project does not have, not a
+better test of this file's logic.
