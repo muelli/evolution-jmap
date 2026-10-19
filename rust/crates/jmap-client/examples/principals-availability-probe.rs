@@ -1,14 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Live probe of `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2)
-// against a real server: does the real deployment implement the method at all,
-// and if so, does it spell the response fields the way `jmap-proto::principals` assumes?
-//
-// Deliberately uses `Client::single_call` to get the raw `serde_json::Value`
-// back rather than the typed `Client::get_availability` wrapper, so a
-// field-name mismatch shows up as a JSON diff in the printed output instead
-// of an opaque deserialization error.
+// Live probe of `Principal/getAvailability` (draft-ietf-jmap-calendars section 2.2) against a real server.
+// Verifies whether the deployment implements the method and matches expected field names.
+// `Client::single_call` prints raw JSON before testing the typed wrapper.
 //
 // Usage:
 //   cargo run -p evolution-jmap-client --example principals-availability-probe -- \
@@ -60,8 +55,7 @@ fn main() {
         .expect("an account for the principals or core capability");
     println!("account_id = {account_id}");
 
-    // Resolve our own principal via Principal/query-by-email, mirroring
-    // jmap_cal_sync::freebusy's attendee resolution.
+    // Resolves the current user principal by email address.
     let ids = client
         .principal_query(&account_id, PrincipalQueryFilter::email(&user))
         .expect("Principal/query");
@@ -80,8 +74,7 @@ fn main() {
         return;
     };
 
-    // Raw Principal/get, printed verbatim, to see real field spelling
-    // (capabilities bag especially) before trusting the typed wrapper.
+    // Prints the raw `Principal/get` response to verify field names.
     let get_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
@@ -94,9 +87,7 @@ fn main() {
         serde_json::to_string_pretty(&get_args).unwrap()
     );
 
-    // Create a real busy event first, so getAvailability has something
-    // non-empty to answer with: an empty `list` proves nothing about field
-    // spelling.
+    // Creates a busy event so `getAvailability` returns non-empty periods.
     let calendar_id = client
         .calendars(&account_id)
         .expect("Calendar/get")
@@ -115,7 +106,7 @@ fn main() {
         .expect("event_create");
     println!("created event id = {:?}", created.id);
 
-    // Raw Principal/getAvailability, printed verbatim.
+    // Prints the raw `Principal/getAvailability` response.
     let availability_args = client.single_call(
         &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS, CAPABILITY_CALENDARS],
         "Principal/getAvailability",
@@ -135,8 +126,7 @@ fn main() {
         Err(error) => println!("Principal/getAvailability FAILED: {error}"),
     }
 
-    // Same call through the typed wrapper, to confirm it deserializes the
-    // real response cleanly (or show exactly how it doesn't).
+    // Calls the typed wrapper to verify response deserialization.
     match client.get_availability(
         &account_id,
         &principal_id,

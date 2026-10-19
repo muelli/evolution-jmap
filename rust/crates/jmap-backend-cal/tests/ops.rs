@@ -843,10 +843,7 @@ fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
 // ---------------------------------------------------------------------------
 // the error mapping itself
 
-/// Each `SyncError` has to reach Evolution as the domain and code it routes on:
-/// `REPOSITORY_OFFLINE` is what makes the meta backend serve its cache,
-/// `OBJECT_NOT_FOUND` is what makes it drop a component, and an iCalendar we
-/// cannot map is a bad argument rather than a server fault.
+/// Asserts `SyncError` variants map to expected GError domains and codes.
 #[test]
 fn each_sync_error_carries_the_code_evolution_routes_on() {
     let cases: Vec<(SyncError, u32, i32)> = vec![

@@ -11,7 +11,7 @@ use jmap_proto::calendars::{
 use jmap_proto::state::UtcDate;
 use serde_json::Value;
 
-/// Properties marked reserved or obsoleted in the JSCalendar-bis registry
+/// Reserved or obsoleted properties in the JSCalendar-bis registry
 /// (draft-ietf-calext-jscalendarbis-22 Section 7.4.2 and Appendix A).
 const GLOBALLY_FORBIDDEN_PROPERTIES: &[&str] = &[
     "aliases",
@@ -39,9 +39,7 @@ const GLOBALLY_FORBIDDEN_PROPERTIES: &[&str] = &[
     "standard",
     "tzId",
     "validUntil",
-    // Note: timeZones is obsoleted in JSCalendar-bis §7.4.2.1, but is retained
-    // as an Intentional Interop Deviation (ICAL-MAPPING §17 Divergence 437)
-    // to preserve custom VTIMEZONE definitions in jmap-cal-sync and jmap-ical.
+    // Retain `timeZones` to preserve custom VTIMEZONE definitions (ICAL-MAPPING 11 and 4.2).
 ];
 
 fn assert_no_reserved_or_obsoleted_properties(val: &Value, path: &str) {
@@ -81,7 +79,7 @@ fn assert_no_reserved_or_obsoleted_properties(val: &Value, path: &str) {
                     );
                 }
 
-                // If k is timeZones, skip recursing into its RFC 8984 TimeZone definitions
+                // Do not recurse into `timeZones` RFC 8984 definitions.
                 if k != "timeZones" {
                     assert_no_reserved_or_obsoleted_properties(v, &current_path);
                 }

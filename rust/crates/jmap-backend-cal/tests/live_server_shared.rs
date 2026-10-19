@@ -1,26 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Calendar backend reading and writing a shared calendar against
-//! a real JMAP server.
+//! Calendar backend operations on shared calendars against a live JMAP server.
 //!
-//! Verifies that `connect::open_calendar_with_account` correctly connects to a
-//! calendar in another account shared via RFC 9670 and draft-ietf-jmap-calendars
-//! `shareWith`, respects `myRights` to mark the backend read-only
-//! (`writable: false`) or writable (`writable: true`), and that the underlying
-//! backend sync engine reads and, where allowed, writes calendar event records.
+//! Tests verify that `connect::open_calendar_with_account` accesses shared calendars.
+//! The backend respects `myRights` permissions (`writable: false` or `true`).
+//! The sync engine reads and writes calendar event records accordingly.
 //!
-//! ## Running it
+//! ## Test Execution
 //!
-//! Needs both `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` pointing to a real Stalwart
-//! server:
+//! Set `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a live Stalwart server:
 //!
 //! ```console
 //! $ cargo test -p jmap-backend-cal --test live_server_shared -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either account pair is unset.
+//! The runner skips tests if environment variables are not set.
 
 use std::env;
 
@@ -162,7 +158,7 @@ fn shared_calendar_opens_in_backend_as_read_only_then_writable_as_grant_widens()
         rebase_urls: rebase,
     };
 
-    // Stage 1: Before any grant, opening the shared calendar through recipient backend must fail.
+    // Stage 1: opening shared calendar before grant must fail.
     let before_grant = connect::open_calendar_with_account(
         &config,
         Credentials::basic(recipient_address.clone(), recipient_password.clone()),
@@ -173,7 +169,7 @@ fn shared_calendar_opens_in_backend_as_read_only_then_writable_as_grant_widens()
         "opening shared calendar before grant must fail"
     );
 
-    // Stage 2: Grant read-only access (mayReadItems: true).
+    // Stage 2: grant read-only access (mayReadItems: true).
     owner_sync
         .client()
         .calendar_update(
@@ -212,7 +208,7 @@ fn shared_calendar_opens_in_backend_as_read_only_then_writable_as_grant_widens()
         "saving event under mayReadItems-only grant must be forbidden, got: {write_err:?}"
     );
 
-    // Stage 3: Widen grant to read-write (mayReadItems: true, mayWriteOwn: true, mayWriteAll: true).
+    // Stage 3: widen grant to read-write.
     owner_sync
         .client()
         .calendar_update(
@@ -246,7 +242,7 @@ fn shared_calendar_opens_in_backend_as_read_only_then_writable_as_grant_widens()
         "event created by recipient must be visible to owner in shared calendar"
     );
 
-    // Cleanup.
+    // Clean up.
     let _ = owner_sync.remove_component(&recipient_saved.uid);
     let _ = owner_sync.remove_component(&owner_saved.uid);
     let _ = owner_sync

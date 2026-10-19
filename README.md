@@ -30,9 +30,8 @@ real deployment (Stalwart, then Fastmail), confirmed by the operator in real
 Evolution — not just against the mock. The mapping crates
 (`jmap-vcard`/`jmap-ical`) carry extensive round-trip and fuzz tests; a
 measured spike into externalising that layer onto the `calcard` crate's own
-converter found it a worse fit against our acceptance suite (see
-[docs/CALCARD-SEMANTIC-SPIKE.md](docs/CALCARD-SEMANTIC-SPIKE.md)) and kept
-the hand-written mapping. `docs/ROADMAP.md` tracks what's next.
+converter found it a worse fit against our acceptance suite and kept the
+hand-written mapping. `docs/ROADMAP.md` tracks what's next.
 
 A `jmap-ui` module puts three JMAP-only features into Evolution's own UI,
 which has no concept of them: a vacation-autoresponder page in the account
@@ -163,6 +162,8 @@ real Fastmail for OAuth2.
   [docs/verifying-artifacts.md](docs/verifying-artifacts.md).
 - `cargo deny` gates dependency licenses (GPLv3-compatible only);
   [REUSE](https://reuse.software/) tracks per-file licensing.
+- Regular FFI and security audits. Each finding and its fix is listed in
+  [docs/SECURITY-AUDITS.md](docs/SECURITY-AUDITS.md).
 
 ## License
 

@@ -1,70 +1,62 @@
 # Manual test: the JMAP mail provider
 
-The test suite exercises every layer of the Camel provider except the one that
-matters to a user: Camel finding `libcameljmap.so` by the `.urls` file next to
-it, opening a store from a `.source` file, and Evolution showing the account's
-folders in the mail view. Camel only dlopens a provider when something asks for
-a protocol one of its installed `.urls` files claims, so that path needs an
-install tree and a running Evolution — it cannot be a `cargo test`, and it is
-this recipe.
+The test suite covers every layer of the Camel provider except three items:
 
-It talks to `jmap-mockd`, not to a real server, so it can be run on a laptop
-with nothing installed and no account anywhere.
+- Camel finds `libcameljmap.so` through its `.urls` file.
+- Camel opens a store from a `.source` file.
+- Evolution shows the folders.
 
-This is the mail counterpart of `docs/manual-test-book-backend.md` and
-`docs/manual-test-cal-backend.md`, and it writes a standalone account with no
-`Parent=` for the same reason they do: until M7's setup UI exists there is
-nothing that mints the three sources a mail account is made of. The other end of
-that is the mail run in `docs/manual-test-collection-backend.md`, where the same
-three sources hang off a JMAP account and get their server *from* it. Here there
-is no account, so the server is written by hand — twice, once for what receives
-and once for what sends.
+These items need an installed module and a running Evolution. They cannot be a
+`cargo test`. This recipe covers them.
 
-## What is already checked without you
+The recipe uses `jmap-mockd`, not a real server. You do not need an account.
 
-`rust/crates/jmap-mail/tests/recipe.rs` loads the three keyfiles below through
-`e_server_side_source_new` — the same call `evolution-source-registry` makes for
-every file in its sources directory — and asserts that they mean what this
-document says they mean: that both services name the protocol
-`camel_provider_module_init` registers, that the account and the identity point
-at the identity and the transport by the right uids, that none of the three
-hangs off a collection, and that the store and the transport each reach
-`http://127.0.0.1:8080` when read through the provider's own
-`ServerConfig::from_settings` — the call `connect_sync` makes, off the
-`CamelSettings` object `e_source_camel_configure_service` would hand the service.
+Like the address book and calendar recipes, this recipe writes standalone
+sources with no `Parent=`. There is no collection account. You therefore write
+the server twice: once for the store and once for the transport. The mail run
+in `docs/manual-test-collection-backend.md` is the version where the sources
+get their server from a JMAP account.
 
-`tests/provider.rs` asserts the other half, that the entry point registers a
-provider for that same protocol and that `libcameljmap.urls` claims it, and
-CTest's `install-camel-provider` asserts the `.urls` file reaches the directory
-Camel scans. So neither the keyfiles nor the protocol can rot silently; the
-steps around them are what you are testing.
+## What automated tests already cover
+
+`rust/crates/jmap-mail/tests/recipe.rs` loads the three keyfiles below with
+`e_server_side_source_new`. The test checks these items:
+
+- Both services name the protocol that the provider registers.
+- The UIDs link the sources correctly.
+- No source has a parent.
+- The store and the transport both reach `http://127.0.0.1:8080` through
+  `ServerConfig::from_settings` of the provider.
+- Each `ini` block here is identical to its file in `docs/examples/`.
+
+`tests/provider.rs` checks that the provider registers that protocol and that
+`libcameljmap.urls` claims it. The CTest test `install-camel-provider` checks
+that the `.urls` file is installed where Camel looks.
 
 ## Prerequisites
 
-- Evolution Data Server 3.52 or newer, *installed*: the development headers are
-  enough to build, but this recipe runs `evolution-source-registry` and
-  Evolution's mail view, which come with the `evolution-data-server` and
-  `evolution` packages.
-- A session bus. The account below names no user, so nothing asks libsecret for
-  a password, but the registry expects a session it can talk on.
-- Evolution itself, and not just EDS: unlike an address book, a mail account has
-  no client-side test harness in this repository, and the mail view is where a
-  store becomes visible.
+- Evolution Data Server 3.52 or newer, and Evolution, installed. This
+  repository has no client-side test harness for mail. You therefore need the
+  mail view.
+- A D-Bus session bus.
 
 ## 1. Start the mock server
 
 ```console
-$ cargo run -p evolution-jmap-mock --bin jmap-mockd
+$ cargo run --manifest-path rust/Cargo.toml -p evolution-jmap-mock --bin jmap-mockd
 jmap-mockd listening on http://127.0.0.1:8080
 ```
 
-It seeds one account with three mailboxes — Inbox, Sent and Drafts, each with
-its JMAP role — and two messages in the Inbox, from Bob and Carol. Leave it
-running in its own terminal; every request it serves is one the provider made.
+The mock server seeds one account with these items:
 
-Do not pass `--basic` or `--bearer` for the first run. The sources below name no
-user, so the provider connects anonymously and no password prompt gets in the
-way of the thing being tested.
+- Inbox, Sent and Drafts (each with its JMAP role)
+- an identity for `alice@example.com`
+- two messages in the Inbox, from Bob and Carol
+
+Leave the server running in its own terminal.
+
+Do not use `--basic` or `--bearer` for the first run. The sources below have
+no user. The provider therefore connects anonymously.
 
 ## 2. Build and install the provider
 
@@ -74,38 +66,31 @@ $ cmake --build build
 $ sudo cmake --install build --component camel-provider
 ```
 
-That installs `libcameljmap.so` *and* `libcameljmap.urls` into the directory
-`pkg-config --variable=camel_providerdir camel-1.2` reports — on Debian and
-Ubuntu, `/usr/lib/evolution-data-server/camel-providers`. Both files, and the
-`.urls` is not documentation: `camel_provider_init()` reads the `.urls` files and
-nothing else, and a `.so` installed without its `.urls` beside it is a provider
-Camel never opens, because nothing ever tells it the protocol exists.
+This installs `libcameljmap.so` and `libcameljmap.urls` into
+`pkg-config --variable=camel_providerdir camel-1.2` (on Debian and Ubuntu,
+`/usr/lib/evolution-data-server/camel-providers`). Camel finds providers only
+through `.urls` files. Camel never loads a `.so` without its `.urls` file.
 
-If you would rather not install into a system directory, install into a scratch
-tree and point Camel at it:
+To avoid a system directory, install into a scratch tree. Then point Camel at
+it:
 
 ```console
 $ DESTDIR=/tmp/jmap cmake --install build --component camel-provider
 $ export EDS_CAMEL_PROVIDER_DIR=/tmp/jmap/usr/lib/evolution-data-server/camel-providers
 ```
 
-`EDS_CAMEL_PROVIDER_DIR` *replaces* Camel's provider directory rather than
-adding to it — the same shape as `EDS_ADDRESS_BOOK_MODULES` in the address book
-recipe, with a larger consequence, because every other mail provider lives in the
-directory being replaced. A session started with it set has JMAP and no IMAP,
-POP, SMTP or local mail at all, which is fine for this test and the reason it is
-not a way to run Evolution day to day. It has to be set in the environment
-Evolution itself is started from — the provider is loaded in the mail client's
-process, not in a factory.
+`EDS_CAMEL_PROVIDER_DIR` replaces the provider directory of Camel. The session
+then has no IMAP, POP, SMTP or local mail. This is acceptable for this test.
+It is not acceptable for daily use. Set the variable in the environment that
+starts Evolution, because the provider loads in the process of Evolution.
 
 ## 3. Write the three sources
 
-Copy all three into `~/.config/evolution/sources/`. Their file names are their
-uids, and those uids are what the `IdentityUid=` and `TransportUid=` lines below
-refer to, so renaming one file means editing another.
+Copy all three files into `~/.config/evolution/sources/`. The file names are
+the UIDs. The lines `IdentityUid=` and `TransportUid=` refer to them. If you
+rename one file, edit the other files.
 
-`docs/examples/jmap-mock-standalone-mail.source` — what Evolution receives
-through:
+`docs/examples/jmap-mock-standalone-mail.source`, the receiving account:
 
 ```ini
 [Data Source]
@@ -124,7 +109,7 @@ Port=8080
 Method=none
 ```
 
-`docs/examples/jmap-mock-standalone-identity.source` — who the mail is from:
+`docs/examples/jmap-mock-standalone-identity.source`, the sender:
 
 ```ini
 [Data Source]
@@ -139,8 +124,7 @@ Address=alice@example.com
 TransportUid=jmap-mock-standalone-transport
 ```
 
-`docs/examples/jmap-mock-standalone-transport.source` — what Evolution sends
-through:
+`docs/examples/jmap-mock-standalone-transport.source`, the sending service:
 
 ```ini
 [Data Source]
@@ -158,47 +142,34 @@ Port=8080
 Method=none
 ```
 
-What each load-bearing line does:
+Notes on the keys:
 
-- `BackendName=jmap` on the account and on the transport, and on neither more
-  nor fewer. It is the protocol Camel keys its provider table by, the first line
-  of `libcameljmap.urls`, and the string `camel_provider_module_init` registers —
-  three places that have to agree. A typo here is not a load error: Camel never
-  learns of the protocol, and the account fails at connect time with *No provider
-  available for protocol '…'*.
-- **`[Authentication]` twice.** This is the difference from the collection
-  recipe. A store and a transport are two `CamelService`s configured from two
-  different sources, and with no collection above them there is nobody to copy a
-  server from one to the other. A transport that lost its copy is the quietest
-  failure here — the account receives mail perfectly and fails only when the user
-  presses Send.
-- `Method=none` is what allows plain HTTP, and it is refused for any host that is
-  not loopback. **The key is `Method`, not `Secure`**: `ESourceSecurity:secure`
-  is a boolean *over* the `Method` string, so a keyfile saying `Secure=true` sets
-  nothing EDS reads and comes back as no method at all — which is `none`. Against
-  a real server that is an account that refuses to connect, blaming TLS. Camel
-  reads this key as a `CamelNetworkSecurityMethod` enum nick, so the other
-  spelling that means TLS here is `ssl-on-alternate-port` and *not* EDS's own
-  word `tls`.
-- No `Parent=` on any of the three. There is no account to hang them off; a
-  `Parent=` naming a collection that is not there is a source the registry drops
-  on load, which is three files present on disk, no account in Evolution, and
-  nothing said about it. The version of these files that *does* have a parent is
-  `docs/examples/jmap-mock-mail-*.source`, in the collection recipe.
-- No `User=` on either service: with one, the provider asks Camel's session to
-  resolve a password and does not contact anything until it has one. To test
-  *that* path instead, start the mock with `--basic alice:secret` and add
-  `User=alice@example.com` to both `[Authentication]` groups. Expect to be asked
-  twice — two sources with two `[Authentication]` groups are two credential
-  sources as far as EDS is concerned, and the rule that collapses them
-  (`e_util_can_use_collection_as_credential_source`, which compares a child's
-  host with its collection's) needs a collection to apply. That the shared-password
-  shape is the nicer one is the argument for M6's account rather than this one.
-- The identity names no backend, because it is a person rather than a service.
-  It reaches no server and needs neither group.
-- `Address=` is yours to change; it is the `From:` Evolution would use, and the
-  mock seeds an identity for `alice@example.com`, so leaving it alone is what
-  makes a send match an identity the server already knows about.
+- `BackendName=jmap` on the account and the transport. The provider table of
+  Camel, the first line of `libcameljmap.urls` and the registration of the
+  provider must all use this string. A typo gives no load error. The account
+  fails at connect time with *No provider available for protocol*.
+- **`[Authentication]` twice.** The store and the transport are two
+  `CamelService`s. Two sources configure them. Without a collection, nothing
+  copies the server from one source to the other. If the transport does not
+  have `[Authentication]`, the account receives mail, but it fails when you
+  press Send.
+- `Method=none` allows plain HTTP, and only for a loopback address. **The key
+  is `Method`, not `Secure`**: EDS ignores `Secure=true`. Camel reads the key
+  as a `CamelNetworkSecurityMethod` nick. The value for TLS is therefore
+  `ssl-on-alternate-port`, not `tls`.
+- No `Parent=`. The registry drops a source whose parent does not exist. It
+  gives no message. The collection recipe has the version with parents
+  (`docs/examples/jmap-mock-mail-*.source`).
+- No `User=`. To test password sign-in, do these steps:
+  1. Start the mock server with `--basic alice:secret`.
+  2. Add `User=alice` to both `[Authentication]` groups.
+
+  Expect two password prompts. EDS treats the two sources as separate
+  credentials, unless a collection account links them.
+- The identity has no backend name, because it is a person. It is not a
+  service.
+- `Address=alice@example.com` matches the identity that the mock server seeds.
+  A sent message therefore matches a known server identity.
 
 ## 4. Restart the daemons and look
 
@@ -208,45 +179,30 @@ $ SOURCE_REGISTRY_DEBUG=1 evolution-source-registry &
 $ CAMEL_DEBUG=all evolution
 ```
 
-Evolution has to be started *after* the registry, and in an environment carrying
-`EDS_CAMEL_PROVIDER_DIR` if you used the scratch tree above — the provider is
-dlopened in Evolution's own process.
+Start Evolution after the registry. If you used the scratch tree, set
+`EDS_CAMEL_PROVIDER_DIR`.
 
-"JMAP mock mail" should appear in the mail view's account list, with Inbox, Sent
-and Drafts under it, and clicking the Inbox should list two messages.
+"JMAP mock mail" appears in the mail view with Inbox, Sent and Drafts. The
+Inbox lists two messages.
 
 ## What "it worked" means
 
-- The account appears at all. If it does not, the bug is in the `.source` files
-  or the registry, not in the provider: check `Enabled=true`, and that the file
-  names match the uids the other two name.
-- Camel opened the module. The mock served `/jmap/session` the moment the
-  account was first touched — that request is the provider's `connect_sync`, and
-  a provider Camel never opened makes no request at all.
-- The folder tree is the mock's three mailboxes, from a single `Mailbox/get`.
-  Inbox, Sent and Drafts arrive with their JMAP roles, which is what lets
-  Evolution mark the Inbox as the account's inbox rather than as a folder that
-  happens to be called one.
-- Opening the Inbox made the mock serve `Email/query` and `Email/get` — the
-  summaries — and lists Bob's and Carol's messages. Opening one of them makes it
-  serve a blob download for the body, which is a plain HTTP GET rather than a
-  method call, and shows up in the mock's log as such.
-- Marking a message read makes it serve `Email/set`, and the flag survives
-  closing and reopening the folder — which also means it went through the
-  provider's summary cache and came back.
-- Sending a message (*File ▸ New ▸ Mail Message*, addressed anywhere) makes it
-  serve `EmailSubmission/set` and lands a copy in Sent. This is the half that
-  goes through the transport, and so the half that a transport with no
-  `[Authentication]` group fails at — with an error naming the *transport*, which
-  is worth reading rather than dismissing, because the account it was sent from
-  is fine.
+- The account appears. If it does not appear, check the `.source` files
+  (`Enabled=true`, file names that match the UIDs).
+- Camel loaded the module: the mock server served `/jmap/session` when the
+  account was first used.
+- The folder tree shows the three mailboxes of the mock server, from
+  `Mailbox/get`. Evolution shows the Inbox as the inbox of the account (from
+  its JMAP role).
+- When you opened the Inbox, the mock server served `Email/query` and
+  `Email/get`. Evolution shows the messages from Bob and Carol. When you open
+  a message, Evolution downloads its body as a blob (a plain HTTP GET in the
+  log of the mock server).
+- If you mark a message as read, the mock server serves `Email/set`. The flag
+  is still set after you close and open the folder again.
+- If you send a message (*File ▸ New ▸ Mail Message*), the mock server serves
+  `EmailSubmission/set`, and Evolution puts a copy in Sent. If the transport
+  has no `[Authentication]` group, this step fails with an error that names
+  the transport.
 
-Anything short of that is a bug in this repository, not in the recipe —
-report it as you would any other bug in this project.
-
-What is left to you rather than to the test suite is that whole list: the tests
-in `rust/crates/jmap-mail/tests/recipe.rs` prove the keyfiles say what this
-document says they say, and stop at the point where a daemon would have to run.
-That Camel loads the installed module, that Evolution offers the account, and
-that the mock sees the requests above are the three things this recipe exists to
-have a human check.
+Any other result is a bug in this repository. Report it.

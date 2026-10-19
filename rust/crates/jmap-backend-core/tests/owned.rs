@@ -4,7 +4,7 @@
 //! What `Owned<T>` promises about a GObject reference, measured on a real one.
 //!
 //! Every one of these could be written as a comment instead — and that is what
-//! the ~15 hand-unreffed sites `docs/UNSAFE-AUDIT.md` Pattern C found were
+//! the ~15 hand-unreffed sites in the calendar backend's marshalling were
 //! doing. A comment saying "this reference is dropped on every path" is not
 //! checkable; a `ref_count` read before and after is. So these tests do not
 //! exercise a mapping or a vfunc: they watch the refcount of a plain

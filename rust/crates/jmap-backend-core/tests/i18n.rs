@@ -12,7 +12,9 @@
 //!
 //! [`bind`]: jmap_backend_core::i18n::bind
 
-use jmap_backend_core::i18n::{DOMAIN, LOCALE_DIR, bind, translate, translate_with};
+use jmap_backend_core::i18n::{
+    DOMAIN, LOCALE_DIR, bind, translate, translate_static, translate_with,
+};
 
 /// The binding gettext reports is the directory the build put in the binary.
 ///
@@ -108,6 +110,20 @@ fn a_placeholder_with_no_argument_stays_as_written() {
         translate_with(c"%1$s, %7$s, 50%, %d, %n", &["one"]),
         "one, %7$s, 50%, %d, %n"
     );
+}
+
+/// With no catalogue, the static-pointer form hands back the exact pointer it
+/// was given, not just an equal string.
+///
+/// `dgettext` documents this: with nothing to translate it returns the
+/// `msgid` pointer unchanged rather than a copy. That is what
+/// `translate_static` leans on to answer a `const gchar *` vfunc without
+/// allocating, so the test checks the pointer, not only its contents.
+#[test]
+fn a_message_with_no_catalogue_keeps_its_own_pointer() {
+    bind();
+    let msgid = c"For reading and storing mail on JMAP servers.";
+    assert_eq!(translate_static(msgid), msgid.as_ptr());
 }
 
 /// The domain is the one Camel and gettext file a catalogue under.

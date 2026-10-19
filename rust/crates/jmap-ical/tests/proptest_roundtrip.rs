@@ -1,33 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Property tests for the JSCalendar <-> iCalendar round trip using `proptest`.
+//! Property tests for JSCalendar and iCalendar round-trip conversions using `proptest`.
 //!
-//! Mirrors claude's ROADMAP item 97 round-trip property testing for the sync layer.
-//! Generates valid JSCalendar events within what `jmap-ical` claims to support
-//! (`MAPPED_PROPERTIES`: start, duration, timeZone, recurrence rules and overrides,
-//! alerts, locations, links, keywords, status, and scalars), asserting that:
-//!     ical_to_event(event_to_ical(event)) == normalize(event)
-//! modulo documented lossy fields, and that the second round trip reaches a fixed point:
+//! Tests that `ical_to_event(event_to_ical(event)) == normalize(event)` modulo documented lossy fields.
+//! Tests that the second round trip reaches a fixed point:
 //!     event_to_ical(parsed1) == event_to_ical(parsed2)
 //!
-//! Documented lossy fields and deviations (ICAL-MAPPING citations):
-//! 1. `id`: ICAL-MAPPING §9.1 (JMAP store-owned identifier, dropped on export;
-//!    `ical_to_event` derives `id` from iCalendar `UID` line).
-//! 2. `created` / `updated`: ICAL-MAPPING §9.1 (Store-owned metadata timestamps;
-//!    `DTSTAMP` is dropped as store-owned on import).
-//! 3. `participants`: ICAL-MAPPING Section 17 & ROADMAP item 102 (Operator decision;
-//!    attendees are not emitted from `ical_to_event`).
-//! 4. `calendar_ids`: ICAL-MAPPING §17 & JMAP §10.9.1 (JMAP container membership,
-//!    managed by EDS backend, not in RFC 5545 VEVENT).
-//! 5. `is_origin` / `is_draft`: ICAL-MAPPING §17 & JMAP §10.9.1 (JMAP server state flags).
-//! 6. `use_default_alerts`: ICAL-MAPPING §17.3 (VALARM has no default alarm syntax).
-//! 7. `color`, `locale`, `localizations`: ICAL-MAPPING §13.15, §17 (Client/server metadata
-//!    not modeled in RFC 5545 VEVENT).
-//! 8. `Location.coordinates` / `Location.description`: ICAL-MAPPING §12.3 (RFC 5545 LOCATION
-//!    is a single text property).
-//! 9. `Link.size` / `Link.title` / `Link.cid`: ICAL-MAPPING §12.5 (RFC 5545 ATTACH carries
-//!    only URI and FMTTYPE).
+//! Documented lossy fields (ICAL-MAPPING citations):
+//! 1. `id`: ICAL-MAPPING 9.1 (written as `UID`).
+//! 2. `created` and `updated`: ICAL-MAPPING 9.1 (store-owned timestamps).
+//! 3. `participants`: ICAL-MAPPING 3.8 (`ical_to_event` assigns `pN` keys).
+//! 4. `calendar_ids`: ICAL-MAPPING 9.2 and JMAP 10.9.1 (container membership).
+//! 5. `is_origin` and `is_draft`: ICAL-MAPPING 9.2 (server flags).
+//! 6. `use_default_alerts`: ICAL-MAPPING 7.4 (no VALARM default syntax).
+//! 7. `color`, `locale`, `localizations`: ICAL-MAPPING 9.2 (unmodeled metadata).
+//! 8. `Location.coordinates` and `description`: ICAL-MAPPING 3.4.
+//! 9. `Link.title` and `cid`: ICAL-MAPPING 3.6.
 
 use std::collections::BTreeMap;
 
@@ -39,7 +28,7 @@ use serde_json::Value;
 
 /// Normalizes an event by stripping documented lossy fields before asserting equality.
 fn normalize_lossy_fields(mut event: CalendarEvent) -> CalendarEvent {
-    // 1. Store/container-owned fields (ICAL-MAPPING §9.1, §17)
+    // 1. Store and container-owned fields (ICAL-MAPPING 9.1 and 9.2).
     event.calendar_ids = None;
     event.created = None;
     event.updated = None;
@@ -53,16 +42,16 @@ fn normalize_lossy_fields(mut event: CalendarEvent) -> CalendarEvent {
     event.time_zones = None;
     event.extra = Default::default();
 
-    // ical_to_event stamps version as "2.0" and event_type as "Event"
+    // Stamp version as "2.0" and event_type as "Event".
     event.event_type = Some("Event".to_owned());
     event.version = Some("2.0".to_owned());
 
-    // If input had no id but had uid, UID in ics was uid, so ical_to_event read id from UID.
+    // Derive `id` from `uid` when `id` is missing.
     if event.id.is_none() && event.uid.is_some() {
         event.id = event.uid.as_ref().map(|u| Id::from(u.as_str()));
     }
 
-    // RecurrenceRule normalizations (RFC 5545 §3.3.10 defaults)
+    // RecurrenceRule normalizations (RFC 5545 3.3.10 defaults).
     if let Some(rule) = &mut event.recurrence_rule {
         rule.rule_type = Some("RecurrenceRule".to_owned());
         if rule.interval == Some(1) {
@@ -77,7 +66,7 @@ fn normalize_lossy_fields(mut event: CalendarEvent) -> CalendarEvent {
 }
 
 /// Generates valid ISO-8601 local date-time strings without fractional seconds
-/// (JSCalendar-bis §1.5.5 / RFC 5545 DATE-TIME).
+/// (JSCalendar-bis 1.5.5 / RFC 5545 DATE-TIME).
 fn arb_local_datetime() -> impl Strategy<Value = String> {
     (
         2020..2035u32,
@@ -90,7 +79,7 @@ fn arb_local_datetime() -> impl Strategy<Value = String> {
         .prop_map(|(y, m, d, h, min, s)| format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}"))
 }
 
-/// Generates valid ISO-8601 duration strings supported by iCalendar DURATION (RFC 5545 §3.3.6).
+/// Generates valid ISO-8601 duration strings supported by iCalendar DURATION (RFC 5545 3.3.6).
 fn arb_duration() -> impl Strategy<Value = String> {
     prop_oneof![
         (1..=14u32).prop_map(|d| format!("P{d}D")),
@@ -232,7 +221,7 @@ fn arb_monthly_nday() -> impl Strategy<Value = NDay> {
         })
 }
 
-/// Generates valid RecurrenceRule objects supported by iCalendar RRULE (RFC 5545 §3.3.10).
+/// Generates RecurrenceRule objects supported by iCalendar RRULE (RFC 5545 3.3.10).
 fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
     prop_oneof![
         // Daily rule
@@ -245,7 +234,7 @@ fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
                 ..RecurrenceRule::default()
             }
         ),
-        // Weekly rule (BYDAY with plain weekdays only per RFC 5545 §3.3.10)
+        // Weekly rule (BYDAY with plain weekdays only per RFC 5545 3.3.10).
         (
             prop::option::of(2..=30u32),
             prop::option::of(1..=100u32),
@@ -318,7 +307,7 @@ fn arb_recurring_event() -> impl Strategy<Value = CalendarEvent> {
     })
 }
 
-/// Generates valid Alert maps (RFC 8984 §4.5.2 / RFC 5545 VALARM DISPLAY).
+/// Generates Alert maps (RFC 8984 4.5.2 / RFC 5545 VALARM DISPLAY).
 fn arb_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![Just("a1".to_string()), Just("a2".to_string())],
@@ -349,7 +338,7 @@ fn arb_alerts() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid Location maps (RFC 8984 §4.2.5 / RFC 5545 LOCATION with X-JMAP-KEY).
+/// Generates Location maps (RFC 8984 4.2.5 / RFC 5545 LOCATION with X-JMAP-KEY).
 fn arb_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         Just("l1".to_string()),
@@ -363,7 +352,7 @@ fn arb_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid VirtualLocation maps (RFC 8984 §4.2.6 / RFC 7986 CONFERENCE with X-JMAP-KEY).
+/// Generates VirtualLocation maps (RFC 8984 4.2.6 / RFC 7986 CONFERENCE with X-JMAP-KEY).
 fn arb_virtual_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![Just("v1".to_string()), Just("v2".to_string())],
@@ -388,7 +377,7 @@ fn arb_virtual_locations() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid Link maps (JSCalendar-bis §1.5.11 / RFC 5545 ATTACH and IMAGE with X-JMAP-KEY).
+/// Generates Link maps (JSCalendar-bis 1.5.11 / RFC 5545 ATTACH and IMAGE with X-JMAP-KEY).
 fn arb_links() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![Just("k1".to_string()), Just("k2".to_string())],
@@ -433,7 +422,7 @@ fn arb_links() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid Keywords maps (RFC 8984 §4.2.9 / RFC 5545 CATEGORIES).
+/// Generates Keywords maps (RFC 8984 4.2.9 / RFC 5545 CATEGORIES).
 fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
         prop_oneof![
@@ -447,7 +436,7 @@ fn arb_keywords() -> impl Strategy<Value = BTreeMap<String, Value>> {
     )
 }
 
-/// Generates valid recurrence overrides (RFC 8984 §4.3.5 / RFC 5545 EXDATE and detached VEVENT).
+/// Generates recurrence overrides (RFC 8984 4.3.5 / RFC 5545 EXDATE and detached VEVENT).
 /// Override patches specify properties that differ from the series baseline.
 fn arb_recurrence_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> {
     prop::collection::btree_map(
@@ -458,7 +447,7 @@ fn arb_recurrence_overrides() -> impl Strategy<Value = BTreeMap<String, Value>> 
         prop_oneof![
             // Excluded instance (EXDATE)
             Just(serde_json::json!({"excluded": true})),
-            // Modified instance (RECURRENCE-ID detached component) differing from series baseline
+            // Modified instance (RECURRENCE-ID detached component).
             prop_oneof![
                 Just(serde_json::json!({"status": "cancelled"})),
                 Just(serde_json::json!({"title": "Shifted Standup"})),
@@ -495,8 +484,7 @@ fn arb_composite_event() -> impl Strategy<Value = CalendarEvent> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
-    /// Property 1: Core scalars (start, duration, timeZone, status, freeBusyStatus,
-    /// priority, privacy, title, description) round-trip losslessly modulo documented lossy fields.
+    /// Property 1: Core scalars round-trip losslessly modulo documented lossy fields.
     #[test]
     fn prop_roundtrip_start_duration_timezone_and_scalars(event in arb_scalar_event()) {
         let expected = normalize_lossy_fields(event.clone());
@@ -505,7 +493,7 @@ proptest! {
 
         prop_assert_eq!(&parsed, &expected, "parsed event must equal normalized original");
 
-        // Second round trip must reach a fixed point
+        // Second round trip must reach a fixed point.
         let ics2 = event_to_ical(&parsed);
         let parsed2 = ical_to_event(&ics2).expect("second roundtrip must parse cleanly");
 
@@ -513,8 +501,7 @@ proptest! {
         prop_assert_eq!(&ics, &ics2, "iCalendar emission must reach fixed point");
     }
 
-    /// Property 2: Recurrence rules (frequency, interval, count, byDay, byMonthDay,
-    /// byMonth, firstDayOfWeek) round-trip losslessly modulo RFC 5545 default omissions.
+    /// Property 2: Recurrence rules round-trip losslessly modulo RFC 5545 default omissions.
     #[test]
     fn prop_roundtrip_recurrence_rule(event in arb_recurring_event()) {
         let expected = normalize_lossy_fields(event.clone());
@@ -549,7 +536,7 @@ proptest! {
         prop_assert_eq!(&ics, &ics2);
     }
 
-    /// Property 4: Physical locations (with name) and virtual locations (with URI and name) round-trip.
+    /// Property 4: Physical and virtual locations round-trip losslessly.
     #[test]
     fn prop_roundtrip_locations(
         mut event in arb_scalar_event(),
@@ -570,7 +557,7 @@ proptest! {
         prop_assert_eq!(&ics, &ics2);
     }
 
-    /// Property 5: External links (attachments with contentType, image links with display set) round-trip.
+    /// Property 5: External links and image links round-trip losslessly.
     #[test]
     fn prop_roundtrip_links(
         mut event in arb_scalar_event(),
@@ -608,7 +595,7 @@ proptest! {
         prop_assert_eq!(&ics, &ics2);
     }
 
-    /// Property 7: Recurrence overrides (exclusions via EXDATE, patched overrides via detached VEVENT).
+    /// Property 7: Recurrence overrides round-trip losslessly.
     #[test]
     fn prop_roundtrip_recurrence_overrides(
         mut event in arb_scalar_event(),
@@ -635,7 +622,7 @@ proptest! {
         prop_assert_eq!(&ics, &ics2);
     }
 
-    /// Property 8: Composite events combining all supported properties round-trip losslessly.
+    /// Property 8: Composite events combining supported properties round-trip losslessly.
     #[test]
     fn prop_roundtrip_composite_event(event in arb_composite_event()) {
         let expected = normalize_lossy_fields(event.clone());

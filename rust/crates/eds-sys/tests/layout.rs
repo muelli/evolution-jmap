@@ -219,10 +219,7 @@ fn cal_backend_layouts_match_the_gtype_system() {
 /// mechanism is an unverified bet, and the symptom of losing it is a
 /// `g_object_new(0)` per address book with no hint as to why.
 ///
-/// Originally `docs/AUDIT-FFI.md`'s F5, on the branch that fix was written on;
-/// the squash that brought F1–F4 to master left it behind, which is
-/// `docs/AUDIT-FFI-20260810.md`'s F12. The collection factory is new since, and
-/// is the same bet a third time.
+/// The collection factory makes the same bet a third time.
 #[test]
 fn backend_factory_layouts_match_the_gtype_system() {
     // `EExtension`, the factories' own parent, has no accessor in the

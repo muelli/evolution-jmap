@@ -228,8 +228,7 @@ fn without_a_source_nothing_is_claimed() {
 #[test]
 fn class_init_installs_get_backend_property_over_the_meta_backends() {
     let gtype = register_static::<JmapCalBackend>();
-    // SAFETY: the type is registered, so referencing its class runs
-    // class_init and hands back a class struct of our own layout.
+    // SAFETY: Referencing the registered class invokes class_init and returns the class struct.
     let class: *mut JmapCalBackendClass = unsafe { g_type_class_ref(gtype) }.cast();
     // SAFETY: the class is referenced and leads with the parent's.
     let ours: &ECalBackendClass = unsafe { &(*class).parent_class.parent_class.parent_class };

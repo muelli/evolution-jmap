@@ -313,14 +313,7 @@ impl VacationResponseCapability {
     }
 }
 
-/// The two `SetError` types RFC 8621 §2.5 adds for `Mailbox/set`.
-///
-/// Both are refusals to *destroy*, and both exist because the generic types of
-/// RFC 8620 §5.3 cannot say what a client would have to do about them: a
-/// mailbox that still holds another mailbox, and one that still holds mail, are
-/// removable once the user has decided what becomes of what is inside. A
-/// `forbidden` would read as "not yours to delete", which is a different
-/// conversation with the user.
+/// The `SetError` types added for `Mailbox/set` destructions (RFC 8621 §2.5).
 pub mod mailbox_set_error {
     pub const HAS_CHILD: &str = "mailboxHasChild";
     pub const HAS_EMAIL: &str = "mailboxHasEmail";
@@ -628,9 +621,8 @@ pub struct EmailImport {
     pub mailbox_ids: Option<BTreeMap<Id, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, bool>>,
-    /// The date the message should sort by. Absent leaves it to the server,
-    /// which RFC 8621 §4.8 defines as the most recent `Received` header's date
-    /// or, failing that, the time of the import.
+    /// The sort date for the message.
+    /// Defaults to the newest `Received` header date or import time (RFC 8621 §4.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub received_at: Option<UtcDate>,
 }
@@ -660,11 +652,6 @@ impl EmailImport {
 }
 
 /// `Email/import` arguments (RFC 8621 §4.8).
-///
-/// Not a [`crate::methods::SetRequest`]: an import has no update and no destroy
-/// half, its creations are `EmailImport`s rather than `Email`s, and the map is
-/// named `emails` rather than `create`. What it does share is `ifInState` and
-/// the `stateMismatch` that comes of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailImportRequest {
@@ -1825,16 +1812,8 @@ impl EnvelopeAddress {
     }
 }
 
-/// When the server should release a submission it was asked to hold: SMTP
-/// FUTURERELEASE (RFC 4865), which RFC 8621 §7 carries not as a property of
-/// the `EmailSubmission` but as a `mailFrom.parameters` entry. The property a
-/// client might reach for instead, `sendAt`, is server-set: the server answers
-/// with the release time there, it does not take one.
-///
-/// RFC 4865 offers the two forms below and forbids sending both. Prefer
-/// `HoldFor`: a relative time cannot disagree with the server about what time
-/// it is now, and Stalwart through 0.16.16 misread `HOLDUNTIL` (it expected a
-/// Unix timestamp where the RFC says date-time).
+/// Release schedule for delayed message submission (RFC 4865, RFC 8621 §7).
+/// Configured as a `mailFrom.parameters` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Schedule {
     /// Hold for this many seconds (RFC 4865 `HOLDFOR`, at most 99999999).
@@ -1997,13 +1976,8 @@ impl SubmissionCapability {
         self
     }
 
-    /// Whether the server names FUTURERELEASE (RFC 4865) among its
-    /// `submissionExtensions`, which is the other half of offering scheduled
-    /// send beside a non-zero `maxDelayedSend`.
-    ///
-    /// The keys are EHLO names and servers disagree about their case (Stalwart
-    /// advertises `FUTURERELEASE`, Cyrus `futurerelease`), so the comparison
-    /// here is case-insensitive.
+    /// Checks if the server advertises FUTURERELEASE (RFC 4865) support.
+    /// Matches capability keys case-insensitively.
     pub fn supports_future_release(&self) -> bool {
         self.submission_extensions
             .keys()

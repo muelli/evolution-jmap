@@ -1262,6 +1262,85 @@ fn debug_print_eds(message: &str) {
 }
 
 #[cfg(test)]
+mod report_fan_out_tests {
+    use jmap_tracing_capture::capture;
+
+    use super::*;
+    use crate::child_source::UnwritableSetting;
+    use crate::fan_out::Abandoned;
+    use crate::removal::NotRemoved;
+
+    #[test]
+    fn each_failure_list_logs_a_critical_naming_its_own_resource() {
+        let report = Populated {
+            children: Vec::new(),
+            uncreated: vec!["addressbook-1".to_owned()],
+            abandoned: vec![Abandoned {
+                resource_id: "addressbook-2".to_owned(),
+                setting: UnwritableSetting::UnknownProperty {
+                    group: "Authentication",
+                    key: "Host",
+                },
+            }],
+            not_removed: vec![NotRemoved {
+                resource_id: "addressbook-3".to_owned(),
+                message: "refused".to_owned(),
+            }],
+        };
+
+        let (_, entries) = capture(|| report_fan_out(&report, None));
+
+        for resource_id in ["addressbook-1", "addressbook-2", "addressbook-3"] {
+            assert!(
+                entries
+                    .iter()
+                    .any(|(_, name, value)| name == "resource_id" && value == resource_id),
+                "expected a resource_id={resource_id} field, got {entries:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_summary_carries_the_account_id_only_when_one_is_given() {
+        let report = Populated::default();
+
+        let (_, with_account) = capture(|| report_fan_out(&report, Some("account-1")));
+        assert!(
+            with_account
+                .iter()
+                .any(|(_, name, value)| name == "account_id" && value == "account-1"),
+            "expected an account_id=account-1 field, got {with_account:?}"
+        );
+
+        let (_, without_account) = capture(|| report_fan_out(&report, None));
+        assert!(
+            without_account
+                .iter()
+                .all(|(_, name, _)| name != "account_id"),
+            "did not expect an account_id field, got {without_account:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parent_class_tests {
+    use super::*;
+
+    #[test]
+    fn parent_class_finds_the_class_once_it_is_initialised() {
+        // SAFETY: referencing the type initialises its class if it is not
+        // already, and the reference is given back below.
+        let class = unsafe { gobject_sys::g_type_class_ref(e_collection_backend_get_type()) };
+        assert!(
+            parent_class().is_some(),
+            "parent_class found no class for an initialised type"
+        );
+        // SAFETY: gives back the reference taken above.
+        unsafe { gobject_sys::g_type_class_unref(class) };
+    }
+}
+
+#[cfg(test)]
 mod debug_print_tests {
     use jmap_tracing_capture::capture;
 
@@ -1301,6 +1380,7 @@ mod debug_print_tests {
             debug_print("no resource id in this one");
         });
 
+        assert!(!entries.is_empty(), "expected a debug entry, got none");
         assert!(
             entries.iter().all(|(_, name, _)| name != "resource_id"),
             "did not expect a resource_id field, got {entries:?}"

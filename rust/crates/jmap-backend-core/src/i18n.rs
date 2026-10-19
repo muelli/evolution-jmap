@@ -307,3 +307,27 @@ fn placeholder(text: &str) -> Option<(usize, usize)> {
     }
     Some((text[1..end].parse().ok()?, end + 2))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_valid_placeholder_gives_its_position_and_byte_length() {
+        assert_eq!(placeholder("%12$s"), Some((12, 5)));
+        assert_eq!(placeholder("%1$s"), Some((1, 4)));
+    }
+
+    #[test]
+    fn digits_without_a_dollar_s_suffix_are_not_a_placeholder() {
+        // Reaches the suffix check (`end` past the digits) without being
+        // short-circuited by the no-digit case, so this fails only when
+        // both parts of the guard are evaluated.
+        assert_eq!(placeholder("%12xs"), None);
+    }
+
+    #[test]
+    fn no_digits_at_all_is_not_a_placeholder() {
+        assert_eq!(placeholder("%$s"), None);
+    }
+}

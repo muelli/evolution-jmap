@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reference count and allocation leak verification across libical-glib marshalling boundaries.
+//! Reference count and leak verification across libical-glib boundaries.
 
 use std::ffi::CString;
 use std::sync::{Mutex, MutexGuard, Once};
@@ -11,19 +11,20 @@ use glib_sys::{G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, g_log_set_always_fatal
 use gobject_sys::{GObject, g_object_unref};
 use jmap_backend_cal::marshal;
 
-/// Every test below resolves a `TZID` through
-/// `i_cal_timezone_get_builtin_timezone`, which lazily builds and reads a
-/// process-global timezone table with no internal locking; running these
-/// tests concurrently (this file's default) segfaults inside libical's own
-/// `strcmp` on that table. Hold this for the lifetime of any such call.
+/// Serialize access to the libical builtin timezone table.
+///
+/// `i_cal_timezone_get_builtin_timezone` reads a global table without locks.
+/// Concurrent access causes memory corruption in `strcmp`.
+/// Hold this lock during every such call.
 fn serialize_libical_timezone_access() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// An event in a zone libical knows, which is the path that walks the most:
-/// every property of the event is asked for a `TZID` parameter, the zone is
-/// resolved, its definition cloned, renamed and put in the envelope.
+/// Event fixture in a known timezone.
+///
+/// The parser inspects properties for `TZID` parameters.
+/// It resolves the zone and adds its definition to the envelope.
 const ZONED: &str = "BEGIN:VCALENDAR\r\n\
                      VERSION:2.0\r\n\
                      BEGIN:VEVENT\r\n\
@@ -34,8 +35,9 @@ const ZONED: &str = "BEGIN:VCALENDAR\r\n\
                      END:VEVENT\r\n\
                      END:VCALENDAR\r\n";
 
-/// The same event as a UTC instant: the traversal runs and finds no zone to
-/// define, so nothing is cloned and nothing is taken.
+/// Event fixture with UTC time.
+///
+/// The parser finds no local zone to define in the envelope.
 const UNZONED: &str = "BEGIN:VCALENDAR\r\n\
                        VERSION:2.0\r\n\
                        BEGIN:VEVENT\r\n\
@@ -45,29 +47,29 @@ const UNZONED: &str = "BEGIN:VCALENDAR\r\n\
                        END:VEVENT\r\n\
                        END:VCALENDAR\r\n";
 
-/// Configures GLib critical and warning logs to abort the test process.
+/// Configure GLib critical and warning logs to abort the test process.
 fn glib_complaints_are_failures() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        // SAFETY: no preconditions; the previous mask is returned and ignored.
+        // SAFETY: no preconditions; the call returns the previous mask.
         unsafe { g_log_set_always_fatal(G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING) };
     });
 }
 
-/// The strong reference count of a GObject-derived instance.
+/// Return the strong reference count of a GObject-derived instance.
 ///
 /// # Safety
 ///
-/// `instance` must be a live GObject-derived instance.
+/// `instance` must point to a live GObject instance.
 unsafe fn strong_count<T>(instance: *mut T) -> u32 {
-    // SAFETY: the caller guarantees a live instance of a GObject-derived type.
+    // SAFETY: caller guarantees a live instance of a GObject type.
     unsafe { (*instance.cast::<GObject>()).ref_count }
 }
 
-/// Returns baseline reference count from libical parsing before traversal.
+/// Return baseline reference count from libical parsing before traversal.
 fn baseline_count(icalendar: &str) -> u32 {
     let text = CString::new(icalendar).expect("fixture has no interior NUL");
-    // SAFETY: `text` is valid for the call; the reference is released below.
+    // SAFETY: `text` is a valid C string; the code releases the reference below.
     unsafe {
         let component = i_cal_component_new_from_string(text.as_ptr());
         assert!(!component.is_null(), "libical would not parse the fixture");
@@ -89,13 +91,13 @@ fn a_loaded_component_carries_exactly_the_callers_reference() {
             "{name}: not read as a calendar object"
         );
         // Verify component reference count matches baseline after traversal.
-        // SAFETY: a live component, just checked for NULL.
+        // SAFETY: component is live and verified non-null.
         assert_eq!(
             unsafe { strong_count(component) },
             baseline,
             "{name}: the traversal changed the component's own reference count"
         );
-        // SAFETY: the reference `component_from_ical` handed over.
+        // SAFETY: releases the reference from `component_from_ical`.
         unsafe { marshal::component_unref(component) };
     }
 }
@@ -106,7 +108,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
     let _lock = serialize_libical_timezone_access();
     let component = marshal::component_from_ical(ZONED);
     assert!(!component.is_null());
-    // SAFETY: a live component this scope owns.
+    // SAFETY: component is a live instance owned by this scope.
     let rendered =
         unsafe { marshal::ical_from_component(component) }.expect("a parsed component renders");
     assert!(
@@ -114,8 +116,8 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
         "the zone was never defined, so this test is not measuring the clone \
          handoff it is about: {rendered}"
     );
-    // Verify cloned timezone component is owned by the envelope.
-    // SAFETY: the reference `component_from_ical` handed over.
+    // Verify envelope owns cloned timezone component.
+    // SAFETY: releases the reference from `component_from_ical`.
     unsafe { marshal::component_unref(component) };
 }
 
@@ -123,7 +125,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
 fn loading_a_zoned_object_over_and_over_retains_nothing() {
     glib_complaints_are_failures();
     let _lock = serialize_libical_timezone_access();
-    // Verifies that repeatedly loading zoned objects does not leak heap memory across windows.
+    // Verify that loading zoned objects repeatedly does not leak heap memory.
     const LOADS: u64 = 10_000;
     const WINDOWS: usize = 8;
     const NOISE_FLOOR: u64 = 32 * 1024;
@@ -146,19 +148,17 @@ fn loading_a_zoned_object_over_and_over_retains_nothing() {
     );
 }
 
-/// One trip through both directions of the zone handling: the load path
-/// (`component_from_ical` → `holds_event` → `take_event_time_zones` →
-/// `referenced_tzids` → `take_referenced_time_zones`) and the render path
-/// (`icalendar_with_time_zones`), which is every function this file is about.
+/// Execute one round trip of timezone load and render paths.
+///
+/// The run exercises `component_from_ical` and `icalendar_with_time_zones`.
 fn load_and_render() {
-    // SAFETY: the reference `component_from_ical` handed over is released
-    // immediately.
+    // SAFETY: releases the reference from `component_from_ical` immediately.
     unsafe { marshal::component_unref(marshal::component_from_ical(ZONED)) };
     marshal::icalendar_with_time_zones(ZONED);
 }
 
-/// Returns total allocated heap bytes via mallinfo2.
+/// Return total allocated heap bytes via mallinfo2.
 fn allocated_bytes() -> u64 {
-    // SAFETY: no preconditions; returns a plain struct of counters.
+    // SAFETY: no preconditions; libc call returns counters.
     unsafe { libc::mallinfo2() }.uordblks as u64
 }

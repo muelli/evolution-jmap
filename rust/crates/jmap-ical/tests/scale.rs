@@ -1,15 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Real-size scale tests for `jmap-ical`.
+//! Scale tests for `jmap-ical`.
 //!
-//! Validates mapping correctness, stability, and throughput across a realistic
-//! corpus of calendar events:
-//! - Recurring events with overrides and VALARMs.
-//! - Events with custom solidus-prefixed VTIMEZONE definitions.
-//! - Point-in-time zero-duration milestone events.
-//! - DST-transition-spanning events.
-//! - Standard multi-day and timed events across major exporters.
+//! Validates mapping correctness, stability, and throughput across calendar events.
 
 use std::env;
 use std::time::Instant;

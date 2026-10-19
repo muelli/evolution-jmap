@@ -152,8 +152,8 @@ pub fn discover_and_register(
     };
 
     // Register — and later request — exactly the scopes this client uses,
-    // chosen from those the deployment advertises: the JMAP data scopes (as
-    // `docs/OAUTH-FASTMAIL.md` records their spelling) plus `offline_access`
+    // chosen from those the deployment advertises: the JMAP data scopes
+    // (spelled as Fastmail advertises them, below) plus `offline_access`
     // for a refresh token. Naming none is wrong (a registration naming no
     // `scope` can be issued an *empty* default — a token with no JMAP access
     // at all), and naming everything advertised is wrong too: the registered

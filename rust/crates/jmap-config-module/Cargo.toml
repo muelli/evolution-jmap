@@ -24,7 +24,7 @@ jmap-config = { workspace = true }
 # module: e_module_load below calls both crates' load. See jmap_ui::module.
 jmap-ui = { workspace = true }
 gobject-sys = { workspace = true }
-# Metadata-only, for this crate's own build.rs: not called from any Rust code
-# here, but needs to be a direct (non-build) dependency for Cargo to set
+# Metadata-only, for this crate's own build.rs. Not called from any Rust
+# code here. It must be a direct, non-build dependency so Cargo sets
 # `DEP_EVOLUTION_SHELL_LIBDIRS` from its `links` key. See build.rs.
 evo-sys = { workspace = true }

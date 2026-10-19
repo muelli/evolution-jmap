@@ -19,7 +19,7 @@ use jmap_backend_book::module::{load, unload};
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// A `GTypeModule` standing in for the `EModule` the factory would load us as.
+/// A `GTypeModule` standing in for the `EModule` loaded by the factory.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -43,8 +43,7 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to a freshly allocated class struct leading with GTypeModuleClass.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -93,9 +92,7 @@ fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
     let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
     assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what the factory does for as long as the backend
-    // is wanted.
+    // SAFETY: `module` is a GTypeModule kept referenced for the test duration.
     assert_ne!(
         unsafe { g_type_module_use(module) },
         GFALSE,
@@ -119,13 +116,7 @@ fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
              address book would fall back to a password prompt"
         );
 
-        // Which service answered is the half that changes with the EDS in
-        // front of us, and it is the half worth pinning: on an EDS with no
-        // dynamic service of its own, the module load above is the only
-        // reason anything answers at all, and where upstream has one, this
-        // project must have stood its own down rather than leave two services
-        // claiming one account for `e_oauth2_services_find` to pick between
-        // by list order.
+        // Pin that the expected service type registered for this EDS build.
         let found_type = (*(*found.cast::<gobject_sys::GTypeInstance>()).g_class).g_type;
         let found_name = std::ffi::CStr::from_ptr(gobject_sys::g_type_name(found_type));
         #[cfg(not(eds_oauth2_dynamic))]

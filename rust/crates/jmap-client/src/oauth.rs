@@ -1,35 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where a JMAP deployment's OAuth 2.0 endpoints and client id come from
-//! (RFC 8414 discovery, RFC 7591 dynamic client registration).
+//! OAuth 2.0 endpoint discovery and dynamic client registration.
 //!
-//! EDS authenticates an OAuth 2.0 account through an `EOAuth2Service`, whose
-//! vfuncs are asked for an authorization URI, a token URI, a client id and a
-//! redirect URI. The three services EDS ships (Google, Outlook, Yahoo)
-//! answer those from constants compiled in, because each of them is exactly
-//! one identity provider. A JMAP service cannot: "JMAP" is not a provider but
-//! a protocol, and the endpoints belong to whichever deployment the account
-//! lives on.
+//! Implements RFC 8414 authorization server metadata discovery and RFC 7591 dynamic client registration.
 //!
-//! Endpoints are discovered via RFC 8414 at a well-known path naming the
-//! authorization and token endpoints, supported grant types and PKCE methods,
-//! and (where the server supports RFC 7591 dynamic client registration)
-//! registration endpoints.
+//! Endpoints are discovered using well-known URI paths.
+//! The metadata provides authorization endpoints, token endpoints, supported grant types, and PKCE methods.
 //!
-//! This module provides [`discover`] to fetch and validate metadata documents,
-//! [`register_client`] for RFC 7591 dynamic client registration, and
-//! [`exchange_code`] / [`refresh_access_token`] to redeem codes and tokens.
+//! This module provides [`discover`] to fetch metadata documents.
+//! It also provides [`register_client`], [`exchange_code`], and [`refresh_access_token`].
 //!
-//! ## What is enforced, and what is not
+//! ## Validation rules
 //!
-//! The security-relevant check is RFC 8414 §3.3: the `issuer` in the document
-//! must be *identical* to the issuer the well-known URL was built from.
-//! OpenID Connect carries this same mix-up defence.
-//!
-//! Not enforced here: that the issuer is `https`. RFC 8414 §2 requires it, but
-//! nothing else in this client requires TLS either (session documents, apiUrl,
-//! and blob URLs are accepted as stated).
+//! RFC 8414 Section 3.3 requires that the document `issuer` matches the requested issuer URI exactly.
+//! The client enforces this check to prevent IdP mix-up attacks.
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -46,12 +31,9 @@ const WELL_KNOWN: &str = "/.well-known/oauth-authorization-server";
 /// What RFC 8414 §2 says `grant_types_supported` means when it is absent.
 const DEFAULT_GRANT_TYPES: [&str; 2] = ["authorization_code", "implicit"];
 
-/// An authorization server's metadata, as RFC 8414 §2 defines it: the fields
-/// an EDS `EOAuth2Service` for a JMAP account needs, and no others.
+/// Authorization server metadata (RFC 8414 Section 2).
 ///
-/// Only [`discover`] and [`AuthorizationServer::parse`] construct one, and
-/// both validate: a value of this type has been checked against the issuer it
-/// was asked for, and every endpoint in it is an absolute URL.
+/// Parsed instances have validated issuer URIs and absolute endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationServer {
     /// The issuer identifier, equal to the (normalised) one discovery asked
@@ -157,11 +139,9 @@ impl AuthorizationServer {
     }
 }
 
-/// Fetch and validate `issuer`'s metadata document.
+/// Fetch and validate an authorization server metadata document (RFC 8414).
 ///
-/// Asks with no credentials, which is not an omission: the document says where
-/// to *obtain* credentials, so RFC 8414 §3 has it publicly readable and a
-/// client that had to authenticate for it could never get started.
+/// Requests are unauthenticated because metadata endpoints are public (RFC 8414 Section 3).
 pub fn discover(
     transport: &dyn Transport,
     issuer: &str,
@@ -190,9 +170,7 @@ pub fn discover(
         })?;
 
     if !(200..300).contains(&response.status) {
-        // No RFC 7807 problem details are parsed out of this one: it is not a
-        // JMAP endpoint, and a 404 here means only "this deployment publishes
-        // no OAuth 2.0 metadata", which the status already says.
+        // OAuth discovery endpoints do not return JMAP problem details.
         return Err(Error::Http {
             status: response.status,
             problem: None,
@@ -202,19 +180,14 @@ pub fn discover(
     AuthorizationServer::parse(&issuer, &response.body)
 }
 
-/// The grant types this client asks a registration endpoint to register it
-/// for. Fixed rather than a parameter: every account this client drives is
-/// the same kind of client, so there is nothing here for a caller to
-/// legitimately vary.
+/// Grant types requested during dynamic client registration.
 const CLIENT_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"];
 
 /// The response types this client asks to be registered for: the
 /// authorization-code grant only; this client does no implicit flow.
 const CLIENT_RESPONSE_TYPES: [&str; 1] = ["code"];
 
-/// RFC 8252 §8.4: a native application cannot keep a client secret
-/// confidential, so it registers as a public client and relies on PKCE
-/// (RFC 7636) rather than one.
+/// Client authentication method for public clients using PKCE (RFC 8252 Section 8.4, RFC 7636).
 const CLIENT_AUTH_METHOD: &str = "none";
 
 /// What this client asks an RFC 7591 registration endpoint to register it
@@ -345,15 +318,12 @@ pub fn register_client(
     ClientRegistration::parse(&response.body)
 }
 
-/// RFC 7636 Proof Key for Code Exchange: a secret generated fresh for one
-/// authorization attempt, whose SHA-256 hash (not the secret itself) is
-/// sent with the authorization request, and whose plaintext is sent only
-/// once, later, to the token endpoint. Redeeming the code then proves
-/// possession of the same secret that produced the challenge the
-/// authorization request carried.
+/// Proof Key for Code Exchange verifier (RFC 7636).
 ///
-/// Without this, an authorization code intercepted in transit (RFC 8252 §8.1)
-/// is redeemable by whoever captured it.
+/// Generates a secret for an authorization attempt.
+/// The SHA-256 challenge hash is sent with the authorization request.
+/// The raw verifier secret is sent to the token endpoint during code exchange.
+/// This protects against authorization code interception attacks (RFC 8252 Section 8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkceVerifier(String);
 
@@ -419,12 +389,10 @@ struct TokenErrorDocument {
     error_description: Option<String>,
 }
 
-/// Redeem an authorization code for tokens (RFC 6749 §4.1.3), proving with
-/// `verifier` that this is the same client the authorization request came
-/// from (RFC 7636 §4.5).
+/// Exchange an authorization code for access and refresh tokens (RFC 6749 Section 4.1.3).
 ///
-/// `redirect_uri` must be byte-identical to the one the authorization request
-/// named: RFC 6749 §4.1.3 requires the token endpoint to check it.
+/// Proves possession of the PKCE verifier (RFC 7636 Section 4.5).
+/// `redirect_uri` must match the value sent in the authorization request.
 pub fn exchange_code(
     transport: &dyn Transport,
     token_endpoint: &str,
@@ -444,10 +412,7 @@ pub fn exchange_code(
     token_request(transport, token_endpoint, body, cancel)
 }
 
-/// Redeem a refresh token for a new access token (RFC 6749 §6).
-///
-/// No PKCE verifier here: a verifier proves who redeemed the *original*
-/// code, not who is refreshing it, and no RFC ties one to a refresh grant.
+/// Redeem a refresh token for a new access token (RFC 6749 Section 6).
 pub fn refresh_access_token(
     transport: &dyn Transport,
     token_endpoint: &str,
@@ -463,11 +428,9 @@ pub fn refresh_access_token(
     token_request(transport, token_endpoint, body, cancel)
 }
 
-/// POST a token request and parse whichever of RFC 6749 §5.1/§5.2 comes back.
+/// Send a token request and parse the response (RFC 6749 Section 5).
 ///
-/// Sent with no separate client authentication: this client registers as a
-/// public, PKCE-only client (see [`CLIENT_AUTH_METHOD`]), so `client_id` in
-/// the body is all the identification RFC 6749 §3.2.1 asks of one.
+/// Public clients authenticate using `client_id` in the request body.
 fn token_request(
     transport: &dyn Transport,
     token_endpoint: &str,
@@ -503,9 +466,7 @@ fn token_request(
     parse_token_response(response.status, &response.body)
 }
 
-/// Parse whichever of RFC 6749 §5.1 (success) or §5.2 (error) a token-endpoint
-/// response turns out to be, from the status and body alone: separate from
-/// [`token_request`] so it can be exercised directly against hostile bodies.
+/// Parse token endpoint response bodies (RFC 6749 Section 5.1 and 5.2).
 fn parse_token_response(status: u16, body: &[u8]) -> Result<TokenResponse, Error> {
     if (200..300).contains(&status) {
         let document: TokenDocument = serde_json::from_slice(body)?;
@@ -523,10 +484,7 @@ fn parse_token_response(status: u16, body: &[u8]) -> Result<TokenResponse, Error
                 "the token response states no token_type; RFC 6749 §5.1 requires one".to_owned(),
             )
         })?;
-        // Every credential this client carries end to end is a bearer token
-        // (`Credentials::Bearer`); a server naming any other type is handing
-        // back something this client has no per-request scheme for, and
-        // using it as a bearer token anyway would send it the wrong way.
+        // Verify that the token type is bearer.
         if !token_type.eq_ignore_ascii_case("bearer") {
             return Err(Error::Protocol(format!(
                 "the token response names token_type {token_type}, which this client cannot use \
@@ -568,19 +526,14 @@ fn form_body(pairs: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-/// The URL `issuer`'s metadata document lives at.
+/// Return the metadata document URL for an issuer (RFC 8414 Section 3.1).
 ///
-/// RFC 8414 §3.1 inserts the well-known path between the host and the path
-/// of the issuer identifier rather than appending it: a deployment at
-/// `https://example.com/tenant1` publishes at
-/// `https://example.com/.well-known/oauth-authorization-server/tenant1`.
+/// Inserts the well-known path between host and path components.
 pub fn metadata_url(issuer: &str) -> Result<String, Error> {
     well_known_for(issuer).map(|(_, url)| url)
 }
 
-/// The normalised issuer identifier and the URL its document lives at, which
-/// are derived together because §3.3's check compares against the former and
-/// only the latter is fetched.
+/// Derive normalized issuer identifier and well-known metadata URL.
 fn well_known_for(issuer: &str) -> Result<(String, String), Error> {
     let (scheme, rest) = issuer
         .split_once("://")
@@ -615,11 +568,7 @@ fn well_known_for(issuer: &str) -> Result<(String, String), Error> {
     ))
 }
 
-/// An endpoint URL as it may be used: absolute, and http(s).
-///
-/// A relative or otherwise odd value would be handed to a browser widget or
-/// posted to; `javascript:` and `data:` are the reason the scheme is checked
-/// rather than merely the absoluteness.
+/// Validate that an endpoint URL is absolute and uses `http://` or `https://`.
 fn endpoint(name: &str, value: Option<String>) -> Result<Option<String>, Error> {
     let Some(value) = value else {
         return Ok(None);
@@ -832,9 +781,7 @@ mod tests {
 
     #[test]
     fn two_verifiers_are_never_the_same() {
-        // Not a proof of randomness, but a regression test against the bug
-        // that would defeat PKCE entirely: a verifier that is constant or
-        // derived from something predictable.
+        // Verify that verifier generation produces distinct secrets.
         assert_ne!(
             PkceVerifier::generate().secret(),
             PkceVerifier::generate().secret()
@@ -932,9 +879,7 @@ mod tests {
 
     #[test]
     fn distinct_error_codes_are_distinguishable() {
-        // The whole reason `OAuthTokenRefused` parses the body: every
-        // refusal here answers the same HTTP 400, so two different failures
-        // must not collapse into the same error.
+        // Distinct token error codes must produce distinct error variants.
         let invalid_grant =
             parse_token_response(400, br#"{"error": "invalid_grant"}"#).expect_err("refused");
         let invalid_client =

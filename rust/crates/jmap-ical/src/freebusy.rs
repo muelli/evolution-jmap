@@ -1,36 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BusyPeriod` -> `VFREEBUSY`: translates JMAP availability to iCalendar.
+//! Translates JMAP availability to iCalendar `VFREEBUSY` components.
 //!
-//! Translates `Principal/getAvailability` [`BusyPeriod`]s (draft-ietf-jmap-calendars §2.2)
-//! to the bare `VFREEBUSY` component EDS's `ECalBackendSync::get_free_busy_sync` expects.
-//!
-//! Omits `UID` and `DTSTAMP` per `ecmb_get_free_busy_sync` to keep the mapping pure.
-//! Unreadable busy periods refuse the entire component to prevent falsely booking busy time.
+//! This module converts `Principal/getAvailability` [`BusyPeriod`] items
+//! (draft-ietf-jmap-calendars Section 2.2) to `VFREEBUSY` components.
+//! It omits `UID` and `DTSTAMP` per EDS `ecmb_get_free_busy_sync`.
+//! Invalid periods reject the entire component to avoid false availability.
 
 use jmap_proto::principals::BusyPeriod;
 use jmap_proto::state::UtcDate;
 
 use crate::event::{Component, EntryExt, make_entry, to_utc_date_time};
 
-/// The RFC 5545 §3.2.9 `FBTYPE` for a `BusyPeriod.busyStatus`.
+/// Returns the RFC 5545 Section 3.2.9 `FBTYPE` parameter for a busy status.
 ///
-/// Maps known busy statuses to their `FBTYPE` equivalent; unknown values map to `BUSY`.
+/// Maps known statuses to `FBTYPE` values; unknown values map to `BUSY`.
 pub fn free_busy_type(busy_status: &str) -> &'static str {
     match busy_status {
         "tentative" => "BUSY-TENTATIVE",
         "unavailable" => "BUSY-UNAVAILABLE",
-        // "confirmed", and anything a future draft adds.
+        // Confirmed and other draft statuses map to BUSY.
         _ => "BUSY",
     }
 }
 
-/// One attendee's busy periods as a bare `VFREEBUSY` component.
+/// Formats attendee busy periods as a bare `VFREEBUSY` component.
 ///
-/// `attendee` is the address EDS asked about (bare or with `mailto:`).
-/// `utc_start` and `utc_end` define the requested window.
-/// Returns `None` if the window or any period cannot be parsed as a UTC date-time.
+/// `attendee` is the email address with or without a `mailto:` prefix.
+/// `utc_start` and `utc_end` define the requested query window.
+/// Returns `None` if any date-time value cannot be parsed.
 pub fn busy_periods_to_vfreebusy(
     attendee: &str,
     utc_start: &UtcDate,
@@ -54,14 +53,13 @@ pub fn busy_periods_to_vfreebusy(
     Some(vfreebusy.to_ics())
 }
 
-/// A JMAP `UTCDate` as RFC 5545's UTC `DATE-TIME`, truncating fractional seconds.
+/// Converts a JMAP `UtcDate` to an RFC 5545 UTC `DATE-TIME`, removing fractional seconds.
 pub fn instant(value: &UtcDate) -> Option<String> {
     let value = value.as_str();
     let Some((seconds, fraction)) = value.split_once('.') else {
         return to_utc_date_time(value);
     };
-    // The fraction runs from the `.` to the zone designator, which for a
-    // `UTCDate` is the single character `Z`.
+    // The fraction runs from the period to the trailing zone designator Z.
     let (digits, zone) = fraction.split_at_checked(fraction.len().checked_sub(1)?)?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -69,7 +67,7 @@ pub fn instant(value: &UtcDate) -> Option<String> {
     to_utc_date_time(&format!("{seconds}{zone}"))
 }
 
-/// Formats the address as a `mailto:` URI for EDS backends.
+/// Formats the address as a `mailto:` URI.
 pub fn mailto(attendee: &str) -> String {
     let address = attendee
         .split_at_checked("mailto:".len())

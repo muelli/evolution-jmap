@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 112, step (a): a meeting created locally through
+//! A meeting created locally through
 //! `ECalClient` keeps its organizer and attendees, both in EDS's own copy and
 //! on the server.
 //!
-//! Item 108 part (1) first pinned the opposite: `jmap_ical::ical_to_event`
+//! An earlier version of this test pinned the opposite: `jmap_ical::ical_to_event`
 //! used to drop `ORGANIZER`/`ATTENDEE` on a create, and since
 //! `jmap-cal-sync::CalSync::save_component` re-reads the event from the server
 //! rather than trusting the component EDS handed it (see that function's own

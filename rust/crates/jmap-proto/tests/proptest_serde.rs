@@ -1,13 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Property tests for `jmap-proto` serde implementations.
-//!
-//! Verifies for all core record types (Mailbox, Email, Identity, AddressBook,
-//! ContactCard, Calendar, CalendarEvent) and their set/get request and response
-//! shapes that:
-//!     serde_json::from_value(serde_json::to_value(&x)) == Ok(x)
-//! and that unknown properties survive round-tripping through the `extra` map.
+//! Property tests for jmap-proto serde implementations.
+//! Verifies roundtrip serialization and preservation of extra properties.
 
 use std::collections::BTreeMap;
 

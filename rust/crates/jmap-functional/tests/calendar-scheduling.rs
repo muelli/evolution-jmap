@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 112, step (c), through a real, running
+//! Through a real, running
 //! `evolution-calendar-factory`: who tells a meeting's guests
 //! (`docs/MEETING-SCHEDULING.md` section 4).
 //!

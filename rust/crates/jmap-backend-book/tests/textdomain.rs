@@ -17,7 +17,7 @@ use jmap_backend_book::module::{load, unload};
 use jmap_backend_core::i18n::{LOCALE_DIR, bind_to, binding};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// A `GTypeModule` standing in for the `EModule` EDS would load us as.
+/// Stand-in `GTypeModule` representing the EDS `EModule`.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -41,8 +41,8 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to an allocated class struct leading with
+        // `GTypeModuleClass`.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -79,8 +79,7 @@ fn the_entry_point_binds_the_domain() {
     let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
     assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what EDS does for as long as the backend is wanted.
+    // SAFETY: `module` is a valid `GTypeModule` pointer.
     assert_ne!(
         unsafe { g_type_module_use(module) },
         GFALSE,

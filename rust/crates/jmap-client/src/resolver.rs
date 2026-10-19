@@ -1,20 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! RFC 8620 §2.2 SRV autodiscovery: `_jmap._tcp.<domain>`.
+//! RFC 8620 Section 2.2 SRV autodiscovery: `_jmap._tcp.<domain>`.
 //!
-//! A client that knows only an email address's domain normally fetches
-//! `https://<domain>/.well-known/jmap` directly. Some deployments (Fastmail
-//! among them) instead publish the real JMAP host via a `_jmap._tcp` SRV
-//! record and answer nothing at the bare domain, so a client that only ever
-//! tries the bare domain gets a 404 for those.
+//! Clients can locate JMAP servers via SRV records when the apex domain returns no service.
 //!
-//! This crate does no DNS itself deliberately: adding a DNS resolver crate
-//! here would cost every embedder a dependency most of them do not need.
-//! [`NoSrvResolver`] is the default and matches today's bare-domain-only
-//! behaviour; an embedder able to perform a real lookup (the EDS
-//! integration, via `g_resolver_lookup_service()`) supplies its own
-//! [`Resolver`] via [`crate::ClientBuilder::resolver`].
+//! This crate does not bundle a DNS resolver dependency.
+//! [`NoSrvResolver`] provides the default fallback behavior.
+//! Embedders provide custom resolvers via [`crate::ClientBuilder::resolver`].
 
 /// The host and port an SRV lookup resolved a domain to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +23,7 @@ pub trait Resolver: Send + Sync {
     fn lookup_srv(&self, domain: &str) -> Option<SrvTarget>;
 }
 
-/// The default resolver: no SRV support, ever. Every domain falls back to
-/// today's bare-domain session discovery.
+/// Default resolver that performs no SRV lookups and falls back to apex domains.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoSrvResolver;
 

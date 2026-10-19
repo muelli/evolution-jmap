@@ -42,9 +42,7 @@ impl Fixture {
         Self::start_with(MockServer::builder(), with_default)
     }
 
-    /// The non-default book is seeded *first* on purpose, so that resolving
-    /// "the default one" as "the first one" is a visible failure rather than
-    /// an accident that happens to pass.
+    /// Seeds the non-default book first so incorrect default resolution fails visibly.
     fn start_with(builder: jmap_mock::MockServerBuilder, with_default: bool) -> Self {
         let server = builder.start();
         let account_id = server.account_id();
@@ -224,8 +222,7 @@ fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
     assert_eq!(reclassified.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
 
-/// EDS re-prompts on `REJECTED` and gives up on `ERROR`, so a wrong password
-/// has to be told apart from a broken server.
+/// Verifies a wrong password yields REJECTED while network errors yield ERROR.
 #[test]
 fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
     let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
@@ -257,10 +254,7 @@ fn a_successful_connect_reports_accepted() {
     );
 }
 
-/// The failures all have to reach Evolution as a `GError` too, and the code
-/// is not decoration: `AUTHENTICATION_REQUIRED` is what makes Evolution offer
-/// a password prompt, and `REPOSITORY_OFFLINE` is what makes the meta backend
-/// serve its cache instead of showing an empty address book.
+/// Asserts error codes mapped to `GError` for Evolution.
 #[test]
 fn each_failure_carries_the_client_error_code_evolution_routes_on() {
     for (error, expected) in [
@@ -310,9 +304,7 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
 // `connect_sync` from the ESource down, which is everything the subclass does
 // not do itself.
 
-/// An `ESource` that is not backed by the registry. `e_source_new_with_uid`
-/// with a NULL D-Bus object is what EDS itself uses for a source read from a
-/// keyfile, so the extension machinery behaves as it does inside a backend.
+/// Creates an `ESource` backed by a mock configuration without D-Bus registry.
 struct TestSource(*mut ESource);
 
 impl TestSource {
@@ -332,9 +324,7 @@ impl TestSource {
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
     }
 
-    /// Points the source at `origin`, which the mock server hands out as
-    /// `http://127.0.0.1:<port>`. TLS is switched off explicitly, which
-    /// `SourceConfig` only tolerates because the host is loopback.
+    /// Configures source host and port for loopback testing without TLS.
     fn at(self, origin: &str) -> Self {
         let (host, port) = origin
             .trim_start_matches("http://")
@@ -394,9 +384,7 @@ impl Drop for TestSource {
     }
 }
 
-/// The out-parameters EDS hands `connect_sync`, started at values it never
-/// passes: a body that writes neither would otherwise be indistinguishable
-/// from one that answers correctly.
+/// Initializes out-parameters to sentinel values to verify they are overwritten.
 struct ConnectOuts {
     auth_result: ESourceAuthenticationResult,
     error: *mut GError,
@@ -737,9 +725,7 @@ fn connecting_from_a_source_with_account_id_opens_that_account() {
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
 
-/// The account a collection child names in `[Resource] Identity` is the one
-/// opened. Only the keyfile reaches the factory a child is opened in, so this
-/// source carries nothing else: no object data, no extra extension.
+/// Verifies opening an account identified by `[Resource] Identity`.
 #[test]
 fn connecting_from_a_source_whose_identity_names_an_account_opens_that_accounts_address_book() {
     let (fixture, second_account_id, _) = Fixture::start_two_accounts();

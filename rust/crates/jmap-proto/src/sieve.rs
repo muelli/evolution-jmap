@@ -132,19 +132,14 @@ impl SieveScript {
     }
 }
 
-/// `SieveScript/set` arguments: the standard `/set` shape plus the
-/// `onSuccessActivateScript` extension (RFC 9661 §2.4). A script's `isActive`
-/// is server-set and only ever changes through this argument: `null`
-/// deactivates whatever script is currently active, a plain id activates
-/// that script, and a `#`-prefixed value is a creation id from the same
-/// call.
+/// `SieveScript/set` arguments (RFC 9661 §2.4).
+/// Extends `/set` with `onSuccessActivateScript` to activate or deactivate scripts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<SieveScript>,
-    /// Distinguishes key absence from JSON `null` ("deactivate script").
-    /// `deserialize_present` tracks property presence.
+    /// Tracks property presence to distinguish key absence from JSON `null`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -221,16 +216,8 @@ impl SieveScriptQueryFilter {
     }
 }
 
-/// `SieveScript/validate` arguments (RFC 9661 §2.6). The RFC names exactly
-/// two arguments, `accountId` and `blobId`: script content must already be
-/// uploaded as a blob (§2.2) before it can be validated, there is no raw
-/// `content` or existing-script `id` shorthand on the wire. An earlier
-/// version of this type invented both as convenience fields; real Stalwart
-/// rejected them (confirmed live, 2026-10-10: a request with only `content`
-/// came back `blobNotFound`, since it has no `blobId` at all). The
-/// `jmap-client` crate's `Client::sieve_script_validate_content` is the
-/// client-side equivalent: it uploads the content first, then validates the
-/// resulting `blobId`.
+/// `SieveScript/validate` arguments (RFC 9661 §2.6).
+/// Requires `accountId` and the `blobId` of the uploaded script content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateRequest {
@@ -255,16 +242,8 @@ impl SieveScriptValidateRequest {
     }
 }
 
-/// `SieveScript/validate` response (RFC 9661 §2.6). The RFC names exactly
-/// two response arguments, `accountId` and `error` (a `SetError|null`);
-/// there is no `isValid` property on the wire at all, validity is simply
-/// whether `error` is null. Confirmed live against real Stalwart
-/// (2026-10-10): a valid script answers `{"accountId":"b0","error":null}`
-/// and an invalid one `{"accountId":"b0","error":{"type":"invalidScript",
-/// "description":"..."}}`, neither with an `isValid` field. An earlier
-/// version of this type declared `isValid` as a mandatory field, so it
-/// failed to deserialize every real server response; [`Self::is_valid`]
-/// replaces it as a derived accessor instead of a wire field.
+/// `SieveScript/validate` response (RFC 9661 §2.6).
+/// Contains `accountId` and an optional `error` detail.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateResponse {
@@ -297,14 +276,13 @@ impl SieveScriptValidateResponse {
         self
     }
 
-    /// No wire field names this; it is simply whether `error` is null.
+    /// Returns true if `error` is None.
     pub fn is_valid(&self) -> bool {
         self.error.is_none()
     }
 }
 
-/// The `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
-/// `invalidSieve` for content parse failures, and `sieveIsActive` for destroy of active scripts.
+/// The `SetError` types defined for `SieveScript/set` (RFC 9661 §2.4).
 pub mod sieve_set_error {
     pub const INVALID_SIEVE: &str = "invalidSieve";
     pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";

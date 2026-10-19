@@ -120,13 +120,20 @@ use std::path::{Path, PathBuf};
 /// go unlisted, which is the whole failure this file exists to prevent.
 const MARKERS: [&str; 3] = ["N_(", "translate(", "translate_with("];
 
-/// The root of the checkout, from this crate's manifest directory.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+/// Walks upward from `start` looking for the checkout root (marked by
+/// `.git`). Returns `None` if no ancestor has one, for example a
+/// mutation-testing sandbox that copies only the `rust/` subtree, so `po/`
+/// was never copied at all and there is nothing honest to assert here.
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    start
         .ancestors()
-        .nth(3)
-        .expect("the crate directory is three levels below the checkout root")
-        .to_path_buf()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// The root of the checkout, from this crate's manifest directory.
+fn repo_root() -> Option<PathBuf> {
+    find_repo_root(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
 /// The paths listed in `po/POTFILES.in`, in file order.
@@ -386,7 +393,13 @@ fn marked_messages(root: &Path) -> Vec<String> {
 
 #[test]
 fn every_source_that_marks_a_string_is_listed_in_potfiles() {
-    let root = repo_root();
+    let Some(root) = repo_root() else {
+        eprintln!(
+            "skipping every_source_that_marks_a_string_is_listed_in_potfiles: no \
+             `.git` ancestor found, not running inside a full repository checkout"
+        );
+        return;
+    };
     let listed = listed(&root);
 
     let missing: Vec<String> = sources(&root)
@@ -404,7 +417,9 @@ fn every_source_that_marks_a_string_is_listed_in_potfiles() {
 
 #[test]
 fn every_path_listed_in_potfiles_still_marks_a_string() {
-    let root = repo_root();
+    let Some(root) = repo_root() else {
+        return;
+    };
 
     let stale: Vec<String> = listed(&root)
         .into_iter()
@@ -421,7 +436,9 @@ fn every_path_listed_in_potfiles_still_marks_a_string() {
 
 #[test]
 fn every_marked_literal_is_written_on_one_line() {
-    let root = repo_root();
+    let Some(root) = repo_root() else {
+        return;
+    };
     let mut literals = 0;
     let mut spanning = Vec::new();
 
@@ -450,7 +467,9 @@ fn every_marked_literal_is_written_on_one_line() {
 
 #[test]
 fn every_marked_literal_reached_the_catalogue() {
-    let root = repo_root();
+    let Some(root) = repo_root() else {
+        return;
+    };
     let extracted = catalogue_messages(&root);
     let marked = marked_messages(&root);
 
@@ -477,7 +496,9 @@ fn every_marked_literal_reached_the_catalogue() {
 
 #[test]
 fn every_message_in_the_catalogue_is_still_marked_in_a_source() {
-    let root = repo_root();
+    let Some(root) = repo_root() else {
+        return;
+    };
     let marked = marked_messages(&root);
 
     let orphaned: Vec<String> = catalogue_messages(&root)
@@ -491,4 +512,41 @@ fn every_message_in_the_catalogue_is_still_marked_in_a_source() {
          translators are working on text nobody will ever read — run \
          po/extract.sh: {orphaned:?}"
     );
+}
+
+/// A scratch directory under the system temp dir, guaranteed not to sit
+/// inside this checkout (so no real `.git` ancestor can leak into the
+/// assertions below), unique per call so parallel tests don't collide.
+fn scratch_dir(name: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "jmap-backend-core-potfiles-test-{name}-{}-{n}",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn find_repo_root_finds_the_nearest_git_ancestor() {
+    let base = scratch_dir("hit");
+    let nested = base.join("a/b/c");
+    fs::create_dir_all(&nested).expect("create nested scratch dirs");
+    fs::create_dir_all(base.join(".git")).expect("create fake .git marker");
+
+    assert_eq!(find_repo_root(&nested), Some(base.clone()));
+
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn find_repo_root_returns_none_without_a_git_ancestor() {
+    let base = scratch_dir("miss");
+    let nested = base.join("x/y");
+    fs::create_dir_all(&nested).expect("create nested scratch dirs");
+    // Deliberately no `.git` anywhere under `base`; the system temp dir and
+    // its ancestors are not part of a git checkout.
+
+    assert_eq!(find_repo_root(&nested), None);
+
+    fs::remove_dir_all(&base).ok();
 }

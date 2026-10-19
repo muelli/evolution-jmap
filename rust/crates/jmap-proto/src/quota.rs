@@ -92,10 +92,8 @@ impl Quota {
     }
 }
 
-/// `Quota/query` filter (RFC 9425 §4.4). Every condition, when present, must
-/// match for the `Quota` to match: `name` and `type` are substring tests
-/// (`name` against the Quota's own `name`, `type` against its `types` list),
-/// `scope` and `resourceType` are exact matches.
+/// `Quota/query` filter (RFC 9425 §4.4).
+/// Matches `name` and `type` by substring, and `scope` and `resourceType` exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaQueryFilter {

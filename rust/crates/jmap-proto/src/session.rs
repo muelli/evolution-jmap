@@ -33,8 +33,7 @@ pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
 pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
 pub const CAPABILITY_PRINCIPALS_AVAILABILITY: &str = "urn:ietf:params:jmap:principals:availability";
 pub const CAPABILITY_WEBPUSH_VAPID: &str = "urn:ietf:params:jmap:webpush-vapid";
-/// Cyrus's vendor mail extension: capability naming `Email.snoozed`
-/// per draft-ietf-extra-email-snooze.
+/// Cyrus vendor mail extension capability naming `Email.snoozed` (draft-ietf-extra-email-snooze).
 pub const CAPABILITY_CYRUS_MAIL: &str = "https://cyrusimap.org/ns/jmap/mail";
 
 /// Server capabilities, available accounts, and endpoint URLs.
@@ -112,11 +111,8 @@ impl Session {
         self.primary_accounts.get(capability)
     }
 
-    /// Which account serves `capability`, resolved per RFC 8620 §2.
-    ///
-    /// Checks `primaryAccounts` first. If omitted by the server, falls back
-    /// to the sole personal account offering the capability. Returns `None` if
-    /// the capability is unknown or cannot be uniquely resolved.
+    /// Resolve the account serving `capability` (RFC 8620 §2).
+    /// Checks `primaryAccounts` first. If omitted, falls back to the sole personal account.
     pub fn resolve_primary_account(&self, capability: &str) -> Option<&Id> {
         if !self.capabilities.contains_key(capability) {
             return None;
@@ -579,11 +575,7 @@ impl Account {
         self.account_capabilities.contains_key(capability)
     }
 
-    /// This account's submission capability object (RFC 8621 §7.1), typed.
-    ///
-    /// The scheduled-send gate reads two of its fields together: a non-zero
-    /// `max_delayed_send` and
-    /// [`crate::mail::SubmissionCapability::supports_future_release`].
+    /// Typed submission capability object for this account (RFC 8621 §7.1).
     #[cfg(feature = "mail")]
     pub fn submission_capability(&self) -> Option<crate::mail::SubmissionCapability> {
         let val = self.account_capabilities.get(CAPABILITY_SUBMISSION)?;

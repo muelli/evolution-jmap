@@ -65,8 +65,7 @@ fn contact_card_roundtrip() {
     let components = name.components.as_ref().unwrap();
     assert_eq!(components[0].kind, "given");
     assert_eq!(components[0].value, "Vera");
-    // How a name is pronounced has no field in the vCard `N` value:
-    // exactly as for an address component, it stays visible to the save path.
+    // Name pronunciation data maps to extra properties.
     assert!(components[0].extra.contains_key("phonetic"));
     assert!(name.extra.contains_key("phoneticSystem"));
     assert_eq!(
@@ -164,8 +163,7 @@ fn contact_card_roundtrip() {
     let relation = spouse.relation.as_ref().expect("relation");
     assert_eq!(relation.keys().collect::<Vec<_>>(), ["kin", "spouse"]);
     assert!(relation.values().all(|set| set == &Value::Bool(true)));
-    // An entity related some other way, named the way §2.1.8 asks for: nothing
-    // on the card says who they are, so no line can show them.
+    // Related entities with free-text names map to extra properties (RFC 9553 §2.1.8).
     assert_eq!(
         related["urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"]
             .relation
@@ -1261,9 +1259,7 @@ fn rfc9553_sub_type_properties_roundtrip() {
     assert_eq!(de_dir.label.as_deref(), Some("Public Staff Directory"));
 }
 
-/// An integer the server sends that does not fit a `u32` is rejected, the
-/// way the same value spelled as a string already is, rather than wrapped
-/// into a small, plausible-looking one.
+/// The deserializer rejects integers that exceed u32::MAX instead of wrapping.
 #[test]
 fn an_out_of_range_unsigned_int_is_rejected_not_wrapped() {
     use jmap_proto::contacts::{Anniversary, Directory, LanguagePref, PersonalInfo};

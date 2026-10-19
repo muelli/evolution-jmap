@@ -71,7 +71,7 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
         let node = unsafe {
             e_cal_meta_backend_info_new(uid.as_ptr(), ptr::null(), ptr::null(), ptr::null())
         };
-        // SAFETY: as in `info_list`.
+        // SAFETY: Follows safety requirements of info_list.
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
@@ -211,7 +211,7 @@ unsafe fn holds_event(component: *mut ICalComponent) -> bool {
 ///
 /// # Safety
 ///
-/// As [`icalendar_from_instances`].
+/// Follows safety requirements of [`icalendar_from_instances`].
 unsafe fn instance_components(instances: *const GSList) -> Vec<*mut ICalComponent> {
     let mut components = Vec::new();
     let mut node = instances;

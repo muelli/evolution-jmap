@@ -7,24 +7,24 @@
 
 use gobject_sys::GTypeModule;
 
-/// `e_module_load`, as EDS resolves it.
+/// Implements `e_module_load` resolved by EDS.
 ///
 /// # Safety
 ///
-/// As [`jmap_backend_cal::module::load`], which this is.
+/// Follows safety requirements of [`jmap_backend_cal::module::load`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
-    // SAFETY: the caller's obligation is passed straight through.
+    // SAFETY: Caller safety obligations forward directly to jmap_backend_cal::module::load.
     unsafe { jmap_backend_cal::module::load(type_module) }
 }
 
-/// `e_module_unload`, as EDS resolves it.
+/// Implements `e_module_unload` resolved by EDS.
 ///
 /// # Safety
 ///
-/// As [`jmap_backend_cal::module::unload`], which this is.
+/// Follows safety requirements of [`jmap_backend_cal::module::unload`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_unload(type_module: *mut GTypeModule) {
-    // SAFETY: as `e_module_load`.
+    // SAFETY: Caller safety obligations forward directly to jmap_backend_cal::module::unload.
     unsafe { jmap_backend_cal::module::unload(type_module) }
 }

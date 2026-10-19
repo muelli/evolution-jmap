@@ -363,10 +363,8 @@ impl Comparator {
     }
 }
 
-/// A `Foo/query` filter (RFC 8620 §5.5): either a leaf condition of type `F`
-/// or a boolean combination of nested filters. Untagged, so a leaf condition
-/// serializes exactly as `F` would on its own, with no wrapper; only an
-/// object carrying `operator`/`conditions` parses as the operator variant.
+/// A `Foo/query` filter (RFC 8620 §5.5).
+/// Represents a leaf condition of type `F` or an untagged boolean combination of filters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Filter<F> {

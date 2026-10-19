@@ -610,6 +610,7 @@ mod tests {
     use std::time::Duration;
 
     use gobject_sys::{G_TYPE_OBJECT, g_type_class_ref, g_type_class_unref};
+    use jmap_tracing_capture::capture;
 
     use super::*;
 
@@ -813,6 +814,36 @@ mod tests {
     #[test]
     fn an_unregistered_type_is_looked_up_as_invalid() {
         assert_eq!(registered_type(c"JmapBackendCoreNeverRegistered"), 0);
+    }
+
+    /// A miss also logs a critical naming the type, so a developer sees why
+    /// an extension never loaded instead of only a silent `GType` of 0.
+    #[test]
+    fn an_unregistered_type_logs_a_critical_naming_it() {
+        let (_, captured) = capture(|| {
+            registered_type(c"JmapBackendCoreNeverRegistered");
+        });
+
+        assert!(
+            captured
+                .iter()
+                .any(|(level, _, value)| *level == tracing::Level::ERROR
+                    && value.contains("JmapBackendCoreNeverRegistered")),
+            "expected an ERROR event naming the missing type, got {captured:?}"
+        );
+    }
+
+    /// A hit logs nothing: the lookup succeeded, so there is no bug to report.
+    #[test]
+    fn a_registered_type_logs_nothing() {
+        let (_, captured) = capture(|| {
+            registered_type(c"GObject");
+        });
+
+        assert!(
+            captured.is_empty(),
+            "expected no log event for a successful lookup, got {captured:?}"
+        );
     }
 
     static UNDECLARED_FROM_CLASS_INIT: AtomicUsize = AtomicUsize::new(1);

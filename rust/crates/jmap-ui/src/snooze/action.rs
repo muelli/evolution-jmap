@@ -55,6 +55,7 @@ use gobject_sys::{
 };
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
+#[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::read_string;

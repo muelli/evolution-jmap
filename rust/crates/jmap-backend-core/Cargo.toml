@@ -19,7 +19,7 @@ name = "jmap_backend_core"
 [features]
 # Compiler-enforced (not just documented) test-only gate on `instance::
 # zeroed_box`, which builds a value by zeroing memory outside the type it
-# claims to be — see docs/UNSAFE-AUDIT.md Pattern A. Each of the five
+# claims to be. Each of the five
 # consumer crates' own `testing` feature reaches through to this one, so
 # enabling theirs (already wired for their own test builds) unlocks this too.
 testing = []

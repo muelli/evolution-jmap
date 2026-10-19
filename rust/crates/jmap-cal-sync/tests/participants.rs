@@ -141,6 +141,39 @@ fn a_guest_made_optional_keeps_the_roles_the_line_cannot_show() {
     );
 }
 
+/// A role that the `ROLE` parameter can state goes when the line stops stating it.
+/// A role that the line cannot state stays.
+#[test]
+fn a_chair_made_a_plain_guest_loses_the_chair_role_and_keeps_the_rest() {
+    let current = meeting(json!({
+        "o": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:olga@example.com",
+            "roles": {"owner": true},
+        },
+        "v": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:vera@example.com",
+            "roles": {"attendee": true, "chair": true, "contact": true},
+        },
+    }));
+    let icalendar = drawn(&current).replace(
+        "ATTENDEE;ROLE=CHAIR:mailto:vera",
+        "ATTENDEE;ROLE=REQ-PARTICIPANT:mailto:vera",
+    );
+    assert!(icalendar.contains("REQ-PARTICIPANT"), "{icalendar}");
+
+    let patch = diff(&current, &saved(&icalendar));
+
+    assert_eq!(
+        patch,
+        patch_of(&[(
+            "participants/v/roles",
+            json!({"attendee": true, "contact": true})
+        )])
+    );
+}
+
 #[test]
 fn a_guest_added_in_evolution_is_filed_under_a_key_the_server_does_not_use() {
     // The server's own keys here are the very ones this crate invents when it

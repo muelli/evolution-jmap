@@ -732,4 +732,74 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
     }
+
+    /// `stop` must actually cancel the pump, not just return quickly: a push
+    /// arriving after `stop` returns must never reach the refresh action.
+    #[test]
+    fn stopping_prevents_a_later_push_from_running_the_refresh_action() {
+        let server = jmap_mock::MockServer::builder().start();
+        let url = expand_url(
+            &format!("{}/eventsource", server.origin()),
+            &["ContactCard"],
+            false,
+            0,
+        );
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&refreshes);
+        let mut push = PushRefresh::start(
+            url,
+            Vec::new(),
+            Id::new("a1"),
+            names(&["ContactCard"]),
+            move |_types: &[String]| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+
+        push.stop();
+        server.push_state_change(&change("a1", "ContactCard"));
+
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            0,
+            "a push arriving after stop() returned must not run the refresh action"
+        );
+    }
+
+    /// `Drop` must actually stop the pump, not just return: a push arriving
+    /// after a `PushRefresh` is dropped must never reach the refresh action.
+    #[test]
+    fn dropping_a_pushrefresh_stops_the_pump_so_a_later_push_does_not_refresh() {
+        let server = jmap_mock::MockServer::builder().start();
+        let url = expand_url(
+            &format!("{}/eventsource", server.origin()),
+            &["ContactCard"],
+            false,
+            0,
+        );
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&refreshes);
+        let push = PushRefresh::start(
+            url,
+            Vec::new(),
+            Id::new("a1"),
+            names(&["ContactCard"]),
+            move |_types: &[String]| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+
+        drop(push);
+        server.push_state_change(&change("a1", "ContactCard"));
+
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            0,
+            "a push arriving after the PushRefresh is dropped must not run the refresh action"
+        );
+    }
 }

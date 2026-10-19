@@ -3,7 +3,7 @@
 
 //! Module entry points executed when EDS loads `libecalbackendjmap.so`.
 //!
-//! [`load`] registers the backend, factory, and OAuth 2.0 service; [`unload`] handles teardown.
+//! [`load`] registers backend, factory, and OAuth 2.0 service. [`unload`] handles teardown.
 
 use gobject_sys::GTypeModule;
 use jmap_backend_core::i18n::bind;
@@ -22,7 +22,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         jmap_backend_core::logging::init();
         bind();
-        // SAFETY: the module is EDS's, by this function's contract.
+        // SAFETY: `type_module` is a valid GTypeModule pointer per function contract.
         unsafe {
             remember_backend_type(register_dynamic::<JmapCalBackend>(type_module));
             register_dynamic::<JmapCalFactory>(type_module);
@@ -31,7 +31,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     });
 }
 
-/// Handles module unloading; GLib cleans up registered dynamic types.
+/// Handles module unloading. GLib cleans up registered dynamic types.
 ///
 /// # Safety
 ///

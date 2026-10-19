@@ -8,7 +8,7 @@
 //! is not in the list, a cycle. `folders.rs` covers the well-behaved case
 //! against `jmap-mockd`.
 
-use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
+use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree, path};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
 
@@ -176,6 +176,32 @@ fn a_slash_in_a_name_cannot_invent_a_level() {
         tree.find("and%2For")
             .map(|folder| folder.display_name.clone()),
         Some("and/or".to_owned())
+    );
+}
+
+#[test]
+fn a_path_splits_back_into_its_parents_path_and_its_own_component() {
+    let tree = tree(&[
+        mailbox("M1", "Projects"),
+        child("M2", "and/or", "M1"),
+        child("M3", "Drafts", "M2"),
+    ]);
+
+    assert_eq!(
+        paths(&tree),
+        ["Projects", "Projects/and%2For", "Projects/and%2For/Drafts"]
+    );
+    // A top-level folder has no parent, and its path is its component.
+    assert_eq!(path::split("Projects"), (None, "Projects"));
+    // The escaped slash is never mistaken for a level.
+    assert_eq!(
+        path::split("Projects/and%2For"),
+        (Some("Projects"), "and%2For")
+    );
+    // Only the last separator splits.
+    assert_eq!(
+        path::split("Projects/and%2For/Drafts"),
+        (Some("Projects/and%2For"), "Drafts")
     );
 }
 

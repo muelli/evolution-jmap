@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Incremental sync via `/changes` (RFC 8620 §5.2): the primitive the
-//! Evolution Data Server meta-backends' `get_changes_sync` will drive.
+//! Incremental state synchronization via `/changes` (RFC 8620 §5.2).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +16,7 @@ use crate::client::Client;
 use crate::error::Error;
 
 impl Client {
-    /// Generic `Foo/changes` call. `type_name` is a JMAP data type such as
-    /// `Email` or `ContactCard`.
+    /// Request changes for a data type (`Foo/changes`, RFC 8620 §5.2).
     pub fn changes(
         &self,
         account_id: &Id,
@@ -52,16 +50,12 @@ impl Client {
     }
 }
 
-/// A server that answers `/changes` forever without ever clearing
-/// `hasMoreChanges` would otherwise hang the calling thread. The cap is far
-/// above any real backlog; reaching it means the server is broken.
+/// Maximum number of change pages before terminating pagination.
 const MAX_CHANGES_PAGES: usize = 1024;
 
-/// Everything that changed to one data type between two states.
+/// Changes for a data type between two states.
 ///
-/// The identifiers are sets, not the response's lists: what a caller has to
-/// know is *whether* an object changed, and the same object can be named by
-/// several pages of one answer.
+/// Identifiers are stored in sets to eliminate duplicates across pages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSet {
     /// The state to ask from next time.
@@ -88,8 +82,7 @@ impl ChangeSet {
     }
 }
 
-/// One object's history across the window, before it is decided what to call
-/// it.
+/// History of an object across a sync window.
 #[derive(Default)]
 struct Disposition {
     created: bool,
@@ -98,20 +91,10 @@ struct Disposition {
 }
 
 impl Client {
-    /// Every change since `since_state`, however many pages the server needs.
+    /// Fetch and fold all changes since `since_state` (RFC 8620 §5.2).
     ///
-    /// RFC 8620 §5.2 lets a server truncate a `/changes` answer whenever it
-    /// likes (maxChanges is the client's cap, not the only reason for one),
-    /// so a caller that reads a single response is a caller that silently
-    /// misses changes. Following `hasMoreChanges` here is what lets the layers
-    /// above treat "what changed" as one question.
-    ///
-    /// The pages are then folded back into the answer a single response would
-    /// have carried, by the same rule RFC 8620 §5.2 states for one: an object
-    /// created and destroyed inside the window is reported neither way,
-    /// because the caller never learned it existed, and one created and then
-    /// modified is created. Where the server put the page boundary is not
-    /// something a caller should be able to see.
+    /// Automatically follows `hasMoreChanges` pages up to `MAX_CHANGES_PAGES`.
+    /// Consolidates intermediate states into a canonical [`ChangeSet`].
     pub fn all_changes(
         &self,
         account_id: &Id,
@@ -138,8 +121,7 @@ impl Client {
             if !response.has_more_changes {
                 return Ok(ChangeSet::classify(state, by_id));
             }
-            // A page that ends where it started is a page the next call
-            // fetches again: the server is asking to be looped over forever.
+            // Reject responses that do not advance state.
             if !advanced {
                 return Err(Error::Protocol(format!(
                     "{type_name}/changes reports more changes without advancing the state"
@@ -157,8 +139,7 @@ impl ChangeSet {
         let mut set = Self::nothing(new_state);
         for (id, disposition) in by_id {
             match (disposition.created, disposition.destroyed) {
-                // Never visible to this client: it is gone, and the client was
-                // never told it was there.
+                // Discard objects created and destroyed in the same window.
                 (true, true) => {}
                 (true, false) => {
                     set.created.insert(id);

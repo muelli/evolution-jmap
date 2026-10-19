@@ -1,14 +1,16 @@
 # Verifying release artifacts
 
-Every release publishes `SHA256SUMS` alongside the artifacts, plus
-machine-checkable provenance recorded in the public
-[Rekor](https://docs.sigstore.dev/logging/overview/) transparency log.
+Each GitHub release has four artifacts and a `SHA256SUMS` file:
 
-A release carries three things: `jmap-mockd` (the mock JMAP server the test
-suite runs against), a source tarball, and
-`evolution-jmap_<version>_<arch>.deb` — the backends themselves. Everything
-in the release is attested, because the attestation step and the upload step
-are given the same directory rather than two lists that could drift apart.
+- `jmap-mockd`: the mock JMAP server that the test suite runs against
+- `evolution-jmap-<tag>.tar.xz`: the source tarball
+- `evolution-jmap_<version>_<arch>.deb`: the backends
+- `evolution-jmap-<tag>.cdx.json`: the SBOM
+
+The release workflow (`.github/workflows/release.yml`) attests and uploads
+the same directory, `dist/*`. Every published file therefore has provenance in
+the public [Rekor](https://docs.sigstore.dev/logging/overview/) transparency
+log.
 
 ## 1. Checksums
 
@@ -16,9 +18,9 @@ are given the same directory rather than two lists that could drift apart.
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-## 2. Build provenance (GitHub releases)
+## 2. Build provenance
 
-Artifacts are attested with
+The release workflow attests the artifacts with
 [`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance)
 (SLSA provenance, Sigstore-signed, Rekor-logged):
 
@@ -26,11 +28,10 @@ Artifacts are attested with
 gh attestation verify jmap-mockd --repo muelli/evolution-jmap
 ```
 
-This proves the file was built by this repository's release workflow at a
-specific commit — not on a maintainer's laptop. `gh attestation verify`
-refuses to run at all without `gh auth login` or `GH_TOKEN`, even for a
-public repository's attestations. Without a token, fetch and verify the
-same attestation directly instead:
+This command proves that the release workflow of this repository built the
+file at a specific commit. `gh attestation verify` needs `gh auth login` or
+`GH_TOKEN`, also for a public repository. If you have no token, fetch the
+attestation and verify it with cosign:
 
 ```bash
 digest=$(sha256sum jmap-mockd | cut -d' ' -f1)
@@ -44,27 +45,13 @@ cosign verify-blob-attestation --bundle jmap-mockd.bundle.json \
   jmap-mockd
 ```
 
-One attestation covers every file in the release (subject list includes
-`SHA256SUMS` and all four other artifacts), so the bundle fetched for any
-one of them verifies all of them; querying by a different file's digest
-returns the identical bundle.
+One attestation covers every file in `dist/`. The bundle that you fetch for
+one file therefore verifies all of them.
 
-## 3. GitLab tag pipelines
+## 3. The `.deb`
 
-Tag pipelines sign the checksum file keylessly with cosign using the CI
-job's OIDC identity:
-
-```bash
-cosign verify-blob SHA256SUMS \
-  --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp 'gitlab' \
-  --certificate-oidc-issuer https://gitlab.com
-```
-
-## 4. The `.deb`
-
-`apt` verifies nothing about a package handed to it as a file, so verify it
-before installing rather than after:
+`apt` does not verify a package that you give to it as a file. Verify the
+package before you install it:
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
@@ -72,28 +59,30 @@ gh attestation verify evolution-jmap_*_amd64.deb --repo muelli/evolution-jmap
 sudo apt install ./evolution-jmap_*_amd64.deb
 ```
 
-Two things worth knowing before installing:
+- **Version match.** The package must match the EDS and Evolution versions on
+  the system. `evolution-data-server`, Camel, the source registry and
+  Evolution load the modules with `dlopen`. The ABI is not stable across
+  releases. `dpkg-shlibdeps` derives the `Depends` from the modules, which the
+  pinned CI image builds (Ubuntu 24.04, Evolution 3.52). If the libraries are
+  too old, `apt` refuses the package. `apt` cannot see some mismatches. In
+  that case, the backend is missing from the account type list, and no error
+  occurs.
+- **Contents.** `dpkg-deb --contents` shows six modules: the book backend, the
+  calendar backend, the Camel provider and its `.urls` file, the registry
+  module and the configuration module. It also shows `changelog.gz`,
+  `copyright`, `third-party-notices`, a lintian override and the translation
+  catalogues. `cmake/Packaging.cmake` lists the exact set. The `package-deb`
+  CTest test enforces it.
 
-- **It must match the EDS and Evolution it is installed next to.** The six
-  files in it are modules that `evolution-data-server`, Camel, the source
-  registry and Evolution's shell `dlopen`, and their ABI is not stable across
-  releases. The package's `Depends` are derived by `dpkg-shlibdeps` from the
-  modules themselves, built against the pinned CI image (Ubuntu 24.04,
-  Evolution 3.52) — `apt` will refuse it on a machine whose libraries are too
-  old, but a mismatch it cannot see shows up as a backend that never appears in
-  the account type list rather than as an error.
-- **Inspect it first if you like.** `dpkg-deb --contents` lists exactly six
-  files — a book backend, a calendar backend, the Camel provider and its
-  `.urls`, the registry module and the configuration module. Nothing else: in
-  particular the C example module this repository still builds is not in it.
+## 4. Reproduce the build yourself
 
-## 5. Reproduce it yourself
-
-The binaries are bit-for-bit reproducible (a CI job enforces this on every
-push). To rebuild and compare:
+`jmap-mockd` is bit-for-bit reproducible. The `reproducible` CI job builds it
+twice in different directories and compares the hashes. To rebuild it and
+compare the result, do this:
 
 ```bash
 git clone https://github.com/muelli/evolution-jmap && cd evolution-jmap
+git checkout <tag>
 export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
 cd rust
 export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$HOME/.cargo=/cargo"
@@ -101,64 +90,68 @@ cargo build --release --locked -p evolution-jmap-mock
 sha256sum target/release/jmap-mockd   # compare against SHA256SUMS
 ```
 
-The toolchain is pinned by `rust/rust-toolchain.toml` and dependencies by
-the committed `Cargo.lock`, so any machine with the same rustc produces
-the same bytes.
+`rust/rust-toolchain.toml` pins the toolchain. The committed `Cargo.lock` pins
+the dependencies.
 
-The `.deb` is reproducible in the same sense, and `ctest -R
-package-deb-reproducible` is what enforces it — the package is built three
-times under three different environments and all three must be byte-identical.
-Rebuilding it needs the Evolution and EDS development headers, so do it in the
-image the release was built in (the digest is in
-`.github/workflows/release.yml`):
+The `.deb` is also reproducible. The `package-deb-reproducible` CTest test
+builds it three times with different `SOURCE_DATE_EPOCH` environments. The
+test requires identical bytes. To rebuild the `.deb`, you need the development
+headers of Evolution and EDS. Use the image in which the release was built.
+The digest is in `.github/workflows/release.yml`:
 
 ```bash
-export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-cmake -S . -B build -G Ninja
+cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build
 cmake --build build --target package
 sha256sum build/*.deb   # compare against SHA256SUMS
 ```
 
-Every timestamp inside the package — the files, the directories `cpack`
-creates on the way to them, and the `ar` member headers — is
-`SOURCE_DATE_EPOCH`, so the package is dated by the commit and not by whoever
-packaged it. A different EDS version, or a different image, will produce
-different bytes: that is the ABI contract these modules live under, not a
-reproducibility failure.
+Every timestamp in the package (files, directories and `ar` member headers)
+is the commit time. It is not the packaging time. A different EDS version or
+a different image gives different bytes. This is the ABI contract of these
+modules. It is not a reproducibility failure.
 
-## 6. The SBOM
+## 5. The SBOM
 
-Every release also carries `evolution-jmap-<version>.cdx.json`, a
-[CycloneDX](https://cyclonedx.org/) 1.5 Software Bill of Materials: the Rust
-crate graph (from the committed `Cargo.lock`) plus the `.deb`'s system-library
-`Depends`, the ones `dpkg-shlibdeps` derives. It is checksummed and attested
-like every other artifact — it is one of the files in `dist/*`.
+`evolution-jmap-<tag>.cdx.json` is a [CycloneDX](https://cyclonedx.org/) 1.5
+Software Bill of Materials. `ci/sbom.sh` makes it. It lists the Rust crate
+graph from `Cargo.lock` and the system-library `Depends` of the `.deb`.
 
 ```bash
-# Integrity and provenance, same as any other artifact:
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify evolution-jmap-*.cdx.json --repo muelli/evolution-jmap
 
-# Scan it against advisory feeds (either tool; neither is required to install):
+# Optional: scan it against advisory feeds with either tool.
 grype sbom:evolution-jmap-*.cdx.json
 osv-scanner --sbom=evolution-jmap-*.cdx.json
 ```
 
-The SBOM is reproducible in the same sense as the binaries: its timestamp is
-`SOURCE_DATE_EPOCH` and it carries no random serial number, so it is a
-deterministic function of `Cargo.lock` and the package's `Depends`. The crate
-versions are exact `pkg:cargo` Package-URLs; the system libraries are
-`pkg:deb/ubuntu` names carrying the `Depends` version *constraints* rather than
-resolved versions, because those are fixed only inside the build image.
+The SBOM is reproducible: its timestamp is `SOURCE_DATE_EPOCH` and it has no
+random serial number. The crates are exact `pkg:cargo` Package-URLs. The
+system libraries are `pkg:deb/ubuntu` Package-URLs, one for each package in
+the `Depends` of the `.deb`. Each one has the version that was installed on
+the build runner when the release workflow built the `.deb`. `ci/sbom.sh`
+stops if these versions were recorded for a different `Depends` line.
+Releases up to v0.5.0 have the `Depends` version constraints instead.
 
-## 7. Runtime smoke test on a clean system
+Releases after v0.5.0 also bind the SBOM to the `.deb` with
+[`actions/attest-sbom`](https://github.com/actions/attest-sbom). This command
+proves which SBOM belongs to the `.deb`:
 
-Checksums and attestation prove the bytes are genuine; they say nothing about
-whether the `.deb` actually works once installed. The `.deb`'s `Depends` name
-one target: the pinned CI image (Ubuntu 24.04, Evolution 3.52.3), so that is
-the only distro to smoke-test. Do it in a throwaway rootless podman container
-so a bad install can't touch the host:
+```bash
+gh attestation verify evolution-jmap_*.deb --repo muelli/evolution-jmap \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+For the `.deb`, the attestation API then returns two attestations: the build
+provenance and the SBOM. The cosign command in section 2 uses the first one.
+Do the cosign check on `jmap-mockd`.
+
+## 6. Runtime smoke test on a clean system
+
+Checksums and attestations prove that the bytes are genuine. They do not prove
+that the `.deb` works. The `Depends` target Ubuntu 24.04. Test the `.deb`
+there, in a temporary rootless podman container:
 
 ```bash
 podman run -d --name jmap-smoke -v /path/to/release/assets:/assets:ro ubuntu:24.04 sleep infinity
@@ -167,44 +160,29 @@ podman exec jmap-smoke bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -
 podman exec jmap-smoke bash -c "cd /assets && apt-get install -y ./evolution-jmap_*_amd64.deb"
 ```
 
-`apt` resolves the package's `Depends` against the distro's own EDS/Evolution
-packages with no extra repository needed, confirming the versions in
-`Depends` are satisfiable on a genuinely clean install, not just on the build
-image.
+This test shows that the `Depends` resolve against the packages of the
+distribution.
 
-To prove the backends actually load (not just that the files unpacked),
-start `evolution-source-registry` with `G_MESSAGES_DEBUG=all` against an
-isolated `XDG_*`/D-Bus session carrying a `BackendName=jmap` probe source
-(`[Collection] BackendName=jmap` with `ContactsEnabled=true` and
-`CalendarEnabled=true`, as in `docs/examples/jmap-mock-collection.source`),
-and look for `Adding probe (...)` in its output — that line only appears if
-`module-jmap-backend.so` registered a factory for that backend name. A
-`BackendName=notarealbackend` control source started from a clean registry
-produces no such line, and
-`org.gnome.evolution.dataserver.SourceManager.RefreshBackend` on its UID
-fails with `Cannot find source`, where the real probe's `RefreshBackend`
-call returns successfully: that contrast is what rules out the line always
-appearing regardless of backend name.
+To show that the registry module loads, do these steps:
 
-For end-to-end proof, point a real collection source's `[Authentication]
-Host`/`Port` at a running `jmap-mockd` (release binary, no runtime
-dependencies beyond libc) and start `evolution-source-registry` plus
-`evolution-addressbook-factory -w` and `evolution-calendar-factory -w`. The
-collection backend queries `jmap-mockd`'s JMAP session over HTTP and creates
-real child `ESource`s for every resource the mock server reports (visible via
+1. Start `evolution-source-registry` with `G_MESSAGES_DEBUG=all`. Use an
+   isolated `XDG_*` environment and an isolated D-Bus session.
+2. Use a collection source like `docs/examples/jmap-mock-collection.source`.
+3. Look for `Adding probe (...)` in the output.
+
+That line appears only if `module-jmap-backend.so` registered a factory for
+`BackendName=jmap`. As a control, a source with `BackendName=notarealbackend`
+gives no such line.
+
+For an end-to-end check, do these steps:
+
+1. Run `jmap-mockd`. It needs only libc.
+2. Point `[Authentication] Host` and `Port` of the collection source at it.
+3. Start `evolution-source-registry`, `evolution-addressbook-factory -w` and
+   `evolution-calendar-factory -w`.
+
+The collection backend then creates an `[Address Book]` child source and a
+`[Calendar]` child source. They are for the address book and the calendar that
+the mock server seeds. To see them, call
 `org.freedesktop.DBus.ObjectManager.GetManagedObjects` on
-`/org/gnome/evolution/dataserver/SourceManager`): an `[Address Book]
-BackendName=jmap` child with `Resource/Identity=AB1` and a `[Calendar]
-BackendName=jmap` child with `Resource/Identity=CAL1`, matching jmap-mockd's
-own seeded `AB1`/`CAL1` resources — proof the backend spoke real JMAP to the
-mock server, not just that its shared object loaded.
-
-Confirmed 2026-10-16 against the v0.5.0 release assets on a fresh
-`ubuntu:24.04` podman container: checksums and attestation verified (section
-2), `apt install ./evolution-jmap_0.5.0_amd64.deb` resolved cleanly against
-Ubuntu 24.04's own `evolution`/`evolution-data-server` 3.52.3 packages, the
-probe source produced `Adding probe (...)` with the `notarealbackend`
-control producing nothing, and a probe collection against a release
-`jmap-mockd` surfaced its `AB1`/`CAL1` resources as real child sources. No
-findings: everything in this release behaves as documented on a clean
-install.
+`/org/gnome/evolution/dataserver/SourceManager`.

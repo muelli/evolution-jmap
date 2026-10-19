@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Round-trip tests for the RFC 8620 core types against fixture JSON taken
-//! from the RFC examples. Comparison happens on `serde_json::Value` so a
-//! field silently dropped or renamed by our types fails the test.
+//! Round-trip tests for RFC 8620 core types against RFC fixture JSON.
+//! Comparison uses serde_json::Value to detect dropped or renamed fields.
 
 use jmap_proto::error::{MethodError, RequestError};
 use jmap_proto::id::Id;
@@ -108,27 +107,21 @@ fn the_session_names_the_largest_upload_the_server_takes() {
     assert_eq!(session.max_size_upload(), Some(50_000_000));
 }
 
-/// How many method calls one request may carry (RFC 8620 §2), which is what
-/// decides whether a chained `Email/query` + `Email/get` may go in one request
-/// or has to be two.
+/// Tests the maximum method calls per request limit (RFC 8620 §2).
 #[test]
 fn the_session_names_how_many_calls_one_request_may_carry() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
     assert_eq!(session.max_calls_in_request(), Some(32));
 }
 
-/// How many octets one request to `apiUrl` may carry (RFC 8620 §2), which is
-/// what decides whether an `Email/get` naming a long list of ids may be sent as
-/// it stands or has to be sent as several.
+/// Tests the maximum request size limit in octets (RFC 8620 §2).
 #[test]
 fn the_session_names_the_largest_request_the_server_takes() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
     assert_eq!(session.max_size_request(), Some(10_000_000));
 }
 
-/// A server that names no request-size limit is answered with `None`, like the
-/// other three: inventing a number here would split requests the server would
-/// have taken whole, and the split ones are the ones with a window in them.
+/// Verifies that a missing request size limit returns None.
 #[test]
 fn a_session_that_names_no_request_size_limit_says_so() {
     let mut value = fixture("core/session.json");
@@ -140,9 +133,7 @@ fn a_session_that_names_no_request_size_limit_says_so() {
     assert_eq!(session.max_size_request(), None);
 }
 
-/// A server that names no call limit is answered with `None`, like the other
-/// two: what to do without a number is the caller's decision, and a guess here
-/// would either split requests that were fine or send ones that are refused.
+/// Verifies that a missing call limit returns None.
 #[test]
 fn a_session_that_names_no_call_limit_says_so() {
     let mut value = fixture("core/session.json");
@@ -174,9 +165,7 @@ fn the_session_names_how_many_ids_one_get_call_may_name() {
     assert_eq!(session.max_objects_in_get(), Some(256));
 }
 
-/// A server that names no `/get` limit is answered with `None`, like the
-/// other three: a caller has to know it has no number to plan a batch size
-/// around, not be handed an invented one.
+/// Verifies that a missing get limit returns None.
 #[test]
 fn a_session_that_names_no_get_limit_says_so() {
     let mut value = fixture("core/session.json");
@@ -408,9 +397,7 @@ fn comparator_defaults_to_ascending_when_the_wire_omits_it() {
     assert!(comparator.is_ascending);
 }
 
-/// `Filter::Condition` is untagged (RFC 8620 §5.5): it must serialize as the
-/// bare condition object, not a wrapper, so a query with no operator is
-/// wire-identical to sending the condition type directly.
+/// Verifies Filter::Condition serializes as an untagged condition object (RFC 8620 §5.5).
 #[test]
 fn filter_condition_serializes_as_the_bare_condition() {
     let condition = EmailQueryFilter::in_mailbox("mailbox1");
@@ -1551,15 +1538,8 @@ fn set_response_and_set_request_builders_and_roundtrip() {
     assert_eq!(round_resp, resp);
 }
 
-/// Fastmail answers `VacationResponse/set` with a null `newState`, and the
-/// response still has to parse.
-///
-/// RFC 8620 §5.3 types `newState` as `String`, not `String|null`, so this is
-/// the server bending the spec. Refusing it is worse than accepting it: the
-/// `updated` member in the same payload says the change *was* applied, so a
-/// parse failure here reports a save that happened as a save that failed, and
-/// the user writes it again. The payload below is verbatim from
-/// api.fastmail.com, 2026-09-05, for an empty (no-op) patch.
+/// Servers can return a null newState in VacationResponse/set (RFC 8620 §5.3).
+/// The response deserializes without error.
 #[test]
 fn set_response_accepts_the_null_new_state_fastmail_sends() {
     use jmap_proto::id::Id;

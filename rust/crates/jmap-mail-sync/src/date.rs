@@ -430,8 +430,7 @@ mod tests {
     /// nineteen digits of it, and `days_from_civil` multiplies what comes out by
     /// 146 097 and then by 86 400. Both overflow long before the parse does, so
     /// the bound is what keeps a date the grammar never allowed from being an
-    /// arithmetic overflow instead of a refusal. See
-    /// `docs/AUDIT-FFI-20260810.md`, F11.
+    /// arithmetic overflow instead of a refusal.
     #[test]
     fn a_year_outside_the_four_digit_grammar_is_not_a_date() {
         for text in [

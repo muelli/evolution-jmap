@@ -3,18 +3,14 @@
 
 #![forbid(unsafe_code)]
 
-//! JSCalendar ↔ iCalendar for the Evolution calendar backend.
+//! Translates between JSCalendar and iCalendar for the Evolution calendar backend.
 //!
-//! `ECalMetaBackend` speaks `ICalComponent`, which is built from and rendered
-//! to iCalendar text ([RFC 5545]); JMAP speaks JSCalendar Events
-//! ([RFC 8984]) wrapped in `CalendarEvent`. This crate is the translation
-//! between the two, and nothing else: it has no dependency on GLib or the
-//! Evolution headers, so the mapping stays testable everywhere the workspace
-//! builds. It is the calendar-side counterpart of `jmap-vcard`.
+//! Translates between JSCalendar ([RFC 8984]) and iCalendar ([RFC 5545]).
+//! `ECalMetaBackend` uses iCalendar text, while JMAP uses JSCalendar `CalendarEvent` objects.
+//! The crate does not depend on GLib or Evolution headers.
 //!
-//! [`event`] is the semantic mapping between JSCalendar and iCalendar, and
-//! [`freebusy`] renders a principal's busy periods as the `VFREEBUSY` a
-//! meeting scheduler reads.
+//! [`event`] maps between JSCalendar and iCalendar events.
+//! [`freebusy`] converts busy periods to `VFREEBUSY` components.
 //!
 //! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984

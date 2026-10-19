@@ -14,9 +14,8 @@
 //! `live-stalwart-book-changes.rs`'s own "a real second client" pattern) so
 //! the account is already large *before* EDS ever connects to it — unlike
 //! `live-stalwart-book.rs`'s single-contact `write` phase, this never asks
-//! EDS to do the importing. Confirmed clean at both 1,000 and 5,000 cards
-//! (`docs/BOOK-SYNC-SCALE.md`): no scale-only bug, cost growing sub-linearly
-//! with book size. `jmap-cal-sync`'s calendar-factory counterpart is
+//! EDS to do the importing. Confirmed clean at both 1,000 and 5,000 cards:
+//! no scale-only bug, cost growing sub-linearly with book size. `jmap-cal-sync`'s calendar-factory counterpart is
 //! `live-stalwart-calendar-scale.rs`, one file over.
 //!
 //! ## Running it

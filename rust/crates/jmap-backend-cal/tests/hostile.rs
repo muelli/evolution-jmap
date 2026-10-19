@@ -22,8 +22,7 @@ use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 ///
 /// `calendar` must be a valid `ICalComponent`.
 unsafe fn vevent(calendar: *mut ICalComponent) -> *mut ICalComponent {
-    // SAFETY: the caller guarantees a valid component; the returned wrapper is
-    // ours and is leaked for the length of the test, which is the shorter life.
+    // SAFETY: Caller guarantees valid component. Leaked wrapper lives for the test duration.
     unsafe { i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT) }
 }
 

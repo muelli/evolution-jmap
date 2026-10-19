@@ -7,11 +7,9 @@
 //! a missing parent, a `parentId` loop, a duplicate id. This file is about the
 //! ones that are not a mistake: a `parentId` chain long enough that the tree's
 //! own recursive `Drop` runs off the end of the stack, which is an abort of the
-//! whole Camel process rather than an error a caller can report (F3), and a
+//! whole Camel process rather than an error a caller can report, and a
 //! date whose year is chosen so that reading it overflows the arithmetic that
-//! turns it into a count of seconds (F11).
-//!
-//! See `docs/AUDIT-FFI.md`, finding F3, and `docs/AUDIT-FFI-20260810.md`, F11.
+//! turns it into a count of seconds.
 
 use jmap_mail_sync::folder::MAX_DEPTH;
 use jmap_mail_sync::{FolderTree, MessageSummary};

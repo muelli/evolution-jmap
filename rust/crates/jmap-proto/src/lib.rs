@@ -5,7 +5,7 @@
 
 //! JMAP protocol types.
 //!
-//! Pure data types with serde implementations - no I/O. Wire format follows:
+//! Pure data types with serde implementations and no I/O. Wire format follows:
 //!
 //! - [RFC 8620] JMAP core: session object, request/response envelopes,
 //!   `Id`/`State` primitives, method-level and set-level errors.

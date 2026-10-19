@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9661): capability detection, `SieveScript/get`, `/set`,
-//! `/query` and `/validate`. No Evolution filters UI consumes this yet; the
-//! wiring is a separate increment.
+//! Tests JMAP Sieve support per RFC 9661.
+//!
+//! Covers capability detection, `SieveScript/get`, `set`, `query`, and `validate`.
 
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
@@ -14,11 +14,7 @@ use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
 use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, sieve_set_error};
 use serde_json::json;
 
-/// A server advertises `urn:ietf:params:jmap:sieve` both at session level and
-/// on the account, the same way every other capability does, and the typed
-/// capability parses (its `maxSizeScript` property is mandatory per RFC 9661
-/// §1.1, unlike the empty placeholder object most other capabilities here
-/// advertise).
+/// Verifies that the server advertises `urn:ietf:params:jmap:sieve` with mandatory `maxSizeScript`.
 #[test]
 fn sieve_capability_is_advertised_and_resolves_to_the_account() {
     let server = MockServer::builder().start();
@@ -34,9 +30,7 @@ fn sieve_capability_is_advertised_and_resolves_to_the_account() {
     );
 }
 
-/// A freshly started account has no Sieve scripts (unlike `Quota`, RFC 9661
-/// scripts are client-created), so `ids: null` returns an empty list rather
-/// than a seeded fixture.
+/// Verifies that an account initially has no Sieve scripts.
 #[test]
 fn sieve_script_get_returns_no_scripts_on_a_fresh_account() {
     let server = MockServer::builder().start();
@@ -47,8 +41,7 @@ fn sieve_script_get_returns_no_scripts_on_a_fresh_account() {
     assert!(scripts.is_empty());
 }
 
-/// `SieveScript/get` with an id that names nothing answers `notFound`, the
-/// same as every other `/get` method (RFC 8620 §5.1).
+/// Verifies that `SieveScript/get` with an unknown identifier returns `notFound`.
 #[test]
 fn sieve_script_get_reports_unknown_ids_as_not_found() {
     let server = MockServer::builder().start();
@@ -71,8 +64,7 @@ fn sieve_script_get_reports_unknown_ids_as_not_found() {
     );
 }
 
-/// `SieveScript/set` create stores the script, stamps a server-set id, and
-/// leaves it inactive (RFC 9661 §2.4).
+/// Verifies that creating a Sieve script leaves it inactive per RFC 9661 section 2.4.
 #[test]
 fn sieve_script_create_stores_an_inactive_script() {
     let server = MockServer::builder().start();
@@ -91,8 +83,7 @@ fn sieve_script_create_stores_an_inactive_script() {
     assert_eq!(scripts[0].id, created.id);
 }
 
-/// A script name is unique per account (RFC 9661 §2.4): a second create
-/// naming one already in use is `alreadyExists`, not silently accepted.
+/// Verifies that duplicate script names fail with `alreadyExists`.
 #[test]
 fn sieve_script_create_rejects_a_duplicate_name() {
     let server = MockServer::builder().start();
@@ -109,7 +100,7 @@ fn sieve_script_create_rejects_a_duplicate_name() {
     }
 }
 
-/// A plain JSON Patch update renames a script.
+/// Verifies that a patch update renames a script.
 #[test]
 fn sieve_script_update_renames() {
     let server = MockServer::builder().start();
@@ -129,8 +120,7 @@ fn sieve_script_update_renames() {
     assert_eq!(scripts[0].name, "out-of-office");
 }
 
-/// `isActive` is server-set (RFC 9661 §2.1): a direct update patch touching
-/// it is `invalidProperties`, not a silent activation.
+/// Verifies that patching `isActive` directly fails with `invalidProperties`.
 #[test]
 fn sieve_script_update_rejects_a_direct_is_active_patch() {
     let server = MockServer::builder().start();
@@ -148,8 +138,7 @@ fn sieve_script_update_rejects_a_direct_is_active_patch() {
     }
 }
 
-/// Destroying the active script is refused (`sieveIsActive`, RFC 9661
-/// §2.4) until it is deactivated; destroying an inactive one works.
+/// Verifies that destroying an active script fails with `sieveIsActive`.
 #[test]
 fn sieve_script_destroy_refuses_the_active_script_until_deactivated() {
     let server = MockServer::builder().start();
@@ -174,8 +163,7 @@ fn sieve_script_destroy_refuses_the_active_script_until_deactivated() {
     assert!(client.sieve_scripts(&account_id).unwrap().is_empty());
 }
 
-/// Activating a second script deactivates whatever was active before,
-/// since RFC 9661 never allows two scripts active at once.
+/// Verifies that activating a script deactivates the previously active script.
 #[test]
 fn sieve_script_activate_switches_the_previous_one_off() {
     let server = MockServer::builder().start();
@@ -205,8 +193,7 @@ fn sieve_script_activate_switches_the_previous_one_off() {
     assert_eq!(active, vec![b]);
 }
 
-/// `SieveScript/query` with no filter (RFC 9661 §2.5) returns every script,
-/// the same as `sieve_scripts` but as bare ids.
+/// Verifies that unfiltered `SieveScript/query` returns all script identifiers.
 #[test]
 fn sieve_script_query_with_no_filter_returns_every_script() {
     let server = MockServer::builder().start();
@@ -233,8 +220,7 @@ fn sieve_script_query_with_no_filter_returns_every_script() {
     assert_eq!(ids, expected);
 }
 
-/// Filtering by `name` (RFC 9661 §2.5) narrows to scripts whose name
-/// contains the given substring.
+/// Verifies that filtering by `name` matches scripts by substring.
 #[test]
 fn sieve_script_query_filters_by_name() {
     let server = MockServer::builder().start();
@@ -259,9 +245,7 @@ fn sieve_script_query_filters_by_name() {
     assert_eq!(ids, vec![out_of_office]);
 }
 
-/// Filtering by `isActive` (RFC 9661 §2.5) narrows to just the one active
-/// script, the same the account's own `SieveScript/set` invariant only ever
-/// allows one of.
+/// Verifies that filtering by `isActive` matches the active script.
 #[test]
 fn sieve_script_query_filters_by_is_active() {
     let server = MockServer::builder().start();
@@ -287,11 +271,7 @@ fn sieve_script_query_filters_by_is_active() {
     assert_eq!(ids, vec![a]);
 }
 
-/// `SieveScript/validate` (RFC 9661 section 2.6) validating raw content via
-/// [`Client::sieve_script_validate_content`] (which uploads it as a blob
-/// first, since the RFC only takes `blobId` on the wire) is always valid:
-/// this mock has no real Sieve parser, the same deliberate limitation
-/// `SieveScript/set` already has (it never produces `invalidSieve`).
+/// Verifies `SieveScript/validate` on raw script content via temporary blob upload.
 #[test]
 fn sieve_script_validate_content_is_always_valid() {
     let server = MockServer::builder().start();
@@ -305,8 +285,7 @@ fn sieve_script_validate_content_is_always_valid() {
     assert!(response.error.is_none());
 }
 
-/// Validating by `blobId` resolves the blob against the account's real
-/// store, the one mechanical check this mock can do without a parser.
+/// Verifies that validating by `blobId` resolves the stored blob.
 #[test]
 fn sieve_script_validate_by_blob_id_resolves_a_real_blob() {
     let server = MockServer::builder().start();
@@ -325,8 +304,7 @@ fn sieve_script_validate_by_blob_id_resolves_a_real_blob() {
     assert!(response.is_valid());
 }
 
-/// An unknown `blobId` is `invalidArguments`: resolving the reference is
-/// mechanical and this mock does check it, unlike script content.
+/// Verifies that an unknown `blobId` returns `invalidArguments`.
 #[test]
 fn sieve_script_validate_rejects_an_unknown_blob_id() {
     let server = MockServer::builder().start();

@@ -13,15 +13,60 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::Fixture;
-use jmap_cal_sync::{FreeBusy, SyncError};
+use jmap_cal_sync::{CalSync, FreeBusy, SyncError};
+use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
+use jmap_client::{Client, Credentials};
 
 use jmap_proto::Id;
 use jmap_proto::principals::Principal;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const WINDOW_START: &str = "2026-09-01T00:00:00Z";
 const WINDOW_END: &str = "2026-09-02T00:00:00Z";
+
+/// The real transport, with every `Principal/getAvailability` answer replaced
+/// by a method-level error of `kind`.
+struct FailingAvailability {
+    inner: UreqTransport,
+    kind: &'static str,
+}
+
+impl Transport for FailingAvailability {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let mut response = self.inner.execute(request)?;
+        if let Ok(mut body) = serde_json::from_slice::<Value>(&response.body) {
+            if let Some(invocations) = body
+                .get_mut("methodResponses")
+                .and_then(Value::as_array_mut)
+            {
+                for invocation in invocations {
+                    if invocation[0] == "Principal/getAvailability" {
+                        let call_id = invocation[2].clone();
+                        *invocation = json!(["error", { "type": self.kind }, call_id]);
+                    }
+                }
+            }
+            response.body = serde_json::to_vec(&body).expect("JSON serialises");
+        }
+        Ok(response)
+    }
+}
+
+/// A [`CalSync`] over `fixture.ours` whose client sees every
+/// `Principal/getAvailability` answer replaced by a `kind` error.
+fn sync_failing_availability(fixture: &Fixture, kind: &'static str) -> CalSync {
+    let client = Client::builder()
+        .transport(FailingAvailability {
+            inner: UreqTransport::new(Duration::from_secs(10)),
+            kind,
+        })
+        .connect(fixture.server.origin(), Credentials::none())
+        .unwrap();
+    CalSync::new(client, fixture.account_id.clone(), fixture.ours.clone())
+}
 
 /// Seeds a principal for `email`; `may_get_availability` false models a
 /// server that knows the person but will not disclose their calendar.
@@ -163,6 +208,23 @@ fn a_server_failure_that_is_not_not_found_is_reported() {
     let error = sync
         .free_busy(&["bob@example.com".to_owned()], WINDOW_START, WINDOW_END)
         .expect_err("the account does not exist");
+
+    assert!(matches!(error, SyncError::Client(_)), "{error:?}");
+}
+
+/// The test above triggers its failure before `getAvailability` is even
+/// asked, in `Principal/query`. This one proves the same rule for the later
+/// call: once a principal is found, a non-`notFound` failure of
+/// `getAvailability` itself must still be reported, not read as "nobody to
+/// disclose".
+#[test]
+fn a_getavailability_failure_that_is_not_not_found_is_reported() {
+    let fixture = Fixture::start();
+    seed_principal(&fixture, "Bob Example", "bob@example.com", true);
+
+    let error = sync_failing_availability(&fixture, "serverFail")
+        .free_busy(&["bob@example.com".to_owned()], WINDOW_START, WINDOW_END)
+        .expect_err("a serverFail is not an answer about the address");
 
     assert!(matches!(error, SyncError::Client(_)), "{error:?}");
 }

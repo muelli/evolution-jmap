@@ -6,7 +6,7 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    // Deserialization failure is expected; assert parser execution never panics or aborts.
+    // Deserialization errors are expected. Verify that deserialization does not panic or abort.
     if let Ok(resp) = serde_json::from_slice::<jmap_proto::response::Response>(data) {
         let _ = serde_json::to_vec(&resp);
     }

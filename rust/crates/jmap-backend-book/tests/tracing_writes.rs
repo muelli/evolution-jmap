@@ -191,7 +191,7 @@ fn get_changes_traces_structured_fields() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    // First, list existing to get the state tag under capture guard
+    // First, list existing to get the state tag under capture guard.
     let mut sync_tag: *mut gchar = ptr::null_mut();
     let mut objects: *mut GSList = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();

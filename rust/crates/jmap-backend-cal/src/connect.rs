@@ -25,7 +25,7 @@ const ACCOUNT_ID_DATA_KEY: &CStr = c"AccountId";
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource`.
+/// `source` must point to a valid, live `ESource`.
 pub unsafe fn set_source_account_id(source: *mut ESource, account_id: &str) {
     if source.is_null() {
         return;
@@ -33,7 +33,7 @@ pub unsafe fn set_source_account_id(source: *mut ESource, account_id: &str) {
     let Ok(cstr) = std::ffi::CString::new(account_id) else {
         return;
     };
-    // SAFETY: caller guarantees source is a valid ESource pointer.
+    // SAFETY: Caller guarantees `source` is a valid ESource pointer.
     unsafe {
         let copy = glib_sys::g_strdup(cstr.as_ptr());
         gobject_sys::g_object_set_data_full(
@@ -47,17 +47,16 @@ pub unsafe fn set_source_account_id(source: *mut ESource, account_id: &str) {
 
 /// Reads the JMAP account ID from `source`, if configured.
 ///
-/// Returns `None` when absent, signaling that the backend should fall back
-/// to the primary account for the capability.
+/// Returns `None` when absent, signaling fallback to the primary account.
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource`.
+/// `source` must be null or point to a valid, live `ESource`.
 pub unsafe fn source_account_id(source: *mut ESource) -> Option<String> {
     if source.is_null() {
         return None;
     }
-    // SAFETY: caller guarantees source is a valid ESource pointer.
+    // SAFETY: Caller guarantees `source` is a valid ESource pointer.
     unsafe {
         let read_obj = |obj: *mut gobject_sys::GObject, keys: &[&CStr]| -> Option<String> {
             if obj.is_null() {
@@ -145,9 +144,8 @@ pub fn open_calendar(
 
 /// Connects to the configured JMAP account and resolves the target calendar.
 ///
-/// The account is `account_id` when given, else the one the source's
-/// `[Resource] Identity` names (see [`SourceConfig::account_id`]), else the
-/// primary account for the capability.
+/// Resolves `account_id` when provided. Falls back to identity configuration
+/// or the primary calendar account.
 pub fn open_calendar_with_account(
     config: &SourceConfig,
     credentials: Credentials,
@@ -199,7 +197,7 @@ pub fn open_calendar_with_account(
 ///
 /// # Safety
 ///
-/// As [`jmap_backend_core::connect::connect_with`].
+/// Follows safety requirements of [`jmap_backend_core::connect::connect_with`].
 pub unsafe fn connect(
     source: *mut ESource,
     credentials: *const ENamedParameters,
@@ -207,8 +205,7 @@ pub unsafe fn connect(
     out_auth_result: *mut ESourceAuthenticationResult,
     error: *mut *mut GError,
 ) -> Option<OpenCalendar> {
-    // SAFETY: the arguments satisfy `connect_with`'s contract by this
-    // function's, which is the same one.
+    // SAFETY: Arguments satisfy `connect_with` safety invariants.
     unsafe {
         let account_id = source_account_id(source);
         connect_with(

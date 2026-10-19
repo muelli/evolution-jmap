@@ -9,34 +9,30 @@ use std::collections::BTreeMap;
 
 #[test]
 fn fold_overlong_lines_exact_boundary_and_continuation_budget() {
-    // RFC 5545 Section 3.1 Content Lines:
-    // Lines of text SHOULD NOT be longer than 75 octets, excluding the line break.
-    // Long lines are split by inserting CRLF followed by a space (continuation line).
+    // RFC 5545 Section 3.1: lines should not exceed 75 octets.
+    // Lines are split by CRLF followed by a space.
 
-    // 1. Line of exactly 75 octets preceded by an overlong line.
-    // Line 1 is 8 + 72 = 80 bytes (exceeds 75, needs folding).
-    // Line 2 is 12 + 63 = 75 bytes (must not fold).
+    // Line 1 is 80 bytes and needs folding.
+    // Line 2 is 75 bytes and must not fold.
     let line1 = format!("SUMMARY:{}", "A".repeat(72));
     let line2 = format!("DESCRIPTION:{}", "B".repeat(63));
     let input = format!("{line1}\r\n{line2}");
     let folded = jmap_ical::event::fold_overlong_lines(input);
     let lines: Vec<&str> = folded.split("\r\n").collect();
 
-    // Line 1 folds into 75 bytes followed by a continuation line of 1 space + 5 bytes (6 bytes total).
+    // Line 1 folds into 75 bytes followed by a 6-byte continuation line.
     assert_eq!(lines[0].len(), 75);
     assert_eq!(lines[0], &line1[..75]);
     assert_eq!(lines[1], format!(" {}", &line1[75..]));
     assert_eq!(lines[1].len(), 6);
 
-    // Line 2 (75 bytes) must remain exactly 1 line of 75 bytes, without any continuation line.
+    // Line 2 remains one line of 75 bytes.
     assert_eq!(lines[2], line2);
     assert_eq!(lines[2].len(), 75);
     assert_eq!(lines.len(), 3);
 
-    // 2. Multi-continuation line fold (200 octets).
-    // Physical line 1 must be exactly 75 octets.
-    // Continuation line 2 must be space + 74 octets = 75 octets.
-    // Continuation line 3 must be space + remaining octets.
+    // Multi-continuation line fold with 200 octets.
+    // Line 1 has 75 octets, line 2 has 75 octets, line 3 has remaining octets.
     let long_line = format!("NOTE:{}", "C".repeat(195));
     let folded_long = jmap_ical::event::fold_overlong_lines(long_line);
     let long_lines: Vec<&str> = folded_long.split("\r\n").collect();
@@ -51,9 +47,7 @@ fn fold_overlong_lines_exact_boundary_and_continuation_budget() {
 
 #[test]
 fn modified_instance_inherits_use_default_alerts_suppressing_alarms() {
-    // RFC 8984 Section 4.5.1 and Section 4.3.5:
-    // When useDefaultAlerts is true on the series, recurrence override instances
-    // inherit it, which suppresses VALARM components on the instance.
+    // RFC 8984 Section 4.5.1: `useDefaultAlerts` on the series suppresses instance `VALARM`.
     let mut alerts = BTreeMap::new();
     alerts.insert(
         "alert1".to_string(),
@@ -97,9 +91,7 @@ fn modified_instance_inherits_use_default_alerts_suppressing_alarms() {
 
 #[test]
 fn unfold_folded_component_structure_delimiters() {
-    // RFC 5545 Section 3.1:
-    // Any content line, including component BEGIN and END delimiters, may be folded.
-    // Unfolding must restore the delimiter and validate structure cleanly.
+    // RFC 5545 Section 3.1: content lines may be folded across delimiters.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
         "BEGIN:VEVE\r\n",
@@ -115,9 +107,7 @@ fn unfold_folded_component_structure_delimiters() {
 
 #[test]
 fn read_definition_refuses_vtimezone_with_no_observances() {
-    // RFC 5545 Section 3.6.5:
-    // A VTIMEZONE calendar component MUST include the TZID calendar property
-    // and at least one STANDARD or DAYLIGHT sub-component.
+    // RFC 5545 Section 3.6.5: `VTIMEZONE` requires `TZID` and at least one observance.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
         "VERSION:2.0\r\n",
@@ -145,10 +135,7 @@ fn read_definition_refuses_vtimezone_with_no_observances() {
 
 #[test]
 fn read_vevent_resolves_vtimezone_by_location_name_for_until_offset() {
-    // RFC 5545 Section 3.6.5 and RFC 8984 Section 4.7.2:
-    // When DTSTART references an IANA time zone matching X-LIC-LOCATION
-    // on a VTIMEZONE with a custom TZID, the VTIMEZONE observances must be
-    // resolved to adjust UTC UNTIL timestamps to local time.
+    // RFC 5545 Section 3.6.5: resolve `VTIMEZONE` by `X-LIC-LOCATION` for `UNTIL` adjustment.
     let ics_berlin = concat!(
         "BEGIN:VCALENDAR\r\n",
         "VERSION:2.0\r\n",
@@ -185,7 +172,7 @@ fn read_vevent_resolves_vtimezone_by_location_name_for_until_offset() {
         "UNTIL must be adjusted by observance offset for alias zone"
     );
 
-    // Verify DTSTART matching by property tzid with multiple zones present.
+    // Match `DTSTART` by property `TZID` with multiple timezones present.
     let ics_multi = concat!(
         "BEGIN:VCALENDAR\r\n",
         "VERSION:2.0\r\n",
@@ -235,9 +222,7 @@ fn read_vevent_resolves_vtimezone_by_location_name_for_until_offset() {
 
 #[test]
 fn date_time_digits_rejects_overlong_date_components() {
-    // RFC 5545 Section 3.3.4 and Section 3.3.5:
-    // A date must be exactly 8 digits (YYYYMMDD).
-    // An overlong 9-digit date with a valid time must be rejected (None).
+    // RFC 5545 Section 3.3.4: dates require exactly 8 digits (`YYYYMMDD`).
     assert_eq!(
         jmap_ical::event::date_time_digits("202601015T120000"),
         None,

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9661): `SieveScript/get`, `/set`, `/query` and
-//! `/validate`. Evolution's filters UI is not wired to any of this yet.
+//! JMAP Sieve operations (RFC 9661).
+//!
+//! Provides `SieveScript/get`, `/set`, `/query`, and `/validate`.
 
 use serde_json::Value;
 
@@ -125,11 +126,10 @@ impl Client {
         Ok(response.ids)
     }
 
-    /// Validate an already-uploaded Sieve script by its `blobId` (RFC 9661
-    /// section 2.6). The RFC takes only `blobId`; content must be uploaded
-    /// first (section 2.2, [`Client::upload_blob`]), there is no raw-content
-    /// shorthand on the wire. Use [`Client::sieve_script_validate_content`]
-    /// to validate raw content directly.
+    /// Validate an uploaded Sieve script by blob ID (RFC 9661 Section 2.6).
+    ///
+    /// Content must be uploaded as a blob before validation (RFC 9661 Section 2.2).
+    /// Use [`Client::sieve_script_validate_content`] to validate raw script bytes directly.
     pub fn sieve_script_validate(
         &self,
         account_id: &Id,
@@ -140,9 +140,9 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    /// Validate raw Sieve script content: uploads it as a blob first (RFC
-    /// 9661 §2.6 requires content to already be uploaded before it can be
-    /// validated), then validates the resulting `blobId`.
+    /// Validate raw Sieve script bytes (RFC 9661 Section 2.6).
+    ///
+    /// Uploads content as a blob and then requests validation for the resulting `blob_id`.
     pub fn sieve_script_validate_content(
         &self,
         account_id: &Id,

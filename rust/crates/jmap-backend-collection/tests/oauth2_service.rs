@@ -9,8 +9,7 @@
 //! but not only there: it also registers it in the shell process and in its
 //! book/cal backend factories (`module-ews-configuration.c`,
 //! `e-book-backend-ews-factory.c`, `e-cal-backend-ews-factory.c`) — four
-//! modules, matching this project's own four. See `docs/EWS-PARITY.md` for
-//! the full module-registration comparison.
+//! modules, matching this project's own four.
 //!
 //! The reason one call is enough: `EOAuth2ServiceBase` (`e-oauth2-service-base.c`,
 //! read rather than assumed) is itself an `EExtension` whose

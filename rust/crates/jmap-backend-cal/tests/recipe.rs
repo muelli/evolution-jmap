@@ -154,7 +154,7 @@ impl RegistrySource {
 
 impl Drop for RegistrySource {
     fn drop(&mut self) {
-        // SAFETY: we hold the only reference to each.
+        // SAFETY: Releases held references to source and server.
         unsafe {
             g_object_unref(self.source.cast());
             g_object_unref(self.server);

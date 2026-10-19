@@ -1,29 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Session discovery through a same-host redirect, as a real server that
-//! serves `/.well-known/jmap` via a `307` to a separate path does (Stalwart
-//! among them). The first live test against such a server failed with "no
-//! primary account": `ureq`'s default redirect policy drops the
-//! `Authorization` header even on a same-host hop, so the redirect target
-//! was fetched anonymously and answered with an empty account list.
+//! Tests session discovery and blob downloads through HTTP redirects.
 //!
-//! Deliberately exercises the real `UreqTransport` (the crate's default),
-//! not a fake in-memory one: the bug is in how that transport follows a
-//! redirect, which only a real HTTP round trip through `ureq` reproduces.
-//!
-//! The second half of this file is the download-path counterpart:
-//! a real Fastmail account's blob download came back as
-//! ~105 KB of `www.fastmail.com`'s own marketing homepage, not the message:
-//! consistent with a *cross*-host redirect on the download hop, which
-//! `UreqTransport`'s `SameHost` policy already denies `Authorization`
-//! (correctly: it is genuinely a different, unnamed host), but which the
-//! client used to hand back as if it were the blob regardless. Unlike the
-//! session redirect above, this one is deliberately cross-host: a second
-//! listener on a different loopback address (127.0.0.2, not 127.0.0.1) so
-//! `ureq`'s own host comparison, and this test, see two different hosts the
-//! way a real cross-domain redirect is, with no real network or DNS
-//! involved.
+//! Verifies that same-host redirects preserve authentication headers.
+//! Also verifies that cross-host redirects do not leak credentials or accept foreign responses.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,18 +32,11 @@ fn primary_account_resolves_through_a_same_host_session_redirect() {
     );
 }
 
-/// The body an unrelated public page answers with, standing in for
-/// Fastmail's own marketing homepage, the real content a live download
-/// redirect came back with (see this file's module doc).
+/// Body representing a foreign web page returned by an unauthenticated redirect.
 const FOREIGN_PAGE: &[u8] = b"<html>this is not your blob</html>";
 
-/// A bare HTTP responder for the redirect target the download hop should
-/// never be trusted through: it answers every request 200 with
-/// [`FOREIGN_PAGE`], regardless of what the request carries: an
-/// unauthenticated bounce is exactly what a redirect target that never saw
-/// `Authorization` (stripped by `SameHost`, since it is a different host) is
-/// expected to answer with, not a 401 a JMAP-oblivious host has no reason to
-/// send.
+/// HTTP responder simulating an untrusted redirect target.
+/// Always returns HTTP 200 with [`FOREIGN_PAGE`] to simulate unauthenticated content.
 struct ForeignHost {
     origin: String,
     stop: Arc<AtomicBool>,
@@ -161,12 +135,8 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
     }
 }
 
-/// A rebase that actually changes `downloadUrl`'s origin (the advertised
-/// origin differs from the one the client connected through) followed by a
-/// cross-origin-redirect refusal must name
-/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error; otherwise a poisoned
-/// account's rebase looks like an ordinary client bug, which is exactly what
-/// cost a full debugging session before the env var was found by hand.
+/// Verifies that refusing a cross-origin redirect mentions `JMAP_LIVE_SERVER_REBASE_URLS`.
+/// This diagnostic guides users when advertised origins conflict with connection URLs.
 #[test]
 fn a_rebased_then_refused_download_names_the_rebase_env_var() {
     let foreign = ForeignHost::start();
@@ -211,11 +181,8 @@ fn a_rebased_then_refused_download_names_the_rebase_env_var() {
     }
 }
 
-/// The `Accept` smell: a blob is never JSON, so a download declaring
-/// `Accept: application/json`
-/// (as every other request this client makes correctly does) gives a server
-/// doing RFC 7231 §5.3.2 content negotiation a legitimate reason to refuse
-/// or redirect it. `download_blob` must declare something else instead.
+/// Verifies that blob downloads do not declare `Accept: application/json`.
+/// A blob request must allow arbitrary MIME types in RFC 7231 content negotiation.
 #[test]
 fn download_blob_does_not_declare_accept_application_json() {
     let server = MockServer::builder()

@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Pinned mock-level regression tests verifying that `jmap-client` tolerates
-//! real-world spec deviations emitted by live Stalwart deployments
-//! (STALWART-RFC-FINDINGS.md).
+//! Mock regression tests verifying that `jmap-client` tolerates
+//! specification deviations emitted by Stalwart deployments.
 
 use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials, Error};
@@ -555,16 +554,12 @@ fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
     assert!(time_zones.contains_key("/custom/zone1"));
 }
 
-/// Exact wire JSON returned by live Stalwart 0.16.22 on
-/// CalendarEvent/parse for a blob containing two distinct top-level VEVENTs
-/// (different UIDs): Stalwart returns one array element per event under the
-/// single blob id, confirmed live against `stalwart-runner`.
+/// Exact wire JSON returned by Stalwart on `CalendarEvent/parse` for a blob with two VEVENTs.
+/// The server returns one array element per event under the single blob id.
 const STALWART_CALENDAR_EVENT_PARSE_RESPONSE_TWO_EVENTS: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":[{"@type":"Event","uid":"probe-multi-1","title":"First Event","start":"2026-10-05T12:00:00","updated":"2026-10-05T00:00:00Z"},{"@type":"Event","uid":"probe-multi-2","title":"Second Event","start":"2026-10-06T12:00:00","updated":"2026-10-05T00:00:00Z"}]}},"c0"]],"sessionState":"aa288e37"}"#;
 
-/// A blob holding more than one top-level event cannot be represented by
-/// this client's one-event-per-blob-id `parsed` map; silently keeping only
-/// the array's first element would discard the rest without any sign of
-/// data loss, so the blob id must move to `notParsable` instead.
+/// A blob with multiple events cannot fit into the one-event-per-blob `parsed` map.
+/// The client reports the blob identifier in `notParsable` to avoid silent data loss.
 #[test]
 fn finding_13_calendar_event_parse_reports_multi_event_blob_as_not_parsable() {
     let client = Client::builder()

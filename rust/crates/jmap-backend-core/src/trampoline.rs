@@ -210,9 +210,98 @@ fn internal_error(message: &str) -> *mut GError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::os::raw::c_char;
+    use std::sync::OnceLock;
+
+    use glib_sys::{GLogLevelFlags, gpointer};
     use jmap_tracing_capture::capture;
 
     use super::*;
+
+    thread_local! {
+        static GLOG_SCOPE: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// Records a `g_log` call into whichever buffer the calling thread's
+    /// [`capture_g_log_critical`] has open, the same per-thread routing
+    /// `jmap_tracing_capture` uses and for the same reason: several tests in
+    /// this binary call a `log_critical*` function at once, on their own
+    /// threads, and must not see each other's messages.
+    unsafe extern "C" fn record(
+        _domain: *const c_char,
+        _level: GLogLevelFlags,
+        message: *const c_char,
+        _user_data: gpointer,
+    ) {
+        // SAFETY: GLib hands every registered log handler a NUL-terminated
+        // string it owns; this function neither frees nor outlives it.
+        let text = unsafe { std::ffi::CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned();
+        GLOG_SCOPE.with(|scope| {
+            if let Some(buf) = scope.borrow_mut().as_mut() {
+                buf.push(text);
+            }
+        });
+    }
+
+    /// Runs `run` and returns the `g_log` criticals under
+    /// [`LOG_DOMAIN`] it caused, in place of GLib's own default handler
+    /// (which only prints them). Installed once per process: `g_log_set_handler`
+    /// has no matching "uninstall the one I just added" call that keeps the
+    /// rest of GLib's default handling for other domains intact, so later
+    /// callers share the one installation and are routed by their own thread.
+    fn capture_g_log_critical<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            // SAFETY: LOG_DOMAIN is a valid NUL-terminated string; `record`
+            // matches the `GLogFunc` signature `g_log_set_handler` expects.
+            unsafe {
+                glib_sys::g_log_set_handler(
+                    LOG_DOMAIN.as_ptr(),
+                    G_LOG_LEVEL_CRITICAL,
+                    Some(record),
+                    std::ptr::null_mut(),
+                );
+            }
+        });
+        GLOG_SCOPE.with(|scope| *scope.borrow_mut() = Some(Vec::new()));
+        let result = run();
+        let captured = GLOG_SCOPE
+            .with(|scope| scope.borrow_mut().take())
+            .unwrap_or_default();
+        (result, captured)
+    }
+
+    #[test]
+    fn log_critical_emits_a_tracing_error_event() {
+        let (_, captured) = capture(|| {
+            log_critical("a bug nobody can act on");
+        });
+
+        assert!(
+            captured
+                .iter()
+                .any(|(level, _, value)| *level == tracing::Level::ERROR
+                    && value.contains("a bug nobody can act on")),
+            "expected an ERROR event carrying the message, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn log_critical_reaches_the_glib_log_as_a_critical() {
+        let (_, captured) = capture_g_log_critical(|| {
+            log_critical("a bug reported through glib too");
+        });
+
+        assert!(
+            captured
+                .iter()
+                .any(|message| message.contains("a bug reported through glib too")),
+            "expected a GLib critical carrying the message, got {captured:?}"
+        );
+    }
 
     #[test]
     fn both_ordinary_panic_payload_shapes_are_printable() {

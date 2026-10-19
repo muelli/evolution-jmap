@@ -1,26 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Address book backend reading and writing a shared address book against
-//! a real JMAP server.
+//! Shared address book read and write tests against a live JMAP server.
 //!
-//! Verifies that `connect::open_book_with_account` correctly connects to an
-//! address book in another account shared via RFC 9670 `shareWith`, respects
-//! `myRights` to mark the backend read-only (`writable: false`) or writable
-//! (`writable: true`), and that the underlying backend sync engine reads and,
-//! where allowed, writes contact records.
+//! Verifies that [`connect::open_book_with_account`] handles RFC 9670 shared address books.
+//! Confirms that myRights sets backend writable status.
+//! Tests contact record read and write operations.
 //!
 //! ## Running it
 //!
-//! Needs both `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` pointing to a real Stalwart
-//! server:
+//! Set write and recipient credentials pointing to a live Stalwart server:
 //!
 //! ```console
 //! $ cargo test -p jmap-backend-book --test live_server_shared -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either account pair is unset.
+//! The test skips cleanly when credentials are not set.
 
 use std::env;
 

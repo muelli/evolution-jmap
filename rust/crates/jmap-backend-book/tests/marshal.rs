@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The C boundary of the address book backend, exercised the way EDS will:
-//! every list is walked as a `GSList` and freed with the function EDS would
-//! call, so a wrong node type or a missing copy shows up here rather than as
-//! a crash in `evolution-addressbook-factory`.
+//! C boundary tests for address book operations.
+//!
+//! Verifies list walking as `GSList` and freeing via EDS deallocators.
 
 use std::ffi::CStr;
 
@@ -126,14 +125,7 @@ fn a_vcard_round_trips_through_econtact_keeping_its_jmap_parameters() {
     }
 }
 
-/// A contact Evolution has just created has no `UID` yet; `save_contact_sync`
-/// tells a create from an edit by exactly this, so a missing `UID` must not
-/// come back as a usable identifier.
-///
-/// Both spellings are checked because `EVCard` distinguishes them and the
-/// backend must not: no `UID` line at all reads back as NULL, but a `UID:`
-/// with an empty value reads back as `""`, which would be sent to the server
-/// as the identifier of a card to patch.
+/// Verifies contact without a UID reports None.
 #[test]
 fn a_contact_without_a_uid_reports_none() {
     for vcard in [

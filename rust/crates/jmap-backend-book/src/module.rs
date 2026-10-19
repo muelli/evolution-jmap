@@ -22,7 +22,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         jmap_backend_core::logging::init();
         bind();
-        // SAFETY: the module is EDS's, by this function's contract.
+        // SAFETY: `type_module` is a valid GTypeModule pointer per caller contract.
         unsafe {
             remember_backend_type(register_dynamic::<JmapBookBackend>(type_module));
             register_dynamic::<JmapBookFactory>(type_module);

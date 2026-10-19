@@ -1,16 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! RFC 8620 §2.2 SRV autodiscovery (`_jmap._tcp.<domain>`).
+//! Tests RFC 8620 section 2.2 SRV autodiscovery (`_jmap._tcp.<domain>`).
 //!
-//! Root-caused by an operator session testing a real `muelli@fastmail.com`
-//! account: the password path fetches
-//! `https://<email domain>/.well-known/jmap`, which 404s for
-//! Fastmail: JMAP actually lives at `api.fastmail.com`, published via a
-//! `_jmap._tcp.fastmail.com` SRV record. This is the client-side half of the
-//! fix: a [`Resolver`] seam `ClientBuilder::connect_domain` consults before
-//! falling back to the bare-domain URL, tested with a fake resolver and a
-//! fake in-memory [`Transport`] so no real DNS or network is needed.
+//! [`ClientBuilder::connect_domain`] queries SRV records before falling back to the bare-domain URL.
+//! Uses fake resolver and transport implementations to verify discovery without live network calls.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,7 +13,7 @@ use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportErro
 use jmap_client::{Client, Credentials};
 use serde_json::json;
 
-/// Returns one fixed answer for every domain asked, or none.
+/// Returns a configured answer for each domain query.
 struct FakeResolver(Option<SrvTarget>);
 
 impl Resolver for FakeResolver {
@@ -28,9 +22,8 @@ impl Resolver for FakeResolver {
     }
 }
 
-/// Records every URL requested and answers each with a fixed session
-/// document. No real network: the question these tests ask is which URL
-/// the client requests session discovery from, not what a server answers.
+/// Records requested URLs and returns a fixed session document.
+/// Verifies the discovery endpoint URL without network access.
 struct FakeTransport {
     seen: Arc<Mutex<Vec<String>>>,
     session_body: Vec<u8>,

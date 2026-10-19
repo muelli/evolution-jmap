@@ -9,13 +9,11 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=DEP_EVOLUTION_SHELL_LIBDIRS");
 
-    // Absent only if `evo-sys` stopped publishing it, which is a build to fail
-    // rather than one to quietly produce a module that cannot load.
+    // Fail the build if evo-sys does not publish DEP_EVOLUTION_SHELL_LIBDIRS.
     let libdirs = env::var("DEP_EVOLUTION_SHELL_LIBDIRS")
         .expect("evo-sys published no DEP_EVOLUTION_SHELL_LIBDIRS");
     for dir in libdirs.split(':').filter(|dir| !dir.is_empty()) {
-        // `-rpath` and not `-rpath-link`: this has to be recorded in the file,
-        // not merely used while linking it.
+        // Record directory paths in the binary via -rpath.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
     }
 }

@@ -106,7 +106,7 @@ const ALL_DAY_DURATION: &str = "P1D";
 /// libical setters the way Evolution's editor builds it — so the `TZID` that
 /// reaches the backend is libical's own
 /// `/freeassociation.sourceforge.net/Europe/Berlin`, which is not an RFC 8984
-/// §1.4.9 `TimeZoneId` and which nothing outside libical resolves.
+/// §1.4.8 `TimeZoneId` and which nothing outside libical resolves.
 ///
 /// This is the leg no test below real EDS can stand in for. The mapping can
 /// translate that identifier only from the `VTIMEZONE` beside it, and whether
@@ -456,7 +456,7 @@ const REPLACED_IMAGE_HREF: &str = "https://pics.example/design-review/whiteboard
 /// which the event carries its own RFC 8984 §4.7.2 definition for.
 ///
 /// This is the other half of what [`PLACED_ZONE`] measures, and the half the
-/// mapping cannot lean on the consumer for. §1.4.9 lets a `TimeZoneId` be either
+/// mapping cannot lean on the consumer for. §1.4.8 lets a `TimeZoneId` be either
 /// an IANA name or a custom identifier beginning with a solidus that the event's
 /// own `timeZones` defines — the second is what a server invents for the zone an
 /// Exchange or Outlook invitation carries its own `VTIMEZONE` for, so it arrives

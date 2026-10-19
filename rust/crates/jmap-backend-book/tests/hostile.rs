@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The server-controlled half of the address book boundary, checked against the
-//! C that consumes it.
+//! Address book boundary checks against C consumption.
 //!
-//! `jmap-vcard`'s own `tests/hostile.rs` pins the text this crate renders. This
-//! file checks what `EVCard` makes of that text.
-//!
-//! See `docs/AUDIT-FFI.md`, findings F1 and F7.
+//! Verify that `EVCard` safely parses server-provided map keys.
+//! Keys must not inject vCard properties.
+//! Instance connections must implement `Send + Sync`.
 
 use std::collections::BTreeMap;
 use std::ffi::CStr;
@@ -19,9 +17,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_book_sync::BookSync;
 use jmap_proto::contacts::{ContactCard, ContactEmail};
 
-/// The card a hostile server sends: the `emails` map key carries a line break
-/// and a full `FN` line, aimed at the `X-JMAP-KEY` parameter this mapping
-/// round-trips it through.
+/// Hostile contact card with injected CRLF and `FN` in the email map key.
 fn hostile_card() -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -33,26 +29,22 @@ fn hostile_card() -> ContactCard {
     );
     ContactCard {
         id: Some("C1".into()),
-        // No `name`, deliberately: a card that names nobody renders no `FN`, so
-        // the injected one would be the only one and would *be* the display
-        // name Evolution shows. With a legitimate `FN` already on the card,
-        // `EVCard` keeps the first and the injection is invisible from here
-        // even though it happened.
+        // Omit `name` so the card renders no legitimate `FN` property.
+        // An injected `FN` would become the display name in Evolution.
         emails: Some(emails),
         ..ContactCard::default()
     }
 }
 
-/// The exploit, run all the way into `EContact`: the contact has no display
-/// name, so a display name appearing at all is one the map key smuggled in.
+/// Verify that an injected `FN` in a map key does not appear in `EContact`.
 #[test]
 fn a_map_key_cannot_give_a_nameless_contact_a_display_name() {
     let vcard = jmap_vcard::card_to_vcard(&hostile_card());
     let contact = marshal::contact_from_vcard(&vcard);
     assert!(!contact.is_null(), "the sanitised vCard did not parse");
 
-    // SAFETY: `contact` is the reference `contact_from_vcard` just handed over,
-    // and `e_contact_get_const` borrows a string the contact owns.
+    // SAFETY: `contact` is a valid pointer from `contact_from_vcard`.
+    // `e_contact_get_const` borrows a string owned by the contact.
     unsafe {
         let read = |field| {
             let raw = e_contact_get_const(contact, field).cast::<i8>();
@@ -70,8 +62,7 @@ fn a_map_key_cannot_give_a_nameless_contact_a_display_name() {
     }
 }
 
-/// And it cannot add a *second* card either, which is the other thing a CRLF
-/// buys: `END:VCARD` followed by a `BEGIN:VCARD` of the server's choosing.
+/// Verify that CRLF injection cannot inject a second vCard.
 #[test]
 fn a_map_key_cannot_terminate_the_card_early() {
     let mut emails = BTreeMap::new();
@@ -88,8 +79,7 @@ fn a_map_key_cannot_terminate_the_card_early() {
         ..ContactCard::default()
     };
 
-    // Counted as lines: the text survives inside the quoted parameter as data,
-    // and must not begin a new line.
+    // Parameter text must not start a new vCard line.
     let vcard = jmap_vcard::card_to_vcard(&card);
     let lines = |name: &str| {
         vcard
@@ -102,7 +92,7 @@ fn a_map_key_cannot_terminate_the_card_early() {
 
     let contact = marshal::contact_from_vcard(&vcard);
     assert!(!contact.is_null());
-    // SAFETY: as above.
+    // SAFETY: `contact` is a valid pointer from `contact_from_vcard`.
     unsafe {
         assert!(
             e_contact_get_const(contact, E_CONTACT_FULL_NAME).is_null(),

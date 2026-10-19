@@ -324,7 +324,7 @@ impl CalSync {
             //
             // Which is the answer only where there is no spelling. An IANA name
             // has one, and so does a zone the document *defines* — RFC 8984
-            // §1.4.9's custom identifier, sent beside the §4.7.2 `timeZones`
+            // §1.4.8's custom identifier, sent beside the §4.7.2 `timeZones`
             // entry that says what it is, which is how an appointment whose zone
             // came from an Exchange invitation rather than a database reaches
             // the server as the event it is. See [`maps_time_zone`], and
@@ -630,4 +630,40 @@ fn revision_of(icalendar: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jmap_proto::error::{MethodError, SetError};
+
+    /// Revisions outlive the process in the EDS cache, so the digest is
+    /// pinned to the published FNV-1a 64-bit test vectors: any drift would
+    /// make every cached event look changed after an upgrade.
+    #[test]
+    fn revision_of_is_fnv1a_64() {
+        assert_eq!(revision_of(""), "cbf29ce484222325");
+        assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
+        assert_eq!(revision_of("foobar"), "85944171f73967e8");
+    }
+
+    #[test]
+    fn a_set_error_other_than_no_supported_schedule_methods_stays_a_client_error() {
+        let error = jmap_client::Error::Set(SetError::new("forbidden"));
+        let result = refused(error, true, None);
+        assert!(
+            matches!(result, SyncError::Client(_)),
+            "only noSupportedScheduleMethods is a scheduling refusal: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_method_error_other_than_invalid_arguments_stays_a_client_error() {
+        let error = jmap_client::Error::Method(MethodError::new("forbidden"));
+        let result = refused(error, true, None);
+        assert!(
+            matches!(result, SyncError::Client(_)),
+            "only invalidArguments reads as sendSchedulingMessages not implemented: {result:?}"
+        );
+    }
 }

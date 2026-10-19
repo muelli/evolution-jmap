@@ -3,10 +3,8 @@
 
 //! HTTP transport abstraction.
 //!
-//! The client only needs plain request/response HTTP. Keeping it behind a
-//! trait lets the Evolution Data Server integration substitute a
-//! libsoup-backed transport later without touching protocol logic; the
-//! [`CancelFlag`] is the seam that maps to `GCancellable`.
+//! Trait definitions for unary HTTP requests and responses.
+//! [`CancelFlag`] provides cooperative cancellation.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -37,38 +35,18 @@ thread_local! {
     static OBSERVED: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };
 }
 
-/// The flag every request made on this thread is currently checked against,
-/// if an operation installed one.
+/// Return the cancellation flag active on this thread.
 ///
-/// Public because the layer that bridges a `GCancellable` onto it lives in
-/// another crate and its tests have to be able to ask what this thread is
-/// observing without making a request to find out.
+/// Returns `None` if no [`CancelScope`] is installed.
 pub fn observed() -> Option<CancelFlag> {
     OBSERVED.with(|observed| observed.borrow().clone())
 }
 
-/// A [`CancelFlag`] installed for the length of one operation, on the thread
-/// running it.
+/// RAII guard setting a thread-local cancellation flag for an operation.
 ///
-/// The problem this exists for: a [`Client`] is built once per account and used
-/// for every operation on it, but the thing that cancels an operation belongs to
-/// the *operation*. Camel and EDS both hand a sync vfunc a `GCancellable` that
-/// means "stop this call", and that vfunc has no way to reach into a client
-/// built long before it and re-point a flag, nor should it, because the next
-/// vfunc along may be running on another thread at the same moment, under a
-/// cancellable of its own.
-///
-/// A thread-local is the exact shape of that: these are *blocking* vfuncs, so
-/// the operation being cancelled is the one this thread is inside, and one
-/// thread is inside exactly one at a time. What was observed before is restored
-/// when the scope drops, so a folder operation that calls into its store leaves
-/// the outer operation's cancellation in place.
-///
-/// A client checks a scope in preference to the flag it was built with; see
-/// [`Client::execute`].
-///
-/// [`Client`]: crate::Client
-/// [`Client::execute`]: crate::Client
+/// Operations can set a flag for blocking execution on the current thread.
+/// Dropping the scope restores the previous flag.
+/// Clients check this scoped flag before falling back to default flags.
 pub struct CancelScope {
     /// What this thread observed before, put back on drop.
     previous: Option<CancelFlag>,
@@ -78,14 +56,9 @@ pub struct CancelScope {
 }
 
 impl CancelScope {
-    /// Makes `flag` the cancellation of every request this thread makes until
-    /// the returned scope is dropped.
+    /// Install `flag` on the current thread until the returned scope drops.
     ///
-    /// Scopes nest, and are expected to be dropped in the reverse of the order
-    /// they were installed, which is what holding one in a local of the vfunc
-    /// it belongs to guarantees. Dropping them out of order restores an older
-    /// observation over a newer one; nothing here can detect that, and no
-    /// caller has reason to do it.
+    /// Scopes support nesting. Dropping a child scope restores the parent flag.
     pub fn install(flag: &CancelFlag) -> Self {
         let previous = OBSERVED.with(|observed| observed.replace(Some(flag.clone())));
         Self {
@@ -116,16 +89,10 @@ pub struct HttpRequest<'a> {
     pub headers: &'a [(String, String)],
     pub body: Option<&'a [u8]>,
     pub cancel: Option<&'a CancelFlag>,
-    /// The most octets of response body this request will accept: exactly
-    /// this many are fine, one more is [`TransportError::ResponseTooLarge`].
+    /// Maximum response body size in bytes.
     ///
-    /// It has no default and every caller states it, which is the whole point:
-    /// a response is buffered whole, JMAP gives no number to bound one by (see
-    /// [`crate::limits`]), and the number in force before this field existed
-    /// was a dependency's. A transport must apply it rather than treat it as
-    /// advice, and must apply it while *reading* rather than after: a body that
-    /// is refused for being too long has to stop being read at the ceiling, or
-    /// the memory it was meant to bound has already been taken.
+    /// Responses exceeding this size return [`TransportError::ResponseTooLarge`].
+    /// Transports must enforce this limit while streaming data to bound memory consumption.
     pub max_response_bytes: u64,
 }
 
@@ -133,14 +100,10 @@ pub struct HttpResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
-    /// The URL this response actually came from: [`HttpRequest::url`] unless
-    /// a redirect was followed, in which case this is the last one.
+    /// Final URL after following redirects.
     ///
-    /// A caller that must not trust a redirect target it never named (a blob
-    /// download addressed by the session's own `downloadUrl`, in particular,
-    /// see [`crate::Client::download_blob`]) compares this against the URL it
-    /// asked for; a transport with nothing to report here because it never
-    /// redirects sets it to the request's own URL.
+    /// Defaults to [`HttpRequest::url`] if no redirects occurred.
+    /// Callers use this value to detect cross-origin redirects.
     pub final_url: String,
 }
 
@@ -150,13 +113,9 @@ pub struct HttpResponse {
 pub enum TransportError {
     Cancelled,
     Failed(String),
-    /// The response body passed [`HttpRequest::max_response_bytes`] and was
-    /// abandoned there; `limit` is the ceiling it passed.
+    /// Response exceeded the configured byte limit.
     ///
-    /// Separate from [`Self::Failed`] because the two mean opposite things to
-    /// whoever is waiting: a failed request may well work on the next attempt,
-    /// while a body that is too large will be too large every time, and the
-    /// number is what a layer above needs in order to say so.
+    /// `limit` records the maximum allowed size from [`HttpRequest::max_response_bytes`].
     ResponseTooLarge {
         limit: u64,
     },
@@ -350,12 +309,9 @@ mod ureq_transport {
 
         use super::*;
 
-        /// Records every event this module emits (level + fields), so a test
-        /// can assert a request attached structured fields rather than only a
-        /// free-text message, duplicated from `client.rs`'s own test
-        /// harness for the same reason that one gives: this crate depends on
-        /// `tracing`, not `tracing-subscriber`, so there is no ready-made
-        /// capturing layer to share across modules.
+        /// Collects tracing events for test assertions.
+        ///
+        /// Records log levels and structured fields.
         struct CapturingSubscriber {
             captured: Arc<Mutex<Vec<(Level, String, String)>>>,
         }
@@ -513,10 +469,7 @@ mod ureq_transport {
 
         #[test]
         fn a_failed_request_traces_the_error_at_debug() {
-            // Nothing listens here: 127.0.0.1:1 is a reserved, unassigned
-            // port that refuses the connection immediately rather than
-            // timing out, so this is a fast, deterministic transport
-            // failure.
+            // Port 1 refuses the connection immediately, which produces a fast test failure.
             let (result, captured) = run_captured(HttpRequest {
                 method: HttpMethod::Get,
                 url: "http://127.0.0.1:1/",

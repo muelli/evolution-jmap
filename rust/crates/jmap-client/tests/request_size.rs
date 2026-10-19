@@ -1,15 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `maxSizeRequest` (RFC 8620 §2): the octets one request to `apiUrl` may
-//! carry, against a server that takes only small ones.
+//! Tests request size enforcement under RFC 8620 section 2 `maxSizeRequest`.
 //!
-//! The sibling of `call_limits.rs`, and the same shape of failure: over the
-//! limit the whole request is refused with
-//! `urn:ietf:params:jmap:error:limit` and none of its calls run. What differs
-//! is where the size comes from: not from the client chaining calls to save a
-//! round trip, but from the one call it builds whose length is the user's data
-//! rather than the client's choice, `Email/get` naming a list of ids.
+//! Exceeding the limit refuses the whole request with `urn:ietf:params:jmap:error:limit`.
+//! Calls like `Email/get` with long identifier lists must split into multiple requests.
 
 use std::time::Duration;
 
@@ -22,20 +17,15 @@ use jmap_proto::request::Request;
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use serde_json::{Value, json};
 
-/// Small enough that an `Email/get` naming every seeded message is well over
-/// it, and large enough that a request naming one is well under, the band
-/// where splitting is the difference between reading the mailbox and failing.
+/// Small request limit that forces request splitting for seeded messages.
 ///
-/// An `Email/get` naming no ids at all is 150 octets here (two capability URNs
-/// and one method call), so this leaves room for a dozen or so of the mock's
-/// short ids per request and forces several requests for [`SEEDED`] of them.
+/// Leaves room for several identifiers per request while forcing multiple batches.
 const SMALL_REQUEST: u64 = 220;
 
-/// How many messages the mailbox holds. Enough that the id list alone is
-/// several times [`SMALL_REQUEST`].
+/// Number of seeded messages in the mailbox, exceeding [`SMALL_REQUEST`].
 const SEEDED: usize = 40;
 
-/// Seed an inbox with [`SEEDED`] messages and answer their ids in seed order.
+/// Seeds an inbox with [`SEEDED`] messages and returns their identifiers in order.
 fn seed_inbox(server: &MockServer) -> Vec<Id> {
     let account_id = server.account_id();
     let state = server.state();
@@ -55,14 +45,9 @@ fn seed_inbox(server: &MockServer) -> Vec<Id> {
         .collect()
 }
 
-/// The mock enforces the limit it advertises: a request longer than it is
-/// refused whole, and nothing in it runs. Without this the tests below would
-/// pass against a permissive mock while proving nothing.
-///
-/// Sent past the client on purpose: [`Client::api_call`] refuses an oversized
-/// request itself (the test at the bottom of this file), so a client-side
-/// assertion here would be about the client twice and about the server not at
-/// all.
+/// Enforces advertised limits on the mock server.
+/// Requests exceeding the limit are rejected without executing any calls.
+/// Uses raw HTTP to verify server behavior independently of client checks.
 #[test]
 fn a_server_that_takes_a_small_request_refuses_a_larger_one() {
     let server = MockServer::builder().size_request(SMALL_REQUEST).start();
@@ -100,8 +85,7 @@ fn a_server_that_takes_a_small_request_refuses_a_larger_one() {
     assert!(client.mailbox_get(&account_id).is_ok());
 }
 
-/// The point of the whole exercise: a list of ids too long for one request is
-/// fetched as several, and the caller gets every message.
+/// Verifies that an identifier list exceeding the limit splits into multiple requests.
 #[test]
 fn a_long_email_get_is_sent_as_several_requests() {
     let server = MockServer::builder().size_request(SMALL_REQUEST).start();
@@ -134,10 +118,8 @@ fn a_long_email_get_is_sent_as_several_requests() {
     );
 }
 
-/// A server with room for the whole list gets it in one request. The split is
-/// what the limit forces, not what the client does by default: every extra
-/// request is a window in which another client can destroy a message the first
-/// half of the list named.
+/// Sends the full list in one request when limits allow.
+/// Splitting only occurs when required by server limits.
 #[test]
 fn a_list_that_fits_is_one_request() {
     let server = MockServer::builder().start();
@@ -158,9 +140,7 @@ fn a_list_that_fits_is_one_request() {
     );
 }
 
-/// A server naming no limit is taken at its word and sent the list whole, like
-/// the other three limits: a number invented here would split requests it would
-/// have taken.
+/// Sends the list whole when the server advertises no request size limit.
 #[test]
 fn a_server_naming_no_request_size_gets_the_list_whole() {
     let server = MockServer::builder().no_size_request().start();
@@ -182,9 +162,7 @@ fn a_server_naming_no_request_size_gets_the_list_whole() {
     );
 }
 
-/// The end of splitting: a single id whose request does not fit cannot be made
-/// into two, so it is refused here, with both numbers, rather than sent for the
-/// server to refuse.
+/// Refuses a request early if a single identifier exceeds the limit.
 #[test]
 fn an_id_that_cannot_fit_alone_is_refused_without_a_request() {
     let server = MockServer::builder().size_request(SMALL_REQUEST).start();
@@ -211,11 +189,7 @@ fn an_id_that_cannot_fit_alone_is_refused_without_a_request() {
     );
 }
 
-/// The boundary itself: a request whose body is exactly `maxSizeRequest`
-/// octets is under the limit, not over it, so it is sent rather than refused.
-/// Distinguishes "over the limit" from "at or over the limit": a server that
-/// states a limit of N octets is stating what it will accept, not the first
-/// size it refuses.
+/// Verifies that a request whose body exactly equals `maxSizeRequest` is accepted.
 #[test]
 fn a_request_exactly_at_the_limit_is_sent() {
     let echo = json!({"hello": "world"});
@@ -232,10 +206,7 @@ fn a_request_exactly_at_the_limit_is_sent() {
     assert!(!invocation.is_error(), "a request at the limit was refused");
 }
 
-/// The backstop under every caller that builds its own request: an oversized
-/// one is refused before it is sent, with the two numbers, rather than spending
-/// a round trip on a 400 that cannot be told from the other request-level
-/// limits without reading its `limit` property.
+/// Rejects oversized requests locally before transmission to save a network round trip.
 #[test]
 fn an_oversized_request_is_refused_before_it_is_sent() {
     let server = MockServer::builder().size_request(SMALL_REQUEST).start();

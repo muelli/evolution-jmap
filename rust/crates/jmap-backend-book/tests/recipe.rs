@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Verifies that the manual test recipe keyfile (`docs/examples/jmap-mock.source`)
-// is parseable by EDS registry code, consistent with `docs/manual-test-book-backend.md`,
-// and recognized by `SourceConfig`.
+// Verifies manual test recipe keyfile parsing and SourceConfig recognition.
 
 use std::ffi::CStr;
 use std::fs;
@@ -80,9 +78,7 @@ impl RegistrySource {
         // NUL-terminated and copied; the GFile is owned here and released
         // below.
         let (server, source) = unsafe {
-            // `e_source_registry_server_new` is declared as returning its own
-            // base class, `EDBusServer *`, the way EDS's own callers use it;
-            // the cast back down is the one C does implicitly.
+            // SAFETY: e_source_registry_server_new returns a new server instance.
             let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
             let file = g_file_new_for_path(path_string.as_ptr());
             let source = e_server_side_source_new(server, file, &mut error);
@@ -110,10 +106,7 @@ impl RegistrySource {
 
     /// What the `[Address Book]` group says the backend is called.
     fn backend_name(&self) -> Option<String> {
-        // SAFETY: referencing the extension's GType registers it, so that the
-        // lookup below can find it in a test binary that has not otherwise
-        // touched an address book source. Then a header constant naming an
-        // extension the source owns.
+        // SAFETY: Registers ESourceAddressBook GType for extension lookup.
         let name = unsafe {
             e_source_address_book_get_type();
             let extension =
@@ -136,7 +129,7 @@ impl RegistrySource {
 
 impl Drop for RegistrySource {
     fn drop(&mut self) {
-        // SAFETY: we hold the only reference to each.
+        // SAFETY: Drops the held references.
         unsafe {
             g_object_unref(self.source.cast());
             g_object_unref(self.server);
@@ -154,14 +147,11 @@ fn the_recipes_keyfile_describes_the_mock_server() {
         config.target,
         ConnectTarget::Origin("http://127.0.0.1:8080".into())
     );
-    // No user, on purpose. A source that names one makes the backend ask EDS
-    // for a password before it sends anything, and the recipe's first run
-    // would then be a prompt rather than a connection; `jmap-mockd` with no
-    // `--basic`/`--bearer` wants no credentials at all.
+    // Omit user. A configured user makes the backend prompt EDS for a password.
+    // `jmap-mockd` without `--basic` or `--bearer` requires no credentials.
     assert_eq!(config.user, None);
-    // No `[Resource]` group either: the address book `jmap-mockd` seeds gets
-    // its id at startup, so the recipe cannot name one. The backend resolves
-    // "the account's default" instead.
+    // Omit `[Resource]` group. The seed address book ID is assigned at startup.
+    // The backend resolves the default address book instead.
     assert_eq!(config.resource_id, None);
 }
 
@@ -229,9 +219,7 @@ struct TemporaryKeyfile(PathBuf);
 
 impl TemporaryKeyfile {
     fn holding(contents: &str) -> Self {
-        // The uid a server-side source gets is its file name, so the name has
-        // to be unique per test process; the directory is cargo's, which is
-        // writable wherever the suite runs.
+        // File name is unique per test process in target temp directory.
         let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "recipe-{}-{}.source",
             std::process::id(),

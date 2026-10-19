@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Targeted integration tests killing mutants across `factory.rs`, `marshal.rs`,
+//! Integration tests for mutants in `factory.rs`, `marshal.rs`,
 //! `ops.rs`, and `connect.rs`.
 
 use std::ffi::CStr;
@@ -44,7 +44,7 @@ fn factory_class_init_types_and_remember_backend_type() {
     let updated_types = <JmapCalFactory as ObjectSubclass>::class_init_types();
     assert_eq!(updated_types, vec![second_dummy]);
 
-    // Restore to zero so future registrations can initialize cleanly.
+    // Restore to zero so future registrations initialize cleanly.
     remember_backend_type(0);
 }
 
@@ -156,7 +156,7 @@ fn marshal_component_from_ical_validation_and_parsing() {
         gobject_sys::g_object_unref(component.cast());
     }
 
-    // A VCALENDAR with only VTODO (no VEVENT) must return null per holds_event check.
+    // A VCALENDAR with only VTODO must return null per the holds_event check.
     let todo_ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:todo-1\r\nSUMMARY:Task\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
     let todo_component = marshal::component_from_ical(todo_ical);
     assert!(
@@ -230,7 +230,7 @@ fn connect_constants_and_auth_result_writing() {
     assert_eq!(ACCEPTED_AUTH_RESULT, E_SOURCE_AUTHENTICATION_ACCEPTED);
 
     let mut result = E_SOURCE_AUTHENTICATION_ERROR;
-    // SAFETY: result is a valid mutable pointer, and null is explicitly handled safely.
+    // SAFETY: result is a valid mutable pointer, and the function handles null.
     unsafe {
         write_auth_result(&mut result, E_SOURCE_AUTHENTICATION_ACCEPTED);
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);

@@ -192,6 +192,7 @@ fn the_switch_is_off_unless_turned_on() {
     sync.save_component(&meeting(&[VERA]), None)
         .expect("the meeting is created");
     assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
+    assert!(fixture.sync(true).server_schedules());
 }
 
 /// §5.9.2: a guest the server has no way to reach (the mock, like Stalwart,

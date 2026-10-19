@@ -4,10 +4,9 @@
 //! The claims this crate's instance structs rest on that the compiler is never
 //! shown.
 //!
-//! `jmap-backend-book` and `jmap-backend-cal` each carry one of these — audit
-//! finding F7, which pinned the threading claim behind `Slot` as a compile
-//! error rather than a comment. The mail provider grew six instance structs
-//! since and had none, which is `docs/AUDIT-FFI-20260810.md`'s F13.
+//! `jmap-backend-book` and `jmap-backend-cal` each carry one of these, which
+//! pins the threading claim behind `Slot` as a compile error rather than a
+//! comment. The mail provider has more instance structs than either.
 //!
 //! Camel is a harder case than EDS, not an easier one: a `CamelStore` is driven
 //! from more threads than a meta backend, and unlike the two backends this crate
@@ -32,12 +31,8 @@ use jmap_proto::{Id, State};
 /// serving every other mail account the user has.
 ///
 /// One test over every field rather than one per struct, because they are one
-/// claim. It has to name *all* of them to be that claim: between the
-/// 2026-09-01 audit and this one the crate grew four more `Slot`s (the store's
-/// push subscription and folder-refresh worker, the row's server thread id,
-/// and an `Arc` around the store's own connection) while this list stood
-/// still, so it asserted five of the ten the crate declares. See
-/// `docs/AUDIT-FFI-20260911.md`, F24.
+/// claim. It has to name *all* of them to be that claim: a `Slot` added to the
+/// crate without a line here is a struct the compiler is again never shown.
 #[test]
 fn everything_an_instance_holds_is_shareable_across_threads() {
     fn assert_send_sync<T: Send + Sync>() {}

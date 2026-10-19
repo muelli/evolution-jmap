@@ -133,12 +133,8 @@ fn sieve_validate_request_and_response_roundtrip() {
     assert_eq!(back_invalid, resp_invalid);
 }
 
-/// Literal response bodies captured from a real Stalwart 0.16 server
-/// (2026-10-10, `STALWART-RFC-FINDINGS.md`'s sieve-validate probe): neither
-/// carries an `isValid` property at all, only `accountId` and `error`, per
-/// RFC 9661 §2.6's actual response shape. A `SieveScriptValidateResponse`
-/// that declared `isValid` as a mandatory field (the bug this test guards
-/// against) would fail to deserialize either one.
+/// Verifies SieveScript/validate response deserialization (RFC 9661 §2.6).
+/// The server response omits isValid and contains only accountId and error.
 #[test]
 fn sieve_validate_response_decodes_the_real_wire_shape() {
     let valid = json!({"accountId": "b0", "error": null});

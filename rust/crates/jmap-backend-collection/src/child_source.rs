@@ -299,3 +299,32 @@ impl fmt::Display for UnwritableSetting {
 }
 
 impl std::error::Error for UnwritableSetting {}
+
+#[cfg(test)]
+mod unwritable_setting_display_tests {
+    use super::*;
+
+    /// `UnwritableSetting`'s `Display` writes something for every variant;
+    /// without this test a `Display` that writes nothing still compiles and
+    /// an abandoned child logs an empty reason.
+    #[test]
+    fn every_variant_names_its_group_and_key() {
+        let unknown = UnwritableSetting::UnknownProperty {
+            group: "Mail Account",
+            key: "BackendName",
+        };
+        let message = unknown.to_string();
+        assert!(message.contains("Mail Account"));
+        assert!(message.contains("BackendName"));
+
+        let wrong_type = UnwritableSetting::WrongType {
+            group: "Authentication",
+            key: "Port",
+            value: "https".to_owned(),
+        };
+        let message = wrong_type.to_string();
+        assert!(message.contains("Authentication"));
+        assert!(message.contains("Port"));
+        assert!(message.contains("https"));
+    }
+}

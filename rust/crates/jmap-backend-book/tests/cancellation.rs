@@ -32,8 +32,7 @@ impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapBookBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: Referencing the registered class runs class_init, returning the class struct.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
@@ -266,8 +265,7 @@ fn a_contact_the_user_stopped_loading_is_not_fetched() {
     Refusal(error).is_the_stop_the_user_pressed("load_contact_sync");
 }
 
-/// A write, not a read: what the user stopped here is a change to their
-/// address book, and it must not be on the server afterwards.
+/// Verifies a cancelled contact save is not written to the server.
 #[test]
 fn a_contact_the_user_stopped_saving_is_not_written() {
     let fixture = Fixture::start();

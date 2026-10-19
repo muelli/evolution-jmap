@@ -41,13 +41,11 @@ impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapBookBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: Referencing the registered class runs class_init, returning the class struct.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
-    /// The `EBookMetaBackendClass` half, which is where every slot we override
-    /// lives.
+    /// The `EBookMetaBackendClass` struct containing the overridden vfunc slots.
     fn vfuncs(&self) -> &EBookMetaBackendClass {
         // SAFETY: the class is referenced and leads with the parent's.
         unsafe { &(*self.0).parent_class }
@@ -161,9 +159,7 @@ fn the_backend_registers_as_a_subclass_of_ebookmetabackend() {
     );
 }
 
-/// The layout check `eds-sys` does for the EDS types, for ours: GObject
-/// allocates from the sizes registration reported, so a struct that has grown
-/// past what was registered is a heap overflow on every instance.
+/// Verifies that registered sizes match Rust struct sizes.
 #[test]
 fn the_registered_sizes_are_the_rust_struct_sizes() {
     let gtype = register_static::<JmapBookBackend>();
@@ -586,9 +582,7 @@ fn install_connection_stores_push_subscription() {
 
 /// Grandparent `EBackendClass` reference from type system.
 fn e_backend_class() -> *mut EBackendClass {
-    // SAFETY: `e_backend_get_type()` is valid to call, and `g_type_class_peek`
-    // is safe for any type whose class is already initialised (which any type
-    // that has a registered subclass guarantees).
+    // SAFETY: e_backend_get_type is valid; g_type_class_peek is safe for initialized classes.
     unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
 }
 

@@ -70,9 +70,8 @@ pub unsafe fn list_existing(
         "listed existing calendar components"
     );
 
-    // SAFETY: Out-parameter allocations transfer ownership to caller. All outputs
-    // are built into locals first and published in a single step so no out-parameter
-    // is written before every fallible allocation is complete (audit F6).
+    // SAFETY: Out-parameter allocations transfer ownership to caller. Outputs
+    // are assigned after all fallible allocations succeed.
     unsafe {
         let existing_objects =
             (!out_existing_objects.is_null()).then(|| marshal::info_list(&components));
@@ -95,8 +94,8 @@ pub unsafe fn list_existing(
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `last_sync_tag` must be NULL or a valid NUL-terminated string.
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+/// Follows safety requirements of [`list_existing`]. `last_sync_tag` must be null or point to a valid NUL-terminated string.
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 pub unsafe fn get_changes(
     sync: &CalSync,
     last_sync_tag: *const gchar,
@@ -110,7 +109,7 @@ pub unsafe fn get_changes(
 ) -> Outcome {
     let account_id = sync.account_id().as_str();
     let calendar_id = sync.calendar_id().as_str();
-    // SAFETY: the caller guarantees a valid string or NULL.
+    // SAFETY: Caller guarantees valid string or null.
     let Some(tag) = (unsafe { read_string(last_sync_tag) }) else {
         tracing::debug!(
             account_id,
@@ -144,7 +143,7 @@ pub unsafe fn get_changes(
                 ?failure,
                 "getting calendar changes failed"
             );
-            // SAFETY: `error` satisfies the contract by this function's own.
+            // SAFETY: `error` satisfies set_raw_gerror contract.
             unsafe { set_raw_gerror(error, to_gerror(&failure)) };
             return Outcome::Failed;
         }
@@ -159,9 +158,8 @@ pub unsafe fn get_changes(
         "reported calendar changes"
     );
 
-    // SAFETY: Out-parameter allocations transfer ownership to caller. All outputs
-    // are built into locals first and published in a single step so no out-parameter
-    // is written before every fallible allocation is complete (audit F6).
+    // SAFETY: Out-parameter allocations transfer ownership to caller. Outputs
+    // are assigned after all fallible allocations succeed.
     unsafe {
         let modified =
             (!out_modified_objects.is_null()).then(|| marshal::info_list(&changes.changed));
@@ -191,7 +189,7 @@ pub unsafe fn get_changes(
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated string.
+/// Follows safety requirements of [`list_existing`]. `uid` must be null or point to a valid NUL-terminated string.
 pub unsafe fn load_component(
     sync: &CalSync,
     uid: *const gchar,
@@ -201,14 +199,14 @@ pub unsafe fn load_component(
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
     let calendar_id = sync.calendar_id().as_str();
-    // SAFETY: the caller guarantees a valid string or NULL.
+    // SAFETY: Caller guarantees valid string or null.
     let Some(uid) = (unsafe { read_string(uid) }) else {
         tracing::debug!(
             account_id,
             calendar_id,
             "component was asked for without an identifier"
         );
-        // SAFETY: `error` satisfies the contract by this function's own.
+        // SAFETY: `error` satisfies fail_invalid contract.
         return unsafe { fail_invalid(error, "a component was asked for without an identifier") };
     };
 
@@ -221,7 +219,7 @@ pub unsafe fn load_component(
 
     let info = match sync.load_component(&uid) {
         Ok(info) => info,
-        // SAFETY: as above.
+        // SAFETY: `error` satisfies fail_bool contract.
         Err(failure) => {
             tracing::debug!(
                 account_id,
@@ -242,7 +240,7 @@ pub unsafe fn load_component(
             uid = uid.as_str(),
             "component could not be rendered as iCalendar"
         );
-        // SAFETY: as above.
+        // SAFETY: `error` satisfies fail_invalid contract.
         return unsafe {
             fail_invalid(
                 error,
@@ -259,7 +257,7 @@ pub unsafe fn load_component(
         "loaded component"
     );
 
-    // SAFETY: `out_component` receives component ownership or it is dropped.
+    // SAFETY: `out_component` receives component ownership or caller drops it.
     unsafe {
         if out_component.is_null() {
             marshal::component_unref(component);
@@ -272,14 +270,13 @@ pub unsafe fn load_component(
 
 /// Creates or updates a component for `save_component_sync`.
 ///
-/// `itip` says whether the server may tell the guests about this change
-/// (see [`crate::scheduling::itip`]).
+/// `itip` controls server meeting invitation dispatch.
 ///
 /// # Safety
 ///
-/// As [`list_existing`], `instances` must be a valid GSList of `ECalComponent *`,
-/// and `zones` NULL or a valid `ETimezoneCache`.
-#[allow(clippy::too_many_arguments)] // the vfunc's signature, plus `itip`
+/// Follows safety requirements of [`list_existing`]. `instances` must be a valid GSList of `ECalComponent *`,
+/// and `zones` null or a valid `ETimezoneCache`.
+#[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 pub unsafe fn save_component(
     sync: &CalSync,
     overwrite_existing: gboolean,
@@ -294,14 +291,14 @@ pub unsafe fn save_component(
     let calendar_id = sync.calendar_id().as_str();
     let is_overwrite = overwrite_existing != GFALSE;
 
-    // SAFETY: the caller guarantees the list's shape.
+    // SAFETY: Caller guarantees valid GSList shape.
     let Some(saved) = (unsafe { marshal::icalendar_from_instances(instances, zones) }) else {
         tracing::debug!(
             account_id,
             calendar_id,
             "component to save has no master instance to send"
         );
-        // SAFETY: `error` satisfies the contract by this function's own.
+        // SAFETY: `error` satisfies fail_invalid contract.
         return unsafe {
             fail_invalid(
                 error,
@@ -311,13 +308,13 @@ pub unsafe fn save_component(
     };
 
     let existing_uid = if !is_overwrite {
-        // A create. Local UID is ignored; the server assigns the identifier.
+        // Local UID is ignored on create; server assigns identifier.
         None
     } else {
         match saved.uid {
             Some(uid) => Some(uid),
             // Editing without a UID would duplicate rather than update; report invalid argument.
-            // SAFETY: as above.
+            // SAFETY: `error` satisfies fail_invalid contract.
             None => {
                 tracing::debug!(
                     account_id,
@@ -342,7 +339,7 @@ pub unsafe fn save_component(
 
     let info = match sync.save_component_with(&saved.icalendar, existing_uid.as_deref(), itip) {
         Ok(info) => info,
-        // SAFETY: as above.
+        // SAFETY: `error` satisfies fail_bool contract.
         Err(failure) => {
             tracing::debug!(
                 account_id,
@@ -369,12 +366,11 @@ pub unsafe fn save_component(
     GTRUE
 }
 
-/// Destroys a component for `remove_component_sync`, with `itip` as
-/// [`save_component`]'s.
+/// Destroys a component for `remove_component_sync`.
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated string.
+/// Follows safety requirements of [`list_existing`]. `uid` must be null or point to a valid NUL-terminated string.
 pub unsafe fn remove_component(
     sync: &CalSync,
     uid: *const gchar,
@@ -383,14 +379,14 @@ pub unsafe fn remove_component(
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
     let calendar_id = sync.calendar_id().as_str();
-    // SAFETY: the caller guarantees a valid string or NULL.
+    // SAFETY: Caller guarantees valid string or null.
     let Some(uid) = (unsafe { read_string(uid) }) else {
         tracing::debug!(
             account_id,
             calendar_id,
             "component was removed without an identifier"
         );
-        // SAFETY: `error` satisfies the contract by this function's own.
+        // SAFETY: `error` satisfies fail_invalid contract.
         return unsafe { fail_invalid(error, "a component was removed without an identifier") };
     };
 
@@ -412,7 +408,7 @@ pub unsafe fn remove_component(
             );
             GTRUE
         }
-        // SAFETY: as above.
+        // SAFETY: `error` satisfies fail_bool contract.
         Err(failure) => {
             tracing::debug!(
                 account_id,
@@ -450,9 +446,7 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
     }
 }
 
-/// Translates the user-facing message for a change the server would not
-/// schedule. Evolution was told the server mails the guests, so each says the
-/// change was not saved and what to do about it.
+/// Translates user-facing message when server cannot schedule the change.
 fn unscheduled(reason: &Unscheduled) -> String {
     match reason {
         Unscheduled::Unreachable { addresses } if addresses.is_empty() => translate(
@@ -512,7 +506,7 @@ pub unsafe fn get_free_busy(
 ) -> FreeBusyOutcome {
     let account_id = sync.account_id().as_str();
     let calendar_id = sync.calendar_id().as_str();
-    // SAFETY: the caller guarantees a well-formed list of live strings.
+    // SAFETY: Caller guarantees valid list of strings.
     let users = unsafe { marshal::user_list(users) };
     if users.is_empty() {
         tracing::debug!(

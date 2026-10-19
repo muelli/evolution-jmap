@@ -190,9 +190,7 @@ pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
 
-    /// The names the contact is also known by (RFC 9553 §2.2.2), keyed like
-    /// the other JSContact maps. vCard states each on a `NICKNAME` line of
-    /// its own.
+    /// Contact nicknames (RFC 9553 §2.2.2), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nicknames: Option<BTreeMap<String, Nickname>>,
 
@@ -200,69 +198,41 @@ pub struct ContactCard {
     pub emails: Option<BTreeMap<String, ContactEmail>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phones: Option<BTreeMap<String, ContactPhone>>,
-    /// The organisations the contact belongs to (RFC 9553 §2.2.3), keyed by
-    /// an id of whoever wrote them: the employer and the department within
-    /// it, which vCard states in one `ORG` line each.
+    /// Organizations the contact belongs to (RFC 9553 §2.2.3), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organizations: Option<BTreeMap<String, Organization>>,
-    /// The job titles the contact holds and the roles it plays (RFC 9553
-    /// §2.2.4), keyed like the other JSContact maps. vCard states each on a
-    /// `TITLE` or a `ROLE` line, depending on the entry's `kind`.
+    /// Job titles and roles (RFC 9553 §2.2.4), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titles: Option<BTreeMap<String, Title>>,
-    /// The postal addresses the contact can be reached at (RFC 9553 §2.5.1),
-    /// keyed like the other JSContact maps. vCard states each as one
-    /// structured `ADR` line, whose seven fields have room for only some of
-    /// the component kinds RFC 9553 allows.
+    /// Postal addresses (RFC 9553 §2.5.1), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addresses: Option<BTreeMap<String, Address>>,
-    /// The free-text notes kept about the contact (RFC 9553 §2.8.3), keyed
-    /// like the other JSContact maps. vCard states each on a `NOTE` line.
+    /// Free-text notes (RFC 9553 §2.8.3), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<BTreeMap<String, Note>>,
-    /// The memorable dates of the contact (RFC 9553 §2.8.1), keyed like the
-    /// other JSContact maps. vCard states the birthday on a `BDAY` line and
-    /// the wedding day on the line Evolution reads as the anniversary.
+    /// Memorable dates such as birthdays (RFC 9553 §2.8.1), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anniversaries: Option<BTreeMap<String, Anniversary>>,
-    /// The resources the contact points at (RFC 9553 §2.6.3), keyed like the
-    /// other JSContact maps. vCard states each on a `URL` line, of which
-    /// Evolution shows the first as the contact's home page.
+    /// External web resources (RFC 9553 §2.6.3), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Link>>,
-    /// The calendaring resources of the contact (RFC 9553 §2.4.1), keyed like
-    /// the other JSContact maps. vCard states the calendar itself on a
-    /// `CALURI` line and the free/busy data drawn from it on an `FBURL`,
-    /// which are the two Evolution shows as the contact's calendar addresses.
+    /// Calendaring resources (RFC 9553 §2.4.1), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendars: Option<BTreeMap<String, Calendar>>,
     /// The scheduling addresses of the contact (RFC 9553 §2.4.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduling_addresses: Option<BTreeMap<String, SchedulingAddress>>,
-    /// The media the card carries (RFC 9553 §2.6.4), keyed like the other
-    /// JSContact maps. vCard states a photo on a `PHOTO` line, which is what
-    /// Evolution shows as the contact's picture.
+    /// Media resources such as photos (RFC 9553 §2.6.4), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<BTreeMap<String, Media>>,
-    /// The online services the contact is reachable on (RFC 9553 §2.3.2),
-    /// keyed like the other JSContact maps. vCard states each on an `X-` line
-    /// (e.g. `X-JABBER`, `X-MATRIX`), which Evolution shows as an IM address.
+    /// Online services and protocols (RFC 9553 §2.3.2), keyed by entry ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online_services: Option<BTreeMap<String, OnlineService>>,
-    /// The tags the contact is filed under (RFC 9553 §2.8.2), an RFC 9553
-    /// §1.4.3 Set: the keys are the keywords and every value is `true`. vCard
-    /// states the whole set on one `CATEGORIES` line, which is what Evolution's
-    /// Categories field shows.
-    ///
-    /// The values are left as JSON rather than as `bool` for the reason
-    /// [`crate::calendars::CalendarEvent::keywords`] gives: a server that puts
-    /// something else there must not cost the user the whole address book, so
-    /// the odd entry stays visible as itself and the vCard mapping refuses to
-    /// write the property back.
+    /// Contact tags (RFC 9553 §2.8.2, RFC 9553 §1.4.3 Set).
+    /// Values stay as JSON to preserve unrecognised server values safely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
-    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed, unlike
-    /// other JSContact maps, by *who the related entity is* rather than by an entry id.
+    /// Related entities (RFC 9553 §2.1.8), keyed by related entity identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, Relation>>,
     /// The cryptographic keys for the contact (RFC 9553 §2.6.1).
@@ -1070,8 +1040,7 @@ pub struct Anniversary {
     /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which gives it no default.
     #[serde(default)]
     pub kind: String,
-    /// The date itself, kept as it arrived rather than parsed into a shape
-    /// of our own.
+    /// Raw date string as received from the server.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1486,12 +1455,9 @@ impl OnlineService {
     }
 }
 
-/// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
-/// the contact.
-///
-/// The entity itself is the map key in [`ContactCard::related_to`]: RFC
-/// 9553 §2.1.8 makes it the related Card's `uid`, and RFC 9555 §2.9.5 puts free
-/// text there for a vCard `RELATED;VALUE=text`.
+/// JSContact Relation (RFC 9553 §2.1.8).
+/// Describes how an entity relates to the contact.
+/// The entity key is a Card `uid` or free text (RFC 9555 §2.9.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Relation {

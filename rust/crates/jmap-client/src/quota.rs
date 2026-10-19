@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Quota (RFC 9425): read-only mailbox/account usage and limits. There
-//! is no `Quota/set`: the RFC defines quotas as server-computed.
+//! JMAP Quota operations (RFC 9425).
+//!
+//! Provides read-only access to mailbox and account usage and limits.
 
 use jmap_proto::Id;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
@@ -17,12 +18,7 @@ const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_QUOTA];
 impl Client {
     /// Fetch all quotas (`Quota/get` with `ids: null`).
     ///
-    /// An empty list, with no request sent, when the account does not
-    /// advertise `urn:ietf:params:jmap:quota` at all (Fastmail, for one):
-    /// naming an unadvertised capability in `using` fails the whole request
-    /// (RFC 8620 §3.6.1's `unknownCapability`) rather than answering "no
-    /// quotas", and every caller here already treats an empty list as
-    /// nothing to report.
+    /// Returns an empty list without sending requests if the account lacks quota capabilities.
     pub fn quotas(&self, account_id: &Id) -> Result<Vec<Quota>, Error> {
         if !self.has_quota_capability(account_id) {
             return Ok(Vec::new());
@@ -33,11 +29,9 @@ impl Client {
         Ok(response.list)
     }
 
-    /// Resolve quota ids matching `filter` (`Quota/query`, RFC 9425 §4.4).
+    /// Query matching quota IDs (`Quota/query`, RFC 9425 Section 4.4).
     ///
-    /// Same capability gate as [`Client::quotas`], for the same reason: a
-    /// server that never advertises quota at all must not be sent this
-    /// request either.
+    /// Returns an empty list if the account lacks quota capabilities.
     pub fn quota_query(&self, account_id: &Id, filter: QuotaQueryFilter) -> Result<Vec<Id>, Error> {
         if !self.has_quota_capability(account_id) {
             return Ok(Vec::new());

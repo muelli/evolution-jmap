@@ -142,7 +142,7 @@ pub struct Login {
 /// login at all. Without it, each address-book/calendar child independently
 /// re-fetches its own credentials the next time it needs them (`connect_with`'s
 /// three-branch resolution, unchanged) rather than being handed what this
-/// authenticate just resolved — see `docs/EWS-PARITY.md` Surface 5.
+/// authenticate just resolved, which is what evolution-ews does too.
 ///
 /// An error is set on every non-`ACCEPTED` path and on none of the accepting
 /// ones, which is GLib's convention read against this enum: `ACCEPTED` is the
@@ -467,5 +467,20 @@ mod tests {
                 Err(ConnectError::Client(_))
             ));
         }
+    }
+
+    /// `LoginError`'s `Display` writes the inner error, for either variant;
+    /// without this test a `Display` that writes nothing still compiles and
+    /// a broken account reports as an empty error message.
+    #[test]
+    fn a_login_error_displays_the_inner_error() {
+        let account = LoginError::Account(SourceError::MissingHost);
+        assert_eq!(account.to_string(), SourceError::MissingHost.to_string());
+
+        let credentials = LoginError::Credentials(ConnectError::CredentialsRequired);
+        assert_eq!(
+            credentials.to_string(),
+            ConnectError::CredentialsRequired.to_string()
+        );
     }
 }

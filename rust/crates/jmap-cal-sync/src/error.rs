@@ -239,4 +239,98 @@ mod tests {
         );
         assert!(!SyncError::NotFound("uid-1".into()).is_unauthorized());
     }
+
+    #[test]
+    fn not_cannot_calculate_changes_for_an_unrelated_failure() {
+        assert!(
+            !SyncError::Client(jmap_client::Error::Http {
+                status: 403,
+                problem: None,
+            })
+            .is_cannot_calculate_changes()
+        );
+        assert!(!SyncError::NotFound("uid-1".into()).is_cannot_calculate_changes());
+    }
+
+    #[test]
+    fn unscheduled_names_the_addresses_it_could_not_reach() {
+        assert_eq!(
+            super::Unscheduled::Unreachable {
+                addresses: vec!["bob@example.com".into(), "carol@example.com".into()],
+            }
+            .to_string(),
+            "the server cannot send scheduling messages to bob@example.com, carol@example.com"
+        );
+        assert_eq!(
+            super::Unscheduled::Unreachable { addresses: vec![] }.to_string(),
+            "the server cannot send scheduling messages to every participant"
+        );
+        assert_eq!(
+            super::Unscheduled::NotImplemented.to_string(),
+            "the server does not implement sendSchedulingMessages"
+        );
+    }
+
+    #[test]
+    fn unsendable_says_which_recurrence_was_refused() {
+        assert_eq!(
+            super::Unsendable::RecurrenceEnd {
+                until: "2026-09-01T00:00:00".into(),
+                zone: "Mars/Olympus_Mons".into(),
+            }
+            .to_string(),
+            "a recurrence ending 2026-09-01T00:00:00, which the time zone \
+             Mars/Olympus_Mons is not defined well enough to convert"
+        );
+        assert_eq!(
+            super::Unsendable::Recurrence.to_string(),
+            "a recurrence rule that cannot be stated"
+        );
+    }
+
+    #[test]
+    fn sync_error_display_states_the_reason() {
+        assert_eq!(
+            SyncError::NotFound("uid-1".into()).to_string(),
+            "no calendar event with identifier uid-1"
+        );
+        assert_eq!(
+            SyncError::Unsendable(super::Unsendable::Recurrence).to_string(),
+            "a recurrence rule that cannot be stated"
+        );
+        assert_eq!(
+            SyncError::Unscheduled(super::Unscheduled::NotImplemented).to_string(),
+            "the server does not implement sendSchedulingMessages"
+        );
+    }
+
+    #[test]
+    fn source_is_only_the_wrapped_errors() {
+        use std::error::Error as _;
+
+        assert!(
+            SyncError::Client(jmap_client::Error::Http {
+                status: 500,
+                problem: None,
+            })
+            .source()
+            .is_some()
+        );
+        assert!(
+            SyncError::ICal(jmap_ical::ICalError::NoEvent)
+                .source()
+                .is_some()
+        );
+        assert!(SyncError::NotFound("uid-1".into()).source().is_none());
+        assert!(
+            SyncError::Unsendable(super::Unsendable::Recurrence)
+                .source()
+                .is_none()
+        );
+        assert!(
+            SyncError::Unscheduled(super::Unscheduled::NotImplemented)
+                .source()
+                .is_none()
+        );
+    }
 }

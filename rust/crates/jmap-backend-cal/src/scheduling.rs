@@ -1,27 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Who tells a meeting's guests: the backend's half of the rule in
-//! `docs/MEETING-SCHEDULING.md` section 4.
+//! Determines meeting invitation dispatch between server and client.
 //!
-//! The switch is the account's "server handles meeting invitations" option,
-//! and it lives where EDS's CalDAV backend keeps the same option: the
-//! `[WebDAV Backend]` group's `CalendarAutoSchedule`
-//! (`e_source_webdav_get_calendar_auto_schedule`). Unlike CalDAV's, it is on
-//! when the group is absent, because every JMAP calendar server we know
-//! schedules (rule 1); a calendar source turns it off with
+//! The configuration setting lives in `[WebDAV Backend]` as `CalendarAutoSchedule`.
+//! When the group is absent, scheduling defaults to server-managed.
+//! Setting `CalendarAutoSchedule=false` disables server scheduling.
 //!
-//! ```text
-//! [WebDAV Backend]
-//! CalendarAutoSchedule=false
-//! ```
-//!
-//! Anything that creates the group without setting the key reads as off too,
-//! since `CalendarAutoSchedule` defaults to false. That is the safe side to
-//! fail on: Evolution mails the guests itself, as it did before.
-//!
-//! The switch is read afresh for every change and every capability query,
-//! as CalDAV does, so a toggled option takes effect without reconnecting.
+//! The backend reads this setting on every change and capability query.
 
 use std::ffi::CStr;
 
@@ -34,26 +20,21 @@ use glib_sys::GFALSE;
 use jmap_backend_core::marshal::extension_if_present;
 use jmap_cal_sync::Itip;
 
-/// `E_CAL_STATIC_CAPABILITY_CREATE_MESSAGES`: Evolution's `itip-utils.c`
-/// composes no mail of its own for a client that has it.
+/// Static capability indicating the backend creates messages.
 pub const CREATE_MESSAGES: &str = "create-messages";
 
-/// `E_CAL_STATIC_CAPABILITY_SAVE_SCHEDULES`: the backend sends the iTIP for
-/// a save, and honours `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
+/// Static capability indicating the backend saves schedules.
 pub const SAVE_SCHEDULES: &str = "save-schedules";
 
-/// `E_CAL_STATIC_CAPABILITY_ITIP_SUPPRESS_ON_REMOVE_SUPPORTED`: the same
-/// flag is honoured on a removal.
+/// Static capability indicating the backend supports suppression on removal.
 pub const ITIP_SUPPRESS_ON_REMOVE_SUPPORTED: &str = "itip-suppress-on-remove-supported";
 
-/// `CLIENT_BACKEND_PROPERTY_CAPABILITIES`, a `#define`d string in
-/// `e-client.h`.
+/// Backend capabilities property name.
 pub const CAPABILITIES_PROPERTY: &CStr = c"capabilities";
 
-/// The capabilities to answer, given what the meta backend answered.
+/// Returns the capability list for the calendar backend.
 ///
-/// With the switch on, the three that tell Evolution the backend delivers
-/// the iTIP itself are added, as `e-cal-backend-caldav.c` adds them.
+/// Adds server scheduling capabilities when `server_schedules` is true.
 pub fn capabilities(inherited: Option<&str>, server_schedules: bool) -> String {
     let mut caps: Vec<&str> = inherited
         .unwrap_or_default()
@@ -74,11 +55,9 @@ pub fn capabilities(inherited: Option<&str>, server_schedules: bool) -> String {
     caps.join(",")
 }
 
-/// Whether one change may ask the server to tell the guests.
+/// Determines whether an operation sends iTIP messages to guests.
 ///
-/// Only while the switch is on, and only when the user did not say not to
-/// send (`E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`, which `ECalMetaBackend`
-/// also keeps with an offline change and replays on upload).
+/// Returns [`Itip::Send`] if server scheduling is active and unsuppressed.
 pub fn itip(server_schedules: bool, opflags: ECalOperationFlags) -> Itip {
     if server_schedules && opflags & E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE == 0 {
         Itip::Send
@@ -87,31 +66,27 @@ pub fn itip(server_schedules: bool, opflags: ECalOperationFlags) -> Itip {
     }
 }
 
-/// The account switch, as `source` states it. See the module comment.
+/// Checks whether the account source enables server scheduling.
 ///
-/// No source is "off": nothing is claimed for a backend EDS has not finished
-/// constructing.
+/// Returns false when `source` is null.
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource` that outlives the call.
+/// `source` must be null or point to a valid, live `ESource`.
 pub unsafe fn server_handles_invitations(source: *mut ESource) -> bool {
     if source.is_null() {
         return false;
     }
-    // A lookup by name walks the registered children of
-    // `E_TYPE_SOURCE_EXTENSION`, so the type must exist first.
-    // SAFETY: no arguments, and the type system initialises itself.
+    // Register the extension type before lookup by name.
+    // SAFETY: Initializing the GType requires no preconditions.
     unsafe { e_source_webdav_get_type() };
-    // Asked without creating the group: this is the user's own account
-    // source, and a group created only to be read would turn the switch off.
-    // SAFETY: a valid source by this function's contract, and the name is
-    // the header's own constant for an `ESourceWebdav`.
+    // Inspect extension without creating an empty group.
+    // SAFETY: `source` is valid by the caller contract.
     match unsafe {
         extension_if_present::<ESourceWebdav>(source, E_SOURCE_EXTENSION_WEBDAV_BACKEND)
     } {
         None => true,
-        // SAFETY: a live extension, by `extension_if_present`'s contract.
+        // SAFETY: `webdav` is a valid extension pointer returned by `extension_if_present`.
         Some(webdav) => unsafe { e_source_webdav_get_calendar_auto_schedule(webdav) != GFALSE },
     }
 }

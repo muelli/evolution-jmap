@@ -612,8 +612,7 @@ fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children(
         // collection that just resolved credentials hands them to its
         // already-running address-book/calendar children immediately, rather than
         // leaving each to hit its own credentials-required cycle before it
-        // independently re-fetches the same thing. See `docs/EWS-PARITY.md` Surface
-        // 5 and this function's own doc.
+        // independently re-fetches the same thing. See this function's own doc.
         let source = account();
         let stored = StoredPassword::new("hunter2");
         let pushed = RefCell::new(Vec::new());
