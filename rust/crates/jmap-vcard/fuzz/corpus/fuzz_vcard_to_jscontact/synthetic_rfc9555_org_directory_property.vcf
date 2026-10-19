@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:ORG-DIRECTORY Section Probe
+UID:org-directory-rfc9555-1
+URL;X-JMAP-KEY=l1:https://example.org/people/profile
+ORG-DIRECTORY;INDEX=1:https://directory.example.com/people/alice
+ORG-DIRECTORY;PREF=1;TYPE=work:ldap://ldap.example.com/ou=Engineering
+END:VCARD

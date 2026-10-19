@@ -11307,7 +11307,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
     // Unsupported standard properties parse safely and are dropped on emission:
     // GEO, TZ, MAILER, KIND, GENDER, LANG, SOCIALPROFILE, EXPERTISE, HOBBY,
-    // INTEREST, MEMBER, CONTACT-URI, SOURCE, XML, CREATED, PRODID, REV,
+    // INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
     // SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
@@ -11349,6 +11349,8 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af\r\n",
         "MEMBER:mailto:alice@example.com\r\n",
         "CONTACT-URI:https://directory.example/contact/albert\r\n",
+        "ORG-DIRECTORY:https://directory.example/contacts\r\n",
+        "ORG-DIRECTORY;INDEX=1;PREF=1;TYPE=work:ldap://directory.example/ou=research\r\n",
         "SOURCE:https://directory.example/contacts/albert.vcf\r\n",
         "XML:<contact><displayName>Dr. Albert Einstein</displayName></contact>\r\n",
         "CREATED:19940930T143510Z\r\n",
@@ -11423,7 +11425,7 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     );
     assert!(
         parsed.directories.is_none(),
-        "SOURCE must not project to directories in this profile"
+        "SOURCE and ORG-DIRECTORY must not project to directories in this profile"
     );
     assert!(parsed.kind.is_none(), "KIND must not project to card.kind");
     assert!(
@@ -11476,6 +11478,10 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(
         !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
         "CONTACT-URI must not be emitted"
+    );
+    assert!(
+        !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("ORG-DIRECTORY;"),
+        "ORG-DIRECTORY must not be emitted"
     );
     assert!(!emitted.contains("SOURCE:"), "SOURCE must not be emitted");
     assert!(!emitted.contains("XML:"), "XML must not be emitted");
@@ -11803,6 +11809,33 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
             "CONTACT-URI must not be emitted"
+        );
+    }
+
+    // ORG-DIRECTORY variants.
+    for org_directory_val in [
+        "ORG-DIRECTORY:https://directory.example.com/people/alice",
+        "ORG-DIRECTORY;INDEX=1:https://directory.example.com/indexed/alice",
+        "ORG-DIRECTORY;PREF=1;TYPE=work:ldap://ldap.example.com/ou=Engineering",
+        "ORG-DIRECTORY;TYPE=home,work;PREF=2:https://directory.example.com/mixed",
+        "org-directory:https://directory.example.com/case-insensitive",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Org Directory User\r\n{org_directory_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse ORG-DIRECTORY");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Org Directory User")
+        );
+        assert!(
+            parsed.directories.is_none(),
+            "ORG-DIRECTORY must not project to directories in this profile"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("ORG-DIRECTORY;"),
+            "ORG-DIRECTORY must not be emitted"
         );
     }
 
@@ -12148,6 +12181,11 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "CONTACT-URI:   ",
         "contact-uri:",
         "CONTACT-URI;TYPE=work:",
+        "ORG-DIRECTORY:",
+        "ORG-DIRECTORY:   ",
+        "org-directory:",
+        "ORG-DIRECTORY;TYPE=work:",
+        "ORG-DIRECTORY;VALUE=uri:",
         "SOURCE:",
         "source:   ",
         "PRODID:",
@@ -12213,6 +12251,47 @@ fn contact_uri_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
     assert!(
         !emitted.contains("CONTACT-URI:") && !emitted.contains("CONTACT-URI;"),
         "CONTACT-URI must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
+fn org_directory_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:org-directory-profile-boundary-1\r\n",
+        "FN:ORG-DIRECTORY Profile Boundary\r\n",
+        "URL;X-JMAP-KEY=l1:https://example.org/people/profile\r\n",
+        "ORG-DIRECTORY:https://directory.example.org/people/alice\r\n",
+        "org-directory;INDEX=1;PREF=1;TYPE=work:ldap://ldap.example.org/ou=Engineering\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse org-directory profile boundary card");
+    let links = parsed.links.as_ref().expect("links map");
+    assert_eq!(links.len(), 1, "only URL link should remain mapped");
+    assert_eq!(
+        links["l1"].uri, "https://example.org/people/profile",
+        "URL line must remain intact"
+    );
+    assert_eq!(links["l1"].kind, None, "URL maps to homepage link kind");
+    assert!(
+        parsed.directories.is_none(),
+        "ORG-DIRECTORY must not project to directories in this profile"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("URL;X-JMAP-KEY=l1:https://example.org/people/profile"),
+        "Mapped URL payload must survive"
+    );
+    assert!(
+        !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("ORG-DIRECTORY;"),
+        "ORG-DIRECTORY must not be emitted"
     );
 
     let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
