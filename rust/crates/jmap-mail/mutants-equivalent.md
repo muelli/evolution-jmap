@@ -31,6 +31,41 @@ SPDX-License-Identifier: GPL-3.0-or-later
   pre-existing value), so the two forms compute identical results for every
   role.
 
+## `src/provider.rs`
+
+- `crates/jmap-mail/src/provider.rs:88:5` through `:91:5` (`FLAGS`) and
+  `:102:5` through `:106:5` (`URL_FLAGS`), all `replace | with ^`, 9 mutants.
+  Both constants are plain `|`-chains of `CamelProviderFlags`/
+  `CamelProviderURLFlags` members, and every member in each chain is a
+  distinct power of two (`camel-enums.h`: `CAMEL_PROVIDER_IS_REMOTE` through
+  `SUPPORTS_SSL` are `1 << 0` to `1 << 5`; `camel-provider.h`:
+  `CAMEL_URL_ALLOW_USER` through `CAMEL_URL_NEED_HOST` are built from
+  `CAMEL_URL_PART_*` values `1 << 0` to `1 << 6`, shifted for `NEED`). Rust's
+  `&` binds tighter than `|`, so replacing one `|` with `^` in an
+  unparenthesised chain only changes how that one adjacent pair combines; for
+  two disjoint bits `^` and `|` compute the same value. Every mutant in this
+  pair is therefore equivalent code, not a test gap.
+  Checked by hand against `tests/provider.rs`'s field assertions, then
+  confirmed by running `cargo mutants` to completion: 9 missed (exactly these
+  9), 9 caught, 1 unviable.
+- `crates/jmap-mail/src/provider.rs:126:5` (`register`), `replace register ->
+  &'static CamelProvider with Box::leak(Box::new(Default::default()))`. Does
+  not compile: `CamelProvider` (from `eds-sys`'s bindgen output) has no
+  `Default` impl, same pattern as `jmap-config`'s other `Default::default()`
+  mutants. Confirmed with `cargo check -p jmap-mail` against the mutated
+  source.
+  Note for future files with a similar `|`-chain of disjoint flag constants:
+  the same `&` binds tighter than `|` rule means a `replace | with &` mutant
+  is *not* automatically caught just because the chain's first or last
+  member has its own test; it only zeroes the two operands adjacent to the
+  mutated operator, so a field that is covered only in combination with
+  neighbours further down the chain can still be missed. `URL_FLAGS`' first
+  run here (before `tests/provider.rs` gained
+  `the_provider_allows_the_url_parts_jmap_uses`) missed four `&` mutants at
+  `:103:5` to `:106:5` for exactly this reason: `the_provider_needs_a_host`
+  checked only the `NEED_HOST` bit, which sits in the first pair and was
+  never the one zeroed by a mutation further along the chain.
+
 ## `src/sasl.rs`
 
 - `crates/jmap-mail/src/sasl.rs:283:5` (`sasl_type`) and `:353:5`

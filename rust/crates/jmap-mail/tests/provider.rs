@@ -28,9 +28,11 @@ use std::ptr;
 use eds_sys::{
     CAMEL_NUM_PROVIDER_TYPES, CAMEL_PROVIDER_IS_EXTERNAL, CAMEL_PROVIDER_IS_REMOTE,
     CAMEL_PROVIDER_IS_SOURCE, CAMEL_PROVIDER_IS_STORAGE, CAMEL_PROVIDER_STORE,
-    CAMEL_PROVIDER_SUPPORTS_SSL, CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_NEED_HOST, CamelProvider,
-    CamelProviderFlags, CamelProviderURLFlags, CamelTransportClass, GError,
-    camel_offline_store_get_type, camel_provider_get, camel_provider_init, camel_store_get_type,
+    CAMEL_PROVIDER_SUPPORTS_SSL, CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_ALLOW_AUTH,
+    CAMEL_URL_ALLOW_PASSWORD, CAMEL_URL_ALLOW_PATH, CAMEL_URL_ALLOW_PORT, CAMEL_URL_ALLOW_USER,
+    CAMEL_URL_NEED_HOST, CamelProvider, CamelProviderFlags, CamelProviderURLFlags,
+    CamelTransportClass, GError, camel_offline_store_get_type, camel_provider_get,
+    camel_provider_init, camel_store_get_type,
 };
 use glib_sys::GType;
 use gobject_sys::{
@@ -127,14 +129,27 @@ fn the_provider_is_a_remote_mail_source_with_folders() {
 /// JMAP has no local flavour: an account is a session URL on some host, and
 /// there is nothing to configure without one. `NEED_HOST` is what makes the
 /// account dialog refuse an empty server rather than build a service that
-/// fails on first use.
+/// fails on first use. The `ALLOW_*` flags are the URL parts a JMAP account
+/// can carry: a path (the session URL), and the credential parts, which this
+/// backend reads from `ESourceAuthentication` and libsecret rather than the
+/// URL, but which the flag still has to permit.
 #[test]
-fn the_provider_needs_a_host() {
+fn the_provider_allows_the_url_parts_jmap_uses() {
     let provider = registered();
-    assert_eq!(
-        provider.url_flags & CAMEL_URL_NEED_HOST as CamelProviderURLFlags,
-        CAMEL_URL_NEED_HOST as CamelProviderURLFlags
-    );
+    for (flag, name) in [
+        (CAMEL_URL_NEED_HOST, "NEED_HOST"),
+        (CAMEL_URL_ALLOW_PORT, "ALLOW_PORT"),
+        (CAMEL_URL_ALLOW_PATH, "ALLOW_PATH"),
+        (CAMEL_URL_ALLOW_USER, "ALLOW_USER"),
+        (CAMEL_URL_ALLOW_AUTH, "ALLOW_AUTH"),
+        (CAMEL_URL_ALLOW_PASSWORD, "ALLOW_PASSWORD"),
+    ] {
+        assert_eq!(
+            provider.url_flags & flag as CamelProviderURLFlags,
+            flag as CamelProviderURLFlags,
+            "the provider does not claim CAMEL_URL_{name}"
+        );
+    }
 }
 
 /// Both slots, which is what makes a JMAP account a whole account: the store is
