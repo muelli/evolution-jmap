@@ -22832,3 +22832,41 @@ fn cc_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn prop_id_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PROP-ID Profile Probe\r\n",
+        "TEL;VALUE=uri;TYPE=work;PROP-ID=PHONE-A:tel:+1-202-555-0100\r\n",
+        "TEL;VALUE=uri;TYPE=home;PROP-ID=PHONE-B:tel:+1-202-555-0101\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PROP-ID profile probe");
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 2, "both TEL lines must remain mapped");
+
+    for phone in phones.values() {
+        assert!(
+            phone.extra.is_empty(),
+            "profile does not retain RFC 9555 PROP-ID metadata on TEL"
+        );
+    }
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("TEL;X-JMAP-KEY="),
+        "emit must keep keyed TEL lines"
+    );
+    assert!(
+        !emitted.contains("PROP-ID="),
+        "non-projected PROP-ID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized PROP-ID profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
