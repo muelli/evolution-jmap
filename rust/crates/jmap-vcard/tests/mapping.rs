@@ -22949,3 +22949,40 @@ fn username_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn tz_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:TZ Parameter Probe\r\n",
+        "ADR;TYPE=home;TZ=Europe/Zurich:;;Bahnhofstrasse 1;Zurich;;8001;Switzerland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse TZ parameter profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "one ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.time_zone.as_deref(), None);
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 TZ metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Bahnhofstrasse 1;Zurich;;8001;Switzerland"));
+    assert!(
+        !emitted.contains("TZ="),
+        "non-projected TZ parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized TZ parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}

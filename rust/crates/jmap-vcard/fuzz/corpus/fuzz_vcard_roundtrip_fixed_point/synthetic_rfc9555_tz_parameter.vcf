@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:TZ Parameter Seed
+ADR;TYPE=home;TZ=Europe/Zurich:;;Bahnhofstrasse 1;Zurich;;8001;Switzerland
+END:VCARD
