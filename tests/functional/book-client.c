@@ -577,7 +577,7 @@ write_phase (EBookClient *book,
 	/* Also boxed. Report the text from e_contact_date_to_string(), which
 	 * has the same format as the date line. */
 	read_back_birthday = e_contact_get (read_back, E_CONTACT_BIRTH_DATE);
-	#if EDS_CHECK_VERSION(3, 60, 0)
+	#if EDS_CHECK_VERSION(3, 59, 1)
 	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday, E_VCARD_VERSION_30) : NULL;
 	#else
 	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday) : NULL;
