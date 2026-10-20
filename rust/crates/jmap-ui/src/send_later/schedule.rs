@@ -1,26 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! When a held message should go out: the moments the menu offers, worked
-//! out against the local calendar every time they are asked for.
+//! When a held message must go out: the moments that the menu offers. The
+//! code calculates each moment from the local calendar at each request.
 //!
-//! The menu is deliberately *not* a fixed list of relative offsets. What a
-//! person wants is "this evening" or "first thing tomorrow", and those are
-//! calendar facts: 18:00 is a different number of seconds away at every
-//! moment of the day, and "tomorrow 08:00" is not `now + 24h` across a DST
-//! boundary. So each entry names a time of day (or the next working day) and
-//! is resolved to seconds-from-now at the instant it is clicked, which also
-//! means a composer left open past one of its own suggestions still does the
-//! right thing: the target rolls to the next occurrence rather than landing
-//! in the past.
+//! The menu is *not* a fixed list of relative offsets, on purpose. A person
+//! wants "this evening" or "early tomorrow", and these are calendar facts.
+//! The number of seconds to 18:00 changes at each moment of the day. Across a
+//! DST change, "tomorrow 08:00" is not `now + 24h`. Thus each item names a
+//! time of day (or the next working day). The code changes it into seconds
+//! from now at the moment of the click. Thus a composer that stays open past
+//! one of its suggestions still gives a correct result: the target moves to
+//! the next occurrence and not into the past.
 //!
-//! The set of times follows Signal's, which offers the next 08:00, 12:00,
-//! 18:00 and 21:00, plus the one email wants that a messenger does not: the
-//! next *working* day at 09:00, so a Friday evening's "next workday" is
-//! Monday and not Saturday.
+//! The set of times follows Signal. Signal offers the next 08:00, 12:00,
+//! 18:00 and 21:00. This module adds one time that email needs and a
+//! messenger does not: the next *working* day at 09:00. Thus on a Friday
+//! evening, "next workday" is Monday, not Saturday.
 //!
-//! GLib's `GDateTime` does all the arithmetic; nothing here reads the system
-//! clock except through it.
+//! GLib's `GDateTime` does all the arithmetic. This module reads the system
+//! clock only through `GDateTime`.
 
 use glib_sys::{
     GDateTime, g_date_time_add_days, g_date_time_format, g_date_time_get_day_of_month,
@@ -34,23 +33,23 @@ use jmap_backend_core::marshal::read_string;
 /// One offered moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
-    /// A flat hour from now: the one genuinely relative choice, and the one
-    /// people reach for to mean "not right this second".
+    /// One hour from now: the only relative choice. People use it to mean
+    /// "not immediately".
     InOneHour,
-    /// The next time the local clock reads this hour, today or tomorrow.
+    /// The next time the local clock shows this hour, today or tomorrow.
     TimeOfDay(i32),
-    /// [`WORKDAY_HOUR`] on the next day that is not a Saturday or Sunday,
-    /// today included if that hour is still ahead.
+    /// [`WORKDAY_HOUR`] on the next day that is not a Saturday or Sunday.
+    /// Today is included if that hour is still ahead.
     NextWorkday,
 }
 
-/// The times of day the menu suggests, in the order it lists them.
+/// The times of day that the menu suggests, in menu order.
 pub const TIMES_OF_DAY: &[i32] = &[8, 12, 18, 21];
 
-/// When a working day is taken to start.
+/// The hour at which a working day starts.
 pub const WORKDAY_HOUR: i32 = 9;
 
-/// Every preset the menu offers, in order.
+/// All presets that the menu offers, in order.
 pub fn offered() -> Vec<Preset> {
     let mut presets = vec![Preset::InOneHour];
     presets.extend(TIMES_OF_DAY.iter().map(|hour| Preset::TimeOfDay(*hour)));
@@ -58,9 +57,9 @@ pub fn offered() -> Vec<Preset> {
     presets
 }
 
-/// The stable action-name suffix for `preset`: what the menu item is known
-/// by, so one `activate` handler can recover which moment was clicked
-/// instead of needing a trampoline each.
+/// The stable action-name suffix for `preset`. With this name, one
+/// `activate` handler finds the clicked moment, and each item does not need
+/// its own trampoline.
 pub fn slug(preset: Preset) -> String {
     match preset {
         Preset::InOneHour => "hour".to_owned(),
@@ -82,19 +81,19 @@ pub fn from_slug(slug: &str) -> Option<Preset> {
     }
 }
 
-/// A resolved preset: how long to hold, and how to name that moment now.
+/// A resolved preset: how long to hold, and the current name of that moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Occurrence {
-    /// Seconds from now, which is what RFC 4865's `HOLDFOR` takes.
+    /// Seconds from now: the unit of the RFC 4865 `HOLDFOR`.
     pub hold: u64,
-    /// The menu label, e.g. `Today, 18:00`, `Tomorrow, 08:00`, `Monday,
-    /// 09:00`, or `In One _Hour` for the relative one.
+    /// The menu label, for example `Today, 18:00`, `Tomorrow, 08:00`,
+    /// `Monday, 09:00`, or `In One _Hour` for the relative preset.
     pub label: String,
 }
 
-/// Resolve `preset` against the local clock now. `None` only when
-/// `GDateTime` cannot represent the result, which means a clock so broken
-/// that the caller should report rather than send.
+/// Resolves `preset` against the local clock now. Returns `None` only if
+/// `GDateTime` cannot calculate or format the result. This means a defective
+/// clock, and the caller must report an error and not send.
 pub fn resolve(preset: Preset) -> Option<Occurrence> {
     if preset == Preset::InOneHour {
         return Some(Occurrence {
@@ -103,8 +102,8 @@ pub fn resolve(preset: Preset) -> Option<Occurrence> {
         });
     }
 
-    // SAFETY: no arguments; every GDateTime built here is checked and
-    // released on each path.
+    // SAFETY: no arguments. The code checks each GDateTime that it makes and
+    // releases it on each path.
     unsafe {
         let now = g_date_time_new_now_local();
         if now.is_null() {
@@ -130,14 +129,14 @@ pub fn resolve(preset: Preset) -> Option<Occurrence> {
     }
 }
 
-/// The next moment the clock reads `hour`:00: today if that is still
+/// The next moment the clock shows `hour`:00: today if that moment is still
 /// ahead, else tomorrow.
 ///
 /// # Safety
 ///
-/// `now` must be a live `GDateTime`. The result is owned by the caller.
+/// `now` must be a live `GDateTime`. The caller owns the result.
 unsafe fn next_at_hour(now: *mut GDateTime, hour: i32) -> Option<*mut GDateTime> {
-    // SAFETY: `now` per the contract; `at_hour` checks its own result.
+    // SAFETY: the contract makes `now` live; `at_hour` checks its own result.
     unsafe {
         let today = at_hour(now, 0, hour)?;
         if g_date_time_to_unix(today) > g_date_time_to_unix(now) {
@@ -148,15 +147,15 @@ unsafe fn next_at_hour(now: *mut GDateTime, hour: i32) -> Option<*mut GDateTime>
     }
 }
 
-/// [`WORKDAY_HOUR`] on the next Monday-to-Friday, today included if that
-/// hour has not passed.
+/// [`WORKDAY_HOUR`] on the next day from Monday to Friday. Today is included
+/// if that hour has not passed.
 ///
 /// # Safety
 ///
 /// As [`next_at_hour`].
 unsafe fn next_workday(now: *mut GDateTime) -> Option<*mut GDateTime> {
-    // SAFETY: `now` per the contract. Seven days is enough to find a
-    // weekday from any starting point, so the loop always terminates.
+    // SAFETY: the contract makes `now` live. Any seven days contain a weekday,
+    // thus the loop always finds one.
     unsafe {
         for ahead in 0..7 {
             let candidate = at_hour(now, ahead, WORKDAY_HOUR)?;
@@ -172,13 +171,14 @@ unsafe fn next_workday(now: *mut GDateTime) -> Option<*mut GDateTime> {
     }
 }
 
-/// `now` shifted `days` ahead, at `hour`:00:00 local.
+/// `now` moved `days` ahead, at `hour`:00:00 local time.
 ///
 /// # Safety
 ///
 /// As [`next_at_hour`].
 unsafe fn at_hour(now: *mut GDateTime, days: i32, hour: i32) -> Option<*mut GDateTime> {
-    // SAFETY: `now` per the contract; the intermediate day is released.
+    // SAFETY: the contract makes `now` live; the code releases the
+    // intermediate day.
     unsafe {
         let day = g_date_time_add_days(now, days);
         if day.is_null() {
@@ -197,18 +197,18 @@ unsafe fn at_hour(now: *mut GDateTime, days: i32, hour: i32) -> Option<*mut GDat
     }
 }
 
-/// `target` named relative to `now`: today, tomorrow, or by weekday.
+/// The name of `target` relative to `now`: today, tomorrow, or the weekday.
 ///
 /// # Safety
 ///
-/// Both must be live `GDateTime`s.
+/// Both arguments must be live `GDateTime`s.
 unsafe fn day_label(now: *mut GDateTime, target: *mut GDateTime) -> Option<String> {
-    // SAFETY: both live per the contract; each formatted string is freed.
+    // SAFETY: the contract makes both live; the code frees each formatted
+    // string.
     let time = unsafe {
-        // `%R` is 24-hour HH:MM. Evolution has a locale-aware formatter
-        // (`e-datetime-format.h`) that would respect a 12-hour locale; it is
-        // a whole further binding surface for four labels, so this is the
-        // deliberate simplification.
+        // `%R` is 24-hour HH:MM. The locale-aware formatter of Evolution
+        // (`e-datetime-format.h`) supports 12-hour locales, but it needs a
+        // large new binding for four labels. Thus this simplification is on purpose.
         let raw = g_date_time_format(target, c"%R".as_ptr());
         let formatted = read_string(raw);
         g_free(raw.cast());
@@ -237,7 +237,7 @@ unsafe fn day_label(now: *mut GDateTime, target: *mut GDateTime) -> Option<Strin
         // TRANSLATORS: %1$s is a time of day, e.g. "08:00".
         return Some(translate_with(N_(c"Tomorrow, %1$s"), &[&time]));
     }
-    // SAFETY: as above; `%A` is the locale's full weekday name.
+    // SAFETY: as above; `%A` is the full weekday name of the locale.
     let weekday = unsafe {
         let raw = g_date_time_format(target, c"%A".as_ptr());
         let formatted = read_string(raw);
@@ -248,13 +248,13 @@ unsafe fn day_label(now: *mut GDateTime, target: *mut GDateTime) -> Option<Strin
     Some(translate_with(N_(c"%1$s, %2$s"), &[&weekday, &time]))
 }
 
-/// A date as one comparable number, for "is this the same day".
+/// A date as one number, to find if two moments are on the same day.
 ///
 /// # Safety
 ///
 /// `moment` must be a live `GDateTime`.
 unsafe fn day_number(moment: *mut GDateTime) -> i64 {
-    // SAFETY: live per the contract.
+    // SAFETY: the contract makes `moment` live.
     unsafe {
         i64::from(g_date_time_get_year(moment)) * 10_000
             + i64::from(g_date_time_get_month(moment)) * 100
@@ -262,10 +262,11 @@ unsafe fn day_number(moment: *mut GDateTime) -> i64 {
     }
 }
 
-/// Now plus `seconds`, as the RFC 8620 `UTCDate` string a JMAP property
-/// takes: what snooze writes into `snoozed.until`.
+/// Now plus `seconds`, as the RFC 8620 `UTCDate` string that a JMAP property
+/// takes. Snooze writes this value into `snoozed.until`.
 pub fn utc_in(seconds: u64) -> Option<String> {
-    // SAFETY: plain GLib calendar calls; every object and string released.
+    // SAFETY: plain GLib calendar calls; the code releases each object and
+    // string.
     unsafe {
         let now = glib_sys::g_date_time_new_now_utc();
         if now.is_null() {
@@ -278,9 +279,9 @@ pub fn utc_in(seconds: u64) -> Option<String> {
         if target.is_null() {
             return None;
         }
-        // The explicit pattern rather than format_iso8601 (which glib-sys
-        // gates behind a newer-GLib feature): `target` is UTC by
-        // construction, so the literal Z is the truth.
+        // An explicit pattern, because glib-sys gives format_iso8601 only
+        // with a newer-GLib feature. `target` is UTC, thus the literal Z is
+        // correct.
         let raw = g_date_time_format(target, c"%Y-%m-%dT%H:%M:%SZ".as_ptr());
         g_date_time_unref(target);
         let formatted = read_string(raw);
@@ -298,9 +299,9 @@ mod tests {
 
     use super::*;
 
-    /// Where `hold` seconds from now lands, as (weekday, hour, minute).
+    /// The time `hold` seconds from now, as (weekday, hour, minute).
     fn lands_at(hold: u64) -> (i32, i32, i32) {
-        // SAFETY: plain GLib calendar calls; every object released.
+        // SAFETY: plain GLib calendar calls; the code releases each object.
         unsafe {
             let now = g_date_time_new_now_local();
             let target = g_date_time_new_from_unix_local(g_date_time_to_unix(now) + hold as i64);
@@ -321,8 +322,8 @@ mod tests {
         assert_eq!(occurrence.hold, 3600);
     }
 
-    /// Every offered time of day resolves to that hour, on the hour, always
-    /// in the future and never more than a day out.
+    /// Each offered time of day resolves to that hour, on the hour. The result
+    /// is always in the future and at most 25 hours ahead (DST included).
     #[test]
     fn each_time_of_day_lands_on_its_own_hour() {
         for wanted in TIMES_OF_DAY {
@@ -337,8 +338,8 @@ mod tests {
         }
     }
 
-    /// The next workday is a Monday-to-Friday at [`WORKDAY_HOUR`], never a
-    /// weekend, and always ahead.
+    /// The next workday is a day from Monday to Friday at [`WORKDAY_HOUR`],
+    /// never a weekend day, and always ahead.
     #[test]
     fn the_next_workday_is_never_a_weekend() {
         let occurrence = resolve(Preset::NextWorkday).unwrap();
@@ -348,7 +349,7 @@ mod tests {
         assert_eq!((hour, minute), (WORKDAY_HOUR, 0));
     }
 
-    /// Labels say which day they mean, so a stale menu is still readable.
+    /// Each label names its day, thus a stale menu is still clear.
     #[test]
     fn labels_name_the_day() {
         for preset in offered() {
@@ -360,8 +361,8 @@ mod tests {
         }
     }
 
-    /// Every preset survives the round trip through its action name, which is
-    /// what lets one handler serve the whole submenu.
+    /// Each preset survives the round trip through its action name. This lets
+    /// one handler serve the full submenu.
     #[test]
     fn slugs_round_trip() {
         for preset in offered() {
@@ -371,7 +372,7 @@ mod tests {
         assert_eq!(from_slug("at-notanumber"), None);
     }
 
-    /// The string `snoozed.until` gets: RFC 8620's `UTCDate` ends in `Z`.
+    /// The string for `snoozed.until`: an RFC 8620 `UTCDate` ends in `Z`.
     #[test]
     fn utc_in_writes_a_z_terminated_utc_date() {
         let stamp = utc_in(600).unwrap();

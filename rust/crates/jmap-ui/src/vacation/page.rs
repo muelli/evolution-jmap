@@ -1,26 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `JmapVacationPage`: a `GtkScrolledWindow` subclass (the interface's
-//! prerequisite) implementing `EMailConfigPage`.
+//! `JmapVacationPage`: a `GtkScrolledWindow` subclass that implements
+//! `EMailConfigPage`. The interface requires `GtkScrolledWindow` as parent.
 //!
-//! The first widget subclass in this workspace, and deliberately the smallest
-//! possible one: the parent's sizes come from the running type system
-//! ([`TypeSizes::of_parent`]), the subclass adds no inline fields, and all of
-//! its state lives in one qdata box ([`UiState`]), so there is no struct
-//! layout here for a GTK release to disagree with.
+//! This is the first widget subclass in this workspace. It is intentionally
+//! as small as possible:
 //!
-//! Lifecycle: [`create`] instantiates the registered type, and
+//! - The parent sizes come from the running type system
+//!   ([`TypeSizes::of_parent`]).
+//! - The subclass adds no inline fields.
+//! - All of its state is in one qdata box ([`UiState`]).
+//!
+//! Thus this file has no struct layout that a GTK release can contradict.
+//!
+//! Lifecycle: [`create`] makes an instance of the registered type.
 //! `instance_init` has already built the widgets (they need no
-//! configuration); `create` then kicks the async load (connect, fetch the
-//! `VacationResponse`) through [`crate::dispatch::spawn_for`], and
-//! [`apply_outcome`] fills the widgets or explains itself in the status
-//! label. Saving is the `EMailConfigPage` contract: the account editor's OK
-//! button calls the interface's async `submit`, which here snapshots the
-//! widgets on the main thread, refuses malformed dates immediately, and runs
-//! the blocking `VacationResponse/set` on a `GTask` worker thread. A page
-//! whose widgets match what was loaded submits nothing: Evolution submits
-//! every page on every save, and an untouched page has no business writing.
+//! configuration). Then `create` starts the asynchronous load (connect, get
+//! the `VacationResponse`) through [`crate::dispatch::spawn_for`].
+//! [`apply_outcome`] fills the widgets, or shows the problem in the status
+//! label.
+//!
+//! Save follows the `EMailConfigPage` contract. The OK button of the account
+//! editor calls the asynchronous `submit` of the interface. Here, `submit`
+//! reads the widgets on the main thread and refuses a date range that is not
+//! valid immediately. Then it runs the blocking `VacationResponse/set` on a
+//! `GTask` worker thread.
+//!
+//! If the widgets are equal to the loaded values, the page submits nothing.
+//! Evolution submits each page on each save, and a page without changes must
+//! not write.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_int};
@@ -67,9 +76,9 @@ const NOT_OFFERED: &CStr = N_(c"This account’s server does not offer a vacatio
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const LOAD_FAILED: &CStr = N_(c"The autoresponder could not be read: %1$s");
 
-/// Everything the page keeps, boxed as qdata: widget pointers (main thread
-/// only) and the account link the load established (shared with `GTask`
-/// submit threads through the `Arc`).
+/// All page state, in a box as qdata. It holds the widget pointers (main
+/// thread only) and the account link from the load. The `Arc` shares the
+/// link with the `GTask` submit threads.
 struct UiState {
     link: Option<Arc<AccountLink>>,
     baseline: Option<VacationForm>,
@@ -82,15 +91,15 @@ struct UiState {
     grid: *mut GtkWidget,
 }
 
-/// The page's qdata, while the page is alive.
+/// The qdata of the page, while the page is alive.
 ///
 /// # Safety
 ///
-/// `page` must be a live `JmapVacationPage`; the reference must not outlive
-/// it (callers use it within one main-loop callback).
+/// `page` must be a live `JmapVacationPage`. The reference must not live
+/// longer than the page (callers use it in one main-loop callback).
 unsafe fn state<'a>(page: *mut GObject) -> Option<&'a RefCell<UiState>> {
-    // SAFETY: set once in instance_init; the cast is the one build_widgets
-    // stored it under.
+    // SAFETY: instance_init sets the data one time. The cast uses the type
+    // that build_widgets stored.
     unsafe {
         g_object_get_data(page, STATE_KEY.as_ptr())
             .cast::<RefCell<UiState>>()
@@ -99,28 +108,27 @@ unsafe fn state<'a>(page: *mut GObject) -> Option<&'a RefCell<UiState>> {
 }
 
 unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: reclaiming the box build_widgets leaked, exactly once, when
-    // GObject clears the qdata at finalization.
+    // SAFETY: this frees the box that build_widgets leaked. GObject calls this
+    // one time, when it clears the qdata at finalization.
     drop(unsafe { Box::from_raw(data.cast::<RefCell<UiState>>()) });
 }
 
 pub struct VacationPage;
 
-// SAFETY: the parent is GtkScrolledWindow, whose sizes type_sizes() takes
-// from the running type system; nothing is added inline (state is qdata), and
-// GTypeInstance/GObjectClass are prefixes of any GObject-derived structs, so
-// the trampolines' casts stay inbounds.
+// SAFETY: the parent is GtkScrolledWindow. type_sizes() gets its sizes from
+// the running type system. The subclass adds no inline fields (the state is
+// qdata). GTypeInstance and GObjectClass are prefixes of all GObject-derived
+// structs, so the casts in the trampolines stay in bounds.
 unsafe impl ObjectSubclass for VacationPage {
     const NAME: &'static CStr = NAME;
     type Instance = GTypeInstance;
     type Class = GObjectClass;
 
     fn parent_type() -> GType {
-        // GtkScrolledWindow, because that is `EMailConfigPage`'s prerequisite:
-        // the running 3.52 refuses the interface on anything less (a GtkBox
-        // and a GtkBin parent were each tried and answered with exactly that
-        // CRITICAL, naming the first unmet ancestor).
-        // SAFETY: no arguments, and the type initialises itself.
+        // `EMailConfigPage` requires GtkScrolledWindow. Evolution 3.52 refuses
+        // the interface on other parents. Tests with GtkBox and GtkBin gave a
+        // CRITICAL that names the first missing ancestor.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { gtk_scrolled_window_get_type() }
     }
 
@@ -133,52 +141,50 @@ unsafe impl ObjectSubclass for VacationPage {
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: GObject passes a live instance whose scrolled-window half
-        // the parent initialised before this runs.
+        // SAFETY: GObject passes a live instance. The parent initialized its
+        // scrolled-window part before this call.
         unsafe { build_widgets(instance.cast::<GObject>()) };
     }
 }
 
-/// The filling of the page's copy of `EMailConfigPageInterface`.
+/// Fills the copy of `EMailConfigPageInterface` for the page.
 struct PageInterface;
 
-// SAFETY: `EMailConfigPageInterface` is bindgen's binding of the interface
-// struct `e_mail_config_page_get_type` names, generated from the same 3.52
-// headers, and it leads with `GTypeInterface`.
+// SAFETY: `EMailConfigPageInterface` is the bindgen binding of the interface
+// struct of `e_mail_config_page_get_type`. Bindgen generated it from the same
+// 3.52 headers. It starts with `GTypeInterface`.
 unsafe impl InterfaceImpl for PageInterface {
     type Vtable = EMailConfigPageInterface;
 
     fn gtype() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { e_mail_config_page_get_type() }
     }
 
     unsafe fn interface_init(vtable: *mut Self::Vtable) {
-        // SAFETY: our own copy of the vtable, pre-filled with the interface's
-        // defaults (which is what keeps check_complete and commit_changes at
-        // upstream's no-ops); nothing else reaches it yet.
+        // SAFETY: this is the page copy of the vtable. It contains the
+        // interface defaults, so check_complete and commit_changes keep the
+        // upstream defaults. No other code uses it yet.
         let vtable = unsafe { &mut *vtable };
         vtable.title = translate_static(N_(c"Vacation Responder"));
-        // After every page Evolution builds for the account itself (identity,
-        // receiving, sending, security all sort below 500 or at it): a
-        // server-side extra belongs at the tail, same neighbourhood as
-        // evolution-ews's Out of Office.
+        // The page sorts after identity (100), receiving (200), sending (400)
+        // and defaults (500). Composing also uses 550; security (600) is after.
         vtable.sort_order = 550;
         vtable.submit = Some(submit);
         vtable.submit_finish = Some(submit_finish);
     }
 }
 
-/// A `GtkLabel` beside its input, on `grid`'s row `row`.
+/// Puts a `GtkLabel` and its input on row `row` of `grid`.
 ///
 /// # Safety
 ///
-/// `grid` must be a live grid and `input` a live widget, both on the main
-/// thread.
+/// `grid` must be a live grid and `input` must be a live widget. Use both on
+/// the main thread.
 unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut GtkWidget) {
     let text = translate(label);
     let text = std::ffi::CString::new(text).unwrap_or_default();
-    // SAFETY: freshly built label, live grid and input, per the contract.
+    // SAFETY: the label is new; the grid and input are live, per the contract.
     unsafe {
         let label = gtk_label_new_with_mnemonic(text.as_ptr());
         gtk_label_set_xalign(label.cast(), 1.0);
@@ -189,18 +195,17 @@ unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut
     }
 }
 
-/// Builds the page's one child, a vertical box with the widgets, and
-/// stores the [`UiState`]. Everything starts insensitive: sensitivity is the
-/// load's to grant.
+/// Builds the only child of the page (a vertical box with the widgets) and
+/// stores the [`UiState`]. The check button and the grid start insensitive.
+/// The load makes them sensitive.
 ///
 /// # Safety
 ///
 /// `page` must be a freshly initialised `JmapVacationPage` instance.
 unsafe fn build_widgets(page: *mut GObject) {
-    // SAFETY: the instance is a GtkScrolledWindow (parent-initialised), which
-    // is what the container cast says; GTK3 wraps the box in a viewport on
-    // its own; every widget below is freshly constructed and owned by the
-    // container it is packed into.
+    // SAFETY: the instance is a GtkScrolledWindow that the parent initialized,
+    // as the container cast requires. GTK3 adds a viewport around the box.
+    // Each widget below is new, and its container owns it.
     unsafe {
         let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_container_add(page.cast(), content);
@@ -224,10 +229,10 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_widget_set_sensitive(grid, GFALSE);
         gtk_box_pack_start(content.cast(), grid, GTRUE, GTRUE, 0);
 
-        // Evolution's own date entry rather than a bare GtkEntry: it brings a
-        // calendar popup and, more to the point, an explicit "no date set"
-        // state, which is exactly RFC 8621 §8's nullable `fromDate`/`toDate`.
-        // Date only: the vacation object's bounds are days, not instants.
+        // The Evolution date field, not a GtkEntry. It has a calendar popup
+        // and a "no date set" state. That state agrees with the nullable
+        // `fromDate`/`toDate` of RFC 8621 §8. The page shows days only, no
+        // time.
         let from_date = new_date_field();
         attach_row(grid, 0, N_(c"_First day:"), from_date);
         let to_date = new_date_field();
@@ -241,8 +246,7 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         gtk_widget_show_all(page.cast());
 
-        // The detail grid follows the check button, once the load has made
-        // the page live at all.
+        // After a successful load, the check button controls the grid.
         g_signal_connect_data(
             enabled.cast(),
             c"toggled".as_ptr(),
@@ -272,22 +276,23 @@ unsafe fn build_widgets(page: *mut GObject) {
     }
 }
 
-/// The check button's `toggled` handler: the detail grid is editable exactly
-/// while automatic replies are on (and the page is live at all).
+/// The `toggled` handler of the check button. The grid is editable only
+/// while automatic replies are on and the page is live.
 ///
 /// # Safety
 ///
-/// Called by GLib's signal machinery; `page` is the connection's data
-/// pointer, the page the button lives on, alive because its child emitted.
+/// The GLib signal system calls this function. `page` is the data pointer
+/// of the connection: the page of the button. The page is alive, because its
+/// child emitted the signal.
 unsafe extern "C" fn on_toggled(_button: *mut GObject, page: gpointer) {
     guard("JmapVacationPage::toggled", (), || {
-        // SAFETY: a live page per this function's contract.
+        // SAFETY: the page is live, per the contract of this function.
         let Some(ui) = (unsafe { state(page.cast()) }) else {
             return;
         };
         let ui = ui.borrow();
         let live = ui.link.as_ref().is_some_and(|link| link.features.vacation);
-        // SAFETY: the grid and check button are the page's own live children.
+        // SAFETY: the grid and the check button are live children of the page.
         unsafe {
             let on = live && get_bool(ui.enabled.cast());
             gtk_widget_set_sensitive(ui.grid, if on { GTRUE } else { GFALSE });
@@ -295,15 +300,17 @@ unsafe extern "C" fn on_toggled(_button: *mut GObject, page: gpointer) {
     });
 }
 
-/// Instantiate the (registered) page for the account `connect_source`
-/// configures and start its load. NULL when the type is missing, which means
-/// [`crate::module::load`] never ran: reported, since a silently absent page
-/// is indistinguishable from the gate refusing.
+/// Makes the registered page for the account of `connect_source` and starts
+/// its load. Returns NULL if the type or the instance is missing.
+///
+/// A missing type means that [`crate::module::load`] did not run. The
+/// function logs this, because a missing page looks the same as a refused
+/// gate.
 ///
 /// # Safety
 ///
-/// `connect_source` must be a valid `ESource`; a reference is taken for the
-/// load's duration.
+/// `connect_source` must be a valid `ESource`. The function keeps a reference
+/// to it during the load.
 pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
     // SAFETY: NAME is a 'static NUL-terminated string.
     let gtype = unsafe { g_type_from_name(NAME.as_ptr()) };
@@ -311,8 +318,8 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         log_critical("JmapVacationPage: not registered; was the module loaded?");
         return ptr::null_mut();
     }
-    // SAFETY: a registered widget type; a GtkWidget comes back floating, and
-    // e_mail_config_notebook_add_page's container sinks it.
+    // SAFETY: the widget type is registered. The new GtkWidget is floating,
+    // and the container of e_mail_config_notebook_add_page sinks it.
     let page = unsafe {
         gobject_sys::g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null())
     };
@@ -320,12 +327,12 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         return ptr::null_mut();
     }
 
-    // SAFETY: a valid source per this function's contract; the reference is
-    // the worker's, released there.
+    // SAFETY: the source is valid, per the contract of this function. The
+    // worker owns the reference and releases it.
     let source = unsafe { SendSource::adopt(g_object_ref(connect_source.cast()).cast()) };
     let work = move || {
-        // SAFETY: the reference `create` took keeps the source alive for the
-        // whole of this closure.
+        // SAFETY: the reference from `create` keeps the source alive for all
+        // of this closure.
         let outcome = unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
             let response = io::load(&link)?;
             Ok((Arc::new(link), VacationForm::from_response(&response)))
@@ -334,21 +341,22 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         outcome
     };
     let finish = |page: *mut GObject, outcome| {
-        // SAFETY: `with_strong` hands back the live page.
+        // SAFETY: `with_strong` gives the live page.
         unsafe { apply_outcome(page, outcome) };
     };
-    // SAFETY: `page` is the live instance just built, still referenced here.
+    // SAFETY: `page` is the live new instance, and this function holds its reference.
     unsafe { dispatch::spawn_for(page, work, finish) };
 
     page.cast()
 }
 
-/// Fill the widgets from what the load found, or say why not, on the main
-/// loop, with the page alive (dispatch's weak reference saw to both).
+/// Fills the widgets with the load result, or shows why the load failed.
+/// The weak reference of dispatch makes sure that this runs on the main loop
+/// and that the page is alive.
 ///
 /// # Safety
 ///
-/// `page` must be the live page the load was started for.
+/// `page` must be the live page of the load.
 unsafe fn apply_outcome(
     page: *mut GObject,
     outcome: Result<(Arc<AccountLink>, VacationForm), String>,
@@ -358,14 +366,12 @@ unsafe fn apply_outcome(
     };
     match outcome {
         Ok((link, form)) if link.features.vacation => {
-            // The widget pointers are Copy; read them under a short immutable
-            // borrow and release it before touching any widget.
-            // `set_bool` on `enabled` calls GTK's own toggle setter, which
-            // emits `"toggled"` synchronously whenever the value actually
-            // changes (an already-enabled responder does exactly that), and
-            // that reenters `on_toggled`, which itself borrows this same
-            // `RefCell`. Holding a borrow across the call is a panic
-            // ("already mutably borrowed"), not a maybe.
+            // Copy the widget pointers in a short borrow, and release it
+            // before a widget call. `set_bool` on `enabled` emits `"toggled"`
+            // synchronously when the value changes (an enabled responder does
+            // this). Then `on_toggled` borrows this `RefCell` again. A
+            // `borrow_mut` held across that call causes a panic ("already
+            // mutably borrowed").
             let (enabled, from_date, to_date, subject, buffer, status, grid) = {
                 let ui = cell.borrow();
                 (
@@ -378,8 +384,8 @@ unsafe fn apply_outcome(
                     ui.grid,
                 )
             };
-            // SAFETY: the page's own live children; no borrow of `cell` is
-            // held across any of these calls.
+            // SAFETY: these are live children of the page. No borrow of
+            // `cell` is held during these calls.
             unsafe {
                 set_bool(enabled.cast(), form.enabled);
                 set_date(from_date, &form.from_date);
@@ -397,7 +403,7 @@ unsafe fn apply_outcome(
         Ok(_) => {
             let text = std::ffi::CString::new(translate(NOT_OFFERED)).unwrap_or_default();
             let status = cell.borrow().status;
-            // SAFETY: the page's own live status label.
+            // SAFETY: the status label is a live child of the page.
             unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
         }
         Err(message) => {
@@ -410,20 +416,20 @@ unsafe fn apply_outcome(
     }
 }
 
-/// What one submit writes, handed to the `GTask` thread: the link keeps the
-/// client alive, the patch is already validated and built.
+/// The data that one submit writes, for the `GTask` thread. The link keeps
+/// the client alive. The patch is already validated.
 struct SubmitJob {
     link: Arc<AccountLink>,
     patch: serde_json::Value,
 }
 
 unsafe extern "C" fn drop_job(data: gpointer) {
-    // SAFETY: reclaiming the box `submit` leaked, exactly once, when the task
-    // drops its task data.
+    // SAFETY: this frees the box that `submit` leaked. The task calls this one
+    // time, when it drops its task data.
     drop(unsafe { Box::from_raw(data.cast::<SubmitJob>()) });
 }
 
-/// The blocking half, on the task's worker thread.
+/// The blocking part, on the worker thread of the task.
 unsafe extern "C" fn submit_thread(
     task: *mut GTask,
     _source_object: *mut GObject,
@@ -431,14 +437,14 @@ unsafe extern "C" fn submit_thread(
     _cancellable: *mut GCancellable,
 ) {
     guard("JmapVacationPage::submit_thread", (), || {
-        // SAFETY: the job `submit` attached; borrowed, the task frees it.
+        // SAFETY: `submit` attached the job. This is a borrow; the task frees it.
         let job = unsafe { &*task_data.cast::<SubmitJob>() };
         match io::save(&job.link, job.patch.clone()) {
-            // SAFETY: `task` is the live task this thread func was invoked for.
+            // SAFETY: `task` is the live task of this thread function.
             Ok(()) => unsafe { g_task_return_boolean(task, GTRUE) },
             Err(message) => {
                 let text = std::ffi::CString::new(message).unwrap_or_default();
-                // SAFETY: a fresh GError, ownership passed to the task.
+                // SAFETY: a new GError; the task gets its ownership.
                 unsafe {
                     let error = g_error_new_literal(g_io_error_quark(), 0, text.as_ptr());
                     g_task_return_error(task, error);
@@ -448,12 +454,12 @@ unsafe extern "C" fn submit_thread(
     });
 }
 
-/// `EMailConfigPage.submit`: the account editor's save button.
+/// `EMailConfigPage.submit`: the save button of the account editor.
 ///
 /// # Safety
 ///
-/// Called through the interface vtable with a live page; `cancellable` NULL
-/// or valid, `callback`/`user_data` GIO's usual pair.
+/// The interface vtable calls this with a live page. `cancellable` is NULL
+/// or valid. `callback` and `user_data` are the usual GIO pair.
 unsafe extern "C" fn submit(
     page: *mut EMailConfigPage,
     cancellable: *mut GCancellable,
@@ -461,8 +467,8 @@ unsafe extern "C" fn submit(
     user_data: gpointer,
 ) {
     guard("JmapVacationPage::submit", (), || {
-        // SAFETY: a live page per the vfunc contract; the task is released
-        // after hand-off (GTask keeps itself alive until it returns).
+        // SAFETY: the page is live, per the vfunc contract. This function
+        // releases the task after hand-off (GTask stays alive until it returns).
         let task = unsafe { g_task_new(page.cast(), cancellable, callback, user_data) };
 
         let job = unsafe { state(page.cast()) }.and_then(|ui| {
@@ -471,17 +477,17 @@ unsafe extern "C" fn submit(
             if !link.features.vacation {
                 return None;
             }
-            // SAFETY: the page's own live children, read on the main thread.
+            // SAFETY: live children of the page, read on the main thread.
             let form = unsafe { snapshot(&ui) };
             if ui.baseline.as_ref() == Some(&form) {
-                return None; // untouched: nothing to write
+                return None; // no changes: nothing to write
             }
             Some((link, form))
         });
 
         match job {
             None => {
-                // SAFETY: completing the fresh task; it self-releases.
+                // SAFETY: completes the new task and releases the local reference.
                 unsafe {
                     g_task_return_boolean(task, GTRUE);
                     g_object_unref(task.cast());
@@ -490,7 +496,7 @@ unsafe extern "C" fn submit(
             Some((link, form)) => match form.patch() {
                 Err(reason) => {
                     let text = std::ffi::CString::new(translate(reason)).unwrap_or_default();
-                    // SAFETY: as above; the error's ownership passes to the task.
+                    // SAFETY: as above. The task gets the ownership of the error.
                     unsafe {
                         let error = g_error_new_literal(g_io_error_quark(), 0, text.as_ptr());
                         g_task_return_error(task, error);
@@ -499,9 +505,9 @@ unsafe extern "C" fn submit(
                 }
                 Ok(patch) => {
                     let job = Box::new(SubmitJob { link, patch });
-                    // SAFETY: the task is live; the data's ownership passes to
-                    // it (drop_job); run_in_thread takes its own reference, so
-                    // the local one is released.
+                    // SAFETY: the task is live and gets the ownership of the
+                    // data (drop_job). run_in_thread keeps its own reference,
+                    // so this releases the local reference.
                     unsafe {
                         g_task_set_task_data(task, Box::into_raw(job).cast(), Some(drop_job));
                         g_task_run_in_thread(task, Some(submit_thread));
@@ -517,27 +523,28 @@ unsafe extern "C" fn submit(
 ///
 /// # Safety
 ///
-/// Called through the interface vtable; `result` is the `GTask` [`submit`]
-/// made for this page, `error` NULL or writable.
+/// The interface vtable calls this. `result` is the `GTask` that [`submit`]
+/// made for this page. `error` is NULL or writable.
 unsafe extern "C" fn submit_finish(
     _page: *mut EMailConfigPage,
     result: *mut GAsyncResult,
     error: *mut *mut GError,
 ) -> gboolean {
     guard("JmapVacationPage::submit_finish", GFALSE, || {
-        // SAFETY: `result` is the task submit created, per the GIO contract
-        // that finish receives what the callback was handed.
+        // SAFETY: `result` is the task from submit. The GIO contract gives
+        // finish the same result that the callback received.
         unsafe { g_task_propagate_boolean(result.cast::<GTask>(), error) }
     })
 }
 
-/// The widgets as data, read on the main thread.
+/// Reads the widget values on the main thread.
 ///
 /// # Safety
 ///
-/// The `UiState`'s widgets must be alive (they are, while the page is).
+/// The widgets of the `UiState` must be alive (they are alive while the page
+/// is alive).
 unsafe fn snapshot(ui: &UiState) -> VacationForm {
-    // SAFETY: live widgets per the contract.
+    // SAFETY: the widgets are live, per the contract.
     unsafe {
         VacationForm {
             enabled: get_bool(ui.enabled.cast()),
@@ -549,15 +556,15 @@ unsafe fn snapshot(ui: &UiState) -> VacationForm {
     }
 }
 
-/// A date-only [`EDateEdit`] that may be left unset: the widget shape RFC
-/// 8621 §8's nullable date bounds ask for.
+/// A date-only [`EDateEdit`] that can have no date. This agrees with the
+/// nullable date bounds of RFC 8621 §8.
 ///
 /// # Safety
 ///
-/// Main thread only; the widget comes back floating, for a container to sink.
+/// Use on the main thread only. The new widget is floating, and a container
+/// must sink it.
 unsafe fn new_date_field() -> *mut GtkWidget {
-    // SAFETY: freshly constructed; both setters take the widget they were
-    // just handed.
+    // SAFETY: the widget is new, and both setters receive it.
     unsafe {
         let field = e_date_edit_new();
         e_date_edit_set_show_time(field.cast(), GFALSE);
@@ -566,16 +573,16 @@ unsafe fn new_date_field() -> *mut GtkWidget {
     }
 }
 
-/// A date field's value as [`VacationForm`] holds it: `YYYY-MM-DD`, or empty
-/// for "no date set".
+/// The value of a date field in the [`VacationForm`] format: `YYYY-MM-DD`,
+/// or empty for "no date set".
 ///
 /// # Safety
 ///
 /// `field` must be a live `EDateEdit`, on the main thread.
 unsafe fn get_date(field: *mut GtkWidget) -> String {
     let (mut year, mut month, mut day) = (0, 0, 0);
-    // SAFETY: a live field per the contract, three writable out-parameters.
-    // FALSE is the widget's own "no date set", which is the empty string here.
+    // SAFETY: the field is live, per the contract. The three out-parameters
+    // are writable. FALSE means "no date set", which becomes the empty string.
     let is_set =
         unsafe { e_date_edit_get_date(field.cast(), &mut year, &mut month, &mut day) } != GFALSE;
     if is_set {
@@ -585,7 +592,7 @@ unsafe fn get_date(field: *mut GtkWidget) -> String {
     }
 }
 
-/// The inverse: an empty (or unparseable) string clears the field.
+/// The inverse of `get_date`. An empty or unparseable string clears the field.
 ///
 /// # Safety
 ///
@@ -601,8 +608,8 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
             _ => None,
         }
     };
-    // SAFETY: a live field per the contract. `set_time(-1)` is how this class
-    // spells "no date set"; there is no `_set_date_to_none`.
+    // SAFETY: the field is live, per the contract. This class uses
+    // `set_time(-1)` for "no date set". There is no `_set_date_to_none`.
     unsafe {
         match parsed {
             Some((year, month, day)) => e_date_edit_set_date(field.cast(), year, month, day),
@@ -611,16 +618,15 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
     }
 }
 
-/// One string property read: `text` is the content of a `GtkEntry` and of a
-/// `GtkTextBuffer` alike, which is what keeps `GtkTextIter` out of the
-/// binding surface.
+/// Reads the string property `text`. Both `GtkEntry` and `GtkTextBuffer`
+/// have this property, so the bindings do not need `GtkTextIter`.
 ///
 /// # Safety
 ///
 /// `object` must be a live GObject with a readable string `text` property.
 unsafe fn get_text(object: *mut GObject) -> String {
     let mut value: *mut c_char = ptr::null_mut();
-    // SAFETY: per the contract; g_object_get copies the property value, and
+    // SAFETY: per the contract. g_object_get copies the property value, and
     // the NULL sentinel ends the varargs.
     unsafe {
         g_object_get(
@@ -633,11 +639,11 @@ unsafe fn get_text(object: *mut GObject) -> String {
     if value.is_null() {
         return String::new();
     }
-    // SAFETY: a NUL-terminated copy this call owns; freed after copying.
+    // SAFETY: a NUL-terminated copy that this call owns. It is freed below.
     let text = unsafe { CStr::from_ptr(value) }
         .to_string_lossy()
         .into_owned();
-    // SAFETY: the copy g_object_get handed over.
+    // SAFETY: the copy from g_object_get.
     unsafe { glib_sys::g_free(value.cast()) };
     text
 }
@@ -647,7 +653,7 @@ unsafe fn get_text(object: *mut GObject) -> String {
 /// `object` must be a live GObject with a writable string `text` property.
 unsafe fn set_text(object: *mut GObject, text: &str) {
     let text = std::ffi::CString::new(text).unwrap_or_default();
-    // SAFETY: per the contract; the property machinery copies the string.
+    // SAFETY: per the contract. The property system copies the string.
     unsafe {
         g_object_set(
             object,

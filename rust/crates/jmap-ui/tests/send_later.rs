@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The scheduled-send conversation end to end against the mock: staged in
-//! Drafts, held with `HOLDFOR`, moved Drafts → Sent by `onSuccessUpdateEmail`,
-//! and refused cleanly where the server does not offer the hold.
+//! End-to-end tests of the scheduled-send conversation against the mock. The
+//! message goes to Drafts, the server holds it with `HOLDFOR`, and
+//! `onSuccessUpdateEmail` moves it from Drafts to Sent. Other tests cover a
+//! server without Drafts and a server that does not offer the hold.
 
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
@@ -23,7 +24,7 @@ fn envelope() -> Envelope {
     )
 }
 
-/// A connected [`AccountLink`], the way the composer's gate builds one.
+/// A connected [`AccountLink`], built as the gate of the composer builds it.
 fn link_to(server: &MockServer) -> AccountLink {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
     let features = AccountFeatures::from_session(client.session()).expect("a mail account");
@@ -45,11 +46,11 @@ fn a_scheduled_message_is_staged_held_and_filed_as_sent() {
     let link = link_to(&server);
 
     let send_at = schedule_send(&link, MESSAGE.to_vec(), envelope(), 600).unwrap();
-    // The mock's clock stands at 2026-01-01T00:00:00Z.
+    // The clock of the mock is at 2026-01-01T00:00:00Z.
     assert_eq!(send_at, "2026-01-01T00:10:00Z");
 
-    // Held, not delivered; and the on-success patch has already filed the
-    // message as sent mail (RFC 8621 §7.5 applies it on acceptance).
+    // The server holds the message and does not deliver it. The on-success
+    // patch already moved it to Sent (RFC 8621 §7.5 applies it on acceptance).
     let state = server.state();
     let state = state.lock().unwrap();
     let account = state.account(&account_id).unwrap();
@@ -70,7 +71,8 @@ fn a_scheduled_message_is_staged_held_and_filed_as_sent() {
     );
 }
 
-/// Without Drafts there is nowhere to stage: refused before anything uploads.
+/// Without Drafts, the message has no staging mailbox: the call fails before
+/// the upload.
 #[test]
 fn a_server_without_a_drafts_mailbox_refuses_before_uploading() {
     let server = MockServer::builder().max_delayed_send(86_400).start();
@@ -97,19 +99,19 @@ fn a_server_without_a_drafts_mailbox_refuses_before_uploading() {
     );
 }
 
-/// The gate the composer reads: `max_hold` comes from `maxDelayedSend` alone
-/// (see `AccountFeatures`), so a deployment advertising neither it nor
-/// FUTURERELEASE, as this mock defaults to, answers `max_hold: None`, which
-/// keeps the menu insensitive; the server refuses a hold anyway if something
-/// submits regardless.
+/// The gate that the composer reads. `max_hold` comes only from
+/// `maxDelayedSend` (see `AccountFeatures`). By default, this mock advertises
+/// neither `maxDelayedSend` nor FUTURERELEASE. Thus `max_hold` is `None`, and
+/// the menu stays insensitive. If a client submits a hold anyway, the server
+/// refuses it.
 #[test]
 fn a_server_without_futurerelease_gates_the_feature_off() {
     let server = MockServer::builder().start();
     let link = link_to(&server);
     assert_eq!(link.features.max_hold, None);
     assert!(!link.features.account_id.as_str().is_empty());
-    // Sanity: the session still names the mail capability, so the gate turned
-    // on the submission facts alone.
+    // The session still names the mail capability, thus only the submission
+    // data turned the gate off.
     assert!(
         link.client
             .session()

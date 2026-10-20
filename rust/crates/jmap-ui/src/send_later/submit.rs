@@ -1,45 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The blocking JMAP conversation behind one scheduled send: upload the
-//! message, import it into Drafts as a draft, submit it with an RFC 4865
-//! `HOLDFOR`, and let `onSuccessUpdateEmail` move it Drafts → Sent the moment
-//! the server accepts. Worker threads only; the mock proves the whole
-//! round trip in `tests/send_later.rs`.
+//! The blocking JMAP conversation for one scheduled send. It uploads the
+//! message, imports it into Drafts as a draft, and submits it with an
+//! RFC 4865 `HOLDFOR`. When the server accepts the submission,
+//! `onSuccessUpdateEmail` moves the message from Drafts to Sent. Use this
+//! module on worker threads only. `tests/send_later.rs` tests the full
+//! sequence against the mock.
 //!
-//! The draft-first shape is deliberate and is `Client::send_email`'s own: a
-//! submission the server refuses leaves the message visible in Drafts rather
-//! than gone, and the user-facing error text names that residue.
+//! The message goes to Drafts first on purpose, as in `Client::send_email`.
+//! If the server refuses the submission, the message stays visible in Drafts
+//! and is not lost. The error text that the user sees tells about this copy.
 //!
 //! ## Why Sent and not the `scheduled` mailbox
 //!
-//! RFC 9979 registers a `scheduled` role for exactly "composed but not yet
-//! sent", so filing a held message there instead reads like the better
-//! answer, and it is the obvious thing to try. It was tried, against
-//! Fastmail, which has such a mailbox: the message sat in `scheduled` while
-//! held, was delivered on time, and then *stayed in `scheduled`*, never
-//! appearing in Sent. That folder is driven by Fastmail's own scheduled-send
-//! feature; a generic RFC 8621 submission is not wired into it, and nothing
-//! moves the copy out.
+//! RFC 9979 registers a `scheduled` role for messages that are "composed but
+//! not yet sent". Thus a held message seems to belong there. A test against
+//! Fastmail, which has such a mailbox, gave this result: the message stayed
+//! in `scheduled` during the hold, and the server sent it on time. After
+//! that, the message *stayed in `scheduled`* and did not appear in Sent. The
+//! scheduled-send function of Fastmail controls that folder. A generic
+//! RFC 8621 submission is not connected to that function, and nothing moves
+//! the copy out.
 //!
-//! Nor can this code move it afterwards. `onSuccessUpdateEmail` fires once,
-//! when the server *accepts* the submission; JMAP has no hook at release,
-//! and the submission record is purged once delivered, so there is not even
-//! a marker to reconcile against later. Doing it properly would mean
-//! Evolution keeping its own timer and being running at release time: the
-//! bookkeeping this project keeps refusing, for snooze and here alike.
+//! This code also cannot move the message later. `onSuccessUpdateEmail`
+//! occurs one time, when the server *accepts* the submission. JMAP has no
+//! hook at release time. The server deletes the submission record after
+//! delivery, thus no marker remains for a later check. A full solution needs
+//! Evolution to keep its own timer and to run at release time. This project
+//! does not accept that bookkeeping, for snooze and for this feature.
 //!
-//! So the message goes to Sent on acceptance. It appears there slightly
-//! before it truly goes out, which is a smaller lie than a sent message that
-//! never appears in Sent at all.
+//! Thus the message goes to Sent when the server accepts it. It appears
+//! there a short time before the server sends it. That error is smaller than
+//! a sent message that never appears in Sent.
 
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_proto::mail::{EmailImport, Envelope, Schedule, keyword, role};
 
 use crate::link::AccountLink;
 
-/// Ask the server to hold the message for `hold` seconds and send it then.
-/// Answers the release time the server reported (`sendAt`).
+/// Tells the server to hold the message for `hold` seconds and then send it.
+/// Returns the release time (`sendAt`) that the server reported.
 pub fn schedule_send(
     link: &AccountLink,
     message: Vec<u8>,
@@ -85,10 +86,9 @@ pub fn schedule_send(
         .id
         .ok_or_else(|| translate(c"the server imported the message without naming its id"))?;
 
-    // Applied when the submission is accepted (RFC 8621 §7.5): no longer a
-    // draft, filed where sent mail goes, exactly what pressing Send leaves
-    // behind. Without a sent-role mailbox the message simply stays in Drafts,
-    // un-drafted.
+    // The server applies this patch when it accepts the submission
+    // (RFC 8621 §7.5). It removes the draft keyword and moves the message to
+    // Sent, as Send does. Without a Sent mailbox, the message stays in Drafts.
     let mut on_success = serde_json::Map::new();
     on_success.insert(
         format!("keywords/{}", keyword::DRAFT),
@@ -122,8 +122,7 @@ pub fn schedule_send(
         .send_at
         .map(|send_at| send_at.as_str().to_owned())
         .ok_or_else(|| {
-            // Accepted but with no release time named: unheard of, but the
-            // caller's success message quotes `sendAt`, so it has to exist.
+            // The success message of the caller quotes `sendAt`, thus it must exist.
             translate_with(
                 c"the server accepted the submission but named no release time (undoStatus %1$s)",
                 &[submission.undo_status.as_deref().unwrap_or("unknown")],

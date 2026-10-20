@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! This crate's half of the module load.
+//! The part of the module load that belongs to this crate.
 //!
-//! There is no `.so` of its own: `jmap-config-module`'s `e_module_load` calls
-//! [`load`] beside `jmap_config::module::load`, so both crates' types ride in
-//! `module-jmap-configuration.so`, one module, the EWS precedent. The
-//! reasoning about extension timing is jmap-config's (its `module` docs,
-//! "nothing is registered *with* anything"): putting a type in the type
-//! system before Evolution constructs the extensible *is* the wiring.
+//! This crate has no `.so` of its own. The `e_module_load` of
+//! `jmap-config-module` calls [`load`] and `jmap_config::module::load`. Thus
+//! the types of the two crates are in one module,
+//! `module-jmap-configuration.so`, as in EWS.
+//!
+//! The `module` docs of jmap-config explain the extension timing ("Nothing is
+//! registered *with* anything"). A type that is in the type system before
+//! Evolution constructs the extensible *is* the connection.
 //!
 use gobject_sys::GTypeModule;
 use jmap_backend_core::i18n::bind;
@@ -17,27 +19,28 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::{send_later, snooze, vacation};
 
-/// Register this crate's types against `type_module`, guarded like every
-/// other entry point Evolution calls.
+/// Register the types of this crate against `type_module`.
 ///
-/// `logging::init` and [`bind`] are idempotent and also run in
-/// `jmap_config::module::load`; repeated here because each load path has to
-/// assume it might be the first (and stay correct if the two crates ever
-/// part ways again).
+/// A panic guard wraps this function, as it wraps all entry points that
+/// Evolution calls.
+///
+/// `logging::init` and [`bind`] are idempotent, and
+/// `jmap_config::module::load` also calls them. This function calls them
+/// again because each load path must operate correctly when it is the first.
+/// This also keeps the load correct if the two crates become separate again.
 ///
 /// # Safety
 ///
-/// `type_module` must be the `GTypeModule *` Evolution passed to
-/// `e_module_load`; it has to stay alive for the duration of the call.
+/// `type_module` must be the `GTypeModule *` that Evolution gave to
+/// `e_module_load`. It must stay alive for the duration of the call.
 pub unsafe fn load(type_module: *mut GTypeModule) {
     guard("e_module_load (jmap-ui)", (), || {
         jmap_backend_core::logging::init();
         bind();
-        // SAFETY: the module is Evolution's, by this function's contract.
+        // SAFETY: the module is the module of Evolution, by the contract of this function.
         unsafe {
-            // The page type before the extension that instantiates it, so
-            // `page::create`'s name lookup cannot lose a race with the first
-            // notebook.
+            // Register the page type before the extension that makes pages.
+            // Then the name lookup in `page::create` always finds the type.
             register_dynamic::<vacation::page::VacationPage>(type_module);
             register_dynamic::<vacation::extension::JmapVacationExtension>(type_module);
             register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
@@ -48,8 +51,8 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
     });
 }
 
-/// Called just before the module is unloaded; nothing to undo, as in
-/// `jmap_config::module::unload`.
+/// Evolution calls this function immediately before it unloads the module.
+/// There is nothing to undo, as in `jmap_config::module::unload`.
 ///
 /// # Safety
 ///

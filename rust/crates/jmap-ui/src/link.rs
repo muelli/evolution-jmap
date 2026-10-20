@@ -1,22 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! From an account's `ESource` to a connected client: the piece every
-//! feature shares. The vacation page connects from the editor's collection
-//! source, scheduled send from the transport's parent. Everything here blocks
-//! on the network or on libsecret, so it runs on worker threads only
-//! ([`crate::dispatch`], or a `GTask` thread for a page submit).
+//! The connection from the `ESource` of an account to a connected client.
+//! All features use this module.
 //!
-//! The connection recipe is the backends' own, reused: `SourceConfig` reads
-//! `[Authentication]`/`[Security]` off the source, and the credentials branch
-//! three ways on the authentication method exactly as
-//! `jmap-backend-core::connect` describes: OAuth 2.0 through
-//! `e_source_get_oauth2_access_token_sync` (which works in Evolution's shell
-//! because `jmap_config::module::load` registers the `EOAuth2Service` there),
-//! an API token or a password out of the stored secret. What is *not* reused
-//! is EDS's prompting machinery: a settings page has no
-//! `ESourceCredentialsProvider`, so an account with nothing stored is
-//! reported, not prompted for.
+//! The vacation page connects from the collection source of the editor.
+//! Scheduled send connects from the parent of the transport source.
+//! All functions here block on the network or on libsecret. Thus they run
+//! only on worker threads ([`crate::dispatch`], or a `GTask` thread for a
+//! page submit).
+//!
+//! The connection procedure is the same as in the backends. `SourceConfig`
+//! reads `[Authentication]`/`[Security]` from the source. The credentials
+//! have three branches on the authentication method, as
+//! `jmap-backend-core::connect` describes:
+//!
+//! - OAuth 2.0 through `e_source_get_oauth2_access_token_sync`. This works
+//!   in the Evolution shell because `jmap_config::module::load` registers
+//!   the `EOAuth2Service` there.
+//! - An API token from the stored secret.
+//! - A password from the stored secret.
+//!
+//! This module does *not* use the prompt mechanism of EDS. A settings page
+//! has no `ESourceCredentialsProvider`. Thus, for an account with no stored
+//! secret, this module reports an error and does not prompt.
 
 use std::ffi::{CStr, c_char};
 use std::ptr;
@@ -33,16 +40,15 @@ use jmap_client::{Client, Credentials};
 
 use crate::session_cache::AccountFeatures;
 
-/// A [`jmap_client::Error`] as something worth putting in front of a person.
+/// A [`jmap_client::Error`] as a text for a user.
 ///
-/// `Error`'s own `Display` is written for a log: "HTTP 401" is accurate and
-/// tells a user nothing, which is exactly what one of them reported. The
-/// cases split out here are the ones a user can act on; everything else falls
-/// back to the underlying text, which at least names the layer that failed.
+/// The `Display` of `Error` is for a log. "HTTP 401" is correct but tells a
+/// user nothing, and a user reported this problem. This function gives
+/// separate texts for the errors that a user can correct. For all other
+/// errors, it uses the `Display` text, which names the layer that failed.
 pub fn describe(error: &jmap_client::Error) -> String {
     match error {
-        // Reached only when a refresh has already been tried and failed (see
-        // `AccountLink::call`), so this really is "sign in again".
+        // Only after a token refresh failed (see `AccountLink::call`): the user must sign in again.
         jmap_client::Error::Http { status: 401, .. } => translate(
             c"the server rejected the account's credentials — it may need to be signed in again",
         ),
@@ -62,9 +68,9 @@ pub fn describe(error: &jmap_client::Error) -> String {
             // TRANSLATORS: %1$s is the reason the mail server gave.
             translate_with(c"the server rejected the change: %1$s", &[&detail])
         }
-        // Not a rejected token: the transport withheld credentials on a
-        // cross-host redirect (RFC 7235) and the destination answered 401
-        // without ever seeing them. Signing in again would not help.
+        // The token is not rejected. The transport did not send the
+        // credentials on a redirect to a different host (RFC 7235), and that
+        // host answered 401. A new sign-in does not correct this.
         jmap_client::Error::RedirectCredentialsWithheld { requested, followed } => translate_with(
             // TRANSLATORS: %1$s and %2$s are the URLs the server redirected
             // between; they differ in host.
@@ -75,46 +81,47 @@ pub fn describe(error: &jmap_client::Error) -> String {
     }
 }
 
-/// A connected client and what the session said about its account: the
-/// page's handle on the server, shared between the load and every later
-/// submit through an `Arc`.
+/// A connected client and the session data about its account.
+///
+/// This is the connection of a page to the server. The load and all later
+/// submits share it through an `Arc`.
 pub struct AccountLink {
     pub client: Client,
     pub features: AccountFeatures,
-    /// The source this connected as, kept alive so an expired OAuth 2.0
-    /// access token can be refreshed and reinstalled, see
-    /// [`AccountLink::call`]. `None` for a method whose credential does not
-    /// expire (a stored password, an API token), where a 401 means the
-    /// credential is wrong rather than old.
+    /// The source of this connection. It stays alive so that
+    /// [`AccountLink::call`] can refresh and install an expired OAuth 2.0
+    /// access token. `None` for a method whose credential does not expire
+    /// (a stored password, an API token). For such a method, a 401 means
+    /// that the credential is wrong, not old.
     refreshable: Option<SendSource>,
 }
 
-/// An owned `ESource` reference that may cross onto a worker thread, or sit
-/// in an [`AccountLink`] shared between threads. Dropping it releases the
-/// reference, on whichever thread drops it.
+/// An owned `ESource` reference that can move to a worker thread, or stay in
+/// an [`AccountLink`] that threads share. The drop releases the reference, on
+/// the thread that drops it.
 ///
-/// `ESource` is a GObject: reference counting is atomic, and the getters used
-/// through it take the source's own property lock, which is the same ground
-/// the EDS backends read their sources on from worker threads.
+/// `ESource` is a GObject, so its reference count is atomic. The getters
+/// that this crate calls take the property lock of the source. The EDS
+/// backends read their sources from worker threads on the same basis.
 pub(crate) struct SendSource(*mut ESource);
 
-// SAFETY: see the type's own doc: refcounting is thread-safe and every call
-// made through the pointer is one EDS itself makes off its worker threads.
+// SAFETY: see the doc of the type. Reference counting is thread-safe, and
+// EDS itself makes each call through the pointer from its worker threads.
 unsafe impl Send for SendSource {}
 unsafe impl Sync for SendSource {}
 
 impl SendSource {
-    /// Take over `source`, a reference the caller owns.
+    /// Take ownership of `source`, a reference that the caller owns.
     ///
     /// # Safety
     ///
-    /// `source` must be a live `ESource` and the reference must be the
-    /// caller's to give away: the wrapper releases it once, on drop.
+    /// `source` must be a live `ESource`, and the caller must own the
+    /// reference and give it away. The wrapper releases it one time, on drop.
     pub(crate) unsafe fn adopt(source: *mut ESource) -> Self {
         Self(source)
     }
 
-    /// The source, alive for as long as `self` is.
+    /// The source. It stays alive while `self` is alive.
     pub(crate) fn as_ptr(&self) -> *mut ESource {
         self.0
     }
@@ -122,15 +129,16 @@ impl SendSource {
 
 impl Drop for SendSource {
     fn drop(&mut self) {
-        // SAFETY: the reference `adopt` took over, released once.
+        // SAFETY: the reference that `adopt` took, released one time.
         unsafe { gobject_sys::g_object_unref(self.0.cast()) };
     }
 }
 
 impl AccountLink {
-    /// A link over an already-connected client, with nothing to refresh:
-    /// what a test against the mock has (no `ESource`, no OAuth 2.0), and
-    /// deliberately the only way to build one without [`connect_account`].
+    /// A link on a client that is already connected, with no token to refresh.
+    ///
+    /// A test against the mock uses this (no `ESource`, no OAuth 2.0). By
+    /// design, this is the only constructor other than [`connect_account`].
     pub fn without_refresh(client: Client, features: AccountFeatures) -> Self {
         Self {
             client,
@@ -139,19 +147,19 @@ impl AccountLink {
         }
     }
 
-    /// Run one JMAP call, refreshing the account's OAuth 2.0 access token and
-    /// retrying exactly once if the server answers 401.
+    /// Run one JMAP call. If the server answers 401, refresh the OAuth 2.0
+    /// access token of the account and try the call again one time.
     ///
-    /// This is the control flow the EDS backends already share
-    /// ([`jmap_backend_core::retry::retry_once_after`]) and the reason they
-    /// survive a session outliving its token: Fastmail's access tokens last
-    /// about an hour, an account editor or composer can sit open far longer,
-    /// and the stored refresh token is still perfectly good. Without this a
-    /// save an hour into the session fails with a bare 401, which is exactly
-    /// what it did before this existed.
+    /// The EDS backends use the same control flow
+    /// ([`jmap_backend_core::retry::retry_once_after`]). It lets a session
+    /// continue after its token expires. Fastmail access tokens last
+    /// approximately one hour. An account editor or a composer can stay open
+    /// much longer, and the stored refresh token stays valid. Without this
+    /// method, a save after one hour fails with a 401. Before this method
+    /// existed, that failure occurred.
     ///
-    /// Every server call in this crate goes through here; a bare
-    /// `link.client` call is the bug this method exists to prevent.
+    /// All server calls in this crate go through this method. Do not call
+    /// `link.client` directly: this method exists to prevent that bug.
     pub fn call<T>(
         &self,
         mut op: impl FnMut(&Client) -> Result<T, jmap_client::Error>,
@@ -163,15 +171,16 @@ impl AccountLink {
         )
     }
 
-    /// Fetch a fresh access token and install it on the client. `false` when
-    /// there is nothing to refresh or the refresh itself failed, which leaves
-    /// the caller's original 401 to be reported.
+    /// Get a new access token and install it on the client.
+    ///
+    /// `false` when there is no token to refresh or the refresh failed.
+    /// Then the caller reports the original 401.
     fn refresh_token(&self) -> bool {
         let Some(source) = self.refreshable.as_ref() else {
             return false;
         };
-        // SAFETY: a live source, kept referenced by `SendSource` for as long
-        // as this link; no cancellable, this thread is ours to block.
+        // SAFETY: a live source, which `SendSource` keeps referenced for the
+        // life of this link. No cancellable: this thread can block.
         match unsafe { oauth2::access_token(source.as_ptr(), ptr::null_mut()) } {
             Ok(token) => {
                 tracing::debug!("refreshed the UI module's OAuth 2.0 access token");
@@ -186,37 +195,38 @@ impl AccountLink {
     }
 }
 
-/// Connect as the account `source` configures.
+/// Connect as the account that `source` configures.
 ///
-/// `source` is the editor's *collection* source when the account has one
-/// (that is where `[Authentication]` and `[Security]` live for a JMAP
-/// account), else its mail-account source.
+/// `source` is the *collection* source of the editor if the account has one.
+/// For a JMAP account, `[Authentication]` and `[Security]` are in that
+/// source. Otherwise, `source` is the mail-account source.
 ///
-/// The error is the user-facing text, most of it the same translated
-/// messages the backends put in their `GError`s.
+/// The error is the text for the user. Most errors are the same translated
+/// messages that the backends put in their `GError`s.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource`, kept alive by the caller for the
-/// length of the call. Blocking; never on the main loop.
+/// `source` must be a valid `ESource`, and the caller must keep it alive for
+/// the duration of the call. This function blocks: never call it on the
+/// main loop.
 pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, String> {
     // SAFETY: `source` is valid per this function's contract.
     let config = unsafe { source::SourceConfig::from_source(source) }
         .map_err(|failure| gerror_message(failure.to_gerror()))?;
 
-    // SAFETY: as above; the extension pointer is the source's own.
+    // SAFETY: as above. The extension pointer belongs to the source.
     let method = unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     }
     .and_then(|authentication| {
-        // SAFETY: a live extension of the still-referenced source; the string
-        // is the extension's own, copied by read_string.
+        // SAFETY: a live extension of the source, which is still referenced.
+        // The string belongs to the extension, and read_string copies it.
         unsafe { read_string(e_source_authentication_get_method(authentication)) }
     });
 
     let is_oauth2 = oauth2::method_is_oauth2(method.as_deref());
     let credentials = if is_oauth2 {
-        // SAFETY: a valid source; no cancellable, the thread is ours to block.
+        // SAFETY: a valid source. No cancellable: this thread can block.
         let token = unsafe { oauth2::access_token(source, ptr::null_mut()) }
             .map_err(|failure| gerror_message(failure.to_gerror()))?;
         Credentials::bearer(token)
@@ -239,12 +249,11 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let features = AccountFeatures::from_session(client.session())
         .ok_or_else(|| translate(c"the session document names no usable mail account"))?;
 
-    // Only the OAuth 2.0 path has a credential that expires; for the others a
-    // 401 means the password or token is wrong, and retrying would just ask
-    // again with the same one.
+    // Only an OAuth 2.0 credential expires. For the other methods, a 401
+    // means a wrong password or token, and a retry sends the same one.
     let refreshable = is_oauth2.then(|| {
-        // SAFETY: `source` is valid for this call by the function's contract;
-        // the reference taken here is owned by the link until it drops.
+        // SAFETY: `source` is valid for this call, by the contract of the
+        // function. The link owns the reference taken here until it drops.
         unsafe { SendSource::adopt(gobject_sys::g_object_ref(source.cast()).cast()) }
     });
 
@@ -255,52 +264,54 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     })
 }
 
-/// The password (or API token) EDS has stored for `source`, if any.
+/// The password (or API token) that EDS stores for `source`, if any.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource`. Blocking (libsecret over D-Bus).
+/// `source` must be a valid `ESource`. This function blocks (libsecret over
+/// D-Bus).
 unsafe fn stored_password(source: *mut ESource) -> Option<String> {
     let mut raw: *mut c_char = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a valid source, no cancellable, two writable out-parameters; the
-    // string and the error both come back owned by this call.
+    // SAFETY: a valid source, no cancellable, and two writable out-parameters.
+    // This call owns the returned string and the returned error.
     unsafe { e_source_lookup_password_sync(source, ptr::null_mut(), &mut raw, &mut error) };
     if !error.is_null() {
-        // No secret stored is the ordinary case for OAuth accounts; anything
-        // else is worth a trace before the connect fails with its own text.
-        // SAFETY: a GError this call owns; message is the struct's own.
+        // OAuth accounts usually have no stored secret. For other accounts,
+        // log the error before the connection fails with its own text.
+        // SAFETY: a GError that this call owns. `message` belongs to the struct.
         let message = unsafe { read_string((*error).message) };
         tracing::debug!(?message, "no stored password for the account source");
-        // SAFETY: owned, freed once.
+        // SAFETY: owned, freed one time.
         unsafe { g_error_free(error) };
     }
     if raw.is_null() {
         return None;
     }
-    // SAFETY: a NUL-terminated string this call owns; copied, then freed.
+    // SAFETY: a NUL-terminated string that this call owns. Copied, then freed.
     let password = unsafe { CStr::from_ptr(raw) }
         .to_string_lossy()
         .into_owned();
-    // SAFETY: the g_malloc'd string e_source_lookup_password_sync handed over.
+    // SAFETY: the g_malloc string that e_source_lookup_password_sync gave.
     unsafe { g_free(raw.cast()) };
     (!password.is_empty()).then_some(password)
 }
 
-/// One `GError`'s message as the user-facing text, the error freed.
+/// The message of one `GError` as the text for the user. This function frees
+/// the error.
 ///
-/// The producers here (`SourceError::to_gerror`, `ConnectError::to_gerror`)
-/// always hand one back, but a NULL is answered with placeholder text rather
-/// than a crash, since this runs in Evolution's own process.
+/// The callers here (`SourceError::to_gerror`, `ConnectError::to_gerror`)
+/// always give an error. For a NULL, this function returns a placeholder text
+/// and does not crash, because it runs in the Evolution process.
 fn gerror_message(error: *mut GError) -> String {
     if error.is_null() {
         return translate(c"no further detail was given");
     }
-    // SAFETY: a live GError this function now owns; the message is the
-    // struct's own, copied before the free.
+    // SAFETY: a live GError that this function owns. The message belongs to
+    // the struct, and the copy occurs before the free.
     let message = unsafe { read_string((*error).message) }
         .unwrap_or_else(|| translate(c"no further detail was given"));
-    // SAFETY: owned, freed once.
+    // SAFETY: owned, freed one time.
     unsafe { g_error_free(error) };
     message
 }
@@ -351,8 +362,8 @@ mod send_source_tests {
     use super::SendSource;
 
     fn ref_count(object: *mut GObject) -> u32 {
-        // SAFETY: a live GObject; `ref_count` is its public, atomically
-        // updated counter, read once.
+        // SAFETY: a live GObject. `ref_count` is its public counter, with
+        // atomic updates. This reads it one time.
         unsafe { (*object).ref_count }
     }
 
@@ -360,13 +371,13 @@ mod send_source_tests {
     fn a_send_source_releases_its_reference_on_the_thread_that_drops_it() {
         let uid = CString::new("jmap-ui-send-source-test").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments: a NUL-terminated uid, no D-Bus
+        // object, and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         let object = source.cast::<GObject>();
 
-        // SAFETY: a live source; the new reference is handed to the wrapper.
+        // SAFETY: a live source. The wrapper gets the new reference.
         let shared = unsafe { SendSource::adopt(g_object_ref(object.cast()).cast()) };
         assert_eq!(shared.as_ptr(), source);
         assert_eq!(ref_count(object), 2);
@@ -379,7 +390,7 @@ mod send_source_tests {
         .expect("the worker thread panicked");
 
         assert_eq!(ref_count(object), 1, "the worker's drop released one ref");
-        // SAFETY: the reference `e_source_new_with_uid` returned.
+        // SAFETY: the reference that `e_source_new_with_uid` returned.
         unsafe { g_object_unref(object.cast()) };
     }
 }

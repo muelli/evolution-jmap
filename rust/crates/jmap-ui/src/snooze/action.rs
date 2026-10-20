@@ -1,27 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The snooze submenu itself, shared by the two window extensions: the merge
-//! into the menu layer, the sensitivity that follows the selection and the
-//! account, and the activation that snoozes what is selected.
+//! The snooze submenu, shared by the two window extensions.
+//! This file merges the submenu into the menu layer and sets its sensitivity.
+//! It also snoozes the selected messages when the user clicks a preset.
 //!
-//! Two menu layers, chosen at compile time by `evolution_eui_manager` (see
-//! `evo-sys/build.rs`): Evolution < 3.55 merges through `GtkUIManager` and a
-//! `GtkActionGroup` the caller already has (the window's "mail" group, or the
-//! browser's standard one); >= 3.55 merges through `EUIManager`, which needs
-//! no pre-existing group (`install` creates and names its own) and takes
-//! the whole action-plus-menu-placement in one call,
-//! `e_ui_manager_add_actions_with_eui_data`. Both sides fill the same
-//! [`SnoozeState`] and drive the same selection/gate/activation logic below;
-//! only the registration, and the sensitivity/tooltip/label setters, differ.
+//! The `evolution_eui_manager` cfg selects one of two menu layers at compile
+//! time (see `evo-sys/build.rs`):
 //!
-//! The gate is the module's usual two levels, with the second one cached
-//! module-wide ([`crate::session_cache::shared`]): the folder's provider
-//! protocol answers synchronously on every `update-actions`, and the server's
-//! snooze capability is fetched once per account off the main loop, every
-//! reader window sharing the answer. Until it is known the submenu sits
-//! insensitive under a "checking" tooltip; on a server without the extension
-//! it stays that way and the tooltip says why.
+//! - Evolution < 3.55 uses `GtkUIManager` and a `GtkActionGroup` that the
+//!   caller supplies (the "mail" group of the window, or the standard group
+//!   of the browser).
+//! - Evolution >= 3.55 uses `EUIManager`. `install` creates and names its own
+//!   group. One call, `e_ui_manager_add_actions_with_eui_data`, adds the
+//!   actions and the menu placement.
+//!
+//! Both layers fill the same [`SnoozeState`] and use the same selection, gate
+//! and activation logic. Only the registration and the setters are different.
+//!
+//! The gate has two levels. The first level is the provider protocol of the
+//! folder, which the code reads synchronously on each `update-actions`. The
+//! second level is the snooze capability of the server. A worker thread gets
+//! it one time for each account. The cache ([`crate::session_cache::shared`])
+//! shares the result with all reader windows. Until the result is known, the
+//! submenu is insensitive and shows a "checking" tooltip. If the server does
+//! not have the extension, the submenu stays insensitive and the tooltip
+//! gives the reason.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -68,7 +72,7 @@ use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::session_cache;
 
-/// See `vacation::extension` on why this literal is not imported.
+/// See `vacation::extension` for the reason that this literal is not imported.
 const BACKEND_NAME: &CStr = c"jmap";
 
 const STATE_KEY: &CStr = c"jmap-snooze-state";
@@ -83,33 +87,33 @@ const OFFERED: &CStr = N_(c"The server hides the message until then and wakes it
 const SNOOZE_FAILED: &CStr = N_(c"The message could not be snoozed: %1$s");
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
 
-/// The submenu's own action, whichever menu layer built it.
+/// The action of the submenu, for the menu layer that is compiled in.
 #[cfg(not(evolution_eui_manager))]
 type MenuAction = *mut GtkAction;
 #[cfg(evolution_eui_manager)]
 type MenuAction = *mut EUIAction;
 
-/// One reader window's snooze state, boxed as qdata on the extensible.
+/// The snooze state of one reader window, kept in a box as qdata on the extensible.
 struct SnoozeState {
-    /// The reader whose selection and folder the actions read: the mail view
-    /// (shell case) or the browser itself: a child, or the object itself,
-    /// alive as long as the owner is.
+    /// The reader that supplies the selection and the folder.
+    /// It is the mail view (shell window) or the browser itself.
+    /// It stays alive while the owner is alive.
     reader: *mut EMailReader,
-    /// The submenu's action, the gate's visible half.
+    /// The action of the submenu. Its sensitivity shows the result of the gate.
     menu_action: MenuAction,
-    /// The service uid a capability fetch is in flight for, so one slow
-    /// account is asked once and not per `update-actions`.
+    /// The service uid of the capability fetch that is in progress.
+    /// It prevents a new fetch for the same account on each `update-actions`.
     pending: Option<String>,
 }
 
-/// The owner's [`SnoozeState`], while it is alive.
+/// The [`SnoozeState`] of the owner, while the owner is alive.
 ///
 /// # Safety
 ///
-/// `owner` must be a live extensible [`install`] decorated; the reference must
-/// not outlive one main-loop callback.
+/// `owner` must be a live extensible that [`install`] decorated.
+/// Do not keep the reference after the main-loop callback ends.
 unsafe fn state<'a>(owner: *mut GObject) -> Option<&'a RefCell<SnoozeState>> {
-    // SAFETY: set once in `install`; the cast is the one it stored.
+    // SAFETY: `install` sets the data one time, with this type.
     unsafe {
         g_object_get_data(owner, STATE_KEY.as_ptr())
             .cast::<RefCell<SnoozeState>>()
@@ -118,19 +122,19 @@ unsafe fn state<'a>(owner: *mut GObject) -> Option<&'a RefCell<SnoozeState>> {
 }
 
 unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: reclaiming the box `install` leaked, exactly once.
+    // SAFETY: this takes back the box that `install` leaked, one time only.
     drop(unsafe { Box::from_raw(data.cast::<RefCell<SnoozeState>>()) });
 }
 
-/// One `activate` handler per preset, matching whichever menu layer's
-/// callback shape is compiled in.
+/// The `activate` handler of one preset, in the callback shape of the
+/// compiled-in menu layer.
 #[cfg(not(evolution_eui_manager))]
 type ActivateFn = unsafe extern "C" fn(*mut GtkAction, gpointer);
 #[cfg(evolution_eui_manager)]
 type ActivateFn = unsafe extern "C" fn(*mut EUIAction, *mut GVariant, gpointer);
 
-/// The three presets, sharing `send_later`'s moments on purpose: one set of
-/// habits, two menus.
+/// The three presets. They use the same [`Preset`] values as `send_later`,
+/// so that the two menus give the same times.
 const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
     (c"jmap-snooze-hour", N_(c"For One _Hour"), activate_hour),
     (
@@ -145,24 +149,23 @@ const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
     ),
 ];
 
-/// This extension's own group name under `EUIManager`: not one of
-/// Evolution's own (the way `mailing-list-actions.c` and
-/// `e-composer-to-meeting.c` upstream each register their own group rather
-/// than joining an existing one; action references inside the merged `.eui`
-/// resolve across the whole manager, not just this group, so nothing about
-/// placement depends on the name).
+/// The group name of this extension under `EUIManager`.
+/// It is not an Evolution group name. Upstream, `mailing-list-actions.c` and
+/// `e-composer-to-meeting.c` also register their own groups.
+/// The merged `.eui` finds actions in all groups of the manager,
+/// thus the placement does not depend on this name.
 #[cfg(evolution_eui_manager)]
 const GROUP_NAME: &CStr = c"jmap-snooze";
 
-/// Appended straight to the popup: `/mail-message-popup` (3.52's
-/// `<popup name='mail-message-popup'>`, 3.55+'s `<menu id='mail-message-popup'>`).
-/// That popup does carry a `mail-message-popup-common-actions` placeholder
-/// (confirmed against the installed 3.52.3 `evolution-mail.ui`/
-/// `evolution-mail-reader.ui`); the similarly named placeholder that really
-/// is absent there, `mail-message-popup-actions`, belongs to the separate
-/// `mail-preview-popup`. `mail-to-task.c` merges a new submenu into this
-/// popup the same way, as a direct child rather than through the
-/// placeholder, with no `is-popup` restated on the merge fragment.
+/// The submenu is a direct child of `/mail-message-popup`
+/// (3.52: `<popup name='mail-message-popup'>`; 3.55+: `<menu id='mail-message-popup'>`).
+///
+/// That popup has a `mail-message-popup-common-actions` placeholder
+/// (in the installed 3.52.3 `evolution-mail.ui` and `evolution-mail-reader.ui`).
+/// This fragment does not use the placeholder.
+/// The placeholder `mail-message-popup-actions` is in `mail-preview-popup`, not in this popup.
+/// `mail-to-task.c` also merges its submenu as a direct child of this popup,
+/// and its merge fragment also does not set `is-popup`.
 #[cfg(not(evolution_eui_manager))]
 const UI: &CStr = c"<popup name='mail-message-popup'>\
 <menu action='jmap-snooze-menu'>\
@@ -181,16 +184,17 @@ const UI: &CStr = c"<eui>\
 </menu>\
 </eui>";
 
-/// Merge the submenu into `ui_manager` (3.52: `action_group` too, a group the
-/// caller already has; 3.55+ creates and names its own, see `GROUP_NAME`) and
-/// hang the state on `owner`. Idempotent per owner: a second call finds the
-/// state and leaves.
+/// Merges the submenu into `ui_manager` and attaches the state to `owner`.
+/// On 3.52, the caller also supplies `action_group`.
+/// On 3.55+, the function creates its own group (see `GROUP_NAME`).
+/// The function is idempotent for each owner: a second call finds the state
+/// and returns.
 ///
 /// # Safety
 ///
-/// `owner` must be a live GObject outliving `reader` and `ui_manager` (3.52:
-/// and `action_group`), all live and belonging to the same window; main loop
-/// only.
+/// `owner` must be a live GObject that lives longer than `reader` and
+/// `ui_manager` (3.52: and `action_group`). All must be live and belong to the
+/// same window. Call on the main loop only.
 #[cfg(not(evolution_eui_manager))]
 pub(crate) unsafe fn install(
     owner: *mut GObject,
@@ -205,8 +209,8 @@ pub(crate) unsafe fn install(
         return;
     }
 
-    // SAFETY: live objects per this function's contract; each action's
-    // reference passes to the group.
+    // SAFETY: the objects are live per the contract of this function.
+    // The reference of each action goes to the group.
     let menu_action = unsafe {
         let menu_action = gtk_action_new(
             c"jmap-snooze-menu".as_ptr(),
@@ -255,7 +259,7 @@ pub(crate) unsafe fn install(
         menu_action,
         pending: None,
     }));
-    // SAFETY: `owner` is live; the box's ownership passes to the qdata.
+    // SAFETY: `owner` is live; the ownership of the box goes to the qdata.
     unsafe {
         g_object_set_data_full(
             owner,
@@ -270,8 +274,9 @@ pub(crate) unsafe fn install(
 
 /// # Safety
 ///
-/// `owner` must be a live GObject outliving `reader` and `ui_manager`, both
-/// live and belonging to the same window; main loop only.
+/// `owner` must be a live GObject that lives longer than `reader` and
+/// `ui_manager`. Both must be live and belong to the same window.
+/// Call on the main loop only.
 #[cfg(evolution_eui_manager)]
 pub(crate) unsafe fn install(
     owner: *mut GObject,
@@ -285,11 +290,11 @@ pub(crate) unsafe fn install(
         return;
     }
 
-    // SAFETY: live manager per this function's contract; every entry's
-    // pointer is either 'static (the preset names, PRESETS itself) or
-    // `translate_static`'s process-lifetime string, so the array need not
-    // outlive this call by more than its own duration, which owning it here
-    // already covers.
+    // SAFETY: the manager is live per the contract of this function.
+    // Each pointer in an entry is 'static (the preset names, PRESETS) or a
+    // `translate_static` string that lives for the process.
+    // The array must only live for the duration of the call, and this
+    // function owns it for that time.
     let menu_action = unsafe {
         let mut entries = vec![EUIActionEntry {
             name: c"jmap-snooze-menu".as_ptr(),
@@ -331,8 +336,8 @@ pub(crate) unsafe fn install(
         tracing::error!("the snooze submenu could not be merged");
         return;
     }
-    // SAFETY: `menu_action` is the live action `e_ui_action_group_get_action`
-    // just found, non-NULL per the check above.
+    // SAFETY: `menu_action` is the live action from `e_ui_action_group_get_action`.
+    // The check above makes sure that it is not NULL.
     unsafe { set_action_sensitive(menu_action, false) };
 
     tracing::trace!("snooze submenu merged into a JMAP-capable reader window");
@@ -341,10 +346,10 @@ pub(crate) unsafe fn install(
         menu_action,
         pending: None,
     }));
-    // SAFETY: `owner` is live; the box's ownership passes to the qdata.
-    // `menu_action` is a borrowed reference from the manager's own group
-    // (`e_ui_action_group_get_action` does not transfer one), unlike the
-    // 3.52 path above, so there is none to release here.
+    // SAFETY: `owner` is live; the ownership of the box goes to the qdata.
+    // `menu_action` is a borrowed reference from the group of the manager
+    // (`e_ui_action_group_get_action` does not transfer a reference).
+    // Thus, unlike the 3.52 path, there is no reference to release here.
     unsafe {
         g_object_set_data_full(
             owner,
@@ -370,8 +375,9 @@ unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
     unsafe { e_ui_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
 }
 
-/// The `update-actions` half: sensitivity from the selection, the folder's
-/// provider, and the cached server answer, kicking the fetch on a miss.
+/// The `update-actions` handler. It sets the sensitivity from the selection,
+/// the folder provider, and the cached server answer.
+/// If the cache has no answer, it starts a fetch.
 ///
 /// # Safety
 ///
@@ -385,8 +391,8 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
         (snooze.reader, snooze.menu_action)
     };
 
-    // SAFETY: the reader is alive with its owner; the uid array and folder
-    // are owned and released here.
+    // SAFETY: the reader is alive while its owner is alive.
+    // This code owns the uid array and the folder and releases them.
     let (selected, service_uid) = unsafe {
         let uids = e_mail_reader_get_selected_uids(reader);
         let selected = if uids.is_null() { 0 } else { (*uids).len };
@@ -407,7 +413,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
 
     match verdict {
         Some((sensitive, tooltip)) => {
-            // SAFETY: the action lives with the owner's window.
+            // SAFETY: the action is alive while the window of the owner is alive.
             unsafe {
                 set_action_sensitive(menu_action, sensitive);
                 set_tooltip(menu_action, tooltip);
@@ -418,7 +424,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
             {
                 let mut snooze = cell.borrow_mut();
                 if snooze.pending.as_deref() == Some(uid.as_str()) {
-                    return; // this account is already being asked
+                    return; // a fetch for this account is in progress
                 }
                 snooze.pending = Some(uid.clone());
             }
@@ -427,23 +433,22 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
                 set_action_sensitive(menu_action, false);
                 set_tooltip(menu_action, translate(CHECKING));
             }
-            // SAFETY: the reader is alive; the source reference is the
-            // worker's, released there.
+            // SAFETY: the reader is alive. The worker owns the source
+            // reference and releases it.
             let Some(source) = (unsafe { connect_source_of(reader) }) else {
-                // Un-poison the gate: without this, one failed resolution
-                // would block every later fetch for this account.
+                // Clear `pending`, or one failure blocks all later fetches for this account.
                 tracing::debug!(%uid, "snooze gate: the account source could not be resolved");
                 if let Some(cell) = unsafe { state(owner) } {
                     cell.borrow_mut().pending = None;
                 }
                 return;
             };
-            // SAFETY: the reference `connect_source_of` took, handed over.
+            // SAFETY: this gives the reference from `connect_source_of` to the wrapper.
             let source = unsafe { SendSource::adopt(source) };
             let fetch_uid = uid.clone();
             let work = move || {
-                // SAFETY: the reference `connect_source_of` took is the
-                // worker's for the whole closure.
+                // SAFETY: the worker owns the reference from
+                // `connect_source_of` for the full closure.
                 let outcome = unsafe { link::connect_account(source.as_ptr()) };
                 drop(source);
                 (fetch_uid, outcome)
@@ -466,7 +471,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
                             tracing::debug!(%message, "snooze gate: the server could not be asked");
                         }
                     }
-                    // SAFETY: `with_strong` hands back the live owner.
+                    // SAFETY: `with_strong` gives a live owner.
                     unsafe {
                         if let Some(cell) = state(owner) {
                             let mut snooze = cell.borrow_mut();
@@ -484,20 +489,20 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
                         update_sensitivity(owner);
                     }
                 };
-            // SAFETY: a live owner per this function's contract.
+            // SAFETY: the owner is live per the contract of this function.
             unsafe { dispatch::spawn_for(owner, work, finish) };
         }
     }
 }
 
-/// The folder's Camel service uid, when the folder belongs to this provider.
+/// The Camel service uid of the folder, if the folder belongs to this provider.
 ///
 /// # Safety
 ///
 /// `reader` must be a live `EMailReader`, on the main loop.
 unsafe fn jmap_service_uid(reader: *mut EMailReader) -> Option<String> {
-    // SAFETY: a live reader; the folder reference is released here, the store
-    // and its strings are the folder's own.
+    // SAFETY: the reader is live. This code releases the folder reference.
+    // The folder owns the store and its strings.
     unsafe {
         let folder = e_mail_reader_ref_folder(reader);
         if folder.is_null() {
@@ -513,7 +518,7 @@ unsafe fn jmap_service_uid(reader: *mut EMailReader) -> Option<String> {
 ///
 /// `folder` must be a live `CamelFolder`.
 unsafe fn service_uid_of(folder: *mut CamelFolder) -> Option<String> {
-    // SAFETY: per the contract; store and provider are borrowed from it.
+    // SAFETY: per the contract. The store and the provider are borrowed from the folder.
     unsafe {
         let store = camel_folder_get_parent_store(folder);
         if store.is_null() {
@@ -531,9 +536,9 @@ unsafe fn service_uid_of(folder: *mut CamelFolder) -> Option<String> {
     }
 }
 
-/// The source to connect as for the reader's folder: the service's own source
-/// resolved in the registry, lifted to its collection when it has one. An
-/// owned reference.
+/// The source to connect with for the folder of the reader.
+/// It is the source of the service in the registry, or its collection source
+/// if it has one. The caller owns the returned reference.
 ///
 /// # Safety
 ///
@@ -541,8 +546,8 @@ unsafe fn service_uid_of(folder: *mut CamelFolder) -> Option<String> {
 unsafe fn connect_source_of(reader: *mut EMailReader) -> Option<*mut ESource> {
     let service_uid = unsafe { jmap_service_uid(reader) }?;
     let service_uid = CString::new(service_uid).ok()?;
-    // SAFETY: the shell singleton and its registry are the process's own;
-    // every source reference taken is released except the one handed back.
+    // SAFETY: the process owns the shell singleton and its registry.
+    // This code releases each source reference, but not the returned reference.
     unsafe {
         let shell = e_shell_get_default();
         if shell.is_null() {
@@ -573,7 +578,7 @@ unsafe fn connect_source_of(reader: *mut EMailReader) -> Option<*mut ESource> {
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::hour", (), || unsafe {
-        // SAFETY: the owner is alive, its own menu emitted.
+        // SAFETY: the owner is alive, because its menu sent the signal.
         activate(owner.cast(), Preset::InOneHour);
     });
 }
@@ -584,7 +589,7 @@ unsafe extern "C" fn activate_hour(
     owner: gpointer,
 ) {
     guard("snooze::hour", (), || unsafe {
-        // SAFETY: as the 3.52 trampoline of the same name.
+        // SAFETY: the same as the 3.52 trampoline with this name.
         activate(owner.cast(), Preset::InOneHour);
     });
 }
@@ -592,7 +597,7 @@ unsafe extern "C" fn activate_hour(
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_tomorrow(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::tomorrow", (), || unsafe {
-        // SAFETY: as `activate_hour`.
+        // SAFETY: the same as `activate_hour`.
         activate(owner.cast(), Preset::TimeOfDay(8));
     });
 }
@@ -603,7 +608,7 @@ unsafe extern "C" fn activate_tomorrow(
     owner: gpointer,
 ) {
     guard("snooze::tomorrow", (), || unsafe {
-        // SAFETY: as `activate_hour`.
+        // SAFETY: the same as `activate_hour`.
         activate(owner.cast(), Preset::TimeOfDay(8));
     });
 }
@@ -611,7 +616,7 @@ unsafe extern "C" fn activate_tomorrow(
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_monday(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::monday", (), || unsafe {
-        // SAFETY: as `activate_hour`.
+        // SAFETY: the same as `activate_hour`.
         activate(owner.cast(), Preset::NextWorkday);
     });
 }
@@ -622,12 +627,13 @@ unsafe extern "C" fn activate_monday(
     owner: gpointer,
 ) {
     guard("snooze::monday", (), || unsafe {
-        // SAFETY: as `activate_hour`.
+        // SAFETY: the same as `activate_hour`.
         activate(owner.cast(), Preset::NextWorkday);
     });
 }
 
-/// A click: snapshot the selection on the main loop, snooze it on a worker.
+/// Handles a click. It copies the selection on the main loop and snoozes the
+/// messages on a worker thread.
 ///
 /// # Safety
 ///
@@ -638,8 +644,8 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
     };
     let reader = cell.borrow().reader;
 
-    // SAFETY: the reader is alive with its owner; the uid array is owned and
-    // released here, its strings copied first.
+    // SAFETY: the reader is alive while its owner is alive. This code owns and
+    // releases the uid array, after it copies the strings.
     let uids: Vec<String> = unsafe {
         let array = e_mail_reader_get_selected_uids(reader);
         if array.is_null() {
@@ -662,15 +668,15 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
         warn_dialog(translate(NO_CLOCK));
         return;
     };
-    // SAFETY: a live reader; the reference is the worker's.
+    // SAFETY: the reader is live. The worker owns the reference.
     let Some(source) = (unsafe { connect_source_of(reader) }) else {
         return;
     };
-    // SAFETY: the reference `connect_source_of` took, handed over.
+    // SAFETY: this gives the reference from `connect_source_of` to the wrapper.
     let source = unsafe { SendSource::adopt(source) };
 
     let work = move || {
-        // SAFETY: the reference `connect_source_of` took is the worker's.
+        // SAFETY: the worker owns the reference from `connect_source_of`.
         let outcome = unsafe { link::connect_account(source.as_ptr()) };
         drop(source);
         outcome.and_then(|link| snooze_all(&link, &uids, &until))
@@ -679,13 +685,14 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
         Ok(count) => tracing::debug!(count, "messages snoozed"),
         Err(message) => warn_dialog(translate_with(SNOOZE_FAILED, &[&message])),
     };
-    // SAFETY: a live owner per this function's contract.
+    // SAFETY: the owner is live per the contract of this function.
     unsafe { dispatch::spawn_for(owner, work, finish) };
 }
 
-/// The blocking half: the snoozed-role mailbox once, then one `Email/set`
-/// per message. Camel uids are JMAP email ids on this provider, which is what
-/// lets the selection cross as strings.
+/// The blocking part. It gets the mailbox with the snoozed role one time,
+/// then sends one `Email/set` for each message.
+/// On this provider, Camel uids are JMAP email ids, thus the selection can go
+/// to the worker as strings.
 fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize, String> {
     if !link.features.snooze {
         return Err(translate(NOT_OFFERED));
@@ -698,8 +705,7 @@ fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize,
         .id
         .ok_or_else(|| translate(c"the server named no id for the snoozed mailbox"))?;
 
-    // `moveToMailboxId` stays unset: the extension's default wake target is
-    // the inbox, which is exactly what snooze means here.
+    // `moveToMailboxId` is not set: the default wake target of the extension is the inbox.
     let details = SnoozeDetails::new(until);
     for uid in uids {
         let email_id = Id::new(uid.clone());
@@ -715,7 +721,7 @@ fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize,
 #[cfg(not(evolution_eui_manager))]
 unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: per the contract; the property machinery copies the string.
+    // SAFETY: per the contract. The property system copies the string.
     unsafe {
         g_object_set(
             action.cast(),
@@ -731,16 +737,17 @@ unsafe fn set_tooltip(action: MenuAction, text: String) {
 #[cfg(evolution_eui_manager)]
 unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: per the contract; the setter copies the string.
+    // SAFETY: per the contract. The setter copies the string.
     unsafe { e_ui_action_set_tooltip(action, text.as_ptr()) };
 }
 
-/// A modal explanation, parentless: the reader window a snooze failed in may
-/// itself be a popup's ephemeral context, and the message stands alone.
+/// Shows a modal error dialog with no parent window.
+/// The reader window can be the temporary context of a popup, and the message
+/// is complete without a parent.
 fn warn_dialog(text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: a fresh dialog, run and destroyed before returning; "%s" keeps
-    // the text out of printf's hands.
+    // SAFETY: the dialog is new, and this code runs and destroys it before it returns.
+    // "%s" prevents printf from reading format directives in the text.
     unsafe {
         let dialog = gtk_message_dialog_new(
             ptr::null_mut(),
@@ -755,10 +762,10 @@ fn warn_dialog(text: String) {
     }
 }
 
-/// The reader behind a mail shell view's content: its `mail-view` property,
-/// which implements `EMailReader` (an interface pointer is the instance
-/// pointer). Borrowed transfer-full and released: the view itself keeps it
-/// alive for the owner's life.
+/// The reader of the content of a mail shell view: its `mail-view` property.
+/// The property implements `EMailReader` (an interface pointer is the instance
+/// pointer). The getter gives a full reference, which this function releases.
+/// The content keeps the view alive while the owner is alive.
 ///
 /// # Safety
 ///
@@ -768,8 +775,8 @@ pub(crate) unsafe fn reader_of_content(content: *mut EShellContent) -> *mut EMai
         return ptr::null_mut();
     }
     let mut view: *mut GObject = ptr::null_mut();
-    // SAFETY: a live content per the contract; the property hands back a
-    // reference this call owns and releases (the content keeps its own).
+    // SAFETY: the content is live per the contract. The property gives a
+    // reference that this call owns and releases (the content keeps its own).
     unsafe {
         g_object_get(
             content.cast(),

@@ -15,18 +15,18 @@ workspace = true
 
 [lib]
 name = "jmap_ui"
-# rlib only, on jmap-config's argument: the shared object Evolution dlopens is
-# the companion `jmap-config-module` cdylib, whose `e_module_load` calls this
-# crate's `module::load` beside `jmap_config::module::load`. One module, one
-# .so — the EWS precedent — and the per-account SessionCache is shared by
-# every extension registered out of it.
+# rlib only, for the same reason as jmap-config. Evolution dlopens the shared
+# object of the companion `jmap-config-module` cdylib. Its `e_module_load`
+# calls `module::load` of this crate and `jmap_config::module::load`.
+# One module is one .so, as in EWS. Thus the module-wide SessionCache is one
+# cache for all extensions in that .so.
 crate-type = ["rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }
-# The Evolution side: the notebook the vacation extension extends and the
-# page interface it implements. Every EDS/GLib type comes back out of eds-sys,
-# per that crate's re-export.
+# The Evolution side: the notebook that the vacation extension extends, and
+# the page interface that it implements. All EDS/GLib types in evo-sys are
+# the eds-sys types, through the re-export of that crate.
 evo-sys = { workspace = true }
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
@@ -39,6 +39,6 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# `tests/send_later.rs` proves the scheduled-send conversation end to end
-# against the stateful mock, HOLDFOR gate included.
+# `tests/send_later.rs` tests the full scheduled-send exchange against the
+# stateful mock, including the HOLDFOR gate.
 evolution-jmap-mock = { workspace = true }

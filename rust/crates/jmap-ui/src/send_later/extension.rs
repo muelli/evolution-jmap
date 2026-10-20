@@ -1,31 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `JmapSendLaterExtension`: the `EExtension` on `EMsgComposer` that merges
-//! the *File ▸ Send Later* submenu, gates it on the From account, and walks a
-//! click through the composer's own message builder to
+//! `JmapSendLaterExtension`: the `EExtension` on `EMsgComposer`. It adds the
+//! *File ▸ Send Later* submenu and gates it on the From account. It sends a
+//! click through the message builder of the composer to
 //! [`crate::send_later::submit::schedule_send`].
 //!
-//! Two menu layers, chosen at compile time by `evolution_eui_manager` (see
-//! `evo-sys/build.rs`): Evolution < 3.55 merges through `GtkUIManager` and the
-//! editor's own "core" `GtkActionGroup`; >= 3.55 merges through `EUIManager`,
-//! registering under this extension's own group name rather than an existing
-//! one (matching how `e-composer-to-meeting.c` upstream registers its own
-//! "composer" group for exactly this extensible): one call,
-//! `e_ui_manager_add_actions_with_eui_data`, both builds the actions and
-//! places the `.eui` fragment that was two steps on the GTK side.
+//! `evolution_eui_manager` selects one of two menu layers at compile time
+//! (see `evo-sys/build.rs`):
+//! - Evolution < 3.55 uses `GtkUIManager` and the "core" `GtkActionGroup` of
+//!   the editor.
+//! - Evolution >= 3.55 uses `EUIManager`. It registers the actions under a
+//!   group name of this extension, not under an existing group. Upstream
+//!   `e-composer-to-meeting.c` registers its own "composer" group for this
+//!   extensible in the same way. On this layer, one call
+//!   (`e_ui_manager_add_actions_with_eui_data`) makes the actions and adds
+//!   the `.eui` fragment. The GTK layer needs two steps for this.
 //!
-//! The gate re-runs on every From switch (`EComposerHeaderTable`'s
-//! `notify::identity-uid`): level 1 is the identity's transport backend name
-//! (the evolution-ews chain, identity source to `[Mail Submission]`
-//! `TransportUid` to transport source's backend name), and level 2 is a
-//! session fetch off the main loop, whose answer lands back through
-//! [`crate::dispatch`] guarded by a generation counter, so a slow fetch for
-//! the previous account cannot sensitize the menu for the current one.
+//! The gate runs again at each From change (`notify::identity-uid` of
+//! `EComposerHeaderTable`). Level 1 is the transport backend name of the
+//! identity. It follows the evolution-ews chain: the identity source, then
+//! `[Mail Submission]` `TransportUid`, then the backend name of the transport
+//! source. Level 2 is a session fetch off the main loop. Its answer comes
+//! back through [`crate::dispatch`], and a generation counter guards it. Thus
+//! a slow fetch for the previous account cannot make the menu sensitive for
+//! the current account.
 //!
-//! On success the composer window is destroyed the way Evolution's own send
-//! path destroys it; on refusal a modal message dialog says why, and, since
-//! the draft-first shape can leave one behind, where a copy may remain.
+//! On success, the extension destroys the composer window, as the usual send
+//! path of Evolution does. On refusal, a modal message dialog tells why. The
+//! message goes to Drafts first, thus the dialog also tells that a copy can
+//! remain there.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -88,7 +92,7 @@ use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::send_later::submit;
 
-/// See `vacation::extension` on why this literal is not imported.
+/// `vacation::extension` tells why the code does not import this literal.
 const BACKEND_NAME: &CStr = c"jmap";
 
 const STATE_KEY: &CStr = c"jmap-send-later-state";
@@ -109,44 +113,44 @@ const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server acc
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
 const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future");
 
-/// The submenu's own action, whichever menu layer built it.
+/// The action of the submenu, for the compiled menu layer.
 #[cfg(not(evolution_eui_manager))]
 type MenuAction = *mut GtkAction;
 #[cfg(evolution_eui_manager)]
 type MenuAction = *mut EUIAction;
 
-/// The group the preset actions live in, so their labels can be brought up to
-/// date afterwards: "Today, 18:00" is only true until 18:00.
+/// The group that holds the preset actions. The code uses it to update their
+/// labels later: "Today, 18:00" is correct only until 18:00.
 #[cfg(not(evolution_eui_manager))]
 type MenuActionGroup = *mut GtkActionGroup;
 #[cfg(evolution_eui_manager)]
 type MenuActionGroup = *mut EUIActionGroup;
 
-/// Per-composer state, boxed as qdata on the composer.
+/// The state of one composer, kept in a box as qdata on the composer.
 struct SendState {
-    /// The connected account behind the current From identity, once the
-    /// level-2 fetch answered: what a click submits through.
+    /// The connected account of the current From identity, after the level-2
+    /// fetch answers. A click submits through this account.
     link: Option<Arc<AccountLink>>,
-    /// Guards a slow fetch against a From switch: only the newest wins.
+    /// Protects against a slow fetch after a From change: only the newest
+    /// fetch applies.
     generation: u64,
-    /// The submenu's own action, whose sensitivity and tooltip are the gate's
-    /// visible half.
+    /// The action of the submenu. Its sensitivity and tooltip are the visible
+    /// part of the gate.
     menu_action: MenuAction,
-    /// The group the preset actions live in, so their labels can be brought
-    /// up to date: "Today, 18:00" is only true until 18:00.
+    /// The group that holds the preset actions, used to update their labels.
     action_group: MenuActionGroup,
 }
 
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
 
-/// The composer's [`SendState`], while it is alive.
+/// The [`SendState`] of the composer, while the composer is alive.
 ///
 /// # Safety
 ///
-/// `composer` must be a live composer this extension decorated; the reference
-/// must not outlive one main-loop callback.
+/// `composer` must be a live composer that this extension decorated. The
+/// reference must not live longer than one main-loop callback.
 unsafe fn state<'a>(composer: *mut GObject) -> Option<&'a RefCell<SendState>> {
-    // SAFETY: set once in `constructed`; the cast is the one it stored.
+    // SAFETY: `constructed` sets the data one time, with this type.
     unsafe {
         g_object_get_data(composer, STATE_KEY.as_ptr())
             .cast::<RefCell<SendState>>()
@@ -155,71 +159,69 @@ unsafe fn state<'a>(composer: *mut GObject) -> Option<&'a RefCell<SendState>> {
 }
 
 unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: reclaiming the box `constructed` leaked, exactly once.
+    // SAFETY: this takes back the box that `constructed` leaked, one time only.
     drop(unsafe { Box::from_raw(data.cast::<RefCell<SendState>>()) });
 }
 
-/// The instance: `EExtension`'s own state and nothing else.
+/// The instance: only the state of `EExtension`.
 #[repr(C)]
 pub struct JmapSendLaterExtension {
     parent: EExtension,
 }
 
-/// The class: `EExtensionClass`'s own state and nothing else.
+/// The class: only the state of `EExtensionClass`.
 #[repr(C)]
 pub struct JmapSendLaterExtensionClass {
     parent_class: EExtensionClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EExtension's own structs;
-// EExtension derives from GObject.
+// SAFETY: both structs are #[repr(C)], and their first fields are the
+// EExtension structs. EExtension derives from GObject.
 unsafe impl ObjectSubclass for JmapSendLaterExtension {
     const NAME: &'static CStr = c"JmapSendLaterExtension";
     type Instance = JmapSendLaterExtension;
     type Class = JmapSendLaterExtensionClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { e_extension_get_type() }
     }
 
     fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself. Called here,
-        // ahead of registration, because `class_init` may only look it up.
+        // SAFETY: no arguments, and the type initializes itself. The call
+        // occurs here, before registration, because `class_init` can only
+        // look up the type.
         vec![unsafe { e_msg_composer_get_type() }]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `EExtensionClass`.
+        // SAFETY: the first field of `class` is `EExtensionClass`.
         unsafe {
             (*class).parent_class.extensible_type = subclass::registered_type(c"EMsgComposer")
         };
         let object_class = class.cast::<GObjectClass>();
-        // SAFETY: transitively leads with GObjectClass.
+        // SAFETY: through the chain of first fields, `class` starts with
+        // GObjectClass.
         unsafe { (*object_class).constructed = Some(constructed) };
     }
 }
 
-/// The three presets: action name, menu label, and activate handler. The
-/// handlers differ only in the preset they pass on; three small trampolines
-/// keep the connection data a plain composer pointer.
-/// The action name of one preset's menu item.
+/// The action name of the menu item for one preset.
 fn action_name(preset: Preset) -> CString {
     CString::new(format!("jmap-send-later-{}", schedule::slug(preset))).unwrap_or_default()
 }
 
-/// The submenu's own XML, with one item per offered moment plus the custom
-/// entry: built rather than a constant, because which moments are offered
-/// is [`schedule::offered`]'s to say.
+/// The XML of the submenu: one item for each offered moment, plus the custom
+/// item. The function builds it, not a constant, because
+/// [`schedule::offered`] sets which moments to offer.
 ///
-/// 3.52 merges into the `<menubar name='main-menu'>` root's own
-/// `pre-edit-menu`/`custom-actions-placeholder` placeholders (evolution-ews's
-/// own composer extensions use the same pair). 3.55+ merges the same way,
-/// under `<eui><menu id='main-menu'>`, `id`-addressed placeholders and
-/// `<item>` rather than `<menuitem>`, confirmed against a real in-tree
-/// composer extension on this exact structure, `e-composer-to-meeting.c`,
-/// whose own merge nests one `<item>` exactly where this one nests a whole
-/// `<submenu>`.
+/// 3.52 merges into the `pre-edit-menu`/`custom-actions-placeholder`
+/// placeholders of the `<menubar name='main-menu'>` root. The composer
+/// extensions of evolution-ews use the same pair. 3.55+ merges at the same
+/// position, under `<eui><menu id='main-menu'>`, with `id` placeholders and
+/// `<item>` in place of `<menuitem>`. A check against the in-tree composer
+/// extension `e-composer-to-meeting.c` confirms this structure. That file
+/// puts one `<item>` where this file puts a full `<submenu>`.
 #[cfg(not(evolution_eui_manager))]
 fn ui_definition() -> CString {
     let mut items = String::new();
@@ -262,26 +264,26 @@ fn ui_definition() -> CString {
     .unwrap_or_default()
 }
 
-/// This extension's own group name under `EUIManager`, matching how
-/// `e-composer-to-meeting.c` registers its own "composer" group for the same
-/// extensible rather than joining an existing one.
+/// The group name of this extension under `EUIManager`. In the same way,
+/// `e-composer-to-meeting.c` registers its own "composer" group for this
+/// extensible and does not use an existing group.
 #[cfg(evolution_eui_manager)]
 const GROUP_NAME: &CStr = c"jmap-send-later";
 
-/// The submenu's own action and the group its presets live in, built through
-/// whichever menu layer is compiled in: 3.52's pre-existing "core" group and
-/// a `gtk_ui_manager_add_ui_from_string` merge, or 3.55+'s own new group and
-/// `e_ui_manager_add_actions_with_eui_data`'s one call for both.
+/// Builds the action of the submenu and the group for its presets, through
+/// the compiled menu layer. 3.52 uses the existing "core" group and a
+/// `gtk_ui_manager_add_ui_from_string` merge. 3.55+ uses a new group, and
+/// one `e_ui_manager_add_actions_with_eui_data` call does both steps.
 ///
 /// # Safety
 ///
-/// `composer` must be a live composer; `editor` its own editor.
+/// `composer` must be a live composer; `editor` must be its editor.
 #[cfg(not(evolution_eui_manager))]
 unsafe fn build_menu(
     composer: *mut EMsgComposer,
     editor: *mut EHTMLEditor,
 ) -> Option<(MenuAction, MenuActionGroup)> {
-    // SAFETY: a live editor per this function's contract.
+    // SAFETY: the contract of this function makes the editor live.
     let ui_manager = unsafe { e_html_editor_get_ui_manager(editor) };
     // SAFETY: as above.
     let action_group = unsafe { e_html_editor_get_action_group(editor, c"core".as_ptr()) };
@@ -289,10 +291,10 @@ unsafe fn build_menu(
         return None;
     }
 
-    // SAFETY: live objects, checked above; each action's reference passes to
-    // the group.
+    // SAFETY: the objects are live (checked above). The reference of each
+    // action goes to the group.
     unsafe {
-        // The submenu's own action; label only, activated by its items.
+        // The submenu action has only a label; its items have the handler.
         let menu_action = gtk_action_new(
             c"jmap-send-later-menu".as_ptr(),
             translate_static(N_(c"Send _Later")),
@@ -302,10 +304,10 @@ unsafe fn build_menu(
         gtk_action_set_sensitive(menu_action, GFALSE);
         gtk_action_group_add_action(action_group, menu_action);
 
-        // One action per offered moment, plus the custom entry. All of them
-        // share `on_activate`, which recovers the moment from the action's
-        // own name; the labels are filled in by `refresh_labels` below and
-        // again on every re-gate, since what "Today, 18:00" means moves.
+        // One action for each offered moment, plus the custom item. All use
+        // `on_activate`, which gets the moment from the action name.
+        // `refresh_labels` sets the labels below and at each gate run,
+        // because the meaning of "Today, 18:00" changes.
         let mut names: Vec<CString> = schedule::offered()
             .iter()
             .copied()
@@ -324,9 +326,9 @@ unsafe fn build_menu(
                 ptr::null(),
                 ptr::null(),
             );
-            // SAFETY: the composer outlives its own menu's actions (the
-            // action group is the editor's, owned by the composer), so a
-            // plain pointer is the connection data evolution-ews itself uses.
+            // SAFETY: the composer lives longer than the actions of its menu
+            // (the editor owns the group, and the composer owns the editor).
+            // Thus a plain pointer is safe connection data, as in evolution-ews.
             g_signal_connect_data(
                 action.cast(),
                 c"activate".as_ptr(),
@@ -336,7 +338,7 @@ unsafe fn build_menu(
                 0,
             );
             gtk_action_group_add_action(action_group, action);
-            // The group holds its reference now.
+            // The group holds its own reference now.
             g_object_unref(action.cast());
         }
         refresh_labels(action_group);
@@ -358,13 +360,13 @@ unsafe fn build_menu(
 
 /// # Safety
 ///
-/// `composer` must be a live composer; `editor` its own editor.
+/// `composer` must be a live composer; `editor` must be its editor.
 #[cfg(evolution_eui_manager)]
 unsafe fn build_menu(
     composer: *mut EMsgComposer,
     editor: *mut EHTMLEditor,
 ) -> Option<(MenuAction, MenuActionGroup)> {
-    // SAFETY: a live editor per this function's contract.
+    // SAFETY: the contract of this function makes the editor live.
     let ui_manager = unsafe { e_html_editor_get_ui_manager(editor) };
     if ui_manager.is_null() {
         return None;
@@ -389,19 +391,16 @@ unsafe fn build_menu(
         state: ptr::null(),
         change_state: None,
     });
-    // One action per offered moment, plus the custom entry; all share
-    // `on_activate`, which recovers the moment from the action's own name.
+    // One action for each offered moment, plus the custom item. All use
+    // `on_activate`, which gets the moment from the action name.
     for name in &names {
         let is_custom = name.to_bytes().ends_with(b"-custom");
         entries.push(EUIActionEntry {
             name: name.as_ptr(),
             icon_name: ptr::null(),
-            // `refresh_labels` fills in the real "Today, 18:00"-style label
-            // an instant later, but `e_ui_action_group_add` (called
-            // synchronously inside `e_ui_manager_add_actions_with_eui_data`,
-            // before that has a chance to run) warns if an action's label is
-            // NULL at the moment it is added; a placeholder here silences
-            // that without changing what the menu ever actually shows.
+            // `e_ui_action_group_add` warns about a NULL label. It runs inside
+            // `e_ui_manager_add_actions_with_eui_data`, before `refresh_labels`
+            // sets the real label. The menu never shows this placeholder.
             label: if is_custom {
                 translate_static(N_(c"_Custom Time…"))
             } else {
@@ -417,9 +416,9 @@ unsafe fn build_menu(
     }
 
     let ui = ui_definition();
-    // SAFETY: a live manager; `entries`' pointers are 'static or
-    // `translate_static`'s process-lifetime strings, so the array need not
-    // outlive this one call.
+    // SAFETY: the manager is live. The pointers in `entries` are 'static or
+    // process-lifetime strings from `translate_static`. Thus the array must
+    // stay alive only during this call.
     unsafe {
         e_ui_manager_add_actions_with_eui_data(
             ui_manager,
@@ -432,36 +431,37 @@ unsafe fn build_menu(
         );
     }
 
-    // SAFETY: a live manager.
+    // SAFETY: the manager is live.
     let action_group = unsafe { e_ui_manager_get_action_group(ui_manager, GROUP_NAME.as_ptr()) };
     if action_group.is_null() {
         tracing::error!("the Send Later menu could not be merged");
         return None;
     }
-    // SAFETY: a live group just found.
+    // SAFETY: the group is live; the code found it immediately before.
     let menu_action =
         unsafe { e_ui_action_group_get_action(action_group, c"jmap-send-later-menu".as_ptr()) };
     if menu_action.is_null() {
         return None;
     }
-    // SAFETY: a live action just found.
+    // SAFETY: the action is live; the code found it immediately before.
     unsafe { set_action_sensitive(menu_action, false) };
-    // SAFETY: a live group just found.
+    // SAFETY: the group is live; the code found it immediately before.
     unsafe { refresh_labels(action_group) };
     Some((menu_action, action_group))
 }
 
-/// Chains up, merges the menu (insensitive), and arms the gate.
+/// Calls the parent `constructed`, adds the menu (insensitive), and starts
+/// the gate.
 unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapSendLaterExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialised and alive.
+        // SAFETY: the parent class of a live instance is initialized and alive.
         let parent = subclass::parent_class::<GObjectClass>(JmapSendLaterExtension::parent_type());
         if let Some(chained) = parent.and_then(|class| class.constructed) {
             chained(object);
         }
 
-        // SAFETY: GObject passes a live instance; the extensible is the
-        // composer this extension was instantiated for.
+        // SAFETY: GObject gives a live instance. The extensible is the
+        // composer for which GObject made this extension.
         let composer: *mut EMsgComposer =
             e_extension_get_extensible(object.cast::<EExtension>()).cast();
         let editor = e_msg_composer_get_editor(composer);
@@ -481,16 +481,14 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             Box::into_raw(state).cast(),
             Some(drop_state),
         );
-        // 3.52 only: the menu action's reference now lives in the state (via
-        // the group); the local one from `gtk_action_new` was the group's,
-        // released here. 3.55+'s `menu_action` is a borrowed reference from
-        // the manager's own group, never owned here, so there is none to
-        // release.
+        // 3.52 only: the group holds a reference to the menu action. This
+        // releases the local reference from `gtk_action_new`. On 3.55+,
+        // `menu_action` is borrowed from the group, thus nothing is released.
         #[cfg(not(evolution_eui_manager))]
         g_object_unref(menu_action.cast());
 
-        // Re-gate on every From switch, and once for the identity the
-        // composer opened with.
+        // Run the gate at each From change, and one time now for the first
+        // identity.
         let table = e_msg_composer_get_header_table(composer);
         g_signal_connect_data(
             table.cast(),
@@ -509,19 +507,22 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
 
 /// # Safety
 ///
-/// GLib's signal machinery; `composer` is the connection's data pointer.
+/// The GLib signal system calls this; `composer` is the data pointer of the
+/// connection.
 unsafe extern "C" fn on_identity_changed(
     _table: *mut GObject,
     _pspec: *mut GParamSpec,
     composer: gpointer,
 ) {
     guard("JmapSendLaterExtension::identity-changed", (), || {
-        // SAFETY: the composer is alive, its own header table emitted.
+        // SAFETY: the composer is alive, because its header table emitted the
+        // signal.
         unsafe { gate(composer.cast()) };
     });
 }
 
-/// Desensitize with `why`, dropping any stale link.
+/// Makes the menu insensitive with `why` as the tooltip, and removes any old
+/// link.
 ///
 /// # Safety
 ///
@@ -534,8 +535,8 @@ unsafe fn refuse_menu(composer: *mut GObject, why: &CStr) {
     state.link = None;
     state.generation = GENERATIONS.fetch_add(1, Ordering::SeqCst);
     tracing::trace!(why = ?why, "send-later gate: refused");
-    // SAFETY: the action is the group's, alive with the composer; a tooltip
-    // is a plain property.
+    // SAFETY: the group owns the action, which lives as long as the composer.
+    // A tooltip is a plain property.
     unsafe {
         set_action_sensitive(state.menu_action, false);
         set_tooltip(state.menu_action, translate(why));
@@ -544,11 +545,12 @@ unsafe fn refuse_menu(composer: *mut GObject, why: &CStr) {
 
 /// # Safety
 ///
-/// `action` must be a live action of whichever menu layer is compiled in.
+/// `action` must be a live action of the compiled menu layer.
 #[cfg(not(evolution_eui_manager))]
 unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: per the contract; the property machinery copies the string.
+    // SAFETY: the contract makes the action live; the property system copies
+    // the string.
     unsafe {
         g_object_set(
             action.cast(),
@@ -564,47 +566,47 @@ unsafe fn set_tooltip(action: MenuAction, text: String) {
 #[cfg(evolution_eui_manager)]
 unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: per the contract; the setter copies the string.
+    // SAFETY: the contract makes the action live; the setter copies the string.
     unsafe { e_ui_action_set_tooltip(action, text.as_ptr()) };
 }
 
 /// # Safety
 ///
-/// `action` must be a live action of whichever menu layer is compiled in.
+/// `action` must be a live action of the compiled menu layer.
 #[cfg(not(evolution_eui_manager))]
 unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
-    // SAFETY: per the contract.
+    // SAFETY: the contract makes the action live.
     unsafe { gtk_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
 }
 #[cfg(evolution_eui_manager)]
 unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
-    // SAFETY: per the contract.
+    // SAFETY: the contract makes the action live.
     unsafe { e_ui_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
 }
 
-/// The gate, both levels; runs on the main loop.
+/// The gate, both levels. It runs on the main loop.
 ///
 /// # Safety
 ///
 /// `composer` must be a live decorated composer.
 unsafe fn gate(composer: *mut GObject) {
-    // Level 1, synchronous. `None` already refused the menu.
+    // Level 1 is synchronous. On `None`, it has already refused the menu.
     let Some(connect_source) = (unsafe { jmap_connect_source(composer) }) else {
         return;
     };
 
-    // Level 2: ask the server, off the main loop, newest ask wins.
+    // Level 2: ask the server off the main loop. The newest request wins.
     let generation = GENERATIONS.fetch_add(1, Ordering::SeqCst);
     {
         let Some(state) = (unsafe { state(composer) }) else {
-            // SAFETY: releasing the reference level 1 handed over.
+            // SAFETY: this releases the reference that level 1 gave.
             unsafe { g_object_unref(connect_source.cast()) };
             return;
         };
         let mut state = state.borrow_mut();
         state.link = None;
         state.generation = generation;
-        // SAFETY: the action and group live with the composer.
+        // SAFETY: the action and the group live as long as the composer.
         unsafe {
             set_action_sensitive(state.menu_action, false);
             set_tooltip(state.menu_action, translate(CHECKING));
@@ -612,34 +614,35 @@ unsafe fn gate(composer: *mut GObject) {
         }
     }
 
-    // SAFETY: the reference level 1 took, handed over.
+    // SAFETY: this takes the reference that level 1 gave.
     let source = unsafe { SendSource::adopt(connect_source) };
     let work = move || {
-        // SAFETY: the reference level 1 took is the worker's for the whole
-        // closure, released right after.
+        // SAFETY: the worker owns the level-1 reference during the closure
+        // and releases it immediately after this call.
         let outcome = unsafe { link::connect_account(source.as_ptr()) };
         drop(source);
         (generation, outcome)
     };
     let finish = |composer: *mut GObject, (generation, outcome)| {
-        // SAFETY: `with_strong` hands back the live composer.
+        // SAFETY: `with_strong` gives back the live composer.
         unsafe { apply_gate(composer, generation, outcome) };
     };
-    // SAFETY: a live composer per this function's contract.
+    // SAFETY: the contract of this function makes the composer live.
     unsafe { dispatch::spawn_for(composer, work, finish) };
 }
 
-/// Level 1: the source to connect as, when the From identity sends through a
-/// JMAP transport: an owned reference to the transport's collection (or the
-/// transport itself without one). `None` refused the menu already.
+/// Level 1: the source to connect as, if the From identity sends through a
+/// JMAP transport. The result is an owned reference to the collection of the
+/// transport, or to the transport if it has no collection. On `None`, this
+/// function has already refused the menu.
 ///
 /// # Safety
 ///
 /// `composer` must be a live decorated composer, on the main loop.
 unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
-    // SAFETY: a live composer; every reference taken here is released before
-    // return except the one handed to the caller. Registry, header and table
-    // are the composer's own (borrowed).
+    // SAFETY: the composer is live. The code releases each reference that it
+    // takes, except the reference for the caller. The registry, the header,
+    // and the table belong to the composer (borrowed).
     unsafe {
         let table = e_msg_composer_get_header_table(composer.cast());
         let from_header = e_composer_header_table_get_header(table, E_COMPOSER_HEADER_FROM);
@@ -649,8 +652,8 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
             e_composer_header_get_registry(from_header)
         };
         let identity_uid = {
-            // The alias out-parameters name which of the identity's aliases
-            // the From line shows; the gate cares only whose account it is.
+            // The alias out-parameters tell which alias the From line shows.
+            // The gate needs only the account.
             let raw =
                 e_composer_header_table_dup_identity_uid(table, ptr::null_mut(), ptr::null_mut());
             let uid = read_string(raw);
@@ -684,7 +687,7 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
             return None;
         }
 
-        // The connection config lives on the collection when there is one.
+        // The connection configuration is on the collection, if one exists.
         let parent = read_string(e_source_get_parent(transport))
             .and_then(|uid| CString::new(uid).ok())
             .map(|uid| e_source_registry_ref_source(registry, uid.as_ptr()))
@@ -699,12 +702,13 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
     }
 }
 
-/// The identity's transport source, an owned reference: the
-/// `[Mail Submission] TransportUid` hop of the evolution-ews chain.
+/// The transport source of the identity, as an owned reference: the
+/// `[Mail Submission] TransportUid` step of the evolution-ews chain.
 ///
 /// # Safety
 ///
-/// `registry` must be a live registry; `identity` NULL or a live source.
+/// `registry` must be a live registry; `identity` must be NULL or a live
+/// source.
 unsafe fn transport_of(
     registry: *mut ESourceRegistry,
     identity: *mut ESource,
@@ -712,7 +716,8 @@ unsafe fn transport_of(
     if identity.is_null() {
         return None;
     }
-    // SAFETY: a live identity source; the extension and its string are its own.
+    // SAFETY: the identity source is live; the extension and its string
+    // belong to it.
     let transport_uid = unsafe {
         extension_if_present::<ESourceMailSubmission>(identity, E_SOURCE_EXTENSION_MAIL_SUBMISSION)
             .and_then(|submission| {
@@ -720,16 +725,18 @@ unsafe fn transport_of(
             })
     }?;
     let transport_uid = CString::new(transport_uid).ok()?;
-    // SAFETY: a live registry per the contract; the reference is the caller's.
+    // SAFETY: the contract makes the registry live; the caller owns the
+    // reference.
     let transport = unsafe { e_source_registry_ref_source(registry, transport_uid.as_ptr()) };
     (!transport.is_null()).then_some(transport)
 }
 
-/// The level-2 answer, applied only if no newer gate superseded it.
+/// Applies the level-2 answer, but only if no newer gate run replaced it.
 ///
 /// # Safety
 ///
-/// `composer` must be the live composer the gate ran for; main loop.
+/// `composer` must be the live composer for which the gate ran, on the main
+/// loop.
 unsafe fn apply_gate(
     composer: *mut GObject,
     generation: u64,
@@ -749,7 +756,7 @@ unsafe fn apply_gate(
     );
     match outcome {
         Ok(link) if link.features.max_hold.is_some() => {
-            // SAFETY: the action lives with the composer.
+            // SAFETY: the action lives as long as the composer.
             unsafe {
                 set_action_sensitive(state.menu_action, true);
                 set_tooltip(state.menu_action, translate(OFFERED));
@@ -773,18 +780,18 @@ unsafe fn apply_gate(
     }
 }
 
-/// Re-label every preset item against the clock now.
+/// Sets the label of each preset item from the current clock.
 ///
-/// Called at build and on every re-gate. It cannot catch a composer left
-/// open across one of its own suggestions (GtkAction has no "about to be
-/// shown" hook), which is why [`schedule::resolve`] is asked again at click
-/// time: a stale *label* is cosmetic, a stale *target* would schedule into
-/// the past.
+/// The menu build and each gate run call this function. It cannot update a
+/// composer that stays open past one of its suggestions, because GtkAction
+/// has no "about to show" hook. Thus [`schedule::resolve`] runs again at
+/// click time. A stale *label* is only cosmetic. A stale *target* would
+/// schedule into the past.
 ///
 /// # Safety
 ///
-/// `action_group` must be a live `GtkActionGroup` holding this submenu's
-/// actions, on the main loop.
+/// `action_group` must be a live `GtkActionGroup` that holds the actions of
+/// this submenu, on the main loop.
 #[cfg(not(evolution_eui_manager))]
 unsafe fn refresh_labels(action_group: MenuActionGroup) {
     if action_group.is_null() {
@@ -795,9 +802,8 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
             continue;
         };
         let name = action_name(preset);
-        // SAFETY: a live group per the contract; the action is the group's
-        // own (or NULL, which is skipped), and the label is copied by the
-        // property machinery.
+        // SAFETY: the contract makes the group live. The group owns the action
+        // (the loop skips NULL), and the property system copies the label.
         unsafe {
             let action = gtk_action_group_get_action(action_group, name.as_ptr());
             if action.is_null() {
@@ -815,8 +821,8 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
 }
 /// # Safety
 ///
-/// `action_group` must be a live `EUIActionGroup` holding this submenu's
-/// actions, on the main loop.
+/// `action_group` must be a live `EUIActionGroup` that holds the actions of
+/// this submenu, on the main loop.
 #[cfg(evolution_eui_manager)]
 unsafe fn refresh_labels(action_group: MenuActionGroup) {
     if action_group.is_null() {
@@ -827,8 +833,8 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
             continue;
         };
         let name = action_name(preset);
-        // SAFETY: a live group per the contract; the action is the group's
-        // own (or NULL, which is skipped), and the setter copies the label.
+        // SAFETY: the contract makes the group live. The group owns the action
+        // (the loop skips NULL), and the setter copies the label.
         unsafe {
             let action = e_ui_action_group_get_action(action_group, name.as_ptr());
             if action.is_null() {
@@ -840,25 +846,27 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
     }
 }
 
-/// The *Custom Time…* entry: ask for a moment, then schedule to it.
+/// The *Custom Time…* item: ask for a moment, then schedule the message for
+/// it.
 ///
-/// An `EDateEdit` with its time half shown is the whole dialog: the same
-/// widget the vacation page uses for dates, which already knows how to parse
-/// what a person types and offers a calendar besides.
+/// The dialog contains only an `EDateEdit` that shows its time part. The
+/// vacation page uses the same widget for dates. It parses typed text and
+/// also shows a calendar.
 ///
 /// # Safety
 ///
 /// `composer` must be a live decorated composer, on the main loop.
 unsafe fn activate_custom(composer: *mut GObject) {
-    // The limit is the server's, so a dialog is pointless without a link.
+    // The server sets the limit, thus the dialog is not necessary without a
+    // link.
     let Some(max_hold) = (unsafe { state(composer) })
         .and_then(|state| state.borrow().link.as_ref()?.features.max_hold)
     else {
         return;
     };
 
-    // SAFETY: a live composer window per the contract; every widget is
-    // freshly built and owned by the dialog, which is destroyed below.
+    // SAFETY: the contract makes the composer window live. Each widget is new,
+    // and the dialog owns it. The code destroys the dialog below.
     let picked = unsafe {
         let dialog = gtk_dialog_new();
         gtk_window_set_title(dialog.cast(), translate_static(N_(c"Send Later")));
@@ -875,11 +883,10 @@ unsafe fn activate_custom(composer: *mut GObject) {
         );
 
         let field = e_date_edit_new();
-        // Both halves: a send time without a time of day is not a time.
+        // Show the time part too: a send time needs a time of day.
         e_date_edit_set_show_time(field.cast(), GTRUE);
-        // Seeded an hour out, so the dialog opens on a sane, valid moment
-        // rather than on "now", which is already in the past by the time
-        // anyone reads it.
+        // Start one hour ahead, not at "now". "Now" is already in the past
+        // when the user reads it.
         let now = glib_sys::g_date_time_new_now_local();
         if !now.is_null() {
             e_date_edit_set_time(field.cast(), glib_sys::g_date_time_to_unix(now) + 3600);
@@ -897,7 +904,7 @@ unsafe fn activate_custom(composer: *mut GObject) {
         return;
     };
 
-    // SAFETY: no arguments; the object is released immediately.
+    // SAFETY: no arguments; the code releases the object immediately.
     let now = unsafe {
         let now = glib_sys::g_date_time_new_now_local();
         if now.is_null() {
@@ -909,16 +916,16 @@ unsafe fn activate_custom(composer: *mut GObject) {
         }
     };
     let Some(now) = now else {
-        // SAFETY: a live composer window per this function's contract.
+        // SAFETY: the contract of this function makes the composer window live.
         unsafe { refuse_send(composer, translate(NO_CLOCK)) };
         return;
     };
 
-    // `e_date_edit_get_time` answers -1 for "no date set", which lands in
-    // the past like any other stale choice, so one check covers both.
+    // `e_date_edit_get_time` returns -1 for "no date set". That value is in
+    // the past, thus one check covers both cases.
     let hold = chosen - now;
     if hold <= 0 {
-        // SAFETY: a live composer window.
+        // SAFETY: the composer window is live.
         unsafe { refuse_send(composer, translate(NOT_FUTURE)) };
         return;
     }
@@ -932,17 +939,18 @@ unsafe fn activate_custom(composer: *mut GObject) {
     unsafe { schedule_hold(composer, hold) };
 }
 
-/// The one `activate` handler for the whole submenu: which moment was
-/// clicked is recovered from the action's own name, so adding a preset is a
-/// line in [`schedule::offered`] rather than another trampoline.
+/// The `activate` handler of all submenu items. It reads the action name and
+/// gives it to [`dispatch_activation`].
 ///
 /// # Safety
 ///
-/// GLib's signal machinery; `composer` is the connection's data pointer.
+/// The GLib signal system calls this; `composer` is the data pointer of the
+/// connection.
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn on_activate(action: *mut GtkAction, composer: gpointer) {
     guard("JmapSendLaterExtension::activate", (), || {
-        // SAFETY: a live action GLib is emitting on; the name is its own.
+        // SAFETY: GLib emits on this live action; the name belongs to the
+        // action.
         let name = unsafe { read_string(gtk_action_get_name(action)) };
         dispatch_activation(name.as_deref(), composer);
     });
@@ -954,25 +962,25 @@ unsafe extern "C" fn on_activate(
     composer: gpointer,
 ) {
     guard("JmapSendLaterExtension::activate", (), || {
-        // SAFETY: a live action GLib is emitting on; `EUIAction` implements
-        // `GAction`, whose own API is where a name comes from (the type's own
-        // accessors are for the *map* name a stateful action registers
-        // under, a different thing).
+        // SAFETY: GLib emits on this live action. `EUIAction` implements
+        // `GAction`, and the `GAction` API gives the name. The accessors of
+        // `EUIAction` give the *map* name of a stateful action, which is a
+        // different value.
         let name = unsafe { read_string(g_action_get_name(action.cast())) };
         dispatch_activation(name.as_deref(), composer);
     });
 }
 
-/// The one dispatch both menu layers' `activate` trampolines share: which
-/// moment was clicked is recovered from the action's own name (read
-/// differently per layer, see the two `on_activate`s above), so adding a
-/// preset is a line in [`schedule::offered`] rather than another trampoline.
+/// The dispatch that the `activate` handlers of both menu layers share. It
+/// gets the clicked moment from the action name (each layer reads the name
+/// differently, see the two `on_activate` functions). Thus a new preset needs
+/// only a line in [`schedule::offered`], not a new trampoline.
 fn dispatch_activation(name: Option<&str>, composer: gpointer) {
     let Some(slug) = name.and_then(|name| name.strip_prefix("jmap-send-later-")) else {
         return;
     };
     tracing::trace!(slug, "send-later: menu item activated");
-    // SAFETY: the composer is alive, its own menu emitted.
+    // SAFETY: the composer is alive, because its menu emitted the signal.
     unsafe {
         if slug == "custom" {
             activate_custom(composer.cast());
@@ -982,22 +990,22 @@ fn dispatch_activation(name: Option<&str>, composer: gpointer) {
     }
 }
 
-/// What one click carries into the async message build.
+/// The data that one click carries into the async message build.
 struct PendingSchedule {
     link: Arc<AccountLink>,
     hold: u64,
 }
 
-/// A preset click. The moment is resolved *here* rather than read off the
-/// menu label, so a composer left open past its own suggestion schedules to
-/// the next occurrence instead of into the past.
+/// A preset click. The function calculates the moment *here*, not from the
+/// menu label. Thus a composer that stays open past its suggestion schedules
+/// to the next occurrence, not into the past.
 ///
 /// # Safety
 ///
 /// `composer` must be a live decorated composer, on the main loop.
 unsafe fn activate(composer: *mut GObject, preset: Preset) {
     let Some(occurrence) = schedule::resolve(preset) else {
-        // SAFETY: a live composer per this function's contract.
+        // SAFETY: the contract of this function makes the composer live.
         unsafe { refuse_send(composer, translate(NO_CLOCK)) };
         return;
     };
@@ -1005,10 +1013,11 @@ unsafe fn activate(composer: *mut GObject, preset: Preset) {
     unsafe { schedule_hold(composer, occurrence.hold) };
 }
 
-/// Hold for `hold` seconds: check it against the server's limit, then ask the
-/// composer for its message the way Send itself does. Shared by the presets
-/// and by the custom-time dialog, which has already done its own bounds
-/// check but is re-checked here so one place owns the rule.
+/// Holds for `hold` seconds: checks the value against the server limit, then
+/// asks the composer for its message, as Send does. The presets and the
+/// custom-time dialog both use this function. The dialog checks the limit
+/// too, but this function checks it again, so that one location owns the
+/// rule.
 ///
 /// # Safety
 ///
@@ -1020,17 +1029,17 @@ unsafe fn schedule_hold(composer: *mut GObject, hold: u64) {
         let max_hold = link.features.max_hold?;
         Some((link, max_hold))
     }) else {
-        return; // the menu was insensitive; a race clicked it anyway
+        return; // A race let a click through the insensitive menu.
     };
     if hold > max_hold {
-        // SAFETY: a live composer per this function's contract.
+        // SAFETY: the contract of this function makes the composer live.
         unsafe { refuse_send(composer, translate(TOO_FAR)) };
         return;
     }
 
     let pending = Box::new(PendingSchedule { link, hold });
-    // SAFETY: a live composer; the box travels through GIO to `got_message`,
-    // which reclaims it exactly once.
+    // SAFETY: the composer is live. The box goes through GIO to `got_message`,
+    // which takes it back one time only.
     unsafe {
         e_msg_composer_get_message(
             composer.cast(),
@@ -1042,25 +1051,27 @@ unsafe fn schedule_hold(composer: *mut GObject, hold: u64) {
     }
 }
 
-/// The composer's finished message: strip the editor's bookkeeping headers,
-/// write it out, read the envelope off it, and hand everything to the worker.
+/// Receives the finished message of the composer. It removes the bookkeeping
+/// headers of the editor, writes the message, reads the envelope from it, and
+/// gives all of it to the worker.
 ///
 /// # Safety
 ///
-/// GIO calls this with the composer as `source_object` and the box `activate`
-/// leaked as `user_data`.
+/// GIO calls this with the composer as `source_object` and the box that
+/// `schedule_hold` leaked as `user_data`.
 unsafe extern "C" fn got_message(
     source_object: *mut GObject,
     result: *mut GAsyncResult,
     user_data: gpointer,
 ) {
     guard("JmapSendLaterExtension::got-message", (), || {
-        // SAFETY: reclaiming the box `activate` leaked, exactly once.
+        // SAFETY: this takes back the box that `schedule_hold` leaked, one time
+        // only.
         let pending = unsafe { Box::from_raw(user_data.cast::<PendingSchedule>()) };
         let composer = source_object;
 
-        // SAFETY: the composer and result GIO handed over; the message comes
-        // back owned (transfer full), the error likewise, both released below.
+        // SAFETY: GIO gave the composer and the result. The message and the
+        // error come back owned (transfer full); the code releases both below.
         let (written, envelope) = unsafe {
             let mut error: *mut GError = ptr::null_mut();
             let message = e_msg_composer_get_message_finish(composer.cast(), result, &mut error);
@@ -1086,7 +1097,8 @@ unsafe extern "C" fn got_message(
         let bytes = match written {
             Ok(bytes) => bytes,
             Err(unwritable) => {
-                // SAFETY: a fresh GError this arm owns; message copied, freed.
+                // SAFETY: this arm owns a new GError; the code copies its message
+                // and frees it.
                 let why = unsafe {
                     let gerror = unwritable.into_gerror(gio_sys::g_io_error_quark(), 0);
                     let why = read_string((*gerror).message)
@@ -1094,7 +1106,7 @@ unsafe extern "C" fn got_message(
                     g_error_free(gerror);
                     why
                 };
-                // SAFETY: a live composer window, per GIO's source_object.
+                // SAFETY: the GIO source_object is a live composer window.
                 unsafe { refuse_send(composer, translate_with(REFUSED, &[&why])) };
                 return;
             }
@@ -1113,27 +1125,28 @@ unsafe extern "C" fn got_message(
         let finish = |composer: *mut GObject, outcome: Result<String, String>| match outcome {
             Ok(send_at) => {
                 tracing::debug!(send_at, "message scheduled; closing the composer");
-                // SAFETY: `with_strong` hands back the live composer window,
-                // and destroying it is what Evolution's own send success does.
+                // SAFETY: `with_strong` gives back the live composer window.
+                // Evolution also destroys it after a successful send.
                 unsafe { gtk_widget_destroy(composer.cast()) };
             }
-            // SAFETY: as above, still alive and shown.
+            // SAFETY: as above; the window is still alive and shown.
             Err(why) => unsafe { refuse_send(composer, translate_with(REFUSED, &[&why])) },
         };
-        // SAFETY: a live composer window, per GIO's source_object.
+        // SAFETY: the GIO source_object is a live composer window.
         unsafe { dispatch::spawn_for(composer, work, finish) };
     });
 }
 
-/// The composer writes `X-Evolution-*` bookkeeping headers (identity,
-/// transport, Fcc) into the built message; none of them belongs on a server.
+/// Removes the `X-Evolution-*` bookkeeping headers (identity, transport, Fcc)
+/// that the composer writes into the message. The server must not get them.
 ///
 /// # Safety
 ///
 /// `message` must be a live `CamelMimeMessage`.
 unsafe fn strip_evolution_headers(message: *mut CamelMimeMessage) {
-    // SAFETY: a live message per the contract; the dup'd array is freed, the
-    // names are copied before any removal mutates the header list.
+    // SAFETY: the contract makes the message live. The code frees the
+    // duplicated array and copies the names before a removal changes the
+    // header list.
     unsafe {
         let medium = message.cast::<CamelMedium>();
         let headers = camel_medium_dup_headers(medium);
@@ -1159,16 +1172,16 @@ unsafe fn strip_evolution_headers(message: *mut CamelMimeMessage) {
     }
 }
 
-/// The SMTP envelope off the message's own headers: From as `mailFrom`, every
-/// To/Cc/Bcc entry as a recipient, the same set the ordinary transport would
-/// send to.
+/// The SMTP envelope from the headers of the message: From is `mailFrom`,
+/// and each To/Cc/Bcc entry is a recipient. The usual transport sends to the
+/// same set.
 ///
 /// # Safety
 ///
 /// `message` must be a live `CamelMimeMessage`.
 unsafe fn envelope_of(message: *mut CamelMimeMessage) -> Result<Envelope, &'static CStr> {
-    // SAFETY: a live message; the address objects and their strings are the
-    // message's own, read before it is released.
+    // SAFETY: the message is live. The address objects and their strings
+    // belong to the message, and the code reads them before its release.
     unsafe {
         let from = camel_mime_message_get_from(message);
         let mail_from = first_address(from).ok_or(NO_FROM)?;
@@ -1196,7 +1209,7 @@ unsafe fn envelope_of(message: *mut CamelMimeMessage) -> Result<Envelope, &'stat
     }
 }
 
-/// The first address in `list`, when there is one.
+/// The first address in `list`, if there is one.
 ///
 /// # Safety
 ///
@@ -1207,7 +1220,8 @@ unsafe fn first_address(list: *mut CamelInternetAddress) -> Option<String> {
     }
     let mut name: *const std::ffi::c_char = ptr::null();
     let mut address: *const std::ffi::c_char = ptr::null();
-    // SAFETY: a live list per the contract; the strings are its own, copied.
+    // SAFETY: the contract makes the list live; the code copies the strings,
+    // which belong to the list.
     unsafe {
         (camel_internet_address_get(list, 0, &mut name, &mut address) != GFALSE)
             .then(|| read_string(address))
@@ -1215,15 +1229,16 @@ unsafe fn first_address(list: *mut CamelInternetAddress) -> Option<String> {
     }
 }
 
-/// A modal explanation on the composer, which stays open.
+/// Shows a modal explanation on the composer. The composer stays open.
 ///
 /// # Safety
 ///
 /// `composer` must be a live composer window, on the main loop.
 unsafe fn refuse_send(composer: *mut GObject, text: String) {
     let text = CString::new(text).unwrap_or_default();
-    // SAFETY: a live window per the contract; the dialog is run and destroyed
-    // before this returns, and "%s" keeps the text out of printf's hands.
+    // SAFETY: the contract makes the window live. The code runs and destroys
+    // the dialog before it returns. The "%s" format stops printf from parsing
+    // the text.
     unsafe {
         let dialog = gtk_message_dialog_new(
             composer.cast::<GtkWindow>(),
