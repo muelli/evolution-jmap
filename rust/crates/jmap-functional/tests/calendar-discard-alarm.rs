@@ -1,21 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A reminder dismissed in Evolution, through a real, running
+//! A reminder that the user dismisses in Evolution, through a real, running
 //! `evolution-calendar-factory`.
 //!
-//! Evolution's reminder watcher dismisses with
-//! `e_cal_client_discard_alarm_sync()` and ignores the outcome.
-//! `ECalMetaBackend` answers that call with `E_CLIENT_ERROR_NOT_SUPPORTED`,
-//! so without an override the dismissal never leaves the machine and the
-//! reminder fires again on the user's other devices. The backend now does
-//! what EDS's CalDAV backend does: it sets the VALARM's `ACKNOWLEDGED` on the
-//! cached component and saves it, which `jmap-ical` sends as the alert's
-//! `acknowledged` (RFC 8984 section 4.5.2).
+//! The Evolution reminder watcher dismisses with
+//! `e_cal_client_discard_alarm_sync()` and ignores the result.
+//! `ECalMetaBackend` answers that call with `E_CLIENT_ERROR_NOT_SUPPORTED`.
+//! Without an override, the dismissal stays on the machine and the reminder
+//! occurs again on the other devices of the user. The backend does what the
+//! EDS CalDAV backend does: it sets `ACKNOWLEDGED` on the VALARM of the
+//! cached component and saves it. `jmap-ical` sends this as the
+//! `acknowledged` of the alert (RFC 8984 section 4.5.2).
 //!
 //! `tests/functional/cal-discard-alarm-client.c` finds the seeded event,
-//! takes the alarm uid libecal reports for it and dismisses it with the
-//! same arguments the reminder watcher passes.
+//! gets the alarm uid that libecal reports for it, and dismisses it with the
+//! same arguments as the reminder watcher.
 
 use std::collections::BTreeMap;
 
@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 const ONE_OFF: &str = "Dentist";
 const SERIES: &str = "Weekly sync";
 const START: &str = "2026-11-02T09:00:00";
-/// An occurrence of [`SERIES`] that is not its first, in the form the
-/// reminder watcher passes: the alarm instance's own recurrence id.
+/// An occurrence of [`SERIES`] that is not the first, in the form that the
+/// reminder watcher gives: the recurrence id of the alarm instance.
 const LATER_OCCURRENCE: &str = "20261116T090000Z";
 const ALERT_KEY: &str = "r1";
 const MEETING: &str = "Design review";
@@ -62,8 +62,8 @@ fn reminder() -> Value {
     })
 }
 
-/// What one run saw: the client's observations, and the event's alerts and
-/// the scheduling messages as the mock holds them afterwards.
+/// The result of one run: the client observations, and the alerts of the
+/// event and the scheduling messages in the mock after the run.
 struct Run {
     observed: BTreeMap<String, String>,
     alerts: Option<BTreeMap<String, Value>>,
@@ -77,7 +77,7 @@ impl Run {
     }
 }
 
-/// The seeded event's shape.
+/// The shape of the seeded event.
 #[derive(Clone, Copy, PartialEq)]
 enum Shape {
     OneOff,
@@ -102,7 +102,7 @@ fn meeting_participants() -> BTreeMap<String, Value> {
     .into()
 }
 
-/// Seeds one event with one reminder and dismisses it at `rid`.
+/// Seed one event with one reminder and dismiss it at `rid`.
 ///
 /// With `refuse_scheduling`, the mock refuses every `CalendarEvent/set`
 /// that carries `sendSchedulingMessages`.
@@ -192,8 +192,8 @@ fn run(name: &str, summary: &str, shape: Shape, refuse_scheduling: bool, rid: Op
     }
 }
 
-/// The dismissal succeeded, EDS holds it, and the server holds it on the
-/// same alert, with nothing else about the reminder changed.
+/// The dismissal succeeded, and EDS and the server both hold it on the same
+/// alert. No other part of the reminder changed.
 fn assert_dismissed(run: &Run) {
     assert_eq!(run.seen("alarms"), Some("1"), "{}", run.report);
     assert_eq!(run.seen("discarded"), Some("1"), "{}", run.report);
@@ -232,9 +232,9 @@ fn dismissing_a_reminder_reaches_the_server() {
     assert_dismissed(&run);
 }
 
-/// The reminder watcher names the occurrence that fired. A series with no
-/// detached occurrence holds its reminder on the master, so that is where
-/// the dismissal goes, as EDS's CalDAV backend does.
+/// The reminder watcher names the occurrence that fired. A series without a
+/// detached occurrence holds its reminder on the master. Thus the dismissal
+/// goes to the master, as in the EDS CalDAV backend.
 #[test]
 fn dismissing_an_occurrences_reminder_acknowledges_the_series() {
     let run = run(
@@ -247,10 +247,10 @@ fn dismissing_an_occurrences_reminder_acknowledges_the_series() {
     assert_dismissed(&run);
 }
 
-/// A dismissal is the user's own business. The reminder watcher passes no
+/// A dismissal is private to the user. The reminder watcher gives no
 /// operation flags, so the backend must not ask the server to send
-/// scheduling messages for it (draft-ietf-jmap-calendars section 5.9.2).
-/// The mock refuses any `/set` that asks, so a request that asks fails.
+/// scheduling messages (draft-ietf-jmap-calendars section 5.9.2). The mock
+/// refuses each `/set` that asks for them, so such a request fails.
 #[test]
 fn dismissing_a_meetings_reminder_never_asks_the_server_to_mail_the_guests() {
     let run = run("meeting", MEETING, Shape::Meeting, true, None);

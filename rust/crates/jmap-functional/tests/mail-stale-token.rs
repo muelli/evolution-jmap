@@ -1,48 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The hourly-re-consent acceptance test, made headless.
+//! The headless acceptance test for the hourly re-consent fix.
 //!
-//! The hourly re-consent fix is code-complete at all four call sites, but its
-//! acceptance test was "the operator leaves Evolution open for hours and sees
-//! no consent window": slow, unrepeatable, and silently invalid if the host
-//! suspends. An earlier attempt concluded a real test could not be built,
-//! "because the refresh path needs a real `CamelService` registered on a real
-//! `CamelSession` (`EMailSession`), which no headless test on this VM can
-//! build".
+//! The manual acceptance test was "leave Evolution open for hours and see no
+//! consent window". That test is slow, not repeatable, and not valid if the
+//! host suspends. An earlier analysis said that a headless test needs a real
+//! `CamelService` on a real `CamelSession` (`EMailSession`), and that this VM
+//! cannot build one.
 //!
-//! It can. `tests/functional/mail-client.c` has been building a real
-//! `CamelService` since the mail leg landed — the store Camel opens after
-//! finding the provider through `libcameljmap.urls`, in the process the
-//! provider is dlopened into. What a plain `CamelSession` does not do is
-//! answer `get_oauth2_access_token_sync`, and that is a class method a test
-//! session can override the same way `EMailSession` overrides it. See
+//! This is not correct. `tests/functional/mail-client.c` builds a real
+//! `CamelService`: the store that Camel opens after it finds the provider
+//! through `libcameljmap.urls`, in the process that loads the provider. A
+//! plain `CamelSession` does not answer `get_oauth2_access_token_sync`, but a
+//! test session can override this class method as `EMailSession` does. See
 //! `tests/functional/mail-stale-token-client.c`.
 //!
-//! ## What each test holds the provider to
+//! ## What each test examines
 //!
-//! Both drive the same program through the same three steps — connect, list,
-//! then list again after the server has changed its mind about which bearer
-//! token it accepts — and differ in one thing: whether the token the session
-//! can fetch is the new one.
+//! The two tests run the same program through the same three steps: connect,
+//! list, then list again after the server changes the bearer token that it
+//! accepts. The only difference is whether the session can fetch the new
+//! token.
 //!
-//! The interesting assertion in both is a *count*, not a success. A provider
-//! that answered the second listing by tearing the connection down and going
-//! back to the session for credentials would also produce a folder tree, and
-//! would be exactly the bug this test exists to catch.
+//! The important assertion in the two tests is a *count*, not a success. A
+//! provider that closes the connection and asks the session for credentials
+//! again also gives a folder tree. That is the bug under test.
 //!
-//! `camel_session_authenticate_sync` is where that shows. `jmap-mail`'s
-//! `connect_sync` (`service.rs`) names [`jmap_mail::sasl::MECHANISM`] and
-//! hands the connect off to `camel_session_authenticate_sync`, exactly as
-//! `mail_ui_session_authenticate_sync` does in the running application. A
-//! mechanism that needs no password buys a silent attempt at this provider's
-//! own `authenticate_sync` before any prompt, so a healthy connect *does*
-//! reach the session once — that is what makes the silent attempt possible
-//! at all, not a bug — and only a rejected attempt escalates further, to the
-//! credentials prompter, which for an OAuth2-method source is the consent
-//! window. So a healthy run's baseline is exactly one session-level call,
-//! made at connect time, and the escalation this test watches for is any
-//! call *beyond* that baseline.
+//! `camel_session_authenticate_sync` shows the bug. `connect_sync` of
+//! `jmap-mail` (`service.rs`) names [`jmap_mail::sasl::MECHANISM`] and calls
+//! `camel_session_authenticate_sync`, as `mail_ui_session_authenticate_sync`
+//! does in the application. A mechanism that needs no password gets a silent
+//! attempt at the `authenticate_sync` of the provider before a prompt. Thus a
+//! correct connect calls the session one time. Only a rejected attempt goes on
+//! to the credentials prompter, which is the consent window for an
+//! OAuth2-method source. The baseline is one session-level call at connect
+//! time. The escalation under test is each call *after* that baseline.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,27 +44,23 @@ use std::time::{Duration, Instant};
 
 use jmap_functional::{Session, observations, required_path};
 
-/// The bearer token the account connects with, and the one the mock is
-/// switched to while that connection is open. Distinct strings rather than a
-/// counter, so a mock that had somehow kept accepting the first one shows up
-/// as the wrong token in a request rather than as a passing test.
+/// The bearer token of the first connect, and the token that the mock
+/// accepts after the rotation. Different strings make a mock that still
+/// accepts the first token visible as a wrong token in a request.
 const STALE_TOKEN: &str = "stale-access-token";
 const FRESH_TOKEN: &str = "fresh-access-token";
 
-/// How long the harness waits for the client to say its connection is up.
-/// Generous for the same reason the ctest timeout is: it covers activating
-/// the registry and a first connect.
+/// The maximum time that the harness waits for the client to connect. It
+/// includes the activation of the registry and the first connect.
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// `docs/examples/jmap-mock-standalone-mail.source`, with the mock's
-/// ephemeral port filled in and one line changed: `[Authentication] Method`,
-/// which EDS binds to `CamelNetworkSettings:auth-mechanism` and which
-/// `jmap_mail::oauth2::uses_oauth2` reads to decide this is an OAuth 2.0
-/// account. `OAuth2` is the generic spelling
-/// (`jmap_backend_core::oauth2::OAUTH2_METHOD`) rather than the name of a
-/// registered `EOAuth2Service`: no service has to exist for the provider to
-/// know it should ask its session for a token, and asking the session is the
-/// whole of what this test is about.
+/// `docs/examples/jmap-mock-standalone-mail.source`, with the ephemeral port
+/// of the mock and a changed `[Authentication] Method`. EDS binds that field
+/// to `CamelNetworkSettings:auth-mechanism`, and
+/// `jmap_mail::oauth2::uses_oauth2` reads it to identify an OAuth 2.0 account.
+/// `OAuth2` is the generic name (`jmap_backend_core::oauth2::OAUTH2_METHOD`),
+/// not a registered `EOAuth2Service`. The provider asks its session for a
+/// token without a registered service, and this test examines only that step.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -91,14 +80,13 @@ fn keyfile(port: u16) -> String {
     )
 }
 
-/// One run of the client against a freshly seeded mock, with the token
-/// rotated underneath it while it waits at its handshake.
+/// Runs the client against a new mock, and rotates the token while the
+/// client waits at its handshake.
 ///
-/// `refresh_serves_fresh_token` is the one thing the two tests differ in:
-/// whether the file the client's session answers `get_oauth2_access_token_
-/// sync` out of is updated along with the mock. `false` is a stored refresh
-/// token that no longer works — the case that must still escalate, and must
-/// do so exactly once.
+/// `refresh_serves_fresh_token` is the only difference between the two
+/// tests. It sets whether the harness also updates the file from which the
+/// client session answers `get_oauth2_access_token_sync`. `false` is a stored
+/// refresh token that does not operate. That case must escalate exactly once.
 fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     let client = required_path("JMAP_FUNCTIONAL_MAIL_STALE_TOKEN_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
@@ -130,17 +118,14 @@ fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_camel_provider(&module, &urls);
 
-    // The token the client's session hands out, and the two files the two
-    // sides meet at. All three live beside each other under the session root,
-    // which the next run wipes.
+    // The token file of the client session, and the two handshake files.
+    // All three are in the session root, which the next run deletes.
     let token_path = session.write_input("access-token", STALE_TOKEN);
     let ready_path = token_path.with_file_name("client-ready");
     let go_path = token_path.with_file_name("harness-go");
 
-    // The rotation happens while `Session::run` blocks, so it happens on a
-    // thread. Everything it touches is either owned by it or `Sync`: the mock
-    // handle is shared by reference across the scope, and the two paths are
-    // its own.
+    // The rotation runs on a thread because `Session::run` blocks. The
+    // thread borrows the mock handle and the paths across the scope.
     let finished = AtomicBool::new(false);
     let output = thread::scope(|scope| {
         let rotator = scope.spawn(|| {
@@ -163,9 +148,8 @@ fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
                 &go_path.to_string_lossy(),
             ],
         );
-        // Releases the rotator if the client died before ever writing its
-        // ready file — otherwise this scope would block until the timeout for
-        // a client that is already gone.
+        // Release the rotator if the client stopped before it wrote its ready
+        // file. Otherwise the scope blocks until the timeout.
         finished.store(true, Ordering::Release);
         rotator.join().expect("the rotating thread panicked");
         output
@@ -183,24 +167,23 @@ fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     }
 }
 
-/// What one [`run`] produced. The client's stdout is kept apart from the
-/// report so that [`observations`] reads only the lines the client meant as
-/// observations — EDS and Camel are talkative on stderr, and a warning
-/// containing an `=` would otherwise be read as one.
+/// The result of one [`run`]. The client stdout is separate from the report,
+/// so [`observations`] reads only client observations. EDS and Camel write
+/// many warnings to stderr, and a warning with an `=` can look like an
+/// observation.
 struct Run {
     status: std::process::ExitStatus,
     stdout: String,
     report: String,
-    /// How many requests the mock refused with a 401 across the whole run —
-    /// the server's own count of the thing being provoked, from the far side
-    /// of the wire. Without it the counts the client reports could all be
-    /// right for a run in which the token never actually went stale.
+    /// The number of 401 responses from the mock during the run. Without
+    /// this server-side count, the client counts can be correct for a run in
+    /// which the token did not become stale.
     unauthorized_responses: usize,
 }
 
-/// Wait for the client's `ready`, change which bearer token the mock accepts
-/// (and, in the positive case, which one the client's session will hand
-/// back), then create `go`.
+/// Waits for the `ready` file of the client, changes the bearer token that
+/// the mock accepts (and, in the positive case, the token of the client
+/// session), then creates `go`.
 fn rotate(
     server: &jmap_mock::MockServer,
     token_path: &Path,
@@ -212,18 +195,16 @@ fn rotate(
     let deadline = Instant::now() + READY_TIMEOUT;
     while !ready_path.exists() {
         if finished.load(Ordering::Acquire) || Instant::now() > deadline {
-            // No `go` file: the client is either gone already or is about to
-            // fail its own handshake and say so, which is a better failure
-            // than one asserted from here.
+            // No `go` file. The client stopped, or its handshake fails with a
+            // better message than an assertion here can give.
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
 
-    // The order matters and is the real-world one: the server stops accepting
-    // the old token, and only then is a new one obtainable. Reversed, the
-    // client could fetch the fresh token before the mock had a use for it and
-    // the test would pass without ever producing a 401.
+    // Keep this order. The server first refuses the old token, then the new
+    // token becomes available. In the opposite order, the client can fetch
+    // the new token first, and the test passes without a 401.
     server.set_bearer_token(FRESH_TOKEN);
     if refresh_serves_fresh_token {
         std::fs::write(token_path, FRESH_TOKEN).expect("write the refreshed access token");
@@ -232,8 +213,8 @@ fn rotate(
     std::fs::write(go_path, "go").expect("write the harness's go file");
 }
 
-/// The positive case: a stored refresh token that still works. The
-/// operation the user asked for must simply happen.
+/// The positive case: the stored refresh token operates. The operation must
+/// complete.
 #[test]
 fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     let Run {
@@ -247,10 +228,9 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     );
     let seen = observations(&stdout);
 
-    // Before anything else, because it is what says the account this test
-    // built is the kind of account it thinks it is. `uses_oauth2` reads this
-    // field; if the keyfile's `[Authentication] Method` did not reach it,
-    // every observation below would be about a password account.
+    // Assert this first. `uses_oauth2` reads this field. If the keyfile
+    // `[Authentication] Method` does not get to it, all observations below
+    // are about a password account.
     assert_eq!(
         seen.get("auth-mechanism"),
         Some(&"OAuth2"),
@@ -266,19 +246,16 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
         "the client failed with {status}\n{report}",
     );
 
-    // The connect fetched exactly one token, through the session — which is
-    // already more than the old unit tests could see: it is the provider
-    // asking a real `CamelSession` for a real account's token.
+    // The connect fetched exactly one token from a real `CamelSession`.
     assert_eq!(
         seen.get("token-fetches-before-rotation"),
         Some(&"1"),
         "the connect did not fetch exactly one access token through the session\n{report}"
     );
-    // Exactly one — the connect's own silent attempt through the named
-    // mechanism, which is what buys an OAuth 2.0 account its one try before
-    // any prompt. A second call here would mean that attempt was rejected
-    // and the connect already fell back to the session's interactive loop,
-    // which would make the count after the rotation impossible to read.
+    // Exactly one: the silent attempt of the connect through the named
+    // mechanism. A second call means that the session rejected the attempt
+    // and started its interactive loop. Then the count after the rotation has
+    // no meaning.
     assert_eq!(
         seen.get("authenticate-calls-before-rotation"),
         Some(&"1"),
@@ -291,8 +268,8 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
         "the first listing is not the mock's two mailboxes\n{report}"
     );
 
-    // The whole point. The server has refused the token the open connection
-    // carries, and the user notices nothing.
+    // The main assertion. The server refused the token of the open
+    // connection, and the user sees nothing.
     assert_eq!(
         seen.get("second-listing-ok"),
         Some(&"1"),
@@ -304,11 +281,9 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
         "the retried listing did not answer with the mock's mailboxes\n{report}"
     );
 
-    // How it succeeded, not merely that it did. One extra token fetch is a
-    // refresh; a call *beyond* the one already counted before rotation would
-    // be the provider going back to the session for credentials a second
-    // time, which in the running application is the hourly re-consent window
-    // this test exists to stop.
+    // How the retry succeeded. One more token fetch is a refresh. A call
+    // *after* the call before the rotation is a second credentials request.
+    // In the application, that is the hourly re-consent window.
     assert_eq!(
         seen.get("token-fetches"),
         Some(&"2"),
@@ -321,22 +296,17 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
          running application that is the hourly re-consent window this test exists to avoid\n{report}"
     );
 
-    // From the server's own side of the wire, and the assertion that makes
-    // the rest of them mean anything: exactly one request was refused. Zero
-    // would be a run in which the token never went stale at all — every
-    // count above would still read the same, and the test would be asserting
-    // nothing.
+    // The server refused exactly one request. Without this assertion, a run
+    // with no stale token gives the same counts, and the test proves nothing.
     assert_eq!(
         unauthorized_responses, 1,
         "the mock refused {unauthorized_responses} requests, not the single stale-token one\n{report}"
     );
 }
 
-/// The negative case: the refresh produces a token the server also refuses —
-/// a revoked account, or a refresh token that has itself expired. That has to
-/// fail, and it has to fail after exactly one attempt at refreshing. A retry
-/// loop here is worse than no retry at all: it is the hourly re-consent
-/// window arriving repeatedly.
+/// The negative case: the server also refuses the refreshed token (a revoked
+/// account, or an expired refresh token). The operation must fail after
+/// exactly one refresh. A retry loop shows the re-consent window many times.
 #[test]
 fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
     let Run {
@@ -371,32 +341,27 @@ fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
         "the failing refresh was attempted more than once, or not at all\n{report}"
     );
 
-    // Two refusals, not more: the listing, and the one retry it was given.
-    // A provider that kept retrying would climb this count, which is the
-    // failure mode this test exists for — the counters the client reports
-    // could not tell a second retry apart from a second token fetch.
+    // Two refusals: the listing and its one retry. A retry loop increases
+    // this count. The client counters cannot tell a second retry from a
+    // second token fetch.
     assert_eq!(
         unauthorized_responses, 2,
         "the mock refused {unauthorized_responses} requests, not the attempt and its single retry\n{report}"
     );
 
-    // The user is told something rather than nothing. Which message it is
-    // belongs to `jmap-mail`'s own tests; that there is one is this test's.
+    // The user gets an error message. The tests of `jmap-mail` examine its
+    // text.
     assert!(
         seen.get("second-listing-error")
             .is_some_and(|message| !message.is_empty()),
         "the failed listing reported no error message at all\n{report}"
     );
 
-    // "Escalates exactly once" — and this is where the count says something
-    // this test did not expect going in, so it is asserted rather than
-    // described: the escalation is *not* inside the failing operation. The
-    // store reports the 401 to whoever asked for the folder tree and stops;
-    // nothing goes back to the session beyond the one silent attempt already
-    // counted before rotation. Which means the prompter is reached, at most,
-    // once per reconnect rather than once per failed operation — strictly
-    // better than "exactly once", and the assertion here is what would
-    // notice if that ever changed.
+    // The escalation is *not* in the failed operation. The store gives the
+    // 401 to the caller of the folder tree and stops. No call goes to the
+    // session after the silent attempt before the rotation. Thus the prompter
+    // occurs at most once for each reconnect, not once for each failed
+    // operation. This assertion finds a change of that behaviour.
     assert_eq!(
         seen.get("authenticate-calls"),
         Some(&"1"),

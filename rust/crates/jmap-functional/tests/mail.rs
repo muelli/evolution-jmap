@@ -1,46 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, mail: Camel finding `libcameljmap.so` by the `.urls` file
-//! beside it, opening a store from a `.source` keyfile, and serving the
-//! folder tree and the inbox out of the mock JMAP server.
+//! Mail: Camel finds `libcameljmap.so` through the `.urls` file next to it,
+//! opens a store from a `.source` keyfile, and gets the folder tree and the
+//! inbox from the mock JMAP server.
 //!
-//! The third leg, and the one that is not a mirror of the other two. An
-//! address book or calendar backend is dlopened by a factory daemon EDS
-//! ships, found by being a file in a directory; a Camel provider is dlopened
-//! by the *mail client's own process*, and only when something asks for a
-//! protocol that a `.urls` file in Camel's provider directory claims. That
-//! is a whole loading mechanism no other test in this repository exercises:
-//! `jmap-mail`'s own tests link the provider in, so they cannot tell whether
-//! Camel would ever have found it. Here nothing links it — the client is a
-//! plain libcamel consumer, and the provider is a file in a directory.
+//! The mail test is different from the address book and calendar tests. An
+//! EDS factory daemon loads those backends from a directory. The *mail client
+//! process* loads a Camel provider, and only when a request names a protocol
+//! that a `.urls` file in the Camel provider directory claims. The tests of
+//! `jmap-mail` link the provider, so they cannot show that Camel finds it.
+//! Here, the client is a plain libcamel consumer and does not link the
+//! provider.
 //!
-//! Everything is checked from the two ends and nothing in between: the
-//! client program says what Camel gave it, the mock says what the provider
-//! asked the server for.
+//! The test examines only the two ends. The client program reports what
+//! Camel gave it, and the mock reports the requests of the provider.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_mock::EmailSeed;
 
-/// The two messages the mock's inbox is seeded with. Named here rather than
-/// in the client, which reports what it read and holds no opinion about it.
+/// The two messages in the inbox of the mock. The client only reports what
+/// it read.
 ///
-/// Every list the client reports is sorted, so these are written in the
-/// order they sort in: the assertions compare sets, and a set spelled out of
-/// order would fail for a reason that has nothing to do with the provider.
+/// The client sorts each list, so these constants are in sorted order. In a
+/// different order, the set comparisons fail for a reason not related to the
+/// provider.
 const FIRST_SUBJECT: &str = "Lunch on Tuesday";
 const SECOND_SUBJECT: &str = "Re: the quarterly numbers";
 const FIRST_BODY: &str = "One o'clock at the usual place.";
 const SECOND_BODY: &str = "They are fine.";
 
 /// The keyfile from `docs/examples/jmap-mock-standalone-mail.source`, with
-/// the mock's ephemeral port filled in — the *account*, and not the identity
-/// or the transport that recipe also writes, because nothing here sends.
+/// the ephemeral port of the mock. Only the *account*, not the identity or
+/// the transport, because this test sends nothing.
 ///
-/// Kept as a literal for the reason the other two tests give: a change to the
-/// documented recipe should fail this test loudly rather than quietly
-/// retargeting it. `jmap-mail`'s `recipe.rs` is what holds the documented
-/// files to what they claim to mean.
+/// It is a literal, so a change to the documented recipe makes this test
+/// fail. `recipe.rs` of `jmap-mail` examines the documented files.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -67,9 +62,7 @@ fn camel_opens_the_store_and_serves_the_inbox() {
 
     let server = jmap_mock::MockServer::builder().start();
     let account_id = server.account_id();
-    // Three mailboxes with their JMAP roles and two messages in the inbox —
-    // the same shape `jmap-mockd` seeds for the manual recipe, written out
-    // here so the assertions below name what they are asserting.
+    // Five mailboxes with their JMAP roles and two messages in the inbox.
     {
         let state = server.state();
         let mut state = state.lock().expect("mock state lock");
@@ -79,19 +72,17 @@ fn camel_opens_the_store_and_serves_the_inbox() {
 
         let inbox = account.seed_mailbox("Inbox", Some("inbox"));
         account.seed_mailbox("Sent", Some("sent"));
-        // Seeded unsubscribed on purpose, opposite of every other mailbox
-        // here: the `CamelSubscribable` block below subscribes it, and a
-        // write that starts from the value it is asked to set would prove
-        // nothing.
+        // Drafts starts unsubscribed, as the only mailbox. The
+        // `CamelSubscribable` block subscribes it, so the write must change
+        // the value.
         let drafts = account.seed_mailbox("Drafts", Some("drafts"));
         account
             .mailboxes
             .get_mut(&drafts)
             .expect("the mailbox just seeded")
             .is_subscribed = Some(false);
-        // `get_trash_folder_sync`/`get_junk_folder_sync`: purpose-lookups the
-        // same family as `get_inbox_folder_sync` above, but each answered
-        // from a different role.
+        // For `get_trash_folder_sync` and `get_junk_folder_sync`, which find
+        // a folder from its role, as `get_inbox_folder_sync` does.
         account.seed_mailbox("Trash", Some("trash"));
         account.seed_mailbox("Junk", Some("junk"));
 
@@ -129,13 +120,11 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Before the exit status, because this is the observation that says
-    // *why* a failure happened. Camel keys its provider table by protocol,
-    // so the account's `BackendName`, the one line in `libcameljmap.urls`
-    // and the string `camel_provider_module_init` registers are three
-    // spellings that have to agree — and when they do not, every later step
-    // fails with "no provider available for protocol", a message about the
-    // connect that is really about a typo in one of three files.
+    // Assert this before the exit status, because it tells *why* a failure
+    // occurred. Camel finds providers by protocol. The account `BackendName`,
+    // the line in `libcameljmap.urls` and the `camel_provider_module_init`
+    // string must be the same. If not, each step fails with "no provider
+    // available for protocol", which hides a typo in one of the three files.
     assert_eq!(
         seen.get("protocol"),
         Some(&"jmap"),
@@ -154,18 +143,17 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         output.status
     );
 
-    // The mock's three mailboxes, and only those: the provider builds the
-    // tree from one `Mailbox/get`.
+    // Only the five mailboxes of the mock: the provider builds the tree from
+    // one `Mailbox/get`.
     assert_eq!(
         seen.get("folders"),
         Some(&"Drafts,Inbox,Junk,Sent,Trash"),
         "the folder tree is not the mock's five mailboxes\n{report}"
     );
 
-    // `CamelSubscribable`: the tick beside a folder in the subscription
-    // editor, driven through the real vtable rather than the plain decision
-    // function `jmap-mail`'s own `tests/subscriptions.rs` calls directly.
-    // Checked locally first...
+    // `CamelSubscribable`: the check mark of a folder in the subscription
+    // editor, through the real vtable. `tests/subscriptions.rs` of
+    // `jmap-mail` calls the plain decision function. First, the local state.
     assert_eq!(
         seen.get("sent-subscribed-initially"),
         Some(&"1"),
@@ -187,9 +175,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "subscribe_folder_sync did not flip the store's own held answer for Drafts\n{report}"
     );
 
-    // ...then against the mock's own copy, the decisive half: a write that
-    // silently failed to reach the server would still leave Camel's own
-    // in-memory answer, checked above, looking right.
+    // Then the copy of the mock. If the write does not get to the server,
+    // the in-memory state of Camel above is still correct.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
@@ -217,19 +204,18 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         );
     }
 
-    // By role rather than by name. Camel asks the store which folder is the
-    // inbox and the provider answers from the mailbox's JMAP role, so a
-    // provider that ignored roles would hand back whatever it opened first.
+    // By role, not by name. The provider identifies the inbox from the JMAP
+    // role of the mailbox. A provider that ignores roles returns the first
+    // folder that it opened.
     assert_eq!(
         seen.get("inbox-full-name"),
         Some(&"Inbox"),
         "the store's inbox is not the mailbox with the inbox role\n{report}"
     );
 
-    // `get_trash_folder_sync`/`get_junk_folder_sync`: the same by-role lookup
-    // as the inbox above, each answered from a different role rather than
-    // the inherited vTrash/vJunk virtual folders — see `folders.rs`'s own
-    // module doc for why those would be the wrong answer for a JMAP account.
+    // `get_trash_folder_sync` and `get_junk_folder_sync` use the role, not
+    // the inherited vTrash/vJunk virtual folders. The module doc of
+    // `folders.rs` tells why those are incorrect for a JMAP account.
     assert_eq!(
         seen.get("trash-full-name"),
         Some(&"Trash"),
@@ -252,22 +238,19 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the summaries Camel built are not the seeded messages\n{report}"
     );
 
-    // And both whole messages, which is a different request again: the
-    // summaries come from `Email/query` and `Email/get`, a body from a blob
-    // download that is a plain HTTP GET. Sorted on the client side, so this
-    // is the set of bodies and not an order.
+    // The two full messages use a different request. The summaries come
+    // from `Email/query` and `Email/get`, a body from a blob download (a plain
+    // HTTP GET). The client sorts the bodies, so this compares a set.
     assert_eq!(
         seen.get("message-bodies"),
         Some(&format!("{FIRST_BODY},{SECOND_BODY}").as_str()),
         "the message bodies did not survive the download\n{report}"
     );
 
-    // `synchronize_sync`: the write half nothing above exercises. Marking one
-    // message important is a local Camel flag until a synchronise carries it
-    // to the server as a keyword — checked from both ends, not merely that
-    // the call returned successfully, since a synchronise that swallowed a
-    // write failure instead of reporting one would still read the flag back
-    // out of Camel's own in-memory row.
+    // `synchronize_sync`, the write path. A flag stays local in Camel until a
+    // synchronization sends it to the server as a keyword. The test examines
+    // the two ends. If the synchronization hides a write failure, the
+    // in-memory row of Camel still shows the flag.
     let flagged_uid = match seen.get("flagged-uid") {
         Some(uid) => (*uid).to_string(),
         None => panic!("the client never named a message to flag\n{report}"),
@@ -278,8 +261,7 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the flag did not survive a fresh read of the row after synchronize_sync\n{report}"
     );
 
-    // The other end: the mock's own copy of the message, not merely that
-    // `synchronize_sync` returned success locally.
+    // The other end: the copy of the message in the mock.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
@@ -303,9 +285,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         );
     }
 
-    // The other end: what the server was actually asked for. Nothing here is
-    // scheduled or refreshed in the background — every call above is
-    // synchronous — so these are not a race.
+    // The other end: the requests that the server got. All calls above are
+    // synchronous, so there is no race.
     let calls = server.method_calls();
     assert!(
         calls.iter().any(|call| call == "Email/set"),
@@ -318,29 +299,25 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         );
     }
 
-    // `create_folder_sync`, driven through the real vtable rather than the
-    // plain decision function `jmap-mail`'s own unit tests call directly.
+    // `create_folder_sync` through the real vtable. The unit tests of
+    // `jmap-mail` call the plain decision function.
     assert_eq!(
         seen.get("create-folder-name"),
         Some(&"Receipts"),
         "the created folder's full name is not the mailbox name asked for\n{report}"
     );
 
-    // The provider's own claim: Camel's `folder_created` announcement named
-    // the same folder the return value did.
+    // The listing of the store contains the new folder.
     assert_eq!(
         seen.get("folders-after-create"),
         Some(&"Drafts,Inbox,Junk,Receipts,Sent,Trash"),
         "the store's own listing did not gain the new folder\n{report}"
     );
 
-    // `append_message_sync`: a message Camel is already holding, arriving in
-    // this account's inbox from outside it — `Email/import` over an uploaded
-    // blob, not `Email/set`'s transfer of a message the account already
-    // has. Checked as a round trip, the same as create/rename/delete: not
-    // merely that the append answered, but that the folder's own listing
-    // grew, and that fetching the message back by the uid it was minted
-    // under returns the same subject that went up.
+    // `append_message_sync`: a message from outside the account goes into
+    // the inbox. It uses `Email/import` of an uploaded blob, not the
+    // `Email/set` transfer. The test examines the round trip: the listing
+    // grows, and a fetch by the new uid gives the same subject.
     assert!(
         seen.get("append-uid").is_some_and(|uid| !uid.is_empty()),
         "append_message_sync did not mint a uid for the appended message\n{report}"
@@ -360,19 +337,18 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "append_message_sync never asked the server for Email/import; it asked for {calls:?}\n{report}"
     );
 
-    // `transfer_messages_to_sync`: the appended message, dragged out of the
-    // inbox and into "Receipts". RFC 8621 gives an `Email` one immutable id
-    // per account, so the uid the transfer reports for the moved message is
-    // the same uid the append minted — not a fresh one the destination
-    // folder made up — which is `transfer.rs`'s own `Reported` doc's point.
+    // `transfer_messages_to_sync` moves the appended message from the inbox
+    // to "Receipts". RFC 8621 gives an `Email` one immutable id per account.
+    // Thus the transfer reports the uid of the append (see the doc of
+    // `Reported` in `transfer.rs`).
     assert_eq!(
         seen.get("transfer-uid"),
         seen.get("append-uid"),
         "transfer_messages_to_sync reported a different uid than the message it moved was appended under\n{report}"
     );
 
-    // A move, checked from both ends: the row leaves the inbox (back down to
-    // the two seeded messages) and lands in the destination.
+    // The row leaves the inbox (again two messages) and goes into the
+    // destination.
     assert_eq!(
         seen.get("inbox-count-after-transfer"),
         Some(&"2"),
@@ -384,10 +360,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the destination folder does not hold the moved message\n{report}"
     );
 
-    // Moved back, the mirror image, before the rename/delete sequence below
-    // runs on "Receipts" — a JMAP server refuses to destroy a mailbox that
-    // still holds a message, so the test moves it back out rather than
-    // deleting a non-empty folder, same as a real user would have to.
+    // The message moves back before the rename and delete of "Receipts". A
+    // JMAP server refuses to destroy a mailbox that contains a message.
     assert_eq!(
         seen.get("receipts-count-after-transfer-back"),
         Some(&"0"),
@@ -399,56 +373,46 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the inbox does not hold the message again after it was moved back\n{report}"
     );
 
-    // The other end: the transfer is one `Email/set` patching `mailboxIds`,
-    // not `Email/import` a second time — a move of a message the account
-    // already has is not a message the account has never seen.
+    // The other end: the transfer is one `Email/set` that changes
+    // `mailboxIds`, not a second `Email/import`.
     assert!(
         calls.iter().any(|call| call == "Email/set"),
         "transfer_messages_to_sync never asked the server for Email/set; it asked for {calls:?}\n{report}"
     );
 
-    // `rename_folder_sync`, driven through the real vtable rather than the
-    // plain decision function `manage::rename_folder`. The last component
-    // changed under the same (root) parent — the "name the user typed" half
-    // of `manage.rs`'s own doc comment, not a drag-and-drop of the folder's
-    // existing path encoding.
+    // `rename_folder_sync` through the real vtable, not
+    // `manage::rename_folder`. Only the last component changes, under the
+    // same (root) parent. This is the "name the user typed" case of the
+    // `manage.rs` doc comment, not a drag-and-drop.
     assert_eq!(
         seen.get("folders-after-rename"),
         Some(&"Drafts,Inbox,Invoices,Junk,Sent,Trash"),
         "the store's own listing did not reflect the rename\n{report}"
     );
 
-    // The other end for create, rename and delete together: the client runs
-    // to completion — create, then rename, then delete — before any
-    // assertion here can look at the mock's state, so there is no point
-    // between the calls to catch the mock mid-sequence the way the
-    // address-book/calendar removal tests do. What the method log *can*
-    // still prove is that all three requests actually reached the server
-    // rather than the provider answering out of a purely local cache:
-    // exactly three `Mailbox/set` calls for the folder create/rename/delete,
-    // plus one each for the unsubscribe-Sent and subscribe-Drafts writes
-    // asserted above — `set_subscribed` goes over the same method — five in
-    // total.
+    // The other end for create, rename and delete. The client completes all
+    // three before the assertions read the mock state, so the test cannot
+    // examine the mock between the calls. The method log proves that the
+    // requests got to the server, not to a local cache. There are three
+    // `Mailbox/set` calls for create, rename and delete. `set_subscribed`
+    // also uses `Mailbox/set`, one call each for Sent and Drafts. The total
+    // is five.
     let mailbox_set_calls = calls.iter().filter(|call| *call == "Mailbox/set").count();
     assert_eq!(
         mailbox_set_calls, 5,
         "expected one Mailbox/set each for the create, the rename, the delete, the unsubscribe and the subscribe; saw {mailbox_set_calls} in {calls:?}\n{report}"
     );
 
-    // `delete_folder_sync`, the mirror image: driven through the real
-    // vtable, not the plain decision function `manage::delete_folder` —
-    // deleting the folder by its post-rename name, since that is what the
-    // client asked to delete.
+    // `delete_folder_sync` through the real vtable, not
+    // `manage::delete_folder`. The client deletes the folder by its new name.
     assert_eq!(
         seen.get("folders-after-delete"),
         Some(&"Drafts,Inbox,Junk,Sent,Trash"),
         "the store's own listing did not lose the deleted folder\n{report}"
     );
 
-    // And the other end: the mock's mailbox store actually lost it too, not
-    // merely that the provider claimed success — checked under both names,
-    // since a rename that silently left a stale copy behind under the old
-    // name would still pass a check that only looked for the new one.
+    // The other end: the mock no longer has the folder. The test examines
+    // the two names, because a rename can leave a copy with the old name.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
@@ -466,13 +430,10 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         );
     }
 
-    // `expunge_sync`: "Expunge"/"Empty Trash", the vfunc `synchronize_sync`'s
-    // own `expunge` argument (exercised above as FALSE) chains into when it
-    // is TRUE. A second, distinct message from the one `synchronize_sync`
-    // flagged — still in the inbox, untouched by the folder create/rename/
-    // transfer/delete sequence — so the inbox holds its three settled
-    // messages (the two seeds plus the appended-then-transferred-back one)
-    // right up until this point.
+    // `expunge_sync` is "Expunge" or "Empty Trash". `synchronize_sync` calls
+    // it when its `expunge` argument is TRUE (FALSE above). The message is
+    // not the message that `synchronize_sync` flagged. Until this point the
+    // inbox has three messages: the two seeds and the appended message.
     let deleted_uid = match seen.get("deleted-uid") {
         Some(uid) => (*uid).to_string(),
         None => panic!("the client never named a message to delete\n{report}"),
@@ -488,12 +449,10 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the expunged message's row is still in the folder's own uid list\n{report}"
     );
 
-    // The other end, and the decisive one: not merely that Camel's local row
-    // went away, but that the mock's own copy of the message is gone
-    // entirely — `expunge_sync` on a message filed in only this mailbox is a
-    // destroy (RFC 8621 §4.6), not a keyword patch, so a synchronise that
-    // swallowed a write failure would still show a shrunk local listing while
-    // the server kept the message.
+    // The other end: the mock no longer has the message. For a message in
+    // only this mailbox, `expunge_sync` is a destroy (RFC 8621 §4.6), not a
+    // keyword patch. A hidden write failure still shows a smaller local
+    // listing, but the server keeps the message.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");

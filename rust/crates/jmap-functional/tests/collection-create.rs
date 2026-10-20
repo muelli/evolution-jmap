@@ -1,27 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, collection backend, write half: `evolution-source-registry`
-//! driving `ECollectionBackendClass::create_resource_sync` and
-//! `delete_resource_sync` through the exact public calls Evolution's own
-//! "New Address Book"/"Delete" use — `e_source_remote_create_sync()` on the
-//! account and `e_source_remote_delete_sync()` on the child it returns —
-//! rather than the in-process `EServerSideSource` fixtures
-//! `jmap-backend-collection/tests/{create_resource,delete_resource}.rs`
-//! build themselves.
+//! Collection backend write path: `evolution-source-registry` calls
+//! `ECollectionBackendClass::create_resource_sync` and `delete_resource_sync`
+//! through the public calls that "New Address Book" and "Delete" in
+//! Evolution use: `e_source_remote_create_sync()` on the account and
+//! `e_source_remote_delete_sync()` on the child that it returns. The tests
+//! in `jmap-backend-collection/tests/{create_resource,delete_resource}.rs`
+//! use in-process `EServerSideSource` fixtures instead.
 //!
-//! `collection.rs` (this crate's sibling) proves the read direction —
-//! populate/fan-out discovering what the server already holds. This proves
-//! the write direction, against the same kind of real registry. Scoped to
-//! address books; `collection-create-calendar.rs` runs the same sequence
-//! against `E_SOURCE_EXTENSION_CALENDAR`.
+//! `collection.rs` tests the read direction: populate/fan-out finds what the
+//! server holds. This test examines the write direction, with the same kind
+//! of real registry. It uses address books only.
+//! `collection-create-calendar.rs` does the same steps with
+//! `E_SOURCE_EXTENSION_CALENDAR`.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// `docs/examples/jmap-mock-collection.source`, with the mock's ephemeral
-/// port filled in — the same keyfile `collection.rs` uses, since what this
-/// test needs from the account (contacts switched on, so the populate that
-/// runs before the create marks it `remote-creatable`) is identical.
+/// The same keyfile as in `collection.rs`. This test needs contacts enabled,
+/// so the populate before the create marks the account `remote-creatable`.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -117,9 +114,8 @@ fn evolution_source_registry_creates_and_deletes_an_address_book() {
          disappear from the registry\n{report}"
     );
 
-    // The other end: the server was actually asked to create, then destroy,
-    // the address book — not merely a source appearing and disappearing
-    // locally with no server round trip.
+    // The server side: the backend asked the server to create and then
+    // destroy the address book. A local-only change does not do this.
     let calls = server.method_calls();
     let set_calls = calls
         .iter()

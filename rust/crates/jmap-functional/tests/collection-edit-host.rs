@@ -1,43 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Whether editing a JMAP collection account's host while it is live
-//! triggers a fresh authenticate, the way
-//! `rust/crates/jmap-backend-collection/src/source_changed.rs` intends, is
-//! a question an AT-SPI session against a real Evolution cannot settle on
-//! its own: neither this crate's own `debug_print` nor the GUI gives any
-//! visibility into the backend's internal state, so a run where no traffic
-//! reaches the mock after an edit cannot tell `AccountWatch` correctly
-//! declining a repopulate apart from a real gap in the live trigger, and
-//! AT-SPI timing cannot rule out "the edit never really landed" either.
+//! Make sure that an edit of the host of a live JMAP collection account
+//! starts a new authenticate, as
+//! `rust/crates/jmap-backend-collection/src/source_changed.rs` intends. An
+//! AT-SPI session against a real Evolution cannot show this. The
+//! `debug_print` of the backend and the GUI do not show the internal state of
+//! the backend. Thus, if no traffic reaches the mock after an edit, the
+//! cause can be that `AccountWatch` correctly refuses a repopulate, or a
+//! real fault in the live trigger. With AT-SPI timing, the cause can also be
+//! that the edit was not saved.
 //!
-//! This is the same scenario against the same real
-//! `evolution-source-registry` and the same real collection-backend module,
-//! driven by `tests/functional/collection-edit-client.c` instead of a GUI:
-//! the account starts pointed at a port nothing listens on, so its first
-//! populate's fan-out fails (anonymous auth, no credentials round trip to
-//! wait on, and a loopback refusal is immediate), then the client edits the
-//! account's port to the mock's real one and commits it with
-//! `e_source_write_sync`, the same call the Account Editor's own "OK"
-//! button makes. EDS re-emits "changed" on its own in-process `ESource`
-//! either way, which is what `source_changed`'s handler listens for, so this
-//! is a faithful stand-in for the question, not a different one.
+//! This test uses the same scenario, the same real
+//! `evolution-source-registry` and the same real collection backend module,
+//! with `tests/functional/collection-edit-client.c` in place of a GUI. The
+//! account starts with a port that has no listener, so the fan-out of the
+//! first populate fails. (The authentication is anonymous, so no credentials
+//! round trip occurs, and a loopback refusal is immediate.) Then the client
+//! changes the port of the account to the port of the mock and saves it with
+//! `e_source_write_sync`, the same call as the "OK" button of the Account
+//! Editor. In both cases, EDS emits "changed" on its in-process `ESource`,
+//! and the `source_changed` handler monitors that signal. Thus this test
+//! examines the same question.
 //!
-//! The oracle is the mock's own `api_requests()`: nothing else in this
-//! window reschedules a populate (`source_changed.rs`'s own doc names the
-//! four things that do, and none of them fire here: no part toggled, no
-//! online transition, no manual refresh), so a nonzero count once the client
-//! exits means the edit's "changed" handler is what got a connection
-//! through.
+//! The test uses `api_requests()` of the mock as its result. The doc of
+//! `source_changed.rs` names the four events that schedule a populate. None
+//! of them occurs after the edit: no toggle changes, no online transition
+//! occurs, no manual refresh occurs, and construction is before the edit.
+//! Thus a count above zero after the client exits shows that the "changed"
+//! handler of the edit made a connection.
 
 use jmap_functional::{Session, observations, required_path};
 use std::net::TcpListener;
 
-/// A port nothing is listening on, picked rather than guessed: bind it,
-/// read it back, then drop the listener before anything connects. A loopback
-/// `connect()` to a port with no listener and no lingering connection gets
-/// an immediate refusal, which is what the account's first populate needs to
-/// fail on before this test's client has even started.
+/// A port without a listener. Bind it, read it, then drop the listener
+/// before a connection occurs. A loopback `connect()` to this port gets an
+/// immediate refusal, so the first populate fails before the client starts.
 fn closed_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
     listener.local_addr().expect("local_addr").port()

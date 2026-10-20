@@ -1,36 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, calendar, D2's write half: a real, running
-//! `evolution-calendar-factory` — not the in-process fixtures
-//! `jmap-backend-cal/tests/{backend,ops}.rs` stop at — reacting to a local
-//! colour edit and pushing it to the mock JMAP server.
+//! Calendar colour write path: a real, running `evolution-calendar-factory`
+//! reacts to a local colour edit and sends it to the mock JMAP server. The
+//! in-process tests in `jmap-backend-cal/tests/{backend,ops}.rs` do not go
+//! this far.
 //!
-//! `jmap-backend-cal/tests/backend.rs` proves the `source_changed` vtable
-//! slot is installed and differs from the parent's; `jmap-backend-cal/tests/
-//! ops.rs` proves the pure diff-and-push decision
-//! (`ops::on_source_changed`) against literal colours with no `ESource`
-//! involved. Neither drives the FFI glue in between: reading the *live*
-//! `ESourceSelectable` colour off a real `ESource` inside the vfunc body,
-//! which only a real `ECalMetaBackend` instance — one actually watching a
-//! real `ESource` for its own `"changed"` signal — can exercise. This test
-//! is that missing link, the same way `collection-create.rs` is the missing
-//! link between `jmap-backend-collection`'s own `create_resource.rs` tests
-//! and a real registry.
+//! `jmap-backend-cal/tests/backend.rs` shows that the `source_changed`
+//! vtable slot is installed and that the parent leaves it unset.
+//! `jmap-backend-cal/tests/ops.rs` tests the diff-and-push decision
+//! (`ops::on_source_changed`) with literal colours and no `ESource`. Neither
+//! test does the FFI step between them: the vfunc body reads the *live*
+//! `ESourceSelectable` colour from a real `ESource`. Only a real
+//! `ECalMetaBackend` that monitors the `"changed"` signal of a real `ESource`
+//! can do this step. This test does it, as `collection-create.rs` does for
+//! the `create_resource.rs` tests of `jmap-backend-collection` and a real
+//! registry.
 //!
-//! `tests/functional/cal-color-client.c` opens the calendar (which is what
-//! makes the factory dlopen the backend and keep it alive), edits the
-//! colour the way the calendar-properties dialog's colour picker does, and
-//! waits — see that file's own header for why the wait is a plain sleep
-//! rather than a poll.
+//! `tests/functional/cal-color-client.c` opens the calendar, so the factory
+//! loads the backend and keeps it alive. Then it edits the colour as the
+//! colour picker of the calendar-properties dialog does, and waits. The
+//! header of that file tells why the wait is a fixed sleep and not a poll.
 
 use jmap_functional::{Session, observations, required_path};
 
 const NEW_COLOR: &str = "#336699";
 
-/// No `[Resource] Identity=`, mirroring `calendar.rs`'s own keyfile: the
-/// backend asks the server for the account's default calendar, which is
-/// what makes seeding one flagged default enough to answer it.
+/// No `[Resource] Identity=`, as in the keyfile of `calendar.rs`. The backend
+/// asks the server for the default calendar of the account, so one seeded
+/// default calendar is sufficient.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -83,11 +81,10 @@ fn a_local_colour_edit_reaches_the_server() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Checked before the exit status, for the reason every other calendar
-    // leg's own assertion is: a calendar the backend could not open reaches
-    // the client looking exactly like one it opened and forgot to claim
-    // connected, and the exit status alone would only say "somewhere
-    // earlier", not where.
+    // Check this before the exit status, as the other calendar tests do. For
+    // the client, a calendar that the backend could not open looks the same
+    // as one that it opened but did not mark connected. The exit status does
+    // not tell where the failure occurred.
     assert_eq!(
         seen.get("connection-status"),
         Some(&"connected"),
@@ -106,10 +103,9 @@ fn a_local_colour_edit_reaches_the_server() {
         "the client never reported writing the colour edit\n{report}"
     );
 
-    // The default `ESourceSelectable:color` EDS's own GParamSpec supplies —
-    // asserted so a future change to that default, or to this test's own
-    // keyfile, is caught here rather than read as "the push already
-    // happened before the edit".
+    // The default `ESourceSelectable:color` from the EDS GParamSpec. If that
+    // default or this keyfile changes, this assertion fails. Otherwise the
+    // change can look like a push before the edit.
     assert_eq!(
         seen.get("initial-color"),
         Some(&"#62a0ea"),

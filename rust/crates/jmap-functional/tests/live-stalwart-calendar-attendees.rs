@@ -1,43 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A meeting created locally through
-//! `ECalClient` keeps its organizer and attendees, both in EDS's own copy and
-//! on the server.
+//! A meeting that a local `ECalClient` creates keeps its organizer and
+//! attendees, in the EDS copy and on the server.
 //!
-//! An earlier version of this test pinned the opposite: `jmap_ical::ical_to_event`
-//! used to drop `ORGANIZER`/`ATTENDEE` on a create, and since
-//! `jmap-cal-sync::CalSync::save_component` re-reads the event from the server
-//! rather than trusting the component EDS handed it (see that function's own
-//! comment), the local copy lost them on the very same create. Now the guests
-//! go out as jscalendarbis `participants` (`calendarAddress`, never `sendTo`)
-//! beside `organizerCalendarAddress`. This test drives that path through a
-//! real `ECalClient` against real Stalwart (`functional-cal-attendees-
-//! client`, `tests/functional/cal-attendees-client.c`) and also asks the
-//! server directly over JMAP what it actually stored, so the answer is
-//! evidence rather than another reading of the same source.
+//! The guests go to the server as jscalendarbis `participants`
+//! (`calendarAddress`, never `sendTo`), with `organizerCalendarAddress`.
+//! `jmap-cal-sync::CalSync::save_component` reads the event again from the
+//! server after a create (see the comment of that function). Thus a dropped
+//! `ORGANIZER`/`ATTENDEE` also disappears from the local copy.
 //!
-//! Every address is on `example.com` (RFC 2606), so a server that did mail
-//! the guests would reach nobody.
+//! This test uses a real `ECalClient` against real Stalwart
+//! (`functional-cal-attendees-client`,
+//! `tests/functional/cal-attendees-client.c`). It also asks the server over
+//! JMAP what it stored, so the result does not depend on the code under test.
 //!
-//! The mechanism is unchanged from `live-stalwart-calendar.rs`:
-//! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
-//! plaintext-stays-loopback rule while the traffic actually continues to
-//! Stalwart; `JMAP_FUNCTIONAL_STORE_PASSWORD` seeds the password a real
-//! server needs; `JMAP_LIVE_SERVER_REBASE_URLS` rebases the server's stated
-//! `apiUrl` onto the address actually connected through.
+//! All addresses are on `example.com` (RFC 2606). Thus if the server sends
+//! mail to the guests, nobody gets it.
 //!
-//! ## Running it
+//! The method is the same as in `live-stalwart-calendar.rs`:
+//! `spawn_loopback_proxy`, `JMAP_FUNCTIONAL_STORE_PASSWORD` and
+//! `JMAP_LIVE_SERVER_REBASE_URLS`.
 //!
-//! Same environment as `live-stalwart-calendar.rs` -- see
-//! `docs/manual-test-live-server.md`:
+//! ## How to run it
+//!
+//! Use the same environment as `live-stalwart-calendar.rs` (see
+//! `docs/manual-test-live-server.md`):
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-calendar-attendees -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 
@@ -46,9 +41,8 @@ use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy
 use jmap_proto::calendars::CalendarEventQueryFilter;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never mistakes a previous run's event for this
-/// one's -- mirrors every other live-server test in this crate.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not read an event from an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -56,8 +50,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors
-/// `live-stalwart-calendar.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-calendar.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,7 +61,8 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// `live-stalwart-calendar.rs`'s own keyfile, unchanged.
+/// The keyfile of `live-stalwart-calendar.rs`, with a different
+/// `DisplayName=`.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -99,10 +94,8 @@ fn attendees_survive_a_local_create_against_the_real_server() {
     let client_binary = required_path("JMAP_FUNCTIONAL_CAL_ATTENDEES_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
 
-    // A direct connection, the same one every `jmap-cal-sync`/`jmap-client`
-    // live-server test uses, for checking the server's own copy -- not
-    // routed through EDS, so it answers what Stalwart actually stored
-    // rather than what EDS made of it.
+    // A direct connection, not through EDS. It reads the copy that Stalwart
+    // stored, not the EDS version of it.
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let direct = Client::builder()
         .rebase_urls_to_origin(rebase)
@@ -168,8 +161,8 @@ fn attendees_survive_a_local_create_against_the_real_server() {
         "EDS added an event with no UID\n{report}"
     );
 
-    // The local-copy half: EDS's own read-back, right after the create, already
-    // shows what `CalSync::save_component`'s fresh reload left in the cache.
+    // The local copy: the EDS read-back after the create shows what the
+    // reload of `CalSync::save_component` put in the cache.
     assert_eq!(
         seen.get("read-back-organizer"),
         Some(&"mailto:organizer@example.com"),
@@ -189,8 +182,7 @@ fn attendees_survive_a_local_create_against_the_real_server() {
         "the event EDS handed back lost its attendees\n{report}"
     );
 
-    // The server-copy half: ask Stalwart directly, not through EDS, what it
-    // actually stored for the event this create produced.
+    // The server copy: ask Stalwart directly what it stored for this event.
     let query = direct
         .event_query(
             &account_id,

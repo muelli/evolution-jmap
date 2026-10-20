@@ -1,25 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Through a real, running
-//! `evolution-calendar-factory`: who tells a meeting's guests
-//! (`docs/MEETING-SCHEDULING.md` section 4).
+//! Who sends mail to the guests of a meeting (`docs/MEETING-SCHEDULING.md`
+//! section 4), through a real, running `evolution-calendar-factory`.
 //!
-//! `jmap-backend-cal/tests/scheduling.rs` proves the capability string, the
-//! operation-flag mapping and the source read on their own, and that the
-//! `impl_get_backend_property` slot is installed. Only a real backend proves
-//! that a libecal consumer, which is what Evolution is, sees the capabilities
-//! that stop it mailing the guests itself, and that the flags it passes reach
-//! the server. `tests/functional/cal-scheduling-client.c` reports the three
-//! capabilities, then creates and removes one meeting the user sends and one
-//! the user chose not to, each with its own guest.
+//! `jmap-backend-cal/tests/scheduling.rs` tests the capability string, the
+//! operation-flag mapping and the source read separately, and that the
+//! `impl_get_backend_property` slot is installed. Only a real backend shows
+//! that a libecal consumer (such as Evolution) sees the capabilities that
+//! stop it from sending mail to the guests, and that its flags reach the
+//! server. `tests/functional/cal-scheduling-client.c` reports the three
+//! capabilities. Then it creates and removes one meeting that the user sends
+//! and one that the user does not send, each with a different guest.
 //!
-//! Step (d): last, it creates a meeting with a guest the server has no way
-//! to reach, and reports how `ECalClient`'s create failed. The mock, like
-//! Stalwart, delivers only to `mailto:`, so a `urn:uuid:` guest is refused
-//! with `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section
-//! 5.9.2). Evolution must see that as a failed save naming the guest, and
-//! the meeting must not be stored anywhere for a later sync to send.
+//! Last, it creates a meeting with a guest that the server cannot reach, and
+//! reports how the create of `ECalClient` failed. The mock, as Stalwart,
+//! delivers only to `mailto:`, so it refuses a `urn:uuid:` guest with
+//! `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section 5.9.2).
+//! Evolution must see a failed save that names the guest. The meeting must
+//! not be stored, so a later sync cannot send it.
 
 use std::collections::BTreeMap;
 
@@ -32,8 +31,8 @@ const SENT_GUEST: &str = "mailto:vera@example.com";
 /// Must match `UNREACHABLE_GUEST` in `cal-scheduling-client.c`.
 const UNREACHABLE_GUEST: &str = "urn:uuid:5f0c9a4e-0000-4000-8000-0000000000d1";
 
-/// The calendar's keyfile, with `extra` appended. No `[Resource] Identity=`:
-/// the backend asks for the account's default calendar.
+/// The calendar keyfile, with `extra` at the end. No `[Resource] Identity=`:
+/// the backend asks for the default calendar of the account.
 fn keyfile(port: u16, extra: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -53,11 +52,11 @@ fn keyfile(port: u16, extra: &str) -> String {
     )
 }
 
-/// What one run saw: the client's observations and the mock's outbox.
+/// The result of one run: the client observations and the mock outbox.
 struct Run {
     observed: BTreeMap<String, String>,
     sent: Vec<(String, String)>,
-    /// Events left in the mock's store once the client is done.
+    /// The number of events in the mock store after the client exits.
     stored: usize,
     report: String,
 }
@@ -68,8 +67,8 @@ impl Run {
     }
 }
 
-/// Runs the client against a fresh mock whose account is the organiser,
-/// with `extra` keyfile lines.
+/// Run the client against a new mock whose account is the organiser, with
+/// the `extra` keyfile lines.
 fn run(name: &str, extra: &str) -> Run {
     let client = required_path("JMAP_FUNCTIONAL_CAL_SCHEDULING_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
@@ -155,9 +154,9 @@ fn by_default_the_server_tells_the_guests_and_evolution_is_told_not_to() {
             run.report
         );
     }
-    // The meeting sent with no flags is announced and then cancelled; the
-    // one the user chose not to send asks the server for nothing, either
-    // way, so Ida hears of neither.
+    // The meeting sent without flags gets a REQUEST and then a CANCEL. The
+    // meeting that the user does not send asks the server for nothing, so
+    // its guest (Ida) gets no message.
     assert_eq!(
         run.sent,
         [
@@ -182,15 +181,15 @@ fn with_calendar_auto_schedule_off_evolution_tells_the_guests_and_the_server_is_
     }
     assert!(run.sent.is_empty(), "sent {:?}\n{}", run.sent, run.report);
     assert_eq!(run.seen("removed-sent"), Some("1"), "{}", run.report);
-    // Nothing asks the server to reach anyone, so it refuses nothing.
+    // No request asks the server to send, so the server refuses nothing.
     assert_eq!(run.seen("unreachable-created"), Some("1"), "{}", run.report);
     assert_eq!(run.stored, 0, "{}", run.report);
 }
 
-/// Step (d): the server refuses to schedule a guest it cannot reach, and
-/// Evolution, which was told the server sends, gets a failed save with the
-/// translated sentence naming that guest. Nothing is stored and nothing is
-/// sent, so no later sync can file the meeting with the guest never told.
+/// The server refuses to schedule a guest that it cannot reach. Evolution,
+/// which expects the server to send, gets a failed save with the translated
+/// message that names that guest. Nothing is stored or sent, so a later sync
+/// cannot save the meeting without a message to the guest.
 #[test]
 fn a_guest_the_server_cannot_reach_fails_the_save_in_evolution_and_names_them() {
     let run = run("unreachable", "");

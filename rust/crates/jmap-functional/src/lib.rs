@@ -1,46 +1,42 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The harness for the headless functional tests (M9 layer 1): a real
-//! `evolution-source-registry` and a real host for the module under test —
-//! `evolution-addressbook-factory`, `evolution-calendar-factory`, or, for the
-//! Camel provider, the client program itself — loading a real build of this
-//! repository's modules and talking to an in-process mock JMAP server.
+//! The harness for the headless functional tests. It starts a real
+//! `evolution-source-registry` and a real host for the module under test:
+//! `evolution-addressbook-factory`, `evolution-calendar-factory`, or (for the
+//! Camel provider) the client program itself. The host loads a real build of
+//! the modules of this repository and talks to an in-process mock JMAP server.
 //!
-//! Every other test in this workspace stops at the edge of EDS — it calls a
-//! vfunc body directly, or checks a mapping against a fixture. That leaves
-//! one layer untested, and it is the layer a user meets first: EDS deciding
-//! *when* to call those vfuncs and what to do with what they said. A backend
-//! can pass every unit test in the tree and still give an address book that
-//! silently refuses writes, because nothing below this file ever asks EDS
-//! what it made of the backend's answers.
+//! All other tests in this workspace stop at the edge of EDS. They call a
+//! vfunc body directly, or compare a mapping with a fixture. These tests
+//! examine the layer that a user sees first: when EDS calls those vfuncs, and
+//! what EDS does with the results. A backend can pass all unit tests and
+//! still give an address book that silently refuses writes.
 //!
 //! # What a session is
 //!
-//! [`Session`] is a throwaway EDS installation in a directory:
+//! [`Session`] is a temporary EDS installation in a directory:
 //!
-//! - a scratch `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME`, so the
-//!   run cannot see — or corrupt — the developer's own Evolution data, and
-//!   so every run starts with an empty meta-backend cache. The cache being
-//!   empty is load-bearing, not hygiene: `EBookMetaBackend` connects during
-//!   the open only when it has never connected before, so a reused cache
-//!   would make the connect path race with a background refresh.
-//! - a scratch module directory named by `EDS_ADDRESS_BOOK_MODULES`,
-//!   `EDS_CALENDAR_MODULES` or `EDS_CAMEL_PROVIDER_DIR`, holding the one
-//!   module under test and nothing else. Nothing is installed system-wide and
-//!   no `sudo` is involved.
-//! - a private session bus from `dbus-run-session`, so the daemons that
-//!   D-Bus activates are this test's daemons, started with this test's
-//!   environment, and are killed with the bus when the client exits. A test
-//!   that used the developer's session bus would silently reach an
-//!   already-running factory started with the wrong environment.
+//! - A scratch `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME`. The run
+//!   cannot read or damage the Evolution data of the developer, and each run
+//!   starts with an empty meta-backend cache. The empty cache is necessary:
+//!   `EBookMetaBackend` connects during the open only if it never connected
+//!   before. With a reused cache, the connect path races a background refresh.
+//! - A scratch module directory that `EDS_ADDRESS_BOOK_MODULES`,
+//!   `EDS_CALENDAR_MODULES` or `EDS_CAMEL_PROVIDER_DIR` names. It holds only
+//!   the module under test. Nothing is installed system-wide and no `sudo`
+//!   is necessary.
+//! - A private session bus from `dbus-run-session`. The daemons that D-Bus
+//!   activates are the daemons of this test, with the environment of this
+//!   test, and they stop with the bus when the client exits. On the session
+//!   bus of the developer, a test can silently reach a factory that is
+//!   already running with the wrong environment.
 //!
-//! # What it deliberately does not do
+//! # What it does not do
 //!
-//! It does not assert. The client program is an ordinary libebook consumer
-//! that reports what EDS told it; the mock records what the backend asked
-//! the server for. Both are evidence, and the test files hold every
-//! judgement about it.
+//! It does not assert. The client program is a usual libebook consumer that
+//! reports what EDS told it. The mock records what the backend requested from
+//! the server. The test files make all decisions about this evidence.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -52,19 +48,19 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 /// A scratch EDS installation: XDG directories, a sources directory, and a
-/// module directory, all under one root that is wiped when the session is
-/// created rather than when it is dropped — a failed run leaves its tree
-/// behind to be looked at.
+/// module directory, all under one root. The root is removed when a session
+/// is created, not when it is dropped, so a failed run keeps its tree for
+/// examination.
 pub struct Session {
     root: PathBuf,
     environment: BTreeMap<OsString, OsString>,
 }
 
 impl Session {
-    /// Create a session rooted at `root`, which is removed if it exists.
+    /// Create a session at `root`. If `root` exists, remove it first.
     ///
-    /// Pass `env!("CARGO_TARGET_TMPDIR")` joined with a name unique to the
-    /// test: two sessions sharing a root would share a registry cache.
+    /// Give `env!("CARGO_TARGET_TMPDIR")` joined with a name unique to the
+    /// test. Two sessions with the same root share a registry cache.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         if root.exists() {
@@ -72,20 +68,19 @@ impl Session {
         }
 
         let mut environment = BTreeMap::new();
-        // Deliberately not the caller's environment. Inheriting it would
-        // bring DBUS_SESSION_BUS_ADDRESS, which points at the developer's
-        // own session bus and at the daemons already running on it, and the
-        // XDG variables pointing at their real Evolution data.
+        // Do not inherit the environment of the caller. It contains
+        // DBUS_SESSION_BUS_ADDRESS (the session bus of the developer and its
+        // daemons) and XDG variables that point to real Evolution data.
         //
-        // PATH is the exception: `dbus-run-session` execs `dbus-daemon`
-        // through it, and the activated services are `/usr/libexec` paths in
-        // their `.service` files but run child processes of their own.
+        // PATH is the exception: `dbus-run-session` uses it to exec
+        // `dbus-daemon`. The activated services have `/usr/libexec` paths in
+        // their `.service` files, but they start child processes of their own.
         environment.insert(
             "PATH".into(),
             std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
         );
-        // Error messages from EDS reach the client, and this test reads
-        // them; a translated one would be read as a different message.
+        // The tests read EDS error messages. A translated message does not
+        // match.
         environment.insert("LC_ALL".into(), "C".into());
 
         for (variable, directory) in [
@@ -100,9 +95,9 @@ impl Session {
             environment.insert(variable.into(), path.clone().into_os_string());
         }
 
-        // D-Bus refuses a runtime directory anyone else can read, and says
-        // so as a warning rather than a failure — which would leave the bus
-        // running with a socket somewhere unexpected.
+        // D-Bus refuses a runtime directory that other users can read. It
+        // gives only a warning, and the bus then puts its socket in an
+        // unexpected location.
         fs::set_permissions(root.join("runtime"), fs::Permissions::from_mode(0o700))
             .expect("lock down the session's XDG_RUNTIME_DIR");
 
@@ -116,19 +111,17 @@ impl Session {
         self.root.join("config/evolution/sources")
     }
 
-    /// Where a collection backend writes its *children*, which is somewhere
-    /// else entirely: `collection_backend_new_user_file` (EDS 3.52.3,
-    /// `e-collection-backend.c:176-200`) builds the child's file name under
-    /// `e_collection_backend_get_cache_dir()`, itself
+    /// Where a collection backend writes its *children*. This is a different
+    /// directory: `collection_backend_new_user_file` (EDS 3.52.3,
+    /// `e-collection-backend.c:176-200`) puts the child file under
+    /// `e_collection_backend_get_cache_dir()`, which is
     /// `$XDG_CACHE_HOME/evolution/sources/<collection-uid>`
     /// (`collection_backend_constructed`, line 927).
     ///
-    /// So a child source's keyfile is never in [`Self::sources_directory`],
-    /// and "this UID matches no configured source" is the normal condition of
-    /// every source Evolution ever fanned an account out into rather than
-    /// evidence of debris. Exposed so `tests/stale-source-uid.rs` can go and
-    /// look in both places
-    /// instead of taking the client program's word for where a child landed.
+    /// Thus the keyfile of a child source is never in
+    /// [`Self::sources_directory`]. For a child source, "this UID matches no
+    /// configured source" is normal and is not evidence of debris.
+    /// `tests/stale-source-uid.rs` uses this to examine both directories.
     pub fn cache_sources_directory(&self, collection_uid: &str) -> PathBuf {
         self.root
             .join("cache/evolution/sources")
@@ -138,26 +131,26 @@ impl Session {
     /// Set one more environment variable for the daemons and the client this
     /// session starts.
     ///
-    /// The session's environment is built from nothing rather than inherited
-    /// (see [`Self::new`]), so a test that needs EDS's own diagnostics — the
-    /// `ESR_DEBUG=1` that `e_source_registry_debug_enabled`
-    /// (`e-data-server-util.c:2372`) gates every `e_source_registry_debug_print`
-    /// on, and with it the `Failed to lookup password for source …` line
-    /// `tests/stale-source-uid.rs` investigates — has no other way to ask for
-    /// them.
+    /// The session environment is not inherited (see [`Self::new`]). Thus
+    /// this is the only way to enable EDS diagnostics, for example
+    /// `ESR_DEBUG=1`. `e_source_registry_debug_enabled`
+    /// (`e-data-server-util.c:2372`) controls each
+    /// `e_source_registry_debug_print` with it, which includes the
+    /// `Failed to lookup password for source …` line that
+    /// `tests/stale-source-uid.rs` examines.
     ///
-    /// The output lands in the same captured stdout as the client's own
-    /// `key=value` observations, because `dbus-run-session`'s `dbus-daemon`
-    /// hands its own stdout to every service it activates. That is safe to mix:
-    /// EDS's debug lines that contain `=` are keyfile diffs of the form
-    /// `" + : Key=Value"`, whose "key" begins with a space and so can never
-    /// collide with an observation's.
+    /// The output goes to the same captured stdout as the `key=value`
+    /// observations of the client, because the `dbus-daemon` of
+    /// `dbus-run-session` gives its stdout to each service that it activates.
+    /// This is safe: the EDS debug lines that contain `=` are keyfile diffs
+    /// of the form `" + : Key=Value"`. Their "key" starts with a space, so it
+    /// cannot be the same as an observation key.
     pub fn set_variable(&mut self, name: &str, value: &str) {
         self.environment.insert(name.into(), value.into());
     }
 
-    /// Write a `.source` keyfile. The file name is the source UID, which is
-    /// how EDS identifies it and how the client program asks for it.
+    /// Write a `.source` keyfile. The file name is the source UID, which EDS
+    /// and the client program use to identify the source.
     pub fn write_source(&self, uid: &str, contents: &str) {
         fs::write(
             self.sources_directory().join(format!("{uid}.source")),
@@ -166,20 +159,19 @@ impl Session {
         .expect("write the source keyfile");
     }
 
-    /// Write a file for a client program to read, and hand back its path.
+    /// Write an input file for a client program, and return its path.
     ///
-    /// For input a client is *told* rather than one it invents — a `VTIMEZONE`
-    /// the test also asserts about, say. Written under the session's root so it
-    /// goes when the next run wipes it, and so a failed run leaves it beside
-    /// the tree it belongs to.
+    /// Use this for input that the test supplies, for example a `VTIMEZONE`
+    /// that the test also examines. The file is under the session root, so
+    /// the next run removes it and a failed run keeps it with its tree.
     pub fn write_input(&self, name: &str, contents: &str) -> PathBuf {
         let path = self.root.join(name);
         fs::write(&path, contents).expect("write the client's input file");
         path
     }
 
-    /// Stage a built cdylib as the one address book backend this session's
-    /// factory can see, under the name EDS derives from `BackendName`.
+    /// Stage a built cdylib as the only address book backend of the session
+    /// factory, with the name that EDS derives from `BackendName`.
     pub fn stage_address_book_backend(&mut self, built_module: &Path) {
         self.stage_backend(
             "EDS_ADDRESS_BOOK_MODULES",
@@ -189,8 +181,8 @@ impl Session {
         );
     }
 
-    /// The same for the calendar factory, which scans a directory of its own
-    /// named by a variable of its own.
+    /// Do the same for the calendar factory, which uses a different variable
+    /// and directory.
     pub fn stage_calendar_backend(&mut self, built_module: &Path) {
         self.stage_backend(
             "EDS_CALENDAR_MODULES",
@@ -200,10 +192,9 @@ impl Session {
         );
     }
 
-    /// The same for `evolution-source-registry` itself, which scans
+    /// Do the same for `evolution-source-registry`, which scans
     /// `EDS_REGISTRY_MODULES` for the collection backend
-    /// (`module-jmap-backend.so`, per `docs/manual-test-collection-backend.md`)
-    /// rather than a factory's own directory.
+    /// (`module-jmap-backend.so`, see `docs/manual-test-collection-backend.md`).
     pub fn stage_collection_backend(&mut self, built_module: &Path) {
         self.stage_backend(
             "EDS_REGISTRY_MODULES",
@@ -213,32 +204,28 @@ impl Session {
         );
     }
 
-    /// Stage one of EDS's OWN already-installed registry modules beside the
-    /// one [`Self::stage_collection_backend`] staged.
+    /// Stage an installed EDS registry module next to the module that
+    /// [`Self::stage_collection_backend`] staged.
     ///
-    /// Needed because `EDS_REGISTRY_MODULES` *replaces* EDS's module directory
-    /// rather than adding to it (`e-source-registry-server.c:1073-1076` assigns it
-    /// over `MODULE_DIRECTORY`), so a session that stages only our own module
-    /// runs a registry with none of EDS's. That is the right default — every
-    /// other functional test here wants exactly one backend in play — but it
-    /// silently removes behaviour a test may be *about*: `tests/oauth2-stale-
-    /// proxy.rs` needs `module-oauth2-services.so`, whose `EOAuth2SourceMonitor`
-    /// is what exports the `Source.OAuth2Support` D-Bus interface for an
-    /// account whose `[Authentication] Method` names a registered
-    /// `EOAuth2Service`.
+    /// `EDS_REGISTRY_MODULES` *replaces* the EDS module directory
+    /// (`e-source-registry-server.c:1073-1076` assigns it over
+    /// `MODULE_DIRECTORY`). Thus a session that stages only our module has no
+    /// EDS modules. This is the correct default, but some tests need an EDS
+    /// module: `tests/oauth2-stale-proxy.rs` needs `module-oauth2-services.so`.
+    /// Its `EOAuth2SourceMonitor` exports the `Source.OAuth2Support` D-Bus
+    /// interface for an account whose `[Authentication] Method` names a
+    /// registered `EOAuth2Service`.
     ///
-    /// Takes the *installed* module's path rather than a built one: this is
-    /// EDS's module, not ours, and a copy of it in this repository would be a
-    /// copy of the thing under test. CMake finds it (see `cmake/Functional.cmake`)
-    /// so that a machine without it fails the configure step by name instead of
-    /// producing a test that quietly measures nothing.
+    /// The argument is the path of the *installed* EDS module, because a copy
+    /// in this repository is a copy of the thing under test. CMake finds it
+    /// (see `cmake/Functional.cmake`), so a machine without it fails the
+    /// configure step with a clear message.
     pub fn stage_installed_registry_module(&mut self, installed_module: &Path) {
         let name = installed_module
             .file_name()
             .expect("the installed module path names a file");
-        // Not `stage_backend`: that would reset EDS_REGISTRY_MODULES to a
-        // fresh directory and drop whatever was staged before it. This adds
-        // to the directory the collection backend already went into.
+        // Do not use `stage_backend`: it replaces the directory contents.
+        // Add to the directory that holds the collection backend.
         let directory = self.root.join("registry-modules");
         fs::create_dir_all(&directory).expect("create the registry module directory");
         fs::copy(installed_module, directory.join(name)).unwrap_or_else(|error| {
@@ -251,15 +238,13 @@ impl Session {
             .insert("EDS_REGISTRY_MODULES".into(), directory.into_os_string());
     }
 
-    /// Stage a built cdylib as the one Camel mail provider this session can
-    /// see, together with the `.urls` file that is what makes Camel open it.
+    /// Stage a built cdylib as the only Camel mail provider of the session,
+    /// with the `.urls` file that makes Camel open it.
     ///
-    /// Unlike the two above, this directory is not scanned by a daemon: the
-    /// provider is dlopened in the *client's* own process, and only when
-    /// something asks for a protocol one of the `.urls` files in here claims.
-    /// So the `.urls` file is staged rather than written — it is the file the
-    /// build installs, and a test that wrote its own copy would keep passing
-    /// after the installed one stopped naming the protocol.
+    /// No daemon scans this directory. The *client* process dlopens the
+    /// provider when a request uses a protocol that a `.urls` file names.
+    /// The test copies the `.urls` file that the build installs. A test with
+    /// its own copy continues to pass if the installed file loses the protocol.
     pub fn stage_camel_provider(&mut self, built_module: &Path, urls: &Path) {
         self.stage_backend(
             "EDS_CAMEL_PROVIDER_DIR",
@@ -273,21 +258,17 @@ impl Session {
             .unwrap_or_else(|error| panic!("copy {} beside the provider: {error}", urls.display()));
     }
 
-    /// Stage a built cdylib in a scratch directory of its own and return that
-    /// directory, for a client program that loads it itself via
-    /// `e_module_load_all_in_directory` rather than a directory a daemon
-    /// scans. `module-jmap-configuration.so`'s `JmapConfigLookup` is not found
-    /// by any daemon this crate stages against elsewhere — it registers
-    /// against a live `EConfigLookup`, which only a client constructs — so
-    /// the directory has to be handed to that client rather than passed
-    /// through the environment the way `EDS_ADDRESS_BOOK_MODULES` and its
-    /// siblings are.
+    /// Stage a built cdylib in a new scratch directory and return the
+    /// directory. The client program loads it with
+    /// `e_module_load_all_in_directory`. No daemon loads
+    /// `module-jmap-configuration.so`: its `JmapConfigLookup` registers with
+    /// a live `EConfigLookup`, which only a client creates. Thus give the
+    /// directory to the client, not through an environment variable.
     ///
-    /// No `LD_LIBRARY_PATH` juggling needed here: `jmap-config-module`'s own
-    /// `build.rs` records `/usr/lib/evolution` in the built module's
-    /// `RUNPATH`, the same way every real Evolution module has it, so
-    /// `dlopen`ing the module resolves its transitive `libevolution-mail.so`
-    /// dependency on its own.
+    /// `LD_LIBRARY_PATH` is not necessary. The `build.rs` of
+    /// `jmap-config-module` records the Evolution library directory in the
+    /// `RUNPATH` of the module, as in real Evolution modules. Thus `dlopen`
+    /// finds the transitive `libevolution-mail.so` dependency.
     pub fn stage_config_lookup_module(&mut self, built_module: &Path) -> PathBuf {
         let directory = self.root.join("config-lookup-module");
         fs::create_dir_all(&directory).expect("create the config-lookup module directory");
@@ -301,14 +282,12 @@ impl Session {
         directory
     }
 
-    /// Copy `built_module` into a scratch directory of this session's and
-    /// point `variable` at it.
+    /// Copy `built_module` into a scratch directory of the session and set
+    /// `variable` to that directory.
     ///
-    /// All three of `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES` and
-    /// `EDS_CAMEL_PROVIDER_DIR` *replace* their host's module directory rather
-    /// than adding to it, so a host started here has this module and no other
-    /// — which is why a stray "no backend factory for jmap", or "no provider
-    /// available for protocol", is unambiguous evidence about this module.
+    /// The variables *replace* the module directory of their host, so the
+    /// host has only this module. Thus "no backend factory for jmap" or "no
+    /// provider available for protocol" is clear evidence about this module.
     fn stage_backend(
         &mut self,
         variable: &str,
@@ -329,54 +308,47 @@ impl Session {
             .insert(variable.into(), directory.into_os_string());
     }
 
-    /// Where `gnome-keyring-daemon` (started by [`Self::run`], below) writes
-    /// the login keyring this session's secret store lives in. Exists only
-    /// after a client has actually run.
+    /// The login keyring file that `gnome-keyring-daemon` (from [`Self::run`])
+    /// writes for the session secret store. It exists only after a client ran.
     pub fn login_keyring_file(&self) -> PathBuf {
         self.root.join("data/keyrings/login.keyring")
     }
 
-    /// This session's own `XDG_RUNTIME_DIR`, unique to it — what
-    /// [`Self::reap_keyring_daemon`] matches against, and what a test can
-    /// use to check that no daemon [`Self::run`] started is still alive.
+    /// The unique `XDG_RUNTIME_DIR` of the session. [`Self::reap_keyring_daemon`]
+    /// uses it to find daemons. A test can use it to make sure that no daemon
+    /// from [`Self::run`] is still alive.
     pub fn runtime_directory(&self) -> PathBuf {
         self.root.join("runtime")
     }
 
-    /// Run `program` on a private session bus in this session's environment,
-    /// and return what it said. The bus — and every daemon activated on it —
-    /// is gone by the time this returns.
+    /// Run `program` on a private session bus with the session environment,
+    /// and return its output. The bus and all daemons that it activated stop
+    /// before this function returns.
     ///
-    /// Before `program` runs, a login keyring is unlocked (created, on a
-    /// fresh session) on the same bus with an empty password. Every account
-    /// with an `[Authentication]` extension makes EDS's credential lookup —
-    /// `create_resource_sync`'s `stored_password_of`, `authenticate_sync`'s
-    /// resolution, and any real password store this session's client stages
-    /// — ask a `org.freedesktop.secrets` provider, and without this step
-    /// that ask either finds no provider at all (a functional container
-    /// carrying only `evolution-data-server`/`dbus-daemon`, no
-    /// `gnome-keyring`) or, once one is
-    /// installed, hits `gnome-keyring-daemon`'s own default D-Bus activation
-    /// (`--start --foreground`, from its `.service` file) needing to CREATE
-    /// or UNLOCK a collection it has never seen before — which falls back to
-    /// a GTK prompt this headless bus has no display for, failing in
-    /// milliseconds rather than merely doing nothing (confirmed by hand: a
-    /// secret-store call against such a freshly-activated, keyring-less
-    /// service loses to "cannot open display" in ~20ms). Unlocking up front,
-    /// before anything asks, avoids both failure modes entirely.
+    /// Before `program` runs, this unlocks a login keyring (or creates it, in
+    /// a new session) on the same bus with an empty password. For each account
+    /// with an `[Authentication]` extension, the EDS credential lookup asks an
+    /// `org.freedesktop.secrets` provider. This includes the
+    /// `stored_password_of` of `create_resource_sync`, the resolution in
+    /// `authenticate_sync`, and each real password store that the client
+    /// stages. Without this step, there are two failures:
     ///
-    /// `--daemonize` detaches the keyring daemon from this call's own
-    /// process group, so it outlives `dbus-run-session` and this method:
-    /// nothing here waits for the bus to be the daemon's only owner. Left
-    /// alone, that is a process leaked onto the machine on every call — this
-    /// reaps it (by matching its own `XDG_RUNTIME_DIR`, unique to this
-    /// session, against `/proc/<pid>/environ`) before returning, the same
-    /// mechanism `jmap-backend-core/tests/secret_store.rs` uses for the same
-    /// daemon.
+    /// - A container with only `evolution-data-server`/`dbus-daemon` has no
+    ///   provider.
+    /// - With `gnome-keyring` installed, D-Bus activates `gnome-keyring-daemon`
+    ///   (`--start --foreground`, from its `.service` file). It must create or
+    ///   unlock a new collection, and it shows a GTK prompt. The headless bus
+    ///   has no display, so the call fails in approximately 20ms with "cannot
+    ///   open display" (manually confirmed).
+    ///
+    /// `--daemonize` detaches the keyring daemon from the process group, so it
+    /// continues to run after `dbus-run-session` and this function. Thus this
+    /// function stops it before it returns. It finds the daemon by its unique
+    /// `XDG_RUNTIME_DIR` in `/proc/<pid>/environ`, as
+    /// `jmap-backend-core/tests/secret_store.rs` does.
     pub fn run(&self, program: &Path, arguments: &[&str]) -> Output {
-        // `sh -c SCRIPT ARG0 ARG1...`: ARG0 becomes $0, the rest become the
-        // "$@" the final `exec` forwards — so `program`'s own path never has
-        // to survive being interpolated into the script text.
+        // `sh -c SCRIPT ARG0 ARG1...`: ARG0 becomes $0 and the rest becomes
+        // "$@" for the `exec`. Thus the script text never contains the path.
         let unlock_and_exec = r#"
             printf '\n' | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null ||
                 { echo "gnome-keyring-daemon --unlock failed; is gnome-keyring installed? EDS D-Bus-activates org.freedesktop.secrets on credential lookups and needs a running keyring daemon to answer it." >&2; exit 97; }
@@ -384,14 +356,11 @@ impl Session {
         "#;
         let stdout_path = self.root.join("run.stdout");
         let stderr_path = self.root.join("run.stderr");
-        // Files, not pipes: `Command::output()` waits for end-of-file on the
-        // child's stdout, which arrives only once every process holding the
-        // write end has exited — and the private bus's `dbus-daemon`, plus
-        // the keyring daemon it activates, inherit that handle and outlive
-        // `dbus-run-session`. Waiting on the shell's own exit status, with
-        // its stdout/stderr going to files, is what this call actually
-        // means, and it cannot hang on a daemon this method is about to reap
-        // anyway.
+        // Use files, not pipes. `Command::output()` waits for end-of-file on
+        // stdout, which comes only when all processes with the write end exit.
+        // The `dbus-daemon` and the keyring daemon inherit that handle and
+        // live longer than `dbus-run-session`. With files, this waits only for
+        // the exit status of the shell and cannot hang on a daemon.
         let status = Command::new("dbus-run-session")
             .arg("--")
             .arg("sh")
@@ -416,22 +385,20 @@ impl Session {
         }
     }
 
-    /// Terminate the `gnome-keyring-daemon` [`Self::run`] started, if it is
-    /// still alive, and wait for it to actually go. Matches by this
-    /// session's own `XDG_RUNTIME_DIR`, so it can only ever find and kill
-    /// this session's own daemon, never another session's or the
-    /// developer's.
+    /// Stop the `gnome-keyring-daemon` that [`Self::run`] started, if it is
+    /// alive, and wait for it to exit. The match uses the `XDG_RUNTIME_DIR` of
+    /// the session, so it cannot stop a daemon of a different session or of
+    /// the developer.
     fn reap_keyring_daemon(&self) {
         for pid in self.keyring_daemons() {
-            // SAFETY: a plain signal to a pid `keyring_daemons` just read out
-            // of `/proc`, filtered to processes whose own `XDG_RUNTIME_DIR`
-            // is this session's scratch directory — nothing else can have
-            // that value.
+            // SAFETY: a plain signal to a pid that `keyring_daemons` read from
+            // `/proc`. The filter keeps only processes whose `XDG_RUNTIME_DIR`
+            // is the scratch directory of this session. No other process can
+            // have that value.
             unsafe { libc::kill(pid, libc::SIGTERM) };
         }
-        // SIGTERM is a request, not a guarantee, so poll for the exit this
-        // is actually meant to produce rather than assume it. Half a second
-        // is far more than a keyring daemon needs to shut down.
+        // SIGTERM does not guarantee an exit, so poll for it. A keyring daemon
+        // needs much less than half a second to stop.
         for _ in 0..50 {
             if self.keyring_daemons().is_empty() {
                 return;
@@ -440,20 +407,18 @@ impl Session {
         }
     }
 
-    /// Every `gnome-keyring-daemon` process whose own `XDG_RUNTIME_DIR`
-    /// environment variable is this session's scratch runtime directory.
+    /// All `gnome-keyring-daemon` processes whose `XDG_RUNTIME_DIR` is the
+    /// scratch runtime directory of the session.
     fn keyring_daemons(&self) -> Vec<i32> {
-        // Both spellings: `gnome-keyring-daemon` as started by `run`'s own
-        // script, and `/usr/bin/gnome-keyring-daemon` as D-Bus activation
-        // would start it — `contains` below matches either.
+        // `contains` matches both `gnome-keyring-daemon` (from the `run`
+        // script) and `/usr/bin/gnome-keyring-daemon` (from D-Bus activation).
         self.pids_matching(b"gnome-keyring-daemon")
     }
 
-    /// Every process whose `cmdline` contains `needle` and whose own
-    /// `XDG_RUNTIME_DIR` environment variable is this session's scratch
-    /// runtime directory — so a match can only ever be a daemon *this*
-    /// session's private bus activated, never another session's or the
-    /// developer's.
+    /// All processes whose `cmdline` contains `needle` and whose
+    /// `XDG_RUNTIME_DIR` is the scratch runtime directory of the session.
+    /// Thus a match is always a daemon that the private bus of *this*
+    /// session activated.
     fn pids_matching(&self, needle: &[u8]) -> Vec<i32> {
         let Some(runtime_directory) = self.environment.get(OsStr::new("XDG_RUNTIME_DIR")) else {
             return Vec::new();
@@ -479,22 +444,19 @@ impl Session {
             .collect()
     }
 
-    /// Like [`Self::run`], but also reports the highest `VmHWM` (peak
-    /// resident set size) seen on any process matching `process_name` that
-    /// this session's own private bus activated, while `program` ran.
+    /// Like [`Self::run`], but also return the highest `VmHWM` (peak resident
+    /// set size) of a process that matches `process_name`, from the private
+    /// bus of the session, while `program` ran.
     ///
-    /// This is for measuring a D-Bus-activated *factory* process
+    /// Use this to measure a D-Bus-activated *factory* process
     /// (`evolution-addressbook-factory`, `evolution-calendar-factory`), not
-    /// `program` itself: the factory is what actually holds the meta
-    /// backend's cache, and it lives and dies with the private bus `run`
-    /// tears down, so it cannot be inspected from outside this one call's
-    /// window. A background thread polls `/proc` every 20ms for the
-    /// duration, the same `XDG_RUNTIME_DIR`-matching technique
-    /// [`Self::keyring_daemons`] uses to find a daemon this session, and no
-    /// other, started.
+    /// `program`. The factory holds the meta-backend cache, and it stops with
+    /// the private bus, so only this function can examine it. A background
+    /// thread polls `/proc` every 20ms, with the `XDG_RUNTIME_DIR` match that
+    /// [`Self::keyring_daemons`] uses.
     ///
-    /// `None` if the process never appeared -- e.g. its name was misspelled,
-    /// or the open never actually reached the factory.
+    /// The value is `None` if the process did not start, for example if its
+    /// name is incorrect or the open did not reach the factory.
     pub fn run_measuring_peak_rss(
         &self,
         program: &Path,
@@ -535,10 +497,9 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-/// `VmHWM` (peak resident set size, in kB) of `pid`, read from
-/// `/proc/<pid>/status`. `None` once the process has exited, or on any
-/// platform without `/proc` -- Linux only, which every runner this crate
-/// actually runs on is.
+/// The `VmHWM` (peak resident set size, in kB) of `pid`, from
+/// `/proc/<pid>/status`. `None` after the process exits, or without `/proc`
+/// (all runners of this crate are Linux).
 fn process_peak_rss_kb(pid: i32) -> Option<u64> {
     let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     status.lines().find_map(|line| {
@@ -548,10 +509,10 @@ fn process_peak_rss_kb(pid: i32) -> Option<u64> {
     })
 }
 
-/// A path handed to the test by CTest, which knows where CMake put things
-/// and where the EDS runtime is. Absent means the test was started by hand
-/// with a plain `cargo test`, which is not a thing this crate supports — see
-/// `docs/functional-tests.md` — so say that rather than passing quietly.
+/// A path that CTest gives to the test. CTest knows the CMake output and the
+/// EDS runtime locations. If the variable is absent, the test started with a
+/// plain `cargo test`, which this crate does not support (see
+/// `docs/functional-tests.md`). Then panic with a clear message.
 pub fn required_path(variable: &str) -> PathBuf {
     let value = std::env::var_os(variable).unwrap_or_else(|| {
         panic!(
@@ -568,8 +529,8 @@ pub fn required_path(variable: &str) -> PathBuf {
     path
 }
 
-/// Split `key=value` lines into a map, ignoring anything else the program
-/// printed. The client programs report their observations this way.
+/// Put the `key=value` lines into a map, and ignore all other output. The
+/// client programs report their observations in this format.
 pub fn observations(stdout: &str) -> BTreeMap<&str, &str> {
     stdout
         .lines()
@@ -577,20 +538,18 @@ pub fn observations(stdout: &str) -> BTreeMap<&str, &str> {
         .collect()
 }
 
-/// Forward every connection accepted on a fresh loopback port to `target` (an
-/// address `TcpStream::connect` accepts, e.g. a JMAP origin's bracketed-IPv6
-/// authority), and return the port it bound.
+/// Forward each connection on a new loopback port to `target`, and return
+/// the port. `target` is an address that `TcpStream::connect` accepts, for
+/// example the bracketed-IPv6 authority of a JMAP origin.
 ///
-/// `jmap-backend-core`'s `connect_target` refuses plaintext to anything but a
-/// loopback host (`Host=127.0.0.1` in a `.source` keyfile, same as the mock
-/// tests here use) — a real, honest rule, and one that would otherwise make
-/// real-server coverage of this harness impossible, since `.source` keyfiles
-/// name a host and port, not an arbitrary client object the way
-/// `jmap_client::Client::connect` takes one. This satisfies the rule rather
-/// than bypassing it: the backend's own plaintext traffic genuinely never
-/// leaves the loopback interface, and the plaintext hop onward to the real
-/// server is the same one every other live-server test in this workspace
-/// already makes directly.
+/// The `connect_target` of `jmap-backend-core` refuses plaintext to a host
+/// that is not loopback (the mock tests use `Host=127.0.0.1`). A `.source`
+/// keyfile names a host and port, not a client object as
+/// `jmap_client::Client::connect` accepts. Without this proxy, tests against
+/// a real server are thus not possible. The proxy obeys the rule: the
+/// plaintext traffic of the backend stays on the loopback interface. The
+/// plaintext connection to the real server is the same connection that the
+/// other live-server tests make directly.
 pub fn spawn_loopback_proxy(target: String) -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback proxy port");
     let port = listener
@@ -607,9 +566,8 @@ pub fn spawn_loopback_proxy(target: String) -> u16 {
     port
 }
 
-/// One proxied connection's two directions. Ends, without reporting, the
-/// moment either side closes — a relay has no opinion of its own on whether
-/// that was expected.
+/// Copy both directions of one proxied connection. Stop silently when one
+/// side closes.
 fn relay(mut incoming: std::net::TcpStream, target: &str) {
     let Ok(mut outgoing) = std::net::TcpStream::connect(target) else {
         return;

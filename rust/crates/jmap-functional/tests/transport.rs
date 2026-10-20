@@ -1,71 +1,61 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, sending: the other half of the Camel provider, reached the way
-//! Evolution reaches it — from the account, through the identity, to the
-//! transport.
+//! Sending: the second part of the Camel provider. The test gets to it as
+//! Evolution does, from the account through the identity to the transport.
 //!
-//! `mail.rs` covers receiving, and stops at the store. A transport is not the
-//! same object and is not configured from the same file: it is a second
-//! `CamelService`, built from a second `ESource`, and the only thing that joins
-//! it to the account is two hops of uid indirection through a third —
-//! `[Mail Account] IdentityUid` names an identity, and that identity's
-//! `[Mail Submission] TransportUid` names the transport. Nothing in Camel walks
-//! that chain; `EMailSession` does, out of `libemail-engine`, and so does the
-//! client program here.
+//! `mail.rs` tests receiving and stops at the store. A transport is a second
+//! `CamelService` from a second `ESource`. A third source connects it to the
+//! account through two uid references: `[Mail Account] IdentityUid` names an
+//! identity, and its `[Mail Submission] TransportUid` names the transport.
+//! Camel does not follow that chain. `EMailSession` (`libemail-engine`) and
+//! the client program here follow it.
 //!
-//! That chain is the whole reason this leg exists rather than being three more
-//! assertions in `mail.rs`. Every link in it is a string in a file that no
-//! compiler and no unit test can hold to the file it names, and the failure a
-//! broken link produces is the quietest one this provider has:
-//! `docs/manual-test-mail-provider.md` says it plainly — the account receives
-//! mail perfectly and fails only when the user presses Send. A store that never
-//! opens is a red account in the folder tree; a transport that was never
-//! configured is a message that looks sent.
+//! That chain is the reason for a separate test. Each link is a string in a
+//! file, and no compiler or unit test can check it. A broken link gives the
+//! least visible failure of this provider (see
+//! `docs/manual-test-mail-provider.md`): the account receives mail correctly
+//! and fails only when the user presses Send. A store that does not open
+//! shows a red account. A transport with no configuration shows a message
+//! that looks sent.
 //!
-//! Two tests, and the second is the failure rather than the success:
-//! [`camel_sends_through_the_transport_the_identity_names`] is the chain
-//! walked, connected and sent over, and
-//! [`a_transport_with_no_authentication_group_cannot_send`] is the same three
-//! files with the transport's `[Authentication]` group deleted — the mistake the
-//! recipe warns about, made on purpose, so that the thing which catches it is a
-//! test and not a reader.
+//! There are two tests.
+//! [`camel_sends_through_the_transport_the_identity_names`] follows the
+//! chain, connects and sends.
+//! [`a_transport_with_no_authentication_group_cannot_send`] uses the same
+//! three files without the `[Authentication]` group of the transport. This
+//! is the mistake that the recipe warns about.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// The uids of the three sources, which are also their file names. They are
-/// named here rather than derived because they are what the keyfiles below
-/// point at each other with: `IdentityUid` and `TransportUid` are these
-/// strings, and the client is handed only the first of the three.
+/// The uids of the three sources, which are also their file names.
+/// `IdentityUid` and `TransportUid` in the keyfiles use these strings. The
+/// client gets only the account uid.
 const ACCOUNT_UID: &str = "jmap-functional-account";
 const IDENTITY_UID: &str = "jmap-functional-identity";
 const TRANSPORT_UID: &str = "jmap-functional-transport";
 
-/// Who the account sends as. It is the identity's `Address` in the keyfile, the
-/// address the client puts in the envelope, and the identity seeded on the
-/// mock — three places that have to agree for `Identity/get` to resolve, and
-/// the test asserts the submission went out through the seeded one.
+/// The sender of the account. It is the identity `Address` in the keyfile,
+/// the envelope address of the client, and the identity on the mock. These
+/// three must agree for `Identity/get` to resolve.
 const SENDER: &str = "alice@example.com";
 const SENDER_NAME: &str = "Alice Example";
 
-/// Who it is sent to. Deliberately not an address the mock knows anything
-/// about: an envelope recipient is not a record on the server, it is a string
-/// the submission carries.
+/// The recipient. The mock does not know this address, because an envelope
+/// recipient is only a string in the submission, not a server record.
 const RECIPIENT: &str = "bob@example.com";
 
-/// The message the composer would have built. Owned by this file rather than by
-/// the client program so that what is asserted and what is sent are one string.
+/// The message. This file, not the client, holds it, so the assertions and
+/// the sent message use the same string.
 const SUBJECT: &str = "Lunch on Tuesday";
 const BODY: &str = "One o'clock at the usual place.";
 
-/// The account: what mail arrives in, and — through `IdentityUid` — the only
-/// pointer that exists towards what it leaves through.
+/// The account receives the mail. Its `IdentityUid` is the only reference
+/// to the transport.
 ///
-/// A literal, for the reason the other legs give: this is
-/// `docs/examples/jmap-mock-standalone-mail.source` with the mock's ephemeral
-/// port filled in, and a change to the documented recipe should fail a test
-/// rather than quietly retarget one. `jmap-mail`'s `recipe.rs` is what holds
-/// the documented files themselves to what they claim.
+/// This literal is `docs/examples/jmap-mock-standalone-mail.source` with the
+/// ephemeral port of the mock. A change to the documented recipe makes a test
+/// fail. `recipe.rs` of `jmap-mail` examines the documented files.
 fn account(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -85,8 +75,8 @@ fn account(port: u16) -> String {
     )
 }
 
-/// The identity: who the mail is from, and where the chain turns towards the
-/// transport. It names no server of its own — an identity is not a service.
+/// The identity: the sender, and the link to the transport. It names no
+/// server, because an identity is not a service.
 fn identity() -> String {
     format!(
         "[Data Source]\n\
@@ -102,14 +92,13 @@ fn identity() -> String {
     )
 }
 
-/// The transport: what mail leaves through, with a server of its own.
+/// The transport sends the mail, and has its own server.
 ///
-/// `authentication` is what makes this function interesting. The
-/// `[Authentication]` group here is a *second* copy of the account's, and it has
-/// to be: a store and a transport are two `CamelService`s configured from two
-/// `ESource`s, and with no collection above them there is nothing that would
-/// copy a server from one to the other. Passing `false` deletes it, which is the
-/// mistake the second test makes.
+/// The `[Authentication]` group is a *second* copy of the group of the
+/// account. A store and a transport are two `CamelService`s from two
+/// `ESource`s. With no collection above them, nothing copies the server from
+/// one to the other. `authentication` set to `false` removes the group, as the
+/// second test does.
 fn transport(port: u16, authentication: bool) -> String {
     let server = if authentication {
         format!(
@@ -134,7 +123,8 @@ fn transport(port: u16, authentication: bool) -> String {
     )
 }
 
-/// A mock with the account a send needs, and the three paths CTest passes.
+/// A mock with the account that a send needs, and the ids of its seeded
+/// records.
 struct Fixture {
     server: jmap_mock::MockServer,
     account_id: jmap_proto::Id,
@@ -147,11 +137,10 @@ struct Fixture {
 impl Fixture {
     /// Inbox, Sent and Drafts by role, and one identity for [`SENDER`].
     ///
-    /// All three mailboxes, because which two a send uses is decided from the
-    /// roles the account has: `OutgoingMailboxes` stages in Drafts and files
-    /// into Sent when both exist, which is the ordinary account and the one
-    /// whose `out_sent_message_saved` answer is `TRUE`. An account seeded with
-    /// fewer would be testing a fallback rather than the normal path.
+    /// The roles of the account decide the mailboxes of a send. If Drafts and
+    /// Sent exist, `OutgoingMailboxes` stages in Drafts and files into Sent,
+    /// and `out_sent_message_saved` is `TRUE`. With fewer mailboxes, the test
+    /// examines a fallback, not the normal path.
     fn start() -> Self {
         let server = jmap_mock::MockServer::builder().start();
         let account_id = server.account_id();
@@ -201,8 +190,8 @@ impl Fixture {
         session
     }
 
-    /// The mailboxes an email is in, by id rather than by name: the roles are
-    /// what a send is decided from, and two mailboxes may share a name.
+    /// The mailbox ids of an email. Ids, not names, because two mailboxes can
+    /// have the same name.
     fn mailboxes_of(&self, email: &jmap_proto::mail::Email) -> Vec<jmap_proto::Id> {
         email
             .mailbox_ids
@@ -214,7 +203,7 @@ impl Fixture {
             .collect()
     }
 
-    /// Every email the account holds, which after one send is one.
+    /// All emails of the account. After one send, there is one.
     fn emails(&self) -> Vec<jmap_proto::mail::Email> {
         let state = self.server.state();
         let state = state.lock().expect("mock state lock");
@@ -227,7 +216,7 @@ impl Fixture {
             .collect()
     }
 
-    /// The bytes an email was imported from, as they arrived over the upload.
+    /// The uploaded bytes from which the server imported an email.
     fn blob(&self, email: &jmap_proto::mail::Email) -> String {
         let state = self.server.state();
         let state = state.lock().expect("mock state lock");
@@ -245,9 +234,9 @@ impl Fixture {
     }
 }
 
-/// Runs the client and returns its output together with a report to attach to
-/// any failure. The client is handed the *account* uid and nothing else about
-/// the chain — finding the transport from it is what is being tested.
+/// Runs the client and returns its output and a report for failures. The
+/// client gets only the *account* uid. The test examines how it finds the
+/// transport from that uid.
 fn run(session: &Session) -> (Output, String) {
     let client = required_path("JMAP_FUNCTIONAL_TRANSPORT_CLIENT");
     let output = session.run(&client, &[ACCOUNT_UID, RECIPIENT, SUBJECT, BODY]);
@@ -264,7 +253,7 @@ fn run(session: &Session) -> (Output, String) {
     )
 }
 
-/// What the client said, with its streams already decoded.
+/// The decoded output of the client.
 struct Output {
     status: std::process::ExitStatus,
     stdout: String,
@@ -278,11 +267,10 @@ fn camel_sends_through_the_transport_the_identity_names() {
     let (output, report) = run(&session);
     let seen = observations(&output.stdout);
 
-    // The chain, before anything about the send: these three are what the
-    // client resolved out of the registry, and a wrong one here explains every
-    // later failure. `transport-uid` is the assertion the whole leg is for —
-    // the client was given the account and arrived at the transport, through
-    // the identity, using only what the keyfiles say.
+    // Assert the chain first. The client resolved these values from the
+    // registry, and a wrong value explains all later failures. `transport-uid`
+    // is the main assertion: from the account, the client found the transport
+    // through the identity, with only the keyfiles.
     assert_eq!(
         seen.get("identity-uid"),
         Some(&IDENTITY_UID),
@@ -304,9 +292,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the transport source names a protocol the provider does not register\n{report}"
     );
 
-    // Camel found the provider a second time, in the transport slot this time:
-    // `object_types[CAMEL_PROVIDER_TRANSPORT]`, which is a different entry of
-    // the same registered struct than the store came out of.
+    // Camel found the provider again, in the transport slot
+    // `object_types[CAMEL_PROVIDER_TRANSPORT]`. The store uses a different
+    // entry of the same registered struct.
     assert_eq!(
         seen.get("transport-connected"),
         Some(&"1"),
@@ -325,10 +313,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the send did not report success\n{report}"
     );
 
-    // Camel's one out-parameter, and not decoration: told `0`, Evolution
-    // appends a copy of its own to the account's sent folder, so a wrong answer
-    // here is either two of every sent message or none of them. This account
-    // has a Sent mailbox, so the copy is saved.
+    // The Camel out-parameter. For `0`, Evolution adds its own copy to the
+    // sent folder of the account. A wrong value gives two copies of each sent
+    // message, or none. This account has a Sent mailbox, so the copy is saved.
     assert_eq!(
         seen.get("sent-copy-saved"),
         Some(&"1"),
@@ -341,9 +328,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the transport did not let go of its connection\n{report}"
     );
 
-    // The other end. One submission, through the identity the mock seeded for
-    // the address the *identity source* named — which is the chain checked
-    // again from the server's side, and this time including `Identity/get`.
+    // The other end. One submission, through the mock identity for the
+    // address of the *identity source*. This examines the chain again from the
+    // server side, with `Identity/get`.
     let (email_id, identity_id, envelope) = {
         let state = fixture.server.state();
         let state = state.lock().expect("mock state lock");
@@ -365,10 +352,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the submission did not go out through the account's identity\n{report}"
     );
 
-    // The envelope, which is what the message is *delivered* by and is not the
-    // headers. The client hands Camel two `CamelAddress` lists, exactly as
-    // `e_mail_session_send_to` does, and RFC 8621 §7's envelope is what has to
-    // come out the far side.
+    // The envelope *delivers* the message. It is not the headers. The client
+    // gives Camel two `CamelAddress` lists, as `e_mail_session_send_to` does.
+    // The server must get the envelope of RFC 8621 §7.
     assert_eq!(
         envelope.mail_from.email, SENDER,
         "the envelope sender is not the identity's address\n{report}"
@@ -383,10 +369,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the envelope recipients are not the ones Camel was given\n{report}"
     );
 
-    // And what the account holds now: one message, in Sent rather than in the
-    // Drafts it was staged in, no longer a draft. That move is the server's own
-    // `onSuccessUpdateEmail`, so seeing it here is evidence the submission was
-    // accepted and not merely posted.
+    // The account now has one message, in Sent and not in Drafts, and not a
+    // draft. The server `onSuccessUpdateEmail` does this move. Thus the server
+    // accepted the submission.
     let emails = fixture.emails();
     assert_eq!(
         emails.len(),
@@ -413,9 +398,8 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the sent message is still a draft: {keywords:?}\n{report}"
     );
 
-    // The bytes themselves, which nothing above looks at: the subject and the
-    // body as Camel's own emitter wrote them out. A provider that submitted an
-    // empty message would satisfy every assertion up to here.
+    // The subject and the body in the bytes from Camel. An empty message
+    // passes all assertions above.
     let source = fixture.blob(email);
     assert!(
         source.contains(SUBJECT),
@@ -426,9 +410,9 @@ fn camel_sends_through_the_transport_the_identity_names() {
         "the uploaded message has no body:\n{source}\n{report}"
     );
 
-    // The requests, in the order a send makes them. `Email/import` is preceded
-    // by a blob upload, which is a plain HTTP PUT and not a method call, so it
-    // is not in this list — the import naming a blob is what says it happened.
+    // The requests of a send. A blob upload (a plain HTTP POST, not a method
+    // call) comes before `Email/import`, so it is not in this list. The blob
+    // in the import proves the upload.
     let calls = fixture.server.method_calls();
     for method in ["Identity/get", "Mailbox/get", "Email/import"] {
         assert!(
@@ -450,10 +434,9 @@ fn a_transport_with_no_authentication_group_cannot_send() {
     let (output, report) = run(&session);
     let seen = observations(&output.stdout);
 
-    // The chain is intact: this is not a source the client failed to find, it
-    // is one it found and that names no server. The distinction is the point —
-    // the failure has to be about the transport's own configuration, not about
-    // the walk.
+    // The chain is correct. The client found the transport source, which
+    // names no server. The failure must come from the transport
+    // configuration, not from the chain.
     assert_eq!(
         seen.get("transport-uid"),
         Some(&TRANSPORT_UID),
@@ -465,11 +448,9 @@ fn a_transport_with_no_authentication_group_cannot_send() {
         "a transport with no server connected anyway\n{report}"
     );
 
-    // At the connect, and named for what it is. `SourceError::MissingHost`'s
-    // sentence is shared with the book and calendar backends, which is why it
-    // says "account" rather than "transport": the user's mistake is one line
-    // missing from one of their account's files, and this is the message
-    // Evolution puts in front of them when they press Send.
+    // The failure is at the connect. The book and calendar backends use the
+    // same `SourceError::MissingHost` text, so it says "account", not
+    // "transport". Evolution shows this message when the user presses Send.
     assert!(
         output
             .stderr
@@ -477,10 +458,8 @@ fn a_transport_with_no_authentication_group_cannot_send() {
         "the transport failed somewhere other than the connect\n{report}"
     );
 
-    // And it cost nothing. Not one request, so not one message imported into
-    // the account for a send that never happened — the failure a user recovers
-    // from by adding a line to a keyfile, rather than by deleting a draft they
-    // did not write.
+    // No request, so no imported message for a failed send. The user adds a
+    // line to a keyfile, and does not have to delete an unwanted draft.
     let calls = fixture.server.method_calls();
     assert!(
         calls.is_empty(),

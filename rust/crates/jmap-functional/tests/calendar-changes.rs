@@ -1,31 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, calendar: the calendar-side twin of `book-changes.rs` — whether
-//! `ECalMetaBackendClass::get_changes_sync` is actually reached through a
-//! real, running `evolution-calendar-factory`, not just through
-//! `jmap-backend-cal`'s own tests, which link the crate directly and call
-//! `ops::get_changes` as a plain function.
+//! Calendar: the calendar equivalent of `book-changes.rs`. Make sure that a
+//! real `evolution-calendar-factory` calls
+//! `ECalMetaBackendClass::get_changes_sync`. The tests of `jmap-backend-cal`
+//! call `ops::get_changes` only as a plain function.
 //!
-//! `calendar.rs`'s legs each open a calendar exactly once, so every one of
-//! them drives `list_existing_sync` (a fresh meta-backend cache has no
-//! stored revision to diff from) and none reaches `get_changes_sync` at
-//! all — the same gap `book-changes.rs` closed for the address book,
-//! closed here for the calendar. This test opens the
-//! same calendar *twice*, reusing one [`Session`]'s on-disk cache across two
-//! separate `session.run()` calls (each its own process, its own private
-//! bus, its own freshly started factory): the first connect has nothing
-//! cached and lists in full; the second connect, against the warm cache the
-//! first left behind, is where EDS's own post-connect refresh has a stored
-//! sync tag to hand `get_changes_sync` instead.
+//! The tests in `calendar.rs` each open a calendar one time. Each open calls
+//! `list_existing_sync`, because a new meta-backend cache has no stored
+//! revision. None of them reaches `get_changes_sync`. This test opens the
+//! same calendar *two* times with the on-disk cache of one [`Session`]. Each
+//! `session.run()` has its own process, private bus and factory. The first
+//! connect has no cache and lists all events. The second connect has the
+//! cache from the first, so the EDS post-connect refresh gives the stored
+//! sync tag to `get_changes_sync`.
 //!
-//! An event seeded between the two connects — straight into the mock's store
-//! via [`jmap_mock::state::Store::transaction`], not
-//! [`jmap_mock::state::Store::seed`], since only a transaction bumps the
-//! state counter and logs a `Change` for `CalendarEvent/changes` to report —
-//! is what makes the second connect's answer observably different from the
-//! first, rather than merely asserting the right method name was called on
-//! nothing.
+//! Between the two connects, the test adds an event with
+//! [`jmap_mock::state::Store::transaction`], not
+//! [`jmap_mock::state::Store::seed`]. Only a transaction increments the state
+//! counter and logs a `Change` for `CalendarEvent/changes`. Thus the second
+//! connect gives a different, observable result.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::calendars::CalendarEvent;
@@ -35,8 +29,8 @@ const SECOND_EVENT: &str = "Retro";
 const START: &str = "2026-01-15T13:00:00";
 const DURATION: &str = "PT30M";
 
-/// `docs/examples/jmap-mock-calendar.source`, with the mock's ephemeral port
-/// filled in — the same keyfile shape `calendar.rs`'s own `keyfile` writes.
+/// `docs/examples/jmap-mock-calendar.source` with the ephemeral port of the
+/// mock. The `keyfile` of `calendar.rs` writes the same shape.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -55,7 +49,7 @@ fn keyfile(port: u16) -> String {
     )
 }
 
-/// Runs the calendar-changes client and hands back its sorted `event-<i>`
+/// Run the calendar-changes client and return its sorted `event-<i>`
 /// summaries.
 fn list_summaries(session: &Session, client: &std::path::Path) -> (Vec<String>, String) {
     let output = session.run(client, &["jmap-functional"]);
@@ -99,10 +93,9 @@ fn a_second_connect_pulls_a_change_through_get_changes_sync() {
             .expect("the mock's default account");
         let calendar_id = account.seed_calendar("Personal", true);
 
-        // The baseline event: a plain fixture, not a logged change — the
-        // first connect is expected to see it via `list_existing_sync`'s
-        // full query, which reads the store directly rather than the change
-        // log `Store::seed` deliberately does not touch.
+        // The baseline event is a fixture, not a logged change. The first
+        // connect sees it through the full query of `list_existing_sync`.
+        // `Store::seed_with_id` does not write to the change log.
         let id = account.calendar_events.alloc_id();
         let mut event = CalendarEvent::simple(calendar_id.clone(), FIRST_EVENT, START, DURATION);
         event.id = Some(id.clone());
@@ -145,9 +138,8 @@ fn a_second_connect_pulls_a_change_through_get_changes_sync() {
         "the first connect has no prior sync tag, so it should not have called CalendarEvent/changes\n{calls_after_first:?}"
     );
 
-    // A real, logged change: `Store::transaction` bumps the state counter,
-    // which is what makes it visible to a later `CalendarEvent/changes` at
-    // all — `Store::seed`/`seed_with_id` above deliberately does not do this.
+    // A logged change: `Store::transaction` increments the state counter,
+    // so a later `CalendarEvent/changes` shows it.
     {
         let state = server.state();
         let mut state = state.lock().expect("mock state lock");
@@ -164,14 +156,12 @@ fn a_second_connect_pulls_a_change_through_get_changes_sync() {
         });
     }
 
-    // Reuses `session`'s own on-disk cache from the first connect — a fresh
-    // process and a fresh private bus, but the same `XDG_CACHE_HOME`, so
-    // EDS's own stored sync tag is what the second connect's post-connect
-    // refresh has to work with.
+    // A new process and private bus, but the same `XDG_CACHE_HOME`. Thus the
+    // post-connect refresh starts from the sync tag that EDS stored.
     let (second_summaries, second_report) = list_summaries(&session, &client);
     assert_eq!(
         second_summaries,
-        // Alphabetical, per the client's own sort: "Retro" before "Team Standup".
+        // The client sorts alphabetically: "Retro" before "Team Standup".
         vec![SECOND_EVENT.to_owned(), FIRST_EVENT.to_owned()],
         "the second connect should see the change made between the two runs\n{second_report}"
     );

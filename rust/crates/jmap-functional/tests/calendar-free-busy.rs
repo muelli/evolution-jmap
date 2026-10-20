@@ -1,27 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Track E Path A's `get_free_busy_sync`, proven through a real, running
-//! `evolution-calendar-factory` — not the in-process fixtures
-//! `jmap-backend-cal/tests/{backend,ops}.rs` stop at.
+//! `get_free_busy_sync` through a real, running `evolution-calendar-factory`.
+//! The in-process tests in `jmap-backend-cal/tests/{backend,ops}.rs` do not
+//! go this far.
 //!
-//! `backend.rs` only proves the `get_free_busy_sync` vtable slot is
-//! installed on the right (`ECalBackendSyncClass`, one level up from
-//! `ECalMetaBackend`) parent class; `ops.rs` only proves the pure
-//! attendee-answering decision (`ops::get_free_busy`) against a literal
-//! `CalSync::free_busy` stand-in, with no `ESource`/`ECalClient` involved.
-//! Neither drives the FFI glue in between: a real `ECalClient` asking a
-//! real, connected `ECalMetaBackend` instance for free/busy, which is what
-//! actually calls `jmap_cal_sync::CalSync::free_busy` — the
-//! `Principal/query` + `Principal/getAvailability` round trip — and marshals
-//! its answer back through `marshal::free_busy_list` into the `GSList` EDS
-//! hands the client. This test is that missing link, the same way
-//! `calendar-color.rs` is the missing link for D2's colour push.
+//! `backend.rs` shows only that the `get_free_busy_sync` vtable slot is
+//! installed on the correct parent class (`ECalBackendSyncClass`, one level
+//! above `ECalMetaBackend`). `ops.rs` tests only the attendee decision
+//! (`ops::get_free_busy`), without an `ESource` or `ECalClient`. Neither test
+//! does the FFI step between them: a real `ECalClient` asks a real, connected
+//! `ECalMetaBackend` for free/busy. That calls
+//! `jmap_cal_sync::CalSync::free_busy` (the `Principal/query` and
+//! `Principal/getAvailability` round trip), and `marshal::free_busy_list`
+//! converts the result into the `GSList` that EDS gives the client. This test
+//! does that step, as `calendar-color.rs` does for the colour push.
 //!
-//! `tests/functional/cal-free-busy-client.c` opens the calendar (which is
-//! what makes the factory dlopen the backend and keep it alive), then calls
-//! `e_cal_client_get_free_busy_sync()` for one seeded principal's address
-//! over a window that contains one seeded busy event.
+//! `tests/functional/cal-free-busy-client.c` opens the calendar, so the
+//! factory loads the backend and keeps it alive. Then it calls
+//! `e_cal_client_get_free_busy_sync()` for the address of one seeded
+//! principal, over a window that contains one seeded busy event.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::calendars::CalendarEvent;
@@ -31,12 +29,12 @@ const USER_EMAIL: &str = "bob@example.test";
 const WINDOW_START: &str = "20260901T080000Z";
 const WINDOW_END: &str = "20260901T120000Z";
 
-/// No `[Resource] Identity=`, mirroring `calendar.rs`/`calendar-color.rs`'s
-/// own keyfile: the backend asks the server for the account's default
-/// calendar, which is what makes seeding one flagged default enough to
-/// answer it. `get_free_busy_sync`'s own account-id resolution
-/// (`jmap-backend-cal/src/connect.rs`) is the same one D2's colour push
-/// uses, so this needs no collection-backend wiring either.
+/// No `[Resource] Identity=`, as in the keyfiles of `calendar.rs` and
+/// `calendar-color.rs`. The backend asks the server for the default calendar
+/// of the account, so one seeded default calendar is sufficient.
+/// `get_free_busy_sync` gets the account id in the same way as the colour
+/// push (`jmap-backend-cal/src/connect.rs`), so no collection backend is
+/// necessary.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -74,9 +72,9 @@ fn a_real_backend_answers_free_busy_for_a_seeded_principal() {
             email: Some(USER_EMAIL.to_owned()),
             ..Principal::default()
         });
-        // 09:00-10:00 UTC, inside the [08:00, 12:00) window the client asks
-        // about — the one thing `Principal/getAvailability` should report
-        // back as this attendee's busy period.
+        // 09:00-10:00 UTC, in the [08:00, 12:00) window of the client. This
+        // is the only busy period that `Principal/getAvailability` must
+        // report for this attendee.
         account.calendar_events.seed(CalendarEvent::simple(
             calendar_id,
             "Busy meeting",
@@ -106,11 +104,10 @@ fn a_real_backend_answers_free_busy_for_a_seeded_principal() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Checked before the exit status, for the reason every other calendar
-    // leg's own assertion is: a calendar the backend could not open reaches
-    // the client looking exactly like one it opened and forgot to claim
-    // connected, and the exit status alone would only say "somewhere
-    // earlier", not where.
+    // Check this before the exit status, as the other calendar tests do. For
+    // the client, a calendar that the backend could not open looks the same
+    // as one that it opened but did not mark connected. The exit status does
+    // not tell where the failure occurred.
     assert_eq!(
         seen.get("connection-status"),
         Some(&"connected"),

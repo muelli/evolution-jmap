@@ -1,40 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The mail twin of `live-stalwart-book-scale.rs` and
-//! `live-stalwart-calendar-scale.rs`: how long the Camel provider's first
-//! open of an already-large inbox takes against a real server, and how much
-//! memory the process holding it peaks at.
+//! The mail version of `live-stalwart-book-scale.rs` and
+//! `live-stalwart-calendar-scale.rs`. It measures the first open of a large
+//! inbox by the Camel provider against a real server: the time, and the peak
+//! memory of the process.
 //!
-//! The book and calendar legs measure a factory daemon, because that is where
-//! an EDS backend lives. A Camel provider has no daemon: it is dlopened into
-//! the mail client's own process, so the process measured here is
-//! `functional-mail-live-client` itself, the stand-in for Evolution. Its
-//! `scale` phase reports three steps separately: opening the inbox, which is
-//! where the first sync happens (every row fetched and written into Camel's
-//! summary), a delta refresh like every later open makes, and a summary read
-//! for every listed message, which is what the message list does to draw its
-//! rows.
+//! The book and calendar tests measure a factory daemon, because an EDS
+//! backend runs there. A Camel provider has no daemon: it loads into the
+//! process of the mail client. Thus this test measures
+//! `functional-mail-live-client`, which is in place of Evolution. Its `scale`
+//! phase reports three steps:
 //!
-//! Messages are seeded directly over JMAP with a raw [`Client`], in
-//! `Email/set` batches, before Camel ever connects, so the open really is the
-//! first one against an inbox that was already this size.
+//! - The open of the inbox, which does the first sync (it gets each row and
+//!   writes it into the Camel summary).
+//! - A delta refresh, as each later open does.
+//! - A summary read for each listed message, as the message list does to
+//!   show its rows.
 //!
-//! ## Running it
+//! A raw [`Client`] creates the messages over JMAP in `Email/set` batches
+//! before Camel connects. Thus the open is the first open of a large inbox.
 //!
-//! Same environment as `live-stalwart-mail.rs`, built through
-//! `-DENABLE_FUNCTIONAL_TESTS=ON` so `JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT`,
-//! `_MAIL_MODULE` and `_MAIL_URLS` are set, with the EDS runtime packages
-//! installed (`ci/install-deps-functional.sh`). `JMAP_SCALE_TEST_MESSAGES`
-//! overrides the inbox size (default 10000). Use a throwaway account created
-//! for this alone: the run leaves that many messages in its inbox.
+//! ## How to run it
+//!
+//! Use the same environment as `live-stalwart-mail.rs`. Build with
+//! `-DENABLE_FUNCTIONAL_TESTS=ON`, so that `JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT`,
+//! `_MAIL_MODULE` and `_MAIL_URLS` are set. Install the EDS runtime packages
+//! (`ci/install-deps-functional.sh`). `JMAP_SCALE_TEST_MESSAGES` sets the
+//! inbox size (default 10000). Use a throwaway account only for this test,
+//! because the test leaves all the messages in its inbox.
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-mail-scale -- --ignored --nocapture
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 use std::thread::sleep;
@@ -45,9 +46,8 @@ use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use serde_json::{Map, Value, json};
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never counts a previous run's messages as this
-/// one's. Mirrors every other live-server test's own copy.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not count the messages of an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -62,8 +62,8 @@ fn inbox_size() -> usize {
         .unwrap_or(10_000)
 }
 
-/// `(origin, user, password)`, or `None` to skip. Mirrors
-/// `live-stalwart-mail.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-mail.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -73,9 +73,9 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) with a short
-/// sleep, up to 20 times. Mirrors `live-stalwart-book-scale.rs`'s own copy,
-/// duplicated for the reason it gives.
+/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) up to 19 times,
+/// with a 5-second sleep before each retry. A copy of `retrying` in
+/// `live-stalwart-book-scale.rs` (see its comment for the reason).
 fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T, ClientError> {
     for remaining in (0..20).rev() {
         match attempt() {
@@ -108,9 +108,9 @@ fn keyfile(port: u16, user: &str) -> String {
     )
 }
 
-/// One `Email/set` create entry: a plain-text message in `inbox_id`, with
-/// `subject` unique to it, each a minute after the one before, so the summary
-/// has distinct dates to sort on like a real inbox.
+/// One `Email/set` create entry: a plain-text message in `inbox_id` with a
+/// unique `subject`. Each message is one minute after the one before, so the
+/// summary has different dates to sort, as in a real inbox.
 fn message(inbox_id: &str, subject: &str, index: usize) -> Value {
     let received = 1_767_225_600 + index as i64 * 60;
     let received_at = chrono_free_utc(received);
@@ -126,12 +126,12 @@ fn message(inbox_id: &str, subject: &str, index: usize) -> Value {
     })
 }
 
-/// `seconds` since the epoch as an RFC 3339 UTC date, without pulling a date
-/// crate into this crate's dev-dependencies for one format string.
+/// `seconds` since the epoch as an RFC 3339 UTC date. This avoids a date
+/// crate dependency for one format string.
 fn chrono_free_utc(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     let time = seconds.rem_euclid(86_400);
-    // Howard Hinnant's civil-from-days.
+    // The civil-from-days algorithm of Howard Hinnant.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -174,9 +174,9 @@ fn camels_first_open_of_a_real_sized_inbox_is_measured() {
         unique_suffix() & 0xffff_ffff_ffff
     );
 
-    // The raw seeding client talks to the server directly, not through the
-    // loopback proxy or Camel. See `live-stalwart-book-scale.rs` for why it
-    // rebases the session's URLs.
+    // The raw seeding client connects directly to the server, not through
+    // the loopback proxy or Camel. See `live-stalwart-book-scale.rs` for why
+    // it rebases the URLs of the session.
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
         .rebase_urls_to_origin(rebase)

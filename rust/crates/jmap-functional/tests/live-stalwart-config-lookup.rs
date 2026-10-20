@@ -1,52 +1,55 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `config-lookup.rs`'s real-Stalwart counterpart: a real `EConfigLookup`
-//! running `JmapConfigLookup` against real Stalwart's own OAuth 2.0
-//! discovery endpoint, not the mock's simplified fixture.
+//! The real-Stalwart version of `config-lookup.rs`: a real `EConfigLookup`
+//! runs `JmapConfigLookup` against the OAuth 2.0 discovery endpoint of real
+//! Stalwart, not against the simplified fixture of the mock.
 //!
-//! ## Why this cannot assert a positive, complete result
+//! ## Why this test cannot assert a complete result
 //!
-//! RFC 8414 §3.3 requires the fetched metadata document's `issuer` to equal,
-//! byte for byte, the host discovery was asked for. Real Stalwart's issuer is
-//! baked in at first-boot time from the one-time Bootstrap singleton's
-//! `serverHostname` ("https://mail.example.internal" on this runner's test
-//! server, confirmed live) and nothing in the post-bootstrap admin API can
-//! change it: the `Bootstrap` singleton itself is gone once the server leaves
-//! bootstrap mode. So any address this runner can actually reach Stalwart on
-//! — the loopback proxy's own origin, same as every other live-stalwart test
-//! uses — names a different issuer than the one the document states, and
-//! `oauth::discover`'s own RFC 8414 §3.3 check rejects it.
-//! `jmap-config/tests/live_server_discover_and_register.rs` solved the same
-//! mismatch one layer down with a transport that rewrites just the origin
-//! while leaving the checked issuer string untouched, but
-//! `JmapConfigLookup::run()` constructs its own `UreqTransport` directly with
-//! no such seam, and adding one would be production-code scope creep for a
-//! coverage-only item.
+//! RFC 8414 §3.3 requires that the `issuer` of the metadata document is
+//! byte-for-byte equal to the host that discovery asked for. Real Stalwart
+//! sets its issuer at first boot from the `serverHostname` of the one-time
+//! `Bootstrap` singleton ("https://mail.example.internal" on the test server
+//! of this runner). The post-bootstrap admin API cannot change it, because
+//! the `Bootstrap` singleton does not exist after bootstrap mode.
 //!
-//! What this test asserts instead is still genuinely new, real-server
-//! coverage: that `run()`'s *failure* path — reached here by a real,
-//! non-synthetic RFC 8414 rejection of real Stalwart's own, fuller metadata
-//! document (it carries `device_authorization_endpoint`,
-//! `introspection_endpoint`, `token_endpoint_auth_methods_supported` and
-//! `authorization_response_iss_parameter_supported`, none of which the mock's
-//! fixture does) — actually reaches a real `EConfigLookup`'s own
-//! `"worker-finished"` signal with a real `GError`, and adds no result. No
-//! existing test drives this path at all: `config-lookup.rs` only ever
-//! exercises the mock's success path, and `jmap-config`'s own unit tests of
-//! `Error::to_gerror` never go through a real `EConfigLookup`.
+//! Thus each address at which this runner can get to Stalwart (the origin of
+//! the loopback proxy, as in all live-stalwart tests) is different from the
+//! issuer in the document. The RFC 8414 §3.3 check in `oauth::discover`
+//! rejects it.
 //!
-//! Needs no throwaway account: RFC 8414 discovery and RFC 7591 registration
-//! are both unauthenticated by design, so only `$STALWART_URL` is required.
+//! `jmap-config/tests/live_server_discover_and_register.rs` solves the same
+//! mismatch one layer lower: its transport changes only the origin and keeps
+//! the issuer string. But `JmapConfigLookup::run()` constructs its own
+//! `UreqTransport` and has no such seam. To add one would change production
+//! code only for test coverage.
 //!
-//! ## Running it
+//! Thus this test asserts the failure path of `run()`. A real RFC 8414
+//! rejection of the metadata document of real Stalwart causes the failure.
+//! That document is more complete than the fixture of the mock: it has
+//! `device_authorization_endpoint`, `introspection_endpoint`,
+//! `token_endpoint_auth_methods_supported` and
+//! `authorization_response_iss_parameter_supported`. The test asserts that
+//! the failure gets to the `"worker-finished"` signal of a real
+//! `EConfigLookup` with a real `GError`, and that no result is added.
+//! `config-lookup.rs` tests only the success path of the mock, and the unit
+//! tests of `Error::to_gerror` in `jmap-config` do not use a real
+//! `EConfigLookup`.
+//!
+//! This test needs no throwaway account. RFC 8414 discovery and RFC 7591
+//! registration need no authentication, thus only `$STALWART_URL` is
+//! necessary.
+//!
+//! ## How to run it
+//!
+//! Set `STALWART_URL`, then run:
 //!
 //! ```console
-//! $ source harness/live-server/live-server-env.sh
 //! $ cargo test -p jmap-functional --test live-stalwart-config-lookup -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `STALWART_URL` is unset.
+//! When `STALWART_URL` is not set, the test skips and does not fail.
 
 use std::env;
 

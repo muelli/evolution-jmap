@@ -1,38 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The calendar leg, driven against a real Stalwart instead of the
-//! in-process mock.
+//! The calendar test, against a real Stalwart instead of the in-process mock.
 //!
-//! The twin of `live-stalwart-book.rs`, and deliberately narrower than
-//! `calendar.rs`'s own mock-based leg: `functional-cal-live-client`
-//! (`tests/functional/cal-live-client.c`) creates and reads back one plain
-//! event only, not `functional-cal-client`'s whole run of an all-day event, a
-//! zoned event, a six-occurrence recurring series with three kinds of
-//! exception, a THISANDFUTURE split, and a second zoned recurring series — a
-//! real server genuinely differing on any one of those would fail the whole
-//! client rather than just mismeasure a field, which is a risk this test
-//! deliberately defers to a later, richer pass. See the client's own header.
+//! This is the calendar version of `live-stalwart-book.rs`. It tests less
+//! than `calendar.rs`: `functional-cal-live-client`
+//! (`tests/functional/cal-live-client.c`) creates and reads back only one
+//! non-recurring event. `functional-cal-client` writes many events (all-day,
+//! zoned, recurring with exceptions, a THISANDFUTURE split). On a real
+//! server, one difference in those events makes the full client fail. See
+//! the header of the client.
 //!
-//! The mechanism is unchanged from the address-book leg: `spawn_loopback_proxy`
-//! satisfies `jmap-backend-core::connect_target`'s plaintext-stays-loopback
-//! rule honestly while the traffic actually continues to Stalwart;
-//! `JMAP_FUNCTIONAL_STORE_PASSWORD` seeds the password a real server needs and
-//! the mock never checks; `JMAP_LIVE_SERVER_REBASE_URLS` rebases the server's
-//! stated `apiUrl` onto the address actually connected through.
+//! The method is the same as in the address-book test. `spawn_loopback_proxy`
+//! satisfies the loopback-only plaintext rule of `connect_target` in
+//! `jmap-backend-core`, and sends the traffic to Stalwart.
+//! `JMAP_FUNCTIONAL_STORE_PASSWORD` supplies the password that a real server
+//! needs. `JMAP_LIVE_SERVER_REBASE_URLS` rebases the `apiUrl` of the server
+//! onto the address of the connection.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Same environment as the `jmap-*-sync` crates' own `live_server_*.rs`
-//! tests -- see `docs/manual-test-live-server.md`: a throwaway `stw seed`
-//! account, then
+//! Use the same environment as the `live_server_*.rs` tests of the
+//! `jmap-*-sync` crates (see `docs/manual-test-live-server.md`): a throwaway
+//! `stw seed` account, then
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-calendar -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 
@@ -45,9 +42,8 @@ const PRIORITY: &str = "1";
 const CLASS: &str = "CONFIDENTIAL";
 const ALARM_TRIGGER: &str = "-PT15M";
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never mistakes a previous run's event for this
-/// one's. Mirrors every `jmap-*-sync` live-server test's own copy.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not read an event from an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -55,8 +51,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors
-/// `live-stalwart-book.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-book.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -66,9 +62,8 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// `calendar.rs`'s own keyfile, with a real `User=` added -- the one field
-/// that turns `jmap-backend-core::connect::credentials`'s anonymous branch
-/// into the Basic one.
+/// The keyfile of `calendar.rs`, with a real `User=`. This field causes
+/// `jmap-backend-core::connect::credentials` to use Basic, not anonymous.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -111,9 +106,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_real_server() {
     ));
     session.write_source("jmap-functional", &keyfile(port, &user));
     session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", &password);
-    // Stalwart's session document states its own configured `apiUrl`, not the
-    // loopback proxy address it was actually asked through -- see
-    // `live-stalwart-book.rs`'s own comment on this line for the mechanism.
+    // The session document gives the configured `apiUrl`, not the proxy
+    // address. See the comment on this line in `live-stalwart-book.rs`.
     session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
     session.stage_calendar_backend(&module);
 
@@ -124,9 +118,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_real_server() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Checked before the exit status, same reason `live-stalwart-book.rs`
-    // does: a read-only calendar turns every later failure into "Permission
-    // denied", a message about the write that is really about the connect.
+    // Check this before the exit status. A read-only calendar causes each
+    // later failure to show "Permission denied", but the cause is the connect.
     let readonly = seen.get("readonly").copied().unwrap_or_else(|| {
         panic!(
             "the client failed before it opened the calendar, with {}\n{report}",
@@ -191,10 +184,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_real_server() {
         Some(&ALARM_TRIGGER),
         "the event EDS handed back lost its reminder\n{report}"
     );
-    // Not `== "1"`: unlike the mock, which `calendar.rs` starts fresh every
-    // run, a real account can carry events an earlier run of this same test
-    // left behind. Presence, not the exact count, is the claim -- same
-    // reasoning as `live-stalwart-book.rs`'s own `contacts-after` check.
+    // Not `== "1"`. `calendar.rs` starts a new mock for each run, but a real
+    // account can keep events from an earlier run of this test. Thus the test
+    // asserts that the event is present, not the exact count.
     let events_after = seen
         .get("events-after")
         .and_then(|value| value.parse::<u32>().ok())

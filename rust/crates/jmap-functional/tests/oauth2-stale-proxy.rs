@@ -4,47 +4,42 @@
 //! The headless reproduction of the stale `Source.OAuth2Support` interface
 //! proxy.
 //!
-//! A calendar factory asking for an access token got `"The name :1.4 was not
-//! provided by any .service files"`, which then escalated into a consent
-//! window. The mechanism was established from GLib/EDS source and the
-//! classification was fixed (`jmap_backend_core::oauth2::is_service_gone`),
-//! but nothing had ever *run* the failure: what existed was a hand
-//! `dbus-send` to a made-up unique name, which proves D-Bus's semantics
-//! rather than EDS's behaviour. This test runs it against real daemons.
+//! A calendar factory that asked for an access token got `"The name :1.4 was
+//! not provided by any .service files"`. This error then caused a consent
+//! window. The fix is the classification in
+//! `jmap_backend_core::oauth2::is_service_gone`. This test runs the failure
+//! against real daemons, not a manual `dbus-send` to an invented unique name.
 //!
-//! The whole reproduction is one client program (`tests/functional/
-//! oauth2-stale-proxy-client.c`, whose header carries the source citations)
-//! standing in for a long-lived backend factory: hold an `ESource`, kill the
-//! registry, ask the same `ESource` for a token.
+//! One client program (`tests/functional/oauth2-stale-proxy-client.c`, with
+//! the source citations in its header) acts as a long-lived backend factory.
+//! It holds an `ESource`, kills the registry, then asks the same `ESource`
+//! for a token.
 //!
-//! **The load-bearing assertion is `oauth2-support-exported`.** An earlier
-//! analysis concluded the opposite: that for our accounts the entire token
-//! path is D-Bus-free, so any harness of this shape would pass vacuously, on
-//! the premise that `e_server_side_source_set_oauth2_support` is called only by
-//! `module-google-backend.c` and `module-gnome-online-accounts.c`. There is a
-//! third caller: `module-oauth2-services.c:139`, an EDS module inside
-//! `evolution-source-registry`, which calls it for *every* server-side source
-//! whose `[Authentication] Method` names a registered `EOAuth2Service` — ours
-//! being `jmap_config::oauth2_service::NAME`, `"JMAP"`. This test is what
-//! keeps that correction honest: if the export ever stops happening, the rest
-//! of the reproduction would still "pass" while measuring nothing, so the
-//! export is asserted first and by itself.
+//! **The necessary assertion is `oauth2-support-exported`.** An earlier
+//! analysis said that the token path of these accounts uses no D-Bus. It
+//! assumed that only `module-google-backend.c` and
+//! `module-gnome-online-accounts.c` call
+//! `e_server_side_source_set_oauth2_support`. There is a third caller:
+//! `module-oauth2-services.c:139` in `evolution-source-registry`. It calls the
+//! function for each server-side source whose `[Authentication] Method` names
+//! a registered `EOAuth2Service`. The name of the service of this project is
+//! `jmap_config::oauth2_service::NAME`, `"JMAP"`. If the export stops, the
+//! other assertions pass but measure nothing. Thus the test asserts the
+//! export first, as a separate assertion.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// A collection account whose `[Authentication] Method` is our own
-/// `EOAuth2Service`'s name.
+/// A collection account whose `[Authentication] Method` is the name of the
+/// `EOAuth2Service` of this project.
 ///
-/// `Method=JMAP` is the entire point of this keyfile and the one line that
-/// must not drift: it is what `e_oauth2_services_is_oauth2_alias` matches
-/// against the service `module-jmap-backend.so` registers, and so what makes
-/// `module-oauth2-services.so` export the D-Bus interface this test is about.
-/// A `Method=` naming anything else produces a source with no OAuth2Support
-/// interface, no proxy, and nothing to go stale.
+/// Do not change `Method=JMAP`. `e_oauth2_services_is_oauth2_alias` compares
+/// it with the service that `module-jmap-backend.so` registers. A match makes
+/// `module-oauth2-services.so` export the D-Bus interface under test. With a
+/// different `Method=`, the source has no OAuth2Support interface and no proxy.
 ///
-/// No `[Security] Method=none` and no reachable server: this test never
-/// completes a token fetch or talks to a JMAP server at all — it only needs
-/// the registry to have *built* the source and exported the interface.
+/// The keyfile has no `[Security] Method=none` and no reachable server. The
+/// test does not complete a token fetch or connect to a JMAP server. It only
+/// needs the registry to *build* the source and export the interface.
 fn keyfile() -> String {
     "[Data Source]\n\
      DisplayName=JMAP stale-proxy reproduction account\n\
@@ -74,8 +69,8 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
     let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/oauth2-stale-proxy"));
     session.write_source(ACCOUNT_UID, &keyfile());
     session.stage_collection_backend(&module);
-    // Must come after the line above: both write EDS_REGISTRY_MODULES, and
-    // this one adds to the directory that one created.
+    // Keep this after the line above. Both write EDS_REGISTRY_MODULES, and
+    // this call adds to the directory that the previous call created.
     session.stage_installed_registry_module(&oauth2_services);
 
     let output = session.run(&client, &[ACCOUNT_UID]);
@@ -95,11 +90,10 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         "the registry never saw the account keyfile at all\n{report}"
     );
 
-    // (1) The precondition, and the fact an earlier analysis doubted: our
-    // account really is one the registry exports Source.OAuth2Support for,
-    // so a client's token fetch goes over the bus instead of through
-    // e-source.c's in-process EOAuth2Services fallback. Everything below is
-    // vacuous without this.
+    // (1) The precondition: the registry exports Source.OAuth2Support for
+    // this account. Thus the token fetch goes over the bus, not through the
+    // in-process EOAuth2Services fallback of e-source.c. Without this, the
+    // assertions below measure nothing.
     assert_eq!(
         seen.get("oauth2-support-exported"),
         Some(&"1"),
@@ -118,10 +112,10 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
          proxy pinned to a name that can never come back) would not apply\n{report}"
     );
 
-    // (2) The token path was live before the kill. Reported as "not a bus
-    // error" rather than "succeeded": this scratch session holds no refresh
-    // token, so the fetch legitimately fails — but it must fail *inside* our
-    // EOAuth2Service, having reached a living registry, not in transport.
+    // (2) The token path operates before the kill. The session has no
+    // refresh token, so the fetch fails. It must fail *inside* the
+    // EOAuth2Service of this project after it reaches a live registry, not in
+    // transport. Thus the client reports "not a bus error", not "succeeded".
     assert_eq!(
         seen.get("token-before-kill-was-bus-error"),
         Some(&"0"),
@@ -136,12 +130,12 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         "the registry's unique name still has an owner after SIGKILL\n{report}"
     );
 
-    // (3) The reproduction. The ESource is the same object the client held
-    // before the kill, and it still carries the proxy — EDS's client-side
-    // `source_registry_object_removed_no_owner` deliberately does not strip
-    // it (only the *by_owner* branch calls
-    // `__e_source_private_replace_dbus_object(source, NULL)`), which is why
-    // this is deterministic rather than a race.
+    // (3) The reproduction. The client holds the same ESource as before the
+    // kill, and it keeps the proxy. The EDS client-side
+    // `source_registry_object_removed_no_owner` does not remove it. Only the
+    // *by_owner* branch calls
+    // `__e_source_private_replace_dbus_object(source, NULL)`. Thus the result
+    // is deterministic, not a race.
     assert_eq!(
         seen.get("oauth2-support-still-exported"),
         Some(&"1"),
@@ -157,11 +151,11 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
          Check whether EDS grew a recovery path before deleting it\n{report}"
     );
 
-    // (4) And it fails as exactly the error the live capture recorded, in
-    // exactly the shape jmap_backend_core::oauth2 classifies. `is_service_gone`
-    // keys on domain `g-dbus-error-quark` with G_DBUS_ERROR_SERVICE_UNKNOWN or
-    // G_DBUS_ERROR_NAME_HAS_NO_OWNER; its own unit tests build that error by
-    // hand, and this is the run that proves real EDS produces it.
+    // (4) The error is the same as in the live capture, and has the shape
+    // that jmap_backend_core::oauth2 classifies. `is_service_gone` matches
+    // domain `g-dbus-error-quark` with G_DBUS_ERROR_SERVICE_UNKNOWN or
+    // G_DBUS_ERROR_NAME_HAS_NO_OWNER. Its unit tests make that error manually.
+    // This run proves that real EDS makes it.
     assert_eq!(
         seen.get("token-after-kill-is-service-unknown"),
         Some(&"1"),
@@ -174,12 +168,11 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
         Some(&"g-dbus-error-quark"),
         "the error is not in the domain is_service_gone matches on\n{report}"
     );
-    // The domain matters more than the code, and that is the point: 2 is an
-    // entirely ordinary code in other domains too, which is why
-    // `is_service_gone` matches on both and why
-    // `a_dead_peer_is_recognised_by_domain_not_by_code_alone` (jmap-backend-
-    // core/src/oauth2.rs) pins the same pair from the other side. This
-    // assertion is what would catch the numeric value drifting under it.
+    // The domain is more important than the code: other domains also use
+    // code 2. Thus `is_service_gone` matches on both, and
+    // `a_dead_peer_is_recognised_by_domain_not_by_code_alone`
+    // (jmap-backend-core/src/oauth2.rs) tests the same pair. This assertion
+    // finds a change of the numeric value.
     assert_eq!(
         seen.get("token-after-kill-error-code"),
         Some(&"2"),
@@ -187,8 +180,8 @@ fn a_registry_restart_leaves_a_held_source_fetching_tokens_from_a_dead_peer() {
          value jmap_backend_core::oauth2's own tests document it as\n{report}"
     );
 
-    // The message is the user-visible half of the fix: it must name the
-    // dead peer, because that is the thing an operator would go and restart.
+    // The message is visible to the user. It must name the dead peer,
+    // because the operator must restart that peer.
     assert_eq!(
         seen.get("token-after-kill-names-dead-peer"),
         Some(&"1"),
