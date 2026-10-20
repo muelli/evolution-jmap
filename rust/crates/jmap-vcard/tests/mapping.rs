@@ -22870,3 +22870,41 @@ fn prop_id_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn pid_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PID Profile Probe\r\n",
+        "EMAIL;TYPE=work;PID=1.1:pid-work@example.test\r\n",
+        "EMAIL;TYPE=home;PID=2.1:pid-home@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PID profile probe");
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 2, "both EMAIL lines must remain mapped");
+
+    for email in emails.values() {
+        assert!(
+            email.extra.is_empty(),
+            "profile does not retain RFC 9555 PID metadata on EMAIL"
+        );
+    }
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY="),
+        "emit must keep keyed EMAIL lines"
+    );
+    assert!(
+        !emitted.contains("PID="),
+        "non-projected PID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized PID profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
