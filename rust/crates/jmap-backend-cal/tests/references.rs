@@ -11,12 +11,10 @@ use glib_sys::{G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, g_log_set_always_fatal
 use gobject_sys::{GObject, g_object_unref};
 use jmap_backend_cal::marshal;
 
-/// Serialize access to the libical builtin timezone table.
+/// Serialize the tests in this file.
 ///
-/// `i_cal_timezone_get_builtin_timezone` reads a global table without locks.
-/// Concurrent access causes memory corruption in `strcmp`.
-/// Hold this lock during every such call.
-fn serialize_libical_timezone_access() -> MutexGuard<'static, ()> {
+/// One test measures the heap of the whole process, so a parallel load distorts it.
+fn one_test_at_a_time() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -82,7 +80,7 @@ fn baseline_count(icalendar: &str) -> u32 {
 #[test]
 fn a_loaded_component_carries_exactly_the_callers_reference() {
     glib_complaints_are_failures();
-    let _lock = serialize_libical_timezone_access();
+    let _lock = one_test_at_a_time();
     for (name, icalendar) in [("zoned", ZONED), ("unzoned", UNZONED)] {
         let baseline = baseline_count(icalendar);
         let component = marshal::component_from_ical(icalendar);
@@ -105,7 +103,7 @@ fn a_loaded_component_carries_exactly_the_callers_reference() {
 #[test]
 fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
     glib_complaints_are_failures();
-    let _lock = serialize_libical_timezone_access();
+    let _lock = one_test_at_a_time();
     let component = marshal::component_from_ical(ZONED);
     assert!(!component.is_null());
     // SAFETY: component is a live instance owned by this scope.
@@ -124,7 +122,7 @@ fn the_zone_a_load_defines_is_owned_by_the_object_that_defines_it() {
 #[test]
 fn loading_a_zoned_object_over_and_over_retains_nothing() {
     glib_complaints_are_failures();
-    let _lock = serialize_libical_timezone_access();
+    let _lock = one_test_at_a_time();
     // Verify that loading zoned objects repeatedly does not leak heap memory.
     const LOADS: u64 = 10_000;
     const WINDOWS: usize = 8;

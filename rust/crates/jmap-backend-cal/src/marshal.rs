@@ -6,6 +6,7 @@
 
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::{Mutex, PoisonError};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ESource, ESourceSelectable, ETimezoneCache,
@@ -334,17 +335,27 @@ unsafe fn take_referenced_time_zones(
 unsafe fn resolve_time_zone(tzid: *const gchar, zones: *mut ETimezoneCache) -> *mut ICalTimezone {
     // SAFETY: Caller guarantees arguments; returned timezone is borrowed from cache/table.
     unsafe {
-        let zone = i_cal_timezone_get_builtin_timezone_from_tzid(tzid);
-        if !zone.is_null() {
-            return zone;
-        }
-        let zone = i_cal_timezone_get_builtin_timezone(tzid);
+        let zone = {
+            let _table = BUILTIN_ZONES.lock().unwrap_or_else(PoisonError::into_inner);
+            let zone = i_cal_timezone_get_builtin_timezone_from_tzid(tzid);
+            if zone.is_null() {
+                i_cal_timezone_get_builtin_timezone(tzid)
+            } else {
+                zone
+            }
+        };
         if !zone.is_null() || zones.is_null() {
             return zone;
         }
         e_timezone_cache_get_timezone(zones, tzid)
     }
 }
+
+/// Serializes this crate's lookups in libical's builtin zone table.
+///
+/// libical 3.0 adds a zone that `zone.tab` does not list (for example `Etc/UTC`)
+/// to that table without its lock. A parallel lookup then reads a half-written entry.
+static BUILTIN_ZONES: Mutex<()> = Mutex::new(());
 
 /// Checks whether `calendar` defines `tzid`.
 ///
