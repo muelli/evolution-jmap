@@ -1,20 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// A child following its account, against real `ESource`s — the half of
-// `tests/child_source.rs` that happens *after* the child was written.
+// Tests that a child follows its account, with real `ESource`s.
 //
-// `apply` copies the account's connection onto a child once, at the populate
-// that creates it. Every test in `tests/child_source.rs` is about that copy
-// being right; none of them is about what happens when the account changes
-// afterwards, which is the case this file is for. The failure it describes has
-// no symptom to look at: the child still names a host, still connects, still
-// authenticates — at the *old* server, with the old user, or without the TLS the
-// account has since been given.
+// `apply` copies the account connection to a child once, when the populate
+// creates the child. `tests/child_source.rs` tests that copy. This file tests
+// what occurs when the account changes after the copy. That failure has no
+// visible symptom: the child connects, but to the old server, with the old user,
+// or without TLS.
 //
-// The account and the child here are the real objects, and the account is
-// changed through EDS's own setters, so what is asserted is a live `GBinding`
-// doing its work rather than a second copy taken by this test.
+// The tests change the account through the EDS setters. Thus the tests assert a
+// live `GBinding`, not a copy.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -29,8 +25,8 @@ use eds_sys::{
     e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
     e_source_security_set_secure,
 };
-// The token-cache-key accessors: whichever pair the installed EDS actually
-// has — see `jmap_backend_collection::child_added::CREDENTIAL_PROPERTY`.
+// The token-cache-key accessors that the installed EDS has. See
+// `jmap_backend_collection::child_added::CREDENTIAL_PROPERTY`.
 #[cfg(not(eds_credential_store_id))]
 use eds_sys::{
     e_source_authentication_get_credential_name as get_credential_name,
@@ -56,24 +52,23 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// An `ESource` in the state EDS hands one back in — a uid and nothing else —
-/// with the extensions each test puts on it.
+/// An `ESource` that starts with a uid and no extensions.
 struct Source(*mut ESource);
 
 impl Source {
     fn new(uid: &str) -> Self {
         let uid = CString::new(uid).expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments: a NUL-terminated uid, the default
+        // main context and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
-    /// The account source, as a user's `.source` file describes it: the four
-    /// `[Authentication]` fields and the `[Security]` flag, which together are
-    /// the whole of what a child copies.
+    /// The account source as a `.source` file of the user describes it: the
+    /// four `[Authentication]` fields and the `[Security]` flag. A child copies
+    /// all of these and nothing more.
     fn account() -> Self {
         let source = Self::new("jmap-account");
         source.set_host("jmap.example.com");
@@ -84,9 +79,9 @@ impl Source {
         source
     }
 
-    /// A child of that account, written the way a populate writes one — through
-    /// `child_source::apply`, so the properties are the ones this backend really
-    /// puts on a child rather than ones this test chose.
+    /// A child of the account, written through `child_source::apply` as a
+    /// populate writes it. Thus the child has the properties that the backend
+    /// writes.
     fn child_of(connection: &Connection) -> Self {
         let source = Self::new("jmap-account-child");
         let child = Child {
@@ -111,8 +106,8 @@ impl Source {
             self.has(name),
             "the test would have created the extension it meant to read"
         );
-        // SAFETY: a live source, a header constant, and the extension is
-        // present, so this returns the source's own.
+        // SAFETY: a live source and a header constant. The extension is present,
+        // so the call returns the existing extension of the source.
         unsafe { e_source_get_extension(self.0, name.as_ptr()) }.cast()
     }
 
@@ -162,19 +157,17 @@ impl Source {
     }
 
     fn set_secure(&self, secure: bool) {
-        // The `[Security]` extension of a source that has none yet: created
-        // here, deliberately, because this is a test building an account rather
-        // than the backend reading one.
-        // SAFETY: a live source and a header constant; the extension is created
-        // on demand and owned by the source.
+        // The test writes the account, so creating `[Security]` here is correct.
+        // SAFETY: a live source and a header constant. The source creates and
+        // owns the extension.
         let security: *mut ESourceSecurity =
             unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast() };
         // SAFETY: a live extension.
         unsafe { e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE }) };
     }
 
-    /// `[Authentication]`, created on demand — as for [`Source::set_secure`],
-    /// this is the test writing an account, not the backend reading one.
+    /// `[Authentication]`, created if absent. As in [`Source::set_secure`], the
+    /// test writes the account, so creating the group is correct.
     fn authentication(&self) -> *mut ESourceAuthentication {
         // SAFETY: a live source and a header constant.
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast() }
@@ -186,8 +179,8 @@ impl Source {
         unsafe { read_string(e_source_authentication_get_host(auth)) }
     }
 
-    /// The child as the address book and calendar backends read it — origin,
-    /// user and resource id in one, which is what a stale child gets wrong.
+    /// The child as the address book and calendar backends read it: origin,
+    /// user and resource id.
     fn config(&self) -> SourceConfig {
         // SAFETY: a live source.
         unsafe { SourceConfig::from_source(self.0) }.expect("a child names its account's server")
@@ -211,8 +204,7 @@ fn connection() -> Connection {
     }
 }
 
-/// The account and one of its children, bound — the state every test below
-/// starts from, and the one `child_added` leaves behind.
+/// The account and one bound child, as `child_added` leaves them.
 fn bound() -> (Source, Source) {
     let account = Source::account();
     let child = Source::child_of(&connection());
@@ -225,11 +217,9 @@ fn bound() -> (Source, Source) {
 fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A property name is a string on this call, so a misspelling is not a
-        // compile error — it is a `g_critical` at runtime and a binding that was
-        // never made, which is exactly the silent staleness this module exists to
-        // remove. Asked of GObject rather than assumed, and asked of the *class*, so
-        // it fails whether or not any other test happens to exercise that property.
+        // A misspelt property name is not a compile error. It causes a runtime
+        // `g_critical` and no binding. The test asks the GObject class, so it fails
+        // even if no other test uses that property.
         // SAFETY: no arguments; the type system initialises itself.
         unsafe {
             e_source_authentication_get_type();
@@ -243,8 +233,8 @@ fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
             assert!(!object.is_null(), "{extension:?} is not an extension");
 
             for property in properties {
-                // SAFETY: a live GObject; `g_object_class_find_property` answers
-                // NULL for a name the class does not carry.
+                // SAFETY: a live GObject. `g_object_class_find_property` returns
+                // NULL for a name that the class does not have.
                 let found = unsafe {
                     let class = (*object.cast::<gobject_sys::GObject>())
                         .g_type_instance
@@ -264,11 +254,9 @@ fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
 fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The case the binding exists for, and the one no copy at populate can
-        // reach: a child written by an earlier session, loaded from the backend's
-        // cache directory on this one, carrying the server the account named *then*.
-        // `child_added` fires for it before anything connects, so this is where the
-        // account's current answer has to reach it.
+        // An earlier session wrote this child, and this session loads it from the
+        // cache directory with the old server. A copy at populate cannot update it.
+        // `child_added` fires before a connection, so the binding updates it here.
         let account = Source::account();
         let stale = Connection {
             host: "old.example.com".to_owned(),
@@ -308,9 +296,9 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
 fn moving_the_account_to_another_server_moves_its_children() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The user edits the account: a new host, a new port. Nothing re-runs
-        // `apply` — a populate only writes children it creates — so without the
-        // binding the child goes on reaching the old server.
+        // The user changes the host and the port. A populate writes only the
+        // children that it creates, so nothing runs `apply` again. Without the
+        // binding, the child keeps the old server.
         let (account, child) = bound();
 
         account.set_host("jmap.example.org");
@@ -318,8 +306,7 @@ fn moving_the_account_to_another_server_moves_its_children() {
 
         assert_eq!(
             child.config().target,
-            // A stated default port serializes out of the origin (RFC 6454 §6.2);
-            // the child still follows the renamed server either way.
+            // The origin omits a default port (RFC 6454 §6.2).
             ConnectTarget::Origin("https://jmap.example.org".into()),
             "the child stayed with the server the account used to name"
         );
@@ -346,10 +333,9 @@ fn renaming_the_account_user_renames_its_children() {
 fn switching_tls_off_on_the_account_reaches_its_children() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The one change that a child getting it wrong is a *security* difference
-        // rather than a connection failure — in both directions. A child left at
-        // "tls" against an account switched to "none" fails visibly; the reverse,
-        // which is this assertion's other half below, does not.
+        // An error here is a security problem, not only a connection failure. A
+        // child on TLS with a plaintext account fails visibly. A child on plain
+        // text with a TLS account (the second half) does not.
         let (account, child) = bound();
 
         account.set_secure(false);
@@ -373,8 +359,8 @@ fn switching_tls_off_on_the_account_reaches_its_children() {
 fn the_authentication_method_follows_too() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Not a credential — how EDS is to *obtain* one. A child that disagrees with
-        // its account is a child prompted for a password the account does not use.
+        // The method tells EDS how to get a credential. A child with a different
+        // method asks for a password that the account does not use.
         let (account, child) = bound();
 
         account.set_auth_method("OAuth2");
@@ -390,10 +376,8 @@ fn the_authentication_method_follows_too() {
 fn the_credential_name_follows_too() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // eds#663: the token-storage key an OAuth2 account's credentials are
-        // filed under is the account's own uid, and a child that did not
-        // follow it would look its own token up under a key of its own — or
-        // under none at all — rather than the account's.
+        // eds#663: EDS stores the OAuth2 credentials of an account under the uid
+        // of the account. A child must use that key, not its own key or no key.
         let (account, child) = bound();
 
         account.set_credential_name("jmap-account");
@@ -410,9 +394,8 @@ fn the_credential_name_follows_too() {
 fn a_child_does_not_write_back_to_the_account() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // One-way, deliberately: the child sources are this backend's to write, and
-        // a binding that carried a child's value back would let one of them edit the
-        // user's account file — and, through the account, every other child.
+        // The binding is one-way. A two-way binding would let a child change the
+        // account file of the user, and through it, all the other children.
         let (account, child) = bound();
 
         child.set_host("somewhere-else.example.com");
@@ -429,10 +412,9 @@ fn a_child_does_not_write_back_to_the_account() {
 fn an_account_with_no_authentication_group_is_not_given_one() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The rule that keeps this out of the user's file: `e_source_get_extension`
-        // creates what it cannot find, and the account source is the one thing this
-        // backend must only ever read. An account with no `[Authentication]` names
-        // no host, so there is nothing to carry anyway.
+        // `e_source_get_extension` creates a missing extension, but the backend must
+        // only read the account source. An account with no `[Authentication]` names
+        // no host, so there is nothing to bind.
         let account = Source::new("jmap-account-without-authentication");
         let child = Source::child_of(&connection());
 
@@ -459,11 +441,9 @@ fn an_account_with_no_authentication_group_is_not_given_one() {
 fn a_child_of_a_kind_this_backend_did_not_write_is_left_alone() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `child_added` fires for every source parented to the collection, mail
-        // identities included, and this backend writes only some of them. A source
-        // with no `[Authentication]` connects to nothing, so binding one onto it
-        // would be this backend editing a source belonging to another part of
-        // Evolution.
+        // `child_added` fires for each child of the collection, mail identities
+        // included. A source with no `[Authentication]` connects to nothing. A
+        // binding on it would change a source of a different part of Evolution.
         let account = Source::account();
         let identity = Source::new("jmap-account-identity");
 
@@ -485,15 +465,14 @@ fn a_child_of_a_kind_this_backend_did_not_write_is_left_alone() {
 fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The two groups are decided separately, and this is the pair that says so:
-        // a child with `[Authentication]` and no `[Security]` — which is what a mail
-        // account source created by the setup UI can be — follows the account's host
-        // and user without being given a `[Security]` group it never had.
+        // The module binds each group separately. A child with `[Authentication]`
+        // and no `[Security]` (possible for a mail account from the setup UI)
+        // follows the host and the user. It does not get a `[Security]` group.
         let account = Source::account();
         let mail = Source::new("jmap-account-mail");
         mail.set_host("stale.example.com");
-        // The address book children this backend writes always carry both groups, so
-        // reaching this state at all takes a source it did not write.
+        // The backend always writes both groups on an address book child, so this
+        // source is not an address book.
         assert!(!mail.has(E_SOURCE_EXTENSION_SECURITY));
         assert!(!mail.has(E_SOURCE_EXTENSION_ADDRESS_BOOK));
 
@@ -513,20 +492,17 @@ fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
 }
 
 // ---------------------------------------------------------------------------
-// The `[JMAP OAuth2]` group — bound by its own rule, because EDS hands the
-// OAuth2 service whichever source asked for the token.
+// The `[JMAP OAuth2]` group has its own rule, because EDS gives the OAuth2
+// service the source that requested the token.
 //
 // `e_source_registry_server_get_access_token_sync` (e-source-registry-server.c,
-// EDS 3.52) passes the ASKING source straight into
-// `e_oauth2_service_get_access_token_sync` — no credential-source resolution to
-// the collection happens on the silent-refresh path (only the interactive
-// prompter resolves it). EDS's own services never notice: their client ids are
-// compile-time constants. Ours lives in `[JMAP OAuth2]`, and when only the
-// account carried it, any child-context refresh ran with no client id, no
-// token endpoint and no scope — so the first expired access token turned into
-// a full re-consent instead of a silent refresh: the registry prepared a
-// refresh-token form for a memory-only calendar child's uid, and the shell
-// escalated to the consent window.
+// EDS 3.52) passes the requesting source to
+// `e_oauth2_service_get_access_token_sync`. On the silent-refresh path, EDS does
+// not resolve the credential source to the collection. Only the interactive
+// prompter does. The EDS services have compile-time client ids, but this
+// project keeps its client id in `[JMAP OAuth2]`. If a child does not have the
+// group, a refresh from that child has no client id, token endpoint or scope.
+// Then an expired access token causes a full re-consent, not a silent refresh.
 
 fn oauth2_config() -> jmap_config::oauth2::Config {
     jmap_config::oauth2::Config {
@@ -560,8 +536,8 @@ fn a_childs_jmap_oauth2_group_follows_the_accounts() {
             "the child must carry the account's whole client registration"
         );
 
-        // And it is a live binding, not a copy: a re-registration that lands on
-        // the account reaches every child that was already bound.
+        // The binding is live: a new registration on the account gets to each
+        // bound child.
         let renewed = jmap_config::oauth2::Config {
             client_id: Some("client-def456".to_owned()),
             ..oauth2_config()
@@ -580,10 +556,9 @@ fn a_childs_jmap_oauth2_group_follows_the_accounts() {
 
 #[test]
 fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
-    // The transport is the child whose missing registration the operator
-    // actually saw: Send popped the consent window. It takes the
-    // `follow_server` early path in `follow_collection`, so the OAuth2
-    // binding must happen before that fork.
+    // Without the group, Send on the transport opens the consent window. The
+    // transport takes the early `follow_server` path in `follow_collection`, so
+    // the OAuth2 binding must occur before that branch.
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
@@ -591,9 +566,9 @@ fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
         unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
 
         let transport = Source::new("jmap-account-transport");
-        // SAFETY: a live source and a header constant; the extension is
-        // created on demand and owned by the source, and both mail extension
-        // types derive from ESourceBackend.
+        // SAFETY: a live source and a header constant. The source creates and
+        // owns the extension, and both mail extension types derive from
+        // ESourceBackend.
         unsafe {
             let backend: *mut eds_sys::ESourceBackend = e_source_get_extension(
                 transport.0,
@@ -619,10 +594,9 @@ fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
 
 #[test]
 fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
-    // The rule the rest of this file lives by still holds where it matters:
-    // nothing invents the group on the ACCOUNT, whose `.source` file is the
-    // user's; and a child of an account that has no client registration gains
-    // an empty group nothing will read.
+    // Nothing creates the group on the account, because its `.source` file
+    // belongs to the user. A child of an account with no client registration
+    // does not get the group either.
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
@@ -643,41 +617,28 @@ fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
 }
 
 // ---------------------------------------------------------------------------
-// `GBinding` lifetime — what a live binding does when one of the two
-// `ESource`s it joins is finalized.
+// `GBinding` lifetime: what a live binding does when one of its two `ESource`s
+// is finalized.
 //
-// `e_binding_bind_property` is `camel_binding_bind_property`
-// (EDS 3.52.3's `src/camel/camel.c`): a `GRecMutex` around plain
-// `g_object_bind_property`. GLib 2.80's own `GBinding` (`gobject/gbinding.c`)
-// installs a `g_object_weak_ref` on both endpoints at construction and drops
-// its own sole reference exactly once, the first time either fires — so the
-// binding never outlives the shorter-lived of the two extensions it joins,
-// and never touches the one that is already gone. That is GLib's contract,
-// not this module's — `follow_collection`'s and `follow_server`'s own Safety
-// comments both assert it, correctly, but neither was pinned by a test that
-// actually finalizes one side of a live binding and keeps using the other,
-// which is the thing a future change here (e.g. holding onto a raw extension
-// pointer past the call) could get wrong without GLib's guarantee helping at
-// all.
+// `e_binding_bind_property` is `camel_binding_bind_property` (EDS 3.52.3
+// `src/camel/camel.c`): a `GRecMutex` around `g_object_bind_property`. The GLib
+// 2.80 `GBinding` (`gobject/gbinding.c`) puts a `g_object_weak_ref` on both
+// endpoints. It releases its only reference once, when the first weak ref fires.
+// Thus the binding does not outlive either extension, and does not touch a
+// finalized one. The Safety comments of `follow_collection` and `follow_server`
+// rely on this GLib contract, and these tests pin it.
 //
-// Finalizing an `ESource` is *not* one plain `g_object_unref` away, which the
-// first test below exists to establish before the rest rely on it: every
-// `E_SOURCE_PARAM_SETTING` property write (which is what an account edit, and
-// this module's own `bind()` with `G_BINDING_SYNC_CREATE`, both are) calls
-// `e_source_changed()`, which schedules a debounced idle callback holding its
-// own `g_object_ref` on the source — released only when that idle fires in
-// whatever `GMainContext` the source uses (the default one here, since these
-// tests build sources with no explicit context). A production process has a
-// `GMainLoop` permanently iterating that context, so the idle fires within
-// one turn and the extra ref is gone almost as soon as it was taken; a bare
-// unit test does not run one at all, so without pumping the context by hand
-// the source this file's tests drop never actually finalizes — every
-// assertion after it would then be true for the wrong reason (nothing was
-// ever freed) rather than for the reason each test names.
+// A plain `g_object_unref` does not finalize an `ESource`; the first test
+// below proves this. Each `E_SOURCE_PARAM_SETTING` property write (an account
+// edit, or `bind()` with `G_BINDING_SYNC_CREATE`) calls `e_source_changed()`.
+// That schedules an idle callback which holds a `g_object_ref` on the source.
+// The idle releases the reference when it runs in the `GMainContext` of the
+// source (here, the default context). A production process runs a `GMainLoop`,
+// but a unit test does not. Thus the tests pump the context, or no source is
+// finalized and the assertions pass for the wrong reason.
 fn pump_pending_idle_changed() {
-    // SAFETY: `NULL` is the documented way to name the default `GMainContext`
-    // (the one these tests' sources use); `FALSE` never blocks, so a source
-    // with no more idle callbacks pending simply stops early.
+    // SAFETY: `NULL` names the default `GMainContext`, which the test sources
+    // use. `FALSE` does not block, so the loop stops when no idle is pending.
     for _ in 0..16 {
         if unsafe { glib_sys::g_main_context_iteration(ptr::null_mut(), GFALSE) } == GFALSE {
             break;
@@ -686,8 +647,8 @@ fn pump_pending_idle_changed() {
 }
 
 unsafe extern "C" fn mark_finalized(user_data: gpointer, _object: *mut gobject_sys::GObject) {
-    // SAFETY: `user_data` is the `&'static AtomicBool` the test below passed
-    // to `g_object_weak_ref`, which hands it back unchanged.
+    // SAFETY: `user_data` is the `&'static AtomicBool` that the test gave to
+    // `g_object_weak_ref`, which returns it unchanged.
     let flag = unsafe { &*(user_data as *const AtomicBool) };
     flag.store(true, Ordering::SeqCst);
 }
@@ -699,8 +660,8 @@ fn dropping_a_source_finalizes_its_extension_once_the_pending_idle_runs() {
         let source = Source::account();
         let auth: *mut ESourceAuthentication = source.authentication();
         let finalized: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
-        // SAFETY: `auth` is a live GObject; `finalized` outlives the weak
-        // ref, which never outlives this test's `source`.
+        // SAFETY: `auth` is a live GObject. `finalized` outlives the weak ref,
+        // which does not outlive `source`.
         unsafe {
             g_object_weak_ref(
                 auth.cast(),
@@ -734,10 +695,9 @@ fn dropping_the_child_disconnects_the_binding_and_the_account_stays_usable() {
         drop(child);
         pump_pending_idle_changed();
 
-        // If the binding's weak-unref on the child (the target) had not
-        // disconnected the notify handler it installed on the account (the
-        // source), this write would run the binding's transform into a
-        // freed extension instead of doing nothing.
+        // The weak ref on the child (the target) must disconnect the notify
+        // handler on the account (the source). If not, this write uses a freed
+        // extension.
         account.set_host("moved.example.com");
 
         assert_eq!(
@@ -784,9 +744,8 @@ fn dropping_the_child_does_not_break_a_later_oauth2_reregistration() {
             client_id: Some("client-def456".to_owned()),
             ..oauth2_config()
         };
-        // If `follow_oauth2`'s binding onto the (now-freed) child's extension
-        // had survived, this apply's `notify` would run the binding into it
-        // instead of doing nothing.
+        // If the `follow_oauth2` binding to the freed child extension stayed,
+        // the `notify` of this apply would use the freed extension.
         // SAFETY: a live source.
         unsafe { jmap_config::oauth2::apply(account.0, &renewed) };
 

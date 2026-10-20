@@ -1,119 +1,109 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The JMAP collection backend (M6): the `ECollectionBackend` subclass
-//! `evolution-source-registry` fans one account out through.
+//! The JMAP collection backend: the `ECollectionBackend` subclass through
+//! which `evolution-source-registry` fans out one account.
 //!
-//! `jmap-collection-sync` already answers, in Rust terms, every question this
-//! backend has to answer: which JMAP account serves mail, contacts and
-//! calendars for a login, which collections are in those accounts, what child
-//! source each becomes, what has to be set on it, and which of the account's
-//! parts the user left switched on. What is left is the two ends of that pipe —
-//! the `ESource` the decisions are read off and written to, and the class struct
-//! EDS dispatches through — and that is what this crate is.
+//! `jmap-collection-sync` makes the decisions in Rust. It decides which JMAP
+//! account serves mail, contacts and calendars for a login, and which
+//! collections those accounts have. It also decides which child source each
+//! collection becomes, what to set on it, and which parts of the account the
+//! user enabled. This crate supplies
+//! the two ends: the `ESource` that the decisions are read from and written
+//! to, and the class struct through which EDS dispatches.
 //!
-//! - [`resource_id`] is the first of them, and the one with teeth: the name EDS
-//!   knows a child source by, read back off the source itself. A wrong answer
-//!   here does not fail an operation, it **deletes a cache file** — see the
-//!   module for what EDS does with a `NULL`.
-//! - [`collection_source`] is the other direction and the other source: what the
-//!   *account* says — which parts the user switched on, and where its server is
-//!   — which is everything `populate` knows before it contacts anything.
-//! - [`child_source`] is the write half, and the mirror of [`resource_id`]:
-//!   [`Child::settings`] onto the `ESource` `e_collection_backend_new_child`
-//!   hands back. Everything a child is, it is because this wrote it there —
-//!   including the two properties whose absence loses the cache file or points
-//!   the child at no server.
-//! - [`child_added`] is what keeps that write true afterwards, and the answer to
-//!   the question [`child_source`] does not ask: an account's server, port, user
-//!   and TLS setting are copied onto a child once, when the child is created,
-//!   and the user may edit any of them the next day. So the copy is turned into
-//!   a binding at the vfunc EDS calls for every source that appears under the
-//!   collection — the same thing evolution-ews does, over the properties a JMAP
-//!   child's connection is made of.
-//! - [`mail_child`] is the one child that following does not fit: this
-//!   account's mail account and mail transport, which are sources of this
-//!   account that this backend neither creates nor caches and that nothing else
-//!   writes a server onto — Evolution hides the sending page for a
-//!   store-and-transport provider, so the setup UI is never asked where the
-//!   account submits through. So the group is created here, from the account, and
-//!   `[Security]` is written as the `CamelNetworkSecurityMethod` nick the mail
-//!   side reads rather than as the word EDS's own boolean writes.
-//! - [`removal`] is the other thing a populate does with a fan-out, and the one
-//!   that destroys rather than creates: the children this collection has and no
-//!   longer warrants, read back off their sources and removed. The decision is
-//!   [`Fanout::is_obsolete`]'s; what is here is the join to the `ESource` and
-//!   the `e_source_remove_sync` — including what a populate does with a removal
-//!   EDS refuses, which is all it can do, since the vfunc returns `void`.
-//! - [`authenticate`] is the piece between the account and the fan-out, and the
-//!   answer to where a collection backend's credentials come from: not from
-//!   `populate`, which returns `void` and is handed nothing, but from
-//!   `EBackendClass::authenticate_sync`, which EDS calls back into with an
-//!   `ENamedParameters` once the registry has resolved the account's password.
-//!   So it is also where the fan-out belongs — and where the one enum that
-//!   decides whether Evolution prompts again, gives up, or says nothing is
-//!   written.
-//! - [`fan_out`] is all of those put together, and the closure
-//!   [`authenticate::authenticate_with`] is handed: [`Fanout::discover`] against
-//!   the [`Login`] it is given, an `e_collection_backend_new_child` plus
-//!   [`child_source::apply`] per [`Child`] it warrants, and
-//!   [`removal::remove_obsolete`] over the children the collection already has.
-//!   The four calls on a live collection it needs are a trait, so the order and
-//!   the decisions are testable against a real `jmap-mockd` and real `ESource`s
-//!   on a machine with no `evolution-source-registry`.
-//! - [`create_resource`] is the one request that goes the other way. Everything
-//!   above mirrors what the server holds; this makes the server hold something
-//!   new, because Evolution's "New Address Book" and "New Calendar" asked it to.
-//!   `ECollectionBackendClass::create_resource_sync` is the vfunc, and unlike
-//!   every other slot this crate fills, the implementation it replaces is a
-//!   *refusal* — `G_IO_ERROR_NOT_SUPPORTED` — so it is the one override that
-//!   must not chain up. What is here is the EDS ends: the kind and name read off
-//!   the scratch `ESource` EDS hands the vfunc, and the same [`Child::settings`]
-//!   a fan-out writes, written back onto it so that a created child and a
-//!   discovered one are the same source. The decision in between is
-//!   [`jmap_collection_sync::create`]'s.
-//! - [`delete_resource`] is that request's mirror, and the destructive one:
-//!   Evolution's "Delete" on an address book or a calendar of this account.
-//!   `ECollectionBackendClass::delete_resource_sync` is another slot whose EDS
-//!   default is a refusal, so it does not chain up either. What is here is which
-//!   collection a child `ESource` stands for — read through the very
-//!   [`resource_id`] string `dup_resource_id` hands EDS, so the delete cannot
-//!   name a different object than the child does — and the `remote-deletable`
-//!   flag that makes the menu item exist, set from [`child_added`] for every
-//!   child of this collection and for nothing else. The removal of the source
-//!   afterwards is [`removal`]'s call, the same one a populate uses.
-//! - [`populate`] is the vfunc EDS reaches all of that through first, and the
-//!   half of it that needs no server: the cached children of previous sessions,
-//!   claimed and exported so that an account works *offline*, and then the one
-//!   call that asks EDS to authenticate the account — which is what eventually
-//!   produces a fan-out, one vfunc later.
-//! - [`backend`] is the subclass those functions exist for: an instance struct,
-//!   the three vfunc slots — `dup_resource_id`, `populate` and
-//!   `authenticate_sync` — and a panic guard in front of each. It is also where
-//!   the live `ECollectionBackend` finally appears, as the one implementation of
-//!   [`populate::Populating`] and [`fan_out::Collection`] that is not a test's.
-//! - [`prepare_mail`] is the mail half, and the one part of this crate that is
-//!   not about children of this collection: the mail account, identity and
-//!   transport sources cannot be cached children — `dup_resource_id` would have
-//!   to claim them and EDS deletes the cache file of every source it does not —
-//!   so they belong to the registry's own source directory and to the setup UI.
-//!   What is left for a collection factory is the vfunc that says which service
-//!   they are, which for JMAP is one Camel protocol on both.
-//! - [`factory`] is what the registry actually looks up, because it never
-//!   instantiates a backend itself: an `ECollectionBackendFactory` subclass whose
-//!   two fields say which `BackendName` this is and which type to build. Both
-//!   have working defaults underneath them, so an unwritten factory is an account
-//!   that belongs to somebody else or one that fans out to nothing.
-//! - [`module`] is the pair of entry points the registry dlopens the built
-//!   `module-jmap-backend.so` for, and the only code in this crate the registry
-//!   calls by name. The C symbols `e_module_load`/`e_module_unload` themselves
-//!   live in the `jmap-backend-collection-module` cdylib, which is that shared
-//!   object; the module says why.
+//! - [`resource_id`] gives the name by which EDS knows a child source, read
+//!   from the source itself. A wrong answer here **deletes a cache file**.
+//!   The module tells what EDS does with a `NULL`.
+//! - [`collection_source`] reads the *account* source: which parts the user
+//!   enabled, and where the server is. That is all that `populate` knows
+//!   before it contacts a server.
+//! - [`child_source`] is the write half and the mirror of [`resource_id`]: it
+//!   writes [`Child::settings`] onto the `ESource` that
+//!   `e_collection_backend_new_child` returns. This includes the two
+//!   properties without which the cache file is lost or the child has no
+//!   server.
+//! - [`child_added`] keeps that write correct. A child gets the server, port,
+//!   user and TLS setting of the account once, at creation, and the user can
+//!   edit them later. Thus the vfunc that EDS calls for each source under the
+//!   collection binds these properties, as evolution-ews does.
+//! - [`mail_child`] serves the mail account and mail transport of the account.
+//!   This backend does not create or cache them. Evolution hides the sending
+//!   page for a store-and-transport provider, so nothing else writes a server
+//!   onto the transport. Thus this module creates the group from the account.
+//!   It writes `[Security]` as the `CamelNetworkSecurityMethod` nick that the
+//!   mail side reads, not as the word that the EDS boolean writes.
+//! - [`removal`] removes the children that this collection has but no longer
+//!   needs, read from their sources. [`Fanout::is_obsolete`] makes the
+//!   decision. This module joins it to the `ESource`, calls
+//!   `e_source_remove_sync`, and handles a removal that EDS refuses (the vfunc
+//!   returns `void`).
+//! - [`authenticate`] supplies the credentials of the collection backend.
+//!   They do not come from `populate`, which returns `void` and gets no
+//!   arguments. They come from `EBackendClass::authenticate_sync`, which EDS
+//!   calls with an `ENamedParameters` when the registry has the password of
+//!   the account. Thus the fan-out starts there. That module also has the enum
+//!   that decides if Evolution prompts again, stops, or shows nothing.
+//! - [`fan_out`] combines these parts in the closure that
+//!   [`authenticate::authenticate_with`] gets: [`Fanout::discover`] with the
+//!   given [`Login`], `e_collection_backend_new_child` plus
+//!   [`child_source::apply`] for each [`Child`], and
+//!   [`removal::remove_obsolete`] over the existing children. A trait holds the
+//!   four calls on a live collection. Thus tests check the order and the
+//!   decisions against a real `jmap-mockd` and real `ESource`s, with no
+//!   `evolution-source-registry`.
+//! - [`create_resource`] makes the server hold something new, when the user
+//!   selects "New Address Book" or "New Calendar" in Evolution. The vfunc is
+//!   `ECollectionBackendClass::create_resource_sync`. Its EDS default is a
+//!   *refusal* (`G_IO_ERROR_NOT_SUPPORTED`), so this override must not chain
+//!   up. This module reads the kind and name from the scratch `ESource` that
+//!   EDS gives, and writes the same [`Child::settings`] as a fan-out. Thus a
+//!   created child and a discovered child are the same source.
+//!   [`jmap_collection_sync::create`] makes the decision.
+//! - [`delete_resource`] is the destructive mirror: "Delete" on an address
+//!   book or calendar of this account. The EDS default of
+//!   `ECollectionBackendClass::delete_resource_sync` is also a refusal, so it
+//!   does not chain up. This module finds the collection of a child `ESource`
+//!   through the same [`resource_id`] string that `dup_resource_id` gives EDS.
+//!   Thus the delete cannot name a different object than the child does.
+//!   [`child_added`] sets the `remote-deletable` flag, which shows the menu
+//!   item, on each child of this collection and on nothing else. [`removal`]
+//!   then removes the source, as in a populate.
+//! - [`populate`] is the vfunc through which EDS first reaches all of this,
+//!   and it needs no server. It claims and exports the cached children of
+//!   previous sessions, so that an account works *offline*. Then it asks EDS
+//!   to authenticate the account, which later causes a fan-out.
+//! - [`source_changed`] keeps the `"changed"` connection of the account and
+//!   the state that decides if an edit of the account starts a new populate.
+//!   EDS does not populate again after an ordinary edit.
+//! - [`backend`] is the subclass: an instance struct, the vfunc slots
+//!   (`dup_resource_id`, `populate`, `child_added`, `create_resource_sync`,
+//!   `delete_resource_sync`, `authenticate_sync` and
+//!   `get_destination_address`), and a panic guard in front of each. It also
+//!   has the live `ECollectionBackend`, the only implementation of
+//!   [`populate::Populating`] and [`fan_out::Collection`] that is not in a
+//!   test.
+//! - [`prepare_mail`] is the mail half. The mail account, identity and
+//!   transport sources cannot be cached children: `dup_resource_id` must claim
+//!   each cached child, and EDS deletes the cache file of each source that it
+//!   does not claim. Thus these sources are in the source directory of the
+//!   registry and belong to the setup UI. The collection factory supplies the
+//!   vfunc that names their service, which for JMAP is one Camel protocol for
+//!   both.
+//! - [`factory`] is what the registry looks up, because the registry never
+//!   creates a backend directly. It is an `ECollectionBackendFactory` subclass
+//!   with two fields: the `BackendName` and the type to build. Both fields
+//!   have defaults. Without this factory, the account belongs to a different
+//!   backend or fans out to nothing.
+//! - [`module`] has the bodies of the two entry points that the registry
+//!   calls by name in `module-jmap-backend.so`. The C symbols
+//!   `e_module_load` and `e_module_unload` are in the
+//!   `jmap-backend-collection-module` cdylib, which is that shared object.
+//!   The module tells why.
 //!
-//! `dup_resource_id` came first because [`populate`] cannot be written without
-//! it — EDS loads the cached children and asks their resource ids *before* it
-//! calls `populate`, and a populate that ran against a mis-loaded child list
-//! would create duplicates of children that are already there.
+//! [`populate`] needs `dup_resource_id`. EDS loads the cached children and
+//! asks for their resource ids *before* it calls `populate`. A populate on a
+//! wrongly loaded child list makes duplicates of existing children.
 //!
 //! [`Child`]: jmap_collection_sync::Child
 //! [`Child::settings`]: jmap_collection_sync::Child::settings
@@ -121,18 +111,17 @@
 //! [`Fanout::discover`]: jmap_collection_sync::Fanout::discover
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 //!
-//! Still missing, and the one part of M6 the roadmap asks for that is not here:
-//! the mail sources are *filled in* by [`prepare_mail`] but nothing yet
-//! **creates** them. That is the setup UI's job (M7) in every reference
-//! implementation, and it is also why [`fan_out::Collection::existing_children`]
-//! has no opinion about mail: a source this backend neither creates nor caches
-//! is not one it may remove. `docs/manual-test-collection-backend.md` is the
-//! recipe for what does work, and the account it documents has
-//! `MailEnabled=false` for that reason.
+//! This backend does not **create** the mail sources. [`prepare_mail`] only
+//! fills them in. The account assistant of Evolution creates them, as in each
+//! reference implementation. For the same reason,
+//! [`fan_out::Collection::existing_children`] ignores mail: this backend may
+//! not remove a source that it does not create or cache.
+//! `docs/manual-test-collection-backend.md` is the manual test procedure, and
+//! its first account has `MailEnabled=false` for that reason.
 //!
-//! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
-//! stays out of the workspace's `default-members`; CMake runs its tests via the
-//! `rust-test-eds` target.
+//! Like `jmap-backend-core`, this crate needs the installed EDS headers. Thus
+//! it is not in the `default-members` of the workspace, and CMake runs its
+//! tests through the `rust-test-eds` target.
 
 pub mod authenticate;
 pub mod backend;

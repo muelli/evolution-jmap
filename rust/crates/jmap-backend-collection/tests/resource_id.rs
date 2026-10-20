@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Reading a child source's resource id back off the source, against real
-// `ESource`s built with the EDS setters rather than against a hand-made struct.
+// Tests for the read of the resource id from a child source. The tests use
+// real `ESource`s that the EDS setters build, not a struct made by hand.
 //
-// This is the one vfunc in the collection backend whose wrong answer is not a
-// failed operation: `collection_backend_load_resources()` deletes the cache
-// file of every child that answers `NULL`, and of every child whose answer a
-// previously-loaded child already gave. So the cases below are not edge cases,
-// they are the list of ways this backend can lose a user's offline data.
+// In this vfunc, an incorrect answer does not cause a failed operation. It
+// causes data loss. `collection_backend_load_resources()` deletes the cache
+// file of each child that answers `NULL`. It also deletes the cache file of
+// each child whose answer is the same as the answer of an earlier child. Each
+// case below is a way for this backend to lose offline data of the user.
 
 use std::ffi::CString;
 use std::ptr;
@@ -31,20 +31,19 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// An `ESource` that is not backed by the registry — `e_source_new_with_uid`
-/// with a NULL D-Bus object is what EDS itself uses for a source read from a
-/// keyfile, so the extension machinery behaves as it does in a backend.
+/// An `ESource` without the registry, made with `e_source_new_with_uid`. The
+/// extension functions operate on it as they do in a backend.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
-        // `e_source_get_extension` finds an extension class by walking the
-        // children of `E_TYPE_SOURCE_EXTENSION`, so a type nothing has
-        // referenced yet is one the source will not find. Under EDS the
-        // libraries are loaded and their types registered long before any
-        // source exists; in a test binary that only names the constants,
-        // touching the two accessors is what stands in for it.
-        // SAFETY: no arguments, and the type system initialises itself.
+        // `e_source_get_extension` walks the children of
+        // `E_TYPE_SOURCE_EXTENSION` to find an extension class. It cannot find a
+        // type that is not yet referenced. In EDS, the libraries register their
+        // types before the first source exists. In this test binary, the calls
+        // to the two type functions do that registration.
+        // SAFETY: these functions take no arguments, and the type system
+        // initialises itself.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -52,20 +51,20 @@ impl TestSource {
 
         let uid = CString::new("jmap-collection-child").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, the default
+        // main context and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
-    /// Gives the source the extension named by `group` — which is what makes it
-    /// an address book or a calendar to EDS, and what a `.source` file spells as
-    /// a keyfile group.
+    /// Gives the source the extension named by `group`. The extension makes the
+    /// source an address book or a calendar. A `.source` file has it as a
+    /// keyfile group.
     fn with_extension(self, group: &str) -> Self {
         let group = CString::new(group).expect("no NUL in an extension name");
-        // SAFETY: a live source and a NUL-terminated name; the extension is
-        // created on demand and owned by the source.
+        // SAFETY: a live source and a NUL-terminated name. The source creates
+        // the extension on demand and owns it.
         let extension = unsafe { e_source_get_extension(self.0, group.as_ptr()) };
         assert!(!extension.is_null(), "EDS knows no such extension");
         self
@@ -95,7 +94,7 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: the reference `e_source_new_with_uid` returned is given back
+        // SAFETY: this releases the reference from `e_source_new_with_uid`
         // exactly once.
         unsafe { g_object_unref(self.0.cast()) };
     }
@@ -129,20 +128,20 @@ fn child(kind: ChildKind, collection: &str) -> Child {
 fn the_extension_names_are_the_ones_eds_defines() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `jmap-collection-sync` spells them as string literals, because it must
-        // build on a machine with no EDS headers. They are the argument to
-        // `e_source_get_extension` and the group of a `.source` file, and a typo in
-        // one is not an error — it is a second, empty extension nothing reads. This
-        // crate is the only place both spellings are in scope, so it is the only
-        // place the two can be held against each other.
+        // `jmap-collection-sync` has the names as string literals, because it
+        // must build without the EDS headers. Each name is the argument to
+        // `e_source_get_extension` and a group of a `.source` file. A spelling
+        // error does not cause an error. It causes a second, empty extension
+        // that nothing reads. Only this crate has both spellings in scope, so
+        // only this crate can compare them.
         assert_eq!(
             E_SOURCE_EXTENSION_ADDRESS_BOOK.to_str(),
             Ok(EXTENSION_ADDRESS_BOOK)
         );
         assert_eq!(E_SOURCE_EXTENSION_CALENDAR.to_str(), Ok(EXTENSION_CALENDAR));
 
-        // And the table this crate dispatches on says the same, pair by pair, so a
-        // kind added later cannot bring a third spelling with it.
+        // Each pair in the dispatch table of this crate must also agree. Thus a
+        // new kind cannot add a third spelling.
         assert_eq!(
             KIND_EXTENSIONS
                 .iter()
@@ -184,12 +183,12 @@ fn a_calendar_child_is_read_back_as_a_calendar() {
 fn the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The reason this vfunc is overridden at all. EDS's own implementation
-        // returns `[Resource] Identity` verbatim, and a JMAP account may hand out
-        // the same id for an address book and a calendar — RFC 8620 ids are unique
-        // per data type, not per account. Two children with one resource id is one
-        // child: `collection_backend_load_resources()` keeps the first and deletes
-        // the second's cache file as redundant.
+        // This is why this backend overrides the vfunc. The EDS implementation
+        // returns `[Resource] Identity` without change. A JMAP account can give
+        // the same id to an address book and a calendar. RFC 8620 ids are unique
+        // for each data type, not for each account. If two children have one
+        // resource id, `collection_backend_load_resources()` keeps the first. It
+        // deletes the cache file of the second as redundant.
         let book = TestSource::new()
             .with_extension(EXTENSION_ADDRESS_BOOK)
             .with_identity("X1");
@@ -207,9 +206,9 @@ fn the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id() {
 fn every_child_this_backend_describes_reads_back_as_itself() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The round trip that has to hold for every child `populate` will create:
-        // what `Child::settings` writes is what this reads. A child of ours that
-        // did not round-trip would be deleted from the cache on the next start.
+        // This round trip must be correct for each child that `populate`
+        // creates. This function must read what `Child::settings` writes.
+        // Otherwise, the next start deletes the child from the cache.
         for (kind, collection) in [
             (ChildKind::AddressBook, "AB1"),
             (ChildKind::Calendar, "Cal1"),
@@ -236,10 +235,10 @@ fn every_child_this_backend_describes_reads_back_as_itself() {
 fn a_source_of_no_kind_this_backend_creates_is_not_claimed() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `dup_resource_id` is asked about every `.source` in the backend's cache
-        // directory. Claiming one that is not ours would put a foreign source in
-        // EDS's unclaimed-resources table under a name a real child may also
-        // answer to — and the loser of that collision is deleted.
+        // EDS calls `dup_resource_id` for each `.source` in the cache directory
+        // of the backend. A claim on a source that is not ours puts it in the
+        // unclaimed-resources table of EDS. A real child can have the same name.
+        // EDS then deletes one of the two.
         let source = TestSource::new()
             .with_extension("Mail Account")
             .with_identity("A1");
@@ -252,11 +251,11 @@ fn a_source_of_no_kind_this_backend_creates_is_not_claimed() {
 fn a_child_with_no_identity_is_not_claimed_and_is_not_given_one() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Two things at once, and the second is the subtle one:
-        // `e_source_get_extension` *creates* the extension it is asked for. Reading
-        // the identity that way would give every source that reached this vfunc an
-        // empty `[Resource]` group — including sources belonging to other backends
-        // — so the extension has to be tested for before it is read.
+        // This test examines two things. The second is less clear:
+        // `e_source_get_extension` *creates* the extension that it gets. A read of
+        // the identity with it adds an empty `[Resource]` group to each source
+        // that this vfunc gets, also to sources of other backends. Thus, examine
+        // the presence of the extension before the read.
         let source = TestSource::new().with_extension(EXTENSION_ADDRESS_BOOK);
 
         assert_eq!(source.resource_id(), None);
@@ -271,9 +270,9 @@ fn a_child_with_no_identity_is_not_claimed_and_is_not_given_one() {
 fn an_empty_identity_is_no_identity() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A `.source` carrying `Identity=` reads back as the empty string, and an
-        // empty JMAP id is not an id. Answering `"addressbook:"` would be a name
-        // every such child shares.
+        // A `.source` with `Identity=` gives the empty string. An empty JMAP id
+        // is not an id. All such children would share the answer
+        // `"addressbook:"`.
         let source = TestSource::new()
             .with_extension(EXTENSION_ADDRESS_BOOK)
             .with_identity("");
@@ -286,8 +285,8 @@ fn an_empty_identity_is_no_identity() {
 fn a_null_source_is_not_claimed_rather_than_dereferenced() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // EDS never passes one; the vfunc is a C entry point and this is the
-        // cheapest half of not trusting the caller.
+        // EDS does not pass NULL. The vfunc is a C entry point, and a NULL check
+        // is the easiest protection against an incorrect caller.
         // SAFETY: NULL is an explicitly permitted argument.
         assert_eq!(unsafe { resource_id_of(ptr::null_mut()) }, None);
     });

@@ -1,25 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The `ECollectionBackend` subclass: the type EDS registers and the three vfunc
-// slots it dispatches through.
+// Tests the `ECollectionBackend` subclass: the type that EDS registers and the
+// vfunc slots that EDS dispatches through.
 //
-// Every call here goes *through the class struct*, because that is the only
-// thing EDS ever does — and here that matters more than usual, because all three
-// slots already hold something. `dup_resource_id` inherits a working
-// implementation that answers the bare `[Resource] Identity`, which an address
-// book and a calendar of the same JMAP id both share; `populate` inherits a
-// placeholder; and `authenticate_sync`, two levels up on `EBackendClass`,
-// inherits one that reports success without contacting anything. So a vfunc
-// written but not installed is never a backend that does nothing — it is one
-// that quietly answers something else, and no error says so.
+// Each call goes through the class struct, as EDS does. Each slot already has
+// an inherited value. For example, `dup_resource_id` returns the bare
+// `[Resource] Identity`, which an address book and a calendar of one JMAP id
+// share. `populate` is a placeholder. `authenticate_sync` (on `EBackendClass`,
+// two levels up) reports success without a connection. Thus a vfunc that is not
+// installed gives a different answer silently, with no error.
 //
-// What is not here is a real instance: constructing one needs an
-// `ESourceRegistryServer`, and so a running `evolution-source-registry` on the
-// session bus, which neither this VM nor CI has. `JmapCollectionBackend::detached`
-// stands in, and is sound for exactly one of the three — `dup_resource_id`,
-// which never touches the backend it is handed. The other two can only be held
-// against the slot their override has to displace.
+// These tests have no real instance. An instance needs an
+// `ESourceRegistryServer` and a running `evolution-source-registry` on the
+// session bus, which this VM and CI do not have.
+// `JmapCollectionBackend::detached` is a substitute that is sound only for
+// `dup_resource_id`, which does not touch the backend. For the other slots, the
+// tests compare the override with the inherited value.
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -45,43 +42,41 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The class EDS would dispatch through, kept referenced for the test's
-/// duration so the vfunc pointers stay valid.
+/// The class that EDS dispatches through. The test holds a reference, so the
+/// vfunc pointers stay valid.
 struct Class(*mut JmapCollectionBackendClass);
 
 impl Class {
     fn get() -> Self {
         let gtype = register_static::<JmapCollectionBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init and hands back a class struct of our own layout.
+        // SAFETY: the type is registered, so a reference to its class runs
+        // class_init and returns a class struct with the layout of this crate.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
-    /// The `ECollectionBackendClass` half, which is where `populate` and
-    /// `dup_resource_id` live.
+    /// The `ECollectionBackendClass` part, which holds `populate` and
+    /// `dup_resource_id`.
     fn vfuncs(&self) -> &ECollectionBackendClass {
         // SAFETY: the class is referenced and leads with the parent's.
         unsafe { &(*self.0).parent_class }
     }
 
-    /// The `EBackendClass` half, two levels up, which is where
-    /// `authenticate_sync` lives — a grandparent's vfunc, not the collection
-    /// backend's own.
+    /// The `EBackendClass` part, two levels up, which holds `authenticate_sync`.
     fn backend_vfuncs(&self) -> &EBackendClass {
         &self.vfuncs().parent_class
     }
 
-    /// Calls `dup_resource_id` the way EDS's `collection_backend_load_resources`
-    /// does, and takes ownership of what it hands back.
+    /// Calls `dup_resource_id` as `collection_backend_load_resources` in EDS
+    /// does, and takes ownership of the result.
     fn dup_resource_id(&self, source: *mut ESource) -> Option<String> {
         let mut backend = JmapCollectionBackend::detached();
         let dup = self
             .vfuncs()
             .dup_resource_id
             .expect("class_init installed no dup_resource_id");
-        // SAFETY: the slot is filled, the source is alive, and the detached
-        // instance is never read by this vfunc — see the module comment.
+        // SAFETY: the slot is filled and the source is alive. This vfunc does
+        // not read the detached instance (see the module comment).
         let raw: *mut gchar = unsafe {
             dup(
                 ptr::from_mut(&mut *backend).cast::<ECollectionBackend>(),
@@ -91,8 +86,8 @@ impl Class {
         if raw.is_null() {
             return None;
         }
-        // SAFETY: a non-NULL answer is a NUL-terminated GLib allocation this
-        // caller owns, exactly as EDS's hash table would.
+        // SAFETY: a non-NULL result is a NUL-terminated GLib allocation that the
+        // caller owns, as the EDS hash table does.
         let id = unsafe { std::ffi::CStr::from_ptr(raw) }
             .to_string_lossy()
             .into_owned();
@@ -114,8 +109,8 @@ struct Source(*mut ESource);
 
 impl Source {
     fn new(extension: &str, identity: &str) -> Self {
-        // SAFETY: no arguments; see tests/resource_id.rs for why the extension
-        // types are touched first.
+        // SAFETY: no arguments. See tests/resource_id.rs for why the extension
+        // types must be registered first.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -128,8 +123,8 @@ impl Source {
 
         let extension = CString::new(extension).expect("no NUL in an extension name");
         let identity = CString::new(identity).expect("no NUL in a test identity");
-        // SAFETY: a live source and NUL-terminated names; the extensions are
-        // created on demand and owned by the source, and the setter copies.
+        // SAFETY: a live source and NUL-terminated names. The source creates and
+        // owns the extensions, and the setter copies the string.
         unsafe {
             assert!(!e_source_get_extension(source, extension.as_ptr()).is_null());
             let resource: *mut ESourceResource =
@@ -178,9 +173,9 @@ fn the_backend_registers_as_a_subclass_of_ecollectionbackend() {
 fn the_registered_sizes_are_the_rust_struct_sizes() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The same bet eds-sys's layout test makes one level down, made again for
-        // the type this crate declares: GObject allocates what registration told it
-        // to, and a mismatch writes vfunc pointers past the end of the class.
+        // GObject allocates the sizes given at registration. A mismatch writes
+        // vfunc pointers past the end of the class. The eds-sys layout test does
+        // the same check for the parent types.
         let _class = Class::get();
         let q = query(register_static::<JmapCollectionBackend>());
 
@@ -196,9 +191,9 @@ fn the_registered_sizes_are_the_rust_struct_sizes() {
 fn class_init_replaces_the_default_dup_resource_id_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `ECollectionBackendClass` comes with a working `dup_resource_id` — it
-        // returns `[Resource] Identity` verbatim — so an uninstalled override is
-        // invisible until two children of one JMAP id collide.
+        // The inherited `dup_resource_id` returns `[Resource] Identity` unchanged.
+        // Thus a missing override is not visible until two children of one JMAP id
+        // collide.
         let class = Class::get();
         // SAFETY: the parent type's class is alive for as long as ours is.
         let parent: *mut ECollectionBackendClass =
@@ -247,9 +242,9 @@ fn the_installed_vfunc_answers_with_the_kind_as_well_as_the_identity() {
 fn a_source_this_backend_did_not_create_gets_a_null_back() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // NULL is EDS's "not one of yours" — and, for a source in this backend's
-        // own cache directory, its deletion. Answering it for a foreign source is
-        // right; answering it for one of ours would not be.
+        // For EDS, NULL means "not a source of this backend". For a source in the
+        // cache directory of the backend, NULL causes its deletion. Thus NULL is
+        // correct only for a foreign source.
         let class = Class::get();
 
         assert_eq!(
@@ -263,12 +258,10 @@ fn a_source_this_backend_did_not_create_gets_a_null_back() {
 fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `ECollectionBackendClass::populate` is a placeholder — "so subclasses can
-        // safely chain up" — so an override that is written but not installed is a
-        // backend whose sidebar is simply empty: nothing claims the cached children
-        // of previous sessions, nothing exports them, and nothing ever asks EDS for
-        // the account's credentials, so no fan-out happens either. There is no error
-        // and no log line anywhere in that, which is why the slot itself is a test.
+        // `ECollectionBackendClass::populate` is a placeholder "so subclasses can
+        // safely chain up". Without the override, the sidebar is empty. Nothing
+        // claims or exports the cached children, and nothing asks EDS for the
+        // credentials, so no fan-out occurs. No error or log line shows this.
         let class = Class::get();
         // SAFETY: the parent type's class is alive for as long as ours is.
         let parent: *mut ECollectionBackendClass =
@@ -293,13 +286,12 @@ fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
 fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The chain-up the vfunc makes, from the other end: it reaches the parent's
-        // populate through `g_type_class_peek` of `ECollectionBackend` rather than
-        // through the instance's own class, which for a further subclass of ours
-        // would point back at our own slot and recurse until the stack ran out. What
-        // is asserted here is only that the pointer that walk finds is the parent's
-        // placeholder and not ours — the call itself needs a live instance, and so a
-        // running `evolution-source-registry`.
+        // The vfunc chains up through `g_type_class_peek` of `ECollectionBackend`,
+        // not through the class of the instance. For a subclass of this type, the
+        // class of the instance gives this populate again, and the recursion
+        // overflows the stack. The test asserts only that the pointer found is
+        // the parent placeholder. The call needs a live instance and a running
+        // `evolution-source-registry`.
         let class = Class::get();
         // SAFETY: as above.
         let parent: *mut ECollectionBackendClass =
@@ -319,12 +311,10 @@ fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
 fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `ECollectionBackendClass::child_added` is a signal class closure with a
-        // working body — it inserts the child into the backend's table, binds its
-        // enabled flag and makes it non-removable — so an override that is written
-        // but not installed is not a backend that breaks. It is one whose children
-        // go on naming whatever server the account named when they were written,
-        // which is invisible until the user moves the account.
+        // `ECollectionBackendClass::child_added` is a signal class closure that
+        // works. It adds the child to the backend table, binds its enabled flag and
+        // makes it not removable. Without the override, the children keep the old
+        // server. This is not visible until the user moves the account.
         let class = Class::get();
         // SAFETY: the parent type's class is alive for as long as ours is.
         let parent: *mut ECollectionBackendClass =
@@ -349,14 +339,13 @@ fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
 fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The one slot of the five whose EDS default is a *refusal* rather than a
-        // wrong answer: `collection_backend_create_resource()` does nothing but
+        // The EDS default of this slot is a refusal, not a wrong answer.
+        // `collection_backend_create_resource()` only calls
         // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-        // creating remote resources")`, which the default `create_resource_sync`
-        // drives through a closure. So an override that is written but not installed
-        // is not a silent misbehaviour — it is Evolution answering "New Address
-        // Book" with that message — and it is also why this override must NOT chain
-        // up: the parent is the refusal being replaced.
+        // creating remote resources")`. The default `create_resource_sync` calls it
+        // through a closure. Without the override, "New Address Book" shows that
+        // message. The override must not chain up, because the parent is the
+        // refusal.
         let class = Class::get();
         // SAFETY: the parent type's class is alive for as long as ours is.
         let parent: *mut ECollectionBackendClass =
@@ -382,15 +371,13 @@ fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it()
 fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `child_added` and `create_resource_sync` are the slots this crate writes
-        // into the middle of `ECollectionBackendClass` — `dup_resource_id` and
-        // `populate` sit at the front of it — and their neighbours are the other
-        // signal closure and the rest of the resource vfuncs, all of which EDS fills
-        // in. A write one slot out does not fail to compile; it replaces a function
-        // of another signature, which is a call through a bad pointer the first time
-        // EDS uses it. `create_resource` and `create_resource_finish` sit
-        // immediately *after* the slot this crate now writes, so they are the two
-        // that pin it from the far side.
+        // This crate writes `child_added`, `create_resource_sync` and
+        // `delete_resource_sync` in the middle of `ECollectionBackendClass`.
+        // (`populate` and `dup_resource_id` are at the start.) EDS fills the
+        // adjacent slots. A write to the wrong slot compiles, but it replaces a
+        // function of a different signature. EDS then calls a bad pointer.
+        // `child_removed` follows `child_added`. `create_resource` and
+        // `create_resource_finish` follow `create_resource_sync`.
         let class = Class::get();
         // SAFETY: as above.
         let parent: *mut ECollectionBackendClass =
@@ -416,10 +403,8 @@ fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
             inherited.create_resource_finish.map(|f| f as usize),
             "class_init overwrote create_resource_finish"
         );
-        // `delete_resource` and `delete_resource_finish` sit immediately after
-        // `delete_resource_sync`, which this crate now writes too, so they are what
-        // pins *that* slot from the far side — the same job `create_resource` and
-        // `create_resource_finish` do for the create one.
+        // `delete_resource` and `delete_resource_finish` follow
+        // `delete_resource_sync`.
         assert_eq!(
             ours.delete_resource.map(|f| f as usize),
             inherited.delete_resource.map(|f| f as usize),
@@ -437,13 +422,12 @@ fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
 fn class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The create slot's twin, and EDS's default is the same kind of thing:
-        // `collection_backend_delete_resource()` does nothing but
+        // As for create, the EDS default is a refusal:
+        // `collection_backend_delete_resource()` only calls
         // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-        // deleting remote resources")`. So this override must not chain up either —
-        // and leaving the slot uninstalled while `remote-deletable` is set on the
-        // children (see `tests/delete_resource.rs`) would be the worst of both: a
-        // "Delete" Evolution offers and answers with that message.
+        // deleting remote resources")`. Thus this override must not chain up. The
+        // children have `remote-deletable` set (see `tests/delete_resource.rs`).
+        // Without the override, Evolution offers "Delete" and then shows that error.
         let class = Class::get();
         // SAFETY: the parent type's class is alive for as long as ours is.
         let parent: *mut ECollectionBackendClass =
@@ -465,11 +449,11 @@ fn class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it()
     });
 }
 
-/// The `EBackendClass` EDS installed its own defaults into, which is what an
-/// override of `authenticate_sync` has to displace.
+/// The `EBackendClass` that holds the EDS defaults, which the overrides of
+/// `authenticate_sync` and `get_destination_address` replace.
 fn e_backend_class() -> *mut EBackendClass {
-    // SAFETY: referencing our own class initialises the whole ancestry, so the
-    // grandparent's class is alive for as long as ours is.
+    // SAFETY: a reference to the class of this crate initialises all its
+    // ancestors, so the grandparent class is alive while that class is.
     unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
 }
 
@@ -477,18 +461,14 @@ fn e_backend_class() -> *mut EBackendClass {
 fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The worst default of the three. `EBackendClass::authenticate_sync` is
-        // installed by `e_backend_class_init` and its body is one line — "the
-        // default implementation just reports success, it's for backends which do
-        // not use (nor define) authentication routines" — so it returns
-        // `E_SOURCE_AUTHENTICATION_ACCEPTED` without contacting anything.
+        // `e_backend_class_init` installs `EBackendClass::authenticate_sync`. Its
+        // body says "the default implementation just reports success, it's for
+        // backends which do not use (nor define) authentication routines". It
+        // returns `E_SOURCE_AUTHENTICATION_ACCEPTED` without a connection.
         //
-        // An override that is written but not installed is therefore not a backend
-        // that fails to log in. It is one that EDS believes logged in: the account
-        // goes CONNECTED, no fan-out ever runs, no credentials are ever asked for,
-        // and there is no error, no prompt and no log line anywhere in it. That is
-        // invisible in a way a NULL slot would not be, which is why the slot is a
-        // test of its own.
+        // Without the override, EDS thinks that the login succeeded. The account
+        // goes CONNECTED, but no fan-out runs and no credentials are requested.
+        // No error, prompt or log line shows this.
         let class = Class::get();
         let parent = e_backend_class();
         assert!(
@@ -515,15 +495,12 @@ fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
 fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutdown_inherited() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `authenticate_sync` and `get_destination_address` are the two slots this
-        // crate writes into a half of the class struct it does not own the layout
-        // of — bindgen's `EBackendClass`, two levels up, sitting between GObject's
-        // class and `ECollectionBackendClass`'s own vfuncs. A wrong offset there
-        // does not fail to compile; it silently overwrites a neighbouring slot with
-        // a function of a different signature, which is a call through a bad
-        // pointer the first time EDS uses it. `prepare_shutdown` is the one
-        // neighbour still left untouched, so it is what pins the offset from the
-        // far side: it must still be exactly what the grandparent installed.
+        // This crate writes `authenticate_sync` and `get_destination_address` in
+        // the bindgen `EBackendClass`, two levels up. This crate does not control
+        // that layout. A wrong offset compiles, but it replaces an adjacent slot
+        // with a function of a different signature. EDS then calls a bad pointer.
+        // `prepare_shutdown` is between the two written slots, so it must keep the
+        // value that the grandparent installed.
         let class = Class::get();
         let parent = e_backend_class();
         assert!(
@@ -547,14 +524,11 @@ fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutd
 fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `EBackendClass`'s own default (`backend_get_destination_address`) reads
-        // the backend's "connectable" property via `e_backend_ref_connectable`,
-        // which nothing in this crate ever sets — so left inherited, it always
-        // answers `FALSE`, and EDS's host-specific reachability monitor sees only
-        // generic network-up/down for a JMAP account, never this account's actual
-        // host. That is invisible in exactly the way `authenticate_sync`'s own
-        // uninstalled-default would be, which is why this slot gets the same kind
-        // of test.
+        // The default `backend_get_destination_address` reads the "connectable"
+        // property through `e_backend_ref_connectable`. This crate does not set
+        // that property, so the default always returns `FALSE`. Then the EDS
+        // reachability monitor sees only the general network state, not the
+        // account host. As for `authenticate_sync`, nothing shows this failure.
         let class = Class::get();
         let parent = e_backend_class();
         assert!(
@@ -588,9 +562,8 @@ fn a_blocked_backend_test_times_out_and_fails_fast() {
 
 #[test]
 fn watch_returns_the_same_account_watch_on_every_call() {
-    // `watch()` must read the instance's own field, not hand back a fresh
-    // one. A second call that claims the connection again, after the first
-    // call already claimed it, proves the two calls saw one `AccountWatch`.
+    // `watch()` must return the field of the instance, not a new value. The
+    // second claim fails, so both calls saw one `AccountWatch`.
     let backend = JmapCollectionBackend::detached();
     assert!(backend.watch().claim_connection());
     assert!(!backend.watch().claim_connection());

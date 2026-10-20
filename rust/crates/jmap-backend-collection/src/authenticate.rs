@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The piece between the account and the fan-out: where a collection backend
-//! gets its credentials, and what it answers EDS with.
+//! The connection between the account and the fan-out: the source of the
+//! credentials of a collection backend, and the result that it gives to EDS.
 //!
-//! This is the question that blocked `populate`, and the answer is that
-//! `populate` is not where the fan-out happens. `ECollectionBackendClass`'s
-//! `populate` returns `void`, is handed nothing, and has nowhere to put a
-//! password prompt. What EDS gives a backend instead is its grandparent's vfunc:
+//! The fan-out does not occur in `populate`. The `populate` of
+//! `ECollectionBackendClass` returns `void`, gets no arguments, and cannot show
+//! a password prompt. Instead, EDS gives a backend this vfunc of its
+//! grandparent class:
 //!
 //! ```c
 //! ESourceAuthenticationResult (*authenticate_sync) (EBackend *backend,
@@ -18,61 +18,55 @@
 //!                                                   GError **error);
 //! ```
 //!
-//! and the loop around it is: a `populate` that needs the server calls
-//! `e_backend_schedule_credentials_required()`, `evolution-source-registry`
-//! resolves the account's password (libsecret, or OAuth2, or a prompt through
-//! Evolution), and then calls back into `authenticate_sync` with an
-//! `ENamedParameters` — the same shape the address book and calendar backends
-//! are handed at `connect_sync`. So the credentials never come from this
-//! crate's own code, and never from a config file; they come from EDS, once, and
-//! the fan-out happens inside the call that receives them. EDS's own
-//! `e_webdav_collection_backend_discover_sync()` has exactly this signature and
-//! exists for exactly this reason.
+//! A `populate` that needs the server calls
+//! `e_backend_schedule_credentials_required()`. Then `evolution-source-registry`
+//! gets the password of the account (libsecret, OAuth2, or a prompt through
+//! Evolution). Then it calls `authenticate_sync` with an `ENamedParameters`.
+//! The address book and calendar backends get the same type at `connect_sync`.
+//! Thus the credentials come from EDS, one time, and not from this crate or a
+//! configuration file. The fan-out occurs in the call that receives them.
+//! `e_webdav_collection_backend_discover_sync()` of EDS has the same signature
+//! for the same reason.
 //!
-//! [`authenticate_with`] is that vfunc minus the instance: everything from the
-//! account `ESource` down to the [`Login`] a fan-out needs, with the one enum
-//! EDS reads written on every path. The fan-out itself is a closure because it
-//! is the only part that needs a live `ECollectionBackend` —
-//! `e_collection_backend_new_child()` and `e_collection_backend_list_*_sources()`
-//! are instance methods — and the decisions here are not about children at all.
+//! [`authenticate_with`] is that vfunc without the instance. It reads the
+//! account `ESource`, makes the [`Login`] that a fan-out needs, and sets the
+//! result enum on each path. The fan-out is a closure because only it needs a
+//! live `ECollectionBackend`: `e_collection_backend_new_child()` and
+//! `e_collection_backend_list_*_sources()` are instance methods.
 //!
-//! ## The result is the whole user experience
+//! ## The result controls what Evolution does next
 //!
-//! `ESourceAuthenticationResult` is not a status code, it is what Evolution
-//! *does* next, and three of its values are traps:
+//! `ESourceAuthenticationResult` is not a status code. It tells Evolution what
+//! to do next, and three of its values are dangerous:
 //!
-//! - `REJECTED` makes EDS discard the stored password and ask again. Answering
-//!   it for a server that is down, or for a 403, asks someone to fix something a
-//!   password cannot fix — and asks again every time.
-//! - `REQUIRED` is what turns into the prompt. Answering anything else for an
-//!   account that has no password yet is an account that can never be completed.
-//! - `ERROR` is the end of the road for this attempt. Answering it for an
-//!   account whose parts the user simply switched off puts a dialog in front of
-//!   someone who asked for nothing.
+//! - `REJECTED` makes EDS discard the stored password and ask again. For a
+//!   server that is down, or for a 403, a new password does not help, and EDS
+//!   asks again on each attempt.
+//! - `REQUIRED` causes the prompt. Any other result for an account without a
+//!   password means that the user can never complete the account.
+//! - `ERROR` stops this attempt. For an account where the user disabled all
+//!   parts, it shows an error dialog that the user did not cause.
 //!
-//! The 401-and-only-401 rule is [`ConnectError::auth_result`]'s, in
-//! `jmap-backend-core`, and it is reached from here rather than restated:
-//! `connect_sync` on the book and calendar backends answers the same question
-//! with the same enum, and a rule like that written twice is a rule corrected
-//! once.
+//! [`ConnectError::auth_result`] in `jmap-backend-core` contains the rule that
+//! only a 401 gives `REJECTED`. This module calls that rule and does not copy
+//! it, because `connect_sync` of the book and calendar backends uses it too.
 //!
-//! ## What is read, and in which order
+//! ## The order of the reads
 //!
-//! [`parts_of`] first, and only then [`server_of`]. An account with every part
-//! switched off has nothing to discover and needs no server, so asking for the
-//! host first would report a half-written account as broken the moment its owner
-//! unticked the last part. That ordering is [`crate::collection_source`]'s
-//! documented one; this is where it is enforced.
+//! [`parts_of`] comes first, then [`server_of`]. An account with all parts
+//! disabled has nothing to discover and needs no server. If the host is read
+//! first, an incomplete account becomes an error when the user disables its
+//! last part. [`crate::collection_source`] documents this order, and this
+//! module enforces it.
 //!
-//! ## The two out-parameters this does not touch
+//! ## The two out-parameters that this module does not set
 //!
-//! `out_certificate_pem` and `out_certificate_errors` are how a backend hands
-//! EDS a server certificate it could not verify, so that Evolution can offer to
-//! trust it. This backend does not fill them in: TLS is `ureq`'s and the system
-//! trust store's, and a certificate this code cannot see is one it must not
-//! invite anyone to accept. The consequence is honest and small — a JMAP account
-//! with a self-signed certificate fails with an error instead of a "trust this
-//! certificate?" dialog.
+//! A backend uses `out_certificate_pem` and `out_certificate_errors` to give
+//! EDS a server certificate that it could not verify. Evolution can then offer
+//! to trust it. This backend does not set them: `ureq` and the system trust
+//! store do TLS. This code cannot see the certificate, so it must not ask a
+//! user to accept it. Thus a JMAP account with a self-signed certificate fails
+//! with an error, not with a "trust this certificate?" dialog.
 
 use std::fmt;
 
@@ -96,68 +90,65 @@ use jmap_collection_sync::Parts;
 
 use crate::collection_source::{Server, parts_of, server_of};
 
-/// Everything a fan-out needs, out of one read of the account and one set of
+/// All that a fan-out needs, from one read of the account and one set of
 /// credentials from EDS.
 ///
-/// The three fields answer the three questions [`Fanout::discover`] asks —
-/// which server, as whom, and for which parts — and they are one struct because
-/// they have to be one *read*: the origin this backend discovers from is also
-/// the host written into every child it creates, and two reads of one `ESource`
-/// are two chances to disagree about which server the account is.
+/// The three fields answer the three questions of [`Fanout::discover`]: which
+/// server, which user, and which parts. They are one struct because they must
+/// come from one read. The discovery origin is also the host in each child that
+/// the backend creates, and two reads of one `ESource` can disagree.
 ///
 /// [`Fanout::discover`]: jmap_collection_sync::Fanout::discover
 #[derive(Debug, Clone)]
 pub struct Login {
-    /// Where the server is, in both the shapes it is needed in — see
-    /// [`Server`].
+    /// The location of the server, in the two forms that the backend needs.
+    /// See [`Server`].
     pub server: Server,
-    /// Which of mail, contacts and calendars the account still asks for.
-    /// Never all-off: an account with nothing switched on never reaches a
-    /// fan-out.
+    /// The parts (mail, contacts, calendars) that the account enables. Never
+    /// all disabled: an account with no enabled part does not reach a fan-out.
     pub parts: Parts,
-    /// What to authenticate as. [`Credentials::None`] is a deliberate answer,
-    /// not a missing one — an account that names no user is anonymous on
-    /// purpose.
+    /// The credentials to authenticate with. [`Credentials::None`] is
+    /// intentional: an account that names no user is anonymous.
     pub credentials: Credentials,
 }
 
-/// `EBackendClass::authenticate_sync` for a JMAP collection, minus the
-/// instance: the account is read, the credentials are assembled, and `fan_out`
-/// is run against the result — or one of the answers before it is returned
-/// instead, and `fan_out` never runs at all.
+/// `EBackendClass::authenticate_sync` for a JMAP collection, without the
+/// instance. It reads the account, makes the credentials, and runs `fan_out`
+/// with the result. If an earlier step fails, it returns that result and
+/// `fan_out` does not run.
 ///
-/// `fan_out` is what needs the `ECollectionBackend` and so is not here:
-/// `Fanout::discover` against [`Login::server`], an
-/// `e_collection_backend_new_child` plus [`child_source::apply`] per child, and
-/// [`removal::remove_obsolete`] over the children the collection already has.
-/// Its `Ok` is `ACCEPTED` and its error is classified the same way
-/// `connect_sync`'s is.
+/// `fan_out` needs the `ECollectionBackend`, so the caller supplies it. It does
+/// `Fanout::discover` against [`Login::server`], one
+/// `e_collection_backend_new_child` plus [`child_source::apply`] for each child,
+/// and [`removal::remove_obsolete`] over the existing children. Its `Ok` gives
+/// `ACCEPTED`. Its error gets the same classification as an error of
+/// `connect_sync`.
 ///
-/// `push_credentials` is EWS's `e_collection_backend_authenticate_children()`
-/// call, for the same reason `fan_out` is a closure: it needs the live
-/// `ECollectionBackend`, which is not here either. It runs exactly once, only
-/// once `fan_out` has returned `Ok` — an account with nothing switched on never
-/// reaches it, and neither does one `fan_out` failed for, since there is
-/// nothing freshly authenticated to hand children that never got a look at this
-/// login at all. Without it, each address-book/calendar child independently
-/// re-fetches its own credentials the next time it needs them (`connect_with`'s
-/// three-branch resolution, unchanged) rather than being handed what this
-/// authenticate just resolved, which is what evolution-ews does too.
+/// `push_credentials` does the `e_collection_backend_authenticate_children()`
+/// call of EWS. It is a closure because it also needs the live
+/// `ECollectionBackend`. It runs one time, and only after `fan_out` returns
+/// `Ok`. An account with no enabled part does not reach it. An account where
+/// `fan_out` failed does not reach it either, because there is no new login to
+/// give to the children. With it, the children get the credentials that this
+/// call resolved, as in evolution-ews. Without it, each address book and
+/// calendar child gets its credentials again when it next needs them (the
+/// three-branch resolution of `connect_with`).
 ///
-/// An error is set on every non-`ACCEPTED` path and on none of the accepting
-/// ones, which is GLib's convention read against this enum: `ACCEPTED` is the
-/// only success it has. EDS reads the out-parameter whatever the result was, so
-/// a stale `GError` is how an account that is fine gets reported as broken.
+/// This function sets an error on each path that is not `ACCEPTED`, and on no
+/// accepting path. This is the GLib convention for this enum, because
+/// `ACCEPTED` is its only success. EDS reads the out-parameter for all results,
+/// so a stale `GError` makes a correct account look broken.
 ///
 /// [`child_source::apply`]: crate::child_source::apply
 /// [`removal::remove_obsolete`]: crate::removal::remove_obsolete
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource` — the account EDS constructed the
-/// backend from — `credentials` NULL or a valid `ENamedParameters`,
-/// `cancellable` NULL or a valid `GCancellable`, and `error` NULL or a writable
-/// pointer to a NULL `GError`. That is what an EDS vfunc receives.
+/// `source` must be NULL or a valid `ESource` (the account from which EDS
+/// constructed the backend). `credentials` must be NULL or a valid
+/// `ENamedParameters`. `cancellable` must be NULL or a valid `GCancellable`.
+/// `error` must be NULL or a writable pointer to a NULL `GError`. An EDS vfunc
+/// receives these values.
 pub unsafe fn authenticate_with<F, P>(
     source: *mut ESource,
     credentials: *const ENamedParameters,
@@ -170,12 +161,12 @@ where
     F: FnOnce(Login) -> Result<(), jmap_client::Error>,
     P: FnOnce(*const ENamedParameters),
 {
-    // An account-less backend cannot be configured, so no prompt helps. It
-    // should not happen — EDS constructs the backend *from* a source — but a
-    // NULL dereference here takes `evolution-source-registry` down, and with it
-    // every account in the session.
+    // A backend without an account cannot be configured, so a prompt does not
+    // help. EDS constructs the backend from a source, so this is not expected.
+    // But a NULL dereference here stops `evolution-source-registry` and all
+    // accounts in the session.
     if source.is_null() {
-        // SAFETY: the out-parameter satisfies the contract by this function's.
+        // SAFETY: the contract of this function makes `error` valid.
         unsafe { set_raw_gerror(error, no_account_gerror()) };
         return E_SOURCE_AUTHENTICATION_ERROR;
     }
@@ -183,8 +174,8 @@ where
     let account_id = unsafe { read_string(e_source_get_uid(source)) };
     let account_id_str = account_id.as_deref();
 
-    // Parts before server: see the module comment on the order.
-    // SAFETY: a valid source, checked non-NULL above.
+    // Read the parts before the server. See the module documentation.
+    // SAFETY: `source` is valid, and the check above makes sure it is not NULL.
     let parts = unsafe { parts_of(source) };
     if !parts.any() {
         tracing::debug!(
@@ -194,22 +185,20 @@ where
         return ACCEPTED_AUTH_RESULT;
     }
 
-    // SAFETY: `credentials` is NULL — which is what EDS passes before it has
-    // asked libsecret for anything — or a valid `ENamedParameters` that
-    // outlives the call.
+    // SAFETY: `credentials` is NULL (EDS passes NULL before it asks libsecret)
+    // or a valid `ENamedParameters` that is alive longer than this call.
     let password = unsafe { stored_password(credentials) };
-    // Read once and kept, not just asked inside `login_of`: `fan_out`'s own
-    // failure needs it too, to tell a 401 on the token this login just
-    // fetched apart from one on an ordinary password — see `finish_fan_out`.
-    // SAFETY: a valid source, checked non-NULL above.
+    // Keep this value: a failure of `fan_out` also needs it. It separates a 401
+    // on a new OAuth 2.0 token from a 401 on a password. See `finish_fan_out`.
+    // SAFETY: `source` is valid, and the check above makes sure it is not NULL.
     let uses_oauth2 = unsafe { source_uses_oauth2(source) };
     tracing::debug!(
         account_id = account_id_str,
         uses_oauth2,
         "authenticating collection backend"
     );
-    // SAFETY: a valid source, checked non-NULL above, and a cancellable that
-    // satisfies `login_of`'s contract by this function's own.
+    // SAFETY: `source` is valid and not NULL (see above). The contract of this
+    // function makes `cancellable` satisfy the contract of `login_of`.
     let login = match unsafe { login_of(source, parts, password.as_deref(), cancellable) } {
         Ok(login) => login,
         Err(failure) => {
@@ -219,19 +208,18 @@ where
                 ?failure,
                 "collection backend credential resolution failed"
             );
-            // SAFETY: the out-parameter satisfies the contract by this
-            // function's.
+            // SAFETY: the contract of this function makes `error` valid.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
             return failure.auth_result();
         }
     };
 
-    // Held for the length of the fan-out and no longer. A flag that outlived
-    // the call would belong to the *account* rather than to this operation, and
-    // an authenticate the user stopped would leave every later request on this
-    // thread refusing. See `jmap_backend_core::cancel::observe`.
-    // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS keeps
-    // alive for the duration of the vfunc, which outlives this scope.
+    // Keep this guard only for the duration of the fan-out. A flag that stays
+    // after the call belongs to the account and not to this operation. Then,
+    // after the user stops one authentication, all later requests on this thread
+    // fail. See `jmap_backend_core::cancel::observe`.
+    // SAFETY: `cancellable` is NULL or a valid `GCancellable`. EDS keeps it
+    // alive for the duration of the vfunc, which is longer than this scope.
     let _cancel = unsafe { observe(cancellable) };
 
     match finish_fan_out(uses_oauth2, fan_out(login)) {
@@ -258,17 +246,15 @@ where
     }
 }
 
-/// What `authenticate_with` reports, given what `fan_out` itself answered.
+/// The result of `authenticate_with`, from the result of `fan_out`.
 ///
-/// Split out so the reclassification decision needs no live `ESource`, the
-/// same way [`jmap_backend_core::connect`]'s own `finish_connect` is split
-/// out of `connect_with` for the address book and calendar backends'
-/// `connect_sync` — this is the collection backend's sibling of that, over
-/// `fan_out`'s `jmap_client::Error` rather than a `Result<T, ConnectError>`
-/// an `open` already returns. See
-/// [`ConnectError::reclassify_oauth2_rejection`] for why a 401 on a bearer
-/// token this login just fetched is not "the password was wrong" the way it
-/// is for Basic or an API token.
+/// This is a separate function so that the reclassification needs no live
+/// `ESource`. [`jmap_backend_core::connect`] keeps `finish_connect` separate
+/// from `connect_with` for the same reason. This function does the same for
+/// the collection backend, over the `jmap_client::Error` of `fan_out`. See
+/// [`ConnectError::reclassify_oauth2_rejection`] for why a 401 on a new OAuth
+/// 2.0 bearer token does not mean a wrong password, as for Basic or an API
+/// token.
 fn finish_fan_out(uses_oauth2: bool, outcome: Result<(), Error>) -> Result<(), ConnectError> {
     outcome.map_err(ConnectError::from).map_err(|failure| {
         if uses_oauth2 {
@@ -279,43 +265,40 @@ fn finish_fan_out(uses_oauth2: bool, outcome: Result<(), Error>) -> Result<(), C
     })
 }
 
-/// One read of the account and one set of credentials, as the [`Login`] every
-/// operation against this account's server needs.
+/// One read of the account and one set of credentials, as the [`Login`] that
+/// each operation against the server of this account needs.
 ///
-/// Split out of [`authenticate_with`] because `authenticate_sync` is no longer
-/// the only vfunc that needs one: `create_resource_sync` has to reach the same
-/// server as the same account with the same credentials, and the rule that
-/// decides *which* credentials — OAuth 2.0 by the account's
-/// `[Authentication] Method`, otherwise the stored password — is one rule.
-/// Written twice it would be two, and the way it fails is silent: an account
-/// whose OAuth 2.0-ness one path reads and the other does not is one that fans
-/// out fine and then creates address books anonymously.
+/// This is separate from [`authenticate_with`] because `create_resource_sync`
+/// also needs the same server, account and credentials. One rule selects the
+/// credentials: the `[Authentication] Method` of the account selects OAuth 2.0
+/// or an API token, otherwise the stored password. Two copies of the rule can
+/// disagree without an error. For example, the fan-out uses OAuth 2.0 and the
+/// account then creates address books anonymously.
 ///
-/// `parts` is passed in rather than read here so that [`authenticate_with`]
-/// keeps its documented order — an account with every part switched off is
-/// answered before its host is even looked at — and so that a caller for whom
-/// the parts do not gate anything (a create is about a collection that exists on
-/// the server whatever the account has switched on) still reports the account's
-/// real parts in the `Login`.
+/// The caller gives `parts`, so that [`authenticate_with`] keeps its documented
+/// order: it answers an account with all parts disabled before it reads the
+/// host. Also, a caller that does not use the parts as a gate still puts the
+/// real parts of the account in the `Login`. (A create is about a collection on
+/// the server, whatever parts the account enables.)
 ///
-/// `password` is what EDS resolved out of libsecret, in the form
+/// `password` is the value that EDS got from libsecret, in the form that
 /// [`jmap_backend_core::marshal::password`] and
-/// [`crate::create_resource::stored_password_of`] both produce. `None` is "there
-/// is none yet", which for an account that names a user is
-/// [`ConnectError::CredentialsRequired`] and so a prompt.
+/// [`crate::create_resource::stored_password_of`] give. `None` means that
+/// there is no password yet. For an account that names a user, this gives
+/// [`ConnectError::CredentialsRequired`] and thus a prompt.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — the account EDS constructed the backend
-/// from — and `cancellable` NULL or a valid `GCancellable`. That is what an EDS
-/// vfunc receives.
+/// `source` must be a valid `ESource` (the account from which EDS constructed
+/// the backend). `cancellable` must be NULL or a valid `GCancellable`. An EDS
+/// vfunc receives these values.
 pub unsafe fn login_of(
     source: *mut ESource,
     parts: Parts,
     password: Option<&str>,
     cancellable: *mut GCancellable,
 ) -> Result<Login, LoginError> {
-    // SAFETY: a valid source by this function's contract.
+    // SAFETY: the contract of this function makes `source` valid.
     let server = unsafe { server_of(source) }?;
 
     let uses_oauth2 = unsafe { source_uses_oauth2(source) };
@@ -328,15 +311,14 @@ pub unsafe fn login_of(
         "resolving collection backend login credentials"
     );
 
-    // Which authentication scheme this account uses is decided the same way
-    // `connect_with` decides it for the address book and calendar backends —
-    // see `jmap_backend_core::oauth2`'s module docs for whose rule this is.
-    // An OAuth 2.0 account can name no `[Authentication] User` at all, so
-    // reading a missing user as "anonymous" here, the way a plain password
-    // account's absent user means, would silently skip OAuth 2.0 and connect
-    // with no credentials whatsoever.
-    // SAFETY: a valid source by this function's contract; `cancellable`
-    // satisfies `access_token`'s contract by this function's own.
+    // Select the authentication scheme with the same rule as `connect_with` for
+    // the address book and calendar backends. See the module documentation of
+    // `jmap_backend_core::oauth2` for the source of this rule. An OAuth 2.0
+    // account can name no `[Authentication] User`. If a missing user meant
+    // "anonymous" here, as for a password account, the backend would skip
+    // OAuth 2.0 and connect with no credentials.
+    // SAFETY: the contract of this function makes `source` valid, and makes
+    // `cancellable` satisfy the contract of `access_token`.
     let credentials = unsafe {
         if uses_oauth2 {
             access_token(source, cancellable).map(Credentials::bearer)
@@ -354,17 +336,17 @@ pub unsafe fn login_of(
     })
 }
 
-/// Why an account could not be turned into a [`Login`].
+/// The reason why an account did not become a [`Login`].
 ///
-/// Two variants because the two halves fail differently and Evolution has to
-/// treat them differently: a broken *account* is never a password problem, so it
-/// must never become a prompt, while a missing credential is nothing but.
+/// There are two variants because Evolution must treat the two failures
+/// differently. A broken account is never a password problem, so it must never
+/// cause a prompt. A missing credential is only a password problem.
 #[derive(Debug)]
 pub enum LoginError {
-    /// The account does not name a server this backend may contact — see
+    /// The account does not name a server that this backend can contact. See
     /// [`SourceError`].
     Account(SourceError),
-    /// The account names a server and there is no credential to reach it with.
+    /// The account names a server, but there is no credential for it.
     Credentials(ConnectError),
 }
 
@@ -392,7 +374,7 @@ impl fmt::Display for LoginError {
 impl std::error::Error for LoginError {}
 
 impl LoginError {
-    /// The `GError` an operation reports this through.
+    /// The `GError` that an operation reports for this error.
     pub fn to_gerror(&self) -> *mut GError {
         match self {
             Self::Account(failure) => failure.to_gerror(),
@@ -400,13 +382,12 @@ impl LoginError {
         }
     }
 
-    /// What `authenticate_sync` writes into its return value.
+    /// The return value of `authenticate_sync` for this error.
     ///
-    /// [`LoginError::Account`] is always `ERROR`: a missing host, a host that is
-    /// not a host, or plain HTTP to a remote server: none of them is fixed by a
-    /// password, so none of them is ever `REQUIRED` or `REJECTED`. The
-    /// credentials half keeps [`ConnectError::auth_result`]'s own rule, which is
-    /// the one that produces the prompt.
+    /// [`LoginError::Account`] is always `ERROR`. A password does not fix a
+    /// missing host, an invalid host, or plain HTTP to a remote server. Thus
+    /// none of them is `REQUIRED` or `REJECTED`. The credentials variant uses
+    /// the rule of [`ConnectError::auth_result`], which causes the prompt.
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
             Self::Account(_) => E_SOURCE_AUTHENTICATION_ERROR,
@@ -415,7 +396,7 @@ impl LoginError {
     }
 }
 
-/// The `GError` for a backend that was handed no account at all.
+/// The `GError` for a backend that got no account.
 fn no_account_gerror() -> *mut GError {
     invalid_arg_gerror("the JMAP collection backend has no account to authenticate")
 }
@@ -424,11 +405,10 @@ fn no_account_gerror() -> *mut GError {
 mod tests {
     use super::*;
 
-    /// The gate `authenticate_with` applies around `fan_out`'s outcome: only
-    /// an OAuth 2.0 login's 401 is reclassified, and success passes through
-    /// unchanged either way — the collection backend's sibling of
-    /// `jmap_mail::service::finish_authenticate_tests` and
-    /// `jmap_backend_core::connect`'s own `finish_connect` test.
+    /// The gate of `authenticate_with` on the result of `fan_out`. Only a 401
+    /// on an OAuth 2.0 login gets reclassification, and success does not
+    /// change. Compare `jmap_mail::service::finish_authenticate_tests` and the
+    /// `finish_connect` test of `jmap_backend_core::connect`.
     #[test]
     fn finish_fan_out_reclassifies_only_when_the_login_was_oauth2() {
         let unauthorized = || {
@@ -450,9 +430,10 @@ mod tests {
         assert!(finish_fan_out(false, Ok(())).is_ok());
     }
 
-    /// The reclassification is narrow: a non-401 failure on an OAuth 2.0
-    /// login is left as `Client`, the same as `jmap_backend_core::connect`'s
-    /// `only_a_401_is_reclassified_to_oauth2_required`.
+    /// The reclassification is narrow: a failure other than 401 on an OAuth
+    /// 2.0 login stays `Client`. Compare
+    /// `only_a_401_is_reclassified_to_oauth2_required` in
+    /// `jmap_backend_core::connect`.
     #[test]
     fn only_the_401_shape_is_reclassified() {
         for failure in [
@@ -469,9 +450,9 @@ mod tests {
         }
     }
 
-    /// `LoginError`'s `Display` writes the inner error, for either variant;
-    /// without this test a `Display` that writes nothing still compiles and
-    /// a broken account reports as an empty error message.
+    /// The `Display` of `LoginError` writes the inner error for both variants.
+    /// Without this test, a `Display` that writes nothing compiles, and a
+    /// broken account shows an empty error message.
     #[test]
     fn a_login_error_displays_the_inner_error() {
         let account = LoginError::Account(SourceError::MissingHost);

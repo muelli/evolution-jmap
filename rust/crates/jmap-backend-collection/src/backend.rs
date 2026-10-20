@@ -3,18 +3,17 @@
 
 //! The `ECollectionBackend` subclass itself.
 //!
-//! Deliberately dull, like `jmap-backend-book`'s: the instance and class
-//! structs, the vfunc slots, and a panic guard in front of each body — the
-//! bodies themselves live a layer down, where they can be tested without a
-//! GObject. What is different here is that none of the three slots is empty to
-//! begin with. `ECollectionBackendClass` installs a working `dup_resource_id`
-//! and a do-nothing `populate`, and `EBackendClass` — two levels up, which is
-//! where `authenticate_sync` lives — installs one that reports success without
-//! contacting anything. So an override that is written but not *installed* does
-//! not produce a backend that fails; it produces one that quietly answers
-//! something else, and in `authenticate_sync`'s case one that EDS believes
-//! logged in. `tests/backend.rs` holds each slot against the parent's to keep
-//! that from being invisible.
+//! Deliberately simple, as in `jmap-backend-book`: the instance and class
+//! structs, the vfunc slots, and a panic guard in front of each body. The
+//! bodies are one layer down, where tests can run them without a GObject.
+//!
+//! No slot here is empty in the parent. `ECollectionBackendClass` installs a
+//! working `dup_resource_id` and an empty `populate`. `EBackendClass`, two
+//! levels up, installs an `authenticate_sync` that reports success and
+//! contacts nothing. Thus an override that is not *installed* does not fail:
+//! the backend silently gives a different answer. For `authenticate_sync`,
+//! EDS then thinks that the login succeeded. `tests/backend.rs` compares each
+//! slot with the slot of the parent, so that this error is visible.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -73,62 +72,60 @@ use crate::source_changed::{AccountWatch, login_fingerprint};
 /// The JMAP collection backend.
 #[repr(C)]
 pub struct JmapCollectionBackend {
-    /// GObject's; never read by this code, only handed back to EDS as the
-    /// instance pointer it gave us.
+    /// The parent instance. This code does not read it. It only gives it back
+    /// to EDS as the instance pointer.
     parent: ECollectionBackend,
-    /// The account's `"changed"` connection and whether its settings have
-    /// been proven to work; see [`crate::source_changed`].
+    /// The `"changed"` connection of the account, and if its settings are
+    /// proven to work. Refer to [`crate::source_changed`].
     watch: AccountWatch,
 }
 
-/// The class struct. Nothing of ours lives in it; it exists because GObject
-/// needs a size to allocate and a place to put the vfunc slots.
+/// The class struct. It holds no data of this crate. GObject needs it for the
+/// allocation size and for the vfunc slots.
 #[repr(C)]
 pub struct JmapCollectionBackendClass {
     pub parent_class: ECollectionBackendClass,
 }
 
 impl JmapCollectionBackend {
-    /// An instance outside the GObject type system: zeroed parent bytes, which
-    /// is what `instance_init` leaves behind minus the GObject.
+    /// An instance outside the GObject type system: zeroed parent bytes, as
+    /// `instance_init` leaves them, but with no GObject.
     ///
-    /// As in `jmap-backend-book`, this exists because a real instance needs an
-    /// `ESourceRegistryServer` and so a running `evolution-source-registry` on
-    /// the session bus, which neither the test VM nor CI has. Nothing may be
-    /// touched through the result: the parent bytes are a valid bit pattern but
-    /// they are not a GObject, so passing one to any EDS function is undefined
+    /// As in `jmap-backend-book`, a real instance needs an
+    /// `ESourceRegistryServer`, and thus a running `evolution-source-registry`
+    /// on the session bus. The test VM and CI do not have one. Do not touch
+    /// anything through the result. The parent bytes are a valid bit pattern
+    /// but not a GObject, so giving them to an EDS function is undefined
     /// behaviour.
     ///
-    /// So this is sound for exactly one of the two vfuncs below —
-    /// `dup_resource_id`, which never reads the backend at all, because its
-    /// answer is a function of the child source. `populate` is the other kind:
-    /// its very first act is `e_collection_backend_freeze_populate` on the
-    /// instance, so driving it from one of these would be undefined behaviour.
-    /// That is why the populate *body* is [`crate::populate`]'s, behind a trait,
-    /// and why the only thing `tests/backend.rs` can say about the slot is that
-    /// it is installed and is not the one it replaced.
+    /// Of the vfuncs below, only `dup_resource_id` is sound on this instance,
+    /// because it does not read the backend: its answer comes from the child
+    /// source. The other vfuncs use the instance. For example, `populate`
+    /// first calls `e_collection_backend_freeze_populate` on it. Thus the
+    /// populate *body* is in [`crate::populate`], behind a trait.
+    /// `tests/backend.rs` can only check that the slot is installed and is not
+    /// the slot of the parent.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, and
-        // every field of the watch an `AtomicBool`, for all of which all-zero
-        // is a valid value — an empty `AccountWatch`, in the watch's case.
+        // SAFETY: each field of the parent is a pointer or an integer, and
+        // each field of the watch is an `AtomicBool`. All-zero is a valid
+        // value for all of them. For the watch, it is an empty `AccountWatch`.
         unsafe { zeroed_box() }
     }
 
-    /// This instance's [`AccountWatch`].
+    /// The [`AccountWatch`] of this instance.
     ///
-    /// Reads one field of our own half of the instance struct and touches
-    /// none of the parent bytes, which is what makes it the one thing besides
-    /// `dup_resource_id` that a [`detached`](Self::detached) instance can be
-    /// asked.
+    /// Reads one field of the half of the instance struct that this crate
+    /// owns, and touches no parent bytes. Thus, with `dup_resource_id`, it is
+    /// safe to call on a [`detached`](Self::detached) instance.
     pub fn watch(&self) -> &AccountWatch {
         &self.watch
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the ECollectionBackend
-// instance and class structs respectively, and ECollectionBackend derives from
-// GObject (via EBackend).
+// SAFETY: both structs are #[repr(C)]. They start with the ECollectionBackend
+// instance struct and class struct respectively. ECollectionBackend derives
+// from GObject (through EBackend).
 unsafe impl ObjectSubclass for JmapCollectionBackend {
     const NAME: &'static CStr = c"ECollectionBackendJmap";
     type Instance = JmapCollectionBackend;
@@ -140,41 +137,40 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; the slot below is in that half.
+        // SAFETY: `class` points to a newly allocated class struct of this
+        // type, which starts with the class struct of the parent. The slots
+        // below are in that part.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.dup_resource_id = Some(dup_resource_id);
         vfuncs.populate = Some(populate);
         vfuncs.child_added = Some(child_added);
-        // The two slots whose EDS default is a *refusal* rather than a wrong
-        // answer: `collection_backend_create_resource()` and its delete twin
-        // return `G_IO_ERROR_NOT_SUPPORTED` and nothing else, so leaving either
-        // uninstalled is an account that cannot create or delete address books,
-        // which is visible. Which is why these two overrides, unlike
-        // `child_added`'s, must not chain up — see `crate::create_resource` and
-        // `crate::delete_resource`.
+        // The EDS default of these two slots is a *refusal*, not a wrong
+        // answer: `collection_backend_create_resource()` and its delete
+        // counterpart only return `G_IO_ERROR_NOT_SUPPORTED`. Thus, unlike
+        // `child_added`, these overrides must not chain up. Refer to
+        // `crate::create_resource` and `crate::delete_resource`.
         vfuncs.create_resource_sync = Some(create_resource_sync);
         vfuncs.delete_resource_sync = Some(delete_resource_sync);
-        // A grandparent's slot, not the collection backend's own: EDS's own
-        // default for it accepts every account without contacting anything, so
-        // the one thing worse than not writing here is writing to the wrong
-        // offset. `tests/backend.rs` holds both.
+        // A slot of the grandparent, not of the collection backend. The EDS
+        // default accepts each account and contacts nothing, so a write to the
+        // wrong offset is a silent error. `tests/backend.rs` checks both.
         vfuncs.parent_class.authenticate_sync = Some(authenticate_sync);
-        // The grandparent's other slot: EDS's own default reads the
-        // "connectable" property, which nothing here ever sets, so it always
-        // answers FALSE — a JMAP account's host is invisible to EDS's
-        // host-specific reachability monitor without this override. See
+        // The other slot of the grandparent. The EDS default reads the
+        // "connectable" property, which this crate never sets, so it always
+        // returns FALSE. Without this override, the reachability monitor of
+        // EDS cannot see the host of a JMAP account. Refer to
         // `get_destination_address` below.
         vfuncs.parent_class.get_destination_address = Some(get_destination_address);
     }
 }
 
-/// The parent's class struct, for the one vfunc that chains up.
+/// The class struct of the parent, for the vfuncs that chain up (`populate`
+/// and `child_added`).
 ///
-/// `g_type_class_peek` rather than `_ref`, as in `jmap-backend-book`: an
-/// initialised class is what having registered a subclass of it guarantees, and
-/// taking a reference here would mean giving one back on a path that has no
-/// natural place to do so.
+/// `g_type_class_peek`, not `_ref`, as in `jmap-backend-book`. When a vfunc
+/// runs on an instance of the subclass, the parent class is initialised. A
+/// reference taken here needs a release, and this path has no good place for
+/// one.
 fn parent_class() -> Option<&'static ECollectionBackendClass> {
     // SAFETY: the contract above.
     unsafe {
@@ -184,31 +180,30 @@ fn parent_class() -> Option<&'static ECollectionBackendClass> {
     }
 }
 
-/// What EDS calls a cached child source to learn which collection it stands
-/// for, once per file, before `populate`.
+/// EDS calls this on a cached child source to find its collection, once per
+/// file, before `populate`.
 ///
-/// The `backend` argument is not read: the answer is a function of the child
-/// source alone, which is what makes it testable without an instance — and what
-/// makes it safe to drive from a detached one.
+/// The `backend` argument is not read: the answer comes only from the child
+/// source. Thus tests can call it without an instance, or with a detached one.
 ///
-/// A panic becomes NULL, and NULL here means EDS deletes the file. That is the
-/// wrong outcome, but there is no other: the vfunc has no `GError` and no
-/// sentinel that means "ask me again". The guard logs a critical, which is the
-/// only trace such a bug can leave.
+/// A panic becomes NULL, and for NULL, EDS deletes the file. That result is
+/// wrong, but there is no alternative: the vfunc has no `GError` and no value
+/// that means "ask again". The guard logs a critical, which is the only record
+/// of such a bug.
 unsafe extern "C" fn dup_resource_id(
     backend: *mut ECollectionBackend,
     child_source: *mut ESource,
 ) -> *mut gchar {
     let _ = backend;
     guard("dup_resource_id", ptr::null_mut(), || {
-        // SAFETY: EDS hands us one of its own sources, alive for the call.
+        // SAFETY: EDS gives one of its own sources, alive for the call.
         let id_opt = unsafe { resource_id_of(child_source) };
         tracing::debug!(
             resource_id = id_opt.as_deref(),
             "duplicated resource id for child source"
         );
         match id_opt {
-            // SAFETY: ownership of the duplicate passes to EDS, which puts it
+            // SAFETY: the duplicate becomes the property of EDS, which puts it
             // in its hash table and frees it with `g_free`.
             Some(id) => unsafe { dup_string(&id) },
             None => ptr::null_mut(),
@@ -216,36 +211,36 @@ unsafe extern "C" fn dup_resource_id(
     })
 }
 
-/// What EDS calls when it wants a collection's children — on an idle as soon as
-/// the account is added, when one of its parts is switched on or off, and on
-/// going online — and what [`on_account_changed`] calls again after an edit of
-/// the account, which EDS itself does not reschedule for.
+/// EDS calls this to get the children of a collection. It calls it in an idle
+/// callback after the account is added, when the user enables or disables a
+/// part, and when the backend goes online. [`on_account_changed`] calls it again after an
+/// edit of the account, because EDS does not schedule a populate for that.
 ///
-/// The decisions are [`crate::populate::populate`]'s; what is here is the account
-/// read that a populate is not handed, and the report it has nowhere else to go
-/// with. `e_source_registry_debug_print` is EDS's own debug channel, off unless
-/// `SOURCE_REGISTRY_DEBUG` is set, and the same one
-/// `e_collection_backend_new_child` writes its pairing line to.
+/// [`crate::populate::populate`] makes the decisions. This function reads the
+/// account, which a populate does not get, and writes the report.
+/// `e_source_registry_debug_print` is the debug channel of EDS. It is off
+/// unless `SOURCE_REGISTRY_DEBUG` is set, and `e_collection_backend_new_child`
+/// writes its pairing line to it too.
 ///
-/// A panic becomes a logged critical and no populate, which is the honest
-/// outcome: the vfunc returns `void`, so there is nothing to report through, and
-/// the next populate of this account will find the same state and try again. The
-/// freeze is given back either way — see [`crate::populate`].
+/// A panic becomes a logged critical and no populate. The vfunc returns
+/// `void`, so it cannot report an error, and the next populate of this account
+/// tries again from the same state. The freeze is always released. Refer to
+/// [`crate::populate`].
 unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
     guard("populate", (), || {
-        // `e_backend_get_source` is `(transfer none)` and cannot be NULL for a
-        // backend EDS constructed *from* a source. If it somehow is, the cached
-        // children are still exported — that needs no account — and nothing is
-        // asked of a server this code cannot find, which is what an account with
-        // no parts switched on gets too.
-        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `e_backend_get_source` is `(transfer none)`. It cannot be NULL for a
+        // backend that EDS constructed *from* a source. If it is NULL, the
+        // cached children are still exported, because that needs no account.
+        // No server is contacted, as for an account with no parts enabled.
+        // SAFETY: EDS gives one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
         let (parts, user, uses_oauth2, account_id, login) = if source.is_null() {
             log_critical("populate: the collection backend has no account source");
             (Parts::NONE, None, false, None, 0)
         } else {
-            // SAFETY: a valid `ESource` owned by the backend, only read from.
+            // SAFETY: a valid `ESource` that the backend owns. This code only
+            // reads it.
             let (parts, user, uses_oauth2) = unsafe {
                 (
                     parts_of(source),
@@ -253,39 +248,40 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
                     source_uses_oauth2(source),
                 )
             };
-            // SAFETY: as above; the uid comes back `(transfer none)`.
+            // SAFETY: as above. The uid is `(transfer none)`.
             let account_id = unsafe { read_string(e_source_get_uid(source)) };
             // SAFETY: as above.
             let login = unsafe { login_fingerprint(source) };
             (parts, user, uses_oauth2, account_id, login)
         };
 
-        // Before the body and in this order, as `ews_backend_populate`'s own
-        // two opening steps are: unproven until a fan-out gets through, and
-        // the handler connected once, by the first populate only.
-        // SAFETY: EDS dispatched this vfunc on an instance of our own type.
+        // Do these two steps before the body and in this order, as
+        // `ews_backend_populate` does. First, mark the settings unproven until
+        // a fan-out succeeds. Then connect the handler once, in the first
+        // populate only.
+        // SAFETY: EDS dispatched this vfunc on an instance of this type.
         if let Some(watch) = unsafe { watch_of(backend) } {
             watch.populating(login);
             if !source.is_null() && watch.claim_connection() {
-                // SAFETY: the account source EDS owns, alive for at least as
-                // long as the backend that references it, and the backend this
-                // vfunc was dispatched on.
+                // SAFETY: the account source that EDS owns, alive at least as
+                // long as the backend that references it. The backend is the
+                // one on which EDS dispatched this vfunc.
                 unsafe { connect_account_changed(source, backend) };
             }
         }
 
         let collection = Live(backend);
-        // SAFETY: `Live`'s methods are the EDS calls `Populating` documents, made
-        // on a backend that is valid for the length of the vfunc.
+        // SAFETY: the methods of `Live` are the EDS calls that `Populating`
+        // documents, on a backend that is valid for the duration of the vfunc.
         let report =
             unsafe { crate::populate::populate(&collection, parts, user.as_deref(), uses_oauth2) };
-        // `None` is another populate of this account already running; it will do
-        // the work.
+        // `None` means that a different populate of this account is running.
+        // That populate does the work.
         let Some(report) = report else { return };
 
         if report.unidentified > 0 {
-            // Unreachable through EDS — it only caches a source `dup_resource_id`
-            // answered for — so reaching it means a source changed underneath.
+            // EDS caches only a source for which `dup_resource_id` gave an id.
+            // Thus this branch means that a source changed after it was cached.
             let message = format!(
                 "populate: {} cached children of this account could not be named and stay hidden",
                 report.unidentified
@@ -308,37 +304,37 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
     });
 }
 
-/// The [`AccountWatch`] of the instance EDS dispatched a vfunc on, or `None`
-/// for a NULL backend.
+/// The [`AccountWatch`] of the instance on which EDS dispatched a vfunc, or
+/// `None` for a NULL backend.
 ///
 /// # Safety
 ///
-/// `backend` must be NULL or a live `ECollectionBackendJmap` — what EDS
-/// dispatches this crate's vfuncs on.
+/// `backend` must be NULL or a live `ECollectionBackendJmap` (the type on
+/// which EDS dispatches the vfuncs of this crate).
 unsafe fn watch_of(backend: *mut ECollectionBackend) -> Option<&'static AccountWatch> {
-    // SAFETY: the contract above, and `JmapCollectionBackend` is `#[repr(C)]`
-    // leading with the `ECollectionBackend` the pointer names.
+    // SAFETY: the contract above. `JmapCollectionBackend` is `#[repr(C)]` and
+    // starts with the `ECollectionBackend` that the pointer identifies.
     unsafe { backend.cast::<JmapCollectionBackend>().as_ref() }.map(JmapCollectionBackend::watch)
 }
 
-/// Connects [`on_account_changed`] to the account source's own `"changed"`,
-/// against `backend`.
+/// Connects [`on_account_changed`] to the `"changed"` signal of the account
+/// source, with `backend` as the object.
 ///
-/// `g_signal_connect_object` rather than `g_signal_connect_data`, and so no
-/// handler id kept and no `dispose` override: [`crate::source_changed`] has
-/// the reasoning.
+/// `g_signal_connect_object`, not `g_signal_connect_data`. Thus this code keeps
+/// no handler id and needs no `dispose` override. [`crate::source_changed`]
+/// tells why.
 ///
 /// # Safety
 ///
 /// `source` must be a live `ESource` and `backend` a live
-/// `ECollectionBackendJmap`. The connection outlives this call, so `source`
-/// has to stay alive at least as long as `backend` does — which it does, being
-/// the source `EBackend` holds a reference to for the backend's whole life.
+/// `ECollectionBackendJmap`. The connection stays after this call, so `source`
+/// must stay alive at least as long as `backend`. It does: `EBackend` holds a
+/// reference to this source for the full life of the backend.
 unsafe fn connect_account_changed(source: *mut ESource, backend: *mut ECollectionBackend) {
-    // SAFETY: the contract above, and `on_account_changed`'s signature is what
-    // a handler for a parameterless signal is really called with (the emitting
-    // instance, then the connection's own data), and `tests/source_changed.rs`
-    // holds the arity against the linked library.
+    // SAFETY: the contract above. GLib calls a handler of a signal with no
+    // parameters with two arguments: the emitting instance, then the data of
+    // the connection. The signature of `on_account_changed` agrees.
+    // `tests/source_changed.rs` checks the arity against the linked library.
     unsafe {
         g_signal_connect_object(
             source.cast(),
@@ -350,105 +346,103 @@ unsafe fn connect_account_changed(source: *mut ESource, backend: *mut ECollectio
     }
 }
 
-/// What GLib calls when any setting of the account changes — which EDS does
-/// not reschedule a populate for, and so the only chance a corrected host or
-/// port has of being tried before the account is next re-enabled.
+/// GLib calls this when a setting of the account changes. EDS does not
+/// schedule a populate for that. Thus, without this handler, a corrected host
+/// or port is not tried until the user enables the account again.
 ///
-/// Runs a populate again, unless a fan-out has already succeeded with the
-/// account as it stood: [`crate::source_changed`] on both halves of that.
+/// Runs a populate again, unless a fan-out already succeeded with the current
+/// settings of the account. Refer to [`crate::source_changed`].
 ///
 /// # Safety
 ///
-/// Called by GLib's signal-emission machinery with what a handler for
-/// `ESource::changed` is invoked with: the emitting source (unused — this
-/// answers for the account the backend already holds), and the backend the
-/// connection was made against, which `g_object_watch_closure`'s marshal
-/// guards keep referenced for the length of this call.
+/// The signal emission of GLib calls this with the arguments of an
+/// `ESource::changed` handler. The first is the emitting source. It is not
+/// used, because this handler uses the account that the backend holds. The
+/// second is the backend of the connection. The marshal guards of
+/// `g_object_watch_closure` keep the backend referenced for the duration of
+/// this call.
 unsafe extern "C" fn on_account_changed(source: *mut ESource, backend: gpointer) {
     let _ = source;
     guard("on_account_changed", (), || {
         let backend = backend.cast::<ECollectionBackend>();
-        // SAFETY: the backend this was connected against, by the contract
-        // above.
+        // SAFETY: the backend of the connection, by the contract above.
         let Some(watch) = (unsafe { watch_of(backend) }) else {
             return;
         };
-        // The backend's own account rather than the emitting source, which is
-        // the same object: the fingerprint the populate below records has to be
-        // of the source that populate itself reads.
-        // SAFETY: EDS hands the backend its source `(transfer none)`, alive for
-        // as long as the backend, and `ECollectionBackend` derives from
-        // `EBackend`.
+        // The account of the backend, not the emitting source, although they
+        // are the same object. The fingerprint that the populate below records
+        // must come from the source that the populate reads.
+        // SAFETY: EDS gives the backend its source `(transfer none)`, alive as
+        // long as the backend. `ECollectionBackend` derives from `EBackend`.
         let account = unsafe { e_backend_get_source(backend.cast()) };
         if account.is_null() {
             return;
         }
-        // SAFETY: a valid `ESource` owned by the backend, only read from.
+        // SAFETY: a valid `ESource` that the backend owns. This code only
+        // reads it.
         if !watch.wants_repopulate(unsafe { login_fingerprint(account) }) {
             return;
         }
 
-        // SAFETY: as above, and a repopulate is what the vfunc slot holds
-        // anyway — EWS's own handler calls its populate directly too.
+        // SAFETY: as above. This is the function in the vfunc slot, and the
+        // handler of EWS also calls its populate directly.
         unsafe { populate(backend) };
     });
 }
 
-/// What EDS calls for every source that appears under this collection — the
-/// children a fan-out just wrote, the cached ones a populate exported, and the
-/// mail sources this backend neither creates nor caches.
+/// EDS calls this for each source that appears under this collection. These
+/// are the children that a fan-out wrote, the cached children that a populate
+/// exported, and the mail sources. This backend does not create or cache the
+/// mail sources.
 ///
-/// The decisions are [`crate::child_added::follow_collection`]'s; what is here
-/// is the account source the vfunc is not handed, and the chain-up.
+/// [`crate::child_added::follow_collection`] makes the decisions. This
+/// function gets the account source, which the vfunc does not get, and
+/// chains up.
 ///
-/// The chain-up goes **first**, which is the other way round from
-/// `e_ews_backend_child_added`. The parent's implementation is what puts the
-/// child in the backend's own table and binds its enabled flag to the account's
-/// — so it is what makes `e_collection_backend_list_*_sources` know about it,
-/// which is what the next fan-out's removal pass reads. A panic in the binding
-/// below must not cost the child that; a panic in the chain-up, which is EDS's
-/// own code, is not a thing this order can help with either way.
+/// The chain-up is **first**, the opposite of `e_ews_backend_child_added`.
+/// The parent puts the child in the table of the backend and binds its enabled
+/// flag to the flag of the account. Thus `e_collection_backend_list_*_sources`
+/// knows the child, and the removal pass of the next fan-out reads that list.
+/// A panic in the binding below must not prevent this. This order cannot help
+/// with a panic in the chain-up, which is EDS code.
 ///
-/// A missing account source is a logged critical and no binding, as in
-/// `populate`: the child is already exported by then and works with whatever it
-/// was written with; what it loses is only its following of an account this code
-/// cannot find.
+/// A missing account source gives a logged critical and no binding, as in
+/// `populate`. The child is already exported and works with its written
+/// settings. It only does not follow the account.
 unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source: *mut ESource) {
     guard("child_added", (), || {
         match parent_class().and_then(|class| class.child_added) {
-            // SAFETY: the parent's own child_added, called on an instance of a
-            // type derived from it, which is what chaining up means in C.
+            // SAFETY: the child_added of the parent, called on an instance of
+            // a derived type. This is how C chains up.
             Some(child_added) => unsafe { child_added(backend, child_source) },
-            // EDS installs its own, so this cannot happen; if it ever does, the
-            // binding below is still worth making.
+            // EDS installs its own, so this cannot occur. If it occurs, the
+            // binding below is still useful.
             None => log_critical("child_added: the parent class has no child_added to chain up to"),
         }
 
-        // Every child of a collection passes through here exactly once —
-        // fanned-out, drawn from the cache by a populate, or just published by a
-        // create — which is what makes this the one place the flag is written,
-        // and the same place EDS's own `collection_backend_child_added` writes
-        // `removable = FALSE`. It is deliberately before the account read below:
-        // whether a child may be deleted from the server is a property of the
-        // child alone, so an account this code cannot find must not cost the
-        // user the menu item.
-        // SAFETY: a child source of a collection, which
-        // `evolution-source-registry` holds only as `EServerSideSource`s, alive
-        // for the length of the vfunc.
+        // Each child of a collection comes here exactly once: from a fan-out,
+        // from the cache in a populate, or from a create. Thus this is the
+        // only place that writes the flag. `collection_backend_child_added` in
+        // EDS writes `removable = FALSE` at the same point. This is
+        // deliberately before the account read below. The permission to
+        // delete a child from the server depends only on the child, so a
+        // missing account must not remove the menu item.
+        // SAFETY: a child source of a collection, alive for the duration of
+        // the vfunc. `evolution-source-registry` holds these only as
+        // `EServerSideSource`s.
         unsafe { offer_deletion(child_source) };
 
-        // `(transfer none)`, and NULL only for a backend EDS did not construct
-        // from a source.
-        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `(transfer none)`. NULL only for a backend that EDS did not
+        // construct from a source.
+        // SAFETY: EDS gives one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
         if source.is_null() {
-            // The account is gone, but `child_source` is not — the same shape
-            // as `Live::export`'s unexported-child branch — so an address book
-            // or calendar child among the mail sources this fires for still has
-            // a resource id to log against.
-            // SAFETY: a child source of a collection, alive for the length of
-            // the vfunc, as documented above.
+            // The account is missing, but `child_source` is not, as in the
+            // unexported-child branch of `Live::export`. Thus an address book
+            // or calendar child still has a resource id for the log.
+            // SAFETY: a child source of a collection, alive for the duration
+            // of the vfunc, as documented above.
             match unsafe { resource_id_of(child_source) } {
                 Some(id) => log_critical_for_resource(
                     &id,
@@ -459,36 +453,35 @@ unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source:
             return;
         }
 
-        // SAFETY: the account source EDS owns and one of its child sources, both
-        // alive for the length of the vfunc.
+        // SAFETY: the account source that EDS owns and one of its child
+        // sources, both alive for the duration of the vfunc.
         unsafe { follow_collection(source, child_source) };
     });
 }
 
-/// What EDS calls once it has resolved the account's credentials — after a
-/// `populate` asked it to, and again whenever Evolution retries a login.
+/// EDS calls this when it has the credentials of the account: after a
+/// `populate` asks for them, and each time Evolution tries a login again.
 ///
-/// The decisions are [`crate::authenticate::authenticate_with`]'s, and the
-/// children are [`crate::fan_out::fan_out`]'s; what is here is the instance
-/// those two are not given and the report the fan-out has nowhere else to go
-/// with. Everything before the network — which accounts are contacted at all,
-/// which failures become a second password prompt — is decided in
-/// `authenticate_with`, where it is testable.
+/// [`crate::authenticate::authenticate_with`] makes the decisions, and
+/// [`crate::fan_out::fan_out`] makes the children. This function supplies the
+/// instance, which those two do not get, and writes the report of the
+/// fan-out. `authenticate_with` decides all steps before the network (which
+/// accounts to contact, which failures cause a new password prompt), so tests
+/// can check them.
 ///
-/// `push_credentials` is the other half of that instance:
-/// `authenticate_with`'s own doc explains why a successful fan-out hands the
-/// freshly-resolved credentials to already-running address-book/calendar
-/// children (`e_collection_backend_authenticate_children`) rather than leaving
-/// each to notice on its own.
+/// The `push_credentials` closure also uses the instance. The doc of
+/// `authenticate_with` tells why a successful fan-out gives the new
+/// credentials to the running address-book and calendar children
+/// (`e_collection_backend_authenticate_children`).
 ///
-/// The two certificate out-parameters are deliberately left alone; see
-/// [`crate::authenticate`] on why this backend never offers a certificate for
+/// The two certificate out-parameters are deliberately not written. Refer to
+/// [`crate::authenticate`] for why this backend never offers a certificate for
 /// the user to trust.
 ///
 /// A panic becomes `E_SOURCE_AUTHENTICATION_ERROR` with the error set. Not
-/// `REJECTED`, which would make EDS throw away a password that is probably
-/// correct and ask for it again on every retry; a bug in this code is not the
-/// user's password being wrong.
+/// `REJECTED`: then EDS discards a password that is probably correct and asks
+/// for it again on each retry. A bug in this code does not mean that the
+/// password is wrong.
 unsafe extern "C" fn authenticate_sync(
     backend: *mut EBackend,
     credentials: *const ENamedParameters,
@@ -500,18 +493,18 @@ unsafe extern "C" fn authenticate_sync(
     let _ = (out_certificate_pem, out_certificate_errors);
 
     let authenticate = || {
-        // `(transfer none)`, and NULL only for a backend EDS did not construct
-        // from a source; `authenticate_with` answers that with an error of its
-        // own rather than with a prompt.
-        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        // `(transfer none)`. NULL only for a backend that EDS did not
+        // construct from a source. For NULL, `authenticate_with` returns an
+        // error, not a prompt.
+        // SAFETY: EDS gives one of its own backends, alive for the call.
         let source = unsafe { e_backend_get_source(backend) };
-        // SAFETY: our instance is an `ECollectionBackend`, which is what EDS
-        // dispatched this vfunc on.
+        // SAFETY: the instance is an `ECollectionBackend`, on which EDS
+        // dispatched this vfunc.
         let collection = Live(backend.cast());
 
-        // SAFETY: the arguments are the vfunc's own, which is exactly
-        // `authenticate_with`'s contract, and `Live`'s methods are the EDS
-        // calls `Collection` documents.
+        // SAFETY: the arguments are those of the vfunc, as the contract of
+        // `authenticate_with` requires. The methods of `Live` are the EDS
+        // calls that `Collection` documents.
         unsafe {
             authenticate_with(
                 source,
@@ -520,35 +513,34 @@ unsafe extern "C" fn authenticate_sync(
                 error,
                 |login| {
                     let report = fan_out(&collection, &login)?;
-                    // SAFETY: EDS dispatched this vfunc on an instance of our
-                    // own type. (Already inside the outer `unsafe` block.)
+                    // SAFETY: EDS dispatched this vfunc on an instance of
+                    // this type. (Inside the outer `unsafe` block.)
                     if let Some(watch) = watch_of(backend.cast()) {
                         watch.proven();
                     }
-                    // SAFETY: `authenticate_with` only calls this closure once
-                    // `source` is confirmed non-NULL; the uid comes back
-                    // `(transfer none)`. (Already inside the outer `unsafe`
-                    // block.)
+                    // SAFETY: `authenticate_with` calls this closure only
+                    // after it confirms that `source` is not NULL. The uid is
+                    // `(transfer none)`. (Inside the outer `unsafe` block.)
                     let account_id = read_string(e_source_get_uid(source));
                     report_fan_out(&report, account_id.as_deref());
                     Ok(())
                 },
                 |credentials| {
-                    // SAFETY: `authenticate_with` only calls this closure once
-                    // the fan-out above has succeeded, on the same live
-                    // `backend` this vfunc was dispatched on, with the same
-                    // `credentials` this vfunc received. (Already inside the
-                    // outer `unsafe` block.)
+                    // SAFETY: `authenticate_with` calls this closure only
+                    // after the fan-out above succeeds. It uses the same live
+                    // `backend` on which EDS dispatched this vfunc, and the
+                    // same `credentials` that this vfunc received. (Inside
+                    // the outer `unsafe` block.)
                     e_collection_backend_authenticate_children(collection.0, credentials);
                 },
             )
         }
     };
 
-    // SAFETY: `error` is what an EDS vfunc receives — NULL or a pointer to a
-    // NULL `GError`. `authenticate_with` sets it only on paths it then returns
-    // from, so a panic can never unwind past an already-set error into the
-    // guard's own, which would be one `GError` overwriting another.
+    // SAFETY: `error` is what an EDS vfunc receives: NULL or a pointer to a
+    // NULL `GError`. `authenticate_with` sets it only on paths that then
+    // return. Thus a panic cannot unwind past a set error into the guard,
+    // where one `GError` would overwrite another.
     unsafe {
         guard_value(
             "authenticate_sync",
@@ -559,35 +551,35 @@ unsafe extern "C" fn authenticate_sync(
     }
 }
 
-/// What EDS calls to learn which host to watch for this account's own
-/// reachability, separately from generic network-up/down — used by
-/// `e_backend_is_destination_reachable` and by EDS's periodic reachability
-/// monitor, neither of which this crate calls directly.
+/// EDS calls this to find the host to monitor for the reachability of this
+/// account, separately from the general network state.
+/// `e_backend_is_destination_reachable` and the periodic reachability monitor
+/// of EDS use it. This crate calls neither of them.
 ///
-/// The decision is [`jmap_backend_core::source::destination_address`]'s; what
-/// is here is the account source the vfunc is not handed and the two
-/// out-parameters, which is EDS's own convention for "answer, or say you
-/// cannot" rather than a `GError`.
+/// [`jmap_backend_core::source::destination_address`] makes the decision.
+/// This function gets the account source, which the vfunc does not get, and
+/// writes the two out-parameters. EDS uses them, not a `GError`, to give an
+/// answer or no answer.
 ///
-/// A panic becomes `FALSE` with both out-parameters untouched, which is
-/// [`guard`]'s ordinary "answer nothing" fallback and the same honest
-/// non-answer a backend with no account source gets on the path that does not
-/// panic.
+/// A panic becomes `FALSE` with both out-parameters not written. That is the
+/// usual "no answer" fallback of [`guard`], and the same answer that a backend
+/// with no account source gets without a panic.
 unsafe extern "C" fn get_destination_address(
     backend: *mut EBackend,
     host: *mut *mut gchar,
     port: *mut guint16,
 ) -> gboolean {
     guard("get_destination_address", GFALSE, || {
-        // `(transfer none)`, and NULL only for a backend EDS did not
+        // `(transfer none)`. NULL only for a backend that EDS did not
         // construct from a source.
-        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        // SAFETY: EDS gives one of its own backends, alive for the call.
         let source = unsafe { e_backend_get_source(backend) };
         if source.is_null() {
             return GFALSE;
         }
 
-        // SAFETY: a valid account source, only read from, alive for the call.
+        // SAFETY: a valid account source, alive for the call. This code only
+        // reads it.
         let Some((address_host, address_port)) = (unsafe { destination_address(source) }) else {
             return GFALSE;
         };
@@ -598,9 +590,9 @@ unsafe extern "C" fn get_destination_address(
             "resolved destination address for collection backend"
         );
 
-        // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
-        // only on this success path; ownership of the duplicated string
-        // passes to EDS, which frees it with `g_free`.
+        // SAFETY: `host` and `port` are the out-parameters of the vfunc,
+        // written only on this success path. The duplicated string becomes
+        // the property of EDS, which frees it with `g_free`.
         unsafe {
             *host = dup_string(&address_host);
             *port = address_port;
@@ -609,34 +601,32 @@ unsafe extern "C" fn get_destination_address(
     })
 }
 
-/// What EDS calls when the user asks Evolution for a new address book or
-/// calendar *in this account* — the one request that creates something on the
-/// server rather than mirroring what is there.
+/// EDS calls this when the user asks Evolution for a new address book or
+/// calendar *in this account*. It is the only request that creates something
+/// on the server, not a mirror of what is there.
 ///
-/// The decisions are [`crate::create_resource`]'s and
-/// [`jmap_collection_sync::create`]'s; what is here is the four things only a
-/// live instance can answer — the account source, its uid, the collection's cache
-/// directory and the registry server — and the order they are needed in.
+/// [`crate::create_resource`] and [`jmap_collection_sync::create`] make the
+/// decisions. Only a live instance has four values: the account source, its
+/// uid, the cache directory of the collection and the registry server. This
+/// function supplies them in the necessary order.
 ///
-/// **No chain-up.** The parent's implementation is the
-/// `G_IO_ERROR_NOT_SUPPORTED` this override replaces; calling it on a path this
-/// code handled would report a create that worked as a failure. See
-/// [`crate::create_resource`] on where that is written down in EDS's source.
+/// **No chain-up.** The parent gives the `G_IO_ERROR_NOT_SUPPORTED` that this
+/// override replaces. A call to it after a successful create reports a
+/// failure. [`crate::create_resource`] tells where the EDS source has this.
 ///
-/// The publish is last and unconditional once the source is written: EDS's own
-/// documentation of the vfunc makes adding an `ESource` to the server part of the
-/// contract, not an optimisation, and an unexported child would make a create
-/// that succeeded look as though nothing had happened until the next populate.
-/// It is not gated on `e_collection_backend_is_new_source` the way
-/// [`crate::fan_out`]'s is — that question is about a child drawn from the
-/// backend's cache, and this source came from EDS's `remote_create` handler,
-/// which never consults it.
+/// The publish is last, and always occurs after the source is written. The EDS
+/// documentation of the vfunc makes the addition of the `ESource` to the
+/// server part of the contract. Without it, a successful create shows no
+/// result until the next populate. Unlike in [`crate::fan_out`], the publish
+/// does not depend on `e_collection_backend_is_new_source`. That check is
+/// about a child from the cache of the backend. This source comes from the
+/// `remote_create` handler of EDS, which never uses the cache.
 ///
-/// A panic becomes `FALSE` with the error set, which is
-/// [`guard_bool`](jmap_backend_core::trampoline::guard_bool)'s contract and the
-/// right one here: the collection may or may not exist on the server afterwards,
-/// and the next populate is what reconciles that — exactly as it does for a
-/// create whose source write failed.
+/// A panic becomes `FALSE` with the error set, as the contract of
+/// [`guard_bool`](jmap_backend_core::trampoline::guard_bool) gives. This is
+/// correct here. The collection can exist on the server or not, and the next
+/// populate corrects the state. The same occurs for a create whose source write
+/// failed.
 unsafe extern "C" fn create_resource_sync(
     backend: *mut ECollectionBackend,
     scratch_source: *mut ESource,
@@ -644,21 +634,22 @@ unsafe extern "C" fn create_resource_sync(
     error: *mut *mut GError,
 ) -> gboolean {
     let create = || {
-        // The kind and the name, off the scratch source EDS built from the
-        // keyfile Evolution sent. A source naming no kind is EDS's documented
-        // "cannot be determined without ambiguity".
-        // SAFETY: EDS hands us the scratch source it created, alive for the call.
+        // Read the kind and the name from the scratch source that EDS built
+        // from the keyfile that Evolution sent. For a source with no kind, the
+        // EDS documentation gives "cannot be determined without ambiguity".
+        // SAFETY: EDS gives the scratch source that it created, alive for the
+        // call.
         let Some(requested) = (unsafe { requested_of(scratch_source) }) else {
             // SAFETY: `error` is what an EDS vfunc receives, and nothing has
-            // written to it yet.
+            // written to it.
             return unsafe { fail_bool(error, &CreateError::UnknownKind, CreateError::to_gerror) };
         };
 
-        // `(transfer none)`, and NULL only for a backend EDS did not construct
-        // from a source — which is also the case in which there is no account to
-        // read a server off and no uid to parent the child to, so it is an error
-        // here rather than the logged critical `populate` answers it with.
-        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `(transfer none)`. NULL only for a backend that EDS did not
+        // construct from a source. Then there is no account to read a server
+        // from and no uid to be the parent of the child. Thus this is an error
+        // here, not the logged critical of `populate`.
+        // SAFETY: EDS gives one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let account = unsafe { e_backend_get_source(backend.cast()) };
         if account.is_null() {
@@ -671,8 +662,8 @@ unsafe extern "C" fn create_resource_sync(
             };
         }
 
-        // SAFETY: a live backend, a valid account source and a cancellable that
-        // is NULL or EDS's own — `login_for`'s contract exactly.
+        // SAFETY: a live backend, a valid account source and a cancellable
+        // that is NULL or from EDS, as the contract of `login_for` requires.
         let login =
             match unsafe { login_for(backend, account, cancellable, "create_resource_sync") } {
                 Ok(login) => login,
@@ -684,10 +675,9 @@ unsafe extern "C" fn create_resource_sync(
                 }
             };
 
-        // Held for the length of the create and no longer, as in
-        // `authenticate_sync`.
-        // SAFETY: `cancellable` is NULL or a valid `GCancellable` EDS keeps alive
-        // for the duration of the vfunc.
+        // Held for the duration of the create only, as in `authenticate_sync`.
+        // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
+        // keeps alive for the duration of the vfunc.
         let _cancel = unsafe { observe(cancellable) };
 
         let child = match create_on_server(
@@ -703,8 +693,8 @@ unsafe extern "C" fn create_resource_sync(
             }
         };
 
-        // SAFETY: a valid account source; both getters answer NULL or a string
-        // the object owns.
+        // SAFETY: a valid account source. Both getters return NULL or a string
+        // that the object owns.
         let (account_uid, cache_dir) = unsafe {
             (
                 read_string(e_source_get_uid(account)),
@@ -712,8 +702,8 @@ unsafe extern "C" fn create_resource_sync(
             )
         };
         let Some(account_uid) = account_uid else {
-            // A source with no uid cannot be a parent, and every source the
-            // registry loaded has one — its file name.
+            // A source with no uid cannot be a parent. Each source that the
+            // registry loads has one: its file name.
             // SAFETY: as above.
             return unsafe {
                 fail_invalid(
@@ -724,8 +714,8 @@ unsafe extern "C" fn create_resource_sync(
             };
         };
 
-        // SAFETY: the scratch source is the `EServerSideSource` EDS's
-        // `remote_create` handler built, alive for the call.
+        // SAFETY: the scratch source is the `EServerSideSource` that the
+        // `remote_create` handler of EDS built, alive for the call.
         if let Err(setting) = unsafe {
             adopt_created(
                 scratch_source,
@@ -735,9 +725,9 @@ unsafe extern "C" fn create_resource_sync(
                 cache_dir.as_deref(),
             )
         } {
-            // The collection is on the server and this child is not written, so
-            // nothing is exported — see `adopt_created` on why that is the honest
-            // answer and what the next populate does about it.
+            // The collection is on the server, but this child is not written,
+            // so nothing is exported. `adopt_created` tells why this is
+            // correct and what the next populate does.
             // SAFETY: as above.
             return unsafe {
                 fail_bool(
@@ -748,10 +738,9 @@ unsafe extern "C" fn create_resource_sync(
             };
         }
 
-        // The second of EDS's two documented obligations: a created resource
-        // that is not added to the server is one Evolution does not see until
-        // the next populate, so the create would look as if nothing had
-        // happened.
+        // The second of the two documented EDS obligations. Evolution does not
+        // see a created resource that is not added to the server until the
+        // next populate. Then the create seems to have no result.
         Collection::publish(&Live(backend), scratch_source);
         debug_print_for_resource(
             &child.resource_id,
@@ -764,32 +753,32 @@ unsafe extern "C" fn create_resource_sync(
         GTRUE
     };
 
-    // SAFETY: `error` is what an EDS vfunc receives — NULL or a pointer to a
-    // NULL `GError`. Every path above that sets it then returns, so a panic can
-    // never unwind past an already-set error into the guard's own.
+    // SAFETY: `error` is what an EDS vfunc receives: NULL or a pointer to a
+    // NULL `GError`. Each path above that sets it then returns. Thus a panic
+    // cannot unwind past a set error into the guard.
     unsafe { guard_bool("create_resource_sync", error, create) }
 }
 
-/// What EDS calls when the user chooses "Delete" on an address book or a
-/// calendar of this account — the one request that destroys something on the
-/// server.
+/// EDS calls this when the user selects "Delete" on an address book or a
+/// calendar of this account. It is the only request that destroys something
+/// on the server.
 ///
-/// The decisions are [`crate::delete_resource`]'s and
-/// [`jmap_collection_sync::delete`]'s; what is here is the two things only a
-/// live instance can answer — the account source and, through it, the account's
-/// credentials — and the order the three steps go in.
+/// [`crate::delete_resource`] and [`jmap_collection_sync::delete`] make the
+/// decisions. Only a live instance has two values: the account source and,
+/// through it, the credentials of the account. This function supplies them
+/// and puts the three steps in order.
 ///
-/// **No chain-up**, for the reason `create_resource_sync` gives: the parent's
-/// implementation is the `G_IO_ERROR_NOT_SUPPORTED` this override replaces.
+/// **No chain-up**, for the reason that `create_resource_sync` gives: the
+/// parent gives the `G_IO_ERROR_NOT_SUPPORTED` that this override replaces.
 ///
-/// **The destroy comes before the removal**, and that order is the error
-/// handling — see [`crate::delete_resource`] on which of the two half-done
-/// states is recoverable and which loses the child's uid and offline cache for
-/// nothing.
+/// **The destroy is before the removal**, and this order is the error
+/// handling. [`crate::delete_resource`] tells which of the two incomplete
+/// states is recoverable, and which loses the uid and offline cache of the
+/// child for no reason.
 ///
-/// A panic becomes `FALSE` with the error set. The collection may or may not
-/// still exist on the server afterwards, and the next populate is what
-/// reconciles that — the same answer a failed create gets.
+/// A panic becomes `FALSE` with the error set. The collection can still exist
+/// on the server or not, and the next populate corrects the state, as for a
+/// failed create.
 unsafe extern "C" fn delete_resource_sync(
     backend: *mut ECollectionBackend,
     child_source: *mut ESource,
@@ -797,21 +786,21 @@ unsafe extern "C" fn delete_resource_sync(
     error: *mut *mut GError,
 ) -> gboolean {
     let delete = || {
-        // Which collection this source stands for, read the same way
-        // `dup_resource_id` reads it. A source that answers nothing is not one
-        // of ours, and nothing of ours may be destroyed for it.
-        // SAFETY: EDS hands us one of its own sources, alive for the call.
+        // The collection of this source, read as `dup_resource_id` reads it.
+        // A source with no answer does not belong to this backend, so this
+        // code must destroy nothing for it.
+        // SAFETY: EDS gives one of its own sources, alive for the call.
         let Some(doomed) = (unsafe { doomed_of(child_source) }) else {
             // SAFETY: `error` is what an EDS vfunc receives, and nothing has
-            // written to it yet.
+            // written to it.
             return unsafe { fail_bool(error, &DeleteError::NotOurs, DeleteError::to_gerror) };
         };
 
-        // `(transfer none)`, and NULL only for a backend EDS did not construct
-        // from a source — which is also the case in which there is no account to
-        // read a server off, so it is an error here rather than the logged
-        // critical `populate` answers it with.
-        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `(transfer none)`. NULL only for a backend that EDS did not
+        // construct from a source. Then there is no account to read a server
+        // from, so this is an error here, not the logged critical of
+        // `populate`.
+        // SAFETY: EDS gives one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let account = unsafe { e_backend_get_source(backend.cast()) };
         if account.is_null() {
@@ -824,8 +813,8 @@ unsafe extern "C" fn delete_resource_sync(
             };
         }
 
-        // SAFETY: a live backend, a valid account source and a cancellable that
-        // is NULL or EDS's own — `login_for`'s contract exactly.
+        // SAFETY: a live backend, a valid account source and a cancellable
+        // that is NULL or from EDS, as the contract of `login_for` requires.
         let login =
             match unsafe { login_for(backend, account, cancellable, "delete_resource_sync") } {
                 Ok(login) => login,
@@ -837,10 +826,10 @@ unsafe extern "C" fn delete_resource_sync(
                 }
             };
 
-        // Held for the length of the delete and no longer, as in
+        // Held for the duration of the delete only, as in
         // `create_resource_sync`.
-        // SAFETY: `cancellable` is NULL or a valid `GCancellable` EDS keeps alive
-        // for the duration of the vfunc.
+        // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
+        // keeps alive for the duration of the vfunc.
         let _cancel = unsafe { observe(cancellable) };
 
         if let Err(failure) = delete_on_server(
@@ -853,14 +842,13 @@ unsafe extern "C" fn delete_resource_sync(
             return unsafe { fail_bool(error, &failure, DeleteError::to_gerror) };
         }
 
-        // EDS's documented obligation, and only now that the collection is
-        // really gone: "the implementor must also remove @source from the
+        // The documented EDS obligation, done only after the collection is
+        // deleted: "the implementor must also remove @source from the
         // @backend's #ECollectionBackend:server". `e_source_remove_sync` on a
-        // server-side source is that removal — it unexports the object and
-        // deletes the key file — which is why this is `crate::removal`'s call
-        // rather than a second one written here.
+        // server-side source does that removal: it unexports the object and
+        // deletes the key file. Thus this uses the call in `crate::removal`.
         // SAFETY: a child source of this collection, alive for the call, and a
-        // cancellable that is NULL or EDS's own.
+        // cancellable that is NULL or from EDS.
         if let Err(reason) = unsafe { remove_source(child_source, cancellable) } {
             // SAFETY: as above.
             return unsafe {
@@ -879,36 +867,37 @@ unsafe extern "C" fn delete_resource_sync(
         GTRUE
     };
 
-    // SAFETY: as `create_resource_sync`'s — every path above that sets the error
-    // then returns, so a panic can never unwind past an already-set one.
+    // SAFETY: as in `create_resource_sync`. Each path above that sets the
+    // error then returns, so a panic cannot unwind past a set error.
     unsafe { guard_bool("delete_resource_sync", error, delete) }
 }
 
-/// The account's [`Login`], for the two vfuncs EDS hands no `ENamedParameters`.
+/// The [`Login`] of the account, for the two vfuncs that get no
+/// `ENamedParameters` from EDS.
 ///
-/// `authenticate_sync` is given the credentials EDS resolved; `create_resource_sync`
-/// and `delete_resource_sync` are not, so they have to ask for them — see
-/// [`crate::create_resource`] on why the store is asked at the moment the
-/// password is needed rather than a secret being held for the life of the
-/// account. An OAuth 2.0 account ignores the password entirely and gets a fresh
-/// token inside [`login_of`].
+/// `authenticate_sync` gets the credentials from EDS. `create_resource_sync`
+/// and `delete_resource_sync` do not, so they must ask for them.
+/// [`crate::create_resource`] tells why this code asks the store when it needs
+/// the password, and does not keep a secret for the life of the account. An
+/// OAuth 2.0 account ignores the password and gets a new token in
+/// [`login_of`].
 ///
 /// `context` names the calling vfunc, for the critical channel.
 ///
 /// # Safety
 ///
-/// `backend` must be a valid `ECollectionBackend`, `account` the valid `ESource`
-/// EDS constructed it from, and `cancellable` NULL or a valid `GCancellable` —
-/// which is what both vfuncs receive.
+/// `backend` must be a valid `ECollectionBackend`, `account` the valid
+/// `ESource` from which EDS constructed it, and `cancellable` NULL or a valid
+/// `GCancellable`. Both vfuncs receive these.
 unsafe fn login_for(
     backend: *mut ECollectionBackend,
     account: *mut ESource,
     cancellable: *mut GCancellable,
     context: &str,
 ) -> Result<Login, crate::authenticate::LoginError> {
-    // SAFETY: a valid backend by this function's contract; the server comes back
-    // `(transfer full)` and is dropped, releasing the reference, before it goes
-    // out of scope.
+    // SAFETY: a valid backend, by the contract of this function. The server is
+    // `(transfer full)`. The drop at the end of the scope releases the
+    // reference.
     let password = unsafe {
         let server =
             Owned::<ESourceRegistryServer>::from_raw(e_collection_backend_ref_server(backend));
@@ -916,29 +905,29 @@ unsafe fn login_for(
         stored_password_of(server_ptr, account, cancellable, context)
     };
 
-    // SAFETY: a valid account source and a cancellable that satisfies
-    // `login_of`'s contract by this function's own.
+    // SAFETY: a valid account source and a cancellable that obey the contract
+    // of `login_of`, because the contract of this function requires them.
     unsafe { login_of(account, parts_of(account), password.as_deref(), cancellable) }
 }
 
-/// What one fan-out did, on the two channels a vfunc that has already answered
-/// still has.
+/// Reports the result of one fan-out on the two channels that remain after
+/// the vfunc has returned its answer.
 ///
-/// The three failure lists are criticals because each of them is a child the
-/// user asked for and will not see, and none of them is anything the user can
-/// fix: `uncreated` is EDS refusing to claim a resource, `abandoned` is a
-/// setting this crate was never taught to write, and `not_removed` is a
-/// deletion EDS refused. The successes go to EDS's own debug channel, silent
-/// unless `SOURCE_REGISTRY_DEBUG` is set.
+/// The three failure lists are criticals. Each entry is a child that the user
+/// asked for and will not see, and the user cannot fix it. `uncreated` is a
+/// resource that EDS refused to claim. `abandoned` is a setting that this
+/// crate cannot write. `not_removed` is a deletion that EDS refused. The
+/// successes go to the debug channel of EDS, which is silent unless
+/// `SOURCE_REGISTRY_DEBUG` is set.
 ///
-/// None of it reaches the `GError`: a login that worked is `ACCEPTED` even if
-/// one address book of it could not be written, and turning a per-child
-/// failure into a failed authentication would take the whole account offline
-/// over one collection.
+/// None of this goes to the `GError`. A successful login is `ACCEPTED`, also
+/// if one address book could not be written. A failed authentication for one
+/// child failure would take the full account offline because of one
+/// collection.
 ///
-/// `account_id` names the account this fan-out ran for, attached only to the
-/// summary line below — the three per-child lists above already carry their
-/// own `resource_id`, a more specific structured field than the account's.
+/// `account_id` names the account of this fan-out. Only the summary line
+/// below has it. Each entry of the three lists has its own `resource_id`,
+/// which is a more specific structured field.
 fn report_fan_out(report: &Populated, account_id: Option<&str>) {
     for resource_id in &report.uncreated {
         log_critical_for_resource(
@@ -978,39 +967,39 @@ fn report_fan_out(report: &Populated, account_id: Option<&str>) {
 /// A live collection, as a populate and a fan-out use it: the EDS calls behind
 /// [`Populating`] and [`Collection`], one line each.
 ///
-/// This is the part of both that cannot be tested on a machine with no
-/// `evolution-source-registry` — see [`crate::populate`] and [`crate::fan_out`]
-/// on why everything else is a layer down.
+/// Tests cannot run this part without `evolution-source-registry`. Refer to
+/// [`crate::populate`] and [`crate::fan_out`] for why all other code is one
+/// layer down.
 struct Live(*mut ECollectionBackend);
 
 impl Live {
-    /// `e_source_registry_server_add_source (server, child)`, which both traits
-    /// call `publish` and which is one call on the server rather than on the
-    /// backend.
+    /// `e_source_registry_server_add_source (server, child)`. Both traits call
+    /// it `publish`. It is a call on the server, not on the backend.
     ///
-    /// The server is referenced per child rather than once around a loop:
-    /// neither trait has a setup call to hold one across, and a fan-out exports
-    /// a handful of children at most. `e_collection_backend_ref_server` reads a
-    /// weak reference, so NULL means the registry server is gone — during
-    /// shutdown, say — and then there is nothing to export to.
+    /// This takes a server reference for each child, not one for a loop.
+    /// Neither trait has a setup call that can hold one, and a fan-out exports
+    /// only a small number of children. `e_collection_backend_ref_server` reads
+    /// a weak reference, so NULL means that the registry server is gone (for
+    /// example, during shutdown). Then there is nothing to export to.
     ///
     /// # Safety
     ///
-    /// `child` must be a valid `ESource` that outlives the call. Both callers
-    /// (`populate`, `authenticate_sync`'s fan-out) only ever publish a child
-    /// whose `[Resource] Identity` is already written — `populate` checks
-    /// [`resource_id_of`] before calling this, and `fan_out::adopt` only
-    /// publishes after its own settings write has succeeded — so the failure
-    /// branch below can read it back for the log.
+    /// `child` must be a valid `ESource` that outlives the call. Each caller
+    /// publishes only a child whose `[Resource] Identity` is already written:
+    /// `populate` checks [`resource_id_of`] before this call, `fan_out::adopt`
+    /// publishes only after its settings write succeeds, and
+    /// `create_resource_sync` publishes only after `adopt_created` succeeds.
+    /// Thus the failure branch below can read the identity for the log.
     fn export(&self, child: *mut ESource, context: &str) {
-        // SAFETY: a valid backend; the server comes back `(transfer full)`.
+        // SAFETY: a valid backend. The server is `(transfer full)`.
         let server = unsafe {
             Owned::<ESourceRegistryServer>::from_raw(e_collection_backend_ref_server(self.0))
         };
         let Some(server) = server else {
             let message =
                 format!("{context}: the registry server is gone; a child stays unexported");
-            // SAFETY: `child` is a valid `ESource` by this function's contract.
+            // SAFETY: `child` is a valid `ESource`, by the contract of this
+            // function.
             match unsafe { resource_id_of(child) } {
                 Some(resource_id) => log_critical_for_resource(&resource_id, &message),
                 None => log_critical(&message),
@@ -1018,47 +1007,47 @@ impl Live {
             return;
         };
 
-        // SAFETY: a live registry server and a live child source; the call takes
-        // a reference of its own if it keeps the source.
+        // SAFETY: a live registry server and a live child source. If the call
+        // keeps the source, it takes its own reference.
         unsafe { e_source_registry_server_add_source(server.as_ptr(), child) };
     }
 }
 
-/// The `ESource`s of a `(transfer full)` `GList`, with the list freed and every
-/// reference in it passed on to the caller.
+/// The `ESource`s of a `(transfer full)` `GList`. The list is freed, and each
+/// reference in it goes to the caller.
 ///
-/// `g_list_free` and not `_full`: that is what both
-/// `e_collection_backend_claim_all_resources()` and
-/// `e_collection_backend_list_*_sources()` document, and what both
+/// `g_list_free`, not `_full`, as `e_collection_backend_claim_all_resources()`
+/// and `e_collection_backend_list_*_sources()` document, and as
 /// [`Populating`] and [`Collection`] promise their callers.
 ///
 /// # Safety
 ///
-/// `list` must be NULL or a `GList` this call may free, whose `data` are
-/// `ESource *` carrying one reference each.
+/// `list` must be NULL or a `GList` that this call can free, whose `data` are
+/// `ESource *` with one reference each.
 unsafe fn drain(list: *mut GList) -> Vec<*mut ESource> {
     let mut sources = Vec::new();
     let mut node = list;
     while !node.is_null() {
         // SAFETY: a live node of the list, whose `data` is one of the sources
-        // referenced for us.
+        // referenced for this code.
         sources.push(unsafe { (*node).data }.cast::<ESource>());
         // SAFETY: as above.
         node = unsafe { (*node).next };
     }
 
-    // SAFETY: a list this call owns, whose nodes nothing else holds.
+    // SAFETY: this call owns the list, and nothing else holds its nodes.
     unsafe { g_list_free(list) };
 
     sources
 }
 
-// SAFETY: `claim_all_resources` hands back what
-// `e_collection_backend_claim_all_resources` referenced for us, one reference per
-// source, and the freeze and thaw are the two halves of EDS's own counter.
+// SAFETY: `claim_all_resources` returns what
+// `e_collection_backend_claim_all_resources` referenced for this code, one
+// reference for each source. The freeze and thaw are the two halves of the EDS
+// counter.
 unsafe impl Populating for Live {
     fn freeze(&self) -> bool {
-        // SAFETY: a valid backend for the length of the vfunc this runs inside.
+        // SAFETY: a valid backend for the duration of the enclosing vfunc.
         unsafe { e_collection_backend_freeze_populate(self.0) != GFALSE }
     }
 
@@ -1069,18 +1058,18 @@ unsafe impl Populating for Live {
 
     fn chain_up(&self) {
         match parent_class().and_then(|class| class.populate) {
-            // SAFETY: the parent's own populate, called on an instance of a type
-            // derived from it, which is what chaining up means in C.
+            // SAFETY: the populate of the parent, called on an instance of a
+            // derived type. This is how C chains up.
             Some(populate) => unsafe { populate(self.0) },
-            // EDS installs a placeholder, so this cannot happen; if it ever
-            // does, the populate below is still worth doing.
+            // EDS installs a placeholder, so this cannot occur. If it occurs,
+            // the populate below is still useful.
             None => log_critical("populate: the parent class has no populate to chain up to"),
         }
     }
 
     fn claim_all_resources(&self) -> Vec<*mut ESource> {
-        // SAFETY: as above; the claim answers `(transfer full)`, one reference
-        // per source, which is what `drain` passes on.
+        // SAFETY: as above. The claim is `(transfer full)`, one reference for
+        // each source, and `drain` gives these to the caller.
         unsafe { drain(e_collection_backend_claim_all_resources(self.0)) }
     }
 
@@ -1089,13 +1078,11 @@ unsafe impl Populating for Live {
     }
 
     fn request_credentials(&self) {
-        // No certificate and no error: this backend never hands EDS a
-        // certificate to offer the user (see `crate::authenticate`), and there is
-        // no failed operation behind this — it is the first thing the account is
-        // asked for.
-        // SAFETY: a valid backend, which derives from `EBackend`; every other
-        // argument is optional and NULL, and the reason is one of the enum's own
-        // values.
+        // No certificate and no error. This backend never gives EDS a
+        // certificate to offer the user (refer to `crate::authenticate`). No
+        // operation failed: this is the first request to the account.
+        // SAFETY: a valid backend, which derives from `EBackend`. Each other
+        // argument is optional and NULL, and the reason is a value of the enum.
         unsafe {
             e_backend_schedule_credentials_required(
                 self.0.cast(),
@@ -1110,29 +1097,28 @@ unsafe impl Populating for Live {
     }
 
     fn authenticate_anonymously(&self) {
-        // SAFETY: as above; NULL credentials are what an anonymous authenticate
-        // is, and what `jmap_backend_core::marshal::password` reads as absent.
+        // SAFETY: as above. NULL credentials make an anonymous authenticate,
+        // and `jmap_backend_core::marshal::password` reads them as absent.
         unsafe { e_backend_schedule_authenticate(self.0.cast(), ptr::null()) };
     }
 
     fn offer_creation(&self, offer: bool) {
-        // The account source, not a child: this is the flag Evolution reads to
-        // decide whether "New Address Book" may target this account.
+        // The account source, not a child. Evolution reads this flag to
+        // decide if "New Address Book" can use this account.
         //
-        // In `populate` rather than in a `constructed` override, which is what
-        // evolution-ews uses: this crate has no `constructed`, and adding one
-        // would mean writing a slot in `GObjectClass` — a third class struct,
-        // further up than `authenticate_sync`'s `EBackendClass` — for a
-        // one-line effect. `populate` is the first thing EDS calls on a
-        // collection backend and it runs again on every reconnect and every
-        // account change, which is exactly the cadence a flag derived from the
-        // account's own settings wants.
-        // SAFETY: a valid backend for the length of the vfunc this runs inside;
+        // In `populate`, not in a `constructed` override as in evolution-ews.
+        // This crate has no `constructed`. One would need a slot in
+        // `GObjectClass`, a third class struct above the `EBackendClass` of
+        // `authenticate_sync`, for a one-line effect. EDS calls `populate`
+        // first on a collection backend, and again on each reconnect and each
+        // account change. A flag that comes from the account settings needs
+        // exactly that frequency.
+        // SAFETY: a valid backend for the duration of the enclosing vfunc.
         // `e_backend_get_source` is `(transfer none)`. The account source of a
-        // backend the registry constructed is an `EServerSideSource` — a source
-        // that somehow is not gets EDS's own `g_return_if_fail` critical rather
-        // than undefined behaviour — and NULL is answered by doing nothing,
-        // since a backend with no account has no flag to write.
+        // backend that the registry constructed is an `EServerSideSource`. A
+        // different source gets the `g_return_if_fail` critical of EDS, not
+        // undefined behaviour. For NULL, this does nothing, because a backend
+        // with no account has no flag to write.
         unsafe {
             let source = e_backend_get_source(self.0.cast());
             if source.is_null() {
@@ -1146,11 +1132,11 @@ unsafe impl Populating for Live {
     }
 
     fn allow_rename(&self) {
-        // SAFETY: as `offer_creation`'s: a valid backend, `e_backend_get_source`
-        // is `(transfer none)`, and NULL is answered by doing nothing.
-        // `e_source_get_extension` creates the `Collection` extension if the
-        // account source somehow lacks one rather than returning NULL, so the
-        // cast below is always into a live `ESourceCollection`.
+        // SAFETY: as in `offer_creation`: a valid backend,
+        // `e_backend_get_source` is `(transfer none)`, and for NULL this does
+        // nothing. If the account source has no `Collection` extension,
+        // `e_source_get_extension` creates one and does not return NULL. Thus
+        // the cast below always gives a live `ESourceCollection`.
         unsafe {
             let source = e_backend_get_source(self.0.cast());
             if source.is_null() {
@@ -1163,29 +1149,29 @@ unsafe impl Populating for Live {
     }
 }
 
-// SAFETY: `new_child` and `existing_children` both hand back what EDS
-// referenced for us, one reference per source — `(transfer full)` in both
-// cases, which is what `Collection` asks for.
+// SAFETY: `new_child` and `existing_children` both return what EDS referenced
+// for this code, one reference for each source. Both are `(transfer full)`, as
+// `Collection` requires.
 unsafe impl Collection for Live {
     fn new_child(&self, resource_id: &str) -> *mut ESource {
-        // `CString::new` and not `cstring_lossy`: truncating at an interior NUL
-        // would not fail, it would silently ask EDS for a *different* resource
-        // and pair this collection's child with it. A resource id EDS cannot be
-        // asked about is one no child exists for, which is what NULL means here
-        // and what `adopt` reports as `Uncreated`. Reachable only from a server
-        // that put a NUL in an id, since every other resource id in this crate
-        // was read back out of a C string.
+        // `CString::new`, not `cstring_lossy`. A cut at an interior NUL does
+        // not fail. It silently asks EDS for a *different* resource and pairs
+        // the child of this collection with it. No child exists for a resource
+        // id that EDS cannot receive. NULL means that here, and `adopt`
+        // reports it as `Uncreated`. Only a server that puts a NUL in an id can
+        // cause this. Each other resource id in this crate comes from a C
+        // string.
         let Ok(resource_id) = CString::new(resource_id) else {
             return ptr::null_mut();
         };
-        // SAFETY: a valid backend for the length of the vfunc this runs inside,
-        // and a NUL-terminated string the call only reads from.
+        // SAFETY: a valid backend for the duration of the enclosing vfunc, and
+        // a NUL-terminated string that the call only reads.
         unsafe { e_collection_backend_new_child(self.0, resource_id.as_ptr()) }
     }
 
     fn is_new_child(&self, child: *mut ESource) -> bool {
-        // SAFETY: a valid backend and one of the child sources it just handed
-        // back, both alive for this call.
+        // SAFETY: a valid backend and one of the child sources that it
+        // returned, both alive for this call.
         unsafe { e_collection_backend_is_new_source(self.0, child) != GFALSE }
     }
 
@@ -1194,12 +1180,12 @@ unsafe impl Collection for Live {
     }
 
     fn existing_children(&self) -> Vec<*mut ESource> {
-        // Address books and calendars, in that order and never mail: this
-        // backend creates no mail children, so it has no opinion about them and
-        // must not remove them. Two calls rather than one because EDS has no
-        // "every child" accessor that is not also every mail source.
-        // SAFETY: a valid backend; each list is `(transfer full)`, one
-        // reference per source, which is what `drain` passes on.
+        // Address books and calendars, in that order, and never mail. This
+        // backend creates no mail children, so it must not remove them. Two
+        // calls, because the EDS accessor for all children also gives each
+        // mail source.
+        // SAFETY: a valid backend. Each list is `(transfer full)`, one
+        // reference for each source, and `drain` gives these to the caller.
         let mut children = unsafe { drain(e_collection_backend_list_contacts_sources(self.0)) };
         // SAFETY: as above.
         children.extend(unsafe { drain(e_collection_backend_list_calendar_sources(self.0)) });
@@ -1207,11 +1193,11 @@ unsafe impl Collection for Live {
     }
 
     fn set_remote_deletable(&self, child: *mut ESource, deletable: bool) {
-        // SAFETY: every source `adopt` calls this on came from
-        // `e_collection_backend_new_child`, which — like every child of a
-        // collection in `evolution-source-registry` — hands back an
-        // `EServerSideSource`; `.cast()` is the same one
-        // `delete_resource::offer_deletion` makes of the same guarantee.
+        // SAFETY: each source on which `adopt` calls this comes from
+        // `e_collection_backend_new_child`. That function returns an
+        // `EServerSideSource`, as for each child of a collection in
+        // `evolution-source-registry`. `delete_resource::offer_deletion` makes
+        // the same `.cast()` from the same guarantee.
         unsafe {
             e_server_side_source_set_remote_deletable(
                 child.cast(),
@@ -1221,43 +1207,43 @@ unsafe impl Collection for Live {
     }
 }
 
-/// One line on EDS's own debug channel, which is silent unless
-/// `SOURCE_REGISTRY_DEBUG` is set, and on `tracing`'s DEBUG channel, so the
-/// same informational write/discovery events `log_critical`'s callers already
-/// forward at ERROR also reach journald at DEBUG once a module has called
-/// [`jmap_backend_core::logging::init`].
+/// Writes one line on the debug channel of EDS, which is silent unless
+/// `SOURCE_REGISTRY_DEBUG` is set, and on the DEBUG channel of `tracing`.
+/// Thus the write and discovery events also go to journald at DEBUG, after a
+/// module calls [`jmap_backend_core::logging::init`]. The callers of
+/// `log_critical` send their events at ERROR.
 fn debug_print(message: &str) {
     tracing::debug!("{message}");
     debug_print_eds(message);
 }
 
 /// Like [`debug_print`], but also attaches `resource_id` as a structured
-/// `tracing` field, mirroring
-/// [`jmap_backend_core::trampoline::log_critical_for_resource`] at DEBUG
-/// level — for the two vfuncs (`create_resource_sync`, `delete_resource_sync`)
-/// that already have the resource id in hand when they report success. The
-/// EDS debug-channel side is unchanged: it still carries the id in prose too.
+/// `tracing` field, as
+/// [`jmap_backend_core::trampoline::log_critical_for_resource`] does at ERROR
+/// level. For the two vfuncs (`create_resource_sync`, `delete_resource_sync`)
+/// that have the resource id when they report success. The EDS debug channel
+/// does not change: its text also contains the id.
 fn debug_print_for_resource(resource_id: &str, message: &str) {
     tracing::debug!(resource_id, "{message}");
     debug_print_eds(message);
 }
 
 /// Like [`debug_print`], but also attaches `account_id` as a structured
-/// `tracing` field, mirroring [`log_critical_for_account`] at DEBUG level —
-/// for a `populate`/fan-out summary spanning a whole account's children, which
-/// has no single resource to name. The EDS debug-channel side is unchanged.
+/// `tracing` field, as [`log_critical_for_account`] does at ERROR level. For a
+/// `populate` or fan-out summary about all children of an account, which has
+/// no single resource to name. The EDS debug channel does not change.
 fn debug_print_for_account(account_id: &str, message: &str) {
     tracing::debug!(account_id, "{message}");
     debug_print_eds(message);
 }
 
-/// The EDS debug-channel half [`debug_print`] and [`debug_print_for_resource`]
-/// share.
+/// The EDS debug-channel part that [`debug_print`],
+/// [`debug_print_for_resource`] and [`debug_print_for_account`] share.
 fn debug_print_eds(message: &str) {
     let message = cstring_lossy(message);
     // SAFETY: `e_source_registry_debug_print` is variadic and takes a printf
-    // format; passing the text as an argument to `%s` keeps a `%` in it from
-    // being read as a directive.
+    // format. The text is an argument to `%s`, so a `%` in it is not read as a
+    // directive.
     unsafe { e_source_registry_debug_print(c"%s\n".as_ptr(), message.as_ptr()) };
 }
 
@@ -1328,14 +1314,14 @@ mod parent_class_tests {
 
     #[test]
     fn parent_class_finds_the_class_once_it_is_initialised() {
-        // SAFETY: referencing the type initialises its class if it is not
-        // already, and the reference is given back below.
+        // SAFETY: a reference to the type initialises its class if necessary.
+        // The code below releases the reference.
         let class = unsafe { gobject_sys::g_type_class_ref(e_collection_backend_get_type()) };
         assert!(
             parent_class().is_some(),
             "parent_class found no class for an initialised type"
         );
-        // SAFETY: gives back the reference taken above.
+        // SAFETY: releases the reference taken above.
         unsafe { gobject_sys::g_type_class_unref(class) };
     }
 }

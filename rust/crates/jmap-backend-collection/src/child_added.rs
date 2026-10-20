@@ -1,67 +1,65 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Keeping a child's connection following its account's — what
-//! [`crate::child_source`] writes once, kept true afterwards.
+//! Keeps the connection of a child equal to the connection of its account.
+//! [`crate::child_source`] writes the connection once; this module keeps it
+//! correct after that.
 //!
-//! [`apply`](crate::child_source::apply) copies the account's
-//! [`Connection`](jmap_collection_sync::child_source::Connection) onto a child
-//! at the moment the child is created, and that is the last time anything
-//! copies it. An account whose server, port, user or TLS setting the user then
-//! edits is an account whose address books and calendars go on asking the *old*
-//! server — silently, because a child that names a host is a child that connects
-//! somewhere, and nothing about it looks wrong.
+//! [`apply`](crate::child_source::apply) copies the
+//! [`Connection`](jmap_collection_sync::child_source::Connection) of the
+//! account onto a child when the child is created, and only then. If the user
+//! later changes the server, port, user or TLS setting, the address books and
+//! calendars continue to use the *old* server. Nothing shows an error, because
+//! a child that names a host connects to it.
 //!
-//! So the copy is turned into a binding, which is what every collection backend
-//! in EDS does: `e_ews_backend_child_added` binds the collection's
-//! `[Authentication]` host, user and method onto each child's, and EDS's own
+//! Thus this module replaces the copy with a binding, as every collection
+//! backend in EDS does. `e_ews_backend_child_added` binds the `[Authentication]`
+//! host, user and method of the collection onto each child. EDS's
 //! `collection_backend_child_added` binds the display name and the OAuth 2.0
-//! support object the same way. This module is that, for the five properties a
-//! JMAP child's connection is made of — the four of `[Authentication]` and the
-//! one of `[Security]` — plus a sixth that is not part of the connection at
-//! all: `credential-name`, the account's own uid, bound so every child looks
-//! its OAuth 2.0 token up under the one key the account uses rather than one
-//! each child would otherwise derive on its own (eds#663) — all bound from the
-//! account to the child and never back.
+//! support object in the same way.
 //!
-//! ## Which sources are bound, and which are left alone
+//! This module binds the five properties of a JMAP child connection: the four
+//! of `[Authentication]` and the one of `[Security]`. It also binds a sixth
+//! property that is not part of the connection: [`CREDENTIAL_PROPERTY`], the
+//! uid of the account. With it, every child finds its OAuth 2.0 token under the one
+//! key of the account, not under a key of its own (eds#663). All bindings go
+//! from the account to the child, never back.
 //!
-//! `child_added` fires for *every* source whose parent is the collection: the
-//! address books and calendars this backend creates, and also the mail account,
-//! identity and transport sources that the setup UI creates and that this
-//! backend neither writes nor caches ([`crate::prepare_mail`]). Binding them
-//! too is wanted and is what EWS does — a mail account of this collection
-//! reaches the same server as its address books, so it should follow the same
-//! fields — but it is also why nothing here assumes the shape of the source it
-//! is handed.
+//! ## Which sources are bound, and which stay unchanged
 //!
-//! Hence the rule [`follow_collection`] applies: a group is bound only when
-//! *both* sources already have it. That is a deliberate deviation from EWS,
-//! which fetches the collection's `[Authentication]` unconditionally, and it
-//! exists because `e_source_get_extension` **creates** the extension it cannot
-//! find. On the child that would be a group written into a source belonging to
-//! another part of Evolution; on the collection it would be a group written into
-//! the user's own account file, which is the thing [`crate::collection_source`]
-//! goes out of its way never to do. A source with no `[Authentication]` names no
-//! host anyway, so there is nothing a binding could usefully carry to it.
+//! `child_added` fires for *every* source whose parent is the collection. These
+//! are the address books and calendars that this backend creates, and also the
+//! mail account, identity and transport sources. The setup UI creates the mail
+//! sources, and this backend neither writes nor caches them
+//! ([`crate::prepare_mail`]). EWS binds them too, and that is correct: a mail
+//! account of this collection uses the same server as its address books. But
+//! it is also why nothing here assumes the shape of a source.
 //!
-//! The exception is [`crate::mail_child`], and it is one because the premise
-//! fails there: this account's *own* mail account and mail transport are sources
-//! nothing else writes a server onto — the setup UI can reach only the receiving
-//! one — so a group created on them is created in a source of this account's,
-//! for want of anywhere else it could come from. They are also bound
-//! differently, `[Security]` in particular, which is why they are a module and
-//! not a flag.
+//! Hence the rule of [`follow_collection`]: it binds a group only when *both*
+//! sources already have it. EWS gets the `[Authentication]` of the collection
+//! unconditionally, so this is a deliberate difference. The reason is that
+//! `e_source_get_extension` **creates** an extension that it cannot find.
+//!
+//! On the child, that writes a group into a source of a different Evolution
+//! component. On the collection, it writes a group into the account file of
+//! the user, which [`crate::collection_source`] never does. A source without
+//! `[Authentication]` names no host, so a binding has nothing useful to carry.
+//!
+//! The exception is [`crate::mail_child`], because the premise is not true
+//! there. Nothing else writes a server onto the mail account and mail
+//! transport of this account: the setup UI writes only the receiving one.
+//! Thus a group created on them is in a source of this account, and has no
+//! other origin. They also bind differently (`[Security]` in particular), so
+//! they have a module, not a flag.
 //!
 //! ## `[Security]` is bound as the boolean, not as the string
 //!
-//! `ESourceSecurity` carries `method` — "tls" or "none" — and the derived
-//! `secure` that every JMAP backend actually reads
-//! ([`jmap_backend_core::source::SourceConfig`]), and `set_method` notifies both.
-//! Binding `secure` therefore propagates just as promptly as binding `method`
-//! would, and it propagates the question the reader asks: an account set to some
-//! third method spelling reaches its children as the answer they will act on
-//! rather than as a string they would have to agree about.
+//! `ESourceSecurity` has `method` ("tls" or "none") and the derived `secure`.
+//! Every JMAP backend reads `secure`
+//! ([`jmap_backend_core::source::SourceConfig`]), and `set_method` notifies
+//! both. Thus a binding of `secure` is as fast as a binding of `method`. It
+//! also carries the value that the children use: an account with a third
+//! method spelling reaches its children as the boolean they act on.
 
 use std::ffi::CStr;
 
@@ -75,16 +73,17 @@ use jmap_backend_core::marshal::extension_if_present;
 
 use crate::mail_child::{follow_server, mail_service_of};
 
-/// The properties bound, per `ESource` extension: everything a
-/// [`Connection`](jmap_collection_sync::child_source::Connection) is, and one
-/// property that is not — see the module comment on `credential-name`.
+/// The bound properties, per `ESource` extension: all of a
+/// [`Connection`](jmap_collection_sync::child_source::Connection), and one
+/// property that is not part of it: [`CREDENTIAL_PROPERTY`] (see the module
+/// comment).
 ///
-/// Spelled as GObject property names rather than as the keyfile keys
-/// [`Setting`](jmap_collection_sync::Setting) uses — `secure` is not a keyfile
-/// key at all — so this list is deliberately not the one
-/// [`crate::child_source`] writes through. `tests/child_added.rs` holds the two
-/// against each other by changing the account and reading the child back the way
-/// the address book and calendar backends read it.
+/// These are GObject property names, not the keyfile keys of
+/// [`Setting`](jmap_collection_sync::Setting) (`secure` is not a keyfile key).
+/// Thus this list is deliberately different from the one that
+/// [`crate::child_source`] writes. `tests/child_added.rs` compares the two: it
+/// changes the account and reads the child as the address book and calendar
+/// backends read it.
 pub const BOUND: [(&CStr, &[&CStr]); 2] = [
     (
         E_SOURCE_EXTENSION_AUTHENTICATION,
@@ -93,68 +92,63 @@ pub const BOUND: [(&CStr, &[&CStr]); 2] = [
     (E_SOURCE_EXTENSION_SECURITY, &[c"secure"]),
 ];
 
-/// The name `apply` in `jmap_config::account` actually wrote the account's
-/// OAuth 2.0 token-cache key under — `credential-store-id` where the
-/// installed EDS has it (eds#663), `credential-name` otherwise. See that
-/// module's doc comment; this crate binds whichever one is real rather than
-/// hard-coding the pre-eds#663 name.
+/// The property name under which `apply` in `jmap_config::account` writes the
+/// OAuth 2.0 token-cache key of the account. It is `credential-store-id` if the
+/// installed EDS has it (eds#663), and `credential-name` if not. See the doc
+/// comment of that module.
 #[cfg(eds_credential_store_id)]
 pub const CREDENTIAL_PROPERTY: &CStr = c"credential-store-id";
 #[cfg(not(eds_credential_store_id))]
 pub const CREDENTIAL_PROPERTY: &CStr = c"credential-name";
 
 /// Binds every property of [`BOUND`] from `collection` onto `child`, for the
-/// groups both sources already have.
+/// groups that both sources already have.
 ///
-/// One-way and `G_BINDING_SYNC_CREATE`: the child is brought into line the
-/// moment it is bound — which is the whole point for a *cached* child, whose
-/// values are whatever the account said when it was last written — and nothing
-/// a child does afterwards reaches the account.
+/// The binding is one-way and `G_BINDING_SYNC_CREATE`. Thus the child gets the
+/// values of the account immediately, which is necessary for a *cached* child
+/// with old values. Changes on the child never reach the account.
 ///
-/// Nothing is returned and nothing fails: a group either side lacks is a group
-/// with nothing to carry, and every property named above exists on the extension
-/// it is named under. A misspelling would be a `g_critical` from GLib rather
-/// than an error here, which is what `tests/child_added.rs` exists to catch
-/// first.
+/// Nothing is returned and nothing fails. A group that one side does not have
+/// has nothing to carry, and every property above exists on its extension. A
+/// misspelt name causes a `g_critical` from GLib, and `tests/child_added.rs`
+/// finds it first.
 ///
 /// # Safety
 ///
-/// `collection` and `child` must be valid `ESource`s — the backend's account
-/// source and one of its children. Neither is referenced here; the binding EDS
-/// creates holds what it needs and drops itself when either object is finalized.
+/// `collection` and `child` must be valid `ESource`s (the account source of the
+/// backend and one of its children). Neither is referenced here. The binding
+/// that EDS creates holds what it needs, and removes itself when either object
+/// is finalized.
 pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
-    // As everywhere an extension is looked up by name: `e_source_get_extension`
-    // walks the registered children of `E_TYPE_SOURCE_EXTENSION`, and
-    // `e_source_has_extension` answers off the same table, so a type nothing has
-    // referenced yet is one neither can find. Referencing the GType registers
-    // it.
+    // `e_source_get_extension` and `e_source_has_extension` find only
+    // registered children of `E_TYPE_SOURCE_EXTENSION`. A reference to the
+    // GType registers it.
     // SAFETY: no arguments, and the type system initialises itself.
     unsafe {
         e_source_authentication_get_type();
         e_source_security_get_type();
     }
 
-    // Every child — the mail services included, so before the fork below —
-    // carries the account's client registration; see `follow_oauth2` on why
-    // this group alone is created on the child.
-    // SAFETY: valid sources by this function's contract.
+    // Every child gets the OAuth 2.0 client registration of the account, the
+    // mail services included, so this comes before the branch below. See
+    // `follow_oauth2` on why this group is created on the child.
+    // SAFETY: valid sources by the contract of this function.
     unsafe { follow_oauth2(collection, child) };
 
-    // The two children of this account that are bound by another set of rules,
-    // and the only ones any *other* group is created on — see
-    // `crate::mail_child`.
-    // SAFETY: a valid source by this function's contract, only read from.
+    // The two children of this account with different rules, and the only
+    // children on which other groups are created. See `crate::mail_child`.
+    // SAFETY: a valid source by the contract of this function, only read from.
     if unsafe { mail_service_of(child) }.is_some() {
-        // SAFETY: valid sources by this function's contract, which is
-        // `follow_server`'s too.
+        // SAFETY: valid sources by the contract of this function, which is
+        // also the contract of `follow_server`.
         unsafe { follow_server(collection, child) };
         return;
     }
 
     for (name, properties) in BOUND {
-        // Both sides tested for, and neither fetched unless both answer — see
-        // the module comment on why an absent group is left absent.
-        // SAFETY: valid sources by this function's contract, and a header
+        // Test for the group on both sides, and get neither unless both have
+        // it. See the module comment.
+        // SAFETY: valid sources by the contract of this function, and a header
         // constant.
         let (Some(from), Some(to)) = (unsafe { extension_if_present(collection, name) }, unsafe {
             extension_if_present(child, name)
@@ -164,69 +158,63 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
 
         for property in properties {
             // SAFETY: two live extension objects and two NUL-terminated
-            // property names of theirs; the binding is `(transfer none)` and
+            // property names of them; the binding is `(transfer none)` and
             // owned by the two objects it joins.
             unsafe { bind(from, to, property) };
         }
     }
 }
 
-/// Binds the account's OAuth 2.0 client registration
+/// Binds the OAuth 2.0 client registration of the account
 /// ([`jmap_config::oauth2::EXTENSION_NAME`], whichever group that is on this
-/// EDS) onto a child, creating the group on the child: the second exception
-/// to the both-sides-or-neither rule, and one for [`crate::mail_child`]'s own
-/// reason: a group created here is created in a source of this account's, for
-/// want of anywhere else it could come from.
+/// EDS) onto a child, and creates the group on the child.
 ///
-/// It has to be on the child because EDS hands the `EOAuth2Service` whichever
-/// source asked for the token: `e_source_registry_server_get_access_token_sync`
-/// (e-source-registry-server.c) passes the asking source straight into
-/// `e_oauth2_service_get_access_token_sync`. The silent-refresh path never
-/// resolves the collection as the credential source (only the interactive
-/// prompter does). EDS's own OAuth2 services never feel this, their client ids
-/// being compile-time constants; ours is per-account state in that group, and
-/// a child without it is a child whose token refresh has no client id, no
-/// token endpoint and no scope, so the first expired access token became a
-/// full re-consent (the registry prepared a refresh form for a memory-only
-/// calendar child's uid, and mail's connect escalated to the consent window;
-/// that same send-time re-consent (`jmap-mail`'s `connect_sync` not
-/// authenticating before the shell's prompt-first path) is the mechanism
-/// seen here, through the transport).
+/// This is the second exception to the rule that both sides must have the
+/// group. The reason is the same as for [`crate::mail_child`]: the group is
+/// created in a source of this account, and has no other origin.
 ///
-/// That is true of every EDS this project supports today, and read again
-/// rather than assumed: the paragraph above describes 3.52 through 3.62
-/// verbatim, and on current master the same function has grown a "prefer the
-/// collection source" step in front of the lookup, gated on
-/// `e_util_can_use_collection_as_credential_source`. The binding stays either
-/// way, and not only for the older releases. That gate compares the child's
-/// `[Authentication] Host` and `User` against the collection's and declines
-/// when they are both filled and differ, which is exactly the case EDS
-/// documents it for: a mail service of the account living on another server.
-/// So the collection is a *preference*, never a guarantee, and the child it
-/// falls back to still has to carry the registration itself.
+/// The child must have the group because EDS gives the `EOAuth2Service` the
+/// source that asks for the token.
+/// `e_source_registry_server_get_access_token_sync`
+/// (e-source-registry-server.c) gives the asking source directly to
+/// `e_oauth2_service_get_access_token_sync`. Only the interactive prompter uses
+/// the collection as the credential source; the silent refresh does not.
 ///
-/// The account's side is never invented: an account without the group has no
-/// registration to carry, and its `.source` file is the user's — the same
-/// rule the rest of this module keeps.
+/// The OAuth2 services of EDS have compile-time client ids, so they do not see
+/// this problem. Here, the client id is per-account state in that group. A
+/// child without it has no client id, token endpoint or scope for a refresh.
+/// The first expired access token then causes a full re-consent, for example
+/// for a calendar child or at send time through the transport.
+///
+/// This is true for EDS 3.52 through 3.62. On current EDS master, the same
+/// function first prefers the collection source, gated on
+/// `e_util_can_use_collection_as_credential_source`. That gate declines when
+/// the `[Authentication] Host` and `User` of the child are both set and differ
+/// from the collection. EDS documents this for a mail service on a different
+/// server. Thus the collection is a *preference*, and the child must still
+/// have the registration.
+///
+/// This function never creates the group on the account. An account without
+/// the group has no registration to carry, and its `.source` file belongs to
+/// the user.
 ///
 /// # Safety
 ///
 /// As [`follow_collection`], whose helper this is.
 unsafe fn follow_oauth2(collection: *mut ESource, child: *mut ESource) {
-    // Registers the extension type, so the name lookups below can answer —
-    // same reasoning as the `get_type` calls in `follow_collection`, spelled
-    // through the one caller this crate is meant to use for it.
+    // Registers the extension type, so that the name lookups below find it.
+    // This is the one function in this crate for that purpose.
     jmap_config::oauth2::ensure_registered();
 
     let name = jmap_config::oauth2::EXTENSION_NAME;
-    // SAFETY: a valid source by the caller's contract, and a NUL-terminated
-    // name; only read from.
+    // SAFETY: a valid source by the contract of the caller, and a
+    // NUL-terminated name; only read from.
     let Some(from) = (unsafe { extension_if_present::<gobject_sys::GObject>(collection, name) })
     else {
         return;
     };
     // SAFETY: a valid source; `e_source_get_extension` creates the (registered)
-    // extension on demand, and the child is this account's to write.
+    // extension on demand, and this account owns the child.
     let to: *mut gobject_sys::GObject =
         unsafe { eds_sys::e_source_get_extension(child, name.as_ptr()) }.cast();
 
@@ -237,7 +225,8 @@ unsafe fn follow_oauth2(collection: *mut ESource, child: *mut ESource) {
     }
 }
 
-/// One property, from the account's extension onto the child's.
+/// Binds one property from the extension of the account onto the extension of
+/// the child.
 ///
 /// # Safety
 ///

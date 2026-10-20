@@ -15,22 +15,21 @@ workspace = true
 
 [lib]
 name = "jmap_backend_collection"
-# rlib only. What evolution-source-registry dlopens (installed as
-# module-jmap-backend.so) is the companion `jmap-backend-collection-module`
-# crate, which is a cdylib holding nothing but the two
-# `#[unsafe(no_mangle)]` entry points and delegating both to
-# `module::load`/`module::unload` here. This crate is why the split exists:
-# `jmap-config` dev-depends on it, and two rlibs that both defined
-# `e_module_load` collapsed into one entry point answering for both.
+# rlib only. evolution-source-registry loads the companion cdylib
+# `jmap-backend-collection-module` (installed as module-jmap-backend.so).
+# That cdylib holds only the two `#[unsafe(no_mangle)]` entry points, and
+# they call `module::load` and `module::unload` here. `jmap-config`
+# dev-depends on this crate. If two rlibs define `e_module_load`, one test
+# binary gets one entry point for both crates.
 crate-type = ["rlib"]
 
 [features]
-# Compiler-enforced (not just documented) test-only gate on `detached()`,
-# which builds an instance by zeroing memory outside the GObject type system.
-# Enabled for this crate's own test builds
-# via the self dev-dependency below; never on for a normal build. Reaches
-# through to jmap-backend-core's own `testing` gate on `instance::zeroed_box`,
-# the shared helper `detached()` is built on.
+# The compiler limits `detached()` to tests. `detached()` makes an instance
+# from zeroed memory, outside the GObject type system. The self
+# dev-dependency below enables this feature for the tests of this crate only.
+# A normal build never enables it. It also enables the `testing` feature of
+# jmap-backend-core, which gates `instance::zeroed_box`, the helper that
+# `detached()` uses.
 testing = ["jmap-backend-core/testing"]
 
 [dependencies]
@@ -41,26 +40,26 @@ evolution-jmap-collection-sync = { workspace = true }
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
-# Facade only, no `tracing-subscriber`/`tracing-journald` — mirrors
-# `evolution-jmap-client`'s own precedent for keeping a non-init crate lean.
+# Facade only, with no `tracing-subscriber` or `tracing-journald`. A crate
+# that does not set up logging needs only the facade, as in
+# `evolution-jmap-client`.
 tracing = { workspace = true }
-# The `EOAuth2Service` implementation the module load registers alongside the
-# backend and its factory — see module.rs. `jmap-config` dev-depends on this
-# crate for its own account/collection round-trip tests, which is a
-# dev-dependency back-edge and not a cycle: nothing this crate's *library*
-# needs depends on `jmap-config`'s tests.
+# Gives the `EOAuth2Service` implementation that the module load registers
+# with the backend and its factory (see module.rs). `jmap-config`
+# dev-depends on this crate for its round-trip tests. That is not a cycle,
+# because the library of this crate does not need the tests of `jmap-config`.
 jmap-config = { workspace = true }
 
 [dev-dependencies]
-# Self dev-dependency to turn on `testing` (and so `detached()`) for this
-# crate's own test builds only — see the `[features]` comment above.
+# Self dev-dependency. It enables `testing` (and thus `detached()`) for the
+# tests of this crate only. Refer to the `[features]` comment above.
 jmap-backend-collection = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
-# What the mail sources this backend writes on are read by. A dev-dependency
-# and deliberately not a dependency, for the reason `jmap-config` gives for the
-# same line: what the library writes is `ESource` groups, and the provider is
-# needed only for the `CamelJmapSettings` GType an `ESourceCamel` subtype is
-# generated from — the one object that can be asked the question a store asks.
+# The Camel provider that reads the mail sources this backend writes. It is
+# deliberately a dev-dependency, as in `jmap-config`. The library writes
+# `ESource` groups. The tests need the provider only for the
+# `CamelJmapSettings` GType, from which an `ESourceCamel` subtype is generated.
+# Only that object reads the settings as a store does.
 jmap-mail = { workspace = true }

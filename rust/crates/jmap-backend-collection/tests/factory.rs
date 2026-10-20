@@ -1,27 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The module entry point and the `ECollectionBackendFactory` it registers —
-//! the last two pieces between `evolution-source-registry` and the backend.
+//! Tests the module entry point and the `ECollectionBackendFactory` that it
+//! registers. These connect `evolution-source-registry` to the backend.
 //!
-//! The registry server never instantiates a collection backend itself, and
-//! never looks at this crate directly either. It is an `EDataFactory` whose
-//! `backend_factory_type` is `E_TYPE_COLLECTION_BACKEND_FACTORY` and whose
-//! `module_directory` is libebackend's `registry-modules`; it loads an `EModule`
-//! per shared object it finds there — which dlopens the file and calls
-//! `e_module_load` — and then collects the extensions of itself that appeared.
-//! An account resolves to whichever of those factories answers to the
-//! `BackendName` in its source's `[Collection]` group.
+//! The registry server is an `EDataFactory`. Its `backend_factory_type` is
+//! `E_TYPE_COLLECTION_BACKEND_FACTORY` and its `module_directory` is the
+//! libebackend `registry-modules`. For each shared object there, it loads an
+//! `EModule`, which dlopens the file and calls `e_module_load`. Then it collects
+//! the new extensions of itself. An account uses the factory whose name matches
+//! the `BackendName` in its `[Collection]` group.
 //!
-//! So the test drives that path rather than the functions underneath it: a
-//! `GTypeModule` subclass whose `load` calls our entry point, standing in for
-//! the `EModule` that would dlopen the built `.so`, exactly as
-//! `jmap-backend-book`'s `tests/factory.rs` does. What is different here is the
-//! reason each assertion exists, because *every* field this factory installs has
-//! a working default underneath it (see `EDS_DEFAULTS`): a collection factory
-//! that registers and installs nothing is not a broken account, it is an account
-//! that belongs to a different backend, or one whose backend is EDS's own
-//! do-nothing `ECollectionBackend`.
+//! The tests use that path. A `GTypeModule` subclass, whose `load` calls the
+//! entry point, replaces the `EModule` that dlopens the `.so`. The
+//! `jmap-backend-book` `tests/factory.rs` does the same. Each field of this
+//! factory has a working default (see `EDS_DEFAULTS`). Thus a factory that
+//! installs nothing gives an account of a different backend, or a plain
+//! `ECollectionBackend` that does nothing.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -48,25 +43,23 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// What `e_collection_backend_factory_class_init` leaves in the two fields this
-/// subclass exists to fill in — read off EDS 3.52's own source, because they are
-/// the reason the two tests below are worth writing.
+/// The values that `e_collection_backend_factory_class_init` (EDS 3.52) puts in
+/// the two fields that this subclass sets.
 ///
 /// `factory_name` defaults to `"none"` and `backend_type` to
-/// `E_TYPE_COLLECTION_BACKEND`. Neither default fails: a factory that keeps the
-/// first is one the registry files under `none:Collection` and never finds for a
-/// JMAP account, and a factory that keeps the second builds a *plain*
-/// `ECollectionBackend` — which passes `new_backend`'s own
-/// `g_type_is_a (backend_type, E_TYPE_COLLECTION_BACKEND)` check, has none of
-/// this crate's vfuncs, and so gives the user an account that connects, fans out
-/// to nothing, and reports no error anywhere.
+/// `E_TYPE_COLLECTION_BACKEND`. Neither default causes an error. With the first,
+/// the registry files the factory under `none:Collection` and does not find it
+/// for a JMAP account. With the second, the factory builds a plain
+/// `ECollectionBackend`. That type passes the `new_backend` check
+/// `g_type_is_a (backend_type, E_TYPE_COLLECTION_BACKEND)`, but has none of the
+/// vfuncs of this crate. The account connects, but fans out to nothing, and
+/// shows no error.
 const EDS_DEFAULTS: (&CStr, &str) = (c"none", "ECollectionBackend");
 
-/// A `GTypeModule` standing in for the `EModule` the registry would load us as.
+/// A `GTypeModule` that replaces the `EModule` that the registry loads.
 ///
-/// `EModule`'s own `load` dlopens a shared object, resolves `e_module_load` in
-/// it and calls it; this does the same without a file to open, which is what
-/// lets the test reach the entry point the way the registry will.
+/// The `EModule` `load` dlopens a shared object, finds `e_module_load` in it and
+/// calls it. This module calls the entry point in the same way, without a file.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -90,8 +83,8 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to a new class struct of this type. It starts
+        // with GTypeModuleClass, which holds both slots.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -99,8 +92,8 @@ unsafe impl ObjectSubclass for TestModule {
 }
 
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
+    // SAFETY: GLib passes the module that it loads, which is the argument
+    // that the entry point expects.
     unsafe { load(module) };
     GTRUE
 }
@@ -110,22 +103,21 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// The one module in the process, used, unused, and used again.
+/// The only module in the process, used, unused, and used again.
 ///
-/// One, because two `GTypeModule`s cannot register the same type name: the
-/// second is a GLib warning and a zero `GType`. Used twice around an unuse
-/// because that is the interesting case and it happens in the field —
-/// `g_type_module_unuse` marks every type the module registered as unloaded
-/// when the last user of it goes away, and GLib will not hand the module back
-/// until a second `e_module_load` has registered them again.
+/// Two `GTypeModule`s cannot register the same type name: the second causes a
+/// GLib warning and a zero `GType`. The registry also unuses and uses a module
+/// again. When the last user goes, `g_type_module_unuse` marks each type of the
+/// module as unloaded. GLib does not return the module until a second
+/// `e_module_load` registers the types again.
 struct Loaded {
     module: *mut GTypeModule,
     first_use: gboolean,
     use_after_unload: gboolean,
 }
 
-// SAFETY: the fields are published by the OnceLock and only read afterwards,
-// and the module they describe is deliberately never finalized.
+// SAFETY: the OnceLock publishes the fields, which are only read after that.
+// The module that they describe is never finalized.
 unsafe impl Send for Loaded {}
 unsafe impl Sync for Loaded {}
 
@@ -140,9 +132,8 @@ fn loaded() -> &'static Loaded {
         let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
         assert!(!module.is_null(), "g_object_new returned NULL");
 
-        // SAFETY: `module` is a GTypeModule, and the reference taken by the
-        // second use is never given back — the types stay usable for the rest
-        // of the process, which is what every test below relies on.
+        // SAFETY: `module` is a GTypeModule. The second use keeps its
+        // reference, so the types stay usable for all the tests.
         unsafe {
             let first_use = g_type_module_use(module);
             g_type_module_unuse(module);
@@ -168,15 +159,15 @@ fn factory_type() -> GType {
     unsafe { g_type_from_name(<JmapCollectionFactory as ObjectSubclass>::NAME.as_ptr()) }
 }
 
-/// The factory's class, kept referenced for the test's duration.
+/// The factory class, referenced while the test runs.
 struct FactoryClass(*mut ECollectionBackendFactoryClass);
 
 impl FactoryClass {
     fn get() -> Self {
         let gtype = factory_type();
         assert_ne!(gtype, 0, "the factory type is not registered");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init; the class leads with ECollectionBackendFactoryClass.
+        // SAFETY: the type is registered, so a reference to its class runs
+        // class_init. The class starts with ECollectionBackendFactoryClass.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
@@ -193,16 +184,14 @@ impl Drop for FactoryClass {
     }
 }
 
-/// The parent's class, which is what "the default" means in every assertion
-/// below.
+/// The parent class, which holds "the default" in each assertion below.
 ///
-/// `peek` rather than `ref`: referencing our own class has already initialised
-/// the parent's, so it is there, and the parent class of an EDS type lives as
-/// long as the process.
+/// `peek`, not `ref`: the reference to the factory class initialises the
+/// parent class, and an EDS parent class lives as long as the process.
 fn parent_class() -> &'static ECollectionBackendFactoryClass {
     let _ = FactoryClass::get();
-    // SAFETY: the type is registered and its class initialised by the line
-    // above, which also initialised its parent's.
+    // SAFETY: the type is registered. The line above initialised its class
+    // and the parent class.
     let class = unsafe { g_type_class_peek(e_collection_backend_factory_get_type()) }
         .cast::<ECollectionBackendFactoryClass>();
     assert!(!class.is_null(), "the parent class is not initialised");
@@ -225,9 +214,9 @@ fn the_entry_point_registers_the_backend_type() {
     });
 }
 
-/// The registry server is an `EDataFactory` whose `backend_factory_type` is
-/// `E_TYPE_COLLECTION_BACKEND_FACTORY`; a type that is not one of its children
-/// is never collected out of a loaded module, however correct the rest of it is.
+/// The `backend_factory_type` of the registry server is
+/// `E_TYPE_COLLECTION_BACKEND_FACTORY`. The server does not collect a type from
+/// a module unless the type derives from it.
 #[test]
 fn the_entry_point_registers_a_collection_backend_factory() {
     with_timeout(|| {
@@ -245,16 +234,15 @@ fn the_entry_point_registers_a_collection_backend_factory() {
     });
 }
 
-/// And it is reached *as an extension* — which is the whole registration story,
-/// and why no call anywhere in this crate hands the factory to the registry.
+/// The registry gets the factory as an extension. Thus no code in this crate
+/// gives the factory to the registry.
 ///
 /// `e_collection_backend_factory_class_init` sets
-/// `EExtensionClass.extensible_type` to `E_TYPE_SOURCE_REGISTRY_SERVER`, so the
-/// server's own `e_extensible_load_extensions` instantiates one of every
-/// registered subclass when it is constructed. Inherited rather than written
-/// here — this asserts the inheritance holds, because a factory that lost it
-/// (by, say, deriving from `EBackendFactory` directly) would register cleanly,
-/// pass every other test in this file, and never be instantiated.
+/// `EExtensionClass.extensible_type` to `E_TYPE_SOURCE_REGISTRY_SERVER`. When
+/// the server is constructed, its `e_extensible_load_extensions` makes one
+/// instance of each registered subclass. The factory inherits this value. A
+/// factory that derives from `EBackendFactory` directly passes all the other
+/// tests in this file, but nothing makes an instance of it.
 #[test]
 fn the_factory_is_an_extension_of_the_registry_server() {
     with_timeout(|| {
@@ -270,12 +258,11 @@ fn the_factory_is_an_extension_of_the_registry_server() {
     });
 }
 
-/// The name is the contract with the account's `.source` file: the registry
-/// looks a collection up by the `BackendName` in its `[Collection]` group.
+/// The registry finds the factory by the `BackendName` in the `[Collection]`
+/// group of the account `.source` file.
 ///
-/// The default is not "no name" but `"none"` — see [`EDS_DEFAULTS`] — so this is
-/// a factory that is silently the wrong one rather than one that is obviously
-/// unfinished.
+/// The default name is `"none"` (see [`EDS_DEFAULTS`]), not an empty name. Thus
+/// a factory with the default is silently the wrong factory.
 #[test]
 fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
     with_timeout(|| {
@@ -290,61 +277,56 @@ fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
     });
 }
 
-/// What the registry actually files the factory under, through the parent's own
-/// `get_hash_key` rather than through our reading of the field it comes from.
+/// The key that the registry files the factory under, read through the parent
+/// `get_hash_key`, not from the field.
 ///
-/// `collection_backend_factory_get_hash_key` builds `"<factory_name>:Collection"`
-/// — so this is the string `e_data_factory_ref_backend_factory` is asked for
-/// when an account named `jmap` is added, and it is read out of the offset the
-/// *parent* believes `factory_name` is at, which is the half of the previous
-/// test that reading our own struct cannot check.
+/// `collection_backend_factory_get_hash_key` builds `"<factory_name>:Collection"`.
+/// `e_data_factory_ref_backend_factory` looks up this string for a `jmap`
+/// account. The parent reads `factory_name` at the offset that it expects. The
+/// previous test cannot check that offset.
 ///
-/// `g_type_create_instance` and not `g_object_new`, which is the one awkward
-/// part. `EExtension:extensible` is `G_PARAM_CONSTRUCT_ONLY`, and GObject sets
-/// *every* construct property during construction — supplied or not — so a
-/// `g_object_new` with no properties hands `extension_set_extensible` a NULL and
-/// earns a critical from its `E_IS_EXTENSIBLE` assertion. Harmless (the
-/// assertion returns early and the field stays NULL, which is where it would
-/// have been anyway) but not something to leave in a green test run, where it
-/// would sit next to real criticals and under a `G_DEBUG=fatal-criticals` would
-/// abort. Creating the instance directly skips property defaults and
-/// `constructed` — which is what GObject's own `g_object_new_internal` does
-/// before it sets any — and neither `EExtension` nor `EBackendFactory` overrides
-/// `constructed` or needs anything from it. `g_object_unref` still runs the
-/// normal dispose/finalize chain, whose end is the `g_type_free_instance` this
-/// allocation pairs with.
+/// The test uses `g_type_create_instance`, not `g_object_new`.
+/// `EExtension:extensible` is `G_PARAM_CONSTRUCT_ONLY`, and GObject sets each
+/// construct property during construction. Thus `g_object_new` with no
+/// properties gives `extension_set_extensible` a NULL. Its `E_IS_EXTENSIBLE`
+/// assertion then logs a critical. The critical is harmless (the field stays
+/// NULL), but `G_DEBUG=fatal-criticals` makes it abort. The direct call skips
+/// property defaults and `constructed`, as `g_object_new_internal` does before
+/// it sets properties. `EExtension` and `EBackendFactory` do not override
+/// `constructed`. `g_object_unref` runs the usual dispose and finalize chain,
+/// which ends in the `g_type_free_instance` that matches this allocation.
 #[test]
 fn the_registry_would_file_the_factory_under_the_account_name() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = factory_type();
         assert_ne!(gtype, 0, "the factory type is not registered");
-        // SAFETY: a registered, instantiatable type; GObject's own instance_init
-        // gives the result a reference count of one.
+        // SAFETY: a registered type that can have instances. The GObject
+        // instance_init gives the result a reference count of one.
         let factory = unsafe { g_type_create_instance(gtype) };
         assert!(!factory.is_null(), "g_type_create_instance returned NULL");
 
-        // SAFETY: a live factory of a type derived from EBackendFactory; the key
-        // comes back `(transfer none)`, interned for the life of the process.
+        // SAFETY: a live factory of a type derived from EBackendFactory. The key
+        // is `(transfer none)` and interned for the life of the process.
         let key = unsafe { e_backend_factory_get_hash_key(factory.cast()) };
         assert!(!key.is_null(), "the factory produced no hash key");
         // SAFETY: an interned NUL-terminated string, checked non-NULL above.
         assert_eq!(unsafe { CStr::from_ptr(key) }, c"jmap:Collection");
 
-        // SAFETY: the reference instance creation left behind, given back once; the
-        // finalize it reaches is what frees the instance.
+        // SAFETY: releases the reference from instance creation once. The
+        // finalize that follows frees the instance.
         unsafe { g_object_unref(factory.cast()) };
     });
 }
 
-/// The type the factory would `g_object_new`, which is the one thing between a
-/// found factory and this crate's code running.
+/// The type that the factory gives to `g_object_new`. This type decides if the
+/// code of this crate runs.
 ///
-/// EDS's default is `E_TYPE_COLLECTION_BACKEND` itself, and it is a *working*
-/// type: `new_backend`'s `g_type_is_a` check passes, an account appears in the
-/// sidebar, and it has none of this crate's three vfuncs — no fan-out, no
-/// credentials asked for, no error. So "is a collection backend" is not enough
-/// to assert; it has to be *ours*.
+/// The EDS default is `E_TYPE_COLLECTION_BACKEND`, which works. The
+/// `new_backend` `g_type_is_a` check passes and the account shows in the
+/// sidebar. But it has none of the vfuncs of this crate: no fan-out, no
+/// credential request, no error. Thus the test asserts the JMAP type, not only
+/// a collection backend.
 #[test]
 fn the_factory_builds_the_jmap_collection_backend() {
     with_timeout(|| {
@@ -367,19 +349,16 @@ fn the_factory_builds_the_jmap_collection_backend() {
     });
 }
 
-/// The two fields above are written into the *parent's* half of the class
-/// struct, whose layout this crate does not own — `factory_name` and
-/// `backend_type` sit between `EBackendFactoryClass` and `prepare_mail`. A wrong
-/// offset there does not fail to compile; it overwrites a neighbouring slot,
-/// which is a call through a bad pointer the first time EDS uses it.
+/// The two fields above are in the parent part of the class struct. This crate
+/// does not control that layout. `factory_name` and `backend_type` are between
+/// `EBackendFactoryClass` and `prepare_mail`. A wrong offset compiles, but it
+/// replaces an adjacent slot. EDS then calls a bad pointer.
 ///
-/// So: the two neighbours EDS fills in and this crate does not touch —
-/// `get_hash_key` and `new_backend`, on the near side — must still be exactly
-/// what the parent class installed. On the far side sits `prepare_mail`, which
-/// *is* overridden (see `tests/prepare_mail.rs`), so what is asserted there is
-/// that it changed and that `reserved` past it did not: a write that landed one
-/// slot too far would leave the parent's `prepare_mail` in place and scribble
-/// into the padding EDS keeps for future vfuncs.
+/// Before the fields, `get_hash_key` and `new_backend` must keep the values
+/// that the parent installed. After them, the crate overrides `prepare_mail`
+/// (see `tests/prepare_mail.rs`). Thus `prepare_mail` must change, and
+/// `reserved` must not. A write one slot too far keeps the parent
+/// `prepare_mail` and corrupts the padding that EDS keeps for future vfuncs.
 #[test]
 fn writing_the_fields_left_the_parent_vfuncs_alone() {
     with_timeout(|| {
@@ -422,9 +401,9 @@ fn writing_the_fields_left_the_parent_vfuncs_alone() {
     });
 }
 
-/// Registered against the module, not statically: a statically registered type
-/// keeps its class — and so pointers into this shared object — alive after the
-/// registry has unloaded the module underneath it.
+/// The types are registered with the module, not statically. A static type
+/// keeps its class (with pointers into this shared object) after the registry
+/// unloads the module.
 #[test]
 fn the_types_belong_to_the_module_that_registered_them() {
     with_timeout(|| {
@@ -432,8 +411,8 @@ fn the_types_belong_to_the_module_that_registered_them() {
         let loaded = loaded();
         for gtype in [backend_type(), factory_type()] {
             assert_eq!(
-                // SAFETY: a registered type; the plugin of a dynamic type is the
-                // GTypeModule it was registered against.
+                // SAFETY: a registered type. The plugin of a dynamic type is the
+                // GTypeModule that registered it.
                 unsafe { g_type_get_plugin(gtype) }.cast::<GTypeModule>(),
                 loaded.module,
                 "{:?} was not registered against the module",
@@ -444,11 +423,10 @@ fn the_types_belong_to_the_module_that_registered_them() {
     });
 }
 
-/// The registry unuses a module when the last backend it provided goes away,
-/// and uses it again when the next account wants one. The second use calls
-/// `e_module_load` a second time, and an entry point that treats "already
-/// registered" as "nothing to do" leaves every type marked unloaded — GLib then
-/// refuses the module and no JMAP account can be constructed again.
+/// The registry unuses a module when its last backend goes, and uses it again
+/// for the next account. The second use calls `e_module_load` again. If the
+/// entry point does nothing for registered types, they stay unloaded. GLib then
+/// refuses the module, and no JMAP account can be constructed.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
     with_timeout(|| {

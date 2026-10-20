@@ -3,9 +3,9 @@
 
 //! Structured tracing tests for `jmap-backend-collection`.
 //!
-//! Asserts structured fields attached to `tracing` events during collection
-//! authentication, fan-out discovery, resource creation, resource deletion,
-//! cache population, and password resolution.
+//! Examines the structured fields of `tracing` events in these operations:
+//! collection authentication, fan-out discovery, resource creation, resource
+//! deletion, cache population and password resolution.
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -232,8 +232,8 @@ unsafe impl CollectionTrait for MockCollection {
     }
 
     fn set_remote_deletable(&self, _child: *mut ESource, _deletable: bool) {
-        // Not what this fixture's tests are about: they pin what `fan_out`
-        // traces, not what it writes onto a child's `remote-deletable`.
+        // These tests examine the `fan_out` traces, not the `remote-deletable`
+        // value of a child. Thus this function does nothing.
     }
 }
 

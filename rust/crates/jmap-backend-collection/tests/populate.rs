@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The offline half of a populate: the cached children of previous sessions, back
-// in the sidebar before anything is asked of the server.
+// Tests for the offline part of a populate. The cached children of previous
+// sessions go back into the sidebar before the backend contacts the server.
 //
-// The `ECollectionBackend` calls a populate makes are a trait, as in
-// `tests/fan_out.rs`, so the collection here is a stand-in — but the sources are
-// real `ESource`s built by `e_source_new_with_uid`, and their resource ids are
-// read back by the same `resource_id_of` the `dup_resource_id` vfunc answers
-// with. The freeze counter in the stand-in is EDS's own arithmetic:
-// `e_collection_backend_freeze_populate` always increments and answers whether
-// *this* caller is the one that got the freeze, which is why a populate that
-// loses the race still owes a thaw.
+// A trait holds the `ECollectionBackend` calls of a populate, as in
+// `tests/fan_out.rs`, so the collection here is a test double. The sources are
+// real `ESource`s from `e_source_new_with_uid`. The `dup_resource_id` vfunc and
+// these tests both read resource ids with `resource_id_of`.
+//
+// The freeze counter of the test double uses the EDS arithmetic.
+// `e_collection_backend_freeze_populate` always increments the counter. It
+// returns TRUE only to the caller that got the freeze. Thus a populate that does
+// not get the freeze must still thaw.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
@@ -33,15 +34,14 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A live `ESource` this test holds one reference to, standing in for one of the
-/// `.source` files in a collection's cache directory.
+/// A live `ESource` with one reference held by the test. It represents a
+/// `.source` file in the cache directory of a collection.
 struct Source(*mut ESource);
 
 impl Source {
-    /// A cached child of the given kind, carrying the identity that makes its
-    /// resource id readable — which is the state EDS's own
-    /// `collection_backend_load_resources` requires before it will cache a
-    /// source at all.
+    /// A cached child of the given kind, with an identity that gives a readable
+    /// resource id. `collection_backend_load_resources` in EDS caches only a
+    /// source in this state.
     fn cached(kind: ChildKind, identity: &str) -> Self {
         let extension = match kind {
             ChildKind::AddressBook => E_SOURCE_EXTENSION_ADDRESS_BOOK,
@@ -50,8 +50,8 @@ impl Source {
         let source = Self::bare(&format!("jmap-cached-{identity}"));
         let extension = CString::new(extension.to_bytes()).expect("no NUL in an extension name");
         let identity = CString::new(identity).expect("no NUL in a test identity");
-        // SAFETY: a live source and NUL-terminated names; the extensions are
-        // created on demand and owned by the source, and the setter copies.
+        // SAFETY: a live source and NUL-terminated names. The source creates the
+        // extensions when necessary and owns them. The setter copies its argument.
         unsafe {
             assert!(!e_source_get_extension(source.0, extension.as_ptr()).is_null());
             let resource: *mut ESourceResource =
@@ -61,11 +61,11 @@ impl Source {
         source
     }
 
-    /// A source with no extension of ours on it at all, which is what a child of
-    /// some other backend — or one a user hand-edited — looks like.
+    /// A source without the extensions of this backend, like a child of a
+    /// different backend or a source that a user edited by hand.
     fn bare(uid: &str) -> Self {
-        // SAFETY: no arguments; `e_source_get_extension` cannot find an
-        // extension class whose type nothing has referenced yet.
+        // SAFETY: no arguments. These calls register the types, because
+        // `e_source_get_extension` cannot find an unregistered extension class.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -79,49 +79,47 @@ impl Source {
         Self(source)
     }
 
-    /// A reference of its own, which is what `claim_all_resources` hands over
-    /// and what the populate consumes.
+    /// A new reference, as `claim_all_resources` gives and the populate consumes.
     fn dup(&self) -> *mut ESource {
         // SAFETY: a live GObject this test holds a reference to.
         unsafe { g_object_ref(self.0.cast()) }.cast()
     }
 
-    /// The GObject reference count, which is how a claim that was not given back
-    /// becomes an assertion rather than a leak nobody notices.
+    /// The GObject reference count. A test asserts it, so that a reference that
+    /// the populate does not release causes a failure, not a silent leak.
     fn ref_count(&self) -> u32 {
-        // SAFETY: a live GObject; `ref_count` is a field of the instance struct.
+        // SAFETY: a live GObject. `ref_count` is a field of the instance struct.
         unsafe { (*self.0.cast::<GObject>()).ref_count }
     }
 }
 
 impl Drop for Source {
     fn drop(&mut self) {
-        // SAFETY: this holds the last reference; every one handed out was
-        // consumed by the call under test.
+        // SAFETY: this is the last reference. The call under test consumed each
+        // reference that the test gave out.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// The `ECollectionBackend` half of a populate, without one.
+/// A test double for the `ECollectionBackend` calls of a populate.
 #[derive(Default)]
 struct Collection {
-    /// EDS's freeze counter, with EDS's arithmetic on it.
+    /// The EDS freeze counter, with the EDS arithmetic.
     freeze_count: Cell<i32>,
-    /// The cache of previous sessions, as `claim_all_resources` hands it over.
+    /// The cache of previous sessions, as `claim_all_resources` gives it.
     cached: Vec<Source>,
-    /// Whether the cache has already been claimed: "previously used sources can
-    /// only be claimed once, so subsequent calls to this function for @backend
-    /// will return NULL".
+    /// Whether a call already claimed the cache. The EDS documentation says:
+    /// "previously used sources can only be claimed once, so subsequent calls to
+    /// this function for @backend will return NULL".
     claimed: Cell<bool>,
-    /// Which trait method was called when, so an ordering decision is a test
-    /// rather than a comment.
+    /// The trait methods in call order, so that the tests can assert the order.
     calls: RefCell<Vec<&'static str>>,
     /// Every source handed to `e_source_registry_server_add_source`.
     published: RefCell<Vec<*mut ESource>>,
-    /// Makes `publish` panic, for the one thing a populate must do even then.
+    /// Makes `publish` panic, to test that the populate still thaws.
     publish_panics: bool,
-    /// Every value `offer_creation` was called with, in order — the flag that
-    /// decides whether Evolution may create a collection in this account.
+    /// Each argument of `offer_creation`, in order. This flag tells whether
+    /// Evolution can create a collection in this account.
     offered: RefCell<Vec<bool>>,
 }
 
@@ -133,14 +131,14 @@ impl Collection {
         }
     }
 
-    /// The resource ids of the sources it exported, read back off them.
+    /// The resource ids of the exported sources, read from the sources.
     fn published_ids(&self) -> Vec<String> {
         self.published
             .borrow()
             .iter()
             .map(|source| {
-                // SAFETY: every published pointer is one this collection still
-                // holds a reference to.
+                // SAFETY: this collection still holds a reference to each
+                // published pointer.
                 unsafe { resource_id_of(*source) }
                     .expect("a source was exported with no resource id on it")
             })
@@ -152,14 +150,14 @@ impl Collection {
     }
 }
 
-// SAFETY: every pointer handed out is a valid `ESource` carrying a reference of
-// its own, taken with `g_object_ref` just before it is returned — which is what
-// `e_collection_backend_claim_all_resources` does too.
+// SAFETY: each returned pointer is a valid `ESource` with its own reference,
+// from `g_object_ref` immediately before the return. This is also what
+// `e_collection_backend_claim_all_resources` does.
 unsafe impl Populating for Collection {
     fn freeze(&self) -> bool {
         self.calls.borrow_mut().push("freeze");
-        // `return !g_atomic_int_add (&count, 1)`: the increment happens whatever
-        // the answer, so a caller that is told FALSE still owes a thaw.
+        // `return !g_atomic_int_add (&count, 1)`: the increment occurs for each
+        // answer, so a caller that gets FALSE must still thaw.
         let before = self.freeze_count.get();
         self.freeze_count.set(before + 1);
         before == 0
@@ -212,14 +210,15 @@ unsafe impl Populating for Collection {
     }
 }
 
-/// The populate under test, with the account's two answers spelled out.
+/// Runs the populate under test with the given account settings.
 fn run(
     collection: &Collection,
     parts: Parts,
     user: Option<&str>,
     uses_oauth2: bool,
 ) -> Option<Restored> {
-    // SAFETY: the stand-in satisfies `Populating`'s contract — see the impl.
+    // SAFETY: the test double satisfies the contract of `Populating` (see the
+    // impl).
     unsafe { populate(collection, parts, user, uses_oauth2) }
 }
 
@@ -227,18 +226,15 @@ fn run(
 fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `e_backend_schedule_credentials_required` routes an OAuth 2.0 source
-        // straight to the consent window: EDS's OAuth2 credentials provider
-        // can neither look a token up nor store one on that path
+        // `e_backend_schedule_credentials_required` sends an OAuth 2.0 source
+        // directly to the consent window. On that path, the EDS OAuth2
+        // credentials provider cannot find or store a token
         // (e-source-credentials-provider-impl-oauth2.c answers can_store FALSE
-        // and can_prompt TRUE), so "resolve credentials" degenerates to "open
-        // the browser". `authenticate_sync` needs no resolving at all —
-        // `login_of` fetches the account's token itself, silently — so an
-        // OAuth 2.0 account is asked for the way an anonymous one is:
-        // `e_backend_schedule_authenticate`, now; routing it through
-        // `e_backend_schedule_credentials_required` instead produced a
-        // consent window looping at every populate of an account whose
-        // token every silent path could fetch fine.
+        // and can_prompt TRUE). `authenticate_sync` does not need resolved
+        // credentials, because `login_of` gets the token silently. Thus an
+        // OAuth 2.0 account uses `e_backend_schedule_authenticate`, as an
+        // anonymous account does. The credentials-required path would open the
+        // consent window at each populate.
         let collection = Collection::with(vec![]);
 
         let report = run(&collection, Parts::ALL, Some("vera@example.com"), true)
@@ -260,13 +256,11 @@ fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
 fn the_cached_children_of_previous_sessions_are_exported_again() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The whole point of the offline half. EDS loads a collection's cached
-        // `.source` files into an unclaimed table and exports none of them; until a
-        // populate claims them and passes each to
-        // `e_source_registry_server_add_source`, the account's address books and
-        // calendars are files on disk that Evolution cannot see. A populate that
-        // skipped this would leave the sidebar empty until the first successful
-        // login, which is exactly the case offline support exists for.
+        // This is the purpose of the offline part. EDS loads the cached
+        // `.source` files of a collection into an unclaimed table and exports
+        // none of them. Evolution cannot see them until a populate claims them
+        // and gives each to `e_source_registry_server_add_source`. Without this,
+        // the sidebar stays empty until the first successful login.
         let collection = Collection::with(vec![
             Source::cached(ChildKind::AddressBook, "B1"),
             Source::cached(ChildKind::Calendar, "C1"),
@@ -288,17 +282,14 @@ fn the_cached_children_of_previous_sessions_are_exported_again() {
 fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Three orderings in one, and each is EDS's:
+        // This test checks three EDS order rules:
         //
-        // - the freeze comes first, because it is what makes two populates of one
-        //   account not run over each other;
-        // - the chain-up comes before the work, which is what chaining up means —
-        //   `ECollectionBackendClass::populate` is a placeholder in 3.52, so a
-        //   populate that never chained up would look identical today and break on
-        //   the release that fills it in;
-        // - the credentials are asked for last, because they are what brings the
-        //   *server's* answer, and the cached children have to be in the sidebar
-        //   before a login that may never succeed.
+        // - The freeze is first. It prevents two populates of one account from
+        //   running at the same time.
+        // - The chain-up is before the work. `ECollectionBackendClass::populate`
+        //   is a placeholder in 3.52, but a later release can give it a function.
+        // - The credentials request is last. The cached children must be in the
+        //   sidebar before a login that possibly fails.
         let collection = Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")]);
 
         run(&collection, Parts::ALL, Some("vera@example.com"), false)
@@ -324,11 +315,11 @@ fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for(
 fn every_reference_the_claim_handed_over_is_given_back() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `e_collection_backend_claim_all_resources` is `(transfer full)`, and it
-        // hands over one reference per source *and* the list. A populate that kept
-        // them would pin every cached child of every account for the life of the
-        // process — and one that unreferenced an exported source twice would free a
-        // source the registry server is still holding.
+        // `e_collection_backend_claim_all_resources` is `(transfer full)`: it
+        // gives one reference for each source and the list. If the populate kept
+        // them, each cached child would stay in memory until the process stops.
+        // If it released an exported source twice, it would free a source that
+        // the registry server still holds.
         let cached = vec![
             Source::cached(ChildKind::AddressBook, "B1"),
             Source::cached(ChildKind::Calendar, "C1"),
@@ -350,14 +341,13 @@ fn every_reference_the_claim_handed_over_is_given_back() {
 fn a_populate_that_lost_the_freeze_does_nothing_but_give_it_back() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // EDS's own guard, and the reason it is not `if (frozen) return`:
-        // `e_collection_backend_freeze_populate` increments the counter whatever it
-        // answers, so the loser of the race owes a thaw. Getting that wrong either
-        // way is invisible until it is permanent — a missing thaw freezes the
-        // account's populate for the life of the process, and an extra one lets two
-        // populates create the same children twice.
+        // This is the EDS guard, and it is not `if (frozen) return`.
+        // `e_collection_backend_freeze_populate` increments the counter for each
+        // answer, so a populate that does not get the freeze must still thaw. A
+        // missing thaw freezes the populate of the account until the process
+        // stops. An extra thaw lets two populates create the same children twice.
         let collection = Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")]);
-        // Another populate, already running.
+        // A different populate that is already running.
         assert!(collection.freeze());
 
         assert_eq!(
@@ -379,12 +369,11 @@ fn a_populate_that_lost_the_freeze_does_nothing_but_give_it_back() {
 fn the_freeze_is_given_back_even_when_the_work_panics() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A populate is called from an idle callback in `evolution-source-registry`,
-        // and the panic guard in front of the vfunc turns a Rust panic into a logged
-        // critical rather than an unwind into C. What the guard cannot do is undo the
-        // freeze: a panic between the freeze and the thaw would leave this account's
-        // populate frozen for the life of the process, so the account would never
-        // populate again — and never say why.
+        // An idle callback in `evolution-source-registry` calls the populate. The
+        // panic guard of the vfunc changes a Rust panic into a logged critical,
+        // not an unwind into C. But the guard cannot undo the freeze. A panic
+        // between the freeze and the thaw would stop all later populates of this
+        // account, with no message.
         let collection = Collection {
             publish_panics: true,
             ..Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")])
@@ -408,14 +397,13 @@ fn the_freeze_is_given_back_even_when_the_work_panics() {
 fn an_account_with_nothing_switched_on_still_gets_its_children_back() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The children of a switched-off part are dormant, not gone: EDS binds each
-        // child's `enabled` to the account's part flag, so a child of a part the
-        // user unticked is exported and shown switched off. A populate that withheld
-        // them instead would make them vanish from the sidebar — and, since nothing
-        // would then claim their resource ids, the next populate that found the part
-        // switched on again would create fresh sources with fresh uids beside the
-        // cached files. That is the same destruction `Fanout::is_obsolete` refuses
-        // to do, reached from the other side.
+        // The children of a disabled part are dormant, not removed. EDS binds the
+        // `enabled` property of each child to the part flag of the account, so
+        // the sidebar shows these children as disabled. If the populate did not
+        // export them, they would disappear from the sidebar. Also, no source
+        // would claim their resource ids. When the user enables the part again,
+        // the next populate would create new sources with new uids, next to the
+        // cached files. `Fanout::is_obsolete` prevents the same damage.
         let collection = Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")]);
 
         let report = run(&collection, Parts::NONE, Some("vera@example.com"), false)
@@ -434,13 +422,11 @@ fn an_account_with_nothing_switched_on_still_gets_its_children_back() {
 fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // This backend creates no mail children yet (see
-        // `jmap_collection_sync::children`), so a mail-only account has nothing for
-        // a login to discover. Asking EDS for credentials would resolve a password
-        // — or prompt for one — to produce nothing the user can see, which is the
-        // one thing a populate should never spend a prompt on. EDS's own WebDAV
-        // collection backend gates on the same pair of parts, for the same reason:
-        // they are the parts it makes children for.
+        // This backend does not create mail children (see
+        // `jmap_collection_sync::children`). Thus a login for a mail-only account
+        // has nothing to discover, and a password prompt would give no result.
+        // The EDS WebDAV collection backend uses the same two parts as its
+        // condition, because it makes children only for them.
         let collection = Collection::with(vec![]);
 
         let report = run(
@@ -474,10 +460,10 @@ fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
 fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The flag `create_resource_sync` is unreachable without:
-        // `server_side_source_remote_create_sync` refuses outright for a collection
-        // source that does not carry `remote-creatable`, so an account this backend
-        // makes address books and calendars for has to be told it may make more.
+        // Without this flag, `create_resource_sync` never runs.
+        // `server_side_source_remote_create_sync` refuses a collection source
+        // without `remote-creatable`. Thus an account with address books or
+        // calendars must get this flag.
         for parts in [
             Parts::ALL,
             Parts {
@@ -506,13 +492,11 @@ fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
 fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The same gate the password is asked behind, and for the same reason: an
-        // account with neither contacts nor calendars switched on has no children of
-        // this backend's, so a collection created in it would be one the very next
-        // populate treats as dormant. Written as FALSE rather than left alone
-        // because the parts are a *setting*: an account whose owner switches
-        // contacts off has to stop being offered without being removed and re-added,
-        // and one who switches them back on has to start again.
+        // The password request uses the same condition. An account with contacts
+        // and calendars disabled has no children of this backend. The next
+        // populate would make a new collection in it dormant. The populate writes
+        // FALSE explicitly, because the user can change the parts at any time.
+        // The flag must follow that change without removal of the account.
         let collection = Collection::with(vec![]);
 
         let report = run(
@@ -536,9 +520,9 @@ fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() 
 fn one_switched_on_part_is_enough_to_ask_for_a_password() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The other side of the gate above: contacts alone, and calendars alone,
-        // each warrant a login. A gate that needed both would leave an account with
-        // one part ticked permanently un-authenticated.
+        // The opposite case: contacts alone, or calendars alone, is sufficient for
+        // a login. If both were necessary, an account with one part enabled would
+        // never authenticate.
         for parts in [
             Parts {
                 mail: false,
@@ -569,13 +553,11 @@ fn one_switched_on_part_is_enough_to_ask_for_a_password() {
 fn an_account_that_names_no_user_is_authenticated_without_a_password() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `e_backend_schedule_credentials_required` is how a backend asks for a
-        // password; `e_backend_schedule_authenticate` is how it asks to be
-        // authenticated *now*, with whatever it already has. An anonymous JMAP
-        // account — `credentials()` reads a source that names no user as anonymous
-        // on purpose — has no password to resolve, so asking for one would put a
-        // prompt in front of someone whose account needs none, and whatever they
-        // typed would be dropped on the floor by `credentials()` anyway.
+        // `e_backend_schedule_credentials_required` asks for a password.
+        // `e_backend_schedule_authenticate` asks for authentication now, with the
+        // available data. `credentials()` reads a source with no user as an
+        // anonymous account, which has no password. A prompt would be unnecessary,
+        // and `credentials()` would ignore the typed password.
         let collection = Collection::with(vec![]);
 
         let report = run(&collection, Parts::ALL, None, false).expect("nothing holds the freeze");
@@ -600,15 +582,14 @@ fn an_account_that_names_no_user_is_authenticated_without_a_password() {
 fn a_cached_source_this_backend_cannot_name_is_not_exported() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Unreachable through EDS, and defined anyway: EDS only caches a source
-        // whose resource id `dup_resource_id` — this crate's — answered for, so a
-        // claimed source that reads back as `None` is a source that changed
-        // underneath. Exporting it would put a child in the sidebar that no resource
-        // id can ever be paired with again: `e_collection_backend_new_child` finds
-        // an existing child by asking `dup_resource_id` about each one, so a child
-        // that answers `None` is one every later populate re-creates instead of
-        // reusing. It stays unexported, and the count is the only trace there is —
-        // `populate` returns `void` and has nobody to report to.
+        // EDS cannot cause this case, but the behaviour is defined. EDS caches
+        // only a source for which `dup_resource_id` of this crate gave an answer.
+        // Thus a claimed source that gives `None` changed after the cache. If
+        // exported, no resource id could match it again.
+        // `e_collection_backend_new_child` finds an existing child through
+        // `dup_resource_id`, so each later populate would create it again. The
+        // source stays unexported. The count is the only record, because
+        // `populate` returns `void`.
         let collection = Collection::with(vec![
             Source::cached(ChildKind::AddressBook, "B1"),
             Source::bare("jmap-cached-nameless"),

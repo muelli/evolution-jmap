@@ -1,87 +1,82 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The two mail sources of this account, following the account — the one child
-//! [`crate::child_added`]'s rule cannot serve.
+//! The two mail sources of this account follow the account. They are the one
+//! exception that the rule of [`crate::child_added`] cannot serve.
 //!
 //! [`follow_collection`](crate::child_added::follow_collection) binds a group
-//! only when *both* sources already have it, because
-//! `e_source_get_extension()` creates the group it cannot find and a collection
-//! backend has no business writing into somebody else's source. That rule is
-//! right for every child except two, and those two are exactly the ones that
-//! reach no server without it.
+//! only when *both* sources already have it. The reason is that
+//! `e_source_get_extension()` creates a group that it cannot find, and a
+//! collection backend must not write into the source of a different component.
+//! That rule is correct for all children except two, and these two reach no
+//! server without the groups.
 //!
-//! ## The transport arrives naming a provider and nothing else
+//! ## The transport arrives with a provider name only
 //!
-//! An account created through Evolution's assistant ends with three mail
-//! sources. The receiving one is written by the setup module's `commit_changes`
-//! — `jmap_config::mail::apply_server`, which is handed the account and the
-//! scratch source together. The transport is not, and cannot be: Evolution hides
-//! the *Sending Email* page for a `CAMEL_PROVIDER_IS_STORE_AND_TRANSPORT`
-//! provider, so the backend that is its candidate is never shown the account and
-//! never asked where the account sends through. What the transport carries when
-//! it gets here is therefore the service name `jmap` and no `[Authentication]`
-//! group at all — and JMAP submission needs a server exactly as much as
+//! An account from the Evolution assistant has three mail sources. The setup
+//! module's `commit_changes` (`jmap_config::mail::apply_server`) writes the
+//! receiving source, because it gets the account and the scratch source
+//! together. Evolution hides the *Sending Email* page for a
+//! `CAMEL_PROVIDER_IS_STORE_AND_TRANSPORT` provider, so the transport backend
+//! never sees the account. Thus the transport arrives with the service name
+//! `jmap` and no `[Authentication]` group. JMAP submission needs a server, as
 //! receiving does.
 //!
-//! This backend is the one place that holds both halves. It is handed the
-//! account source, and `child_added` fires for every source parented to it,
-//! mail sources included ([`crate::prepare_mail`] on why they are children of
-//! the *account* without being cached resources of the *backend*). So the group
-//! is created here, on a source this account owns, and filled from the account
-//! it belongs to. Inventing a host would be the alternative and is not one.
+//! This backend is the one place that has both halves. It has the account
+//! source, and `child_added` fires for every child of the account, the mail
+//! sources included. ([`crate::prepare_mail`] tells why they are children of
+//! the *account* but not cached resources of the *backend*.) Thus this module
+//! creates the group on a source of this account and fills it from the
+//! account. To invent a host is not an acceptable alternative.
 //!
-//! ## Which children this claims, and why the test is not "is it mail"
+//! ## Which children this module claims, and why "is it mail" is not the test
 //!
-//! `[Mail Account]` or `[Mail Transport]`, **and** a
+//! A child must have `[Mail Account]` or `[Mail Transport]`, **and** a
 //! [`backend-name`](crate::prepare_mail::MAIL_BACKEND_NAME) of `jmap`. The
-//! second half is not decoration: an account may put its outgoing service on
-//! another server with a password of its own — that is the case EDS's
-//! `e_util_can_use_collection_as_credential_source` exists to allow — and
-//! writing this collection's host onto an `smtp` transport would point it at a
-//! server that does not speak SMTP and take its password away in the same move.
-//! The identity is not claimed either, and its absence from the list is the same
-//! decision [`crate::prepare_mail`] makes: it is a person, not a service, and it
-//! reaches nothing.
+//! second condition is necessary. An account can send through a different
+//! server with its own password: EDS's
+//! `e_util_can_use_collection_as_credential_source` exists for that case. The
+//! host of this collection on an `smtp` transport would send it to a server
+//! that does not speak SMTP, and would remove its password.
+//! The identity is not claimed, for the same reason as in
+//! [`crate::prepare_mail`]: it is a person, not a service, and it connects to
+//! nothing.
 //!
-//! ## `[Security]` is the one field that is *not* the account's
+//! ## `[Security]` is the one field that is *not* a copy of the account
 //!
-//! Everywhere else in this crate a child repeats what the account says. Here the
-//! account's own spelling would be wrong, and quietly so.
+//! `ESourceSecurity` has `method` and the derived `secure`.
+//! `e_source_security_set_secure()` writes one of two EDS words: `"tls"` or
+//! `"none"`. On a mail source, the `ESourceCamel` extension also binds that key
+//! to `CamelNetworkSettings:security-method` through
+//! `e_binding_transform_enum_nick_to_value`. That transform expects a
+//! **`CamelNetworkSecurityMethod` enum nick**, and `"tls"` is not one.
 //!
-//! `ESourceSecurity` carries `method` plus the derived `secure`, and
-//! `e_source_security_set_secure()` writes one of EDS's own two words — `"tls"`
-//! or `"none"`. On a mail source that same key is additionally bound, by the
-//! `ESourceCamel` extension, to `CamelNetworkSettings:security-method` through
-//! `e_binding_transform_enum_nick_to_value` — which looks the string up as a
-//! **`CamelNetworkSecurityMethod` enum nick**. `"tls"` is not one. The transform
-//! then returns `FALSE`, the binding sets nothing, and the settings object keeps
-//! the property's default, which in EDS 3.52 is `STARTTLS_ON_STANDARD_PORT`: a
-//! security method nobody chose, shown to the user in Evolution's editor as
-//! this account's, and one that a Camel release moving that default would turn
-//! into a refusal to connect. So the boolean is bound to the *method* through a
-//! `GBindingTransformFunc` of this module's, and what lands on the mail source is
-//! [`MAIL_SECURITY_METHOD_TLS`] or [`MAIL_SECURITY_METHOD_NONE`] — the same two
-//! strings `jmap_config::mail::apply_server` commits, which is what keeps a
-//! source that is committed and then merely re-bound from changing shape.
+//! The transform then returns `FALSE`, and the settings object keeps the
+//! default of the property. In EDS 3.52 that default is
+//! `STARTTLS_ON_STANDARD_PORT`. Nobody chose that method, but the Evolution
+//! editor shows it as the method of this account. A Camel release that
+//! changes the default can make the connection fail.
+//!
+//! Thus this module binds the boolean to the *method* through its own
+//! `GBindingTransformFunc`. The mail source gets [`MAIL_SECURITY_METHOD_TLS`]
+//! or [`MAIL_SECURITY_METHOD_NONE`]. `jmap_config::mail::apply_server` commits
+//! the same two strings, so a committed source keeps its shape when it is bound
+//! again.
 //!
 //! ## `[Authentication] Method` is bound too
 //!
-//! All four fields of the group are bound. `Method` was once excluded on the
-//! theory that on a mail source `ESourceCamel` binds it to
-//! `CamelNetworkSettings:auth-mechanism`, where it would name a SASL mechanism
-//! Camel might try to use — and JMAP has none, so `jmap-mail` passes a NULL
-//! mechanism to `camel_session_authenticate_sync`. But `jmap-mail` *reuses* that
-//! `auth-mechanism` field as this project's credential-type selector:
-//! `uses_api_token`/`uses_oauth2` read it back to choose Basic vs Bearer vs
-//! OAuth 2.0. A mail child that did not follow the collection's `Method` would
-//! therefore always authenticate as Basic — which is exactly why the transport
-//! of a Bearer (API-token) account re-prompted for a password forever while its
-//! receiving account, whose `Method` `jmap_config::mail::apply_server` writes
-//! directly, connected. `"none"` (password → Basic) still reaches Camel as the
-//! absent mechanism `ESourceCamel` converts NULL back to, so following the field
-//! costs the Basic case nothing and is what makes Bearer and OAuth reach the
-//! services at all.
+//! All five properties of [`BOUND_MAIL_AUTHENTICATION`] are bound, `Method`
+//! included. On a mail source, `ESourceCamel` binds `Method` to
+//! `CamelNetworkSettings:auth-mechanism`. JMAP has no SASL mechanism, so
+//! `jmap-mail` gives a NULL mechanism to `camel_session_authenticate_sync`.
+//! But `jmap-mail` also uses that field as the credential-type selector:
+//! `uses_api_token`/`uses_oauth2` read it to choose Basic, Bearer or OAuth 2.0.
+//!
+//! A mail child without this binding always authenticates as Basic. That is
+//! why the transport of a Bearer (API-token) account asked for a password
+//! again and again. `"none"` (password, thus Basic) still reaches Camel as the
+//! absent mechanism that `ESourceCamel` converts NULL back to. Thus the
+//! binding costs the Basic case nothing, and Bearer and OAuth 2.0 need it.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -103,42 +98,34 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::prepare_mail::MAIL_BACKEND_NAME;
 
-/// The `[Security] Method` a mail source of this account carries when the
-/// connection is encrypted: a `CamelNetworkSecurityMethod` enum nick, and
-/// deliberately not the `"tls"` EDS's own `secure` setter writes.
+/// The `[Security] Method` of a mail source of this account when the
+/// connection is encrypted. It is a `CamelNetworkSecurityMethod` enum nick, not
+/// the `"tls"` that the EDS `secure` setter writes.
 ///
-/// Of Camel's three nicks this is the one that describes HTTPS — TLS from the
-/// first byte, no in-band upgrade — and it is the spelling Evolution's server
-/// settings page writes back through the same binding. The same constant, for
-/// the same reason and with the argument written out at length, is
-/// `jmap_config::mail::MAIL_SECURITY_METHOD_TLS`; `jmap-config`'s `tests/mail.rs`
-/// holds the two against each other, as it does for
+/// Of the three Camel nicks, this one describes HTTPS: TLS from the first
+/// byte, with no in-band upgrade. The Evolution server settings page writes the
+/// same value through the same binding.
+/// `jmap_config::mail::MAIL_SECURITY_METHOD_TLS` is the same constant, and
+/// `tests/mail.rs` of `jmap-config` compares the two, as it does for
 /// [`MAIL_BACKEND_NAME`].
 pub const MAIL_SECURITY_METHOD_TLS: &CStr = c"ssl-on-alternate-port";
 
-/// And when it is not encrypted, which is the one spelling both sides share:
-/// `ESourceSecurity` documents `"none"` as its convention for "no security" and
-/// `CamelNetworkSecurityMethod`'s first value has the same nick.
+/// The `[Security] Method` when the connection is not encrypted. Both sides
+/// use this spelling: `ESourceSecurity` documents `"none"` for "no security",
+/// and the first `CamelNetworkSecurityMethod` value has the same nick.
 pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 
-/// The `[Authentication]` properties a mail source of this account follows —
-/// [`BOUND`](crate::child_added::BOUND)'s five, `method` and `credential-name`
-/// included.
+/// The `[Authentication]` properties that a mail source of this account
+/// follows: the five of [`BOUND`](crate::child_added::BOUND), `method` and
+/// `credential-name` included.
 ///
-/// `method` was once excluded here on the theory that on a mail source it names
-/// a Camel SASL mechanism rather than a credentials provider. But `jmap-mail`
-/// reuses that field (`CamelNetworkSettings:auth-mechanism`) as this project's
-/// credential-type selector — `uses_api_token`/`uses_oauth2` read it to choose
-/// Basic vs Bearer vs OAuth 2.0 — so a mail child that does not follow the
-/// collection's `method` silently authenticates as Basic. That left the
-/// transport of a Bearer (API-token) account prompting for a password forever
-/// while the receiving account, whose `method` `jmap_config::mail::apply_server`
-/// writes directly, worked. Following it here keeps the two in step.
+/// `jmap-mail` uses `method` (`CamelNetworkSettings:auth-mechanism`) as the
+/// credential-type selector. If a mail child does not follow it, the child
+/// authenticates as Basic. See the module comment.
 ///
-/// `credential-name`/`credential-store-id` follows for exactly the same class
-/// of bug: a mail source that did not carry the account's own uid there would
-/// look its OAuth 2.0 token up under a key of its own rather than the
-/// account's, the token-cache counterpart of the `method` gap above (eds#663).
+/// `credential-name`/`credential-store-id` follows for a related reason. A
+/// mail source without the uid of the account there finds its OAuth 2.0 token
+/// under its own key, not the key of the account (eds#663).
 pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[
     c"host",
     c"port",
@@ -147,34 +134,30 @@ pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[
     crate::child_added::CREDENTIAL_PROPERTY,
 ];
 
-/// The two extensions that make a source one of an account's mail *services*.
-///
-/// In the order they are talked about everywhere else, and without the identity:
-/// a person reaches no server.
+/// The two extensions that make a source one of the mail *services* of an
+/// account. The identity is not included: a person reaches no server.
 const SERVICES: [&CStr; 2] = [
     E_SOURCE_EXTENSION_MAIL_ACCOUNT,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT,
 ];
 
-/// Which of this account's mail services `child` is, if it is one of them —
-/// a source carrying `[Mail Account]` or `[Mail Transport]` that names *this*
-/// provider.
+/// Which mail service of this account `child` is, if any: a source with
+/// `[Mail Account]` or `[Mail Transport]` that names *this* provider.
 ///
-/// Nothing here creates an extension: each is tested for before it is read, so a
-/// child of another kind is left exactly as it arrived. That matters more than
-/// usual, because `collection_backend_child_is_mail()` reads a source carrying
-/// `[Mail Account]` as a receiving account of the user's — a group written here
-/// by accident would show up in Evolution as a second inbox.
+/// This function creates no extension. It tests for each extension before it
+/// reads it, so a child of a different kind stays unchanged. This is important
+/// because `collection_backend_child_is_mail()` reads a source with
+/// `[Mail Account]` as a receiving account. An accidental group would show in
+/// Evolution as a second inbox.
 ///
 /// # Safety
 ///
-/// `child` must be a valid `ESource` — one of the collection's children. It is
-/// only read from, and nothing outlives the call.
+/// `child` must be a valid `ESource`: one of the children of the collection.
+/// It is only read from, and nothing outlives the call.
 pub unsafe fn mail_service_of(child: *mut ESource) -> Option<&'static CStr> {
-    // As everywhere an extension is looked up by name: `e_source_get_extension`
-    // and `e_source_has_extension` both answer off the registered children of
-    // `E_TYPE_SOURCE_EXTENSION`, so a type nothing has referenced yet is one
-    // neither can find. Referencing the GType registers it.
+    // `e_source_get_extension` and `e_source_has_extension` find only
+    // registered children of `E_TYPE_SOURCE_EXTENSION`. A reference to the
+    // GType registers it.
     // SAFETY: no arguments, and the type system initialises itself.
     unsafe {
         e_source_mail_account_get_type();
@@ -182,39 +165,37 @@ pub unsafe fn mail_service_of(child: *mut ESource) -> Option<&'static CStr> {
     }
 
     SERVICES.into_iter().find(|extension| {
-        // SAFETY: a valid source by this function's contract, and a header
+        // SAFETY: a valid source by the contract of this function, and a header
         // constant; both mail extensions derive from `ESourceBackend`.
         let Some(backend) = (unsafe { extension_if_present::<ESourceBackend>(child, extension) })
         else {
             return false;
         };
         // SAFETY: a live extension; the getter returns NULL or a
-        // NUL-terminated string owned by it.
+        // NUL-terminated string that the extension owns.
         let name = unsafe { e_source_backend_get_backend_name(backend) };
         // SAFETY: as above, and the string is only read from within this scope.
         !name.is_null() && unsafe { CStr::from_ptr(name) } == MAIL_BACKEND_NAME
     })
 }
 
-/// Binds where a mail service of this account reaches its server, creating the
-/// groups on the mail source if it has none.
+/// Binds the server settings of a mail service of this account. Creates the
+/// groups on the mail source if it does not have them.
 ///
-/// Called from [`follow_collection`](crate::child_added::follow_collection) for
-/// the children [`mail_service_of`] claims, and instead of the rule that applies
-/// to every other child — see the module comment on why those two children are
-/// the exception, and on `[Security]`, which is bound as a different property at
-/// the far end than it is read from at this one.
+/// [`follow_collection`](crate::child_added::follow_collection) calls this for
+/// the children that [`mail_service_of`] claims, instead of the rule for all
+/// other children. The module comment tells why, and why `[Security]` binds to
+/// a different property on the mail source.
 ///
-/// Nothing is returned and nothing fails, as in `child_added`: a group the
-/// *account* lacks is a group with nothing to carry, and is left absent on both
-/// sides rather than invented on either.
+/// Nothing is returned and nothing fails. If the *account* does not have a
+/// group, there is nothing to copy, and the group stays absent on both sides.
 ///
 /// # Safety
 ///
-/// `collection` and `child` must be valid `ESource`s — the backend's account
-/// source and one of its mail services. Neither is referenced here; the bindings
-/// EDS creates hold what they need and drop themselves when either object is
-/// finalized.
+/// `collection` and `child` must be valid `ESource`s: the account source of the
+/// backend and one of its mail services. Neither is referenced here. The
+/// bindings that EDS creates hold what they need, and remove themselves when
+/// either object is finalized.
 pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
     // SAFETY: no arguments; registers the types the lookups below need.
     unsafe {
@@ -222,21 +203,22 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
         e_source_security_get_type();
     }
 
-    // Tested for on the account and never fetched from it: this is the user's
-    // own file, and an account that names no server has nothing to pass on.
-    // SAFETY: valid sources by this function's contract, and a header constant.
+    // Test for the group on the account, and never create it: the account is
+    // the file of the user. An account without a server has nothing to copy.
+    // SAFETY: valid sources by the contract of this function, and a header
+    // constant.
     if let Some(from) =
         unsafe { extension_if_present(collection, E_SOURCE_EXTENSION_AUTHENTICATION) }
     {
-        // SAFETY: created on demand on the mail source, which is the point of
-        // this module, and owned by the source either way.
+        // SAFETY: created on demand on the mail source (the purpose of this
+        // module), and owned by the source in both cases.
         let to =
             unsafe { e_source_get_extension(child, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
 
         for property in BOUND_MAIL_AUTHENTICATION {
             // SAFETY: two live extension objects and a NUL-terminated property
-            // name both carry; the binding is `(transfer none)` and owned by the
-            // two objects it joins.
+            // name that both have; the binding is `(transfer none)` and owned
+            // by the two objects it joins.
             unsafe {
                 e_binding_bind_property(
                     from,
@@ -250,18 +232,18 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
     }
 
     // SAFETY: created on demand and owned by the mail source; the branch below
-    // is what is written into it.
+    // writes into it.
     let security: *mut ESourceSecurity =
         unsafe { e_source_get_extension(child, E_SOURCE_EXTENSION_SECURITY.as_ptr()) }.cast();
 
-    // SAFETY: valid sources by this function's contract, and a header constant.
+    // SAFETY: valid sources by the contract of this function, and a header
+    // constant.
     if let Some(from) = unsafe { extension_if_present(collection, E_SOURCE_EXTENSION_SECURITY) } {
-        // `G_BINDING_SYNC_CREATE`, so this also *is* the initial write: the
-        // transform runs once here and again on every later change.
+        // `G_BINDING_SYNC_CREATE` makes this binding also the initial write.
         // SAFETY: two live extension objects, a boolean property of the one and
         // a string property of the other, and a transform function with the
-        // signature `GBindingTransformFunc` names; no user data, so nothing to
-        // free.
+        // signature that `GBindingTransformFunc` names; no user data, so
+        // nothing to free.
         unsafe {
             e_binding_bind_property_full(
                 from,
@@ -276,35 +258,31 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
             );
         }
     } else {
-        // No `[Security]` on the account is TLS — `collection_source::server_of`
-        // reads it that way, because `ESourceSecurity:secure` defaults to FALSE
-        // and reading that as "the user turned TLS off" would downgrade every
-        // hand-written account. Written rather than bound, since there is no
-        // group to bind from and adding one to the user's file is what this
-        // crate goes out of its way never to do; a mail source left with no
-        // `[Security]` at all would take `CamelNetworkSettings`' own default
-        // instead, which is a third answer nobody chose.
-        // SAFETY: a live extension, and a static NUL-terminated string the
+        // No `[Security]` on the account means TLS, as in
+        // `collection_source::server_of`. There is no group to bind from, and
+        // this crate never adds one to the file of the user. Thus write the
+        // method directly. Without it, the mail source gets the
+        // `CamelNetworkSettings` default, which nobody chose.
+        // SAFETY: a live extension, and a static NUL-terminated string that the
         // setter copies.
         unsafe { e_source_security_set_method(security, MAIL_SECURITY_METHOD_TLS.as_ptr()) };
     }
 }
 
-/// The account's `secure` as a mail source's `[Security] Method`: a
-/// `CamelNetworkSecurityMethod` nick rather than one of EDS's own two words.
+/// Converts the `secure` of the account to the `[Security] Method` of a mail
+/// source: a `CamelNetworkSecurityMethod` nick, not one of the two EDS words.
 ///
-/// A panic becomes `FALSE`, which is how a `GBindingTransformFunc` says "no
-/// value": the binding then leaves the target alone, so the mail source keeps
-/// the method it had rather than acquiring a half-written one — and a panic
-/// crossing from here into GLib's binding machinery, which runs inside
-/// `evolution-source-registry`, is the thing that must not happen at all.
+/// A panic becomes `FALSE`, which tells GLib "no value". The binding then does
+/// not change the target, so the mail source keeps its previous method. A
+/// panic must never cross into the GLib binding code, which runs inside
+/// `evolution-source-registry`.
 ///
 /// # Safety
 ///
-/// The arguments are `GBindingTransformFunc`'s: `from_value` holds the source
-/// property's value — a boolean, since this is only ever installed on
-/// `ESourceSecurity:secure` — and `to_value` is initialised to the target
-/// property's type, a string.
+/// The arguments are those of `GBindingTransformFunc`. `from_value` holds the
+/// value of the source property: a boolean, because this function is installed
+/// only on `ESourceSecurity:secure`. `to_value` is initialised to the type of
+/// the target property, a string.
 unsafe extern "C" fn secure_to_camel_method(
     binding: *mut GBinding,
     from_value: *const GValue,
@@ -314,8 +292,8 @@ unsafe extern "C" fn secure_to_camel_method(
     let _ = (binding, user_data);
 
     guard("secure_to_camel_method", GFALSE, || {
-        // SAFETY: a `GValue` holding the boolean this binding's source property
-        // is, by the contract above.
+        // SAFETY: a `GValue` that holds the boolean of the source property of
+        // this binding, by the contract above.
         let secure = unsafe { g_value_get_boolean(from_value) } != GFALSE;
         let method = if secure {
             MAIL_SECURITY_METHOD_TLS
@@ -323,11 +301,10 @@ unsafe extern "C" fn secure_to_camel_method(
             MAIL_SECURITY_METHOD_NONE
         };
 
-        // `set_static_string` and not `set_string`: both constants are `'static`
-        // and NUL-terminated, so there is nothing for the `GValue` to copy or
-        // free.
-        // SAFETY: a `GValue` initialised to the string type the target property
-        // is, and a pointer valid for the life of the process.
+        // `set_static_string`: both constants are `'static` and NUL-terminated,
+        // so the `GValue` has nothing to copy or free.
+        // SAFETY: a `GValue` initialised to the string type of the target
+        // property, and a pointer valid for the life of the process.
         unsafe { g_value_set_static_string(to_value, method.as_ptr()) };
         GTRUE
     })

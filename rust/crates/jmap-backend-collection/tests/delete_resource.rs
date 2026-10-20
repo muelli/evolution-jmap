@@ -1,20 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Deleting a collection from the server, from the child `ESource` EDS hands
-// `delete_resource_sync` — against real `ESource`s and a real `jmap-mockd`.
+// Tests for the deletion of a collection on the server from the child
+// `ESource` that EDS gives to `delete_resource_sync`. The tests use real
+// `ESource`s and a real `jmap-mockd`.
 //
-// `jmap-collection-sync`'s `tests/delete.rs` covers what the delete *asks the
-// server*, with no `ESource` in it. This covers the two ends that need the
-// headers, and they are both about the same question: **which source may be
-// deleted at all**.
+// `tests/delete.rs` in `jmap-collection-sync` tests the server request without
+// an `ESource`. These tests cover the two ends that need the headers. Both ends
+// answer one question: **which source can this backend delete**.
 //
-// That question is the whole safety of the feature. `remote-deletable` is what
-// makes Evolution offer the menu item, and the vfunc behind it is handed
-// whatever source the user clicked on. A source this backend did not write must
-// answer "not mine" to both — because the alternative is not an error message,
-// it is a destroy sent to a JMAP server naming an id read out of somebody else's
-// keyfile.
+// The safety of the feature depends on that answer. `remote-deletable` makes
+// Evolution show the menu item. The vfunc gets the source that the user
+// clicked. For a source that this backend did not write, both ends must answer
+// "not mine". Otherwise, the server gets a destroy for an id from the keyfile
+// of a different owner.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -42,14 +41,14 @@ use jmap_proto::Id;
 mod common;
 use common::{with_timeout, with_timeout_duration};
 
-/// A distinct file name per server-side source, so two of them in one test
-/// process never share an `ESource` uid — EDS derives the uid from the file
-/// name.
+/// A different file name for each server-side source. EDS derives the
+/// `ESource` uid from the file name, so two sources in one test process never
+/// share a uid.
 static NEXT: AtomicU32 = AtomicU32::new(0);
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The account this collection belongs to, as a child's settings were written
-/// from.
+/// The connection of the account that owns this collection. The settings of
+/// each child come from it.
 fn connection() -> Connection {
     Connection {
         host: "jmap.example.com".to_owned(),
@@ -74,15 +73,14 @@ fn child(kind: ChildKind, collection_id: &str) -> Child {
     }
 }
 
-/// A plain `ESource` — what the *read* half needs, since `doomed_of` only ever
-/// reads extensions off a source and never writes an `EServerSideSource`
-/// property.
+/// A plain `ESource`, for the *read* half. `doomed_of` only reads extensions
+/// from a source and does not write `EServerSideSource` properties.
 struct Source(*mut ESource);
 
 impl Source {
     fn new(uid: &str) -> Self {
-        // SAFETY: no arguments; `e_source_get_extension` cannot find an
-        // extension class whose type nothing has referenced yet.
+        // SAFETY: these functions take no arguments. `e_source_get_extension`
+        // cannot find an extension class whose type is not yet referenced.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -90,16 +88,16 @@ impl Source {
 
         let uid = CString::new(uid).expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, the default
+        // main context and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
-    /// A child of this account, written the way a populate writes one — through
-    /// `child_source::apply`, so what is read back is what this backend really
-    /// put there.
+    /// A child of this account, written through `child_source::apply` as a
+    /// populate writes it. Thus the test reads back the true output of this
+    /// backend.
     fn child_of(kind: ChildKind, collection_id: &str) -> Self {
         let source = Self::new(&format!("jmap-child-{collection_id}"));
         // SAFETY: a live source.
@@ -126,26 +124,26 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
+        // SAFETY: this struct holds the only reference.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// A real `EServerSideSource`, which is what every child of a collection is in
-/// `evolution-source-registry` — and the only kind of source
-/// `e_server_side_source_set_remote_deletable` will write to. Built the
-/// daemon-free way `tests/create_resource.rs` and `tests/recipe.rs` build one.
+/// A real `EServerSideSource`. In `evolution-source-registry`, each child of a
+/// collection is one, and `e_server_side_source_set_remote_deletable` writes only
+/// to this type. It is built without a daemon, as in `tests/create_resource.rs`
+/// and `tests/recipe.rs`.
 struct ServerSide {
-    /// Held for as long as the source: `e_server_side_source_new` keeps only a
-    /// weak reference to it, and a source whose server has been finalized is one
-    /// every `EServerSideSource` setter refuses.
+    /// Kept for the life of the source. `e_server_side_source_new` keeps only a
+    /// weak reference to the server. All `EServerSideSource` setters refuse a
+    /// source whose server is finalized.
     server: *mut ESourceRegistryServer,
     source: *mut ESource,
 }
 
 impl ServerSide {
     fn new() -> Self {
-        // SAFETY: no arguments; as in `Source::new`.
+        // SAFETY: these functions take no arguments, as in `Source::new`.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -160,8 +158,9 @@ impl ServerSide {
             .expect("no NUL in a temp path");
         let mut error = ptr::null_mut();
 
-        // SAFETY: the constructor takes no arguments; the path is
-        // NUL-terminated and copied; the GFile is owned here and released below.
+        // SAFETY: the constructor takes no arguments. The path is
+        // NUL-terminated and the callee copies it. This code owns the GFile and
+        // releases it below.
         let (server, source) = unsafe {
             let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
             let file = g_file_new_for_path(path.as_ptr());
@@ -179,8 +178,8 @@ impl ServerSide {
         Self { server, source }
     }
 
-    /// The same source, written as a child of this account — the state every
-    /// child is in by the time `child_added` fires for it.
+    /// The same source, written as a child of this account. Each child is in
+    /// this state when `child_added` fires for it.
     fn child_of(kind: ChildKind, collection_id: &str) -> Self {
         let held = Self::new();
         // SAFETY: a live source.
@@ -202,8 +201,9 @@ impl ServerSide {
 
 impl Drop for ServerSide {
     fn drop(&mut self) {
-        // SAFETY: this holds the only reference to each; the source is released
-        // first because it holds a weak reference to the server.
+        // SAFETY: this struct holds the only reference to each object. The
+        // source is released first because it holds a weak reference to the
+        // server.
         unsafe {
             g_object_unref(self.source.cast());
             g_object_unref(self.server.cast::<GObject>());
@@ -231,9 +231,9 @@ fn an_address_book_child_names_the_address_book_it_stands_for() {
 fn a_calendar_child_names_the_calendar_it_stands_for() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The pair, not the id: a server that numbers its objects from one gives an
-        // address book and a calendar the same id (RFC 8620 §1.2), and the kind is
-        // what decides which `/set` call destroys this one.
+        // The result is the pair, not only the id. An address book and a
+        // calendar can have the same id (RFC 8620 §1.2). The kind selects the
+        // `/set` call that destroys the collection.
         let source = Source::child_of(ChildKind::Calendar, "AB1");
 
         assert_eq!(
@@ -250,12 +250,12 @@ fn a_calendar_child_names_the_calendar_it_stands_for() {
 fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The rule the whole feature rests on. `delete_resource_sync` is handed
-        // whatever source the user clicked "Delete" on, and a source with no
-        // `[Resource] Identity` of ours — a mail source of this account, a child of
-        // another collection backend, a hand-edited file — has no collection to
-        // destroy. Answering anything but `None` here sends a destroy naming an id
-        // read out of somebody else's keyfile.
+        // The feature depends on this rule. `delete_resource_sync` gets the
+        // source that the user clicked "Delete" on. A source without our
+        // `[Resource] Identity` has no collection to destroy. Examples are a mail
+        // source of this account, a child of a different collection backend, or
+        // a file that a person edited. A value other than `None` sends a destroy
+        // for an id from the keyfile of a different owner.
         let bare = Source::new("jmap-not-a-child");
 
         assert_eq!(bare.doomed(), None);
@@ -266,11 +266,11 @@ fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
 fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Halfway is still not ours: the address book extension alone says which
-        // `/set` call would be used and nothing about which object.
+        // A half-written source is not ours. The address book extension
+        // identifies the `/set` call, but not the object.
         let source = Source::new("jmap-half-written");
-        // SAFETY: a live source and a header constant; creating the extension is
-        // exactly what puts the source in the state under test.
+        // SAFETY: a live source and a header constant. The creation of the
+        // extension puts the source in the state under test.
         unsafe {
             assert!(
                 !e_source_get_extension(source.0, E_SOURCE_EXTENSION_ADDRESS_BOOK.as_ptr())
@@ -286,9 +286,9 @@ fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
 fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `e_source_get_extension` *creates* what it cannot find, and this vfunc is
-        // handed sources belonging to other parts of Evolution. A read that reached
-        // for `[Resource]` would write a group into every one of them.
+        // `e_source_get_extension` *creates* an extension that it cannot find.
+        // This vfunc gets sources that other parts of Evolution own. A read of
+        // `[Resource]` would write a group into each of them.
         let bare = Source::new("jmap-untouched");
 
         assert_eq!(bare.doomed(), None);
@@ -302,10 +302,9 @@ fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked
 fn a_child_of_this_backend_is_offered_for_deletion() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // What makes Evolution show "Delete" on a JMAP address book at all:
-        // `server_side_source_remote_delete_sync()` refuses outright unless the
-        // child's own `remote-deletable` is set, so without this the vfunc below is
-        // unreachable dead code.
+        // This flag makes Evolution show "Delete" on a JMAP address book.
+        // `server_side_source_remote_delete_sync()` refuses unless the child has
+        // `remote-deletable` set. Without the flag, the vfunc is unreachable.
         let child = ServerSide::child_of(ChildKind::AddressBook, "AB1");
         assert!(
             !child.offered_for_deletion(),
@@ -324,10 +323,10 @@ fn a_child_of_this_backend_is_offered_for_deletion() {
 fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `child_added` fires for every source under this collection, mail sources
-        // included. Offering deletion on one of those would put a "Delete" in front
-        // of the user that this backend cannot honour — and `delete_resource_sync`
-        // would then be asked about a source it can make no sense of.
+        // `child_added` fires for each source under this collection, mail
+        // sources included. This backend cannot delete those sources, so it must
+        // not show "Delete" for them. Otherwise, `delete_resource_sync` gets a
+        // source that it cannot interpret.
         let stranger = ServerSide::new();
 
         // SAFETY: a live `EServerSideSource` this test holds a reference to.
@@ -342,11 +341,11 @@ fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
 fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Deleting a shared collection deletes the owner's collection for
-        // everyone. A cached shared child reaches `child_added` before any
-        // server contact, so the funnel's permissive default must not apply
-        // to it: only a fan-out, which reads `myRights.mayDelete`, may offer
-        // it.
+        // The deletion of a shared collection deletes the collection of the
+        // owner for all users. A cached shared child gets to `child_added` before
+        // contact with the server. Thus the permissive default of
+        // `offer_deletion` must not apply to it. Only a fan-out, which reads
+        // `myRights.mayDelete`, can offer the deletion.
         let held = ServerSide::new();
         let shared = Child {
             resource_id: ChildKind::Calendar.shared_resource_id(&Id::new("A2"), &Id::new("C1")),
@@ -361,8 +360,8 @@ fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
 
         assert!(!offered);
         assert!(!held.offered_for_deletion());
-        // Still ours: once a fan-out has offered it, the delete knows what
-        // to destroy and in which account.
+        // The child is still ours. After a fan-out offers the deletion, the
+        // delete knows the collection and the account.
         // SAFETY: as above.
         let doomed = unsafe { doomed_of(held.source) }.expect("a child this backend wrote");
         assert_eq!(doomed.collection_id, Id::new("A2/C1"));
@@ -373,9 +372,9 @@ fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
 fn deleting_a_child_takes_its_collection_off_the_server() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The whole vfunc minus the instance: a collection created on a real mock,
-        // a child source written for it the way a fan-out writes one, and the
-        // delete driven from what that source says about itself.
+        // The full vfunc without the instance. The test creates a collection on
+        // a real mock and writes a child source for it as a fan-out does. Then
+        // it deletes the collection from the data in that source.
         let server = MockServer::builder().start();
         let target = ConnectTarget::Origin(server.origin().to_owned());
         let created = create_on_server(

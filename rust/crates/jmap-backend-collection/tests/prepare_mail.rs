@@ -1,29 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The mail half of a JMAP account, as far as a collection backend owns it: the
-// `prepare_mail` vfunc, driven through EDS's own
+// Tests for the mail part of a JMAP account that a collection backend owns: the
+// `prepare_mail` vfunc, called through the EDS function
 // `e_collection_backend_factory_prepare_mail`.
 //
-// Which is *not* the same thing as this backend creating mail children, and the
-// distinction is the whole reason this file is small. EDS's own
-// `collection_backend_load_resources()` deletes the cache file of any child
-// whose `dup_resource_id` answers NULL, and every reference implementation —
-// `module-google-backend.c`, `module-yahoo-backend.c`, evolution-ews's
-// `e-ews-backend.c` — answers NULL for exactly the mail extensions. So the mail
-// account, identity and transport sources are not the collection's cached
-// children at all: they are ordinary registry sources whose `Parent` is the
-// account, created by the setup UI, and `prepare_mail` is the one hook a vendor
-// backend gets to say what service they are. `tests/fan_out.rs` and
-// `tests/populate.rs` cover the children this backend *does* create; this
-// covers the three it only fills in.
+// This backend does not create mail children. EDS
+// `collection_backend_load_resources()` deletes the cache file of each child for
+// which `dup_resource_id` returns NULL. All reference implementations
+// (`module-google-backend.c`, `module-yahoo-backend.c`, and `e-ews-backend.c` of
+// evolution-ews) return NULL for the mail extensions. Thus the mail account,
+// identity and transport sources are not cached children of the collection.
+// They are usual registry sources with the account as `Parent`, and the setup UI
+// creates them. `prepare_mail` is the only hook where a vendor backend sets
+// their service. `tests/fan_out.rs` and `tests/populate.rs` test the children
+// that this backend creates. This file tests the three sources that it only
+// fills in.
 //
-// The vfunc is reached through EDS's public wrapper rather than by calling our
-// function, because that is the only way the test crosses the class struct: the
-// wrapper reads `prepare_mail` at the offset the *parent* believes it is at,
-// one slot past the two fields `class_init` also writes. `tests/factory.rs`
-// checks that slot as a pointer, which says the write landed somewhere; this
-// says it landed in the slot EDS dispatches through.
+// The test calls the vfunc through the public EDS wrapper, not directly. Only
+// this path goes through the class struct. The wrapper reads `prepare_mail` at
+// the offset that the parent class expects: the slot after the two fields that
+// `class_init` also writes. `tests/factory.rs` checks that the slot holds a
+// pointer. This file checks that EDS dispatches through that slot.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -51,28 +49,28 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// One of the three `ESource`s the setup UI would hand `prepare_mail`: a source
-/// with a uid and nothing on it.
+/// One of the three `ESource`s that the setup UI gives `prepare_mail`: a source
+/// with a uid and no extensions.
 ///
-/// `e_source_new (NULL, NULL, &error)` is what EDS itself uses for a source with
-/// no keyfile behind it yet; it mints the uid. Nothing here creates an
-/// extension — that is precisely what is being tested, since an
-/// `e_source_get_extension` for an unregistered `ESourceExtension` subclass
-/// returns NULL rather than failing (`e-source.c`, `source_find_extension_classes`).
+/// EDS uses `e_source_new (NULL, NULL, &error)` for a source without a keyfile.
+/// It creates the uid. This type creates no extension, because the tests check
+/// the extensions. `e_source_get_extension` for an unregistered
+/// `ESourceExtension` subclass returns NULL and does not fail (`e-source.c`,
+/// `source_find_extension_classes`).
 struct Blank(*mut ESource);
 
 impl Blank {
     fn new() -> Self {
         let mut error = ptr::null_mut();
-        // SAFETY: no related object, no file, and a GError out-parameter are
-        // the documented arguments.
+        // SAFETY: the documented arguments are no related object, no file, and
+        // a GError out-parameter.
         let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new failed");
         Self(source)
     }
 
     fn uid(&self) -> Option<String> {
-        // SAFETY: a live source; the uid it returns is owned by it.
+        // SAFETY: a live source. The source owns the uid that it returns.
         unsafe { read_string(e_source_get_uid(self.0)) }
     }
 
@@ -81,18 +79,17 @@ impl Blank {
         unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
     }
 
-    /// The `ESourceBackend:backend-name` under `name`, which is only asked for
-    /// once the extension is known to be there — `e_source_get_extension`
-    /// creates what it cannot find, and a test that created the extension it
-    /// then asserts the presence of would assert nothing.
+    /// The `ESourceBackend:backend-name` of the extension `name`. It first
+    /// asserts that the extension is present, because `e_source_get_extension`
+    /// creates a missing extension.
     fn backend_name(&self, name: &CStr) -> Option<String> {
         assert!(
             self.has_extension(name),
             "the source has no {name:?} to read a backend name from"
         );
-        // SAFETY: the extension is present, so this returns the source's own,
-        // owned by it; the name it holds is NULL or a NUL-terminated string
-        // with the same lifetime.
+        // SAFETY: the extension is present, so this returns the extension that
+        // the source owns. Its name is NULL or a NUL-terminated string with the
+        // same lifetime.
         unsafe {
             let backend: *mut ESourceBackend = e_source_get_extension(self.0, name.as_ptr()).cast();
             read_string(e_source_backend_get_backend_name(backend))
@@ -102,12 +99,12 @@ impl Blank {
 
 impl Drop for Blank {
     fn drop(&mut self) {
-        // SAFETY: the reference `e_source_new` transferred, given back once.
+        // SAFETY: this releases the reference from `e_source_new` once.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// The three sources after this factory has prepared them.
+/// The three sources after this factory prepared them.
 struct Prepared {
     account: Blank,
     identity: Blank,
@@ -116,18 +113,15 @@ struct Prepared {
 
 impl Prepared {
     fn new() -> Self {
-        // Registered statically rather than through the module entry point:
-        // `tests/factory.rs` owns the question of what `e_module_load` does, and
-        // there is no module here for the type to belong to. `register_static`
-        // hands an already-registered type straight back, so every test in this
-        // binary gets the same one.
+        // Static registration, not the module entry point. `tests/factory.rs`
+        // tests `e_module_load`, and there is no module here. `register_static`
+        // returns an already-registered type, so all tests here get one type.
         let gtype = register_static::<JmapCollectionFactory>();
         assert_ne!(gtype, 0, "the factory type is not registered");
 
-        // `g_type_create_instance` rather than `g_object_new`, for the reason
-        // `tests/factory.rs` sets out: `EExtension:extensible` is
-        // CONSTRUCT_ONLY, so a property-less `g_object_new` earns a critical
-        // from `E_IS_EXTENSIBLE` that has nothing to do with this test.
+        // `g_type_create_instance`, not `g_object_new`, as `tests/factory.rs`
+        // explains. `EExtension:extensible` is CONSTRUCT_ONLY, so `g_object_new`
+        // without properties causes an unrelated critical from `E_IS_EXTENSIBLE`.
         // SAFETY: a registered, instantiatable type.
         let factory = unsafe { g_type_create_instance(gtype) };
         assert!(!factory.is_null(), "g_type_create_instance returned NULL");
@@ -138,8 +132,8 @@ impl Prepared {
             transport: Blank::new(),
         };
 
-        // SAFETY: a live factory of a type derived from ECollectionBackendFactory
-        // and three live sources; the call takes no references.
+        // SAFETY: a live factory of a type derived from ECollectionBackendFactory,
+        // and three live sources. The call takes no references.
         unsafe {
             e_collection_backend_factory_prepare_mail(
                 factory.cast(),
@@ -149,21 +143,19 @@ impl Prepared {
             );
         }
 
-        // SAFETY: the reference instance creation left behind, given back once.
+        // SAFETY: this releases the reference from instance creation once.
         unsafe { g_object_unref(factory.cast()) };
 
         prepared
     }
 }
 
-/// The mail account is what Evolution *receives* through, and the backend name
-/// is the Camel protocol it is received through — `libcameljmap.so`'s, not this
-/// crate's factory name.
+/// Evolution receives mail through the mail account. Its backend name is the
+/// Camel protocol of `libcameljmap.so`, not the factory name of this crate.
 ///
-/// The inherited `prepare_mail` writes no backend name at all, and a mail
-/// account source without one is not an error either: it is an account
-/// Evolution shows and cannot open, because `camel_provider_get` is asked for
-/// the empty protocol.
+/// The inherited `prepare_mail` writes no backend name. A mail account source
+/// without one causes no error. Evolution shows the account but cannot open it,
+/// because it calls `camel_provider_get` for the empty protocol.
 #[test]
 fn the_mail_account_is_served_by_the_jmap_camel_provider() {
     with_timeout(|| {
@@ -186,10 +178,10 @@ fn the_mail_account_is_served_by_the_jmap_camel_provider() {
     });
 }
 
-/// And so is the transport, under the *same* name, because JMAP submits over
-/// the session it reads through: `jmap-mail`'s provider registers one protocol
-/// with both a store and a transport type in it, which is why there is no
-/// second name here the way IMAP accounts have `smtp` beside them.
+/// The transport uses the same name, because JMAP sends over the session that
+/// it reads through. The `jmap-mail` provider registers one protocol with a
+/// store type and a transport type. Thus there is no second name, unlike `smtp`
+/// for IMAP accounts.
 #[test]
 fn the_transport_is_the_same_provider_and_not_a_second_one() {
     with_timeout(|| {
@@ -212,15 +204,14 @@ fn the_transport_is_the_same_provider_and_not_a_second_one() {
     });
 }
 
-/// The name written above has to be the protocol Camel routes to
-/// `libcameljmap.so`, and that file is what tells Camel so.
+/// The backend name must be the protocol that Camel sends to `libcameljmap.so`.
+/// The file `libcameljmap.urls` gives Camel this protocol.
 ///
-/// Read out of the source tree rather than depended on as a crate: `jmap-mail`
-/// links Camel and this crate does not, and the two strings meeting in a build
-/// dependency would be a heavier answer than the one thing that has to be true.
-/// It is the same check `jmap-mail`'s own `tests/provider.rs` makes from the
-/// other side, and CTest's `install-camel-provider` checks the same file
-/// reaches the directory Camel scans.
+/// The test reads the file from the source tree, and has no crate dependency.
+/// `jmap-mail` links Camel and this crate does not. A build dependency only for
+/// this check would be too much. `tests/provider.rs` of `jmap-mail` does the
+/// same check from the other side. The CTest `install-camel-provider` checks
+/// that the file gets to the directory that Camel scans.
 #[test]
 fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
     with_timeout(|| {
@@ -237,22 +228,22 @@ fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
     });
 }
 
-/// A subclass that forgets to chain up loses the wiring that makes the three
-/// sources one account, and loses it silently: each source is still a valid
-/// source of its own kind, and nothing points at anything.
+/// If a subclass does not chain up, the three sources are not linked into one
+/// account. No error occurs: each source is still valid, but no source refers
+/// to a different one.
 ///
-/// Both links are the parent's work — `identity-uid` on the account and
-/// `transport-uid` on the identity's `[Mail Submission]` — and both are uids
-/// this test reads back off the very sources they should name.
+/// The parent class writes both links: `identity-uid` on the account and
+/// `transport-uid` in `[Mail Submission]` of the identity. The test compares
+/// both with the uids of the sources that they must name.
 #[test]
 fn chaining_up_left_the_three_sources_pointing_at_each_other() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
-        // SAFETY: the extension is present (asserted through `has_extension`
-        // first), so this returns the source's own, and the uid it holds is NULL or
-        // a NUL-terminated string owned by it.
+        // SAFETY: the extension is present (`has_extension` asserts it first), so
+        // this returns the extension that the source owns. Its uid is NULL or a
+        // NUL-terminated string that the extension owns.
         let identity_uid = unsafe {
             assert!(
                 prepared
@@ -281,7 +272,7 @@ fn chaining_up_left_the_three_sources_pointing_at_each_other() {
              as one"
         );
 
-        // SAFETY: as above, with `[Mail Submission]` the extension.
+        // SAFETY: as above, for the `[Mail Submission]` extension.
         let transport_uid = unsafe {
             assert!(
                 prepared
@@ -305,13 +296,12 @@ fn chaining_up_left_the_three_sources_pointing_at_each_other() {
     });
 }
 
-/// The identity is a person, not a service, and giving it a backend name would
-/// make it one.
+/// The identity is a person, not a service. A backend name would make it a
+/// service.
 ///
-/// `collection_backend_child_is_mail()` treats a source carrying any of the
-/// three mail extensions as mail, so an identity that also carried
-/// `[Mail Account]` would be a second, empty receiving account of this user's —
-/// visible in Evolution, pointed at nothing.
+/// `collection_backend_child_is_mail()` treats a source with one of the three
+/// mail extensions as mail. An identity with `[Mail Account]` would be a second,
+/// empty receiving account. Evolution would show it, with no server.
 #[test]
 fn the_identity_is_not_turned_into_a_service_of_its_own() {
     with_timeout(|| {
@@ -331,16 +321,14 @@ fn the_identity_is_not_turned_into_a_service_of_its_own() {
     });
 }
 
-/// And none of the three is ever claimed as a child of this collection, which
-/// is the rule that keeps `prepare_mail` and `dup_resource_id` from
-/// contradicting each other.
+/// This collection never claims one of the three sources as a child. This rule
+/// keeps `prepare_mail` and `dup_resource_id` consistent.
 ///
-/// `dup_resource_id` is asked about every `.source` file in the backend's cache
-/// directory and its NULL means "not mine" — but for a file that *is* in that
-/// directory it means "delete this". A mail source that this vfunc had made
-/// look like a child of ours would be one or the other, and both are wrong:
-/// these three live in the registry's own source directory, parented to the
-/// account, and are the setup UI's to manage.
+/// EDS calls `dup_resource_id` for each `.source` file in the cache directory
+/// of the backend. NULL means "not mine", and for a file in that directory it
+/// means "delete this". Both results are wrong for a mail source that looks like
+/// a child. These three sources are in the source directory of the registry,
+/// with the account as parent, and the setup UI manages them.
 #[test]
 fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
     with_timeout(|| {
@@ -362,14 +350,15 @@ fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
     });
 }
 
-/// This file's own `Prepared::new()` is the one place in this crate's tests
-/// that references the factory through `register_static` alone, with no
-/// `module::load` to call `remember_backend_type` first -- the case
-/// `factory::backend_type`'s doc comment names as happening in a test. That
-/// makes this the only place that can catch `class_init_types` failing to
-/// register the backend type before `class_init` asks for it a second time
-/// from under GLib's class-initialisation lock, where a miss logs a critical
-/// and leaves `backend_type` zero rather than retrying.
+/// `Prepared::new()` is the only place in the tests of this crate that gets the
+/// factory through `register_static` alone. No `module::load` calls
+/// `remember_backend_type` first. The doc comment of `factory::backend_type`
+/// names this test case.
+///
+/// Thus only this test can find a failure of `class_init_types` to register the
+/// backend type before `class_init`. `class_init` asks for the type again under
+/// the GLib class-initialisation lock. There, a miss logs a critical and leaves
+/// `backend_type` zero, with no retry.
 #[test]
 fn the_backend_type_is_valid_when_the_factory_is_registered_alone() {
     with_timeout(|| {
@@ -377,17 +366,16 @@ fn the_backend_type_is_valid_when_the_factory_is_registered_alone() {
         let gtype = register_static::<JmapCollectionFactory>();
         assert_ne!(gtype, 0, "the factory type is not registered");
 
-        // SAFETY: the type is registered; referencing its class runs
-        // class_init, which writes `backend_type`, and the class leads with
+        // SAFETY: the type is registered. A reference to its class runs
+        // class_init, which writes `backend_type`. The class starts with
         // ECollectionBackendFactoryClass.
         let class = unsafe { g_type_class_ref(gtype) }.cast::<ECollectionBackendFactoryClass>();
         assert!(!class.is_null(), "the factory class failed to initialise");
         // SAFETY: a live, referenced class.
         let backend_type = unsafe { (*class).backend_type };
 
-        // Called standalone, outside any class_init, so it registers the
-        // backend if nothing already has -- the authoritative value `class`
-        // should already carry.
+        // This call is outside class_init, so it registers the backend if
+        // necessary. The result is the correct value, which `class` must hold.
         let expected = register_static::<JmapCollectionBackend>();
         assert_ne!(expected, 0, "the backend type does not register at all");
         assert_eq!(
@@ -396,7 +384,7 @@ fn the_backend_type_is_valid_when_the_factory_is_registered_alone() {
              build nothing for an account found this way"
         );
 
-        // SAFETY: the reference taken above, given back once.
+        // SAFETY: this releases the reference from above once.
         unsafe { g_type_class_unref(class.cast()) };
     });
 }
