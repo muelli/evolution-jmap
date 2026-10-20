@@ -22715,6 +22715,79 @@ fn sort_as_parameter_metadata_is_not_retained_in_eds_profile() {
 }
 
 #[test]
+fn jscomps_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:JSCOMPS Parameter Probe\r\n",
+        "N;JSCOMPS=\";1;0\":Doe;Jane;;;\r\n",
+        "ADR;JSCOMPS=\"s,\\\\, ;11;s, ;10;3\":;;123 Main St;Exampletown;;12345;Exampleland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse JSCOMPS profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("JSCOMPS Parameter Probe"));
+    assert!(
+        name.extra.is_empty(),
+        "profile does not retain RFC 9555 JSCOMPS metadata on N"
+    );
+
+    let name_components = name.components.as_ref().expect("name components");
+    assert_eq!(name_components.len(), 2, "N components stay mapped");
+    assert!(
+        name_components
+            .iter()
+            .any(|component| component.value == "Doe")
+    );
+    assert!(
+        name_components
+            .iter()
+            .any(|component| component.value == "Jane")
+    );
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    let address = addresses.get("a1").expect("first address entry");
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 JSCOMPS metadata on ADR"
+    );
+    let components = address.components.as_ref().expect("address components");
+    assert!(components.len() >= 3, "ADR components stay mapped");
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "123 Main St")
+    );
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "Exampletown")
+    );
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "12345")
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let n_line = line(&emitted, "N");
+    assert_eq!(n_line, "N:Doe;Jane;;;");
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.ends_with(":;;123 Main St;Exampletown;;12345;Exampleland"));
+    assert!(
+        !emitted.contains("JSCOMPS="),
+        "non-projected JSCOMPS parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized JSCOMPS profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
 fn note_metadata_parameters_are_not_retained_in_eds_profile() {
     let source = concat!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\n",

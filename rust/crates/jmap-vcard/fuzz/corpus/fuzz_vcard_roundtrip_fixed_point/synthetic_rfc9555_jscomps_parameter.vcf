@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:JSCOMPS Parameter Seed
+N;JSCOMPS=";1;0":Doe;Jane;;;
+ADR;JSCOMPS="s,\\, ;11;s, ;10;3":;;123 Main St;Exampletown;;12345;Exampleland
+END:VCARD
