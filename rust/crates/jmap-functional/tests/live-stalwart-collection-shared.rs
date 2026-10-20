@@ -1,35 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Calendars and address books another account shares with the user, through
-//! a real `evolution-source-registry` against a real Stalwart.
+//! Calendars and address books that another account shares with the user,
+//! through a real `evolution-source-registry` against a real Stalwart.
 //!
-//! `jmap-collection-sync/tests/live_server_shared.rs` proves that
-//! `Fanout::discover` finds a share and lets it go once the grant is
-//! withdrawn. This leg asks what a user sees: that the collection backend's
-//! populate turns those answers into child `ESource`s of the account (named
-//! with the owner, carrying the `<accountId>/<collectionId>` identity the book
-//! and calendar factories read), and that a later populate removes them from
-//! the registry once the share is gone.
+//! `jmap-collection-sync/tests/live_server_shared.rs` tests that
+//! `Fanout::discover` finds a share, and stops when the grant is removed.
+//! This test checks what the user sees. The populate of the collection
+//! backend makes child `ESource`s of the account from those results. Each
+//! child has the owner in its name and the `<accountId>/<collectionId>`
+//! identity that the book and calendar factories read. When the share is
+//! removed, a later populate removes the children from the registry.
 //!
-//! Two runs of `functional-collection-shared-client`
-//! (`tests/functional/collection-shared-client.c`) in one scratch tree: the
-//! first, with the grants in place, waits for both shared children; the
-//! second, after the owner withdrew them, starts from the `.source` files the
-//! first run left on disk and waits for the populate to remove them.
+//! The test runs `functional-collection-shared-client`
+//! (`tests/functional/collection-shared-client.c`) two times in one scratch
+//! tree. The first run, with the grants, waits for the two shared children.
+//! The owner then removes the grants. The second run starts from the
+//! `.source` files of the first run and waits until the populate removes
+//! them.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! The two-account recipe of the `jmap-*-sync` crates' shared-collection
-//! tests (`JMAP_LIVE_SERVER_WRITE_*` is the owner, `JMAP_LIVE_SERVER_RECIPIENT_*`
-//! the user whose Evolution account this is), built through
-//! `-DENABLE_FUNCTIONAL_TESTS=ON`, with the EDS runtime packages installed:
+//! Use the two-account environment of the shared-collection tests of the
+//! `jmap-*-sync` crates. `JMAP_LIVE_SERVER_WRITE_*` is the owner, and
+//! `JMAP_LIVE_SERVER_RECIPIENT_*` is the user of the Evolution account. Build
+//! with `-DENABLE_FUNCTIONAL_TESTS=ON` and install the EDS runtime packages:
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-collection-shared -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either pair is unset.
+//! When one of the two pairs is not set, the test skips and does not fail.
 
 use std::env;
 
@@ -66,8 +67,8 @@ fn connect(origin: &str, user: &str, password: &str) -> Client {
         .unwrap_or_else(|error| panic!("could not fetch the session document for {user}: {error}"))
 }
 
-/// `live-stalwart-collection.rs`'s keyfile: the recipient's account, contacts
-/// and calendars on, mail off.
+/// The keyfile of `live-stalwart-collection.rs`, for the account of the
+/// recipient: contacts and calendars enabled, mail disabled.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -91,11 +92,11 @@ fn keyfile(port: u16, user: &str) -> String {
 }
 
 /// The owner shares an address book (writable) and a calendar (read-only)
-/// with the recipient. The recipient's Evolution account gains one child for
-/// each, named `<collection> (<owner account name>)` and not offered for
-/// deletion (neither grant has `mayDelete`). The owner withdraws both grants,
-/// and the next populate removes both children. Destroys both collections at
-/// the end.
+/// with the recipient. The Evolution account of the recipient gets one child
+/// for each, named `<collection> (<owner account name>)`. The children are
+/// not removable, because no grant has `mayDelete`. The owner removes the
+/// two grants, and the next populate removes the two children. At the end,
+/// the test destroys the two collections.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn shared_collections_appear_in_the_source_registry_and_go_when_unshared() {
@@ -171,8 +172,8 @@ fn shared_collections_appear_in_the_source_registry_and_go_when_unshared() {
         )
         .expect("Calendar/set shareWith failed");
 
-    // The name the recipient's session gives the owner's account, which is
-    // what the child's display name carries.
+    // The name of the owner account in the session of the recipient. The
+    // display name of the child contains it.
     let recipient = connect(&origin, &recipient_user, &recipient_password);
     let owner_name = recipient
         .session()
@@ -182,8 +183,8 @@ fn shared_collections_appear_in_the_source_registry_and_go_when_unshared() {
         .name
         .clone();
 
-    // The kind is part of each name: JMAP ids are unique per type only, and
-    // Stalwart does give a fresh book and a fresh calendar the same id.
+    // Each name contains the kind, because JMAP ids are unique only per type.
+    // Stalwart can give a new book and a new calendar the same id.
     let book_child = format!("address-book:{contacts_account}/{book_id}");
     let calendar_child = format!("calendar:{calendars_account}/{calendar_id}");
 

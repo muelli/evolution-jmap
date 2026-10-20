@@ -1,45 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The real-EDS leg shared by `jmap-book-sync` and `jmap-cal-sync`'s own
-//! scale checkpoints, both fully delivered through the sync layer directly.
-//! Every number recorded there came from `BookSync`/`CalSync`
-//! calling the real server with no EDS in between; this file asks the question
-//! those numbers cannot: how long `evolution-addressbook-factory`'s own first
-//! open of an already-large book takes, and how much memory it peaks at,
-//! through the real meta-backend machinery (cache population, vCard
-//! rendering for every card) rather than just the wire calls.
+//! The real-EDS scale test for address books. The scale tests of
+//! `jmap-book-sync` and `jmap-cal-sync` measure `BookSync`/`CalSync` against
+//! the real server without EDS. This test measures the first open of a large
+//! book by `evolution-addressbook-factory`: the time and the peak memory. It
+//! includes the meta-backend work (cache population, vCard rendering for each
+//! card), not only the wire calls.
 //!
-//! Contacts are seeded directly over JMAP with a raw [`Client`] (mirroring
-//! `live-stalwart-book-changes.rs`'s own "a real second client" pattern) so
-//! the account is already large *before* EDS ever connects to it — unlike
-//! `live-stalwart-book.rs`'s single-contact `write` phase, this never asks
-//! EDS to do the importing. Confirmed clean at both 1,000 and 5,000 cards:
-//! no scale-only bug, cost growing sub-linearly with book size. `jmap-cal-sync`'s calendar-factory counterpart is
-//! `live-stalwart-calendar-scale.rs`, one file over.
+//! A raw [`Client`] creates the contacts over JMAP (as the second client of
+//! `live-stalwart-book-changes.rs` does). Thus the account is large before
+//! EDS connects, and EDS does not import the contacts. Results at 1,000 and
+//! 5,000 cards: no scale-only bug, and the cost increases sub-linearly with
+//! the book size. The calendar version is `live-stalwart-calendar-scale.rs`.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Same environment as every other `live-stalwart-*` test in this crate —
-//! see `docs/manual-test-live-server.md` — built through
-//! `-DENABLE_FUNCTIONAL_TESTS=ON` so `JMAP_FUNCTIONAL_BOOK_CLIENT`/
-//! `_MODULE` are set. `JMAP_SCALE_TEST_CARDS` overrides the batch size
-//! (default 1000); the write-test account should be a throwaway created for
-//! this alone, since this leaves that many cards in its address book.
+//! Use the same environment as the other `live-stalwart-*` tests in this
+//! crate (see `docs/manual-test-live-server.md`). Build with
+//! `-DENABLE_FUNCTIONAL_TESTS=ON`, so that `JMAP_FUNCTIONAL_BOOK_CLIENT`/
+//! `_MODULE` are set. `JMAP_SCALE_TEST_CARDS` sets the batch size (default
+//! 5000). Use a throwaway write-test account only for this test, because the
+//! test leaves all the cards in its address book.
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-book-scale -- --ignored --nocapture
 //! ```
 //!
-//! Also needs `-DENABLE_FUNCTIONAL_TESTS=ON` and the EDS *runtime* packages
-//! (`docs/functional-tests.md`), which this runner's own dev VM does not
-//! have installed natively -- run inside the `ubuntu:24.04` podman recipe
-//! `docs/eds-version-matrix.md`'s "The `functional` job itself, reproduced
-//! from scratch" section documents, same as every other `-live-stalwart`
-//! leg's first confirmation.
+//! The test also needs the EDS runtime packages (`docs/functional-tests.md`).
+//! If the host does not have them, run the test in the `ubuntu:24.04` podman
+//! recipe in the section "The `functional` job itself, reproduced from
+//! scratch" of `docs/eds-version-matrix.md`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 use std::thread::sleep;
@@ -50,9 +44,8 @@ use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy
 use jmap_proto::contacts::ContactCard;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never mistakes a previous run's card for this
-/// one's. Mirrors every other live-server test's own copy.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not read a card from an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -67,8 +60,8 @@ fn batch_size() -> usize {
         .unwrap_or(5000)
 }
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors
-/// `live-stalwart-book.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-book.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -78,12 +71,11 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) with a short
-/// sleep, up to 20 times. Mirrors `jmap-book-sync/tests/live_server_scale.rs`'s
-/// own `retrying` exactly, duplicated rather than shared: this crate's
-/// dev-dependencies stop at `jmap_client`/`jmap_proto`, and pulling in
-/// `jmap-book-sync` just for one helper would cross a turf boundary this
-/// file has no other reason to cross.
+/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) up to 19 times,
+/// with a 5-second sleep before each retry. This is a copy of `retrying` in
+/// `jmap-book-sync/tests/live_server_scale.rs`, for `ClientError`. This crate
+/// does not depend on `jmap-book-sync`, and one helper is not a sufficient
+/// reason to add that dependency.
 fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T, ClientError> {
     for remaining in (0..20).rev() {
         match attempt() {
@@ -96,8 +88,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T,
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// `address-book.rs`'s own keyfile, with a real `User=` added -- the same
-/// shape `live-stalwart-book.rs` writes.
+/// The keyfile of `address-book.rs`, with a real `User=`, as in
+/// `live-stalwart-book.rs`.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -131,13 +123,10 @@ fn the_addressbook_factorys_first_open_of_a_real_sized_book_is_measured() {
     let n = batch_size();
     let run = unique_suffix();
 
-    // A raw client, talking to the real server directly -- not through the
-    // loopback proxy or EDS -- the same role `live-stalwart-book-changes.rs`'s
-    // second client plays, here used to build the large book EDS has never
-    // seen rather than to inject one change into it. `rebase_urls_to_origin`
-    // mirrors every `jmap-*-sync` live-server test's own `connect_for_write`:
-    // the session document can name a configured hostname this runner cannot
-    // reach, independently of whether EDS is involved at all.
+    // A raw client that connects directly to the real server, not through
+    // the loopback proxy or EDS. It makes the large book before EDS sees it.
+    // `rebase_urls_to_origin` is necessary because the session document can
+    // name a hostname that this runner cannot reach.
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
         .rebase_urls_to_origin(rebase)
@@ -166,9 +155,9 @@ fn the_addressbook_factorys_first_open_of_a_real_sized_book_is_measured() {
     let import_elapsed = import_start.elapsed();
     eprintln!("SCALE: seeded {n} cards directly over JMAP in {import_elapsed:?}");
 
-    // Only now does EDS enter the picture -- a fresh `Session`, so
-    // `evolution-addressbook-factory`'s open of this account really is its
-    // first, against a book that was already this size before it connected.
+    // EDS starts only now, in a new `Session`. Thus this is the first open of
+    // the account by `evolution-addressbook-factory`, on a book that is
+    // already large.
     let authority = origin
         .trim_start_matches("https://")
         .trim_start_matches("http://");

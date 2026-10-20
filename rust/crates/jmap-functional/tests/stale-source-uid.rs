@@ -1,81 +1,74 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The headless answer to an operator observation:
-//! `evolution-source-registry` logging
+//! The headless answer to an operator observation.
+//! `evolution-source-registry` logged
 //!
 //! ```text
 //! server_side_source_credentials_lookup_cb: Failed to lookup password for
 //! source d06b56726065b3531de05498dd3519c2bd6efcb3
 //! ```
 //!
-//! twice, followed in the same second by an interactive `authorization_code`
-//! consent, for a UID absent from `~/.config/evolution/sources/` whose only
-//! trace anywhere on the machine was inside `~/.config/dconf/user`.
+//! two times, and in the same second an interactive `authorization_code`
+//! consent followed. The UID was not in `~/.config/evolution/sources/`. Its
+//! only occurrence on the machine was in `~/.config/dconf/user`.
 //!
-//! The item asks two things. This file answers the first with one test and the
-//! second with a pair, because the second answer is only worth anything if the
-//! measurement can also come out the other way.
+//! This file answers two questions. One test answers the first. A pair of
+//! tests answers the second, because that measurement must also be able to
+//! give the opposite result.
 //!
-//! # 1. Can dconf debris drive it?
+//! # 1. Can dconf debris cause it?
 //!
-//! No, and the reason is structural rather than incidental. Read from EDS
-//! 3.52.3: `server_side_source_credentials_lookup_cb` (`e-server-side-source.c:
-//! 418`) runs on a live `EServerSideSource` GObject that the callback holds a
-//! reference to, and a live one exists only where a `.source` keyfile was
-//! loaded. dconf holds no source data at all — the only dconf-linked
-//! source-UID mechanism EDS ships is the `org.gnome.Evolution.DefaultSources`
-//! schema (`e-source-registry.c:68`), six keys that hold nothing but a UID
-//! *reference*, and whose getters resolve it with `e_source_registry_ref_source`
-//! and fall back when that is NULL (`e_source_registry_ref_default_mail_account`,
-//! line 3300). So the first test plants exactly the operator's debris — a UID
-//! written into all six keys, verified present in the session's own
-//! `dconf/user` file and nowhere else — and pins that the registry neither
-//! gains a source for it nor answers it from any default-source getter.
+//! No, for a structural reason. In EDS 3.52.3,
+//! `server_side_source_credentials_lookup_cb` (`e-server-side-source.c:418`)
+//! holds a reference to a live `EServerSideSource` GObject. A live source
+//! exists only if EDS loaded a `.source` keyfile. dconf holds no source data.
+//! The only dconf source-UID mechanism in EDS is the
+//! `org.gnome.Evolution.DefaultSources` schema (`e-source-registry.c:68`).
+//! Its six keys hold only a UID *reference*. The getters resolve it with
+//! `e_source_registry_ref_source` and use a fallback for NULL
+//! (`e_source_registry_ref_default_mail_account`, line 3300). The first test
+//! writes the UID into all six keys, and checks that it is only in the
+//! `dconf/user` file of the session. It then makes sure that the registry
+//! makes no source for the UID and that no default-source getter returns it.
 //!
-//! # 2. Then what produced that log line?
+//! # 2. Then what caused that log line?
 //!
-//! A perfectly ordinary child source. `collection_backend_new_user_file`
-//! (`e-collection-backend.c:176-200`) writes a collection backend's children
-//! to `$XDG_CACHE_HOME/evolution/sources/<collection-uid>/`, never to the
-//! config directory: **being absent from `~/.config/evolution/sources/` is the
-//! normal condition of every address book and calendar Evolution has ever
-//! fanned an account out into**, and is no evidence of staleness whatsoever.
-//! The second test runs this project's own collection backend against the mock
-//! server, takes a child it produced, and drives the operator's exact path on
-//! it.
+//! A normal child source. `collection_backend_new_user_file`
+//! (`e-collection-backend.c:176-200`) writes the children of a collection
+//! backend to `$XDG_CACHE_HOME/evolution/sources/<collection-uid>/`, not to the
+//! config directory. **Each address book and calendar of an account is absent
+//! from `~/.config/evolution/sources/`**, so absence does not show a stale
+//! source. The second test runs the collection backend of this project
+//! against the mock server, takes a child, and does the operator path on it.
 //!
-//! # Why the escalation is EDS working as designed
+//! # Why the escalation is the designed EDS behaviour
 //!
-//! `server_side_source_invoke_credentials_required_cb` (`e-server-side-source.c:
-//! 252`) does not forward a `required` request to clients. It sets
-//! `skip_emit = TRUE` (line 318) and starts a silent credentials lookup;
-//! only the callback decides what the user sees. Failure re-emits
-//! `credentials-required` — the prompter, and for an OAuth2-method source the
-//! consent window — while success emits `authenticate` and nobody is asked.
-//! The operator's two lines are therefore ONE code path on ONE live source:
-//! not a lookup failure and then a separate spurious consent, but a lookup
-//! failure whose designed consequence is the consent.
+//! `server_side_source_invoke_credentials_required_cb`
+//! (`e-server-side-source.c:252`) does not send a `required` request to
+//! clients. It sets `skip_emit = TRUE` (line 318) and starts a silent
+//! credentials lookup. The callback decides what the user sees. A failure
+//! emits `credentials-required` again (the prompter, or for an OAuth2-method
+//! source the consent window). A success emits `authenticate`, and the user
+//! sees nothing. Thus the two log lines are ONE code path on ONE live source.
+//! The consent is the designed result of the lookup failure.
 //!
-//! That is what makes the third test a control rather than a nicety: the same
-//! source, the same request, differing only in whether a password is in the
-//! store, must produce the opposite pair of signals. Without it a run could
-//! not tell a real escalation from the registry echoing back the request this
-//! harness itself made.
+//! Thus the third test is a necessary control. It uses the same source and
+//! the same request, but with a password in the store, and it must give the
+//! opposite pair of signals. Without it, a run cannot tell a real escalation
+//! from an echo of the request of this harness.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// A UID of the operator's shape — 40 lowercase hex characters, what
-/// `e_util_generate_uid()` produces — that names nothing on disk.
+/// A UID with the shape that `e_util_generate_uid()` makes (40 lowercase hex
+/// characters). No file on disk has this UID.
 const DANGLING_UID: &str = "d06b56726065b3531de05498dd3519c2bd6efcb3";
 
-/// The collection account both halves of the second question fan out.
+/// The collection account of the two tests for the second question.
 const ACCOUNT_UID: &str = "jmap-functional-stale-source-uid";
 
-/// The account the collection tests fan out, with the mock's ephemeral port
-/// filled in. The same literal `collection.rs` uses, for the same reason: a
-/// change to the documented recipe should fail loudly rather than quietly
-/// retarget the test.
+/// The keyfile of `collection.rs` with a different `DisplayName`, and with
+/// the ephemeral port of the mock.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -105,8 +98,8 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
         env!("CARGO_TARGET_TMPDIR"),
         "/stale-source-uid-dconf"
     ));
-    // EDS's own diagnostics, so that the operator's line would be visible here
-    // if anything produced it. Its absence is an assertion below.
+    // Enable the EDS diagnostics, so that the operator log line is visible
+    // here if it occurs. An assertion below makes sure that it does not occur.
     session.set_variable("ESR_DEBUG", "1");
 
     let output = session.run(&client, &["dconf-only", DANGLING_UID]);
@@ -126,13 +119,10 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
         "the client did not run to the end\n{report}"
     );
 
-    // (1) The precondition, and the thing that makes the rest non-vacuous: the
-    // debris really is debris of the operator's kind — a UID that now lives in
-    // this session's own `~/.config/dconf/user` and nowhere else. A GSettings
-    // that fell back to the memory backend (no dconf GIO module, or
-    // `ca.desrt.dconf` not activatable on the private bus) would leave the
-    // rest of this test asserting things about a value no daemon could ever
-    // have seen.
+    // (1) The precondition: the UID is in `~/.config/dconf/user` of this
+    // session and in no other location. If GSettings uses the memory backend
+    // (no dconf GIO module, or no `ca.desrt.dconf` activation on the private
+    // bus), no daemon can see the value, and the test measures nothing.
     assert_eq!(
         seen.get("dconf-file-present"),
         Some(&"1"),
@@ -146,7 +136,7 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
         "the dangling UID was not written into the session's dconf/user, so \
          nothing here reproduces the operator's finding\n{report}"
     );
-    // And nowhere else: exactly the check the operator ran by hand.
+    // The UID has no keyfile. The operator did this check manually.
     let sources = session.sources_directory();
     assert!(
         !sources.join(format!("{DANGLING_UID}.source")).exists(),
@@ -154,9 +144,9 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
          ordinary configured source and not debris at all\n{report}"
     );
 
-    // (2) The answer. `e_source_registry_ref_source` is a lookup over the
-    // sources the registry actually built from files; nothing in EDS turns a
-    // dconf UID into one.
+    // (2) The answer. `e_source_registry_ref_source` searches only the
+    // sources that the registry built from files. EDS makes no source from a
+    // dconf UID.
     assert_eq!(
         seen.get("dangling-uid-in-registry"),
         Some(&"0"),
@@ -172,10 +162,9 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
          instead of falling back to the built-in account\n{report}"
     );
 
-    // (3) And the registry's own source list never grows to include it, over
-    // the same settling window the escalation test gives it. Checked from the
-    // list rather than only from `ref_source` so that a source appearing late
-    // — after some deferred read of the setting — would be caught too.
+    // (3) The source list of the registry does not get the UID during the
+    // settling time. The test examines the list, not only `ref_source`, to
+    // find a source that appears late after a deferred read of the setting.
     for key in ["source-uids", "source-uids-after-settling"] {
         let uids = seen
             .get(key)
@@ -186,10 +175,9 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
         );
     }
 
-    // (4) The operator's log line itself never appears. This is the assertion
-    // the item's "if it turns out to be harmless noise, prove that" asks for,
-    // and it is only meaningful because ESR_DEBUG=1 is set above — the same
-    // switch that made the line visible on the operator's machine.
+    // (4) The operator log line does not appear. This proves that the debris
+    // is harmless. The assertion has a meaning only because of ESR_DEBUG=1
+    // above, which also made the line visible on the operator machine.
     assert!(
         !stdout.contains("Failed to lookup password for source"),
         "a credentials lookup ran, and failed, in a session whose only source \
@@ -197,9 +185,9 @@ fn a_uid_reachable_only_from_dconf_never_becomes_a_source_and_is_never_looked_up
     );
 }
 
-/// Run the collection account, wait for a child, and hand back the child's
-/// UID plus everything the run said — shared by the two halves of the second
-/// question, which differ only in whether a password is in the store.
+/// Runs the collection account, waits for a child, and returns the child UID,
+/// the stdout and the report. The two tests for the second question use it,
+/// with and without a password in the store.
 fn run_collection_child(name: &str, password: Option<&str>) -> (String, String, String) {
     let client = required_path("JMAP_FUNCTIONAL_STALE_SOURCE_UID_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_COLLECTION_MODULE");
@@ -246,10 +234,9 @@ fn run_collection_child(name: &str, password: Option<&str>) -> (String, String, 
         .unwrap_or_else(|| panic!("the client reported no child UID\n{report}")))
     .to_owned();
 
-    // The half of the answer that is about *files*, and the reason this
-    // helper takes the session apart rather than trusting the client: the
-    // child the registry just handed out has no keyfile where the operator
-    // looked, and does have one where EDS actually puts children.
+    // The *file* part of the answer, examined in the session directories.
+    // The child has no keyfile in the config directory, but it has one in the
+    // cache directory where EDS puts children.
     let configured = session
         .sources_directory()
         .join(format!("{child_uid}.source"));
@@ -289,10 +276,10 @@ fn a_live_collection_child_has_no_configured_keyfile_and_a_failed_lookup_for_it_
         "the client did not run to the end\n{report}"
     );
 
-    // The escalation. Exactly one, and no `authenticate`: the registry tried
-    // the store silently, found nothing, and put the prompter in front of the
-    // user. `skip_emit = TRUE` is what makes this count the escalation rather
-    // than an echo of the request the client made — see this file's header.
+    // The escalation: exactly one, and no `authenticate`. The registry did a
+    // silent lookup in the store, found nothing, and showed the prompter.
+    // Because of `skip_emit = TRUE`, this count is the escalation, not an echo
+    // of the client request (see the file header).
     assert_eq!(
         seen.get("credentials-required"),
         Some(&"1"),
@@ -309,14 +296,13 @@ fn a_live_collection_child_has_no_configured_keyfile_and_a_failed_lookup_for_it_
          for\n{report}"
     );
 
-    // The second reason the operator's UID looked unfamiliar, and the sharper
-    // one: the message names the source the request was ABOUT, not the source
-    // the secret store was searched under. For a collection child those are
-    // never the same — `source_credential_provider_ref_impl_for_source`
-    // (`e-source-credentials-provider.c:216-237`) resolves the credentials
-    // source first, and it is the collection. So a `Failed to lookup password
-    // for source <uid>` line is not even a statement about a keyring entry
-    // under `<uid>`.
+    // The second reason why the operator did not know the UID. The message
+    // names the source of the request, not the source of the secret-store
+    // lookup. For a collection child, these are different.
+    // `source_credential_provider_ref_impl_for_source`
+    // (`e-source-credentials-provider.c:216-237`) first resolves the
+    // credentials source, which is the collection. Thus `Failed to lookup
+    // password for source <uid>` is not about a keyring entry for `<uid>`.
     assert_eq!(
         seen.get("credentials-source-uid"),
         Some(&ACCOUNT_UID),
@@ -331,10 +317,8 @@ fn a_live_collection_child_has_no_configured_keyfile_and_a_failed_lookup_for_it_
          the UID whose secret was looked up after all\n{report}"
     );
 
-    // And the operator's own line, for the operator's own UID shape, naming a
-    // source that has no keyfile in the config directory: the puzzle this
-    // file answers, reproduced from an account set up thirty seconds earlier
-    // rather than from debris.
+    // The operator log line, for a UID of the same shape and a source with no
+    // keyfile in the config directory. A new account, not debris, causes it.
     let expected = format!(
         "server_side_source_credentials_lookup_cb: Failed to lookup password for source {child_uid}"
     );
@@ -348,10 +332,10 @@ fn a_live_collection_child_has_no_configured_keyfile_and_a_failed_lookup_for_it_
 
 #[test]
 fn and_the_same_request_is_answered_silently_when_the_password_is_in_the_store() {
-    // The control. Everything is identical to the test above except that the
-    // client stores a password for the child before asking — so if the counts
-    // did not move, the pair above would be measuring the harness rather than
-    // the registry's decision.
+    // The control. It is the same as the test above, but first the client
+    // stores a password under the credentials source of the child. If the
+    // counts do not change, the test above measures the harness, not the
+    // registry.
     let (child_uid, stdout, report) =
         run_collection_child("stale-source-uid-child-stored", Some("item-26-secret"));
     let seen = observations(&stdout);
@@ -361,8 +345,8 @@ fn and_the_same_request_is_answered_silently_when_the_password_is_in_the_store()
         Some(&"1"),
         "the client did not take the stored-password path\n{report}"
     );
-    // Where the password had to go, which is not where the log line points.
-    // See `child-uid` vs `credentials-source-uid` in the test above.
+    // The password goes to the credentials source, not to the source in the
+    // log line. See `child-uid` and `credentials-source-uid` above.
     assert_eq!(
         seen.get("credentials-source-uid"),
         Some(&ACCOUNT_UID),
@@ -384,10 +368,9 @@ fn and_the_same_request_is_answered_silently_when_the_password_is_in_the_store()
          lookup's outcome does not decide it\n{report}"
     );
 
-    // The corollary an operator can act on: no failure line either. The log
-    // message this file starts from is emitted only on the failing branch,
-    // so seeing it always means the store had nothing for that source,
-    // never that the source is unknown or stale.
+    // No failure line. EDS logs the message only on the failure branch. Thus
+    // the line always means that the store had no secret for the source, not
+    // that the source is unknown or stale.
     assert!(
         !stdout.contains(&format!("Failed to lookup password for source {child_uid}")),
         "the registry logged a lookup failure for a source whose password it \

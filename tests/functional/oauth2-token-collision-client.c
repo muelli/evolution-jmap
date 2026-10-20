@@ -1,46 +1,40 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the reproduction of two JMAP accounts that share one
- * `[Authentication] User` string colliding on one OAuth2 secret-store slot,
- * because EDS derives that slot's key from `(service name, user)` alone.
+ * The client half of a reproduction: two JMAP accounts with the same
+ * `[Authentication] User` use the same OAuth2 secret-store slot. EDS makes
+ * the slot key from `(service name, user)` only.
  *
  * `eos_generate_secret_uid` (evolution-data-server 3.52.3,
- * `src/libedataserver/e-oauth2-service.c:1086`, read rather than assumed) is:
+ * `src/libedataserver/e-oauth2-service.c:1086`) is:
  *
  *     g_strdup_printf ("OAuth2::%s[%s]", e_oauth2_service_get_name (service), user)
  *
- * No host. Every in-tree `EOAuth2Service` (Google, Outlook, Yahoo, ...) names
- * exactly one cloud, so `(service, user)` is unique there. JMAP is
- * multi-server: an account at one deployment and an account at a completely
- * different one, both authenticating as the same address, derive the
- * identical key.
+ * The key has no host. Each in-tree `EOAuth2Service` (Google, Outlook,
+ * Yahoo, ...) names one cloud, thus `(service, user)` is unique there. JMAP
+ * has many servers: two accounts on different servers with the same address
+ * get the same key.
  *
- * This program is one plain `ESourceRegistry`/`ESource` consumer, run twice
- * by `rust/crates/jmap-functional/tests/oauth2-token-collision.rs` against
- * two accounts that share a `[Authentication] User` but point at two
- * different mock JMAP deployments (two independent `jmap_mock::MockServer`s,
- * standing in for two real, unrelated servers: Fastmail and a self-hosted
- * Stalwart). It knows nothing about which run it is; the Rust side decides
- * that by which source UID and secret JSON it is handed, and reads every
- * judgement off this program's `key=value` stdout.
+ * `rust/crates/jmap-functional/tests/oauth2-token-collision.rs` runs this
+ * program twice, for two accounts with the same `[Authentication] User` on
+ * two different `jmap_mock::MockServer`s. These are in place of two
+ * unrelated real servers (Fastmail and a self-hosted Stalwart). The Rust
+ * side selects the run with the source UID and secret JSON. It reads all
+ * results from the `key=value` lines on stdout.
  *
  *   usage: functional-oauth2-token-collision-client <source-uid> \
  *              <secret-uid> <secret-json-or-empty>
  *
- * When `<secret-json-or-empty>` is non-empty, it is stored under
- * `<secret-uid>` before anything else happens — the "this account has been
- * consented to before and holds a refresh token" precondition the first run
- * (account A) needs. When it is empty, nothing is stored: the second run
- * (account B) asks for a token exactly as a freshly added account normally
- * would, having consented to nothing at all, and whatever the secret store
- * already holds under the (host-blind) shared key is what it gets.
+ * If `<secret-json-or-empty>` is not empty, the program first stores it
+ * under `<secret-uid>`. This gives account A (the first run) a refresh token
+ * from an earlier consent. If it is empty, the program stores nothing.
+ * Account B (the second run) then asks for a token as a new account does,
+ * and gets the value that the shared key already holds.
  */
 
 #include <libedataserver/libedataserver.h>
 
-/* One `key=value` observation on stdout, the format `jmap_functional::
- * observations` parses. */
+/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
 static void
 observe (const gchar *key,
          const gchar *value)
@@ -89,25 +83,22 @@ main (int argc,
 	secret_json = argv[3];
 
 	if (*secret_json != '\0') {
-		/* Account A's precondition: a stored refresh token, as an account
-		 * that has already been consented to once carries. Stored under
-		 * `secret_uid` directly rather than through this account's own
-		 * `EOAuth2Service`, for the same reason `cal-stale-token-client.c`
-		 * seeds this way: `e_secret_store_store_sync` talks to the
-		 * `org.freedesktop.secrets` provider on the session bus this
-		 * process was started on. */
+		/* Account A: store a refresh token directly under `secret_uid`,
+		 * not through the `EOAuth2Service`. `cal-stale-token-client.c` does
+		 * the same: `e_secret_store_store_sync` uses the
+		 * `org.freedesktop.secrets` provider on the session bus of this
+		 * process. */
 		if (!e_secret_store_store_sync (secret_uid, secret_json,
 						"Evolution Data Source - jmap-functional",
 						TRUE, NULL, &error))
 			fatal ("seed-secret", error);
 	}
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote and loads
-	 * module-jmap-backend.so (our "JMAP" EOAuth2Service) and EDS's own
-	 * module-oauth2-services.so (whose EOAuth2SourceMonitor is what exports
-	 * Source.OAuth2Support for a Method=JMAP account, routing the token
-	 * fetch below into the registry process rather than in-process). */
+	/* This starts evolution-source-registry on the session bus. It reads the
+	 * scratch sources directory and loads module-jmap-backend.so (the "JMAP"
+	 * EOAuth2Service) and EDS's module-oauth2-services.so. Its
+	 * EOAuth2SourceMonitor exports Source.OAuth2Support for a Method=JMAP
+	 * account, thus the token fetch below occurs in the registry process. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		fatal ("registry", error);
@@ -120,11 +111,10 @@ main (int argc,
 		return 1;
 	}
 
-	/* The reproduction. `eos_lookup_token_sync` derives the very same
-	 * `secret_uid` this program's caller derived by hand (same service
-	 * name, same [Authentication] User) — regardless of what this
-	 * account's own [Authentication] Host or [JMAP OAuth2] TokenEndpoint
-	 * say — and looks *that* slot up. */
+	/* The reproduction. `eos_lookup_token_sync` makes the same `secret_uid`
+	 * as the caller (same service name, same [Authentication] User) and
+	 * reads that slot. [Authentication] Host and [JMAP OAuth2]
+	 * TokenEndpoint have no effect on the key. */
 	fetched = e_source_get_oauth2_access_token_sync (
 		source, NULL, &access_token, &expires_in, &error);
 

@@ -1,34 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `address-book.rs`'s own single-write leg, driven against
-//! a real Stalwart instead of the in-process mock.
+//! The single-write test of `address-book.rs`, against a real Stalwart
+//! instead of the in-process mock.
 //!
-//! Reuses `functional-book-client`'s `write` phase unchanged — the same
-//! program, built once and staged for both legs — so that a difference in
-//! what EDS hands the client back is a difference in what the *server* did
-//! with the write, not a difference in how two client programs asked for it.
+//! This test uses the `write` phase of `functional-book-client` without
+//! change. Both tests use the same program. Thus a different result from EDS
+//! comes from the server, not from a different client program.
 //!
-//! `jmap-backend-core::connect_target` refuses plaintext to anything but a
-//! loopback host, which a `.source` keyfile's `Host=`/`Port=` pair cannot
-//! name a real, non-loopback Stalwart around; `spawn_loopback_proxy` is the
-//! workaround (see its own doc comment), and `JMAP_FUNCTIONAL_STORE_PASSWORD`
-//! (`book-client.c`) is the other missing piece — a real server needs a
-//! password this crate's other legs never do, and nothing here has a GUI to
-//! be prompted through.
+//! `connect_target` in `jmap-backend-core` refuses plaintext to a host that
+//! is not loopback. Thus `spawn_loopback_proxy` gives a loopback address for
+//! the real Stalwart (see its doc comment).
+//! `JMAP_FUNCTIONAL_STORE_PASSWORD` (`book-client.c`) supplies the password,
+//! because a real server needs one and no GUI can ask for it.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Same environment as the `jmap-*-sync` crates' own `live_server_*.rs`
-//! tests -- see `docs/manual-test-live-server.md`: a throwaway `stw seed`
-//! account, then
+//! Use the same environment as the `live_server_*.rs` tests of the
+//! `jmap-*-sync` crates (see `docs/manual-test-live-server.md`): a throwaway
+//! `stw seed` account, then
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-book -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 
@@ -54,13 +51,12 @@ const CATEGORY_ONE: &str = "Friends";
 const CATEGORY_TWO: &str = "beer, in Berlin";
 const CATEGORY_SEPARATOR: &str = "|";
 const BIRTHDAY: &str = "1964-03-27";
-/// The same 1x1 PNG `address-book.rs` uses.
+/// The same 1x1 PNG as in `address-book.rs`.
 const PHOTO_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never mistakes a previous run's contact for this
-/// one's. Mirrors every `jmap-*-sync` live-server test's own copy.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not read a contact from an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -68,8 +64,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors every
-/// `jmap-*-sync` live-server test's own `connect_for_write`.
+/// `(origin, user, password)`, or `None` to skip. This is the same as
+/// `connect_for_write` in the live-server tests of the other crates.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -79,9 +75,8 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// `address-book.rs`'s own keyfile, with a real `User=` added: the one field
-/// that turns `jmap-backend-core::connect::credentials`'s anonymous branch
-/// into the Basic one.
+/// The keyfile of `address-book.rs`, with a real `User=`. This field causes
+/// `jmap-backend-core::connect::credentials` to use Basic, not anonymous.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -121,13 +116,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_real_server() {
     let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/live-stalwart-book"));
     session.write_source("jmap-functional", &keyfile(port, &user));
     session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", &password);
-    // Stalwart's session document states its own configured `apiUrl`
-    // (`mail.example.internal`, unreachable from here), not the loopback
-    // proxy address it was actually asked through -- the same divergence
-    // every other live-server test in this workspace already works around.
-    // `jmap-backend-core::rebase` ORs this env var into its own
-    // `[JMAP Rebase]` keyfile extension, so it reaches the real backend's
-    // connect path too, not just `jmap_client`'s own harness.
+    // The session document of Stalwart gives its configured `apiUrl`
+    // (`mail.example.internal`, which this host cannot reach), not the
+    // address of the loopback proxy. `jmap-backend-core::rebase` ORs this
+    // variable into its `[JMAP Rebase]` keyfile extension, thus the connect
+    // path of the real backend also rewrites the URLs.
     session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
     session.stage_address_book_backend(&module);
 
@@ -141,7 +134,8 @@ fn evolution_opens_the_book_and_a_write_reaches_the_real_server() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Checked before the exit status, same reason `address-book.rs` does.
+    // Check this before the exit status, for the same reason as in
+    // `address-book.rs`.
     let readonly = seen.get("readonly").copied().unwrap_or_else(|| {
         panic!(
             "the client failed before it opened the book, with {}\n{report}",
@@ -236,17 +230,12 @@ fn evolution_opens_the_book_and_a_write_reaches_the_real_server() {
         Some(&BIRTHDAY),
         "the contact EDS handed back lost or moved its birthday\n{report}"
     );
-    // Not `Some(&IM_HANDLE)`, unlike every other field here: a vCard
-    // `X-JABBER` line can only ever state a bare `user`, never a `uri`
-    // (`jmap-book-sync`'s own `patch.rs` module doc), and real Stalwart
-    // silently discards an `onlineServices` entry that has `user` but no
-    // `uri` -- confirmed independently of this test, with raw curl against a
-    // freshly seeded account, in the harness log's 2026-10-02
-    // `diff_online_services` entry (RFC-SUSPECT, RFC 9553 section 2.3.2).
-    // Asserted as the known-dropped shape rather than left unchecked, so a
-    // future fix on either side (Stalwart stops dropping it, or this crate
-    // starts synthesizing a `uri`) turns this red instead of silently
-    // passing on behaviour nobody re-examined.
+    // Not the `IM_HANDLE` of `address-book.rs`. A vCard `X-JABBER` line
+    // gives only a `user`, never a `uri` (module doc of `patch.rs` in
+    // `jmap-book-sync`). Real Stalwart discards an `onlineServices` entry
+    // that has a `user` but no `uri` (RFC-SUSPECT, RFC 9553 section 2.3.2).
+    // The test asserts the dropped value. Thus a fix on the server or in
+    // this crate causes the test to fail, and somebody must examine it again.
     assert_eq!(
         seen.get("read-back-jabber"),
         Some(&"(null)"),
@@ -301,9 +290,9 @@ fn evolution_opens_the_book_and_a_write_reaches_the_real_server() {
         Some(&escaped_label.as_str()),
         "the contact EDS handed back lost or mangled its address label\n{report}"
     );
-    // Not `== "1"`: unlike the mock, which `address-book.rs` starts fresh
-    // every run, a real account can carry contacts an earlier run of this
-    // same test left behind. Presence, not the exact count, is the claim.
+    // Not `== "1"`. `address-book.rs` starts a new mock for each run, but a
+    // real account can keep contacts from an earlier run of this test. Thus
+    // the test asserts that the contact is present, not the exact count.
     let contacts_after = seen
         .get("contacts-after")
         .and_then(|value| value.parse::<u32>().ok())

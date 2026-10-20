@@ -1,43 +1,34 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the collection-backend functional test: an ordinary
- * `ESourceRegistry` consumer, the way the "Add Address Book"/"Add Calendar"
- * machinery in Evolution's account list is one. It knows nothing about JMAP
- * and nothing about the mock server — it connects to the registry, which is
- * what D-Bus-activates `evolution-source-registry` and, through it, loads
- * `module-jmap-backend.so` for the account `.source` file already on disk,
- * then waits for the two children the module's populate/fan-out is expected
- * to write (`docs/manual-test-collection-backend.md`'s whole recipe, done by
- * a real daemon instead of by a person).
+ * The client half of the collection backend functional test. It is a plain
+ * `ESourceRegistry` client and has no JMAP code. Its registry connection
+ * starts `evolution-source-registry`, which loads `module-jmap-backend.so`
+ * for the account `.source` file. Then it waits for the two children that
+ * populate must write. This is the procedure of
+ * `docs/manual-test-collection-backend.md`, done by a real daemon.
  *
- * Everything around it — the scratch XDG tree, the account `.source`
- * keyfile, the private D-Bus session, the mock server (or, for
- * `tests/live-stalwart-collection.rs`, the real one) and every assertion —
- * belongs to `rust/crates/jmap-functional/tests/collection.rs`, which runs
- * this program and reads its output. So this file has no test framework in
- * it and no notion of what "correct" is: it reports what the registry told
- * it on stdout, one `key=value` line per observation, and exits non-zero the
- * moment a call fails.
+ * `rust/crates/jmap-functional/tests/collection.rs` (and
+ * `live-stalwart-collection.rs` for a real server) creates the scratch XDG
+ * tree, the account `.source` keyfile, the private D-Bus session and the
+ * server, and it does all the assertions. This program writes one
+ * `key=value` line on stdout for each observation. It exits non-zero when a
+ * call fails.
  *
- * C rather than Rust for the reason `book-client.c`'s own header gives:
- * `libedataserver`'s client API is a surface no crate in this repository
- * binds.
+ * The file is C because no crate in this repository binds the
+ * `libedataserver` client API (see `book-client.c`).
  *
  *   usage: functional-collection-client <account-uid>
  */
 
 #include <libedataserver/libedataserver.h>
 
-/* How long to wait for the two children to appear before giving up and
- * reporting whatever was found. Generous for the same reason
- * `connection-status.c`'s own wait is: this covers activating the registry
- * and a first populate cycle, and the point of a limit at all is that a
- * populate that never runs fails the run instead of hanging it. */
+/* The maximum wait for the two children. It includes the registry start and
+ * the first populate. A limit makes a stuck populate fail the run instead of
+ * hang it. */
 #define WAIT_SECONDS 30
 
-/* State for one wait: the children of `parent_uid`, refreshed on every tick
- * until there are at least two of them or the deadline passes. */
+/* State for one wait for at least two children of `parent_uid`. */
 typedef struct {
 	ESourceRegistry *registry;
 	const gchar *parent_uid;
@@ -54,9 +45,7 @@ children_of (ESourceRegistry *registry,
 	GList *link;
 	GList *children = NULL;
 
-	/* NULL asks for every registered source, regardless of which
-	 * extensions it carries — the two children this test waits for are
-	 * told apart by their own extension afterwards, not by this query. */
+	/* NULL gives all sources. The caller sorts the children by extension. */
 	all = e_source_registry_list_sources (registry, NULL);
 
 	for (link = all; link != NULL; link = g_list_next (link)) {
@@ -89,13 +78,8 @@ wait_for_children_tick_cb (gpointer user_data)
 	return G_SOURCE_CONTINUE;
 }
 
-/* Polls, rather than connecting to "source-added": the children are written
- * to disk by the backend and picked up by the registry's own file monitor,
- * which is exactly the asynchronous step `docs/manual-test-collection-
- * backend.md` describes as "restart the daemons and look" — there is no
- * single signal this client could wait on that is simpler than asking again
- * a few times a second, the same tradeoff `connection-status.c` already
- * makes for a different property of the same kind of source. */
+/* Polls every 100ms. The backend writes the children to disk and the file
+ * monitor of the registry reads them, so no single signal is simpler. */
 static GList *
 wait_for_children (ESourceRegistry *registry,
                     const gchar *parent_uid)
@@ -122,11 +106,9 @@ wait_for_children (ESourceRegistry *registry,
 	return wait.found;
 }
 
-/* Reports one child as two lines, `<prefix>-backend-name` and
- * `<prefix>-parent`, so the Rust side can tell an address book from a
- * calendar without guessing at which extension a source carries — and can
- * assert the one property `child_added` is actually responsible for
- * (naming the account as `Parent=`) rather than just counting sources. */
+/* Reports one child as three lines: `<prefix>-backend-name`,
+ * `<prefix>-parent` and `<prefix>-enabled`. The Rust side can then check
+ * the `Parent=` that `child_added` sets. */
 static void
 report_child (ESource *source,
               const gchar *extension_name,
@@ -162,10 +144,8 @@ main (gint argc,
 	}
 	account_uid = argv[1];
 
-	/* This is what D-Bus-activates evolution-source-registry, on this
-	 * process's private bus, with `EDS_REGISTRY_MODULES` already pointed
-	 * at this session's scratch directory by the Rust side — see
-	 * `Session::stage_collection_backend`. */
+	/* Starts evolution-source-registry on the private bus.
+	 * `Session::stage_collection_backend` sets `EDS_REGISTRY_MODULES`. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (registry == NULL) {
 		g_printerr ("e_source_registry_new_sync: %s\n", error->message);
@@ -181,21 +161,12 @@ main (gint argc,
 	}
 	g_print ("account-found=1\n");
 
-	/* A real server needs a password the mock never checks, and nothing
-	 * here has a GUI to be prompted through. Stored against the account
-	 * itself -- the collection backend's own `authenticate_sync` is what
-	 * populate's first credentials lookup resolves against, not a child.
-	 * Unlike `book-client.c`, which stores the password before the call
-	 * that first triggers its backend's own `authenticate_sync`
-	 * (`e_book_client_connect_sync`), the collection backend's populate
-	 * runs the moment the registry loads the account, which is before this
-	 * client has even connected to the bus -- so by the time it is safe to
-	 * store the password, the first attempt has already run with none
-	 * available, scheduled `credentials-required`, and gone quiet (no GUI
-	 * here to answer it). `e_source_invoke_authenticate_sync` is the
-	 * ordinary way a client answers that signal -- passing no credentials
-	 * tells EDS to resolve them itself, the same stored-password lookup
-	 * the first attempt already found empty, now populated. */
+	/* A real server needs a password and no GUI prompt is available. Store
+	 * it on the account, because the collection backend authenticates.
+	 * Populate already ran without a password when the registry loaded the
+	 * account, so it waits on `credentials-required`.
+	 * `e_source_invoke_authenticate_sync` with no credentials makes EDS
+	 * read the stored password and try again. */
 	{
 		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 

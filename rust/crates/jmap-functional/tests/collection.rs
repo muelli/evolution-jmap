@@ -1,30 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, collection backend: `evolution-source-registry` loading
-//! `module-jmap-backend.so`, turning one account `.source` keyfile into the
-//! address-book and calendar children `docs/manual-test-collection-
-//! backend.md`'s hand-run recipe describes.
+//! Collection backend: `evolution-source-registry` loads
+//! `module-jmap-backend.so` and makes the address book and calendar children
+//! of one account `.source` keyfile, as the manual procedure in
+//! `docs/manual-test-collection-backend.md` describes.
 //!
-//! Every other functional test in this crate opens a *leaf* backend
-//! (address book, calendar, mail) from a `.source` file that already names
-//! the server directly. This one is about the layer above them: whether a
-//! collection account's populate/fan-out actually reaches a real registry
-//! and writes children a leaf backend could then open, which nothing below
-//! `jmap_functional` can ask — `jmap-backend-collection`'s own tests build an
-//! `EServerSideSource` in-process and call the vfunc bodies directly, never
-//! through the registry's own module-loading and file-writing.
+//! All other functional tests in this crate open a *leaf* backend (address
+//! book, calendar, mail) from a `.source` file that names the server. This
+//! test examines the layer above them: whether the populate/fan-out of a
+//! collection account reaches a real registry and writes children that a
+//! leaf backend can open. The tests of `jmap-backend-collection` make an
+//! `EServerSideSource` in-process and call the vfunc bodies directly. They
+//! never use the module loading and file writing of the registry.
 //!
-//! Checked from the two ends, same as every other test here: the client
-//! program reports what the registry's own API says about the account's
-//! children, and the mock reports what the backend asked the server for.
+//! The test examines both sides, as the other tests do: the client program
+//! reports what the registry API says about the children of the account, and
+//! the mock reports what the backend requested from the server.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// `docs/examples/jmap-mock-collection.source`, with the mock's ephemeral
-/// port filled in. Kept as a literal for the reason `address-book.rs`'s own
-/// `keyfile` is: a change to the documented recipe fails this test loudly
-/// instead of quietly retargeting it.
+/// `docs/examples/jmap-mock-collection.source` with the ephemeral port of the
+/// mock and a different `DisplayName`. It is a literal for the same reason
+/// as the `keyfile` of `address-book.rs`: a change to the documented file
+/// does not silently change this test.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -53,10 +52,10 @@ fn evolution_source_registry_fans_the_account_out_into_a_book_and_a_calendar() {
 
     let server = jmap_mock::MockServer::builder().start();
     let account_id = server.account_id();
-    // What the populate step fans out into children: one address book and
-    // one calendar, both flagged default so the collection backend's own
-    // discovery (not this test) picks a `[Resource] Identity=`-less child's
-    // resource for it.
+    // The populate step makes children from these: one address book and one
+    // calendar. Both are default, so the discovery of the collection backend
+    // (not this test) selects the resource of a child without
+    // `[Resource] Identity=`.
     {
         let state = server.state();
         let mut state = state.lock().expect("mock state lock");
@@ -112,9 +111,8 @@ fn evolution_source_registry_fans_the_account_out_into_a_book_and_a_calendar() {
         "the account did not get a calendar child\n{report}"
     );
 
-    // Each child names our backend and the account as its parent — the two
-    // things `child_added` is actually responsible for, not merely a source
-    // of some kind existing.
+    // Each child names our backend and has the account as its parent. These
+    // are the two tasks of `child_added`.
     for prefix in ["address-book", "calendar"] {
         assert_eq!(
             seen.get(format!("{prefix}-backend-name").as_str()),
@@ -133,9 +131,8 @@ fn evolution_source_registry_fans_the_account_out_into_a_book_and_a_calendar() {
         );
     }
 
-    // The other end: the server was actually asked for both kinds of
-    // collection, `ids: null`, the way `docs/manual-test-collection-
-    // backend.md` says a fan-out asks.
+    // The server side: the backend asked for both kinds of collection, as
+    // `docs/manual-test-collection-backend.md` says a fan-out does.
     let calls = server.method_calls();
     assert!(
         calls.iter().any(|call| call == "AddressBook/get"),

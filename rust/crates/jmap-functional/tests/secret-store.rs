@@ -1,27 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1's own environment, not a backend under test.
+//! Tests the environment of the functional harness, not a backend.
 //!
-//! The gated functional CI job's private session bus has no secret service,
-//! so `evolution_source_registry_creates_and_deletes_a_calendar` (any
-//! account with an `[Authentication]` extension, really) fails when
-//! `create_resource_sync`'s `stored_password_of` asks
-//! `e_source_credentials_provider_lookup_sync` for one. `Session::run` now
-//! unlocks a login keyring on the private bus before the real client runs —
-//! see its own doc comment for why that specific step, not merely installing
-//! `gnome-keyring`, is what closes both failure modes. This test proves that
-//! step actually runs and does what it says, with no backend, module, or
-//! `ESource` involved: the on-disk keyring file it should have created.
+//! The private session bus of the gated functional CI job has no secret
+//! service. Thus `evolution_source_registry_creates_and_deletes_a_calendar`
+//! (and each account with an `[Authentication]` extension) fails when
+//! `stored_password_of` in `create_resource_sync` calls
+//! `e_source_credentials_provider_lookup_sync`. `Session::run` unlocks a login
+//! keyring on the private bus before the real client runs. Its doc comment
+//! tells why this step, and not only an installed `gnome-keyring`, prevents
+//! the two failure modes. This test proves that the step runs and creates the
+//! on-disk keyring file, with no backend, module or `ESource`.
 //!
-//! It needs nothing `ENABLE_FUNCTIONAL_TESTS`'s other tests do — no built
-//! module, no client library, no `JMAP_FUNCTIONAL_*` path — only
-//! `dbus-run-session` and `gnome-keyring-daemon`, so unlike its siblings it
-//! runs under a plain `cargo test -p jmap-functional --test secret-store`
-//! too. It is still registered as a `functional`-labelled ctest (see
-//! `cmake/Functional.cmake`) so the same `-DENABLE_FUNCTIONAL_TESTS=ON`
-//! build that catches a missing EDS runtime also catches a missing
-//! `gnome-keyring`.
+//! The test does not need a built module, a client library or a
+//! `JMAP_FUNCTIONAL_*` path. It needs only `dbus-run-session` and
+//! `gnome-keyring-daemon`. Thus it also runs under a plain
+//! `cargo test -p jmap-functional --test secret-store`. It is a
+//! `functional`-labelled ctest (see `cmake/Functional.cmake`), so the
+//! `-DENABLE_FUNCTIONAL_TESTS=ON` build also finds a missing `gnome-keyring`.
 
 use jmap_functional::Session;
 use std::fs;
@@ -31,8 +28,8 @@ use std::path::{Path, PathBuf};
 fn a_session_creates_a_usable_login_keyring_before_running_its_client() {
     let session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/secret-store"));
 
-    // `/bin/true` stands in for "the real client" — this test is about the
-    // step `run()` takes before that, not about any client's own behaviour.
+    // `/bin/true` replaces the real client. This test examines the step that
+    // `run()` does before the client starts.
     let output = session.run(&PathBuf::from("/bin/true"), &[]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -52,10 +49,8 @@ fn a_session_creates_a_usable_login_keyring_before_running_its_client() {
 
 #[test]
 fn running_a_client_does_not_leave_a_keyring_daemon_behind() {
-    // The finding: "`jmap_functional::Session::run` leaks a
-    // `gnome-keyring-daemon` per run" — `--daemonize` detaches it from the
-    // private bus, so it outlives `dbus-run-session` unless `run` itself
-    // reaps it.
+    // `--daemonize` detaches `gnome-keyring-daemon` from the private bus. It
+    // stays alive after `dbus-run-session` if `run` does not stop it.
     let session = Session::new(concat!(
         env!("CARGO_TARGET_TMPDIR"),
         "/secret-store-no-leak"
@@ -72,9 +67,9 @@ fn running_a_client_does_not_leave_a_keyring_daemon_behind() {
     );
 }
 
-/// Every `gnome-keyring-daemon` process whose own `XDG_RUNTIME_DIR`
-/// environment variable is `runtime_directory` — the same match
-/// `jmap-backend-core/tests/secret_store.rs` makes for the same daemon.
+/// Returns each `gnome-keyring-daemon` process with `XDG_RUNTIME_DIR` equal
+/// to `runtime_directory`. `jmap-backend-core/tests/secret_store.rs` uses the
+/// same match.
 fn keyring_daemons(runtime_directory: &Path) -> Vec<i32> {
     let marker = format!("XDG_RUNTIME_DIR={}", runtime_directory.display());
     let Ok(entries) = fs::read_dir("/proc") else {

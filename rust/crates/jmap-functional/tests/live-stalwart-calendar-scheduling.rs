@@ -1,37 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! End to end: a meeting organised through a
-//! real `evolution-calendar-factory` against a real server reaches a guest on
-//! that server exactly once, sent by the server and not by Evolution, and the
-//! guest's answer comes back into the organizer's calendar.
+//! End to end: a meeting that a real `evolution-calendar-factory` organizes
+//! on a real server gets to a guest on that server exactly one time. The
+//! server sends it, not Evolution. The answer of the guest comes back into
+//! the calendar of the organizer.
 //!
-//! `calendar-scheduling.rs` proves the backend's half against the mock, and
-//! `jmap-cal-sync`'s `live_server_scheduling.rs` proves the server delivers
-//! what the sync layer asks for. This joins the two: the organizer's side is
-//! `functional-cal-scheduling-live-client` (`tests/functional/cal-scheduling-
-//! live-client.c`), doing what the comp editor does; the guest's side is a
-//! direct JMAP connection, because what the guest got is only evidence when it
-//! is read from the guest's own account. Of the two meetings the client
-//! creates, the one the user chose not to send must reach the guest neither
-//! way.
+//! `calendar-scheduling.rs` tests the backend against the mock.
+//! `live_server_scheduling.rs` in `jmap-cal-sync` tests that the server
+//! delivers what the sync layer asks for. This test joins the two. On the
+//! organizer side, `functional-cal-scheduling-live-client`
+//! (`tests/functional/cal-scheduling-live-client.c`) does what the comp
+//! editor does. On the guest side, a direct JMAP connection reads the account
+//! of the guest, because only that account shows what the guest got. The
+//! client creates two meetings. The meeting that the user did not send must
+//! not get to the guest.
 //!
-//! Evolution itself sends nothing for a backend advertising
-//! `create-messages` (`itip-utils.c`), and this program has no mail
-//! transport at all, so any invitation in the guest's inbox came from the
-//! server. Counting it proves "exactly once" for the server's own delivery.
+//! Evolution sends nothing for a backend that advertises `create-messages`
+//! (`itip-utils.c`), and this program has no mail transport. Thus each
+//! invitation in the inbox of the guest came from the server. The test counts
+//! them to check that the server delivers exactly one time.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Two throwaway accounts on the same server, so delivery stays intra-server
-//! (see `docs/manual-test-live-server.md`, steps 3 and 3a): the write-test
-//! account organises, the recipient account is the guest.
+//! Use two throwaway accounts on the same server, so that delivery stays on
+//! that server (see `docs/manual-test-live-server.md`, steps 3 and 3a). The
+//! write-test account is the organizer, and the recipient account is the
+//! guest.
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-calendar-scheduling -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either account is not configured.
+//! When one of the accounts is not configured, the test skips and does not
+//! fail.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -71,9 +73,9 @@ fn connect(origin: &str, user: &str, password: &str) -> Client {
         .unwrap_or_else(|error| panic!("could not fetch the session document for {user}: {error}"))
 }
 
-/// The organizer's calendar keyfile, as `live-stalwart-calendar-attendees.rs`
-/// writes it. No `[WebDAV Backend]` group, so the switch is at its default:
-/// the server sends.
+/// The calendar keyfile of the organizer, as in
+/// `live-stalwart-calendar-attendees.rs`. It has no `[WebDAV Backend]`
+/// group, thus `CalendarAutoSchedule` has its default: the server sends.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -93,8 +95,8 @@ fn keyfile(port: u16, user: &str) -> String {
     )
 }
 
-/// Runs the client once in a fresh scratch tree named `name`, and returns its
-/// observations, failing the test with its whole output if it failed.
+/// Runs the client one time in a new scratch tree named `name` and returns
+/// its observations. If the client fails, the test fails with its full output.
 fn run_client(
     name: &str,
     port: u16,
@@ -144,8 +146,8 @@ fn copies_titled(client: &Client, account_id: &Id, title: &str) -> Vec<CalendarE
         .collect()
 }
 
-/// The `participationStatus` the copy titled `title` in `account_id` states
-/// for `address`, if the copy and the participant exist.
+/// The `participationStatus` of `address` in the copy titled `title` in
+/// `account_id`, if the copy and the participant exist.
 fn guest_status(client: &Client, account_id: &Id, title: &str, address: &str) -> Option<String> {
     let copies = copies_titled(client, account_id, title);
     let participants = copies.first()?.participants.as_ref()?;
@@ -164,7 +166,7 @@ fn guest_status(client: &Client, account_id: &Id, title: &str, address: &str) ->
     })
 }
 
-/// The subjects of the guest's messages that mention `title`.
+/// The subjects of the messages of the guest that contain `title`.
 fn guest_mail(guest: &Client, account_id: &Id, title: &str) -> Vec<String> {
     let filter = EmailQueryFilter {
         text: Some(title.to_owned()),
@@ -182,8 +184,8 @@ fn guest_mail(guest: &Client, account_id: &Id, title: &str) -> Vec<String> {
         .collect()
 }
 
-/// Asks `probe` until `done` holds or `within` passes, and returns the last
-/// answer either way.
+/// Calls `probe` until `done` is true or `within` has passed. Returns the last
+/// answer.
 fn wait_for<T>(within: Duration, probe: impl Fn() -> T, done: impl Fn(&T) -> bool) -> T {
     let deadline = Instant::now() + within;
     loop {
@@ -253,8 +255,8 @@ fn a_meeting_saved_in_evolution_reaches_the_guest_once_and_the_answer_comes_back
         );
     }
 
-    // The server delivers the sent meeting into the guest's calendar once,
-    // and the invitation mail into the guest's inbox once.
+    // The server delivers the sent meeting one time into the calendar of the
+    // guest, and the invitation one time into the inbox of the guest.
     let copies = wait_for(
         Duration::from_secs(30),
         || copies_titled(&guest, &guest_calendars, &sent),
@@ -282,8 +284,8 @@ fn a_meeting_saved_in_evolution_reaches_the_guest_once_and_the_answer_comes_back
         "the meeting the user chose not to send reached the guest"
     );
 
-    // The guest accepts on their own copy and asks the server to tell the
-    // organizer, as a JMAP client of the guest's would.
+    // The guest accepts on the guest copy and tells the server to send the
+    // reply to the organizer, as a JMAP client of the guest does.
     let copy = &copies[0];
     let guest_address = format!("mailto:{guest_user}");
     let participant = copy
@@ -308,8 +310,8 @@ fn a_meeting_saved_in_evolution_reaches_the_guest_once_and_the_answer_comes_back
         )
         .expect("the guest's accept is stored and sent");
 
-    // The server files the guest's reply into the organizer's copy on its
-    // own time; wait for that directly, so the one settle run below reads it.
+    // The server puts the reply into the copy of the organizer at a later
+    // time. Wait for it, so that the settle run below reads it.
     let organizer = connect(&origin, &organizer_user, &organizer_password);
     let organizer_calendars = organizer.primary_account(CAPABILITY_CALENDARS).unwrap();
     let answered = wait_for(
@@ -323,9 +325,9 @@ fn a_meeting_saved_in_evolution_reaches_the_guest_once_and_the_answer_comes_back
         "the server never filed the guest's accept into the organizer's copy"
     );
 
-    // A fresh Evolution view of the organizer's calendar shows the answer,
-    // then removes both meetings: the sent one with a cancellation, the
-    // quiet one without.
+    // A new Evolution view of the calendar of the organizer shows the
+    // answer. Then it removes the two meetings: the sent meeting with a
+    // cancellation, the other meeting without.
     let settled = run_client(
         "settle",
         port,

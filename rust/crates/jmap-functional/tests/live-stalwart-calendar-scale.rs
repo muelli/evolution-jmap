@@ -1,49 +1,43 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `jmap-cal-sync`'s own half of the real-EDS leg, the twin of
-//! `live-stalwart-book-scale.rs` one file over (see that file's own header
-//! for the full rationale, shared by both).
+//! The real-EDS scale test for calendars. It is the calendar version of
+//! `live-stalwart-book-scale.rs` (see the header of that file for the
+//! reason).
 //!
-//! Every number `jmap-cal-sync/tests/live_server_scale.rs` recorded came from
-//! `CalSync` calling the real server directly; this asks
-//! the question those numbers cannot: how long `evolution-calendar-factory`'s
-//! own first open of an already-large calendar takes through the real
-//! meta-backend machinery (cache population, JSCalendar-to-`ICalComponent`
-//! conversion for every event), and how much memory it peaks at.
+//! `jmap-cal-sync/tests/live_server_scale.rs` measures `CalSync` against the
+//! real server without EDS. This test measures the first open of a large
+//! calendar by `evolution-calendar-factory`: the time and the peak memory. It
+//! includes the meta-backend work (cache population, JSCalendar-to-
+//! `ICalComponent` conversion for each event).
 //!
-//! Events are seeded directly over JMAP with a raw [`Client`] (mirroring
-//! `live-stalwart-calendar-changes.rs`'s own "a real second client" pattern,
-//! via [`CalendarEvent::simple`]) so the account is already large *before*
-//! EDS ever connects to it. The listing side reuses
-//! `functional-cal-changes-client` unchanged: that binary already does
-//! exactly "connect, list every event, print the count", the calendar
-//! analogue of `functional-book-client`'s own `list` phase the book half of
-//! this leg reuses.
+//! A raw [`Client`] creates the events over JMAP with
+//! [`CalendarEvent::simple`] (as the second client of
+//! `live-stalwart-calendar-changes.rs` does). Thus the account is large
+//! before EDS connects. The listing uses `functional-cal-changes-client`
+//! without change: it connects, lists each event and prints the count, as
+//! the `list` phase of `functional-book-client` does for the book test.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Same environment as every other `live-stalwart-*` test in this crate --
-//! see `docs/manual-test-live-server.md` -- built through
-//! `-DENABLE_FUNCTIONAL_TESTS=ON` so `JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT`/
-//! `JMAP_FUNCTIONAL_CAL_MODULE` are set. `JMAP_SCALE_TEST_EVENTS` overrides
-//! the batch size (default 3000); the write-test account should be a
-//! throwaway created for this alone, since this leaves that many events in
-//! its calendar.
+//! Use the same environment as the other `live-stalwart-*` tests in this
+//! crate (see `docs/manual-test-live-server.md`). Build with
+//! `-DENABLE_FUNCTIONAL_TESTS=ON`, so that `JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT`/
+//! `JMAP_FUNCTIONAL_CAL_MODULE` are set. `JMAP_SCALE_TEST_EVENTS` sets the
+//! batch size (default 3000). Use a throwaway write-test account only for
+//! this test, because the test leaves all the events in its calendar.
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-calendar-scale -- --ignored --nocapture
 //! ```
 //!
-//! Also needs `-DENABLE_FUNCTIONAL_TESTS=ON` and the EDS *runtime* packages
-//! (`docs/functional-tests.md`), which this runner's own dev VM does not
-//! have installed natively -- run inside the `ubuntu:24.04` podman recipe
-//! `docs/eds-version-matrix.md`'s "The `functional` job itself, reproduced
-//! from scratch" section documents, same as `live-stalwart-book-scale.rs`'s
-//! own first confirmation.
+//! The test also needs the EDS runtime packages (`docs/functional-tests.md`).
+//! If the host does not have them, run the test in the `ubuntu:24.04` podman
+//! recipe in the section "The `functional` job itself, reproduced from
+//! scratch" of `docs/eds-version-matrix.md`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 use std::thread::sleep;
@@ -54,9 +48,8 @@ use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// A value unique to this process invocation, so a repeated run against the
-/// same throwaway account never mistakes a previous run's event for this
-/// one's. Mirrors every other live-server test's own copy.
+/// A value that is unique to this process. Thus a new run on the same
+/// throwaway account does not read an event from an earlier run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -71,8 +64,8 @@ fn batch_size() -> usize {
         .unwrap_or(3000)
 }
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors
-/// `live-stalwart-book-scale.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-book-scale.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -82,10 +75,9 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) with a short
-/// sleep, up to 20 times. Mirrors `live-stalwart-book-scale.rs`'s own
-/// `retrying` exactly, duplicated for the same turf reason that file's own
-/// comment gives.
+/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) up to 19 times,
+/// with a 5-second sleep before each retry. A copy of `retrying` in
+/// `live-stalwart-book-scale.rs` (see its comment for the reason).
 fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T, ClientError> {
     for remaining in (0..20).rev() {
         match attempt() {
@@ -98,7 +90,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T,
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// `live-stalwart-calendar.rs`'s own keyfile, unchanged.
+/// The keyfile of `live-stalwart-calendar.rs`, with a different
+/// `DisplayName=`.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -132,10 +125,9 @@ fn the_calendar_factorys_first_open_of_a_real_sized_calendar_is_measured() {
     let n = batch_size();
     let run = unique_suffix();
 
-    // A raw client, talking to the real server directly -- not through the
-    // loopback proxy or EDS -- the same role `live-stalwart-book-scale.rs`'s
-    // own raw client plays, here used to build the large calendar EDS has
-    // never seen rather than to inject one change into it.
+    // A raw client that connects directly to the real server, not through
+    // the loopback proxy or EDS. It makes the large calendar before EDS sees
+    // it.
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
         .rebase_urls_to_origin(rebase)
@@ -164,10 +156,9 @@ fn the_calendar_factorys_first_open_of_a_real_sized_calendar_is_measured() {
     let import_elapsed = import_start.elapsed();
     eprintln!("SCALE: seeded {n} events directly over JMAP in {import_elapsed:?}");
 
-    // Only now does EDS enter the picture -- a fresh `Session`, so
-    // `evolution-calendar-factory`'s open of this account really is its
-    // first, against a calendar that was already this size before it
-    // connected.
+    // EDS starts only now, in a new `Session`. Thus this is the first open of
+    // the account by `evolution-calendar-factory`, on a calendar that is
+    // already large.
     let authority = origin
         .trim_start_matches("https://")
         .trim_start_matches("http://");

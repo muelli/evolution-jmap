@@ -1,33 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, collection backend, write half, calendar leg: the same
-//! `e_source_remote_create_sync`/`e_source_remote_delete_sync` proof
-//! `collection-create.rs` runs for an address book, run for a calendar
-//! instead — `E_SOURCE_EXTENSION_CALENDAR` and `Calendar/set`, not
-//! `E_SOURCE_EXTENSION_ADDRESS_BOOK` and `AddressBook/set`.
+//! Collection backend write path for a calendar: the same
+//! `e_source_remote_create_sync`/`e_source_remote_delete_sync` test as
+//! `collection-create.rs`, but with `E_SOURCE_EXTENSION_CALENDAR` and
+//! `Calendar/set` in place of `E_SOURCE_EXTENSION_ADDRESS_BOOK` and
+//! `AddressBook/set`.
 //!
-//! `collection-create.rs`'s own module doc named this as the follow-up left
-//! open once the address-book leg landed: the same sequence against the
-//! other extension `ECollectionBackendClass::create_resource_sync`/
-//! `delete_resource_sync` has to support, since a wrong guess at which
-//! `/set` call to make for a given child kind is exactly the bug
-//! `jmap-backend-collection/tests/resource_id.rs`'s
-//! `the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id`
-//! already guards against for the read side (an address book and a
-//! calendar may share one resource id, RFC 8620 §1.2) — this is that same
-//! risk, checked from the write side, through a real registry rather than
-//! an in-process fixture.
+//! `ECollectionBackendClass::create_resource_sync`/`delete_resource_sync`
+//! must select the correct `/set` call for each kind of child. An address
+//! book and a calendar can have the same resource id (RFC 8620 §1.2).
+//! `the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id` in
+//! `jmap-backend-collection/tests/resource_id.rs` tests this risk on the
+//! read side. This test examines the write side, through a real registry.
 
 use jmap_functional::{Session, observations, required_path};
 
-/// The same keyfile `collection-create.rs` uses: contacts and calendars both
-/// switched on is what makes the account `remote-creatable` regardless of
-/// which kind of child is then created (`Populating::offer_creation` in
-/// `jmap-backend-collection/src/populate.rs` offers creation whenever either
-/// is wanted), and the mock is left unseeded so populate discovers nothing
-/// — the account has no calendar child until this test's own create makes
-/// one.
+/// The same keyfile as in `collection-create.rs`. With contacts or calendars
+/// enabled, the account is `remote-creatable` for each kind of child
+/// (`Populating::offer_creation` in `jmap-backend-collection/src/populate.rs`).
+/// The mock has no seeded data, so populate finds nothing, and the account
+/// has no calendar child before the create of this test.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -126,10 +119,9 @@ fn evolution_source_registry_creates_and_deletes_a_calendar() {
          disappear from the registry\n{report}"
     );
 
-    // The other end: the server was actually asked to create, then destroy,
-    // the calendar — not merely a source appearing and disappearing locally
-    // with no server round trip, and not the address-book `/set` call a
-    // resource-kind mixup would send instead.
+    // The server side: the backend asked the server to create and then
+    // destroy the calendar. A local-only change does not do this, and a
+    // mixup of resource kinds sends the address book `/set` instead.
     let calls = server.method_calls();
     let calendar_set_calls = calls.iter().filter(|call| *call == "Calendar/set").count();
     assert_eq!(

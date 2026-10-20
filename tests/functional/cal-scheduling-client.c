@@ -1,28 +1,25 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Who tells a meeting's guests, seen from an
- * ordinary libecal consumer through a real, running `evolution-calendar-
- * factory`. Evolution's `itip-utils.c` composes no invitation mail of its own
- * for a client that has `create-messages`, so the capabilities this program
- * reports are what decides whether Evolution or the server mails the guests.
+ * Tests who tells the guests of a meeting, with a libecal client and a real
+ * `evolution-calendar-factory`. The Evolution `itip-utils.c` writes no
+ * invitation mail for a client with `create-messages`. Thus the reported
+ * capabilities decide if Evolution or the server sends mail to the guests.
  *
- * Then it does what the comp editor does with a meeting the user organises:
- * creates two, one sent and one with "do not send" (the operation flag
- * `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`), and removes both the same
- * way. Each has its own guest, so the mock's scheduling outbox says which
- * change asked the server to send.
+ * Then the program does what the comp editor does for a meeting of the
+ * user. It creates two meetings: one is sent, one has "do not send"
+ * (`E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`). It removes the two meetings
+ * with the same flags. Each meeting has a different guest, so the scheduling
+ * outbox of the mock shows which change made the server send.
  *
- * Last, step (d): it creates a meeting with a guest the server has no way to
- * reach, as the comp editor would, and reports whether the create failed,
- * whether as `E_CLIENT_ERROR_INVALID_ARG`, and the message Evolution would
- * show. If the create succeeds (nothing asked the server to schedule), the
- * meeting is removed again so the store is left empty either way.
+ * Last, it creates a meeting with a guest that the server cannot reach. It
+ * reports if the create failed, if the error is
+ * `E_CLIENT_ERROR_INVALID_ARG`, and the message that Evolution shows. If the
+ * create succeeds, the program removes the meeting, so the store is empty.
  *
- * Everything around this program belongs to
- * `rust/crates/jmap-functional/tests/calendar-scheduling.rs`, which runs it
- * and reads its output: one `key=value` line per observation, non-zero exit
- * the moment a call fails.
+ * `rust/crates/jmap-functional/tests/calendar-scheduling.rs` runs this
+ * program and does the assertions. The program writes one `key=value` line
+ * for each observation. It exits non-zero when a call fails.
  *
  *   usage: functional-cal-scheduling-client <source-uid>
  */
@@ -54,8 +51,8 @@ report_capability (EClient *client,
 	g_print ("%s=%d\n", capability, e_client_check_capability (client, capability) ? 1 : 0);
 }
 
-/* Creates a meeting Olga organises with `guest`, returning the uid the
- * backend reports for it, or NULL with `error` set. */
+/* Creates a meeting of Olga with `guest`. Returns the uid from the backend,
+ * or NULL with `error` set. */
 static gchar *
 create_meeting (ECalClient *client,
 		const gchar *summary,

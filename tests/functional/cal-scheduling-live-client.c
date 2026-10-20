@@ -1,29 +1,28 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Against a real server with two accounts: the
- * organizer's side of a meeting, driven the way Evolution's comp editor
- * drives it, through a real, running `evolution-calendar-factory`.
+ * The organizer side of a meeting against a real server with two accounts.
+ * It makes the calls of the Evolution comp editor through a real
+ * `evolution-calendar-factory`.
  *
- * `cal-scheduling-client.c` proves the same calls against the mock, whose
- * outbox only records what it was asked to send. Here the guest is a second
- * account on the same server, so whether the server really delivered is
- * read from the guest's own calendar and mailbox by
- * `rust/crates/jmap-functional/tests/live-stalwart-calendar-scheduling.rs`,
- * which runs this program twice and owns every assertion:
+ * `cal-scheduling-client.c` makes the same calls against the mock, which
+ * only records what it must send. Here the guest is a second account on the
+ * same server.
+ * `rust/crates/jmap-functional/tests/live-stalwart-calendar-scheduling.rs`
+ * reads the calendar and mailbox of the guest to see the delivery. It runs
+ * this program two times and does all the assertions:
  *
- *   create: reports the three capabilities, then creates two meetings
- *   organised by <organizer> with <guest>, one sent and one with "do not
- *   send" (`E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`).
+ *   create: reports the three capabilities. Then creates two meetings with
+ *   <organizer> as organizer and <guest> as attendee: one is sent, one has
+ *   "do not send" (`E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`).
  *
- *   settle: run in a fresh scratch tree, so its first connect lists the
- *   calendar afresh (see `cal-changes-client.c`) and sees whatever the guest
- *   did to the organizer's copy meanwhile. Reports the guest's PARTSTAT on
- *   the sent meeting, then removes both meetings the same way they were
- *   created.
+ *   settle: runs in a new scratch tree, so its first connect lists the full
+ *   calendar again (see `cal-changes-client.c`) and sees the changes of the
+ *   guest. Reports the PARTSTAT of the guest on the sent meeting. Then
+ *   removes the two meetings with the same flags as at creation.
  *
- * One `key=value` line per observation, non-zero exit the moment a call
- * fails.
+ * The program writes one `key=value` line for each observation. It exits
+ * non-zero when a call fails.
  *
  *   usage: functional-cal-scheduling-live-client create <source-uid>
  *              <organizer> <guest> <sent-summary> <quiet-summary>
@@ -54,8 +53,8 @@ report_capability (EClient *client,
 	g_print ("%s=%d\n", capability, e_client_check_capability (client, capability) ? 1 : 0);
 }
 
-/* Creates a meeting `organizer` organises with `guest`, returning the uid
- * the backend reports for it, or NULL with `error` set. */
+/* Creates a meeting of `organizer` with `guest`. Returns the uid from the
+ * backend, or NULL with `error` set. */
 static gchar *
 create_meeting (ECalClient *client,
 		const gchar *summary,
@@ -90,8 +89,8 @@ create_meeting (ECalClient *client,
 	return uid;
 }
 
-/* The component titled `summary` in `components`, or NULL. Not a new
- * reference. */
+/* The component with the title `summary` in `components`, or NULL. Not a
+ * new reference. */
 static ICalComponent *
 find_by_summary (GSList *components,
 		 const gchar *summary)
@@ -108,8 +107,8 @@ find_by_summary (GSList *components,
 	return NULL;
 }
 
-/* The PARTSTAT `component` states for the attendee `mailto:<guest>`, as
- * iCalendar spells it, or "none" when it lists no such attendee. */
+/* The PARTSTAT of the attendee `mailto:<guest>` in iCalendar text, or "none"
+ * when `component` has no such attendee. */
 static gchar *
 guest_partstat (ICalComponent *component,
 		const gchar *guest)
@@ -126,7 +125,7 @@ guest_partstat (ICalComponent *component,
 		if (address && g_ascii_strcasecmp (address, wanted) == 0) {
 			ICalParameter *parameter;
 
-			/* Read as written, "PARTSTAT=ACCEPTED", and keep the value. */
+			/* Read the text "PARTSTAT=ACCEPTED" and keep the value. */
 			parameter = i_cal_property_get_first_parameter (property, I_CAL_PARTSTAT_PARAMETER);
 			if (parameter) {
 				gchar *written = i_cal_parameter_as_ical_string (parameter);

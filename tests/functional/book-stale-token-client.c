@@ -1,36 +1,34 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the ADDRESS-BOOK leg of the stale-access-token
- * acceptance test: the hourly re-consent, driven through a real
- * `evolution-addressbook-factory` and a real `evolution-source-registry`
- * rather than through the operator leaving Evolution open for an afternoon.
+ * The client part of the address-book test for a stale access token (the
+ * hourly re-consent). It uses a real `evolution-addressbook-factory` and a
+ * real `evolution-source-registry`.
  *
- * An ordinary libebook consumer. It opens a book — which is what makes the
- * factory dlopen `libebookbackendjmap.so` and keep a live, connected
- * `EBookMetaBackend` instance holding one pooled JMAP connection — creates a
- * contact, waits at a two-file handshake while the harness makes the server
- * refuse the access token that connection was built with, and creates a
- * second contact. Whether that second create succeeds, and at what cost, is
- * the whole question; this program answers nothing about it. Every judgement
- * belongs to `rust/crates/jmap-functional/tests/book-stale-token.rs`, which
- * runs this program and reads the `key=value` observations it writes to
- * stdout.
+ * An ordinary libebook consumer. It opens a book, which makes the factory
+ * dlopen `libebookbackendjmap.so` and keep a connected `EBookMetaBackend` with
+ * one pooled JMAP connection. It creates a contact. Then it waits at a
+ * two-file handshake while the test makes the server refuse the access token
+ * of that connection. Then it creates a second contact. This program only
+ * writes `key=value` observations to stdout.
+ * `rust/crates/jmap-functional/tests/book-stale-token.rs` makes all decisions.
  *
- * This is `tests/functional/cal-stale-token-client.c` with `libecal` swapped
- * for `libebook` — the mechanism and every constraint in its header apply
- * unchanged: `jmap_backend_core::oauth2::source_uses_oauth2` is the same
- * function for both backends, so the account must say `Method=JMAP`
- * (`e_oauth2_services_is_oauth2_alias` matches only a registered service),
- * which is exactly the condition under which EDS's own
- * `module-oauth2-services.so` exports `Source.OAuth2Support` and routes the
- * factory's `e_source_get_oauth2_access_token_sync` over D-Bus to the
- * registry, against this project's own `EOAuth2Service::get_refresh_uri` and
- * `[JMAP OAuth2]`'s `TokenEndpoint`. The refresh is gap-driven rather than
- * clock-driven for the same reason: a seeded secret carrying only a
- * `refresh_token` leaves `eos_lookup_token_sync`'s `expires_in` at -1, so
- * `e_oauth2_service_get_access_token_sync` (`<= TOKEN_VALIDITY_GAP_SECS`, 10)
- * refreshes on every fetch, with no wall-clock window to lose.
+ * This is `tests/functional/cal-stale-token-client.c` with `libebook` in
+ * place of `libecal`. The mechanism and the constraints in its header apply:
+ * `jmap_backend_core::oauth2::source_uses_oauth2` is the same for both
+ * backends, so the account must have `Method=JMAP`
+ * (`e_oauth2_services_is_oauth2_alias` matches only a registered service).
+ * With that method, the EDS `module-oauth2-services.so` exports
+ * `Source.OAuth2Support` and sends the factory's
+ * `e_source_get_oauth2_access_token_sync` over D-Bus to the registry. The
+ * registry uses `EOAuth2Service::get_refresh_uri` from this project and the
+ * `TokenEndpoint` of `[JMAP OAuth2]`.
+ *
+ * The refresh depends on the validity gap, not on the clock. A stored secret
+ * with only a `refresh_token` makes `eos_lookup_token_sync` set `expires_in`
+ * to -1. Thus `e_oauth2_service_get_access_token_sync`
+ * (`<= TOKEN_VALIDITY_GAP_SECS`, 10) refreshes on each fetch, with no
+ * time window to miss.
  *
  *   usage: functional-book-stale-token-client <source-uid> <secret-uid> \
  *              <secret-json> <ready-path> <go-path>
@@ -40,8 +38,8 @@
 
 #include "connection-status.h"
 
-/* See `cal-stale-token-client.c`'s own copy of this macro for why it is
- * named as a string rather than through EDS's generated accessors. */
+/* `cal-stale-token-client.c` tells why this is a string and not an EDS
+ * generated accessor. */
 #define OAUTH2_SUPPORT_INTERFACE "org.gnome.evolution.dataserver.Source.OAuth2Support"
 
 /* See `cal-stale-token-client.c`. */
@@ -72,9 +70,8 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Counted rather than acted on: in the running application this signal is
- * what puts the credentials prompter — and, for an OAuth2-method source, the
- * consent window — in front of the user. */
+/* Only count this signal. In Evolution, it shows the credentials prompter (and
+ * the consent window for an OAuth2 source) to the user. */
 static void
 credentials_required_cb (ESource *source,
                          ESourceCredentialsReason reason,
@@ -108,10 +105,9 @@ oauth2_support_exported (ESource *source)
 	return exported;
 }
 
-/* Create one contact and report whether EDS accepted it, plus the message it
- * refused with. Never fatal: the second call's failure is a result this test
- * has two opposite expectations of, depending on which token the harness let
- * the server keep. */
+/* Create one contact and report if EDS accepted it, or the refusal message.
+ * A failure is not fatal: the test expects either result from the second
+ * call, related to the token that the server accepts. */
 static gboolean
 create_contact (EBookClient *book,
                 const gchar *full_name,
@@ -140,9 +136,8 @@ create_contact (EBookClient *book,
 	return ok;
 }
 
-/* See `cal-stale-token-client.c`'s own copy: iterates this thread's default
- * main context for `milliseconds`, so queued idles — the only way ESource
- * applies anything it learned over D-Bus — get to run. */
+/* Iterates the default main context of this thread for `milliseconds`, so
+ * that queued idles run. ESource applies D-Bus updates only from idles. */
 static void
 settle (guint milliseconds)
 {
@@ -199,15 +194,15 @@ main (int argc,
 	ready_path = argv[4];
 	go_path = argv[5];
 
-	/* Before anything connects: the stored refresh token an account that has
-	 * been consented to once already has. */
+	/* Before the connect, store the refresh token that an account has after
+	 * one consent. */
 	if (!e_secret_store_store_sync (secret_uid, secret_json,
 					"Evolution Data Source - jmap-functional",
 					TRUE, NULL, &error))
 		return fail ("seed-secret", error);
 
-	/* Activates evolution-source-registry on the session bus, which reads the
-	 * scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry on the session bus. It reads the
+	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -220,15 +215,14 @@ main (int argc,
 
 	observe_boolean ("oauth2-support-exported", oauth2_support_exported (source));
 
-	/* Connected before the first connect, so that a consent escalation
-	 * raised by the connect itself would be counted too. */
+	/* Connect the signal before the first connect, to count a consent request
+	 * from the connect too. */
 	g_signal_connect (source, "credentials-required",
 			  G_CALLBACK (credentials_required_cb), &credentials_required);
 
-	/* Activates evolution-addressbook-factory and keeps a live backend
-	 * instance for the rest of this process's life. This is where the
-	 * pooled connection whose token the test later rotates out from under
-	 * it is built, and the access token it carries is fetched here, once. */
+	/* Starts evolution-addressbook-factory, with a backend instance that
+	 * stays for the life of this process. This builds the pooled connection
+	 * and gets its access token once. The test rotates that token later. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);
@@ -237,19 +231,18 @@ main (int argc,
 
 	functional_report_connection_status (source, 10);
 
-	/* The operation before the token goes stale, and this program's own
-	 * precondition: a backend that could not write at all would produce the
-	 * same "second create failed" this test is otherwise about. */
+	/* The create before the token becomes stale. It is also a precondition: a
+	 * backend that cannot write also causes "second create failed". */
 	if (!create_contact (book, "Before the rotation",
 			     "first-create-ok", "first-create-error"))
 		return 1;
 
 	g_print ("credentials-required-before-rotation=%u\n", credentials_required);
 
-	/* Meet the harness. It rotates the server's accepted bearer token — and,
-	 * in the positive case, what its token endpoint hands out next — only
-	 * once the connection above exists, because the token has to go stale
-	 * BETWEEN two of this client's own calls. */
+	/* Synchronize with the test. It rotates the bearer token that the server
+	 * accepts (and, in the positive case, the next token from its token
+	 * endpoint) after the connection exists. The token must become stale
+	 * BETWEEN two calls of this client. */
 	if (!g_file_set_contents (ready_path, "ready", -1, &error))
 		return fail ("write-ready", error);
 
@@ -258,7 +251,7 @@ main (int argc,
 		return 1;
 	}
 
-	/* The whole question. */
+	/* The operation that the test examines. */
 	create_contact (book, "After the rotation",
 			"second-create-ok", "second-create-error");
 

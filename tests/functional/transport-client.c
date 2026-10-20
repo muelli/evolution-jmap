@@ -1,37 +1,35 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the transport functional test: the send path, walked from
- * the account the way Evolution walks it.
+ * The client half of the transport functional test. It follows the send path
+ * from the account, as Evolution does.
  *
- * mail-client.c is the receiving half and opens a store. This program never
- * opens one. A `CamelTransport` is a second `CamelService`, instantiated from a
- * second `ESource` out of the same provider's `object_types` table, and the
- * only thing that joins it to the account is two hops of uid indirection
- * through a third source:
+ * mail-client.c is the receive half and opens a store. This program opens no
+ * store. A `CamelTransport` is a second `CamelService`, made from a second
+ * `ESource` through the `object_types` table of the same provider. Only two
+ * UID links through a third source connect it to the account:
  *
  *   [Mail Account] IdentityUid  -> the identity source
  *   [Mail Identity] / [Mail Submission] TransportUid -> the transport source
  *
- * Camel does not walk that chain — it knows nothing about ESource. Evolution
- * walks it, in evolution-mail, out of libedataserver accessors, and this
- * program walks the same one with the same accessors. It is handed the
- * *account* uid and finds the rest, which is the thing being tested: every link
- * is a string in a file that nothing else in this repository can hold to the
- * file it names.
+ * Camel does not follow this chain, because it knows nothing about ESource.
+ * Evolution follows it in evolution-mail with libedataserver accessors, and
+ * this program uses the same accessors. It gets the *account* UID and finds
+ * the rest. This is the subject of the test: each link is a string in a file,
+ * and nothing else in this repository checks it against the file that it
+ * names.
  *
- * The message it sends is built from the arguments rather than from constants
- * of its own, so that what the test asserts and what goes on the wire are one
- * string. Everything else follows mail-client.c: one `key=value` line per
- * observation, exit non-zero the moment a call fails, and no opinion about what
- * any of it should say — `rust/crates/jmap-functional/tests/transport.rs` holds
- * those.
+ * The program builds the message from its arguments, not from its own
+ * constants. Thus the test checks the same strings that go on the wire.
+ * Everything else is as in mail-client.c: one `key=value` line for each
+ * observation, and a non-zero exit when a call fails.
+ * `rust/crates/jmap-functional/tests/transport.rs` checks the output.
  *
- * The CamelSession is instantiated directly, with mail-client.c's caveat in
- * full: the base class's authenticate_sync warns on stderr that it "is not
- * intended for production use", the provider's connect_sync asks for it as
- * every Camel provider does, and the source names no user for it to resolve.
- * That warning is expected output.
+ * The program creates the CamelSession directly, as mail-client.c does. The
+ * provider's connect_sync calls authenticate_sync, as every Camel provider
+ * does, and the source names no user. The base class then writes a warning on
+ * stderr that it "is not intended for production use". This warning is
+ * expected.
  *
  *   usage: functional-transport-client <account-source-uid> <recipient> <subject> <body>
  */
@@ -51,9 +49,9 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* One hop of the chain: the source `uid` names, or NULL with the failure
- * already reported. A missing source is not the same failure as a source that
- * says nothing, and the caller cannot tell them apart from a NULL string. */
+/* One link of the chain: the source that `uid` names, or NULL after it reports
+ * the failure. A missing source and an empty UID are different failures, and
+ * the caller cannot see the difference in a NULL return. */
 static ESource *
 ref_source (ESourceRegistry *registry,
 	    const gchar *what,
@@ -115,8 +113,8 @@ main (int argc,
 	subject = argv[3];
 	body = argv[4];
 
-	/* The scratch tree the harness built; a session that fell back to the
-	 * real XDG directories would write into the developer's own store. */
+	/* The harness points these at the scratch tree. The real XDG
+	 * directories would put data into the developer's own store. */
 	data_dir = g_get_user_data_dir ();
 	cache_dir = g_get_user_cache_dir ();
 
@@ -137,8 +135,8 @@ main (int argc,
 		goto out;
 	}
 
-	/* Hop one. An account's identity is what it sends *as*, and Evolution
-	 * offers the user no way to send from an account that names none. */
+	/* Link one. The identity of an account is the sender. Evolution does
+	 * not let the user send from an account with no identity. */
 	account_extension = e_source_get_extension (account, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
 	identity_uid = e_source_mail_account_get_identity_uid (account_extension);
 	g_print ("identity-uid=%s\n", identity_uid ? identity_uid : "");
@@ -162,10 +160,9 @@ main (int argc,
 		goto out;
 	}
 
-	/* Hop two, and it hangs off the *identity* rather than off the account.
-	 * That is not an accident of the file format: one account may send
-	 * through several identities and each may leave by a different route, so
-	 * the transport is a property of who the mail is from. */
+	/* Link two comes from the *identity*, not from the account. One
+	 * account can send through many identities, and each identity can use
+	 * a different route. Thus the transport is a property of the sender. */
 	if (!e_source_has_extension (identity, E_SOURCE_EXTENSION_MAIL_SUBMISSION)) {
 		g_printerr ("identity '%s' has no submission extension\n", identity_uid);
 		goto out;
@@ -184,10 +181,10 @@ main (int argc,
 		goto out;
 	}
 
-	/* The protocol off the transport source, not off the account's: they are
-	 * two `BackendName` lines in two files, and a transport that named
-	 * another provider is a perfectly valid configuration that this account
-	 * does not have. */
+	/* Read the protocol from the transport source, not from the account.
+	 * These are two `BackendName` lines in two files. A transport for a
+	 * different provider is a valid configuration, but this account does
+	 * not have one. */
 	backend_extension = e_source_get_extension (transport_source, E_SOURCE_EXTENSION_MAIL_TRANSPORT);
 	protocol = e_source_backend_get_backend_name (backend_extension);
 	g_print ("protocol=%s\n", protocol ? protocol : "");
@@ -197,10 +194,9 @@ main (int argc,
 				"user-cache-dir", cache_dir,
 				NULL);
 
-	/* CAMEL_PROVIDER_TRANSPORT, which is a different entry of the same
-	 * registered provider struct than mail-client.c's store came out of. A
-	 * provider that left the transport slot G_TYPE_INVALID loads, receives
-	 * mail, and fails here. */
+	/* CAMEL_PROVIDER_TRANSPORT is a different entry in the provider struct
+	 * than the store in mail-client.c. A provider with G_TYPE_INVALID in
+	 * the transport entry loads and receives mail, but fails here. */
 	service = camel_session_add_service (session, transport_uid, protocol,
 					     CAMEL_PROVIDER_TRANSPORT, &error);
 	if (!service) {
@@ -218,9 +214,9 @@ main (int argc,
 	g_print ("transport-connected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
 
-	/* What the composer would have handed over. The `From` header and the
-	 * envelope sender are the same address here, which is the ordinary case;
-	 * that they *may* differ is jmap-mail's own tests' business. */
+	/* The message from the composer. Here the `From` header and the
+	 * envelope sender are the same address, which is usual. The jmap-mail
+	 * tests check the case where they are different. */
 	message = camel_mime_message_new ();
 	camel_mime_message_set_subject (message, subject);
 
@@ -235,10 +231,9 @@ main (int argc,
 	camel_mime_part_set_content (CAMEL_MIME_PART (message), body, strlen (body),
 				     "text/plain; charset=UTF-8");
 
-	/* The two address lists are passed separately from the message on
-	 * purpose: they are the envelope, which is what the message is
-	 * *delivered* by, and Evolution fills them in from the account and the
-	 * composer's recipient fields rather than from the headers. */
+	/* Give the two address lists separately from the message. They are the
+	 * envelope, which controls the delivery. Evolution fills them from the
+	 * account and the composer recipient fields, not from the headers. */
 	if (!camel_transport_send_to_sync (CAMEL_TRANSPORT (service), message,
 					   CAMEL_ADDRESS (from), CAMEL_ADDRESS (recipients),
 					   &sent_copy_saved, NULL, &error)) {
@@ -250,19 +245,18 @@ main (int argc,
 	}
 
 	g_print ("sent=1\n");
-	/* Camel's one out-parameter besides the error: whether the transport has
-	 * already saved the sent copy. Evolution appends one of its own when it
-	 * is told FALSE, so this line is the difference between one copy in Sent
-	 * and two. */
+	/* The only Camel out-parameter other than the error: TRUE if the
+	 * transport already saved the sent copy. On FALSE, Evolution appends
+	 * its own copy, so this value gives one or two copies in Sent. */
 	g_print ("sent-copy-saved=%d\n", sent_copy_saved ? 1 : 0);
 
 	g_object_unref (recipients);
 	g_object_unref (from);
 	g_object_unref (message);
 
-	/* Evolution disconnects a transport when it is done with the outbox, and
-	 * a transport that held its connection open would keep an HTTP client —
-	 * and its socket — alive for the life of the account. */
+	/* Evolution disconnects a transport after the outbox is empty. A
+	 * transport that kept its connection would keep an HTTP client and its
+	 * socket for the life of the account. */
 	if (!camel_service_disconnect_sync (service, TRUE, NULL, &error)) {
 		status = fail ("disconnect", error);
 		goto out;

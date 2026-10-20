@@ -1,45 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Two JMAP accounts that authenticate as the
-//! same `[Authentication] User` share one OAuth2 secret-store slot, because
-//! `eos_generate_secret_uid` (evolution-data-server 3.52.3,
-//! `e-oauth2-service.c:1086`, read rather than assumed) derives that slot's
-//! key as `"OAuth2::<service name>[<user>]"` — no host. Every in-tree
-//! `EOAuth2Service` names exactly one cloud, so the pair is unique there;
-//! JMAP is multi-server, so an account at one deployment and an account at a
-//! completely unrelated one, both authenticating as the same address,
-//! collide.
+//! Two JMAP accounts with the same `[Authentication] User` share one OAuth2
+//! secret-store slot. `eos_generate_secret_uid` (evolution-data-server
+//! 3.52.3, `e-oauth2-service.c:1086`) makes the slot key
+//! `"OAuth2::<service name>[<user>]"`, with no host. Each in-tree
+//! `EOAuth2Service` names one cloud, so the pair is unique there. JMAP has
+//! many servers, so two accounts on two unrelated deployments with the same
+//! address collide.
 //!
 //! ## Why two mock servers, not a live Fastmail/Stalwart pair
 //!
-//! The scenario this reproduces is a real Stalwart test server and a
-//! Fastmail account sharing an address. Neither is reachable headlessly
-//! from here: this runner holds no Fastmail
-//! credentials (the operator's real account is the only one that exists),
-//! and a literal two-real-server repro would need a GUI consent flow this
-//! VM has no display for. The defect itself is not about what either server
-//! answers — it is entirely in EDS's own key derivation, independent of
-//! which two servers are involved — so two independently configured mock
-//! deployments, standing in for "Fastmail" and "a self-hosted Stalwart" the
-//! way every other functional test here stands one mock in for "a real JMAP
-//! server", reproduce the identical bug deterministically and are
-//! reproducible by anyone who checks this repository out, live
-//! infrastructure or not.
+//! The real scenario is a Stalwart test server and a Fastmail account with
+//! the same address. This runner has no Fastmail credentials, and a test with
+//! two real servers needs a GUI consent flow, but this VM has no display. The
+//! defect is in the EDS key derivation, not in the server answers. Thus two
+//! mock deployments reproduce the same bug deterministically, without live
+//! infrastructure.
 //!
 //! ## The shape of the proof
 //!
-//! Account A seeds a refresh token and connects for real against mock
-//! server A, which mints a fresh, long-lived access token that
-//! `eos_store_token_sync` files under the shared slot. Account B then asks
-//! for a token of its own, having consented to nothing — and
-//! `functional-oauth2-token-collision-client` is run for it exactly as a
-//! freshly added account's factory would run. Two facts nail the collision
-//! down at once: mock server B's token endpoint is asked nothing at all
-//! (account B never even attempts a refresh of its own, because the lookup
-//! under the shared slot already finds an unexpired token), and the token
-//! account B is handed is not merely *a* valid-looking string but the
-//! byte-for-byte access token mock server A minted for account A.
+//! Account A gets a refresh token and connects to mock server A. Server A
+//! issues a long-lived access token, and `eos_store_token_sync` stores it in
+//! the shared slot. Then `functional-oauth2-token-collision-client` asks for a
+//! token for account B, which has no consent. This is the same as the factory
+//! of a new account. Two facts prove the collision. The token endpoint of
+//! mock server B gets no request, because the lookup in the shared slot finds
+//! a token that is not expired. Account B gets the exact access token that
+//! mock server A issued for account A.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -47,39 +35,35 @@ use std::sync::{Arc, Mutex};
 use jmap_functional::{Session, observations, required_path};
 use serde_json::json;
 
-/// `[Authentication] User`, shared by both accounts — the whole precondition
-/// for the collision, per `eos_generate_secret_uid`.
+/// The `[Authentication] User` of the two accounts. Per
+/// `eos_generate_secret_uid`, this is the precondition for the collision.
 const SECRET_USER: &str = "jmap-oauth2-collision";
 
-/// `jmap_config::oauth2_service::NAME` is `"JMAP"`; this is the key that
-/// name and [`SECRET_USER`] produce, host-blind by construction.
+/// The key from `jmap_config::oauth2_service::NAME` (`"JMAP"`) and
+/// [`SECRET_USER`]. It contains no host.
 const SECRET_UID: &str = "OAuth2::JMAP[jmap-oauth2-collision]";
 
-/// What account A is seeded as already holding — a refresh token with no
-/// `expires_after`, which makes `eos_lookup_token_sync` report `-1` and so
-/// forces `e_source_get_oauth2_access_token_sync` to refresh on account A's
-/// very first fetch (`e-oauth2-service.c:1893`, `TOKEN_VALIDITY_GAP_SECS`
-/// is 10) — deterministic, no timing window.
+/// The initial refresh token of account A. It has no `expires_after`, so
+/// `eos_lookup_token_sync` gives `-1`. Thus
+/// `e_source_get_oauth2_access_token_sync` refreshes on the first fetch of
+/// account A (`e-oauth2-service.c:1893`, `TOKEN_VALIDITY_GAP_SECS` is 10),
+/// with no timing window.
 const SEED_REFRESH_TOKEN: &str = "seed-refresh-token-account-a";
 
-/// What mock server A's token endpoint mints for account A's refresh. Chosen
-/// distinct from anything server B could ever produce, so if account B's
-/// fetch reports this string back there is only one place it could have
-/// come from.
+/// The access token that mock server A issues for the refresh of account A.
+/// Server B cannot make this string, so if account B gets it, it comes from
+/// server A.
 const SERVER_A_ACCESS_TOKEN: &str = "server-a-access-token";
 
-/// Long enough that the token is nowhere near
-/// `TOKEN_VALIDITY_GAP_SECS` (10) by the time account B looks the shared
-/// slot up moments later, so account B's fetch is answered out of the store
-/// alone — no refresh, no network call to either server.
+/// Much longer than `TOKEN_VALIDITY_GAP_SECS` (10). Thus the store alone
+/// answers the fetch of account B, with no refresh and no network call.
 const TOKEN_LIFETIME_SECONDS: u64 = 3600;
 
-/// An account keyfile naming [`SECRET_USER`] and a `TokenEndpoint` unique to
-/// this one deployment. `[Collection]` rather than `[Calendar]`/`[Mail]`:
-/// this test never opens a factory, only the registry (the same shape
-/// `oauth2-stale-proxy.rs` uses), so nothing beyond `module-jmap-backend.so`
-/// registering the "JMAP" `EOAuth2Service` and `[JMAP OAuth2]`'s extension
-/// type is needed.
+/// An account keyfile with [`SECRET_USER`] and a `TokenEndpoint` for one
+/// deployment. It uses `[Collection]`, not `[Calendar]`/`[Mail]`, because the
+/// test opens only the registry, not a factory (as `oauth2-stale-proxy.rs`
+/// does). It needs only the "JMAP" `EOAuth2Service` and the `[JMAP OAuth2]`
+/// extension type from `module-jmap-backend.so`.
 fn keyfile(display_name: &str, port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -109,15 +93,12 @@ fn keyfile(display_name: &str, port: u16) -> String {
     )
 }
 
-/// Every form body a mock deployment's token endpoint was asked with, in
-/// order — shared between the handler closure that appends to it and the
-/// assertions that read it back afterwards.
+/// The form bodies that the token endpoint of a mock deployment received,
+/// in sequence. The handler closure writes them and the assertions read them.
 type TokenRequestLog = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
 
-/// A mock deployment's own count of how many times its token endpoint was
-/// asked, plus what it hands out. `issued_access_token` is only ever
-/// consulted by server A's handler in this test — server B's is asked
-/// nothing at all, which is exactly the fact under test.
+/// Starts a mock deployment that issues `issued_access_token` and records
+/// each token request. In this test, only server A gets requests.
 fn counted_oauth_server(
     issued_access_token: &'static str,
 ) -> (jmap_mock::MockServer, TokenRequestLog) {
@@ -149,8 +130,8 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
     let module = required_path("JMAP_FUNCTIONAL_COLLECTION_MODULE");
     let oauth2_services = required_path("JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE");
 
-    // Server B's handler would report a request too, if account B's fetch
-    // ever reached it — the assertion below is that it never does.
+    // The handler of server B also records requests. The test asserts that
+    // it gets none.
     let (server_a, requests_a) = counted_oauth_server(SERVER_A_ACCESS_TOKEN);
     let (server_b, requests_b) = counted_oauth_server("server-b-access-token");
 
@@ -176,13 +157,12 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
     session.write_source(ACCOUNT_A, &keyfile("JMAP collision account A", port_a));
     session.write_source(ACCOUNT_B, &keyfile("JMAP collision account B", port_b));
     session.stage_collection_backend(&module);
-    // Must come after the line above: both write EDS_REGISTRY_MODULES, and
-    // this one adds to the directory that one created.
+    // Keep this after the line above. Both write EDS_REGISTRY_MODULES, and
+    // this call adds to the directory that the previous call created.
     session.stage_installed_registry_module(&oauth2_services);
 
-    // Account A: seeded with a refresh token, so its first fetch is a real
-    // refresh grant against mock server A, minting SERVER_A_ACCESS_TOKEN
-    // and filing it under the shared slot.
+    // Account A has a refresh token. Its first fetch is a refresh grant to
+    // mock server A, which issues SERVER_A_ACCESS_TOKEN into the shared slot.
     let seed = json!({ "refresh_token": SEED_REFRESH_TOKEN }).to_string();
     let output_a = session.run(&client, &[ACCOUNT_A, SECRET_UID, &seed]);
     let stdout_a = String::from_utf8_lossy(&output_a.stdout).into_owned();
@@ -214,9 +194,8 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
          once\n{report_a}"
     );
 
-    // Account B: never seeded, never consented — an ordinary "just added
-    // this account" fetch, run against a source whose Host, Port and
-    // TokenEndpoint all name server B and nothing about server A.
+    // Account B has no token and no consent, as a new account. Its Host,
+    // Port and TokenEndpoint all name server B.
     let output_b = session.run(&client, &[ACCOUNT_B, SECRET_UID, ""]);
     let stdout_b = String::from_utf8_lossy(&output_b.stdout).into_owned();
     let stderr_b = String::from_utf8_lossy(&output_b.stderr);
@@ -237,7 +216,7 @@ fn two_accounts_sharing_a_user_string_share_one_token_slot() {
          than that the underlying bug is gone\n{report_b}"
     );
 
-    // The collision itself, from two independent directions.
+    // Two independent proofs of the collision.
     assert_eq!(
         requests_b.lock().expect("server B's request log").len(),
         0,

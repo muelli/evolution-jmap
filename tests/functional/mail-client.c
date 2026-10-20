@@ -1,39 +1,31 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the mail functional test: an ordinary libcamel
- * consumer, the way Evolution's mail view is one. It knows nothing about
- * JMAP and nothing about the mock server — it opens a store for a source
- * uid, lists the folder tree, opens the inbox and reads a message out of
- * it, which is the whole of what receiving mail is.
+ * The client half of the mail functional test. It is an ordinary libcamel
+ * consumer, like the Evolution mail view. It knows nothing about JMAP or the
+ * mock server. It opens a store for a source UID, lists the folder tree,
+ * opens the inbox and reads the messages in it.
  *
- * The two halves either side of it are the same as the address book's:
- * `rust/crates/jmap-functional/tests/mail.rs` builds the scratch tree, the
- * `.source` keyfile, the private bus and the mock, and holds every opinion
- * about what the output should say. This program reports what Camel told
- * it, one `key=value` line per observation, and exits non-zero the moment a
- * call fails.
+ * `rust/crates/jmap-functional/tests/mail.rs` creates the scratch tree, the
+ * `.source` keyfile, the private bus and the mock, and checks the output.
+ * This program writes one `key=value` line for each observation. It exits
+ * with a non-zero status when a call fails.
  *
- * What it does *not* share with book-client.c is the host process, and that
- * is why this test exists at all. An address book backend is dlopened by a
- * factory daemon EDS ships; a Camel provider is dlopened by the mail client
- * itself, out of a directory Camel finds by reading the `.urls` file beside
- * each object. So this program is that host: it is the process the provider
- * is loaded into, and reaching `store-connected=1` already proves the
- * `.urls` file, the protocol name and the entry point agree — three things
- * that live in three files and that no unit test can hold together, because
- * a unit test links the provider rather than letting Camel find it.
+ * Unlike book-client.c, this program is the host process. An EDS factory
+ * daemon dlopens an address book backend, but the mail client itself dlopens
+ * a Camel provider. Camel finds the provider through the `.urls` file beside
+ * each object. Thus `store-connected=1` proves that the `.urls` file, the
+ * protocol name and the entry point agree. These are in three files, and a
+ * unit test cannot check them together, because it links the provider
+ * directly.
  *
- * A CamelSession is instantiated directly rather than subclassed. Evolution
- * subclasses it (EMailSession) to answer the vfuncs that need a user —
- * passwords, trust prompts, filters — and the source below deliberately
- * names no user, so nothing the base class's defaults do can matter. One of
- * them says so on stderr: the provider's connect_sync asks the session to
- * authenticate it, as every Camel provider does, and the default
- * authenticate_sync warns that it "is not intended for production use"
- * before doing the one round it takes for a service that needs no password.
- * That warning is expected output here, and is itself evidence the
- * authenticate path ran.
+ * The program creates a CamelSession directly, without a subclass. Evolution
+ * uses a subclass (EMailSession) for the vfuncs that need a user: passwords,
+ * trust prompts and filters. The source names no user, so the base class
+ * defaults have no effect. The provider's connect_sync asks the session to
+ * authenticate, as every Camel provider does. The default authenticate_sync
+ * then writes a warning that it "is not intended for production use". This
+ * warning is expected, and shows that the authenticate path ran.
  *
  *   usage: functional-mail-client <source-uid>
  */
@@ -51,12 +43,11 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* 3.58 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
- * pair with `camel_folder_dup_uids`, an ordinary reference-counted
- * `GPtrArray` the caller owns (see `docs/eds-version-matrix.md`; the Rust
- * side has the same two names behind `eds-sys`'s `compat::folder_dup_uids`/
- * `folder_free_uids`). This test client links no crate from this
- * repository, so the same two names are repeated here as plain C. */
+/* From 3.58, `camel_folder_dup_uids` replaces the borrowed
+ * `camel_folder_get_uids`/`camel_folder_free_uids` pair. It returns a
+ * reference-counted `GPtrArray` that the caller owns (see
+ * `docs/eds-version-matrix.md`). `eds-sys` has wrappers with the same two
+ * names in `compat`, but this client links no crate from this repository. */
 static GPtrArray *
 folder_dup_uids (CamelFolder *folder)
 {
@@ -78,10 +69,8 @@ folder_free_uids (CamelFolder *folder,
 #endif
 }
 
-/* The folder tree, flattened into a list of full names. A tree is what the
- * store returns and a flat sorted list is what the test can hold to; the
- * nesting is not what this test is about — jmap-mail's own tests own the
- * shape of the tree. */
+/* Flattens the folder tree into a list of full names. This test checks the
+ * names; the jmap-mail tests check the tree shape. */
 static void
 collect_folder_names (CamelFolderInfo *info,
 		      GPtrArray *names)
@@ -92,11 +81,8 @@ collect_folder_names (CamelFolderInfo *info,
 	}
 }
 
-/* One `key=a,b,c` line, sorted. Sorted because every list this program
- * reports is a set: the order Camel hands folders or message uids over is
- * the provider's business, and a test that compared it as given would be
- * asserting an order nobody promised. Consumes nothing; `values` is left
- * sorted and owned by the caller. */
+/* Writes one sorted `key=a,b,c` line. Each list is a set, because the provider
+ * controls the order. `values` stays sorted and the caller keeps ownership. */
 static void
 report_sorted (const gchar *key,
 	       GPtrArray *values)
@@ -104,13 +90,12 @@ report_sorted (const gchar *key,
 	gchar *joined;
 
 	g_ptr_array_sort_values (values, (GCompareFunc) g_strcmp0);
-	/* g_strjoinv wants a NULL-terminated vector, and the terminator has
-	 * to go on after the sort so it is not sorted into the middle. */
+	/* g_strjoinv needs a NULL terminator. Add it after the sort. */
 	g_ptr_array_add (values, NULL);
 	joined = g_strjoinv (",", (gchar **) values->pdata);
 	g_print ("%s=%s\n", key, joined);
 	g_free (joined);
-	/* Leave the array as the caller handed it over. */
+	/* Remove the terminator again. */
 	g_ptr_array_remove_index (values, values->len - 1);
 }
 
@@ -152,30 +137,27 @@ main (int argc,
 
 	source_uid = argv[1];
 
-	/* The scratch tree the harness built. Camel keeps a summary database
-	 * and a message cache per service under these, and a session that
-	 * fell back to the real XDG directories would write into the
-	 * developer's own Evolution store. */
+	/* The harness points these at the scratch tree. Camel keeps a summary
+	 * database and a message cache for each service in them. The real XDG
+	 * directories would put data into the developer's own Evolution store. */
 	data_dir = g_get_user_data_dir ();
 	cache_dir = g_get_user_cache_dir ();
 
-	/* Reads the `.urls` files out of EDS_CAMEL_PROVIDER_DIR, which the
-	 * harness points at a directory holding this repository's provider
-	 * and nothing else. Nothing is dlopened yet: a `.urls` file only
-	 * tells Camel which protocols the object beside it claims. */
+	/* Reads the `.urls` files in EDS_CAMEL_PROVIDER_DIR. The harness
+	 * points it at a directory that holds only the provider of this
+	 * repository. This step dlopens nothing: a `.urls` file only gives the
+	 * protocols of the object beside it. */
 	camel_init (data_dir, FALSE);
 	camel_provider_init ();
 
-	/* Generates the ESourceCamel subtype each provider's settings live
-	 * under, so that the `[JMAP Backend]` group in the keyfile parses
-	 * into a CamelSettings object rather than being ignored. This is
-	 * what Evolution calls, and skipping it gives a store that connects
-	 * to whatever the settings defaults are — which for a host and port
-	 * is nothing at all. */
+	/* Registers the ESourceCamel subtype for the settings of each
+	 * provider. Without it, the `[JMAP Backend]` keyfile group does not
+	 * parse into a CamelSettings object, and the store connects to the
+	 * default host and port, which are empty. Evolution also calls this. */
 	e_source_camel_register_types ();
 
-	/* Activates evolution-source-registry on the private session bus,
-	 * which reads the scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry on the private session bus. It
+	 * reads the scratch sources directory from the harness. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -186,11 +168,10 @@ main (int argc,
 		return 1;
 	}
 
-	/* The protocol comes off the source rather than being spelled here.
-	 * `BackendName=jmap` in the keyfile, the protocol in
-	 * libcameljmap.urls and the one camel_provider_module_init registers
-	 * are three spellings that have to agree, and a program that
-	 * hardcoded the middle one would agree with itself. */
+	/* Read the protocol from the source, not from a literal. The keyfile
+	 * `BackendName=jmap`, libcameljmap.urls and camel_provider_module_init
+	 * each spell it, and all three must agree. A literal here would hide a
+	 * disagreement. */
 	if (!e_source_has_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT)) {
 		g_printerr ("source '%s' is not a mail account\n", source_uid);
 		return 1;
@@ -205,18 +186,17 @@ main (int argc,
 				"user-cache-dir", cache_dir,
 				NULL);
 
-	/* Where the provider is dlopened: Camel looks the protocol up in the
-	 * table the `.urls` files built, and opens the object beside the file
-	 * that claimed it. A protocol no file claims fails here, with "no
-	 * provider available" — which is the failure mode the manual recipe
-	 * warns about, arriving at exactly this call. */
+	/* Camel dlopens the provider here. It finds the protocol in the table
+	 * from the `.urls` files and opens the object beside the file that
+	 * claims it. An unclaimed protocol fails here with "no provider
+	 * available". */
 	service = camel_session_add_service (session, source_uid, protocol,
 					     CAMEL_PROVIDER_STORE, &error);
 	if (!service)
 		return fail ("add-service", error);
 
-	/* Copies the keyfile's settings onto the service — the host, the port
-	 * and the security method the provider reads in connect_sync. */
+	/* Copies the keyfile settings to the service: the host, the port and
+	 * the security method that connect_sync reads. */
 	e_source_camel_configure_service (source, service);
 
 	if (!camel_service_connect_sync (service, NULL, &error))
@@ -240,15 +220,14 @@ main (int argc,
 	report_sorted ("folders", names);
 	g_ptr_array_unref (names);
 
-	/* `CamelSubscribable`: the tick beside a folder in the subscription
-	 * editor. Two folders, two directions, so neither write happens to
-	 * already hold the value it is asked to set: "Sent" starts subscribed
-	 * (every mailbox the mock seeds is) and is unsubscribed here; "Drafts"
-	 * starts unsubscribed (the Rust harness seeds it that way for this
-	 * purpose) and is subscribed here. `folder_is_subscribed` takes no
-	 * cancellable or error — it is one of Camel's non-blocking methods —
-	 * so it is called straight off the cast rather than through a
-	 * fail()-checked wrapper. */
+	/* `CamelSubscribable` controls the tick beside a folder in the
+	 * subscription editor. The two folders change in opposite directions,
+	 * so no write sets a value that is already there. "Sent" starts
+	 * subscribed, as all mailboxes from the mock do, and this block
+	 * unsubscribes it. "Drafts" starts unsubscribed (the Rust harness
+	 * seeds it so), and this block subscribes it. `folder_is_subscribed`
+	 * is a non-blocking method with no cancellable or error, so it needs
+	 * no fail() check. */
 	{
 		CamelSubscribable *subscribable = CAMEL_SUBSCRIBABLE (store);
 
@@ -267,19 +246,17 @@ main (int argc,
 			 camel_subscribable_folder_is_subscribed (subscribable, "Drafts") ? 1 : 0);
 	}
 
-	/* The inbox by its role rather than by its name: Camel asks the store
-	 * which folder is the inbox, and the provider answers from the
-	 * mailbox's JMAP role. A store that got that wrong hands back a
-	 * folder that merely happens to be called one. */
+	/* Get the inbox by role, not by name. The provider answers from the
+	 * JMAP role of the mailbox. A wrong answer gives a folder that only
+	 * has the name of an inbox. */
 	inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
 	if (!inbox)
 		return fail ("inbox", error);
 
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
 
-	/* The other two by-role lookups: same purpose-lookup family as the
-	 * inbox above, each answered from a different role rather than the
-	 * inherited vTrash/vJunk virtual folders. */
+	/* Trash and junk use the same lookup by role, not the inherited vTrash
+	 * and vJunk virtual folders. */
 	trash = camel_store_get_trash_folder_sync (store, NULL, &error);
 	if (!trash)
 		return fail ("trash", error);
@@ -298,17 +275,14 @@ main (int argc,
 	uids = folder_dup_uids (inbox);
 	g_print ("inbox-count=%u\n", uids->len);
 
-	/* Every message, twice over — once out of the summary and once as a
-	 * whole message — because those are two different requests. The
-	 * summaries come from Email/query and Email/get; a body comes from a
-	 * blob download, which is a plain HTTP GET rather than a method call,
-	 * and a provider that lists mail it cannot open is a common enough
-	 * failure to be worth fetching every one of them.
+	/* Read each message two times: from the summary and as a full message.
+	 * These are different requests. The summaries come from Email/query
+	 * and Email/get. A body comes from a blob download, which is a plain
+	 * HTTP GET, not a method call. A provider that lists mail that it
+	 * cannot open is a frequent failure.
 	 *
-	 * All of them rather than the first, because a folder's uid order is
-	 * the provider's business and not this program's: picking one by
-	 * position would make the test assert whatever order happened to come
-	 * out. Each list is sorted, so the reported set is the set. */
+	 * Read all messages, not only the first, because the provider controls
+	 * the UID order. Each list is sorted, so the output is a set. */
 	subjects = g_ptr_array_new_with_free_func (g_free);
 	bodies = g_ptr_array_new_with_free_func (g_free);
 
@@ -318,14 +292,13 @@ main (int argc,
 		GByteArray *body;
 		CamelStream *stream;
 
-		/* Whichever rows Camel hands over first and second, held aside
-		 * for the `synchronize_sync` and `expunge_sync` blocks below —
-		 * which ones they are does not matter, since those blocks only
-		 * read back the same rows they wrote to. Two distinct messages,
-		 * not one reused for both: `expunge_sync` destroys its message
-		 * outright, and the Rust harness still needs to find the
-		 * `synchronize_sync` message on the mock afterwards to confirm
-		 * its keyword survived. */
+		/* Keep the first and second UIDs for the `synchronize_sync`
+		 * and `expunge_sync` blocks below. Which messages they are is
+		 * not important, because those blocks read back only the rows
+		 * they wrote. Use two different messages: `expunge_sync`
+		 * destroys its message, and the Rust harness must still find
+		 * the `synchronize_sync` message on the mock to check its
+		 * keyword. */
 		if (index == 0)
 			flagged_uid = g_strdup (uid);
 		else if (index == 1)
@@ -359,9 +332,8 @@ main (int argc,
 			return fail ("message-body", error);
 		}
 
-		/* The decoded bytes are not NUL-terminated, and the trailing
-		 * newline the MIME body carries is the transfer's, not the
-		 * text's. */
+		/* The decoded bytes have no NUL terminator. The trailing
+		 * newline is part of the MIME transfer, not of the text. */
 		joined = g_strndup ((const gchar *) body->data, body->len);
 		g_ptr_array_add (bodies, g_strdup (g_strstrip (joined)));
 		g_free (joined);
@@ -378,11 +350,10 @@ main (int argc,
 	g_ptr_array_unref (subjects);
 	g_ptr_array_unref (bodies);
 
-	/* `synchronize_sync`: the write half of what everything above only
-	 * reads. Marking a message important is a local Camel flag until a
-	 * synchronise carries it to the server as a keyword; nothing else in
-	 * this program ever writes to a message's flags, so this is the only
-	 * place that vfunc is reached. */
+	/* `synchronize_sync` is the write path. A flag on a message stays a
+	 * local Camel flag until a synchronize sends it to the server as a
+	 * keyword. Only this block writes message flags, so only this block
+	 * reaches that vfunc. */
 	if (!flagged_uid)
 		return fail ("no-message-to-flag", NULL);
 
@@ -404,11 +375,10 @@ main (int argc,
 		return fail ("synchronize", error);
 	}
 
-	/* The flag survives a fresh read of the row — which a synchronise
-	 * that swallowed a write failure instead of reporting one would
-	 * still show, so this alone does not prove the server was asked;
-	 * the mock's own method log and stored keywords, checked from the
-	 * Rust harness, are what prove that. */
+	/* A fresh read of the row shows the flag. A synchronize that ignored a
+	 * write failure also shows it, so this does not prove that the server
+	 * got the write. The Rust harness checks the method log and stored
+	 * keywords of the mock for that. */
 	{
 		CamelMessageInfo *flag_info;
 
@@ -422,18 +392,15 @@ main (int argc,
 		g_clear_object (&flag_info);
 	}
 
-	/* `flagged_uid` stays alive: `expunge_sync`, at the very end of this
-	 * program, reuses this same message once the folder create/rename/
-	 * transfer/delete sequence below is done with it. */
+	/* The program frees `flagged_uid` at the end. `expunge_sync` below
+	 * uses a different message, `deleted_uid`. */
 
-	/* `append_message_sync`: a message Camel is already holding — dragged
-	 * out of another account, dropped as a `.eml`, saved by a filter —
-	 * that this account has never seen, as opposed to `Email/set`'s
-	 * transfer of a message the account already has. Parsed from raw RFC
-	 * 5322 bytes rather than built header-by-header, the same way
-	 * `jmap-mail`'s own append tests construct one: the parse on the way
-	 * in has to be Camel's, or the write on the way out could disagree
-	 * with it. */
+	/* `append_message_sync` adds a message that this account does not
+	 * have, for example from another account, a dropped `.eml` file or a
+	 * filter. `Email/set` transfer is different: it moves a message that
+	 * the account already has. Parse the message from raw RFC 5322 bytes,
+	 * as the `jmap-mail` append tests do. Then Camel does the parse, and
+	 * the write cannot disagree with it. */
 	{
 		static const gchar outside_message[] =
 			"From: Dave <dave@example.com>\r\n"
@@ -464,8 +431,8 @@ main (int argc,
 
 		g_print ("append-uid=%s\n", appended_uid ? appended_uid : "");
 
-		/* The row is the listing's to write, not the append's — the
-		 * message appears only once the folder is next refreshed. */
+		/* The folder listing writes the row, not the append. The
+		 * message shows only after the next refresh. */
 		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 			return fail ("refresh-after-append", error);
 
@@ -480,15 +447,14 @@ main (int argc,
 		g_print ("appended-subject=%s\n", camel_mime_message_get_subject (reread));
 		g_object_unref (reread);
 
-		/* `appended_uid` stays alive: `transfer_messages_to_sync`,
-		 * below, moves this same message once "Receipts" exists to
-		 * move it into. */
+		/* Keep `appended_uid`: `transfer_messages_to_sync` below moves
+		 * this message into "Receipts". */
 	}
 
-	/* "New Folder" at the account root: `create_folder_sync` on the live
-	 * store, not the plain decision function `jmap-mail`'s own unit tests
-	 * call directly. A NULL parent is the account itself, the same
-	 * convention `manage.rs`'s own tests use. */
+	/* Create "Receipts" at the account root through `create_folder_sync`
+	 * on the live store, not through the decision function that the
+	 * `jmap-mail` unit tests call. A NULL parent is the account itself, as
+	 * in the `manage.rs` tests. */
 	{
 		CamelFolderInfo *created;
 
@@ -499,9 +465,9 @@ main (int argc,
 		g_print ("create-folder-name=%s\n", created->full_name);
 		camel_folder_info_free (created);
 
-		/* The property `manage.rs`'s own module doc names as the point of
-		 * the vfunc: the store's own listing has to be in step with what
-		 * it just told Camel it made, not merely return success. */
+		/* The `manage.rs` module doc gives the purpose of the vfunc:
+		 * the store listing must agree with what the store told Camel
+		 * it made. A success return alone is not sufficient. */
 		info = camel_store_get_folder_info_sync (store, NULL,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
@@ -515,16 +481,14 @@ main (int argc,
 		report_sorted ("folders-after-create", names);
 		g_ptr_array_unref (names);
 
-		/* `transfer_messages_to_sync`: dragging the message appended
-		 * earlier out of the inbox and into the folder just created.
-		 * `camel_folder_transfer_messages_to_sync` dispatches straight
-		 * to the vfunc here because both folders belong to this one
-		 * store — the cross-store path through `get_message`/
-		 * `append_message` that `transfer.rs`'s own doc comment
-		 * describes is not what this exercises.
-		 * `delete_originals=TRUE`, a move: checked from both folders,
-		 * not merely that the call answered — the row has to leave the
-		 * inbox as well as land in "Receipts". */
+		/* `transfer_messages_to_sync` moves the appended message from
+		 * the inbox into the new folder. Both folders are in this
+		 * store, so `camel_folder_transfer_messages_to_sync` calls the
+		 * vfunc directly. This does not test the cross-store path
+		 * through `get_message`/`append_message` that the
+		 * `transfer.rs` doc comment describes. `delete_originals=TRUE`
+		 * makes it a move, so check both folders: the row must leave
+		 * the inbox and arrive in "Receipts". */
 		{
 			CamelFolder *receipts;
 			GPtrArray *transfer_uids;
@@ -548,10 +512,10 @@ main (int argc,
 			}
 			g_ptr_array_unref (transfer_uids);
 
-			/* RFC 8621 gives an `Email` one immutable id per account, so
-			 * the uid reported for the transferred message is the same
-			 * uid that went in, not a fresh one the destination minted —
-			 * `transfer.rs`'s own `Reported` doc makes the same point. */
+			/* RFC 8621 gives an `Email` one immutable id for each
+			 * account. Thus the reported UID is the UID that went
+			 * in, not a new one from the destination. The
+			 * `Reported` doc in `transfer.rs` says the same. */
 			g_print ("transfer-uid=%s\n",
 				 (transferred && transferred->len > 0 && transferred->pdata[0])
 				 ? (const gchar *) transferred->pdata[0] : "");
@@ -579,13 +543,10 @@ main (int argc,
 			g_print ("receipts-count-after-transfer=%u\n", uids->len);
 			folder_free_uids (receipts, uids);
 
-			/* Moved back, the mirror image: a JMAP server refuses to
-			 * destroy a mailbox that still holds a message
-			 * (`mailboxHasEmail`), which the rename/delete sequence
-			 * below exercises on an empty "Receipts" — so the message
-			 * goes back to the inbox first, the same way a user who
-			 * dropped a message into a folder would have to move it
-			 * back out before deleting that folder. */
+			/* Move the message back. A JMAP server refuses to
+			 * destroy a mailbox that holds a message
+			 * (`mailboxHasEmail`), and the rename and delete below
+			 * need an empty "Receipts". */
 			transfer_uids = g_ptr_array_new ();
 			g_ptr_array_add (transfer_uids, appended_uid);
 
@@ -625,12 +586,11 @@ main (int argc,
 		}
 		g_free (appended_uid);
 
-		/* `rename_folder_sync` on the folder just made: a changed last
-		 * component under the same (root) parent, which `manage.rs`'s own
-		 * module doc reads as the name the user typed rather than this
-		 * store's own path encoding of one. Checked the same way as create:
-		 * not merely that the call answered, but that the store's own
-		 * listing agrees the folder is now called "Invoices". */
+		/* `rename_folder_sync` changes the last component of the new
+		 * folder under the same root parent. The `manage.rs` module
+		 * doc reads this as the name the user typed, not as a path
+		 * encoding of the store. Check that the store listing shows
+		 * "Invoices", not only the return value. */
 		if (!camel_store_rename_folder_sync (store, "Receipts", "Invoices", NULL, &error))
 			return fail ("rename-folder", error);
 
@@ -647,9 +607,8 @@ main (int argc,
 		report_sorted ("folders-after-rename", names);
 		g_ptr_array_unref (names);
 
-		/* The mirror image: `delete_folder_sync` on the renamed folder,
-		 * checked the same way — not merely that the call answered, but
-		 * that the store's own listing agrees the folder is gone. */
+		/* `delete_folder_sync` on the renamed folder. Check that the
+		 * store listing no longer shows it, not only the return value. */
 		if (!camel_store_delete_folder_sync (store, "Invoices", NULL, &error))
 			return fail ("delete-folder", error);
 
@@ -667,14 +626,13 @@ main (int argc,
 		g_ptr_array_unref (names);
 	}
 
-	/* `expunge_sync`: "Expunge"/"Empty Trash", the vfunc
-	 * `synchronize_sync`'s own `expunge` argument (already exercised above,
-	 * with that argument FALSE) chains into when it is TRUE. A second,
-	 * distinct message from the one `synchronize_sync` flagged — that one
-	 * stays on the server so the Rust harness can still confirm its keyword
-	 * survived; this one is destroyed outright, which the harness confirms
-	 * by its absence instead. It is still sitting in the inbox, untouched by
-	 * the folder create/rename/transfer/delete sequence above. */
+	/* `expunge_sync` is "Expunge" or "Empty Trash". `synchronize_sync`
+	 * calls it when its `expunge` argument is TRUE (above, that argument
+	 * is FALSE). This block uses a different message from the one that
+	 * `synchronize_sync` flagged. That message stays on the server, so the
+	 * Rust harness can check its keyword. This one is destroyed, and the
+	 * harness checks that it is absent. It is still in the inbox, because
+	 * the folder sequence above did not touch it. */
 	if (!deleted_uid)
 		return fail ("no-message-to-delete", NULL);
 

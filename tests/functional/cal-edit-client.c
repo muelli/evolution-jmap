@@ -1,37 +1,33 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The second client half of the calendar functional test: an ordinary libecal
- * consumer that opens a calendar, reads an event the *server* already held,
- * reports when EDS says it starts, retypes the places it happens at, the
- * document it points at and the picture of it, and writes them back.
+ * The second client half of the calendar functional test. A usual libecal
+ * consumer opens a calendar and reads an event that the *server* already has.
+ * It reports the start that EDS gives, changes the places, the document and
+ * the picture of the event, and saves the event.
  *
- * A program of its own rather than a phase of cal-client.c, which creates
- * every event it looks at. The two ask opposite questions. cal-client.c asks
- * what reaches the server when the user makes an appointment, so its whole
- * story is a client writing components and EDS's recurrence machinery
- * answering; this one asks what survives the *round trip* — a JSCalendar event
- * the mapping could only draw part of, out to iCalendar, through
- * ECalMetaBackend's cache, into a libecal consumer, back through a save. Only
- * an event nobody here created can ask that, and none of cal-client.c's
- * six hundred lines of series-splitting would be reached on the way.
+ * This is a separate program, not a phase of cal-client.c, which creates all
+ * its events. cal-client.c examines what the server gets when the user makes
+ * an appointment. This program examines the *round trip*: a JSCalendar event
+ * that the mapping can only partly show goes to iCalendar, through the
+ * ECalMetaBackend cache, to a libecal consumer, and back through a save. Only
+ * an event that the server made can test this, and the series-splitting code
+ * of cal-client.c is not used on that path.
  *
- * Like its twin it has no notion of what "correct" is: it reports what EDS
- * told it on stdout, one `key=value` line per observation, and exits non-zero
- * the moment a call fails. Every assertion belongs to
- * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the event,
- * runs this program and reads its output.
+ * Like cal-client.c, it does not judge: it writes one `key=value` line on
+ * stdout for each observation, and exits non-zero when a call fails.
+ * `rust/crates/jmap-functional/tests/calendar.rs` seeds the event, runs this
+ * program and asserts on its output.
  *
  *   usage: functional-cal-edit-client <source-uid> <event-uid> <new-location>
  *                                    <new-conference-uri> <old-attach-uri>
  *                                    <new-attach-uri> <old-image-uri>
  *                                    <new-image-uri>
  *
- * The attachment and the picture to re-address are named by the address they
- * already carry rather than by their position among the lines or by the key the
- * mapping put on them: an event holds any number of both (RFC 5545 §3.8.1.1,
- * RFC 7986 §5.10), that is how a user picks the one they meant, and it keeps
- * this program with no notion of what the mapping writes on a line.
+ * The arguments identify the attachment and the picture to change by their
+ * current address, not by position or by the mapping key. An event can have
+ * many of each (RFC 5545 §3.8.1.1, RFC 7986 §5.10). A user selects them by
+ * address, and this program needs no knowledge of the mapping.
  */
 
 #define LIBICAL_GLIB_UNSTABLE_API 1
@@ -41,23 +37,17 @@
 #include "connection-status.h"
 #include "event-start.h"
 
-/* The parameter the mapping writes on a LOCATION and on a CONFERENCE to say
- * which entry of the server's map the line was drawn from — jmap-ical's
- * X_JMAP_KEY. Reading it back is the whole point of this program: the save
- * path patches `locations/<key>/name`, so a key EDS did not carry is a save
- * that cannot reach the entry the user edited. */
+/* The parameter (jmap-ical X_JMAP_KEY) that tells which entry of the server
+ * map a line comes from. A save patches `locations/<key>/name`: if EDS loses
+ * the key, the save cannot find the entry that the user changed. */
 #define JMAP_KEY_PARAMETER "X-JMAP-KEY"
 
-/* How long to wait for the seeded event to become gettable, and how often to
- * ask. The same reasoning as book-client.c's EDIT_WAIT_TRIES: ECalMetaBackend
- * answers a get for an event its cache has never heard of by asking the
- * backend to load it, so the first try is expected to succeed — but the
- * backend also schedules a refresh during the connect, and a get that arrives
- * while that is still running can be answered out of a cache the refresh has
- * not filled yet. Polling turns that ordering into a wait rather than a flake.
- * Ten seconds in total, far beyond what a local mock needs and well inside the
- * CTest timeout, so a genuinely absent event fails the test rather than
- * hanging it. */
+/* The tries and interval for the get of the seeded event, as for
+ * EDIT_WAIT_TRIES in book-client.c. For an event that is not in its cache,
+ * ECalMetaBackend asks the backend to load it, thus the first try usually
+ * succeeds. But the connect also starts a refresh, and during the refresh the
+ * cache can be incomplete. Polling prevents a random failure. The total is ten
+ * seconds, less than the CTest timeout, thus a missing event fails the test. */
 #define EDIT_WAIT_TRIES 200
 #define EDIT_WAIT_INTERVAL_US 50000
 
@@ -71,11 +61,9 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* What EDS hands back from get_object: a bare VEVENT for an event with one
- * instance, or a VCALENDAR wrapping the instances when there are several. The
- * event this program reads has one, but taking the wrapper's first VEVENT
- * rather than insisting on the bare form keeps the shape of EDS's answer from
- * becoming a failure that says nothing about what is being tested. */
+/* Return the VEVENT from a get_object result. EDS gives a VEVENT for one
+ * instance, or a VCALENDAR with the instances. Accept both forms, so that the
+ * form of the result does not cause an unrelated failure. */
 static ICalComponent *
 first_vevent (ICalComponent *component)
 {
@@ -85,19 +73,16 @@ first_vevent (ICalComponent *component)
 	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }
 
-/* The value of one non-standard parameter of a property, or the empty string
- * for a property that carries none.
+/* Return the value of one non-standard parameter of a property, or the empty
+ * string if there is none.
  *
- * libical holds every parameter it has no enum for as an I_CAL_X_PARAMETER
- * whose name is readable through i_cal_parameter_get_xname, so this walks
- * them rather than asking for one by kind. The name is compared
- * case-insensitively because RFC 5545 §3.1 makes parameter names
- * case-insensitive, and this program is reading back what another
- * implementation — the meta backend's cache — chose to write.
+ * libical keeps each parameter without an enum as an I_CAL_X_PARAMETER, with
+ * the name from i_cal_parameter_get_xname. Thus this looks at all of them. The
+ * comparison ignores case: RFC 5545 §3.1 makes parameter names
+ * case-insensitive, and the meta backend cache wrote this value.
  *
- * The empty string rather than NULL for absent, so that a parameter EDS
- * dropped is an observation the harness can assert on instead of a line
- * missing from the output. */
+ * The empty string (not NULL) gives an observation for a lost parameter, not
+ * a missing line in the output. */
 static gchar *
 x_parameter (ICalProperty *property,
 	     const gchar *name)
@@ -128,10 +113,8 @@ x_parameter (ICalProperty *property,
 	return g_strdup ("");
 }
 
-/* How many properties of one kind a component carries. Counted rather than
- * inferred from the values, because a line the round trip *added* — a second
- * place under a key nobody chose — is a different bug from one whose value
- * changed, and only the count tells them apart. */
+/* Count the properties of one kind. A line that the round trip *added* is a
+ * different bug from a changed value. Only the count shows the difference. */
 static guint
 property_count (ICalComponent *component,
 		ICalPropertyKind kind)
@@ -152,38 +135,29 @@ property_count (ICalComponent *component,
 	return count;
 }
 
-/* The CONFERENCE property kind, which libical-glib 3.0's generated
- * ICalPropertyKind does not name.
+/* The CONFERENCE property kind, which the generated ICalPropertyKind of
+ * libical-glib 3.0 does not name.
  *
- * RFC 7986 §5.11 is a decade newer than the enum's oldest members, and the
- * glib binding shipped with EDS 3.52 has no I_CAL_CONFERENCE_PROPERTY even
- * though the libical C enum it is generated from has ICAL_CONFERENCE_PROPERTY
- * and the parser produces it. The cast is therefore between two spellings of
- * the same value, not a reinterpretation: I_CAL_* is defined as the ICAL_*
- * member throughout i-cal-derived-property.h.
+ * The glib binding with EDS 3.52 has no I_CAL_CONFERENCE_PROPERTY (RFC 7986
+ * §5.11). The libical C enum has ICAL_CONFERENCE_PROPERTY, and the parser
+ * makes it. The cast changes only the name, not the value:
+ * i-cal-derived-property.h defines each I_CAL_* as the ICAL_* member.
  *
- * Worth stating plainly because it is a fact about the platform this test
- * measures: a client that wanted to *offer* a conference through libical-glib
- * has no named constant for the property, which is part of why Evolution 3.52
- * has no UI for one. */
+ * Thus a libical-glib client has no named constant to *offer* a conference.
+ * This is one reason that Evolution 3.52 has no UI for it. */
 #define CONFERENCE_PROPERTY ((ICalPropertyKind) ICAL_CONFERENCE_PROPERTY)
 
-/* The IMAGE property kind, missing from the generated ICalPropertyKind for the
- * same reason CONFERENCE is: RFC 7986 §5.10 is a decade newer than the enum's
- * oldest members. The same cast between two spellings of one value applies. */
+/* The IMAGE property kind (RFC 7986 §5.10). The generated ICalPropertyKind
+ * also does not name it. The same cast applies. */
 #define IMAGE_PROPERTY ((ICalPropertyKind) ICAL_IMAGE_PROPERTY)
 
-/* Report what EDS holds for the two places the mapping draws: the one line of
- * text a LOCATION is, and the CONFERENCE beside it.
+/* Report the LOCATION and the CONFERENCE that EDS has.
  *
- * Four observations per place rather than one, because they answer different
- * questions and the value alone answers only the least interesting of them.
- * The value says the drawing arrived; the key says the line can be *saved*
- * back onto the entry the server chose, which is the claim the whole
- * patch-into-the-property design rests on; the count says the round trip
- * neither dropped the line nor added one beside it; and the conference's LABEL
- * says a parameter the mapping invented no name for — a standard one, unlike
- * the key — came along too. */
+ * Each place has more than one observation. The value shows that the place
+ * arrived. The key shows that a save can find the server entry, which is
+ * necessary for the patch design. The count shows that the round trip did not
+ * remove or add a line. The LABEL of the conference shows that a standard
+ * parameter also stayed. */
 static void
 report_places (const gchar *prefix,
 	       ICalComponent *event)
@@ -227,35 +201,27 @@ report_places (const gchar *prefix,
 	}
 }
 
-/* Report what EDS holds for the documents the event points at — every ATTACH
- * line, one group of observations per line, numbered from one in the order the
- * component carries them.
+/* Report each ATTACH line that EDS has: one group of observations for each
+ * line, numbered from one in component order.
  *
- * A separate question from the two places above, and the reason is the value
- * type. A LOCATION and a CONFERENCE are text and a URI, which libical keeps as
- * the string the line carried; an ATTACH (RFC 5545 §3.8.1.1) has a value type of
- * its own, so the parser builds an icalattach and the parameters end up standing
- * beside a value the library re-made. Whether the X-JMAP-KEY survives that, and
- * survives ECalMetaBackend's cache afterwards, is not settled by the other two
- * properties surviving it — which is what this leg is for.
+ * The value type makes this a different question. libical keeps a LOCATION
+ * and a CONFERENCE as the string of the line. An ATTACH (RFC 5545 §3.8.1.1)
+ * has its own value type, thus the parser makes an icalattach and the
+ * parameters are next to a new value. This part examines if the X-JMAP-KEY
+ * stays through that and through the ECalMetaBackend cache.
  *
- * Every line rather than the first, because an event may point at several
- * documents and that is where the key stops being decoration: with one resource
- * a save that lost the key finds the server's only entry anyway, and with two it
- * re-addresses whichever the mapping guessed. The number in each observation's
- * name is this program's own counting and means nothing beyond keeping the
- * groups apart — which line belongs to which of the server's entries is what the
- * key beside it says, and the harness looks them up by that.
+ * Report all lines, not only the first. With one document, a save that lost
+ * the key finds the only server entry. With two, it changes the entry that
+ * the mapping guessed. The number in each name only separates the groups:
+ * the harness finds the server entry by the key.
  *
- * The address is read through i_cal_property_get_attach rather than
- * i_cal_property_get_value_as_string: it is the URL libical parsed out, not the
- * text of the line, so a value the round trip re-spelled shows up as a
- * difference here instead of being hidden by the string form.
+ * Read the address with i_cal_property_get_attach, not
+ * i_cal_property_get_value_as_string. This is the URL that libical parsed,
+ * thus a value that the round trip wrote differently shows as a difference.
  *
- * FMTTYPE and SIZE go out beside the key because they are parameters libical
- * *does* have an enum for. A cache that kept only what it recognised would
- * answer those two and drop the key, so reporting all three tells "the cache
- * dropped everything it did not know" apart from "the cache dropped the line".
+ * Also report FMTTYPE and SIZE, which have a libical enum. A cache that keeps
+ * only known parameters keeps these two and drops the key. Thus the three
+ * values tell "unknown parameters lost" from "line lost".
  */
 static void
 report_resource (const gchar *prefix,
@@ -303,20 +269,15 @@ report_resource (const gchar *prefix,
 	}
 }
 
-/* The value of a parameter as it would be written on a line — what follows the
- * `=` in libical's own rendering of it, or the empty string for a parameter the
- * component does not carry.
+/* Return the text after the `=` when libical writes the parameter, or the
+ * empty string if there is no parameter.
  *
- * Needed because libical-glib names no function that turns a parameter's enum
- * value back into its iCalendar spelling: i_cal_parameter_get_display hands back
- * an ICalParameterDisplay, and printing the number would tie this program's
- * output to the enum's layout rather than to what stands on the line. Asking the
- * library to render the parameter and taking the value off it reports the
- * spelling a reader of the calendar would see, which is the thing under test.
+ * libical-glib has no function that changes an enum value of a parameter into
+ * its iCalendar text. i_cal_parameter_get_display returns an
+ * ICalParameterDisplay, and its number depends on the enum layout. The text
+ * that libical writes is the text that a calendar reader sees.
  *
- * The empty string for absent, for the reason x_parameter gives: a parameter EDS
- * dropped should be an observation the harness asserts on, not a line missing
- * from the output. */
+ * The empty string for no parameter has the same reason as in x_parameter. */
 static gchar *
 parameter_value (ICalParameter *parameter)
 {
@@ -338,31 +299,25 @@ parameter_value (ICalParameter *parameter)
 	return value;
 }
 
-/* Report what EDS holds for the pictures *of* the event — every IMAGE line, one
- * group of observations per line, numbered like report_resource's.
+/* Report each IMAGE line that EDS has, numbered as in report_resource.
  *
- * A third question rather than a variant of the second, because RFC 8984 §4.2.7
- * keeps in one `links` map what iCalendar splits across two properties: a
- * document attached to the event is an ATTACH, a picture of it is RFC 7986
- * §5.10's IMAGE, and jmap-ical tells them apart by the `icon` rel. Reporting them
- * apart is what says a link the mapping read as an icon left on the property it
- * belongs on — an event whose picture came back as an ATTACH would pass every
- * observation report_resource makes.
+ * RFC 8984 §4.2.7 keeps in one `links` map what iCalendar puts in two
+ * properties: a document is an ATTACH, a picture is an IMAGE (RFC 7986
+ * §5.10). jmap-ical uses the `icon` rel to separate them. A picture that came
+ * back as an ATTACH passes all report_resource observations, thus report the
+ * IMAGE lines separately.
  *
- * The address is read as the value's string form, and here that is not the same
- * choice report_resource made — it is the only one available. §5.10's grammar
- * makes VALUE=URI REQUIRED on the URI alternative, so the mapping writes it, and
- * with the parameter present libical parses the value as an ICAL_URI_VALUE rather
- * than the ICAL_ATTACH_VALUE an ATTACH gets. i_cal_property_get_attach on such a
- * property does not return NULL: it reaches into a union as though the URI were
- * an icalattach and *crashes*. Measured on this VM's libical 3.0.17, and the
- * reason the two reporters differ.
+ * Read the address as the value string: here no other method is available.
+ * The §5.10 grammar makes VALUE=URI REQUIRED for a URI, thus the mapping
+ * writes it. Then libical parses an ICAL_URI_VALUE, not the ICAL_ATTACH_VALUE
+ * of an ATTACH. i_cal_property_get_attach on this property does not return
+ * NULL: it reads the URI as an icalattach and *crashes* (measured with
+ * libical 3.0.17).
  *
- * DISPLAY goes out beside the key because it is the one member of a JSCalendar
- * Link with a standard parameter of its own, and because §6.1 requires a reader
- * meeting a DISPLAY it does not know to show no image at all — so a value the
- * round trip mangles is worse for the user than one it drops. FMTTYPE joins it;
- * SIZE does not, since §5.10 admits none on this property. */
+ * Also report DISPLAY: it is the only JSCalendar Link member with its own
+ * standard parameter. §6.1 tells a reader to show no image for an unknown
+ * DISPLAY value, thus a changed value is worse than a lost one. Report
+ * FMTTYPE too, but not SIZE: §5.10 does not allow SIZE on this property. */
 static void
 report_pictures (const gchar *prefix,
 		 ICalComponent *event)
@@ -407,12 +362,10 @@ report_pictures (const gchar *prefix,
 	}
 }
 
-/* The IMAGE line stating one address, or NULL for a component holding none.
+/* Return the IMAGE line with the given address, or NULL if there is none.
  *
- * The twin of attach_pointing_at, and separate from it for the same reason
- * report_pictures is separate from report_resource: the value must be compared as
- * a string here, since asking this property for an icalattach crashes. Nothing
- * here looks at the key either. */
+ * Like attach_pointing_at, but compare the value as a string: an icalattach
+ * request on this property crashes (see report_pictures). Ignore the key. */
 static ICalProperty *
 image_pointing_at (ICalComponent *event,
 		   const gchar *url)
@@ -438,15 +391,11 @@ image_pointing_at (ICalComponent *event,
 	return NULL;
 }
 
-/* The ATTACH line pointing at one address, or NULL for a component holding
- * none.
+/* Return the ATTACH line with the given address, or NULL if there is none.
  *
- * The address is compared as libical hands it over — the URL parsed out of the
- * line, the same one report_resource prints — so this picks the line a consumer
- * would recognise rather than the one a text match would. Nothing here looks at
- * the key: which of the server's entries a line stands for is the *mapping's*
- * business, and a program that picked its line by that could not catch the
- * mapping pairing them up wrongly. */
+ * Compare the URL that libical parsed (as report_resource prints it), as a
+ * consumer does. Ignore the key: the *mapping* pairs lines with server
+ * entries, and a selection by key cannot find a wrong pairing. */
 static ICalProperty *
 attach_pointing_at (ICalComponent *event,
 		    const gchar *url)
@@ -472,10 +421,9 @@ attach_pointing_at (ICalComponent *event,
 	return NULL;
 }
 
-/* Ask for one event until EDS has it, or give up. A miss arrives as
- * E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND rather than as a failure of the call, so
- * it is cleared and retried; any other error would be retried too, and the
- * caller says what it was waiting for when the tries run out. */
+/* Get one event until EDS has it, or return NULL after EDIT_WAIT_TRIES. Retry
+ * after each error, also after E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND. The caller
+ * reports the failure. */
 static ICalComponent *
 wait_for_event (ECalClient *cal,
 		const gchar *uid)
@@ -552,22 +500,20 @@ main (int argc,
 		return 1;
 	}
 
-	/* (guint32) -1 is EDS's "do not wait for connected". A program shaped like
-	 * this one cannot use the built-in wait — it blocks the only thread that
-	 * would iterate the context the notification arrives on, so it always
-	 * expires — and waiting properly is what functional_report_connection_status
-	 * below is for. See "Why the clients pass 'do not wait for connected'" in
+	/* (guint32) -1 tells EDS "do not wait for connected". The built-in wait
+	 * blocks the only thread that iterates the context of the notification,
+	 * thus it always expires. functional_report_connection_status below waits
+	 * correctly. See "Why the clients pass 'do not wait for connected'" in
 	 * docs/functional-tests.md. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);
 
-	/* Reported before anything is asked of the calendar, for the reason
-	 * cal-client.c gives: e_cal_client_connect_sync succeeds even when the
-	 * backend's connect_sync failed, so a calendar the backend never opened
-	 * looks from here exactly like one it opened and forgot to claim
-	 * writable. */
+	/* Report the status before the first request, as cal-client.c does.
+	 * e_cal_client_connect_sync succeeds also when the backend connect_sync
+	 * failed. Without the status, a calendar that the backend did not open
+	 * looks like an open calendar that is read-only. */
 	functional_report_connection_status (source, 10);
 
 	cal = E_CAL_CLIENT (client);
@@ -586,36 +532,29 @@ main (int argc,
 	}
 
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
-	/* The VEVENT rather than what wrapped it, which is safe because libical
-	 * resolves a TZID against the component *and its parents*: first_vevent
-	 * hands back a child of `fetched` with its parent link intact, so a
-	 * VTIMEZONE standing in the VCALENDAR is still in reach from here. */
+	/* The VEVENT is sufficient: libical finds a TZID in the component *and its
+	 * parents*. first_vevent returns a child of `fetched` with its parent link,
+	 * thus a VTIMEZONE in the VCALENDAR is available. */
 	functional_report_start ("read", event);
 	report_places ("read", event);
 	report_resource ("read", event);
 	report_pictures ("read", event);
 
-	/* The first edit: the user retypes the place, which is what Evolution's
-	 * appointment editor writes into. i_cal_component_set_location replaces
-	 * the value of the existing LOCATION and leaves its parameters where they
-	 * are — measured, not assumed. */
+	/* The first edit: the user changes the place in the Evolution appointment
+	 * editor. i_cal_component_set_location replaces the LOCATION value and
+	 * keeps its parameters (measured). */
 	i_cal_component_set_location (event, new_location);
 
-	/* And the second: the address the event is joined at. Evolution 3.52 has
-	 * no control for one — libical-glib does not even name the property, see
-	 * CONFERENCE_PROPERTY above — so this half of the edit is what another
-	 * client on the same account does, not what a user of this plugin can do
-	 * today. It is here because it is the only edit that makes the
-	 * X-JMAP-KEY load-bearing: RFC 7986 §5.11 admits several CONFERENCE lines,
-	 * so the mapping finds the server's entry by the key on the line and by
-	 * nothing else. A LOCATION cannot ask that question — RFC 5545 §3.6.1
-	 * allows one, so the save finds the single entry in the server's own map
-	 * whatever the line says.
+	/* The second edit: the conference address. Evolution 3.52 has no control
+	 * for it (see CONFERENCE_PROPERTY), thus another client on the account
+	 * makes this edit. This edit makes the X-JMAP-KEY necessary: RFC 7986
+	 * §5.11 allows many CONFERENCE lines, thus only the key finds the server
+	 * entry. RFC 5545 §3.6.1 allows one LOCATION, thus the save finds the
+	 * only entry without the key.
 	 *
-	 * The value is set through the property rather than by replacing it, for
-	 * the same reason set_location is used above: what is under test is
-	 * whether a save carries the parameters the load handed over, and a fresh
-	 * property would carry none by construction. */
+	 * Set the value on the existing property, as with set_location above. The
+	 * test examines if a save keeps the loaded parameters, and a new property
+	 * has none. */
 	conference = i_cal_component_get_first_property (event, CONFERENCE_PROPERTY);
 	if (!conference) {
 		g_printerr ("edit-conference: the event EDS handed back has no "
@@ -625,23 +564,16 @@ main (int argc,
 	i_cal_property_set_value_from_string (conference, new_conference_uri, "URI");
 	g_object_unref (conference);
 
-	/* And the third: the address of one of the documents the event points at.
-	 * Like the conference this is an edit another client makes rather than one
-	 * Evolution 3.52 offers — its appointment editor attaches files from the
-	 * user's own disk, which is a file: URI the mapping deliberately never
-	 * reads — and like the conference it is the edit that makes the key
-	 * load-bearing, since RFC 5545 §3.8.1.1 admits any number of ATTACH lines.
+	/* The third edit: the address of one document. Another client makes this
+	 * edit. The Evolution 3.52 appointment editor attaches local files, and the
+	 * mapping intentionally ignores file: URIs. RFC 5545 §3.8.1.1 allows many
+	 * ATTACH lines, thus this edit also makes the key necessary.
 	 *
-	 * The line is the one already pointing at old_attach_uri, which is the
-	 * user picking the attachment they meant out of several; with two on the
-	 * event, a save that took "the attachment" to mean the first line moves a
-	 * document nobody asked to move.
+	 * Use the line with old_attach_uri: the user selects one attachment of
+	 * many. A save that changes the first line changes the wrong document.
 	 *
-	 * Set through the existing property, and through the icalattach API rather
-	 * than as a string, for the same two reasons the conference is: a fresh
-	 * property would carry no parameters by construction, and the value is the
-	 * one libical hands a consumer, so this is the edit a consumer can actually
-	 * make. */
+	 * Set the value on the existing property (a new property has no
+	 * parameters), and with the icalattach API that a consumer uses. */
 	attach = attach_pointing_at (event, old_attach_uri);
 	if (!attach) {
 		g_printerr ("edit-attach: the event EDS handed back has no ATTACH "
@@ -653,19 +585,14 @@ main (int argc,
 	g_object_unref (attach_value);
 	g_object_unref (attach);
 
-	/* And the fourth: the address of the picture of the event. The other half
-	 * of the same `links` map, and a property of its own — see
-	 * report_pictures. Edited in the same save as the attachment above rather
-	 * than in a run of its own, because a mapping that paired lines with
-	 * entries by counting rather than by the key on them can only be caught
-	 * where both kinds of line are present.
+	/* The fourth edit: the address of the picture, from the same `links` map
+	 * but in its own property (see report_pictures). Change it in the same
+	 * save as the attachment. Only with both kinds of line does a test find a
+	 * mapping that pairs lines with entries by count, not by key.
 	 *
-	 * Set through i_cal_property_set_value_from_string, not through the
-	 * icalattach API the ATTACH above uses: with the VALUE=URI the mapping
-	 * writes, this property's value is a URI, and handing it an icalattach
-	 * would be handing it the wrong kind. Setting the value keeps the
-	 * parameters standing beside it, which is what makes this the edit a
-	 * consumer can make. */
+	 * Use i_cal_property_set_value_from_string, not the icalattach API: with
+	 * VALUE=URI, the value is a URI, not an icalattach. This keeps the
+	 * parameters, as a consumer edit does. */
 	image = image_pointing_at (event, old_image_uri);
 	if (!image) {
 		g_printerr ("edit-image: the event EDS handed back has no IMAGE "

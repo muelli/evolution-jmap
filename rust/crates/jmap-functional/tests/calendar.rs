@@ -1,28 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! M9 layer 1, calendar: `evolution-calendar-factory` loading
-//! `libecalbackendjmap.so`, opening a calendar from a `.source` keyfile, and
-//! serving a write through it to the mock JMAP server.
+//! Calendar functional tests: `evolution-calendar-factory` loads
+//! `libecalbackendjmap.so`, opens a calendar from a `.source` keyfile, and
+//! sends writes through it to the mock JMAP server.
 //!
-//! The twin of `address-book.rs`, and deliberately so: the two backends are
-//! mirrors of each other, which is exactly why one of them can carry a bug
-//! the other's tests would have caught. Everything here is checked from the
-//! two ends and nothing in between — the client program says what EDS gave a
-//! libecal consumer, the mock says what the backend asked the server for.
+//! This file is the twin of `address-book.rs`, because the two backends are
+//! mirrors of each other. Each test checks only the two ends. The client
+//! program reports what EDS gave a libecal consumer. The mock reports what the
+//! backend sent to the server.
 //!
-//! Four legs, asking different questions, so they run different client
-//! programs. The first creates every event it looks at, which is what a user
-//! making an appointment does; the second starts from an event the *server*
-//! held before EDS ever connected, carrying members no iCalendar line can
-//! state, and asks what survives the round trip out to a component and back
-//! through a save. Only an event nobody here created can ask that. The third
-//! asks what a zone only the server can name means to a consumer — the instant
-//! it puts an appointment at, before and after each of the two kinds of edit a
-//! user can make to it: one that has nothing to do with the clock, and one that
-//! is about nothing else. The fourth runs the same program the other way round:
-//! the *client* defines a zone no database holds, and the question is whether
-//! the definition reaches the server at all.
+//! There are five legs, and each runs its own client mode or program:
+//!
+//! 1. The client creates every event it examines, as a user does.
+//! 2. The client starts from an event that the server holds, with members that
+//!    no iCalendar line can state, and edits it.
+//! 3. The client reads events in zones that only the server can name, then
+//!    renames one and moves its start.
+//! 4. The client defines a zone that no database holds and creates an event in
+//!    it.
+//! 5. The client creates a series in such a zone and moves one occurrence into
+//!    a second such zone.
 
 use std::collections::BTreeMap;
 
@@ -30,594 +28,463 @@ use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, NDay};
 
-/// The event the client writes. The summary is passed on its command line
-/// and looked for in the mock's store, so the two ends cannot disagree about
-/// it by a typo; the start is the JSCalendar spelling of the `DTSTART` in
-/// `tests/functional/cal-client.c`.
+/// The first event that the client writes. The client receives the summary on
+/// its command line, and the test finds it in the mock's store. The start is
+/// the JSCalendar form of the `DTSTART` in `tests/functional/cal-client.c`.
 const SUMMARY: &str = "Sprint planning";
 const START: &str = "2026-01-15T13:00:00";
 
-/// And where it happens — the `LOCATION` in `tests/functional/cal-client.c`,
-/// which has to reach the server as an entry in a JSCalendar `locations` map
-/// (RFC 8984 §4.2.5) rather than as nothing at all. The key is the one
-/// `jmap-ical` invents for a component that carries none, since EDS has never
-/// seen this event before.
+/// The `LOCATION` in `tests/functional/cal-client.c`. It must reach the server
+/// as an entry in the JSCalendar `locations` map (RFC 8984 §4.2.5). The key is
+/// the one that `jmap-ical` makes for a component that has no key.
 const LOCATION: &str = "Room 42";
 
-/// And what it is filed under — the `CATEGORIES` in
-/// `tests/functional/cal-client.c`, which has to reach the server as a
-/// JSCalendar `keywords` Set (RFC 8984 §4.2.9). Two tags on one line, because
-/// libical re-renders a multi-valued `CATEGORIES` as one property per value: a
-/// mapping that read only the first would send a set of one, and the save after
-/// it would delete the rest. Sorted, since that is the order a set is held in on
-/// both sides.
+/// The `CATEGORIES` in `tests/functional/cal-client.c`, which must reach the
+/// server as a JSCalendar `keywords` set (RFC 8984 §4.2.9). There are two tags
+/// because libical writes a multi-valued `CATEGORIES` as one property per
+/// value. A mapping that reads only the first loses the rest. Sorted,
+/// because both sides keep a set in that order.
 const KEYWORDS: [&str; 2] = ["offsite", "planning"];
 
-/// And whether it blocks the time it occupies — the `TRANSP` in
-/// `tests/functional/cal-client.c`, which has to reach the server as a
-/// JSCalendar `freeBusyStatus` (RFC 8984 §4.4.2). The transparent state
-/// deliberately: both formats default to the other one, so only this direction
-/// distinguishes a state that crossed from a component that lost the line.
+/// The `TRANSP` in `tests/functional/cal-client.c`, which must reach the server
+/// as a JSCalendar `freeBusyStatus` (RFC 8984 §4.4.2). Both formats default to
+/// the opaque state, so only the transparent state shows that the value crossed.
 const TRANSP: &str = "TRANSPARENT";
 const FREE_BUSY_STATUS: &str = "free";
 
-/// And how important it is — the `PRIORITY` in `tests/functional/cal-client.c`,
-/// which has to reach the server as a JSCalendar `priority` (RFC 8984 §4.4.1).
-/// The one mapped property that is a number rather than text on both sides, so
-/// this is the leg that says a numeric property survives EDS's cache; 1 rather
-/// than the 0 both formats treat as no value at all.
+/// The `PRIORITY` in `tests/functional/cal-client.c`, which must reach the
+/// server as a JSCalendar `priority` (RFC 8984 §4.4.1). This is the only mapped
+/// numeric property. The value is 1 because both formats read 0 as no value.
 const PRIORITY: &str = "1";
 
-/// And who may see it — the `CLASS` in `tests/functional/cal-client.c`, which has
-/// to reach the server as a JSCalendar `privacy` (RFC 8984 §4.4.3). The one mapped
-/// property whose iCalendar value libical holds as an enum rather than as text, so
-/// this is the leg that says a property EDS's cache can only keep by *recognising*
-/// it survives the trip. CONFIDENTIAL because it is the value whose two spellings
-/// differ, so the pair below also says the translation happened rather than a
-/// string being copied.
+/// The `CLASS` in `tests/functional/cal-client.c`. It must reach the server as a
+/// JSCalendar `privacy` (RFC 8984 §4.4.3). libical keeps this value as an enum,
+/// so EDS's cache keeps it only if it recognises it. CONFIDENTIAL has different
+/// spellings in the two formats, so the pair also shows that a translation
+/// occurred.
 const CLASS: &str = "CONFIDENTIAL";
 const PRIVACY: &str = "secret";
 
-/// And when the user is reminded of it — the `VALARM` in
-/// `tests/functional/cal-client.c`, which has to reach the server as an entry in
-/// a JSCalendar `alerts` map (RFC 8984 §4.5.2). The one mapped property that is a
-/// child *component*, so this is the leg that says `ECalMetaBackend`'s cache
-/// keeps a component nested inside the one it was handed — and that the key of
-/// the entry, which rides on the alarm's RFC 9074 §4 `UID`, is the one the client
-/// wrote rather than the one `jmap-ical` invents for an alarm that names none.
+/// The `VALARM` in `tests/functional/cal-client.c`, which must reach the server
+/// as an entry in the JSCalendar `alerts` map (RFC 8984 §4.5.2). This is the only
+/// mapped child component, so it shows that `ECalMetaBackend`'s cache keeps a
+/// nested component. The entry key comes from the alarm's RFC 9074 §4 `UID`, not
+/// from the key that `jmap-ical` makes for an alarm without one.
 const ALARM_UID: &str = "k1";
 const ALARM_TRIGGER: &str = "-PT15M";
 
-/// The length of that event, which the client states as a `DTEND` — the way
-/// Evolution's editor does — an hour and a half after the start. Nothing but
-/// this test says the two forms end up alike on the server.
+/// The length of the first event. The client states it as a `DTEND`, as
+/// Evolution's editor does, 90 minutes after the start.
 const DURATION: &str = "PT1H30M";
 
-/// The second event the client writes: an all-day one, `VALUE=DATE` on both
-/// ends, which is the only way iCalendar says "a day rather than a time of
-/// day". On the server it has to arrive as JSCalendar's `showWithoutTime`,
-/// starting at the top of the day and lasting one — otherwise every other
-/// client reading the account sees a midnight appointment.
+/// The second event: an all-day event, `VALUE=DATE` on both ends. On the server
+/// it must be JSCalendar's `showWithoutTime`, start at midnight and last one
+/// day. If not, other clients show a midnight appointment.
 const ALL_DAY_SUMMARY: &str = "Team offsite";
 const ALL_DAY_START: &str = "2026-02-01T00:00:00";
 const ALL_DAY_DURATION: &str = "P1D";
 
-/// The third event: one in a named zone, built by the client through the
-/// libical setters the way Evolution's editor builds it — so the `TZID` that
-/// reaches the backend is libical's own
-/// `/freeassociation.sourceforge.net/Europe/Berlin`, which is not an RFC 8984
-/// §1.4.8 `TimeZoneId` and which nothing outside libical resolves.
+/// The third event, in a named zone. The client builds it with libical's
+/// builtin zone, as Evolution's editor does, so the `TZID` that reaches the
+/// backend is libical's own `/freeassociation.sourceforge.net/Europe/Berlin`.
+/// That is not an RFC 8984 §1.4.8 `TimeZoneId`.
 ///
-/// This is the leg no test below real EDS can stand in for. The mapping can
-/// translate that identifier only from the `VTIMEZONE` beside it, and whether
-/// one travels with the component is `marshal::icalendar_from_instances`'s
-/// business — so the mapping's own tests, which supply the identifier and the
-/// definition by hand, cannot say whether a zone the user picked in Evolution
-/// ever reaches the server. A `time_zone` of `None` here is exactly the bug
-/// that had shipped: the appointment on the server floats, and every other
-/// client shows it at the wrong hour.
+/// The mapping can translate that identifier only from the `VTIMEZONE` beside
+/// it, and `marshal::icalendar_from_instances` decides whether that `VTIMEZONE`
+/// travels with the component. The mapping's own tests supply both by hand, so
+/// only real EDS can show the result. A `time_zone` of `None` here is a known
+/// shipped bug: the appointment floats on the server.
 ///
 /// The start is the wall-clock time in that zone, which is what JSCalendar's
-/// `start` means beside a `timeZone` (RFC 8984 §5.1.1) — not the UTC instant.
+/// `start` means beside a `timeZone` (RFC 8984 §5.1.1). It is not the UTC
+/// instant.
 const ZONED_SUMMARY: &str = "Berlin review";
 const ZONED_START: &str = "2026-01-15T16:00:00";
 const ZONED_TIME_ZONE: &str = "Europe/Berlin";
 
-/// The fourth event: a weekly one with a single occurrence deleted, which EDS
-/// hands to the backend as an `EXDATE` on the master component. On the server
-/// that has to be an entry in `recurrenceOverrides` saying the instance is
-/// `excluded` — the only thing JSCalendar has for it. An `EXDATE` the mapping
-/// drops is an appointment the user cancelled and everybody else still sees.
+/// The fourth event: a weekly series with one occurrence deleted, which EDS
+/// gives to the backend as an `EXDATE` on the master. On the server it must be
+/// a `recurrenceOverrides` entry that says the instance is `excluded`.
 const RECURRING_SUMMARY: &str = "Weekly standup";
 const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
 
-/// And the other half of "not that one": an occurrence the user renamed
-/// rather than deleted, which is what "Edit this occurrence" does. EDS hands
-/// the backend a second `VEVENT` with the same `UID` and a `RECURRENCE-ID`
-/// naming the instance it replaces (RFC 5545 §3.8.4.4); JSCalendar says the
-/// same thing with a patch under that instant in `recurrenceOverrides`
-/// (RFC 8984 §4.3.5). Nothing below this file says the two ends agree about
-/// it through real EDS — the mapping's own tests stop at the component.
+/// An occurrence that the user renamed ("Edit this occurrence"). EDS gives the
+/// backend a second `VEVENT` with the same `UID` and a `RECURRENCE-ID`
+/// (RFC 5545 §3.8.4.4). JSCalendar states the same thing as a patch under that
+/// instant in `recurrenceOverrides` (RFC 8984 §4.3.5).
 const RECURRING_EDITED: &str = "2026-01-22T13:00:00";
 const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 
-/// And the tags that one occurrence carries — the `CATEGORIES` on the detached
-/// component in `tests/functional/cal-client.c`, which has to reach the server as
-/// a `keywords` patch in that instance's override (RFC 8984 §4.3.5). The series
-/// carries none, so this set is the whole of the difference between them; an
-/// instance whose tags EDS's cache dropped reads back as one the user just
-/// unfiled, and the save after it would tell the server so. Sorted, since that is
-/// the order a set is held in on both sides.
+/// The `CATEGORIES` on the detached component in
+/// `tests/functional/cal-client.c`. It must reach the server as a `keywords`
+/// patch in that instance's override (RFC 8984 §4.3.5). The series has no tags,
+/// so this set is the full difference. Sorted, because both sides keep a set in
+/// that order.
 const RECURRING_EDITED_KEYWORDS: [&str; 2] = ["cancelled", "offsite"];
 
-/// And when that one occurrence reminds — the `VALARM` inside the detached
-/// component in `tests/functional/cal-client.c`, which has to reach the server as
-/// an `alerts` patch in that instance's override. The series carries no reminder,
-/// so this one is the whole of the difference between them, and it is the deepest
-/// thing this leg asks EDS's cache to keep: a child component of the child
-/// component the instance itself is.
+/// The `VALARM` inside the detached component in
+/// `tests/functional/cal-client.c`. It must reach the server as an `alerts`
+/// patch in that instance's override. The series has no alarm, so this is the
+/// deepest thing that EDS's cache must keep: a child of a child component.
 ///
-/// Keyed by the alarm's RFC 9074 §4 `UID`, because that is what the entry is named
-/// by: an alarm EDS handed back without it would arrive under a positional key
-/// this mapping invented, which is the same reminder saved under a name nobody
-/// chose. The offset is negative and stated as text at both ends, since a reminder
-/// an hour *after* the meeting is the failure a lost sign looks like.
+/// The key is the alarm's RFC 9074 §4 `UID`. An alarm without it arrives under
+/// a key that the mapping makes. The offset is negative, because a lost sign
+/// puts the reminder after the meeting.
 const RECURRING_EDITED_ALERT_KEY: &str = "k1";
 const RECURRING_EDITED_ALARM_TRIGGER: &str = "-PT1H";
 
-/// And "not that one" a second time, reached the way a user reaches it. The
-/// `EXDATE` above is written into the component the client creates, so it holds
-/// the *mapping* to account and says nothing about EDS: Evolution's "Delete
-/// this occurrence" calls `e_cal_client_remove_object_sync` with a
-/// `RECURRENCE-ID` and `E_CAL_OBJ_MOD_THIS`, and what `ECalMetaBackend` makes
-/// of that is a **save of the master** — not a removal — which is a code path
-/// nothing in this tree had ever asked EDS to take. The fourth occurrence of
-/// the weekly series, so that it is neither the excluded one nor the edited
-/// one and a mix-up cannot pass.
+/// An occurrence that the user deletes through EDS. Evolution's "Delete this
+/// occurrence" calls `e_cal_client_remove_object_sync` with a `RECURRENCE-ID`
+/// and `E_CAL_OBJ_MOD_THIS`, and `ECalMetaBackend` makes this a save of the
+/// master, not a removal. This is the fourth occurrence of the series, so it
+/// is different from the excluded and the edited occurrences.
 const RECURRING_REMOVED: &str = "2026-02-05T13:00:00";
 
-/// And the third thing that menu offers, "Edit this and future occurrences",
-/// which is not an exception to the series at all: `ECalMetaBackend` answers it
-/// by **splitting the series in two** — the master's rule is truncated to stop
-/// before the named instance, and that instance onwards becomes a *second
-/// event* under a UID EDS invents, handed to the backend as a create. So it is
-/// the only one of the three that reaches the backend as two writes, and the
-/// only one where the mapping's job is an ordinary event rather than an
-/// override. `RANGE=THISANDFUTURE` never appears — EDS has resolved it into
-/// plain components before the backend sees anything, which is what makes
-/// `jmap-ical` skipping that parameter on read the harmless choice it was
-/// assumed to be.
+/// The occurrence where the user selects "Edit this and future occurrences".
+/// `ECalMetaBackend` splits the series in two. It truncates the master's rule
+/// before this instance. Then it gives the backend a create for a second event
+/// with a new UID. `RANGE=THISANDFUTURE` never reaches the backend, so
+/// `jmap-ical` can safely ignore that parameter on read.
 ///
-/// The fifth occurrence, after all three exceptions the series carries by then.
+/// This is the fifth occurrence, after all three exceptions.
 const RECURRING_SPLIT: &str = "2026-02-12T13:00:00";
 const RECURRING_SPLIT_SUMMARY: &str = "Weekly standup (new plan)";
 
-/// What the split leaves behind, as EDS spells the two rules back in its own
-/// cache. `COUNT=6` becomes four occurrences before the split and two from it
-/// on: a truncated rule the backend's save undid would leave the old series
-/// still recurring over the days the new event now owns — the same appointment
-/// twice, under two titles — and a new series that kept `COUNT=6` would run six
-/// weeks past where the user cut it.
+/// The two rules after the split, as EDS's cache states them. `COUNT=6`
+/// becomes four occurrences before the split and two from it. If the backend
+/// lost the truncation, the old series overlaps the new event. If the new
+/// series kept `COUNT=6`, it runs past the end that the user set.
 ///
-/// Both keep the `BYDAY` the series was created with — the day of the week is
-/// not something a split changes — which is the client-side half of the
-/// question the `byDay` assertions below ask of the server.
+/// Both rules keep the `BYDAY` of the original series. This is the client side
+/// of the `byDay` assertions on the server.
 const SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=4;BYDAY=TH";
 const SPLIT_RRULE: &str = "FREQ=WEEKLY;COUNT=2;BYDAY=TH";
 const SPLIT_DTSTART: &str = "20260212T130000Z";
 
-/// The same two exclusions as EDS spells them back in its own cache: the one
-/// the client wrote with the event and the one it removed afterwards, both in
-/// the series' UTC. Named rather than counted, because two exclusions of which
-/// one names the wrong day is one cancelled appointment that comes back and
-/// another that was never cancelled at all.
+/// The two exclusions as EDS's cache states them, in UTC: the one the client
+/// wrote with the event and the one it removed after. The test compares the
+/// values, not only the count, so an exclusion on the wrong day fails.
 const RECURRING_EXDATES: [&str; 2] = ["20260129T130000Z", "20260205T130000Z"];
 
-/// And the sixth event, which is the one question every case above leaves
-/// open: a series in one named zone with a single occurrence moved into
-/// another. RFC 5545 §3.2.19 puts a zone on the *property*, so a detached
-/// instance states its own `TZID` and need not share the series'; RFC 8984
-/// §4.3.5 says the same thing by letting a `recurrenceOverrides` patch carry
-/// `timeZone`. The mapping learned both last, and its own tests supply the
-/// identifiers by hand — so nothing yet says that a second zone, named by one
-/// instance of a component Evolution actually hands over, is defined in the
-/// envelope the backend builds and translated on the way out.
+/// The sixth event: a series in one named zone, with one occurrence moved into
+/// a different zone. RFC 5545 §3.2.19 puts a zone on the property, so a
+/// detached instance can have its own `TZID`. RFC 8984 §4.3.5 lets a
+/// `recurrenceOverrides` patch carry `timeZone`. This shows that the backend
+/// defines the second zone in the envelope and translates it.
 ///
-/// The move is five hours and a different clock, not a nudge: an override that
-/// arrived as a bare `start` — the bug that had shipped — puts the occurrence
-/// at 08:00 *Berlin* instead of 08:00 New York, and every other client reading
-/// the account shows it there.
+/// The move is to a different clock, five hours later. An override that
+/// arrives as a bare `start` (a known shipped bug) puts the occurrence at 08:00
+/// Berlin time, not 08:00 New York time.
 const ZONED_RECURRING_SUMMARY: &str = "Berlin standup";
 const ZONED_RECURRING_START: &str = "2026-03-05T10:00:00";
 const ZONED_RECURRING_DURATION: &str = "PT1H";
 
-/// The occurrence that moved: keyed on its start as the *rules* generate it,
-/// which is the series' clock, and carrying the start and the zone it was moved
-/// to. Both halves of the patch are asserted together, because either alone
-/// passes for the other going wrong.
+/// The moved occurrence. Its key is its start as the rules generate it (on the
+/// series' clock), and its patch carries the new start and zone. The test
+/// asserts both together, because either alone can hide an error in the other.
 const ZONED_MOVED_INSTANCE: &str = "2026-03-12T10:00:00";
 const ZONED_MOVED_START: &str = "2026-03-12T08:00:00";
 const ZONED_MOVED_TIME_ZONE: &str = "America/New_York";
 
-/// And what EDS itself kept of that instance, which is the other end of the
-/// same claim: a `DTSTART` still on the moved clock. The value is exact; the
-/// `TZID` is only required to *name* the zone, because how libical spells an
-/// identifier for a builtin zone is libical's business and has changed between
-/// releases — `/freeassociation.sourceforge.net/America/New_York` and a plain
-/// `America/New_York` both end the same way, and a series' zone silently
-/// applied to the instance ends in `Europe/Berlin`.
+/// The `DTSTART` that EDS keeps for the moved instance. The value must be
+/// exact. The `TZID` must only end with the zone name, because libical's
+/// spelling of a builtin zone identifier changes between releases. If the
+/// instance incorrectly uses the series' zone, it ends in `Europe/Berlin`.
 const ZONED_MOVED_DTSTART: &str = "20260312T080000";
 
-/// The event the second leg starts from — one the *server* holds, which is the
-/// only way to ask the question that leg asks. Every event above is created
-/// through EDS, so its `locations` and `virtualLocations` hold exactly what an
-/// iCalendar line can state and there is nothing for a round trip to lose.
+/// The event that the second leg starts from, which the server holds before
+/// EDS connects. Events that EDS creates contain only what an iCalendar line
+/// can state, so a round trip cannot lose anything from them.
 ///
-/// The title is asserted from both ends, so a mix-up cannot pass; the length is
-/// `CalendarEvent::simple`'s shape, since it is not what this leg is about. The
-/// start is, together with the zone below.
+/// The test asserts the title from both ends. The length is
+/// `CalendarEvent::simple`'s default. The start and the zone below are part of
+/// the test.
 const PLACED_TITLE: &str = "Design review";
 const PLACED_START: &str = "2026-04-09T10:00:00";
 const PLACED_DURATION: &str = "PT1H";
 
-/// And the clock that start is on — a named zone rather than the `Etc/UTC`
-/// `CalendarEvent::simple` fills in, which is what makes the start worth an
-/// observation at all.
+/// The zone of that start: a named zone, not the `Etc/UTC` that
+/// `CalendarEvent::simple` sets.
 ///
-/// UTC is RFC 5545 §3.3.5's form 2: `jmap-ical` draws it as a `DTSTART` ending in
-/// `Z`, which names no identifier and so needs no definition of one. A named zone
-/// is form 3, and there the mapping writes `DTSTART;TZID=Europe/Berlin` and **no
-/// `VTIMEZONE`** — betting that a consumer resolves an IANA name out of libical's
-/// builtin table, see `dated` in `jmap-ical`. RFC 5545 §3.2.19 has the document
-/// itself define what a `TZID` refers to, so the bet is this repository declining
-/// to ship a definition it has no zone database to build; and nothing below real
-/// EDS can test it, because every fixture in `jmap-ical` and `jmap-cal-sync`
-/// compares text against text, where a zone nobody could resolve reads back
-/// exactly like one anybody could.
+/// UTC is RFC 5545 §3.3.5's form 2: `jmap-ical` writes a `DTSTART` ending in
+/// `Z`, which needs no zone definition. A named zone is form 3: the mapping
+/// writes `DTSTART;TZID=Europe/Berlin` and **no `VTIMEZONE`** (see `dated` in
+/// `jmap-ical`). It expects the consumer to resolve the IANA name from
+/// libical's builtin table, although RFC 5545 §3.2.19 requires the document to
+/// define each `TZID`. Only real EDS can test this, because the fixtures in
+/// `jmap-ical` and `jmap-cal-sync` compare text with text.
 ///
-/// Berlin rather than a zone that never leaves standard time, because the instant
-/// is what makes the bet visible: 2026-04-09 is inside CEST, so a consumer that
-/// resolved the name lands on 08:00 UTC while one that quietly floated the value
-/// lands on 10:00 — two hours apart, and on any machine, since libical does not
-/// adjust a floating time it converts.
+/// 2026-04-09 is in CEST. A consumer that resolves the name gives 08:00 UTC.
+/// A consumer that floats the value gives 10:00 on any machine, because libical
+/// does not adjust a floating time when it converts it.
 const PLACED_ZONE: &str = "Europe/Berlin";
 
-/// The wall clock EDS should show for that start, and the instant a consumer's
-/// own clock should land on. Two observations rather than one for the reason
-/// `dtstart_parts` in `tests/functional/cal-client.c` gives: a start that lost
-/// its zone and a start converted into another are the same appointment at the
-/// wrong hour, stated differently, and either value alone passes for the other
-/// going wrong.
+/// The wall-clock start that EDS must show, and the instant that a consumer
+/// must calculate. `dtstart_parts` in `tests/functional/cal-client.c` gives the
+/// reason for two values. A lost zone and a converted start are different
+/// errors, and each value alone can hide the other.
 const PLACED_DTSTART: &str = "20260409T100000";
 const PLACED_DTSTART_UTC: &str = "20260409T080000Z";
 
-/// The place that event happens at, under a key only a server would choose, and
-/// with a member no `LOCATION` line has room for.
+/// The location of that event, under a key that the server chose, and with a
+/// member that a `LOCATION` line cannot hold.
 ///
-/// RFC 8984 §4.2.5's Location holds a `description`, `coordinates`,
-/// `locationTypes` and more besides its `name`; RFC 5545 §3.6.1 gives a `VEVENT`
-/// one line of text. That gap is why the save patches `locations/<key>/name`
-/// rather than replacing the property — and the `description` is what says it
-/// did: a save that replaced `locations` would delete a note the user was never
-/// shown, and this leg would see it gone from the server.
+/// An RFC 8984 §4.2.5 Location has a `description` and other members beside
+/// its `name`. RFC 5545 §3.6.1 gives a `VEVENT` one line of text. Thus the save
+/// patches `locations/<key>/name` and does not replace the property. If the save
+/// replaces `locations`, the `description` disappears from the server.
 const PLACED_LOCATION_KEY: &str = "srv-loc";
 const PLACED_LOCATION_NAME: &str = "Room 42";
 const PLACED_LOCATION_DESCRIPTION: &str = "third floor, past the lift";
 
-/// And where it may be joined online, likewise under the server's own key and
-/// likewise holding a `description` the `CONFERENCE` line cannot carry.
+/// The virtual location of the event, also under a key that the server chose
+/// and with a `description` that the `CONFERENCE` line cannot hold.
 ///
-/// This is the entry that makes the `X-JMAP-KEY` load-bearing, and the reason the
-/// leg edits it too. RFC 7986 §5.11 admits several `CONFERENCE` lines, so
-/// `jmap-ical` reads the key off the line and the save patches
-/// `virtualLocations/<key>/uri`; a key EDS dropped between the load and the save
-/// leaves the mapping holding a key it invented, which names no entry on the
-/// server, and the edit reaches nothing. A `LOCATION` cannot ask that — RFC 5545
-/// §3.6.1 allows one, so the save finds the single entry in the server's own map
-/// whatever the line carries.
+/// This entry makes the `X-JMAP-KEY` necessary, so the leg also edits it.
+/// RFC 7986 §5.11 permits more than one `CONFERENCE` line. Thus `jmap-ical`
+/// reads the key from the line, and the save patches
+/// `virtualLocations/<key>/uri`. If EDS drops the key, the mapping makes a new
+/// key that matches no entry on the server, and the edit has no effect. A
+/// `LOCATION` cannot test this: RFC 5545 §3.6.1 permits only one, so the save
+/// finds the single entry without the key.
 ///
-/// The `name` rides on the line as a `LABEL`, which is the one parameter here
-/// that says a *standard* parameter came back too — a cache that kept only what
-/// libical has an enum for would answer that one and drop the key.
+/// The `name` goes on the line as a `LABEL`. This shows that EDS also keeps a
+/// standard parameter. A cache that keeps only parameters with a libical enum
+/// keeps the `LABEL` and drops the key.
 const PLACED_CONFERENCE_KEY: &str = "srv-conf";
 const PLACED_CONFERENCE_URI: &str = "https://meet.example/design-review";
 const PLACED_CONFERENCE_NAME: &str = "Video bridge";
 const PLACED_CONFERENCE_DESCRIPTION: &str = "dial in from the lobby phone";
 
-/// And the document the event points at — the third of the three maps the save
-/// patches into, and the one whose line libical does not leave as text.
+/// The first document that the event links to. Of the three maps that the
+/// save patches, this is the one whose line libical does not keep as text.
 ///
-/// An `ATTACH` is why this is a separate question from the `CONFERENCE` above.
-/// RFC 5545 §3.8.1.1 gives the property a value type of its own, and libical
-/// parses it into an `icalattach` rather than holding the string: the parameters
-/// ride beside a value the library has re-built, which is exactly the shape in
-/// which a cache loses one. Whether EDS carries the `X-JMAP-KEY` on *this*
-/// property was inferred from the two above until this leg measured it.
+/// RFC 5545 §3.8.1.1 gives `ATTACH` its own value type, and libical parses it
+/// into an `icalattach`. The parameters stay beside a rebuilt value, and a
+/// cache can lose them there. This leg measures whether EDS keeps the
+/// `X-JMAP-KEY` on this property.
 ///
-/// The `title` is the member with no room on the line at all, so it plays the
-/// part `description` plays for the two places: a save that replaced `links`
-/// would delete it. The `contentType` and the `size` are shown — an `FMTTYPE`
-/// and a `SIZE` — and still never written back, since they are the server's
-/// description of what it holds rather than a field the user was offered; they
-/// are asserted after the save for that reason, not as decoration.
+/// The `title` has no place on the line, so a save that replaced `links`
+/// deletes it. The `contentType` and `size` show as `FMTTYPE` and `SIZE` but
+/// the save never writes them back, because they describe the server's file.
+/// The test asserts them after the save for this reason.
 ///
-/// This is the resource the user does **not** touch. It is drawn first — the
-/// entries go out in key order, and `srv-att` sorts before
-/// [`PLACED_EDITED_ATTACH_KEY`] — so it is also the line a save that meant "the
-/// attachment" rather than "that one" would reach.
+/// The user does **not** edit this resource. Entries go out in key order, and
+/// `srv-att` sorts before [`PLACED_EDITED_ATTACH_KEY`]. Thus this is also the
+/// line that a save would change if it took the first attachment.
 const PLACED_ATTACH_KEY: &str = "srv-att";
 const PLACED_ATTACH_HREF: &str = "https://files.example/design-review/agenda.pdf";
 const PLACED_ATTACH_TITLE: &str = "Agenda, with the numbers";
 const PLACED_ATTACH_MEDIA_TYPE: &str = "application/pdf";
 const PLACED_ATTACH_SIZE: u64 = 20480;
 
-/// And the second document, which is the case the key exists for.
+/// The second document, which is the reason for the key.
 ///
-/// One resource per event is the shape in which a lost `X-JMAP-KEY` merely
-/// *fails*: whatever the line carries, there is one entry in the server's map and
-/// the save either names it or names nothing. RFC 5545 §3.8.1.1 admits any number
-/// of `ATTACH` lines and RFC 8984 §4.2.7 a whole map of Links, so with two the
-/// same loss *corrupts* — a line whose key EDS dropped, or carried over from its
-/// neighbour, is a save that re-addresses a document the user never touched and
-/// loses the edit they made. Nothing below real EDS can ask that: every fixture in
-/// `jmap-ical` and `jmap-cal-sync` writes the parameter by hand, so the line is
-/// paired with its entry there by construction.
+/// With one resource per event, a lost `X-JMAP-KEY` only makes the save fail.
+/// RFC 5545 §3.8.1.1 permits many `ATTACH` lines and RFC 8984 §4.2.7 a map of
+/// Links. With two, a lost or swapped key makes the save change the wrong
+/// document. The fixtures in `jmap-ical` and `jmap-cal-sync` write the
+/// parameter by hand, so only real EDS can test this.
 ///
-/// This is the one the user re-addresses, and deliberately the one drawn
-/// *second*: a save that took the first `ATTACH` for the resource being edited
-/// reaches [`PLACED_ATTACH_KEY`] instead, which the assertions on both ends then
-/// see as the wrong document moved and the right one left where it was.
+/// The user edits this one, and it is drawn second. A save that took the first
+/// `ATTACH` changes [`PLACED_ATTACH_KEY`] instead, and both ends see it.
 ///
-/// A media type and a size of its own, both different from the first entry's, so
-/// that a parameter reported against the wrong line is a difference rather than a
-/// coincidence.
+/// Its media type and size are different from the first entry's, so a
+/// parameter on the wrong line causes a difference.
 const PLACED_EDITED_ATTACH_KEY: &str = "srv-att-2";
 const PLACED_EDITED_ATTACH_HREF: &str = "https://files.example/design-review/slides.odp";
 const PLACED_EDITED_ATTACH_TITLE: &str = "Slides, as presented";
 const PLACED_EDITED_ATTACH_MEDIA_TYPE: &str = "application/vnd.oasis.opendocument.presentation";
 const PLACED_EDITED_ATTACH_SIZE: u64 = 51200;
 
-/// And the picture *of* the event, which is the other half of the same map and a
-/// different iCalendar property.
+/// The picture of the event: the same map, but a different iCalendar
+/// property.
 ///
-/// RFC 8984 §4.2.7 keeps in one `links` map what iCalendar splits in two: a
-/// document attached to the event is RFC 5545 §3.8.1.1's `ATTACH`, and a picture
-/// of it is RFC 7986 §5.10's `IMAGE`. `jmap-ical` tells them apart by the
-/// `icon` `rel` — RFC 8984 §1.4.11's, the relation `display` may be set on — so
-/// this entry carries one and the two above do not.
+/// RFC 8984 §4.2.7 keeps one `links` map. iCalendar has two properties. A
+/// document is RFC 5545 §3.8.1.1's `ATTACH`, and a picture is RFC 7986 §5.10's
+/// `IMAGE`. `jmap-ical` uses the `icon` `rel` (RFC 8984 §1.4.11) to tell them
+/// apart, so this entry has one and the two above do not.
 ///
-/// A separate question from the two `ATTACH` lines, and not a formality. The
-/// property is a decade newer than the enum libical-glib generates its names
-/// from; the mapping writes `VALUE=URI` on it because §5.10's grammar makes the
-/// parameter REQUIRED on that alternative, and *that* is what changes the shape
-/// of the value libical hands back — an `ATTACH` parses into an `icalattach`,
-/// this parses into a URI. Whether the `X-JMAP-KEY` survives EDS's cache on a
-/// property of that shape is not settled by it surviving on the other one.
+/// The mapping writes `VALUE=URI` on this line because §5.10 requires that
+/// parameter. Thus libical returns a URI here, not an `icalattach`. That the
+/// `X-JMAP-KEY` survives EDS's cache on `ATTACH` does not show that it
+/// survives on this property.
 ///
-/// The `display` is what the picture is *for*, and it exists here because it is
-/// the one member of a Link that crosses into a standard parameter of its own —
-/// RFC 7986 §6.1's `DISPLAY`. A cache that dropped it costs the user nothing
-/// today, since only `href` goes back, but §6.1 requires a reader that meets a
-/// `DISPLAY` it does not know to show *no image at all*, so what the round trip
-/// does to it is worth measuring rather than assuming.
+/// The `display` is the only Link member with its own standard parameter:
+/// RFC 7986 §6.1's `DISPLAY`. Only `href` goes back today, but §6.1 tells a
+/// reader to show no image when it does not know the `DISPLAY` value. Thus the
+/// test measures what the round trip does to it.
 ///
-/// The `size` is here for the opposite reason to the `ATTACH` entries', where it
-/// is shown as a `SIZE` parameter: §5.10 admits no `SIZE` on an `IMAGE`, so this
-/// one has no room on the line at all. It joins the `title` as a member the save
-/// must leave alone because it was never shown — and unlike the `title` it is a
-/// member the *other* two entries do show, so a save that wrote back everything it
-/// could name would lose it from here and keep it there.
+/// §5.10 permits no `SIZE` on an `IMAGE`, so the `size` has no place on the
+/// line. The save must keep it because the user never saw it. The two `ATTACH`
+/// entries show their `size`, so a save that wrote back all it could name
+/// keeps it there and loses it here.
 const PLACED_IMAGE_KEY: &str = "srv-img";
 const PLACED_IMAGE_HREF: &str = "https://files.example/design-review/whiteboard.png";
 const PLACED_IMAGE_TITLE: &str = "Whiteboard, at the end";
 const PLACED_IMAGE_MEDIA_TYPE: &str = "image/png";
 const PLACED_IMAGE_SIZE: u64 = 8192;
-/// How the `display` is spelled on each side of the crossing. RFC 8984 §1.4.11
-/// and RFC 7986 §6.1 name the same four intentions in the same words and differ
-/// only in case, so both spellings are stated here and the leg asserts each
-/// against the end that uses it.
+/// The `display` value in each format. RFC 8984 §1.4.11 and RFC 7986 §6.1 use
+/// the same words with different case, so the leg asserts each spelling at its
+/// own end.
 const PLACED_IMAGE_DISPLAY: &str = "graphic";
 const PLACED_IMAGE_DISPLAY_ICAL: &str = "GRAPHIC";
 
-/// The place the user retypes into the appointment editor's Location field. A
-/// different room, so a value half-written shows up as neither.
+/// The location that the user types in the appointment editor. It is a
+/// different room, so a partial write matches neither value.
 const REPLACED_LOCATION_NAME: &str = "Room 7";
 
-/// And the address the event is joined at afterwards. Not something Evolution
-/// 3.52 offers a control for — see `tests/functional/cal-edit-client.c` — so this
-/// is the edit another client on the same account makes; the mapping has a path
-/// for it, and this is what says the path works through real EDS. A different
-/// host as well as a different path, so a URI half-rewritten is neither.
+/// The new address of the virtual location. Evolution 3.52 has no control for
+/// it (see `tests/functional/cal-edit-client.c`), so this is an edit that
+/// another client makes. The host and the path both change, so a partial
+/// rewrite matches neither value.
 const REPLACED_CONFERENCE_URI: &str = "https://call.example/rescheduled";
 
-/// And the address of the second document afterwards — the edit an attachment can
-/// take through a libecal consumer, since `href` is the one member of a Link this
-/// mapping writes back. A different host as well as a different path, so a URI
-/// half-rewritten is neither.
+/// The new address of the second document. `href` is the only Link member that
+/// this mapping writes back. The host and the path both change, so a partial
+/// rewrite matches neither value.
 ///
-/// The client is told which line to re-address by the address it already carries,
-/// not by its position or by the key: that is how a user picks the attachment
-/// they meant, and it keeps the program free of any notion of what the mapping
-/// writes on a line. See `tests/functional/cal-edit-client.c`.
+/// The client finds the line to change by its current address, not by its
+/// position or key, as a user does. See `tests/functional/cal-edit-client.c`.
 const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/slides-2.odp";
 
-/// And the address of the picture afterwards, which is the same edit made on the
-/// other property.
+/// The new address of the picture: the same edit on the other property.
 ///
-/// Made in the same save as the two above rather than in a leg of its own,
-/// because the failure it is aimed at only exists when both properties are on the
-/// event: `jmap-ical` reads `ATTACH` and `IMAGE` into one map and draws them back
-/// out of one map, so a mapping that paired a line with an entry by counting —
-/// rather than by the key on it — mixes the two kinds up only where both are
-/// present. A picture alone would be re-addressed correctly by construction.
+/// It is in the same save as the two above. `jmap-ical` reads `ATTACH` and
+/// `IMAGE` into one map and writes them from one map. A mapping that paired
+/// lines with entries by count (not by key) mixes them only when both are
+/// present.
 const REPLACED_IMAGE_HREF: &str = "https://pics.example/design-review/whiteboard-2.png";
 
-/// The zone the third leg's first event is in: an identifier no database names,
-/// which the event carries its own RFC 8984 §4.7.2 definition for.
+/// The zone of the third leg's first event: an identifier that no database
+/// names, which the event defines itself (RFC 8984 §4.7.2).
 ///
-/// This is the other half of what [`PLACED_ZONE`] measures, and the half the
-/// mapping cannot lean on the consumer for. §1.4.8 lets a `TimeZoneId` be either
-/// an IANA name or a custom identifier beginning with a solidus that the event's
-/// own `timeZones` defines — the second is what a server invents for the zone an
-/// Exchange or Outlook invitation carries its own `VTIMEZONE` for, so it arrives
-/// on any account holding a meeting somebody organised there. Nothing outside
-/// that server can look the identifier up, so the definition travelling with the
-/// event is the only thing that says what the zone is, and `jmap-ical` draws it
-/// as a `VTIMEZONE` in the document.
+/// This is the other half of what [`PLACED_ZONE`] measures. §1.4.8 lets a
+/// `TimeZoneId` be an IANA name or a custom identifier. A custom identifier
+/// starts with a solidus, and the event's `timeZones` defines it. A server
+/// makes such an identifier for the zone in an Exchange or Outlook invitation.
+/// Only the definition says what the zone is, and `jmap-ical` writes it as a
+/// `VTIMEZONE`.
 ///
-/// The tail is `Europe-Berlin` and not `Europe/Berlin` on purpose: libical's
-/// `icaltimezone_get_builtin_timezone` looks a location up in its own table, so an
-/// identifier whose tail *was* an IANA location could resolve out of the table and
-/// the leg would pass without the definition being read at all.
+/// The tail is `Europe-Berlin`, not `Europe/Berlin`, because libical's
+/// `icaltimezone_get_builtin_timezone` finds a location in its own table. An
+/// IANA tail could resolve from that table, and the leg would pass without the
+/// definition.
 const DEFINED_ZONE: &str = "/example.com/Europe-Berlin";
 
-/// And the zone the third leg's second event is in: an identifier no database
-/// names either, and one the event defines **nothing** for.
+/// The zone of the third leg's second event: an identifier that no database
+/// names and that the event does **not** define.
 ///
-/// The contrast the leg exists for, and the case with no good answer. `jmap-ical`
-/// draws it as a bare `TZID` naming a zone nobody can resolve, because the
-/// alternatives are worse: dropping the parameter states an event in no zone at
-/// all, and inventing UTC states one at an instant the server never named. So a
-/// consumer floats it, and the appointment lands at the wall clock in whatever
-/// zone the consumer treats a floating time as. That is the documented cost of the
-/// fallback in `jmap-ical`'s `dated`, and this leg is where it stops being
-/// documented and starts being measured.
+/// `jmap-ical` writes it as a bare `TZID` that nobody can resolve. The
+/// alternatives are worse: no parameter states no zone, and UTC states the
+/// wrong instant. Thus a consumer floats it. This is the documented cost of the
+/// fallback in `jmap-ical`'s `dated`, and this leg measures it.
 ///
-/// A second `example.com` zone rather than a reuse of [`DEFINED_ZONE`] under a
-/// second event, because the two events travel in one refresh: the same identifier
-/// would let the definition one event carries answer for the other, which is a
-/// pass this leg has not earned.
+/// It is a second `example.com` zone, not [`DEFINED_ZONE`] again, because both
+/// events travel in one refresh. With one identifier, the first event's
+/// definition could resolve the second event.
 const UNDEFINED_ZONE: &str = "/example.com/Somewhere-Else";
 
-/// What both of the third leg's events are called, and when they start.
+/// The titles of the third leg's two events, and their start.
 ///
-/// The same wall clock deliberately: with the starts equal, the whole difference
-/// between the instants the two events resolve to is the difference between a zone
-/// that was defined and one that was not. The date is inside CEST, so the defined
-/// zone's second observance applies and the offset is two hours — a definition
-/// libical read only the standard half of would land an hour out, which a
-/// one-observance zone could not distinguish.
+/// Both events start at the same wall-clock time, so the difference between
+/// their instants comes only from the zone definition. The date is in CEST, so
+/// the defined zone's daylight observance gives an offset of two hours. A
+/// reader that used only the standard observance is one hour wrong.
 const DEFINED_ZONE_TITLE: &str = "Design review";
 const UNDEFINED_ZONE_TITLE: &str = "Design review, nowhere in particular";
 const ZONE_START: &str = "2026-04-09T10:00:00";
 const ZONE_DURATION: &str = "PT1H";
 
-/// What the user retypes over [`DEFINED_ZONE_TITLE`] in the appointment editor —
-/// the edit that touches nothing the zone cares about, since Evolution offers no
-/// way to *redefine* the zone and this mapping would refuse to send a redefinition
-/// anyway.
+/// The title that the user types over [`DEFINED_ZONE_TITLE`]. This edit does
+/// not touch the zone: Evolution cannot redefine a zone, and this mapping does
+/// not send a redefinition.
 ///
-/// A title rather than the clock deliberately, and made first: what the save has to
-/// leave alone is the zone, and an edit that restated the start could not tell "the
-/// zone survived" from "the start was re-sent in a way that happened to agree". The
-/// user's edit here has nothing to do with the zone, so anything that happens to
-/// the zone is something the save did on its own. The clock is moved afterwards, in
-/// a save of its own — see [`ZONE_MOVED_DTSTART`].
+/// The first edit changes the title, not the start, so any change to the zone
+/// comes from the save itself. A later save moves the start: see
+/// [`ZONE_MOVED_DTSTART`].
 const ZONE_RETYPED_TITLE: &str = "Design review, with the numbers";
 
-/// And then the edit that *is* about the clock: where the user drags the
-/// appointment to, as the iCalendar value the client writes onto the `DTSTART`
-/// already there — the `TZID` beside it untouched, because moving an appointment
-/// does not move it out of its zone.
+/// The new start after the user moves the appointment. The client writes this
+/// value on the existing `DTSTART` and does not change the `TZID`.
 ///
-/// Made after the rename rather than instead of it, since the two ask opposite
-/// questions of the same save path. The rename says an edit that has nothing to do
-/// with the clock leaves `start` alone; this one says an edit that is *entirely*
-/// about the clock still leaves the *zone* alone. A mapping that resent `timeZone`
-/// whenever `start` changed would pass the first and fail this one, and it is the
-/// likelier bug of the two: `patch::diff` reads a zone it cannot name off the
-/// component on both sides, so the guard that keeps it out of the patch is only
-/// exercised where something else in the patch is a date-time.
+/// The rename shows that an edit that does not touch the clock keeps `start`.
+/// This edit shows that an edit of the clock keeps the zone. A mapping that
+/// sends `timeZone` each time `start` changes fails only this edit.
+/// `patch::diff` reads an unnamed zone from the component on both sides. Thus
+/// the guard that keeps it out of the patch runs only when the patch has a
+/// date-time.
 ///
-/// In November, on the other side of the definition's `STANDARD` transition. A
-/// move inside CEST would resolve through the same observance the read already
-/// proved; landing in CET says the yearly rules of *both* halves survived into
-/// EDS's timezone store, which is what makes the zone a zone rather than a fixed
-/// offset that happened to be right in April.
+/// The date is in November, after the definition's `STANDARD` transition. This
+/// shows that EDS's timezone store keeps the yearly rules of both observances,
+/// not only one fixed offset.
 const ZONE_MOVED_DTSTART: &str = "20261105T143000";
 
-/// And where it now ends — the same clock, an hour and a half later.
+/// The new end: the same clock, 90 minutes later.
 ///
-/// Written as a `DTEND`, with the `DURATION` the mapping drew removed beside it,
-/// because that is what Evolution states: the appointment editor calls
-/// `e_cal_component_set_dtend`, and RFC 5545 §3.6.1 makes the two mutually
-/// exclusive. So this is also the one place `read_duration`'s `DTEND` branch is
-/// driven through real EDS — the length of an event stated by two wall clocks in a
-/// zone nothing outside the server can resolve, which is exactly the shape a
-/// fixture cannot vouch for: what reaches the mapping is whatever EDS's cache and
-/// libical made of a `DTEND` beside a `DTSTART` neither of them can place on a
-/// timeline.
+/// It is a `DTEND`, because Evolution's editor calls
+/// `e_cal_component_set_dtend`. RFC 5545 §3.6.1 does not permit both, so the
+/// client removes the `DURATION` that the mapping wrote. This is the only test
+/// of the `DTEND` branch of `read_duration` through real EDS. The two
+/// wall-clock times are in a zone that only the server can resolve.
 const ZONE_MOVED_DTEND: &str = "20261105T160000";
 
-/// What the server must hold afterwards: the moved wall clock as JSCalendar states
-/// it, and the length the two lines above state between them.
+/// The values that the server must hold after the move: the new wall-clock
+/// start and the length between the two lines above.
 ///
-/// The length is asserted because it is the half that travels by a different route
-/// — the start is a value copied across, the duration is *computed* from a pair of
-/// wall clocks by `read_duration` — and because a duration that came out of the
-/// `DTSTART`/`DTEND` subtraction wrong is an appointment of the wrong length rather
-/// than at the wrong time, which no assertion about `start` would catch.
+/// `read_duration` calculates the length from two wall-clock times, but copies
+/// the start. Thus a wrong subtraction gives a wrong length at the correct
+/// time, which no `start` assertion finds.
 const ZONE_MOVED_START: &str = "2026-11-05T14:30:00";
 const ZONE_MOVED_DURATION: &str = "PT1H30M";
 
-/// And the instant the moved appointment means: 14:30 in the zone's `STANDARD`
-/// half is 13:30 UTC.
+/// The instant of the moved appointment: 14:30 in the zone's `STANDARD`
+/// observance is 13:30 UTC.
 ///
-/// One hour, not the two the April start resolves to, and that difference is the
-/// whole point of moving into November — a "zone" that had been flattened to the
-/// offset the first read happened to need would put this at 12:30Z.
+/// The offset is one hour, not the two hours of the April start. A zone that
+/// became a fixed April offset gives 12:30Z.
 const ZONE_MOVED_DTSTART_UTC: &str = "20261105T133000Z";
 
-/// What libical alone lands on for it, which is the moved wall clock with a `Z`
-/// stamped on it for the reason [`FLOATING_DTSTART_UTC`] gives.
+/// The value from libical alone: the moved wall-clock time with a `Z` added,
+/// for the reason that [`FLOATING_DTSTART_UTC`] gives.
 const ZONE_MOVED_FLOATING_UTC: &str = "20261105T143000Z";
 
-/// The wall clock EDS should show for both, which is the start above as an
-/// iCalendar `DATE-TIME`.
+/// The wall-clock start that EDS must show for both events, as an iCalendar
+/// `DATE-TIME`.
 const ZONE_DTSTART: &str = "20260409T100000";
 
-/// The instant the defined zone puts that wall clock at, which is the number this
-/// leg exists for: the zone's `DAYLIGHT` observance applies on 2026-04-09, so
-/// 10:00 local is 08:00 UTC. Nothing but a reader of the definition the server sent
-/// can arrive at it — no zone database holds [`DEFINED_ZONE`], and a definition
-/// read only in part would land an hour out.
+/// The instant that the defined zone gives for that start. The `DAYLIGHT`
+/// observance applies on 2026-04-09, so 10:00 local is 08:00 UTC. No zone
+/// database holds [`DEFINED_ZONE`], so only a reader of the server's
+/// definition can calculate it.
 const DEFINED_ZONE_DTSTART_UTC: &str = "20260409T080000Z";
 
-/// And what a reader that could not resolve the identifier lands on instead: the
-/// wall clock with a `Z` stamped on it. libical does not adjust a floating time it
-/// converts, so this is the same on every machine — two hours from where the server
-/// put the appointment, and silently.
+/// The value from a reader that cannot resolve the identifier. It is the
+/// wall-clock time with a `Z` added. libical does not adjust a floating time
+/// when it converts it, so the result is the same on all machines.
 ///
-/// Both events report it from `i_cal_component_get_dtstart`, and that is not a
-/// failure of either: EDS does not hand a `VTIMEZONE` back beside the event (see
-/// the leg), so libical alone has nothing to resolve a custom identifier against.
-/// For the undefined event it is also the *final* answer, because there is nothing
-/// anywhere that says what its zone is.
+/// Both events give this value from `i_cal_component_get_dtstart`. EDS does not
+/// return a `VTIMEZONE` with the event, so libical alone cannot resolve a custom
+/// identifier. For the undefined event this is also the final value.
 const FLOATING_DTSTART_UTC: &str = "20260409T100000Z";
 
-/// The RFC 8984 §4.7.2 definition the server sends for [`DEFINED_ZONE`]: Central
-/// European Time, stated the way a server converting an invitation's `VTIMEZONE`
-/// would state it.
+/// The RFC 8984 §4.7.2 definition that the server sends for [`DEFINED_ZONE`]:
+/// Central European Time, as a server that converts a `VTIMEZONE` states it.
 ///
-/// Both observances, because a zone that moves is only described by both: the
-/// offset a transition moves *from* is the one the other transition moved *to*.
-/// Each carries the yearly rule that repeats it, so the zone applies to a date
-/// half a century after the observance dates itself — which is what makes a 2026
-/// event resolvable out of a 1970 definition at all — and a `TZNAME`, which is
-/// what a reader shows for the offset.
+/// It has both observances and each has a yearly rule, so a 1970 definition
+/// applies in 2026. Each also has a `TZNAME`, which a reader shows.
 fn defined_zone() -> serde_json::Value {
     zone_definition(DEFINED_ZONE)
 }
 
-/// That definition under any identifier, so that the leg which sends one can
-/// state what it expects with the same text the leg which receives one does.
+/// The same definition under a given identifier, so that the sending leg and
+/// the receiving leg expect the same text.
 fn zone_definition(tzid: &str) -> serde_json::Value {
     zone_definition_offset(tzid, "+0100", "+0200", "CET", "CEST")
 }
 
-/// And the zone [`CLIENT_MOVED_ZONE_VTIMEZONE`] describes, which is the same
-/// definition on other offsets under other names — see that constant for why the
-/// two differ in nothing else.
+/// The zone that [`CLIENT_MOVED_ZONE_VTIMEZONE`] describes: the same rules with
+/// different offsets and names.
 fn moved_zone_definition() -> serde_json::Value {
     zone_definition_offset(
         CLIENT_MOVED_ZONE,
@@ -628,14 +495,11 @@ fn moved_zone_definition() -> serde_json::Value {
     )
 }
 
-/// The definition both of the above are, written once: two observances that
-/// trade `standard` for `daylight` on the last Sunday of March and back on the
-/// last Sunday of October, differing only in what each half is called and what it
-/// is worth.
+/// The shared definition: two observances that change to daylight time on the
+/// last Sunday of March and back on the last Sunday of October.
 ///
-/// The `offsetFrom` of each observance is the other's `offsetTo`, because that is
-/// what a transition is; stating them separately here rather than deriving them
-/// would let a caller describe a zone that jumps.
+/// The `offsetFrom` of each observance is the `offsetTo` of the other. The
+/// function derives them, so a caller cannot describe a zone that jumps.
 fn zone_definition_offset(
     tzid: &str,
     standard_offset: &str,
@@ -675,51 +539,42 @@ fn zone_definition_offset(
     })
 }
 
-/// The zone the **fourth** leg's client defines, and which nothing else anywhere
-/// does.
+/// The zone that the **fourth** leg's client defines. Nothing else defines it.
 ///
-/// The other half of [`DEFINED_ZONE`], asked from the other end: there a zone only
-/// the server could name had to reach a consumer, here one only the *client* can
-/// name has to reach the server. It is what Evolution has in hand after the user
-/// accepts an invitation whose `VTIMEZONE` names a zone no database holds — the
-/// Exchange organiser's own — and the only route it can take is
-/// `e_cal_client_add_timezone`, because EDS strips the definition out of the
-/// component and keeps it in the calendar's timezone store. A backend that
-/// looked only at what it was handed would send a `TZID` naming nothing, which
-/// `jmap-ical`'s `maps_time_zone` then refuses, and the appointment would be
-/// filed floating.
+/// This is the reverse of [`DEFINED_ZONE`]: here a zone that only the client
+/// can name must reach the server. Evolution has such a zone after the user
+/// accepts an invitation with a `VTIMEZONE` that no database holds. It can send
+/// it only through `e_cal_client_add_timezone`, because EDS removes the
+/// definition from the component and keeps it in the calendar's timezone
+/// store. A backend that read only the component sends a `TZID` without a
+/// definition, `jmap-ical`'s `maps_time_zone` refuses it, and the appointment
+/// floats.
 ///
-/// A third `example.com` zone rather than a reuse of either above, so that a
-/// definition arriving in the mock can only have come from the file this leg
-/// wrote.
+/// It is a third `example.com` zone, so a definition in the mock can only come
+/// from the file that this leg wrote.
 const CLIENT_ZONE: &str = "/example.com/Somewhere-New";
 
-/// What the fourth leg's client makes, and where in time it puts it.
+/// The title, start and length of the fourth leg's event.
 ///
-/// The same wall clock and length as the third leg's events, and inside CEST for
-/// the same reason: the zone's `DAYLIGHT` observance applies on 2026-04-09, so a
-/// definition that arrived with only its `STANDARD` half would land an hour out
-/// rather than passing.
+/// The same values as the third leg's events, and in CEST for the same reason.
+/// A definition without its `DAYLIGHT` observance gives an instant one hour
+/// wrong.
 const CLIENT_ZONE_TITLE: &str = "Design review, in a zone the client brought";
 const CLIENT_ZONE_DTSTART: &str = "20260409T100000";
 const CLIENT_ZONE_DURATION: &str = "PT1H";
 
-/// And what the server must hold for it: the same wall clock as JSCalendar states
-/// one, the length, and the identifier the client's own `VTIMEZONE` gave.
+/// The start that the server must hold, in JSCalendar form.
 const CLIENT_ZONE_START: &str = "2026-04-09T10:00:00";
 
-/// The definition the client hands the calendar, as the `VTIMEZONE` a document
-/// carries it in.
+/// The definition that the client gives the calendar, as a `VTIMEZONE`.
 ///
-/// The drawing of [`zone_definition`] and not a second zone: what the mock is
-/// held to is that map, so writing the two out of one description is what makes
-/// the assertion an assertion about the round trip rather than about two
-/// literals that happen to agree.
+/// It is the iCalendar form of [`zone_definition`], not a second zone. The
+/// mock must hold that map, so one description for both makes the assertion
+/// test the round trip and not two equal literals.
 ///
-/// No `X-LIC-LOCATION`. One naming an IANA zone would make this a *spelling* of a
-/// zone that already has a name, which `jmap-ical` translates and libical's
-/// builtin table would then answer for — and the leg would pass without the
-/// client's own definition being read at all.
+/// There is no `X-LIC-LOCATION`. An IANA name there lets `jmap-ical` translate
+/// the zone and libical's builtin table resolve it, and the leg passes without
+/// the client's definition.
 const CLIENT_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
      TZID:/example.com/Somewhere-New\r\n\
      BEGIN:STANDARD\r\n\
@@ -738,36 +593,31 @@ const CLIENT_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
      END:DAYLIGHT\r\n\
      END:VTIMEZONE\r\n";
 
-/// The zone the **fifth** leg moves one occurrence of its series into, and the
-/// second one that leg's client defines.
+/// The zone that the **fifth** leg moves one occurrence into. It is the second
+/// zone that this leg's client defines.
 ///
-/// The fourth leg sends a client-defined zone in a `CalendarEvent/set` *create*,
-/// where the mapping builds the whole `timeZones` map itself. This one sends the
-/// other kind of save: an `update`, where the map already on the server is the
-/// user's own and RFC 8620 §5.3's pointer patch is the only way to add to it
-/// without rewriting what a `VTIMEZONE` cannot show. Nothing but real EDS can ask
-/// it, because the definition must be in the calendar's timezone store *and* the
-/// series' definition must already be at the server, which is two saves.
+/// The fourth leg sends a client-defined zone in a `CalendarEvent/set` create,
+/// where the mapping builds the full `timeZones` map. This leg sends an update.
+/// There the map on the server belongs to the user. The RFC 8620 §5.3 pointer
+/// patch is the only way to add to it without overwriting what a `VTIMEZONE`
+/// cannot show. Only real EDS can test this, because it needs the
+/// definition in the timezone store and the series' definition on the server:
+/// two saves.
 ///
-/// A fourth `example.com` zone, so that a definition arriving in the mock under
-/// this identifier can only have come from the second file this leg wrote.
+/// It is a fourth `example.com` zone, so a definition under this identifier
+/// can only come from the second file that this leg wrote.
 const CLIENT_MOVED_ZONE: &str = "/example.com/Somewhere-Further";
 
-/// The description that zone is written from, in the two spellings the leg needs:
-/// the `VTIMEZONE` the client hands the calendar, and the RFC 8984 §4.7.2 map the
-/// mock is held to.
+/// The description of that zone in two forms. The `VTIMEZONE` goes to the
+/// calendar, and the mock must hold the RFC 8984 §4.7.2 map.
 ///
-/// [`CLIENT_ZONE_VTIMEZONE`]'s shape with two members changed — the offsets and
-/// the names — and everything else, the observance dates and both yearly rules,
-/// left as it stands. Deliberately: the fifth leg's claim is about *which* zone
-/// each of two definitions describes, and two definitions that differ in one
-/// respect make a mix-up show up as that one respect rather than as a wholesale
-/// difference that any bug could explain.
+/// It is [`CLIENT_ZONE_VTIMEZONE`] with different offsets and names. The
+/// observance dates and yearly rules are the same. The fifth leg tests which
+/// zone each definition describes, so a mix-up is visible as that one
+/// difference.
 ///
-/// The offsets are three and four hours, which no European zone has, so the
-/// instant the moved occurrence resolves to cannot be reached from the series'
-/// zone: 08:00 here is 04:00 UTC, against 06:00 for a reader that applied the
-/// series' CEST and 08:00 for one that resolved nothing at all.
+/// No European zone has offsets of three and four hours. Thus 08:00 here is
+/// 04:00 UTC, but 06:00 UTC with the series' CEST and 08:00 UTC with no zone.
 const CLIENT_MOVED_ZONE_STANDARD_OFFSET: &str = "+0300";
 const CLIENT_MOVED_ZONE_DAYLIGHT_OFFSET: &str = "+0400";
 const CLIENT_MOVED_ZONE_STANDARD_NAME: &str = "EXT";
@@ -790,48 +640,43 @@ const CLIENT_MOVED_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
      END:DAYLIGHT\r\n\
      END:VTIMEZONE\r\n";
 
-/// The series the fifth leg creates, in [`CLIENT_ZONE`] — the same zone the
-/// fourth leg's one-off event is in, and the same file, because what this leg
-/// adds is the *second* zone rather than a second way of sending the first.
+/// The series that the fifth leg creates, in [`CLIENT_ZONE`]: the same zone
+/// and definition as the fourth leg's event. This leg adds the second zone.
 ///
-/// Weekly and three long, which is [`ZONED_RECURRING_SUMMARY`]'s shape: enough
-/// occurrences that the one that moves is neither the first nor the last, so an
-/// override attached to the wrong instance lands on an occurrence that exists and
-/// is therefore visible as a wrong date rather than as a rejected save.
+/// Weekly with three occurrences, like [`ZONED_RECURRING_SUMMARY`]. The moved
+/// occurrence is neither the first nor the last. Thus an override on the wrong
+/// instance shows a wrong date, not a rejected save.
 const CLIENT_SERIES_TITLE: &str = "Standup, in a zone the client brought";
 const CLIENT_SERIES_DTSTART: &str = "20260409T100000";
 const CLIENT_SERIES_START: &str = "2026-04-09T10:00:00";
 const CLIENT_SERIES_DURATION: &str = "PT1H";
 const CLIENT_SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=3";
 
-/// And the occurrence that moves: the second one, named by the `RECURRENCE-ID`
-/// the rules generated for it — a wall clock on the *series'* zone — and put two
-/// hours earlier on the clock of a zone only this client can name.
+/// The occurrence that moves: the second one. Its `RECURRENCE-ID` is a
+/// wall-clock time on the series' zone. It moves two hours earlier, on the
+/// clock of a zone that only this client can name.
 ///
-/// The key the override arrives under is that recurrence id as JSCalendar states
-/// one, so it is written out here too: a series that reached the server floating
-/// or in UTC would make the same wall clock name a different instant, and the
-/// override would hang off an occurrence the rules never generated.
+/// The override key is that recurrence id in JSCalendar form. If the series
+/// reaches the server floating or in UTC, the key names a different instant
+/// and the override applies to no generated occurrence.
 const CLIENT_MOVED_RECURRENCE_ID: &str = "20260416T100000";
 const CLIENT_MOVED_INSTANCE: &str = "2026-04-16T10:00:00";
 const CLIENT_MOVED_DTSTART: &str = "20260416T080000";
 const CLIENT_MOVED_START: &str = "2026-04-16T08:00:00";
 
-/// The instant that moved wall clock means, which is the number the leg's
-/// client-side half exists for: 08:00 in the moved zone's `DAYLIGHT` observance,
-/// which is +0400, is 04:00 UTC.
+/// The instant of the moved wall-clock time: 08:00 in the moved zone's
+/// `DAYLIGHT` observance (+0400) is 04:00 UTC.
 ///
-/// Neither of the two ways this can go wrong reaches it. A reader that applied the
-/// series' zone to the detached instance lands on 06:00 UTC; one that resolved
-/// nothing lands on 08:00 UTC, since libical stamps a `Z` on a floating time
-/// rather than adjusting it.
+/// A reader that applies the series' zone to the instance gives 06:00 UTC. A
+/// reader that resolves nothing gives 08:00 UTC, because libical adds a `Z` to
+/// a floating time and does not adjust it.
 const CLIENT_MOVED_DTSTART_UTC: &str = "20260416T040000Z";
 
-/// Put nothing but a calendar in the mock's store, for the leg that creates the
-/// only event there will be.
+/// Put only a calendar in the mock's store, for a leg that creates all of its
+/// events.
 ///
-/// A calendar is still needed: `CalSync` writes into the one the source names, so
-/// an account holding none has nowhere to file a create.
+/// The calendar is necessary: the source names no calendar, so the backend
+/// files each create in the account's default calendar.
 fn seed_empty_calendar(server: &jmap_mock::MockServer) {
     let account_id = server.account_id();
     let state = server.state();
@@ -842,20 +687,17 @@ fn seed_empty_calendar(server: &jmap_mock::MockServer) {
         .seed_calendar("Personal", true);
 }
 
-/// Put the third leg's two events into the mock's store — one in a zone the event
-/// defines, one in a zone nothing defines — and hand back the ids the server filed
-/// them under, in that order.
+/// Put the third leg's two events in the mock's store (one in a zone that the
+/// event defines, one in a zone that nothing defines). Return their server ids
+/// in that order.
 ///
-/// Both in one calendar and one seeding, because the leg reads them in one run:
-/// one connect, one refresh, one cache. Two runs would share the session's XDG
-/// directories and so the meta backend's cache, which the harness deliberately
-/// starts empty.
+/// Both go in one calendar because the leg reads them in one run: one connect,
+/// one refresh, one cache. Two runs share the session's XDG directories and
+/// thus the meta backend's cache, which the harness starts empty.
 ///
-/// Seeded straight into the store rather than written through EDS for a reason
-/// stronger than [`seed_placed_event`]'s: a create carries a `timeZones` entry
-/// only for a zone somebody handed the calendar (see [`CLIENT_ZONE`]), and what
-/// this leg is about is the zone nobody here ever had — the server's own, which
-/// reaches this backend only from a server.
+/// The test seeds the store directly, not through EDS. A create carries a
+/// `timeZones` entry only for a zone that a client gave the calendar (see
+/// [`CLIENT_ZONE`]). This leg is about a zone that only the server has.
 fn seed_zoned_events(server: &jmap_mock::MockServer) -> (Id, Id) {
     let account_id = server.account_id();
     let state = server.state();
@@ -881,14 +723,13 @@ fn seed_zoned_events(server: &jmap_mock::MockServer) -> (Id, Id) {
     (defined, undefined)
 }
 
-/// Put the event the second leg starts from into the mock's store, and hand back
-/// the id the server filed it under — which is also the `UID` EDS keys its cache
-/// on, since that is what `jmap-ical` writes there.
+/// Put the second leg's event in the mock's store and return its server id.
+/// That id is also the `UID` that EDS uses as its cache key, because
+/// `jmap-ical` writes it there.
 ///
-/// Seeded straight into the store rather than written through EDS, because the
-/// shape under test is one no iCalendar document can state: an event created
-/// through EDS arrives with a place whose whole content is the name on the line,
-/// leaving nothing for the save to preserve — or to lose.
+/// The test seeds the store directly, because no iCalendar document can state
+/// this shape. An event created through EDS has a location that holds only the
+/// name on the line, so the save has nothing to keep or lose.
 fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
     let account_id = server.account_id();
     let state = server.state();
@@ -901,12 +742,11 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
     let id = account.calendar_events.alloc_id();
     let mut event = CalendarEvent::simple(calendar, PLACED_TITLE, PLACED_START, PLACED_DURATION);
     event.id = Some(id.clone());
-    // What a server assigns; the mock's own `CalendarEvent/set` fills the same
-    // shape in, and seeding bypasses it.
+    // The value that a server assigns. The mock's `CalendarEvent/set` makes the
+    // same value, but seeding does not use it.
     event.uid = Some(format!("urn:example:event:{}", id.as_str()));
-    // In a named zone rather than the UTC `simple` fills in, which is the one
-    // shape of `DTSTART` the mapping writes without shipping the definition of
-    // the identifier it names — see [`PLACED_ZONE`].
+    // A named zone, not the UTC that `simple` sets. For this `DTSTART` the
+    // mapping writes no zone definition: see [`PLACED_ZONE`].
     event.time_zone = Some(PLACED_ZONE.to_owned());
     event.locations = Some(
         [(
@@ -931,11 +771,9 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
         )]
         .into(),
     );
-    // Two resources rather than one, because that is the shape in which a key
-    // lost between the drawing and the save costs the user a document rather
-    // than an edit — see [`PLACED_EDITED_ATTACH_KEY`]. And a third of the other
-    // kind beside them: one map, two iCalendar properties, told apart by the
-    // `icon` `rel` — see [`PLACED_IMAGE_KEY`].
+    // Two resources, because with two a lost key changes the wrong document:
+    // see [`PLACED_EDITED_ATTACH_KEY`]. Also one picture in the same map, which
+    // the `icon` `rel` identifies: see [`PLACED_IMAGE_KEY`].
     event.links = Some(
         [
             (
@@ -977,13 +815,12 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
     id
 }
 
-/// What the client reported of one `ATTACH` line: the address libical parsed out
-/// of it, and the two parameters it carries that libical has an enum for.
+/// What the client reported for one `ATTACH` line: the address that libical
+/// parsed, and the two parameters that have a libical enum.
 ///
-/// Compared whole rather than one observation at a time, because the question is
-/// what stands on *one* line — a media type reported against the wrong resource
-/// is exactly the failure this leg exists to catch, and three separate
-/// assertions would each be satisfied by the other line's value.
+/// The test compares the full line, because a media type reported on the wrong
+/// resource is the failure that this leg looks for. Separate assertions could
+/// each match a value from the other line.
 #[derive(Debug, PartialEq, Eq)]
 struct Resource<'a> {
     href: &'a str,
@@ -991,17 +828,14 @@ struct Resource<'a> {
     size: &'a str,
 }
 
-/// The line the server's entry `key` was drawn onto, as the client reported it.
+/// The line that the client reported for the server's entry `key`.
 ///
-/// Found by the `X-JMAP-KEY` the line carries and never by where it stands: the
-/// order two `ATTACH` properties come back in is `ECalMetaBackend`'s business and
-/// not something this leg means to pin down, and reading the second line as "the
-/// second entry" would turn a swap — the very corruption two resources make
-/// possible — into a pass.
+/// The function finds the line by its `X-JMAP-KEY`, not by its position. The
+/// order of two `ATTACH` properties is `ECalMetaBackend`'s choice, and reading
+/// by position lets a swap pass.
 ///
-/// `None` for a component holding no line under that key, which is what a dropped
-/// key looks like from here: the client reports every line it found, so a key
-/// nothing answers to is either absent or on the wrong property.
+/// `None` if no line has that key, which is how a dropped key looks. The client
+/// reports every line, so a missing key is absent or on the wrong property.
 fn resource<'a>(
     seen: &BTreeMap<&'a str, &'a str>,
     prefix: &str,
@@ -1023,16 +857,14 @@ fn resource<'a>(
     })
 }
 
-/// What the client reported of one `IMAGE` line: the address it states, the media
-/// type an `FMTTYPE` carries and what RFC 7986 §6.1's `DISPLAY` says the picture
-/// is for.
+/// What the client reported for one `IMAGE` line: the address, the media type
+/// from `FMTTYPE`, and the purpose from RFC 7986 §6.1's `DISPLAY`.
 ///
-/// Compared whole for the reason [`Resource`] is, and shaped differently from it
-/// for two reasons that are facts about the property rather than choices: §5.10
-/// admits no `SIZE` on an `IMAGE`, so there is none to report, and it admits a
-/// `DISPLAY`, which an `ATTACH` has no room for. The address is the string form
-/// of the value here rather than a URL libical parsed out — see
-/// `tests/functional/cal-edit-client.c`, which measured why.
+/// The test compares it whole for the same reason as [`Resource`]. The fields
+/// are different because §5.10 permits no `SIZE` on an `IMAGE` and permits a
+/// `DISPLAY`, which an `ATTACH` cannot have. The address is the string form of
+/// the value, not a URL that libical parsed. See
+/// `tests/functional/cal-edit-client.c` for the reason.
 #[derive(Debug, PartialEq, Eq)]
 struct Picture<'a> {
     href: &'a str,
@@ -1040,9 +872,8 @@ struct Picture<'a> {
     display: &'a str,
 }
 
-/// The `IMAGE` line the server's entry `key` was drawn onto, as the client
-/// reported it — found by the key and never by position, for the reason
-/// [`resource`] gives.
+/// The `IMAGE` line that the client reported for the server's entry `key`,
+/// found by the key and not by position, as in [`resource`].
 fn picture<'a>(seen: &BTreeMap<&'a str, &'a str>, prefix: &str, key: &str) -> Option<Picture<'a>> {
     let lines: usize = seen
         .get(format!("{prefix}-images").as_str())?
@@ -1060,10 +891,9 @@ fn picture<'a>(seen: &BTreeMap<&'a str, &'a str>, prefix: &str, key: &str) -> Op
     })
 }
 
-/// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
-/// mock's ephemeral port filled in. Kept as a literal here rather than read
-/// from `docs/` so that a change to the documented recipe fails this test
-/// loudly instead of quietly retargeting it.
+/// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the mock's
+/// port added. It is a literal here and not read from `docs/`, so a change to
+/// the documented recipe makes this test fail.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -1089,9 +919,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
 
     let server = jmap_mock::MockServer::builder().start();
     let account_id = server.account_id();
-    // No `[Resource] Identity=` in the keyfile above, so the backend asks the
-    // server for the account's default calendar. Seeding one flagged default
-    // is what makes that question answerable.
+    // The keyfile has no `[Resource] Identity=`, so the backend asks the server
+    // for the default calendar. Seed one with the default flag.
     {
         let state = server.state();
         let mut state = state.lock().expect("mock state lock");
@@ -1131,32 +960,27 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // Checked before the exit status, for the reason `address-book.rs` gives:
-    // a read-only calendar turns every later failure into "Permission
-    // denied", a message about the write that is really about the connect.
+    // Check this before the exit status, for the reason in `address-book.rs`.
+    // With a read-only calendar, each later failure says "Permission denied",
+    // but the cause is the connect.
     //
-    // It is deliberately a broad net. `e_cal_client_connect_sync` succeeds
-    // even when the backend's `connect_sync` failed — `ECalMetaBackend` opens
-    // the calendar and schedules the connect — so a calendar the backend
-    // could not open reaches the client looking exactly like one it opened
-    // and forgot to claim writable. Both are this assertion's business.
+    // `e_cal_client_connect_sync` succeeds even when the backend's
+    // `connect_sync` fails, because `ECalMetaBackend` opens the calendar and
+    // schedules the connect. Thus a calendar that the backend could not open
+    // looks the same as one that it did not mark writable.
     //
-    // Unless the client never got this far, in which case the failure is
-    // earlier than anything here — the module missing from the factory's
-    // directory, say — and the exit status is what says so.
+    // If the client stopped before this point, the exit status shows the
+    // earlier failure (for example, the module is missing).
     let readonly = seen.get("readonly").copied().unwrap_or_else(|| {
         panic!(
             "the client failed before it opened the calendar, with {}\n{report}",
             output.status
         )
     });
-    // Asserted before `readonly` even though the client prints them in this
-    // order anyway, because this one is the cause and that one is a symptom
-    // of it: the source's connection status is set to connected by
-    // `e_cal_meta_backend_ensure_connected_sync` only when the backend's
-    // `connect_sync` returned TRUE, so a calendar the backend could not open
-    // — the case `readonly` cannot distinguish — fails here first, saying
-    // which of the two happened.
+    // Assert this before `readonly`, because this is the cause and `readonly`
+    // is a symptom. `e_cal_meta_backend_ensure_connected_sync` sets the
+    // connected status only when the backend's `connect_sync` returns TRUE.
+    // Thus a calendar that the backend could not open fails here first.
     assert_eq!(
         seen.get("connection-status"),
         Some(&"connected"),
@@ -1199,72 +1023,61 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&SUMMARY),
         "the event EDS handed back is not the one that went in\n{report}"
     );
-    // And the place it happens at, which crosses the mapping as a whole property
-    // rather than as a line of text: `locations` is a map of objects, so a
-    // LOCATION that does not come back here is one the round trip lost.
+    // The location. `locations` is a map of objects, so a missing LOCATION here
+    // means that the round trip lost it.
     assert_eq!(
         seen.get("read-back-location"),
         Some(&LOCATION),
         "the event EDS handed back happens nowhere\n{report}"
     );
-    // And the tags, which cross the mapping as a set rather than as a line: the
-    // client joins every CATEGORIES value it finds, so a set that lost a member
-    // between the write and EDS's cache shows up here as a shorter list.
+    // The tags. The client joins all CATEGORIES values, so a lost member gives a
+    // shorter list.
     assert_eq!(
         seen.get("read-back-categories")
             .map(|values| values.split(',').collect::<Vec<_>>()),
         Some(KEYWORDS.to_vec()),
         "the event EDS handed back lost a tag\n{report}"
     );
-    // And whether it blocks time. An empty string here is a component EDS handed
-    // back with no TRANSP on it, which reads as the OPAQUE both formats default
-    // to — so the state the client asked for would be gone and the next save
-    // would write the default over it.
+    // The transparency. An empty string means that EDS returned no TRANSP, which
+    // reads as the default OPAQUE. The next save then writes the default.
     assert_eq!(
         seen.get("read-back-transp"),
         Some(&TRANSP),
         "the event EDS handed back blocks time after all\n{report}"
     );
-    // And how important it is. An empty string here is a component EDS handed back
-    // with no PRIORITY on it, which reads as the undefined importance both formats
-    // default to — so the number the client asked for would be gone.
+    // The priority. An empty string means that EDS returned no PRIORITY, which
+    // reads as the default (undefined) value.
     assert_eq!(
         seen.get("read-back-priority"),
         Some(&PRIORITY),
         "the event EDS handed back lost its priority\n{report}"
     );
-    // And who may see it. An empty string here is a component EDS handed back with
-    // no CLASS on it, which reads as the PUBLIC both formats default to — so an
-    // event the user hid would come back visible, and the next save would write
-    // that over the server's own classification.
+    // The classification. An empty string means that EDS returned no CLASS,
+    // which reads as the default PUBLIC. The next save then writes PUBLIC to the
+    // server.
     assert_eq!(
         seen.get("read-back-class"),
         Some(&CLASS),
         "the event EDS handed back lost its classification\n{report}"
     );
-    // And when it reminds the user. An empty string here is a component EDS handed
-    // back with no VALARM in it at all — the reminder the client set would be gone
-    // from Evolution's own view of the appointment, and the next save would delete
-    // it from the server too.
+    // The reminder. An empty string means that EDS returned no VALARM, and the
+    // next save deletes the reminder from the server.
     assert_eq!(
         seen.get("read-back-alarm-trigger"),
         Some(&ALARM_TRIGGER),
         "the event EDS handed back lost its reminder\n{report}"
     );
-    // What EDS made of the edit, read back through the client rather than off
-    // the server: `ECalMetaBackend` holds a series and its detached instances
-    // as one object, so a component set that lost the override here would have
-    // the *next* save undo it, whatever the server holds at this moment.
+    // The edited occurrence, as EDS returns it. `ECalMetaBackend` keeps a series
+    // and its detached instances as one object. If the cache lost the override
+    // here, the next save removes it from the server.
     assert_eq!(
         seen.get("edited-occurrence-summary"),
         Some(&RECURRING_EDITED_SUMMARY),
         "EDS did not keep the occurrence the client edited\n{report}"
     );
-    // And the tags on that same instance, which the cache has to keep *per
-    // component*: the set stated there is the only statement of what that one
-    // occurrence is filed under, so a cache holding the series' tags in its place
-    // would read back as the user having refiled the day they renamed. Sorted,
-    // for the reason the series' own tags are.
+    // The tags on the edited instance, which the cache must keep per component.
+    // If the cache gave the series' tags instead, the user's change is lost.
+    // Sorted, for the same reason as the series' tags.
     let mut occurrence_tags: Vec<&str> = seen
         .get("edited-occurrence-categories")
         .unwrap_or_else(|| panic!("the client reported no tags on the occurrence\n{report}"))
@@ -1276,20 +1089,18 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         occurrence_tags, RECURRING_EDITED_KEYWORDS,
         "EDS did not keep the tags on the occurrence the client edited\n{report}"
     );
-    // And the reminder on that same instance, kept in the same per-component way
-    // one nesting level further down: an empty string here is a cache that handed
-    // the alarm back on the series, or dropped it, and either way the next save
-    // tells the server the user cleared a reminder they had just set.
+    // The reminder on the edited instance, one level deeper. An empty string
+    // means that the cache moved the alarm to the series or dropped it. The next
+    // save then clears the reminder on the server.
     assert_eq!(
         seen.get("edited-occurrence-alarm-trigger"),
         Some(&RECURRING_EDITED_ALARM_TRIGGER),
         "EDS did not keep the reminder on the occurrence the client edited\n{report}"
     );
-    // And what EDS made of the removal, in the same cache and for the same
-    // reason: the master it kept has to carry an `EXDATE` for every occurrence
-    // that no longer happens — the one the client wrote into the event and the
-    // one it removed through EDS afterwards. Sorted before comparing, because
-    // the order libical hands two exclusions back is not what this is about.
+    // The removal, in the same cache. The master must have an `EXDATE` for each
+    // cancelled occurrence: the one in the original event and the one that the
+    // client removed through EDS. Sorted, because libical's order is not part of
+    // the test.
     let exdates = seen
         .get("recurring-exdates")
         .unwrap_or_else(|| panic!("the client reported no exclusions\n{report}"));
@@ -1304,11 +1115,10 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          cancelled\n{report}"
     );
 
-    // And what EDS made of the split, in the same cache and for the same reason.
-    // Both halves are asserted, because either one on its own passes for a
-    // split that went wrong in the other: a truncated master with no new event
-    // is a fortnight of the series the user renamed and lost, and a new event
-    // beside an untruncated master is every one of those days twice.
+    // The split, in the same cache. The test asserts both halves, because each
+    // half alone can hide an error in the other. A truncated master with no new
+    // event loses two weeks of the series. A new event with an untruncated master
+    // doubles those days.
     assert_eq!(
         seen.get("series-rrule"),
         Some(&SERIES_RRULE),
@@ -1333,11 +1143,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          it starts\n{report}"
     );
 
-    // And what EDS made of the occurrence the client moved into another zone,
-    // read back from the same cache and for the same reason as the two above:
-    // whatever the server holds at this moment, a component set that lost the
-    // instance's own zone would have the *next* save write it back on the
-    // series' clock.
+    // The occurrence that the client moved into another zone, in the same cache.
+    // If the cache lost the instance's zone, the next save writes the instance
+    // back on the series' clock.
     assert_eq!(
         seen.get("zoned-occurrence-dtstart"),
         Some(&ZONED_MOVED_DTSTART),
@@ -1354,20 +1162,18 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     );
 
     // Eight objects for six events: `ECalCache` keys on (uid, rid), so each of
-    // the two detached instances is a row of its own beside the series it
-    // belongs to, and the split added a fifth event. Seven would mean the
-    // moved occurrence never landed in the cache; five, that the split's new
-    // event did not either.
+    // the two detached instances is a row beside its series. The split added the
+    // fifth event. A lower count means that the cache lost a detached instance or
+    // the split's new event.
     assert_eq!(
         seen.get("events-after"),
         Some(&"8"),
         "the added events are not all in the calendar they were added to\n{report}"
     );
 
-    // And the other end: what the server was actually asked to do. The read
-    // path is deliberately not asserted here — `ECalMetaBackend` schedules its
-    // refresh rather than running it, so whether `CalendarEvent/query` has
-    // happened by now is a race. The write is synchronous.
+    // The server end: the request that the server received. The test does not
+    // assert the read path, because `ECalMetaBackend` schedules its refresh, and
+    // `CalendarEvent/query` can occur later. The write is synchronous.
     let calls = server.method_calls();
     assert!(
         calls.iter().any(|call| call == "CalendarEvent/set"),
@@ -1391,8 +1197,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         events.len()
     );
 
-    // Looked up by title rather than by position: the store is keyed on
-    // server-assigned ids, and which of the two comes first says nothing.
+    // Find each event by title, not by position: the store's keys are
+    // server-assigned ids, so the order of the events has no meaning.
     let by_title = |title: &str| {
         events
             .iter()
@@ -1421,10 +1227,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .is_some_and(|calendars| calendars.values().any(|included| *included)),
         "the event on the server is in no calendar: {event:?}"
     );
-    // The place, as the server holds it: a one-entry map of a Location object,
-    // not the string the component carried. Nothing below real EDS says whether
-    // a `LOCATION` a libecal consumer wrote survives the trip through the
-    // meta backend's cache to get here.
+    // The location on the server: a map with one Location object, not the
+    // string that the component had. Only real EDS shows that a `LOCATION` from
+    // a libecal consumer survives the meta backend's cache.
     assert_eq!(
         event.locations,
         Some(
@@ -1436,8 +1241,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         ),
         "the place the client named did not reach the server: {event:?}"
     );
-    // The tags, as the server holds them: an RFC 8984 §4.2.9 Set of both, not the
-    // first of a line libical split into two properties on the way here.
+    // The tags on the server: an RFC 8984 §4.2.9 set of both, not only the
+    // first of the two properties that libical made.
     assert_eq!(
         event
             .keywords
@@ -1446,17 +1251,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(KEYWORDS.to_vec()),
         "the tags the client wrote did not reach the server: {event:?}"
     );
-    // And the transparency, as the server holds it: the JSCalendar spelling of
-    // the state, not the iCalendar one the component carried.
+    // The transparency on the server, in its JSCalendar spelling.
     assert_eq!(
         event.free_busy_status.as_deref(),
         Some(FREE_BUSY_STATUS),
         "the event reached the server blocking time, so the TRANSP the client \
          wrote was lost: {event:?}"
     );
-    // And the importance, as the server holds it: the integer both formats spell
-    // the same way, which is the reading a mapping that dropped the property would
-    // leave as nothing at all.
+    // The priority on the server: an integer in both formats. If the mapping
+    // dropped the property, this has no value.
     assert_eq!(
         event
             .priority
@@ -1465,17 +1268,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(PRIORITY),
         "the priority the client wrote did not reach the server: {event:?}"
     );
-    // And the classification, as the server holds it: the JSCalendar spelling of
-    // the value, not the iCalendar one the component carried.
+    // The classification on the server, in its JSCalendar spelling.
     assert_eq!(
         event.privacy.as_deref(),
         Some(PRIVACY),
         "the classification the client wrote did not reach the server: {event:?}"
     );
-    // And the reminder, as the server holds it: an Alert object under the key the
-    // alarm's own UID named, not the one `jmap-ical` invents for an alarm that
-    // carries none — so this also says libecal kept that UID beside the
-    // X-EVOLUTION-ALARM-UID it adds of its own.
+    // The reminder on the server: an Alert under the key from the alarm's own
+    // UID, not a key that `jmap-ical` makes. This also shows that libecal keeps
+    // that UID beside the X-EVOLUTION-ALARM-UID that it adds.
     assert_eq!(
         event.alerts,
         Some(
@@ -1492,9 +1293,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "the reminder the client set did not reach the server: {event:?}"
     );
 
-    // The all-day one, and the property that is the whole point of it: without
-    // `showWithoutTime` the server holds a midnight appointment, which is what
-    // every other client would then show.
+    // The all-day event. Without `showWithoutTime` the server holds a midnight
+    // appointment, and other clients show that.
     let all_day = by_title(ALL_DAY_SUMMARY);
     assert_eq!(
         all_day.show_without_time,
@@ -1513,14 +1313,11 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     );
     assert_eq!(all_day.time_zone, None, "a day has no zone: {all_day:?}");
 
-    // And the zoned one, which is the only assertion in this file that depends
-    // on what the backend puts in the envelope *besides* the components EDS
-    // handed it: the `TZID` on this event is libical's own, so without the
-    // `VTIMEZONE` defining it the mapping has no name for the zone and sends
-    // none. Start and zone are asserted together because either alone passes
-    // for the other going wrong — a wall-clock start with no zone is an
-    // appointment an hour or two off for everybody, and a zone on a start that
-    // was silently converted to UTC is the same error stated twice.
+    // The zoned event. This is the only assertion in this file that depends on
+    // what the backend adds to the envelope beside the components. The `TZID`
+    // is libical's own, so without the `VTIMEZONE` the mapping cannot name the
+    // zone and sends none. The test asserts start and zone together, because
+    // each alone can hide an error in the other.
     let zoned = by_title(ZONED_SUMMARY);
     assert_eq!(
         zoned.time_zone.as_deref(),
@@ -1540,33 +1337,28 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "the zoned event has the wrong length: {zoned:?}"
     );
 
-    // And the recurring one, whose EXDATE has to have become an override. The
-    // rule is asserted alongside it because an event that lost its recurrence
-    // has nothing for an exclusion to be an exception to.
+    // The recurring event, whose EXDATE must become an override. The test also
+    // asserts the rule, because without it an exclusion has no meaning.
     let recurring = by_title(RECURRING_SUMMARY);
     let rules = recurring
         .recurrence_rule
         .as_ref()
         .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
     assert_eq!(rules.frequency, "weekly", "{recurring:?}");
-    // Four rather than the six it was created with: the split truncated it, and
-    // the count is the only thing on the server that says where the old series
-    // now ends. Six here is the old series still recurring over the fortnight
-    // the new one owns, which every other client reading the account would show
-    // as two appointments a week apart under two titles.
+    // Four, not the six of the original rule, because the split truncated it.
+    // The count is the only value on the server that shows where the old series
+    // ends. Six means that the old series overlaps the new event for two weeks.
     assert_eq!(rules.count, Some(4), "{recurring:?}");
-    // The day the rule repeats on, as the NDay objects RFC 8984 §4.3.3 spells
-    // it with. A rule that arrived without them is a weekly series pinned to
-    // whatever day its start happens to fall on, which is the same event only
-    // for as long as nobody moves the start.
+    // The day of the week, as RFC 8984 §4.3.3 NDay objects. Without them, a
+    // weekly series follows the day of its start, which changes if the start
+    // moves.
     assert_eq!(
         rules.by_day.as_deref(),
         Some(&[NDay::new("th")][..]),
         "the day the series repeats on did not reach the server: {recurring:?}"
     );
-    // All three exceptions in one map, because they share it: an override
-    // written for one of them that dropped another is a deletion or a rename
-    // undone, and asserting them one at a time would not notice.
+    // All three exceptions share one map, so the test asserts them together. An
+    // override that dropped another one undoes a deletion or a rename.
     assert_eq!(
         recurring.recurrence_overrides,
         Some(
@@ -1578,10 +1370,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
                 (
                     RECURRING_EDITED.to_owned(),
                     // The tags and the reminder beside the title, because the
-                    // component states all three on that one instance and the
-                    // override is what carries any of them: a patch holding only
-                    // the title is the user's filing of that occurrence, or the
-                    // reminder they set on it, lost between EDS and the server.
+                    // component states all three on this instance and only the
+                    // override carries them. A patch with only the title loses
+                    // the user's tags or reminder.
                     serde_json::json!({
                         "title": RECURRING_EDITED_SUMMARY,
                         "keywords": RECURRING_EDITED_KEYWORDS
@@ -1612,12 +1403,10 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          series' own title on a day the user changed: {recurring:?}"
     );
 
-    // And the event the split made, which is an ordinary event on this side —
-    // the whole point of what EDS did with `THIS_AND_FUTURE`. Its rule and its
-    // start are what say the series was cut where the user asked; the absent
-    // overrides are what say the two cancellations stayed with the half of the
-    // series they belong to, rather than being copied onto days after the split
-    // where the user never cancelled anything.
+    // The event from the split: an ordinary event on this side, because EDS
+    // resolved `THIS_AND_FUTURE`. Its rule and start show that the series was
+    // cut where the user selected. No overrides shows that the two
+    // cancellations stayed with the first half of the series.
     let split = by_title(RECURRING_SPLIT_SUMMARY);
     assert_eq!(
         split.start.as_deref(),
@@ -1649,12 +1438,11 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          {split:?}"
     );
 
-    // And the zoned series, whose one override is the only place in this file
-    // where two named zones meet. The series' own zone is asserted first
-    // because the override's key is a wall-clock time *on it*: a series that
-    // arrived floating or in UTC would make `2026-03-12T10:00:00` name a
-    // different instant, and the override would then be attached to an
-    // occurrence the rules never generated.
+    // The zoned series, whose override is the only place in this file where
+    // two named zones meet. The test asserts the series' zone first, because the
+    // override key is a wall-clock time on it. If the series arrived floating or
+    // in UTC, `2026-03-12T10:00:00` names a different instant and the override
+    // applies to no generated occurrence.
     let zoned_recurring = by_title(ZONED_RECURRING_SUMMARY);
     assert_eq!(
         zoned_recurring.time_zone.as_deref(),
@@ -1679,11 +1467,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .unwrap_or_else(|| panic!("the zoned series has no rule: {zoned_recurring:?}"));
     assert_eq!(zoned_rules.frequency, "weekly", "{zoned_recurring:?}");
     assert_eq!(zoned_rules.count, Some(3), "{zoned_recurring:?}");
-    // The whole point of the event: the moved occurrence, carrying both the
-    // wall-clock start the user put it at and the clock that start is on. A
-    // patch of `{"start": …}` alone — which is what the mapping sent before it
-    // learned `timeZone` — is a five-hour error the server cannot see and no
-    // other client can correct.
+    // The moved occurrence, with its wall-clock start and its zone. A patch with
+    // only `{"start": …}` (the mapping's behaviour before it learned `timeZone`)
+    // is an error of five hours that the server cannot detect.
     assert_eq!(
         zoned_recurring.recurrence_overrides,
         Some(
@@ -1729,11 +1515,11 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
             event_id.as_str(),
             REPLACED_LOCATION_NAME,
             REPLACED_CONFERENCE_URI,
-            // Which of the two documents is being re-addressed, named by the
-            // address it carries — see [`REPLACED_ATTACH_HREF`].
+            // The document to change, identified by its current address: see
+            // [`REPLACED_ATTACH_HREF`].
             PLACED_EDITED_ATTACH_HREF,
             REPLACED_ATTACH_HREF,
-            // And the picture, named the same way — by the address it carries.
+            // The picture to change, identified the same way.
             PLACED_IMAGE_HREF,
             REPLACED_IMAGE_HREF,
         ],
@@ -1743,9 +1529,8 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // The connect first, for the reason the leg above spells out: a calendar the
-    // backend never opened turns every later failure into a message about the
-    // wrong thing.
+    // Check the connect first, for the reason that the first leg gives: if the
+    // backend did not open the calendar, each later failure is misleading.
     assert_eq!(
         seen.get("connection-status"),
         Some(&"connected"),
@@ -1768,14 +1553,12 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the event EDS handed back is not the one the mock was seeded with\n{report}"
     );
 
-    // When EDS says the event starts — the one thing this leg asks about the
-    // document rather than about a map, and three observations because the
-    // mapping states the zone as a bare `TZID` and defines it nowhere. The value
-    // says the wall clock arrived; the identifier says the line still names the
-    // zone the server chose, which is what a save has to read back for the zone
-    // to survive one; and the instant says a consumer resolved that identifier
-    // *without* a `VTIMEZONE` to resolve it against — which is the bet
-    // [`PLACED_ZONE`] describes, and which no fixture can measure.
+    // The start that EDS shows. This is the only document property that this
+    // leg checks, and it has three values because the mapping writes a bare
+    // `TZID` and no definition. The value shows the wall-clock time. The
+    // identifier shows that the line still names the server's zone, which a
+    // save must read back. The instant shows that a consumer resolved the
+    // identifier without a `VTIMEZONE`, as [`PLACED_ZONE`] describes.
     assert_eq!(
         seen.get("read-dtstart"),
         Some(&PLACED_DTSTART),
@@ -1795,22 +1578,19 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          VTIMEZONE, and this is where a zone nobody could resolve shows up\n{report}"
     );
 
-    // What a libecal consumer was shown of the server's two places. The values
-    // say the drawing arrived at all; the keys say a save can reach back into the
-    // entry it was drawn from, which is the claim this leg exists for and one no
-    // fixture in `jmap-ical` or `jmap-cal-sync` can make — they supply the
-    // component by hand, so the parameter is there by construction.
+    // What a libecal consumer received of the server's two locations. The
+    // values show that they arrived. The keys show that a save can find the
+    // entry again, which is the purpose of this leg. Fixtures in `jmap-ical` and
+    // `jmap-cal-sync` write the parameter by hand, so they cannot show this.
     assert_eq!(
         seen.get("read-location"),
         Some(&PLACED_LOCATION_NAME),
         "the place the server holds did not reach the LOCATION line\n{report}"
     );
-    // Reported rather than relied on: the save finds the one entry RFC 5545
-    // §3.6.1 lets a `LOCATION` stand for in the server's own map, so a key lost
-    // here would cost nothing yet. It is asserted because the day the mapping
-    // draws a second place — RFC 8984 §4.2.5 allows any number — it will read
-    // this parameter, and a silent change in what EDS carries should fail then
-    // rather than corrupt.
+    // Reported but not yet necessary: RFC 5545 §3.6.1 permits one `LOCATION`,
+    // so the save finds the single entry without the key. RFC 8984 §4.2.5
+    // permits more than one location. When the mapping writes more, it will
+    // read this parameter, and a change in EDS must then fail this test.
     assert_eq!(
         seen.get("read-location-key"),
         Some(&PLACED_LOCATION_KEY),
@@ -1827,10 +1607,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the place the event may be joined at did not reach the CONFERENCE \
          line\n{report}"
     );
-    // This one is load-bearing, and it is the observation the leg was written
-    // for: the mapping finds the server's virtual location by the key on the
-    // line, so an edit of the line below reaches the entry only if EDS carried
-    // this parameter through its cache.
+    // This one is necessary, and it is the reason for this leg. The mapping
+    // finds the server's virtual location by the key on the line. Thus the edit
+    // below reaches the entry only if EDS's cache kept this parameter.
     assert_eq!(
         seen.get("read-conference-key"),
         Some(&PLACED_CONFERENCE_KEY),
@@ -1842,32 +1621,25 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         Some(&"1"),
         "EDS holds a CONFERENCE line other than the one the mapping wrote\n{report}"
     );
-    // And the standard parameter beside the invented one, which is a separate
-    // question: RFC 7986 §5.11's LABEL is a parameter libical has an enum for,
-    // and a cache that kept only the parameters it recognises would answer this
-    // one and drop the key above.
+    // The standard parameter beside the custom one. RFC 7986 §5.11's LABEL has
+    // a libical enum, so a cache that keeps only known parameters keeps this
+    // one and drops the key.
     assert_eq!(
         seen.get("read-conference-label"),
         Some(&PLACED_CONFERENCE_NAME),
         "EDS did not carry the LABEL naming the conference\n{report}"
     );
 
-    // And the two documents the event points at, read through libical's own
-    // `icalattach` rather than as a string — see `cal-edit-client.c`. Each is
-    // looked up by the `X-JMAP-KEY` on its line, which is both how the assertion
-    // stays free of the order EDS hands the lines back in and the observation
-    // this half of the leg was written for: `ATTACH` is not a text property, so a
-    // cache that round-tripped the value and dropped what stood beside it would
-    // show up here and nowhere else in this file. A key that reached the wrong
-    // line answers to the wrong address, which is a mismatch here rather than a
+    // The two documents, read through libical's `icalattach`, not as a string
+    // (see `cal-edit-client.c`). The test finds each by the `X-JMAP-KEY` on its
+    // line, so the order from EDS does not matter. `ATTACH` is not a text
+    // property, so a cache that kept the value and dropped the parameters is
+    // visible only here. A key on the wrong line gives a wrong address, not a
     // missing entry.
     //
-    // The address says the drawing arrived; the key says a save can name the entry
-    // it came from, which for a `links` entry is the only way back, since the save
-    // compares the address the server stated against the one on the line. The
-    // `FMTTYPE` and the `SIZE` beside them make the same argument the conference's
-    // `LABEL` does: a cache keeping only what libical has an enum for would answer
-    // those two and drop the key.
+    // The address shows that the entry arrived. The key shows that a save can
+    // find the entry, which is the only way back for a `links` entry. The
+    // `FMTTYPE` and `SIZE` have libical enums, like the conference's `LABEL`.
     assert_eq!(
         seen.get("read-attaches"),
         Some(&"2"),
@@ -1895,14 +1667,11 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          user re-addressed\n{report}"
     );
 
-    // And the picture beside them, which the same map sent to a different
-    // property. Two claims in one: that a link the mapping read as an icon left on
-    // an `IMAGE` rather than an `ATTACH` — the count above is still two, so the
-    // third entry did not land there — and that the key rode across on a property
-    // whose value libical re-made into something else again. The mapping writes
-    // `VALUE=URI` on this line because RFC 7986 §5.10 demands it, and that is what
-    // makes the value a URI where an `ATTACH`'s is an `icalattach`; a cache that
-    // kept parameters through one shape and not the other shows up here.
+    // The picture, which the same map sends to a different property. First,
+    // the icon link must be an `IMAGE`, not an `ATTACH` (the `ATTACH` count
+    // above is still two). Second, the key must survive on a property with a
+    // different value type. The mapping writes `VALUE=URI` because RFC 7986
+    // §5.10 requires it, so libical makes the value a URI, not an `icalattach`.
     assert_eq!(
         seen.get("read-images"),
         Some(&"1"),
@@ -1920,9 +1689,8 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          the server chose\n{report}"
     );
 
-    // And what EDS holds after the save: the place the user typed, on the line it
-    // was typed onto, still carrying the key. One line, because a save that
-    // *added* a place would leave two.
+    // What EDS holds after the save: the new location on the same line, with
+    // the key. One line, because a save that added a location gives two.
     assert_eq!(
         seen.get("read-back-location"),
         Some(&REPLACED_LOCATION_NAME),
@@ -1969,10 +1737,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the address of the document the user re-addressed did not survive the \
          save, still under the key the server chose\n{report}"
     );
-    // And the document the user did not touch, which is what having two of them
-    // is for: it comes back at the address it went out with, under its own key.
-    // A save that reached the wrong entry shows up here as the resource that was
-    // never edited pointing somewhere else.
+    // The document that the user did not edit, which is the reason for having
+    // two. It must have its original address and key. A save that changed the
+    // wrong entry makes this resource point to a different address.
     assert_eq!(
         resource(&seen, "read-back", PLACED_ATTACH_KEY),
         Some(Resource {
@@ -1982,10 +1749,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         }),
         "the resource the user never touched did not come back as it went out\n{report}"
     );
-    // And the picture at its new address, still an `IMAGE` and still saying what
-    // it is for. A save that read the re-typed line as a link with no `rel` would
-    // draw it back as an `ATTACH`, which fails the count above and the lookup
-    // here at once.
+    // The picture at its new address, still an `IMAGE` with its `DISPLAY`. A
+    // save that lost the `rel` writes it back as an `ATTACH`, which fails the
+    // count above and the lookup here.
     assert_eq!(
         seen.get("read-back-images"),
         Some(&"1"),
@@ -2003,11 +1769,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          save, still under the key the server chose\n{report}"
     );
 
-    // And the start after the save, which the client never touched: a save that
-    // re-stated the event's clock — as UTC, say, or in the zone the machine
-    // running this happens to be in — is an appointment moved for every other
-    // client of the account, and it would be moved by an edit the user made to a
-    // resource.
+    // The start after the save, which the client did not change. The save must
+    // not restate the clock (as UTC, or in the test machine's zone). If it does,
+    // other clients see the appointment move after an edit to a resource.
     assert_eq!(
         seen.get("read-back-dtstart"),
         Some(&PLACED_DTSTART),
@@ -2039,12 +1803,10 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         .get(&event_id)
         .unwrap_or_else(|| panic!("the save removed the event the mock was seeded with"));
 
-    // The whole of the claim, on the server's side: the entry the server chose,
-    // under the key it chose, renamed — and still holding the description the
-    // line had no room for. A save that named `locations` rather than
-    // `locations/<key>/name` passes every assertion above this one and fails
-    // this one, and what it costs the user is a note they never saw and could
-    // not have meant to delete.
+    // The full claim on the server side. The server's entry has its key, the
+    // new name, and the `description` that the line could not hold. A save
+    // that replaced `locations` and did not patch `locations/<key>/name`
+    // passes all assertions above and fails this one.
     assert_eq!(
         event.locations,
         Some(
@@ -2061,12 +1823,10 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the place the user retyped did not reach the server as a patch of the \
          entry it was drawn from: {event:?}"
     );
-    // And the entry beside it, which is the half of the leg the round trip can
-    // actually break: the address is the new one, under the key the server chose,
-    // and the `description` and the `name` it never showed are still there. The
-    // mapping found that entry by the `X-JMAP-KEY` and nothing else, so a cache
-    // that dropped the parameter leaves this holding the old address — a change
-    // the user made and every other client keeps missing.
+    // The virtual location, which the round trip can break: the new address,
+    // under the server's key, with the `description` and `name` still there.
+    // The mapping found the entry only by the `X-JMAP-KEY`. If the cache dropped
+    // the parameter, this keeps the old address.
     assert_eq!(
         event.virtual_locations,
         Some(
@@ -2084,18 +1844,15 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the new address did not reach the server as a patch of the entry the \
          line was drawn from: {event:?}"
     );
-    // And the resources, which ask the narrowest question of the three: only
-    // `href` goes back, and only for the one entry the user re-addressed. The
-    // `title` had no room on the line and would be gone had the save named
-    // `links`; the `contentType` and the `size` were *shown* and are still the
-    // server's own, so a save that wrote them back — reading an editor's re-typed
-    // line as "the media type was cleared" — fails here even though every
-    // observation the client made would still pass.
+    // The resources: only `href` goes back, and only for the edited entry. The
+    // `title` had no place on the line, so a save that replaced `links` deletes
+    // it. The `contentType` and `size` were shown but belong to the server. A
+    // save that wrote them back fails here, although every client observation
+    // passes.
     //
-    // Both entries in one assertion, because the pair is the claim: a save that
-    // patched `links/srv-att/href` instead has moved a document the user never
-    // opened and left theirs where it was, and either entry alone would still
-    // read as somebody's edit landing.
+    // Both entries are in one assertion, because the pair is the claim. A save
+    // that patched `links/srv-att/href` changed the wrong document, and each
+    // entry alone looks like a correct edit.
     assert_eq!(
         event.links,
         Some(
@@ -2120,15 +1877,13 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
                         "title": PLACED_EDITED_ATTACH_TITLE,
                     }),
                 ),
-                // The picture, re-addressed the same way — and with the three
-                // members the `IMAGE` line had no room for still the server's own.
-                // The `size` is the one this entry adds to the argument: RFC 7986
-                // §5.10 admits no `SIZE` on the property, so unlike the two
-                // entries above it was never shown at all, and a save that wrote
-                // back every member it could name would leave it here alone and
-                // delete it. The `rel` is the entry's own too — the property name
-                // is all the line says about it — and losing it would move the
-                // picture to an `ATTACH` for every other client of the account.
+                // The picture, changed the same way, with its other members
+                // still the server's own. RFC 7986 §5.10 permits no `SIZE` on
+                // an `IMAGE`, so unlike the two entries above the `size` was
+                // never shown. A save that wrote back all members it could name
+                // keeps it on those entries and deletes it here. The `rel` is
+                // also the server's: if the save lost it, other clients see the
+                // picture as an `ATTACH`.
                 (
                     PLACED_IMAGE_KEY.to_owned(),
                     serde_json::json!({
@@ -2147,21 +1902,18 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the resource the user re-addressed did not reach the server as a patch \
          of the entry it was drawn from, leaving the other where it was: {event:?}"
     );
-    // And the title, which says the save patched the event rather than replacing
-    // it with what the one component EDS handed over could state.
+    // The title shows that the save patched the event and did not replace it
+    // with the content of one component.
     assert_eq!(
         event.title.as_deref(),
         Some(PLACED_TITLE),
         "the save renamed the event: {event:?}"
     );
-    // And when it starts, from the server's end: the same wall clock on the same
-    // zone it was seeded with. The client's observations above say the round trip
-    // showed the right instant; this says the save did not *restate* it. A start
-    // and a zone the mapping read back in another form — the solidus-prefixed
-    // identifier libical writes for a builtin zone, an instant converted to UTC —
-    // would reach the server as a patch of `start` and `timeZone` here, and
-    // rewriting either on a save the user made to a picture is a change nobody
-    // asked for even where it names the same moment.
+    // The start, on the server side: the seeded wall-clock time and zone. The
+    // client observations show the correct instant. This shows that the save
+    // did not restate it. Examples of another form are UTC and libical's
+    // solidus-prefixed builtin identifier. These give a patch of `start` and
+    // `timeZone` that the user did not ask for, even at the same instant.
     assert_eq!(
         (event.start.as_deref(), event.time_zone.as_deref()),
         (Some(PLACED_START), Some(PLACED_ZONE)),
@@ -2169,52 +1921,40 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
     );
 }
 
-/// The third calendar leg: does the zone a *server* named mean anything to a
-/// libecal consumer?
+/// The third calendar leg: can a libecal consumer resolve a zone that a
+/// *server* named?
 ///
-/// The second leg answers that for an IANA name, where `jmap-ical` ships no
-/// definition and leans on libical's builtin table. This one answers it for the
-/// identifier that table cannot hold — RFC 8984 §1.4.8's custom `TimeZoneId`,
-/// which only the event's own `timeZones` says anything about. Two things have to
-/// be true for such an event to be shown at the right hour: `jmap-ical` has to draw
-/// a `VTIMEZONE` libical accepts, and everything between it and the consumer —
-/// `jmap-backend-cal`'s marshalling, `ECalMetaBackend`, the D-Bus hop — has to keep
-/// the definition where the consumer can reach it.
+/// The second leg tests an IANA name, where `jmap-ical` sends no definition and
+/// uses libical's builtin table. This leg tests RFC 8984 §1.4.8's custom
+/// `TimeZoneId`, which only the event's `timeZones` defines. Two conditions are
+/// necessary: `jmap-ical` must write a `VTIMEZONE` that libical accepts, and
+/// `jmap-backend-cal`'s marshalling, `ECalMetaBackend` and D-Bus must keep the
+/// definition available to the consumer.
 ///
-/// Neither can be measured below this file. `jmap-ical`'s own tests compare text
-/// against text, where a definition nobody could build a zone from reads back
-/// exactly like one anybody could; `jmap-backend-cal`'s marshalling tests ask
-/// libical directly, which settles the drawing but not what EDS does with it after.
-/// Only a consumer reading the event back out of EDS asks both at once.
+/// Lower tests cannot measure this. `jmap-ical`'s tests compare text with text,
+/// and `jmap-backend-cal`'s marshalling tests ask libical directly, which does
+/// not show what EDS does after. Only a consumer that reads the event from EDS
+/// tests both.
 ///
-/// **And where the consumer has to look is the thing this leg measured.** EDS does
-/// *not* hand the `VTIMEZONE` back beside the event: `ECalMetaBackend` gathers the
-/// definitions out of what the backend gave it into the calendar's own timezone
-/// store, and `e_cal_client_get_object_sync` answers with the component alone. So a
-/// consumer that asks libical to resolve the `TZID` — against the component's own
-/// definitions and then the builtin table — resolves nothing and floats the start,
-/// and one that asks the *calendar* for the zone gets it. That is why Evolution's
-/// recurrence and alarm machinery takes a zone-lookup callback, and it is not
-/// something this repository can choose; the leg asserts both answers, so a change
-/// in either is visible.
+/// **This leg measured where the consumer must look.** EDS does *not* return
+/// the `VTIMEZONE` with the event: `ECalMetaBackend` moves the definitions into
+/// the calendar's timezone store, and `e_cal_client_get_object_sync` returns
+/// the component alone. A consumer that asks libical to resolve the `TZID`
+/// floats the start. A consumer that asks the *calendar* for the zone gets it.
+/// Thus Evolution's recurrence and alarm code takes a zone-lookup callback. The
+/// leg asserts both results, so a change in either is visible.
 ///
-/// A second event beside it, in a zone that is named nowhere and defined nowhere,
-/// because the interesting number is a *difference*: one wall clock, two zones,
-/// two instants two hours apart. Without it, an EDS that had thrown the definition
-/// away would still be caught — but nothing would say what that costs, and the cost
-/// is `jmap-ical`'s documented fallback rather than a bug.
+/// A second event uses a zone that is defined nowhere. With one wall-clock time
+/// and two zones, the two instants are two hours apart. This difference shows
+/// the cost of `jmap-ical`'s documented fallback, which is not a bug.
 ///
-/// **And then the user renames the appointment**, which is the other half of the
-/// same question and the reason this leg does not end at the read. A zone that is
-/// resolvable until the first ordinary edit is not resolvable; and this save is the
-/// one place the whole chain of "seen in part, so not written back" decisions can be
-/// checked against what a server actually ends up holding. `jmap-ical` cannot name
-/// this zone in JSCalendar's terms, so `patch::diff` must leave `timeZone` out of the
-/// patch rather than send the identifier it read or clear the property — and the
-/// definition in the server's `timeZones`, which no component EDS hands back even
-/// mentions, must still be there afterwards. Fixtures say those decisions are
-/// coded; only this leg says they hold once EDS, its cache and libical have each had
-/// the component in their hands.
+/// **Then the user renames the appointment and moves it.** A zone that stops
+/// resolving after the first edit is not resolvable. `jmap-ical` cannot name
+/// this zone in JSCalendar terms, so `patch::diff` must not send or clear
+/// `timeZone`. The definition in the server's `timeZones`, which no component
+/// from EDS mentions, must stay. Fixtures show that this logic exists. Only
+/// this leg shows that it works after EDS, its cache and libical have each
+/// handled the component.
 #[test]
 fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
@@ -2252,9 +1992,8 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
     let seen = observations(&stdout);
 
-    // The connect first, for the reason the legs above spell out: a calendar the
-    // backend never opened turns every later failure into a message about the
-    // wrong thing.
+    // Check the connect first, for the reason that the first leg gives: if the
+    // backend did not open the calendar, each later failure is misleading.
     assert_eq!(
         seen.get("connection-status"),
         Some(&"connected"),
@@ -2266,10 +2005,9 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         output.status
     );
 
-    // Which event is which. The client is told two UIDs and reports against
-    // positions, so a leg that had them the other way round would assert the
-    // undefined zone's floating instant against the defined zone's event and pass
-    // — this is what keeps the two apart.
+    // Identify each event. The client receives two UIDs and reports by position.
+    // If the order were reversed, the test would assert the floating instant on
+    // the wrong event and pass. This assertion prevents that.
     assert_eq!(
         (seen.get("event-1-summary"), seen.get("event-2-summary")),
         (Some(&DEFINED_ZONE_TITLE), Some(&UNDEFINED_ZONE_TITLE)),
@@ -2277,10 +2015,9 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          the order they were asked for\n{report}"
     );
 
-    // The event in the zone the server defined. The wall clock says the drawing
-    // arrived, and the identifier says EDS kept the zone the server chose rather
-    // than normalising it into something else — which is also what a save has to
-    // read back for the zone to survive one.
+    // The event in the zone that the server defined. The wall-clock time shows
+    // that the event arrived. The identifier shows that EDS kept the server's
+    // zone and did not normalise it, which a save must read back.
     assert_eq!(
         seen.get("event-1-dtstart"),
         Some(&ZONE_DTSTART),
@@ -2291,11 +2028,11 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         Some(&DEFINED_ZONE),
         "EDS does not name the server's own zone on the DTSTART it handed back\n{report}"
     );
-    // And the claim: a consumer resolved an identifier no zone database holds, and
-    // landed on the instant the server means. It can only have done that out of the
-    // definition the event carried, so this one assertion covers the whole path —
-    // `timeZones` read off the wire, drawn as a `VTIMEZONE` libical accepts, kept
-    // through the marshalling and `ECalMetaBackend`, and answered over D-Bus.
+    // The main claim: a consumer resolved an identifier that no zone database
+    // holds, to the instant that the server means. Only the event's definition
+    // makes that possible, so this assertion covers the full path: `timeZones`
+    // from the wire, a `VTIMEZONE` that libical accepts, the marshalling,
+    // `ECalMetaBackend`, and D-Bus.
     assert_eq!(
         (seen.get("event-1-zone-known"), seen.get("event-1-zone-utc")),
         (Some(&"1"), Some(&DEFINED_ZONE_DTSTART_UTC)),
@@ -2305,12 +2042,11 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          is, so this is where a VTIMEZONE that was lost, or that libical would not \
          read whole, shows up\n{report}"
     );
-    // Where it is *not* reachable, which is the fact about the platform this leg
-    // pinned down. EDS gathers the definitions into the calendar's timezone store
-    // and answers a get with the component alone, so libical — asked to resolve the
-    // `TZID` against the component and then its builtin table — finds nothing and
-    // floats the start. Asserted rather than left unsaid because a consumer written
-    // the obvious way is two hours out, which is worth having on the record.
+    // Where the zone is *not* available, which is a platform fact that this leg
+    // measured. EDS moves the definitions into the calendar's timezone store and
+    // returns the component alone. Thus libical, which looks in the component
+    // and then in its builtin table, finds nothing and floats the start. A
+    // consumer that uses only libical is two hours wrong.
     assert_eq!(
         seen.get("event-1-definitions"),
         Some(&"0"),
@@ -2325,11 +2061,10 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          changed\n{report}"
     );
 
-    // And the event in the zone nothing defines, which is the same four
-    // observations and one different answer. The wall clock and the identifier
-    // arrive exactly as above — the mapping states the zone it was given, since
-    // dropping the parameter would say "no zone at all" and inventing UTC would
-    // say the wrong instant.
+    // The event in the zone that nothing defines: the same four observations,
+    // with one different result. The wall-clock time and the identifier arrive
+    // as above. The mapping sends the zone it received, because no parameter
+    // means no zone, and UTC means the wrong instant.
     assert_eq!(
         seen.get("event-2-dtstart"),
         Some(&ZONE_DTSTART),
@@ -2348,12 +2083,11 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         Some(&"0"),
         "something defined a zone the server said nothing about\n{report}"
     );
-    // The cost, stated as a number. Nothing anywhere says what this zone is, so
-    // the calendar cannot answer for it either and both routes float the start —
-    // the appointment is two hours from where the server put it, identically on
-    // every machine. That is `jmap-ical`'s documented fallback and the best it can
-    // do with what the server sent; the day a server sends better, or this
-    // repository does better with it, these are the assertions that say so.
+    // The cost, as a value. Nothing defines this zone, so the calendar cannot
+    // resolve it either, and both routes float the start. The appointment is two
+    // hours from the server's instant, on all machines. This is `jmap-ical`'s
+    // documented fallback. If a server or this repository improves it, these
+    // assertions fail.
     assert_eq!(
         (
             seen.get("event-2-zone-known"),
@@ -2369,11 +2103,10 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          is a change in what an unresolvable start costs the user\n{report}"
     );
 
-    // And what the user sees after renaming the first event: the new title, on an
-    // appointment that has not moved. The wall clock and the identifier say the save
-    // did not restate the start; the pair below says the zone can still be resolved
-    // to the instant the server means, which is the only assertion that would catch
-    // a save that kept the identifier while destroying what defines it.
+    // After the rename: the new title, at the same time. The wall-clock time and
+    // the identifier show that the save did not restate the start. The zone
+    // assertions show that the zone still resolves to the server's instant. Only
+    // they find a save that kept the identifier but lost its definition.
     assert_eq!(
         seen.get("saved-summary"),
         Some(&ZONE_RETYPED_TITLE),
@@ -2396,10 +2129,9 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          EDS states another clock, or another identifier, or the calendar can no \
          longer say what that identifier means\n{report}"
     );
-    // How long it was before the user touched the clock, which is what makes the
-    // pair below a *change*: the mapping writes a length as a `DURATION`, so this
-    // is the shape the client is about to replace with the two wall clocks
-    // Evolution's editor writes instead.
+    // The length before the user moves the clock. The mapping writes a
+    // `DURATION`, which the client then replaces with the `DTEND` that
+    // Evolution's editor writes.
     assert_eq!(
         (seen.get("saved-duration"), seen.get("saved-dtend")),
         (Some(&ZONE_DURATION), Some(&"")),
@@ -2407,13 +2139,11 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          mapping drew\n{report}"
     );
 
-    // And then the user drags the appointment into November. The wall clock is the
-    // one they dropped it on, the identifier is untouched — an appointment that is
-    // moved is not moved out of its zone — and the pair after it is the assertion
-    // this half exists for: the calendar still resolves the identifier, and to the
-    // instant the zone's *other* observance means. A save that had resent the zone
-    // it could not name, or cleared it because the patch was touching the clock
-    // anyway, shows up right here.
+    // The user moves the appointment to November. The wall-clock time is the new
+    // one and the identifier is the same, because a move does not change the
+    // zone. The zone assertions are the purpose of this step: the calendar still
+    // resolves the identifier, to the instant of the zone's *other* observance.
+    // A save that sent or cleared the zone fails here.
     assert_eq!(
         seen.get("moved-summary"),
         Some(&ZONE_RETYPED_TITLE),
@@ -2437,22 +2167,20 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          to the wrong instant — the last of which is a zone that survived as the \
          offset April needed rather than as the rules the server sent\n{report}"
     );
-    // The two facts about the platform that the read half pinned down, asked again
-    // of an event whose clock a save has been through: EDS still keeps the
-    // definition out of the component, so libical alone still floats the moved
-    // start. Both would be news, and the news would be about the platform.
+    // The two platform facts from the read, checked again after a save moved the
+    // clock: EDS still keeps the definition out of the component, so libical
+    // alone still floats the moved start. A change here is a platform change.
     assert_eq!(
         (seen.get("moved-definitions"), seen.get("moved-dtstart-utc"),),
         (Some(&"0"), Some(&ZONE_MOVED_FLOATING_UTC)),
         "what a plain libical consumer sees for an event whose clock was moved in \
          a zone only the server can name has changed\n{report}"
     );
-    // And the length, back in the shape the mapping writes. The user stated it as
-    // a `DTEND`; what comes back is a `DURATION` of the same length, which is the
-    // round trip `read_duration`'s `DTEND` branch and `vevent_of`'s `DURATION`
-    // make between them — measured here rather than inferred from fixtures,
-    // because in between the two lines passed through EDS's cache in a zone
-    // libical cannot place.
+    // The length, again in the mapping's form. The user stated a `DTEND`, and a
+    // `DURATION` of the same length returns. `read_duration`'s `DTEND` branch and
+    // `vevent_of`'s `DURATION` make this round trip. The test measures it here,
+    // because the two lines went through EDS's cache in a zone that libical
+    // cannot resolve.
     assert_eq!(
         (seen.get("moved-duration"), seen.get("moved-dtend")),
         (Some(&ZONE_MOVED_DURATION), Some(&"")),
@@ -2475,14 +2203,12 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         .get(&defined)
         .unwrap_or_else(|| panic!("the save removed the event the mock was seeded with"));
 
-    // The claim on the server's side, and the half no observation of EDS could make:
-    // the title changed, and the two properties that say where in time the event is
-    // are exactly as they were seeded. `timeZone` is the one the mapping read back
-    // off the component and cannot express — sending it would be sending an
-    // iCalendar identifier as a JSCalendar `TimeZoneId`, and clearing it would float
-    // an appointment the user only renamed. `timeZones` is stronger still: no
-    // component EDS handed anyone mentions it, so the only way it could change here
-    // is a save that overwrote what it never saw.
+    // The claim on the server side, which no EDS observation can make: the title
+    // changed, and the zone properties are as seeded. The mapping reads
+    // `timeZone` back from the component but cannot express it. Sending it sends
+    // an iCalendar identifier as a JSCalendar `TimeZoneId`, and clearing it
+    // floats the appointment. No component from EDS mentions `timeZones`, so it
+    // changes only if a save overwrote data that it never had.
     assert_eq!(
         event.title.as_deref(),
         Some(ZONE_RETYPED_TITLE),
@@ -2499,11 +2225,10 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         "a save rewrote or dropped the definition of a zone it never had in \
          its hands"
     );
-    // And where the event now is in time, which the second save moved and the
-    // first must not have. The two assertions above are what the pair below is
-    // *for*: a `start` that changed while `timeZone` and `timeZones` did not is an
-    // appointment the user moved, and one that changed while the zone under it
-    // moved too is an appointment nobody asked to move.
+    // The start, which the second save moved and the first must not have. The
+    // assertions above give this meaning: a new `start` with the same
+    // `timeZone` and `timeZones` is a move that the user made. A new start with
+    // a changed zone is a move that nobody asked for.
     assert_eq!(
         event.start.as_deref(),
         Some(ZONE_MOVED_START),
@@ -2518,28 +2243,27 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     );
 }
 
-/// The fourth leg: a zone only the **client** can name, sent to the server with
-/// the definition that says what it is.
+/// The fourth leg: a zone that only the **client** can name reaches the server
+/// with its definition.
 ///
-/// The inverse of the leg above, and the half no unit test can vouch for. The
-/// mapping has been able to *draw* a custom identifier beside its `timeZones`
-/// entry for a while, and `jmap-backend-cal` has been able to pick a definition
-/// out of the calendar's `ETimezoneCache` — but nothing measured the join: that a
-/// `VTIMEZONE` a client handed EDS is in the backend's own cache by the time EDS
-/// calls `save_component_sync`, under the identifier the component still names.
-/// It is a platform fact, and one this repository would rather find out about
-/// here than from an appointment that silently went floating.
+/// This is the reverse of the third leg, and unit tests cannot show it. The
+/// mapping can write a custom identifier with its `timeZones` entry, and
+/// `jmap-backend-cal` can get a definition from the calendar's
+/// `ETimezoneCache`. This leg tests the join. When EDS calls
+/// `save_component_sync`, the backend's cache must have the client's
+/// `VTIMEZONE` under the identifier that the component names. This is a
+/// platform fact, and a failure here is better than an appointment that
+/// floats.
 ///
-/// The client's route is Evolution's: `e_cal_client_add_timezone` and then a
-/// create. EDS does not carry such a definition inside the component — the third
-/// leg pinned that down from the read side — so a backend that read only what it
-/// was handed would see a `TZID` resolving nowhere, `maps_time_zone` would refuse
-/// it, and the appointment would reach the server with no zone at all.
+/// The client uses Evolution's route: `e_cal_client_add_timezone` and then a
+/// create. EDS does not keep the definition in the component (the third leg
+/// measured this on read). A backend that read only the component sees a
+/// `TZID` that resolves nowhere, `maps_time_zone` refuses it, and the
+/// appointment reaches the server without a zone.
 ///
-/// The assertion that matters is the mock's, not EDS's: asking the calendar to
-/// resolve the identifier afterwards would only prove that what the client put in
-/// the store is still in the store. What no client can fake is `timeZones`
-/// arriving at the server.
+/// The necessary assertion is the mock's. A calendar lookup after the save only
+/// shows that the store still has what the client put in it. Only the server
+/// can show that `timeZones` arrived.
 #[test]
 fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
     let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
@@ -2591,27 +2315,23 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
         output.status
     );
 
-    // What the client read off the file it was handed. Reported rather than
-    // assumed because the client is never told the identifier: if libical made a
-    // zone of the definition under some other name, every `TZID` below is that
-    // other name and the leg would be measuring a zone nobody wrote.
+    // The identifier that the client read from its file. The client does not
+    // receive the identifier. If libical used another name, each `TZID` below
+    // has that name, and the leg tests the wrong zone.
     assert_eq!(
         seen.get("zone-tzid"),
         Some(&CLIENT_ZONE),
         "libical named the client's zone something other than its own TZID\n{report}"
     );
 
-    // And what EDS hands back for the event the client made, which is *not* the
-    // component the client wrote: a create is answered out of what the server
-    // stored, so the `TZID` below is the zone as it came back from the mock. A
-    // backend that could not name the zone files the appointment floating, and
-    // then this line reads `created-dtstart-tzid=` — measured, not assumed.
+    // What EDS returns for the new event. This is not the component that the
+    // client wrote: EDS answers a create from what the server stored, so the
+    // `TZID` is the zone as the mock returned it. If the backend cannot name the
+    // zone, the appointment floats and `created-dtstart-tzid` is empty.
     //
-    // The pair after it is the weaker of the two, and reported anyway: the client
-    // put this zone into the calendar's store itself, so `zone-known` says the
-    // store still holds it rather than that anything survived the trip. Its value
-    // is the *instant* — that what came back is still 10:00 in the zone's DAYLIGHT
-    // half, not a clock the round trip shifted.
+    // The zone assertions are weaker: the client put this zone in the store, so
+    // `zone-known` only shows that the store still has it. The instant shows
+    // that the result is still 10:00 in the zone's DAYLIGHT observance.
     assert_eq!(
         (
             seen.get("created-summary"),
@@ -2632,9 +2352,8 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
         "the calendar no longer resolves the zone the client gave it, or resolves \
          it to another instant than its DAYLIGHT observance means\n{report}"
     );
-    // The same platform fact the third leg pinned down, asked of an event that
-    // went out rather than one that came in: EDS keeps the definition in the
-    // calendar's store and hands the component back alone.
+    // The platform fact from the third leg, for an outgoing event: EDS keeps the
+    // definition in the calendar's store and returns the component alone.
     assert_eq!(
         seen.get("created-definitions"),
         Some(&"0"),
@@ -2648,11 +2367,10 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
          mapping writes\n{report}"
     );
 
-    // And the claim, on the only side that can make it. `timeZone` alone would
-    // pass on a backend that sent the identifier and nothing else — which is the
-    // dangling reference RFC 8984 §1.4.8 forbids and a server may reject — so the
-    // definition is asserted beside it, whole, against the same description the
-    // `VTIMEZONE` was written from.
+    // The claim, on the only side that can make it. `timeZone` alone passes if
+    // the backend sent only the identifier, which RFC 8984 §1.4.8 forbids and a
+    // server can reject. Thus the test also asserts the full definition, against
+    // the description that the `VTIMEZONE` came from.
     let state = server.state();
     let state = state.lock().expect("mock state lock");
     let events = &state
@@ -2695,33 +2413,29 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
     );
 }
 
-/// The fifth leg: an occurrence dragged into a second zone only the **client**
-/// can name, added to a `timeZones` map that is already the server's.
+/// The fifth leg: an occurrence moves into a second zone that only the
+/// **client** can name, which the save adds to the server's `timeZones` map.
 ///
-/// The leg above sends such a zone in a create, where the mapping builds the
-/// whole map and may state it whole. This one sends it in an *update*, which is
-/// the save a user actually makes when they drag one day of a standing meeting
-/// into the hours they are travelling — and there the map at the server is the
-/// user's own. RFC 8984 §4.7.2's definitions can carry an `aliases`, a `url` and
-/// a `validUntil` that no `VTIMEZONE` has room for, so a save that restated the
-/// property would delete what the user was never shown; `jmap-cal-sync`'s
-/// `diff_time_zones` therefore adds one entry through RFC 8620 §5.3's pointer,
-/// and this is where that runs against a real server's map rather than a
-/// fixture's.
+/// The fourth leg sends such a zone in a create, where the mapping builds the
+/// full map. This leg sends it in an *update*, which a user makes when they
+/// move one occurrence of a meeting during travel. Then the map on the server
+/// belongs to the user. RFC 8984 §4.7.2 definitions can have `aliases`, `url`
+/// and `validUntil`, which a `VTIMEZONE` cannot hold, so a save that restated
+/// the property deletes them. Thus `jmap-cal-sync`'s `diff_time_zones` adds one
+/// entry through an RFC 8620 §5.3 pointer, and this leg runs it against a
+/// server's map.
 ///
-/// Three joins in one save, and no unit test can reach any of them. The
-/// definition of the moved zone has to be in the calendar's timezone store when
-/// EDS calls `save_component_sync` for a `E_CAL_OBJ_MOD_THIS` — a different call
-/// from the create the leg above measured, and one where EDS hands the backend
-/// the master *and* the detached instance. The identifier the instance names has
-/// to survive into `recurrenceOverrides`. And the series' own definition, which
-/// the create put at the server, has to still be there afterwards, byte for byte,
-/// because the patch was supposed to add rather than replace.
+/// One save has three joins, and no unit test can reach them. The moved zone's
+/// definition must be in the timezone store when EDS calls
+/// `save_component_sync` for `E_CAL_OBJ_MOD_THIS`. This call is different from
+/// the create, and EDS gives the backend the master *and* the detached
+/// instance. The instance's identifier must reach `recurrenceOverrides`. The
+/// series' definition from the create must stay unchanged on the server,
+/// because the patch must add and not replace.
 ///
-/// The assertion that matters is again the mock's. Asking the calendar to resolve
-/// either identifier afterwards only says the store still holds what the client
-/// put in it; what no client can fake is the second entry arriving beside the
-/// first.
+/// The necessary assertion is again the mock's. A calendar lookup only shows
+/// that the store still has what the client put in it. Only the server can
+/// show the second entry beside the first.
 #[test]
 fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
     let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
@@ -2780,10 +2494,9 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
         output.status
     );
 
-    // What libical made of the two files, reported for the reason the leg above
-    // gives: the client is never told either identifier, so a definition filed
-    // under some other name would leave every `TZID` below naming a zone nobody
-    // wrote. Both, because the whole leg is about telling two zones apart.
+    // The identifiers that libical read from the two files, reported for the
+    // reason that the fourth leg gives. The leg tests two different zones, so
+    // the test checks both.
     assert_eq!(
         (seen.get("zone-tzid"), seen.get("moved-zone-tzid")),
         (Some(&CLIENT_ZONE), Some(&CLIENT_MOVED_ZONE)),
@@ -2791,10 +2504,10 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
          TZID\n{report}"
     );
 
-    // That EDS answered with the instance at all, which is what makes the pair
-    // below mean anything: `e_cal_client_get_object_sync` answers a request for an
-    // instance it holds no detached copy of with the *master*, and the master here
-    // is a component with the same UID, the same summary and the unmoved clock.
+    // EDS returned the instance, which gives the assertions below their
+    // meaning. `e_cal_client_get_object_sync` returns the *master* for an
+    // instance with no detached copy, and here the master has the same UID and
+    // summary and the original clock.
     assert_eq!(
         seen.get("occurrence-detached"),
         Some(&"1"),
@@ -2802,12 +2515,10 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
          moved, so the move reached nothing\n{report}"
     );
 
-    // And what EDS kept of the occurrence the client moved — not the component it
-    // wrote: the read-back is answered out of what the backend stored after the
-    // save, so this is the moved instance as it came back from the mock. A save
-    // that could not name the moved zone leaves the instance on the series' one,
-    // and then this `TZID` reads as [`CLIENT_ZONE`] rather than as nothing, which
-    // is the failure that looks most like success.
+    // What EDS kept of the moved occurrence. EDS answers the read from what the
+    // backend stored after the save, so this is the instance as the mock
+    // returned it. If the save could not name the moved zone, this `TZID` is
+    // [`CLIENT_ZONE`], not empty: that failure looks most like success.
     assert_eq!(
         (
             seen.get("occurrence-dtstart"),
@@ -2833,7 +2544,7 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
         "the moved occurrence came back some other length than the series'\n{report}"
     );
 
-    // And the claim, on the only side that can make it.
+    // The claim, on the only side that can make it.
     let state = server.state();
     let state = state.lock().expect("mock state lock");
     let events = &state
@@ -2856,9 +2567,9 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
         Some(CLIENT_SERIES_TITLE),
         "the server does not hold the series the client created\n{report}"
     );
-    // The series' own clock first, because the override's key is a wall-clock
-    // time *on it*: a series that arrived floating or in UTC would make the key
-    // below name an instant the rules never generated.
+    // Assert the series' clock first, because the override key is a wall-clock
+    // time on it. If the series arrived floating or in UTC, the key names an
+    // instant that the rules never generated.
     assert_eq!(
         (
             event.start.as_deref(),
@@ -2887,11 +2598,10 @@ fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
         "the occurrence the user moved did not reach the server on the zone they \
          moved it to\n{report}"
     );
-    // The point of the leg: both definitions, the series' one untouched beside
-    // the one this save added. A patch that had restated the property whole would
-    // pass an assertion about the new entry alone and lose whatever the server
-    // held for the old one, which is exactly the failure §5.3's pointer exists to
-    // avoid — so the map is asserted whole.
+    // The purpose of the leg: both definitions, with the series' definition
+    // unchanged beside the new one. A patch that restated the property passes an
+    // assertion on the new entry alone and loses the old one, which the §5.3
+    // pointer prevents. Thus the test asserts the full map.
     assert_eq!(
         event.time_zones,
         Some(

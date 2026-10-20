@@ -1,60 +1,51 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The collection leg, driven against a real Stalwart instead of the
-//! in-process mock.
+//! The collection test, against a real Stalwart instead of the in-process
+//! mock.
 //!
-//! Unlike the book and calendar legs, this one makes no write at all:
-//! `functional-collection-client` (`tests/functional/collection-client.c`,
-//! unchanged from the mock leg bar one addition -- see below) only waits for
-//! the account's populate/fan-out to write an address-book and a calendar
-//! child, the same question `collection.rs` asks of the mock. Against a real
-//! server there is no mock state to seed directly; what this test relies on
-//! instead is that a freshly `stw seed`-ed Stalwart account already carries
-//! exactly one default address book and one default calendar (confirmed by
-//! hand with a raw `AddressBook/get`/`Calendar/get` against a throwaway
-//! account before writing this test), the same shape
-//! `collection.rs`'s own `seed_address_book`/`seed_calendar` calls build in
-//! the mock.
+//! This test makes no write. `functional-collection-client`
+//! (`tests/functional/collection-client.c`, the mock client with one addition,
+//! see below) waits until the populate of the account writes an address-book
+//! child and a calendar child, as in `collection.rs`. A real server has no
+//! mock state to seed. Instead, a new `stw seed` Stalwart account has exactly
+//! one default address book and one default calendar. In the mock,
+//! `collection.rs` makes the same with `seed_address_book`/`seed_calendar`.
 //!
-//! The mechanism is unchanged from the other two legs:
-//! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
-//! plaintext-stays-loopback rule honestly while the traffic actually
-//! continues to Stalwart; `JMAP_LIVE_SERVER_REBASE_URLS` rebases the
-//! server's stated `apiUrl` onto the address actually connected through.
+//! The method is the same as in the book and calendar tests:
+//! `spawn_loopback_proxy` satisfies the loopback-only plaintext rule of
+//! `connect_target` in `jmap-backend-core`, and sends the traffic to
+//! Stalwart. `JMAP_LIVE_SERVER_REBASE_URLS` rebases the `apiUrl` of the
+//! server onto the address of the connection.
 //!
-//! What `collection-client.c` adds beyond the other two legs' password seed:
-//! unlike the book and calendar legs, where the write-phase client seeds the
-//! password against the leaf source it is about to open *before* opening it,
-//! the collection backend's populate runs the moment the registry loads the
-//! account -- before this client has even connected to the bus -- so the
-//! first attempt always finds no password, schedules
-//! `credentials-required`, and goes quiet with no GUI here to answer it.
-//! The client therefore stores the password against the *account* source
-//! (not a child; it is the account's own `authenticate_sync` that resolves
-//! it) and then calls `e_source_invoke_authenticate_sync`, the ordinary way
-//! a client answers that signal, to make EDS retry now that a password
-//! exists.
+//! The addition in `collection-client.c`: in the book and calendar tests, the
+//! client stores the password on the leaf source before it opens it. But the
+//! collection backend populates when the registry loads the account, before
+//! the client connects to the bus. Thus the first attempt has no password,
+//! goes to `credentials-required` and waits, and no GUI can answer. The
+//! client stores the password on the account source (not on a child, because
+//! the `authenticate_sync` of the account reads it). Then it calls
+//! `e_source_invoke_authenticate_sync`, so that EDS tries again.
 //!
-//! ## Running it
+//! ## How to run it
 //!
-//! Same environment as the `jmap-*-sync` crates' own `live_server_*.rs`
-//! tests -- see `docs/manual-test-live-server.md`: a throwaway `stw seed`
-//! account, then
+//! Use the same environment as the `live_server_*.rs` tests of the
+//! `jmap-*-sync` crates (see `docs/manual-test-live-server.md`): a throwaway
+//! `stw seed` account, then
 //!
 //! ```console
 //! $ cargo test -p jmap-functional --test live-stalwart-collection -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! When `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set, the test skips
+//! and does not fail.
 
 use std::env;
 
 use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
 
-/// `(origin, user, password)`, or `None` to skip -- mirrors
-/// `live-stalwart-book.rs`'s own `live_server_params`.
+/// `(origin, user, password)`, or `None` to skip. The same as
+/// `live_server_params` in `live-stalwart-book.rs`.
 fn live_server_params() -> Option<(String, String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -64,9 +55,8 @@ fn live_server_params() -> Option<(String, String, String)> {
     Some((origin, user, password))
 }
 
-/// `collection.rs`'s own keyfile, with a real `User=` added -- the one field
-/// that turns `jmap-backend-core::connect::credentials`'s anonymous branch
-/// into the Basic one.
+/// The keyfile of `collection.rs`, with a real `User=`. This field causes
+/// `jmap-backend-core::connect::credentials` to use Basic, not anonymous.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\
@@ -113,9 +103,8 @@ fn evolution_source_registry_fans_the_real_account_out_into_a_book_and_a_calenda
     ));
     session.write_source(ACCOUNT_UID, &keyfile(port, &user));
     session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", &password);
-    // Stalwart's session document states its own configured `apiUrl`, not the
-    // loopback proxy address it was actually asked through -- see
-    // `live-stalwart-book.rs`'s own comment on this line for the mechanism.
+    // The session document gives the configured `apiUrl`, not the proxy
+    // address. See the comment on this line in `live-stalwart-book.rs`.
     session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
     session.stage_collection_backend(&module);
 

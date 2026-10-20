@@ -1,42 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A headless acceptance test for the endless OAuth2 consent loop the
-//! operator hit on 0.5.0: it came from a 401 that only arrived after a
-//! redirect to a different origin had dropped
-//! the `Authorization` header, treated as a rejected credential and
-//! escalated to a fresh interactive consent — forever, since the fresh
-//! token hit the same redirect and the same 401 every time.
+//! A headless acceptance test for the endless OAuth2 consent loop of 0.5.0.
 //!
-//! `jmap_client::Error::RedirectCredentialsWithheld`
-//! (`jmap-client/src/client.rs`'s `execute_within`) already keeps that case
-//! out of `is_wrong_password()`, and a unit test at that layer already
-//! covers it; what had never run was a real `EBookMetaBackend` connect
-//! through the scenario, against a real `evolution-source-registry` and a
-//! real `evolution-addressbook-factory`.
+//! A redirect to a different origin removed the `Authorization` header. The
+//! server then sent a 401, and the backend treated it as a rejected
+//! credential. This caused a new interactive consent. The new token got the
+//! same redirect and the same 401, so the loop did not stop.
 //!
-//! Driving that connect end to end surfaced the actual mechanism: EDS's
-//! `ensure_connected_sync` (`e-book-meta-backend.c`) schedules the
-//! interactive `credentials-required` consent for *every*
-//! `ESourceAuthenticationResult` except `UNKNOWN`, regardless of what this
-//! project's own `is_wrong_password` says, so merely keeping
-//! `RedirectCredentialsWithheld` out of that check never stopped the
-//! escalation `jmap_backend_core::connect::ConnectError::auth_result` was
-//! still classifying it as `ERROR`. `auth_result` now maps it to `UNKNOWN`
-//! instead, which is also the one case `ensure_connected_sync` propagates a
-//! real `GError` for rather than clearing it into a bogus success.
+//! `jmap_client::Error::RedirectCredentialsWithheld` (from `execute_within`
+//! in `jmap-client/src/client.rs`) keeps this case out of
+//! `is_wrong_password()`, and a unit test covers it at that layer. This test
+//! does a real `EBookMetaBackend` connect through the scenario, against a
+//! real `evolution-source-registry` and `evolution-addressbook-factory`.
 //!
-//! The fixture needs a redirect to a genuinely different *origin*, not just
-//! a different path: `jmap_client::url::same_origin` differs on port alone,
-//! so two loopback mocks on two different ports already qualify, with no
-//! need to involve a second hostname. `jmap_mock::MockServer`'s own
-//! `session_via_redirect` mode redirects `/.well-known/jmap` to a second
-//! path on the *same* origin — built for a same-origin redirect scenario —
-//! so it cannot stand in here; extending it would also cross into `jmap-mock`,
-//! which is codex's turf. Instead this test runs its own tiny front door: a
-//! raw `TcpListener` that answers every request with a 302 to the real mock
-//! on a different port, which requires Basic auth and so 401s the
-//! credentials-stripped request that reaches it after the hop.
+//! EDS `ensure_connected_sync` (`e-book-meta-backend.c`) schedules the
+//! interactive `credentials-required` consent for each
+//! `ESourceAuthenticationResult` other than `UNKNOWN`. It ignores
+//! `is_wrong_password`. Thus `jmap_backend_core::connect::ConnectError::auth_result`
+//! maps `RedirectCredentialsWithheld` to `UNKNOWN`, not `ERROR`. For `UNKNOWN`,
+//! `ensure_connected_sync` also gives the real `GError` and not a false success.
+//!
+//! The fixture needs a redirect to a different *origin*, not only a different
+//! path. `jmap_client::url::same_origin` compares the port, so two loopback
+//! mocks on two ports are sufficient. The `session_via_redirect` mode of
+//! `jmap_mock::MockServer` redirects to the *same* origin, so it is not
+//! applicable here. Thus this test runs its own front door: a raw
+//! `TcpListener` that sends a 302 for each request to the real mock on a
+//! different port. The mock requires Basic auth, so it sends a 401 for the
+//! request without credentials that arrives after the redirect.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -67,13 +59,11 @@ fn keyfile(front_door_port: u16) -> String {
     )
 }
 
-/// Bind a loopback port that answers every request with a 302 to
-/// `{target_origin}/.well-known/jmap`, regardless of path, method or
-/// headers — this fixture needs no more than that one redirect to make the
-/// origin change. Returns the port and a counter of how many requests it
-/// answered, so the test can assert there was exactly one: a backend that
-/// retried here would mean the redirect-withheld classification had not, in
-/// fact, kept this out of a retry loop.
+/// Binds a loopback port that sends a 302 to
+/// `{target_origin}/.well-known/jmap` for each request, for all paths,
+/// methods and headers. Returns the port and a counter of the answered
+/// requests. The test uses the counter to make sure that the backend does
+/// not retry in a loop.
 fn spawn_redirecting_front_door(target_origin: String) -> (u16, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind the front door's port");
     let port = listener
@@ -85,9 +75,8 @@ fn spawn_redirecting_front_door(target_origin: String) -> (u16, Arc<AtomicUsize>
     std::thread::spawn(move || {
         for incoming in listener.incoming() {
             let Ok(mut stream) = incoming else { continue };
-            // Only the request line and headers matter, and a GET carries no
-            // body; draining a bounded read is enough to let the client see
-            // its write complete before this closes the connection.
+            // A GET has no body. One bounded read lets the client complete
+            // its write before this closes the connection.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             counted.fetch_add(1, Ordering::SeqCst);
@@ -133,26 +122,22 @@ fn a_cross_origin_redirect_that_drops_credentials_fails_without_escalating() {
         "the client failed with {}\n{report}",
         output.status
     );
-    // The first connect runs before EDS ever consults the secret store
-    // (`jmap_backend_core::connect::credentials`'s own doc), so it always
-    // fails with `CredentialsRequired` and schedules the one, expected
-    // consent request: this is the fixture reaching its starting point, not
-    // the bug under test. EDS then retries internally with the now-stored
-    // password before this client does anything else, which is the first of
-    // the two redirect-withheld network attempts below.
+    // The first connect runs before EDS reads the secret store (see the doc
+    // of `jmap_backend_core::connect::credentials`). Thus it always fails with
+    // `CredentialsRequired` and schedules the one expected consent request.
+    // This is the start condition of the fixture, not the bug under test.
+    // EDS then retries with the stored password. This is the first of the two
+    // redirect-withheld network attempts.
     assert_eq!(
         seen.get("credentials-required-after-connect"),
         Some(&"1"),
         "the first connect has no password to try yet and should ask for one exactly once\n\
          {report}"
     );
-    // A credentials prompter answering that one request with the password
-    // explicitly drives the second, independent redirect-withheld attempt.
-    // Answering it schedules one further request of its own (EDS's own
-    // registry-side bookkeeping for having been asked to authenticate
-    // again) but neither attempt's actual 401 may add another: that repeat,
-    // without anything here asking again, is the endless OAuth2 popup loop
-    // this test exists to catch.
+    // The prompter answers that request with the password. This causes the
+    // second redirect-withheld attempt. The answer schedules one more request
+    // (EDS registry records the new authentication). The 401 of an attempt
+    // must not add a request. Such a repeat is the endless OAuth2 popup loop.
     assert_eq!(
         seen.get("credentials-required-after-reauthenticate"),
         Some(&"2"),

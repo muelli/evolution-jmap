@@ -1,21 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Dismissing a reminder the way Evolution's reminder watcher does, through a
- * real, running `evolution-calendar-factory`: find the event by its summary,
- * take the alarm uid libecal reports for its one reminder, and call
- * `e_cal_client_discard_alarm_sync()` with the occurrence's recurrence id
- * (or none) and no operation flags. That is the call
- * `e_reminder_watcher_dismiss_one_sync()` makes in EDS 3.52 and later, and it
- * ignores the outcome, so nothing in Evolution shows a failure: this program
- * reports it instead.
+ * Dismisses a reminder as the Evolution reminder watcher does, through a
+ * real `evolution-calendar-factory`. The program finds the event by its
+ * summary and gets the alarm uid of its reminder. Then it calls
+ * `e_cal_client_discard_alarm_sync()` with the recurrence id of the
+ * occurrence (or none) and no operation flags. In EDS 3.52 and later,
+ * `e_reminder_watcher_dismiss_one_sync()` makes this call and ignores the
+ * result. Evolution shows no failure, so this program reports it.
  *
- * Everything around this program (the scratch XDG tree, the `.source`
- * keyfile, the private D-Bus session, the mock server and every assertion)
- * belongs to `rust/crates/jmap-functional/tests/calendar-discard-alarm.rs`.
- * It reports what EDS told it on stdout, one `key=value` line per
- * observation, and exits non-zero only when a step before the dismissal
- * fails.
+ * `rust/crates/jmap-functional/tests/calendar-discard-alarm.rs` creates the
+ * scratch XDG tree, the `.source` keyfile, the private D-Bus session and the
+ * mock server, and it does all the assertions. The program writes one
+ * `key=value` line on stdout for each observation. It exits non-zero only
+ * when a step before the dismissal fails.
  *
  *   usage: functional-cal-discard-alarm-client <source-uid> <summary> [<rid>]
  */
@@ -24,9 +22,8 @@
 
 #include "connection-status.h"
 
-/* How long to wait for the connect's own refresh to file the event seeded
- * on the server. Generous, as every timeout in this tree is: it only costs
- * time on a failing run. */
+/* The maximum wait for the refresh of the connect to get the event from the
+ * server. A long wait costs time only on a failed run. */
 #define FIND_TIMEOUT_SECONDS 10
 
 static int
@@ -39,8 +36,7 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* The cached event whose summary is `summary`, or NULL once the timeout
- * passes without one. */
+/* The cached event with the summary `summary`, or NULL after the timeout. */
 static ECalComponent *
 find_event (ECalClient *cal,
 	    const gchar *summary,
@@ -74,8 +70,8 @@ find_event (ECalClient *cal,
 	return NULL;
 }
 
-/* The ACKNOWLEDGED of the one VALARM of `uid` as EDS now holds it, or the
- * empty string for none. */
+/* The ACKNOWLEDGED of the first VALARM of `uid` in EDS now, or an empty
+ * string. */
 static gchar *
 read_back_acknowledged (ECalClient *cal,
 			const gchar *uid)

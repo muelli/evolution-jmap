@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The ADDRESS-BOOK leg of the stale-access-token acceptance test, made
-//! headless for `jmap-backend-book`.
+//! The address book part of the stale-access-token acceptance test, without
+//! a display, for `jmap-backend-book`.
 //!
-//! This is `cal-stale-token.rs` with the calendar pair swapped for the
-//! address-book one — `jmap_backend_core::oauth2::source_uses_oauth2` is the
-//! same function for both backends, so every constraint that test's header
-//! documents (the `Method=JMAP` requirement, the gap-driven refresh with no
-//! wall clock, the two staged registry modules beside the backend's own)
-//! applies unchanged. See that file's header for the full mechanism.
+//! This is `cal-stale-token.rs` with the address book backend and client in
+//! place of the calendar ones. Both backends use the same
+//! `jmap_backend_core::oauth2::source_uses_oauth2`. Thus all constraints in
+//! the header of that file apply: `Method=JMAP`, the refresh from the
+//! validity gap without a wall clock, and the two staged registry modules.
+//! That header gives the full mechanism.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -30,8 +30,8 @@ const SECRET_UID: &str = "OAuth2::JMAP[jmap-stale-token]";
 const TOKEN_LIFETIME_SECONDS: u64 = 8;
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// The account: a standalone address book, with the same two OAuth2
-/// additions `cal-stale-token.rs`'s `keyfile` documents in full.
+/// The account: a standalone address book, with the two OAuth2 additions
+/// that the `keyfile` of `cal-stale-token.rs` describes.
 fn keyfile(port: u16) -> String {
     format!(
         "[Data Source]\n\
@@ -63,10 +63,9 @@ fn seeded_secret() -> String {
     json!({ "refresh_token": SEED_REFRESH_TOKEN }).to_string()
 }
 
-/// One run of the client against a freshly seeded mock, with the accepted
-/// bearer token rotated underneath it while it waits at its handshake. See
-/// `cal-stale-token.rs`'s own copy for what `refresh_serves_fresh_token`
-/// means.
+/// One run of the client against a newly seeded mock. The accepted bearer
+/// token changes while the client waits at its handshake. The `run` of
+/// `cal-stale-token.rs` describes `refresh_serves_fresh_token`.
 fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     let client = required_path("JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
@@ -120,8 +119,8 @@ fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     let mut session = Session::new(root);
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_address_book_backend(&module);
-    // The registry's half — see `cal-stale-token.rs`'s comment on the same
-    // two calls for why both are needed and in this order.
+    // The registry part. The same calls in `cal-stale-token.rs` tell why both
+    // are necessary, in this order.
     session.stage_collection_backend(&collection_module);
     session.stage_installed_registry_module(&oauth2_services);
 
@@ -171,7 +170,7 @@ fn run(root: &str, refresh_serves_fresh_token: bool) -> Run {
     }
 }
 
-/// See `cal-stale-token.rs`'s `Run`.
+/// See `Run` in `cal-stale-token.rs`.
 struct Run {
     status: std::process::ExitStatus,
     stdout: String,
@@ -180,7 +179,7 @@ struct Run {
     token_requests: Vec<BTreeMap<String, String>>,
 }
 
-/// See `cal-stale-token.rs`'s `rotate`.
+/// See `rotate` in `cal-stale-token.rs`.
 fn rotate(
     server: &jmap_mock::MockServer,
     issued_token: &Mutex<String>,
@@ -205,7 +204,7 @@ fn rotate(
     std::fs::write(go_path, "go").expect("write the harness's go file");
 }
 
-/// See `cal-stale-token.rs`'s `assert_preconditions`.
+/// See `assert_preconditions` in `cal-stale-token.rs`.
 fn assert_preconditions(run: &Run, seen: &BTreeMap<&str, &str>) {
     let report = &run.report;
 
@@ -258,8 +257,8 @@ fn assert_preconditions(run: &Run, seen: &BTreeMap<&str, &str>) {
     );
 }
 
-/// The positive case: a stored refresh token that still buys a working
-/// access token. The operation the user asked for must simply happen.
+/// The positive case: the stored refresh token gives a valid access token.
+/// The operation must succeed silently.
 #[test]
 fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     let run = run(
@@ -298,8 +297,8 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     );
 }
 
-/// The negative case: the refresh redeems, but what it buys the server also
-/// refuses. Must fail once, not loop.
+/// The negative case: the refresh succeeds, but the server refuses the new
+/// token. The operation must fail one time and not loop.
 #[test]
 fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
     let run = run(

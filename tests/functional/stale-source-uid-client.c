@@ -1,62 +1,60 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the stale-source-uid question: does a source UID that
- * exists only in dconf/GSettings drive `evolution-source-registry` into a
- * credential lookup, and thence into a consent window?
+ * The client half of the stale-source-uid question: can a source UID that is
+ * only in dconf/GSettings cause a credential lookup in
+ * `evolution-source-registry`, and then a consent window?
  *
- * What the operator saw, twice, with `ESR_DEBUG=1` set:
+ * The operator saw this two times with `ESR_DEBUG=1`:
  *
  *   server_side_source_credentials_lookup_cb: Failed to lookup password for
  *   source d06b56726065b3531de05498dd3519c2bd6efcb3
  *
- * followed in the same second by an interactive `authorization_code` consent —
- * for a UID absent from `~/.config/evolution/sources/`, whose only trace
- * anywhere on the machine was inside `~/.config/dconf/user`.
+ * In the same second, an interactive `authorization_code` consent followed.
+ * The UID was not in `~/.config/evolution/sources/`. The only file on the
+ * machine with the UID was `~/.config/dconf/user`.
  *
- * This program runs the two halves of that story separately. It judges
- * neither: every assertion belongs to `rust/crates/jmap-functional/tests/
- * stale-source-uid.rs`, which runs this program and reads the `key=value`
- * observations it writes to stdout.
+ * This program examines the two parts of that problem separately, and does
+ * not judge them. `rust/crates/jmap-functional/tests/stale-source-uid.rs`
+ * runs this program and asserts on the `key=value` lines on stdout.
  *
- * MODE `dconf-only` — plant the debris and see whether it is inert.
- * Writes a UID nothing on disk names into all six keys of the
+ * MODE `dconf-only`: write the stale UID and see if it has an effect.
+ * The program writes a UID that no file names into all six keys of the
  * `org.gnome.Evolution.DefaultSources` schema (`e-source-registry.c:68`, the
- * only dconf-linked source-UID mechanism EDS ships), syncs it out to
- * `$XDG_CONFIG_HOME/dconf/user` — the file is checked, so a run that silently
- * fell back to GSettings' memory backend reports that rather than passing —
- * and only THEN starts the registry, so the setting is already there when the
- * daemon comes up. It then reports whether the registry has any such source
- * and what the default-source getters answer.
+ * only EDS mechanism that keeps source UIDs in dconf). It syncs the value to
+ * `$XDG_CONFIG_HOME/dconf/user` and checks the file, thus a run that uses the
+ * GSettings memory backend reports this and does not pass. Only THEN does it
+ * start the registry, thus the setting exists when the daemon starts. It
+ * reports if the registry has such a source and what the default-source
+ * getters return.
  *
- * MODE `collection-child` — reproduce the log line for real.
- * `collection_backend_new_user_file` (`e-collection-backend.c:176-200`) writes
- * a collection backend's children to `$XDG_CACHE_HOME/evolution/sources/
- * <collection-uid>/`, NOT to the config directory: "the UID matches no
- * configured source" is the normal condition of every child source Evolution
- * ever fans an account out into. This mode waits for our own collection
- * backend's children, then drives one of them down the operator's exact path:
- * `e_source_invoke_credentials_required_sync (reason=required)`, which is what
- * `e_backend_schedule_credentials_required()` calls for a backend that needs
- * credentials.
+ * MODE `collection-child`: reproduce the log line.
+ * `collection_backend_new_user_file` (`e-collection-backend.c:176-200`)
+ * writes the children of a collection backend to
+ * `$XDG_CACHE_HOME/evolution/sources/<collection-uid>/`, NOT to the config
+ * directory. Thus "the UID matches no configured source" is normal for each
+ * child source of an account. This mode waits for the children of the JMAP
+ * collection backend. Then it sends one child through the path of the
+ * operator: `e_source_invoke_credentials_required_sync (reason=required)`,
+ * which `e_backend_schedule_credentials_required()` calls for a backend that
+ * needs credentials.
  *
- * WHY THE SIGNAL COUNTS ARE THE MEASUREMENT.
- * `server_side_source_invoke_credentials_required_cb` (`e-server-side-source.c:
- * 252`) does NOT simply forward the request to clients. For reason `required`
- * it sets `skip_emit = TRUE` (line 318) and starts a silent
- * `e_source_credentials_provider_lookup` instead; only its callback decides
- * what the user sees. So exactly one of two things reaches this process:
+ * Why the signal counts are the measurement.
+ * `server_side_source_invoke_credentials_required_cb`
+ * (`e-server-side-source.c:252`) does NOT only send the request to clients.
+ * For reason `required`, it sets `skip_emit = TRUE` (line 318) and starts a
+ * silent `e_source_credentials_provider_lookup`. The callback of the lookup
+ * selects what the user sees. Thus this process receives one of two results:
  *
- *   - the lookup found a password -> `authenticate`, and NO
- *     `credentials-required` at all: the user is never bothered.
- *   - the lookup failed -> the operator's log line, and `credentials-required`
- *     re-emitted with reason `required` (line 490 onward) -> the prompter, and
- *     for an OAuth2-method source the consent window.
+ *   - The lookup found a password: `authenticate`, and NO
+ *     `credentials-required`. The user sees nothing.
+ *   - The lookup failed: the log line of the operator, and a new
+ *     `credentials-required` with reason `required` (line 490 and after).
+ *     The prompter opens, and for an OAuth2 source, the consent window.
  *
- * That makes the pair discriminating rather than decorative, which is why this
- * mode takes an optional password: run it once without and once with, and the
- * two counts swap. A test that only ever ran the failing half could not tell
- * the escalation from an unconditional echo of its own request.
+ * Thus the two counts are a real check. This mode takes an optional password:
+ * without it and with it, the two counts change places. A test of only the
+ * failure cannot tell the escalation from a simple echo of the request.
  *
  *   usage: functional-stale-source-uid-client dconf-only <dangling-uid>
  *          functional-stale-source-uid-client collection-child <account-uid>
@@ -65,38 +63,33 @@
 
 #include <libedataserver/libedataserver.h>
 
-/* The schema `ESourceRegistry` tracks the default sources in, and the six keys
- * it defines. Spelled out rather than enumerated from the schema so that a key
- * disappearing upstream fails this run by name. From `e-source-registry.c:68`
+/* The schema in which `ESourceRegistry` keeps the default sources. The six
+ * keys are written out (not read from the schema), thus a key that upstream
+ * removes makes this run fail with its name. From `e-source-registry.c:68`
  * and `/usr/share/glib-2.0/schemas/org.gnome.Evolution.DefaultSources.gschema.xml`. */
 #define DEFAULT_SOURCES_SCHEMA "org.gnome.Evolution.DefaultSources"
 
-/* How long to wait for the collection backend's populate/fan-out to produce
- * children, matching `collection-client.c`'s own wait for the same step. */
+/* The maximum wait for the collection backend to make children. Same value as
+ * in `collection-client.c`. */
 #define WAIT_SECONDS 30
 
-/* How long to keep iterating this thread's default main context after the
- * credentials request, so that whatever the registry decided has a chance to
- * arrive before the counts are reported. ESource applies D-Bus news from an
- * idle on the context that was thread-default when `ESourceRegistry` was
- * constructed, so the signals are delivered by iterating and only by
- * iterating. Always burned in full: the *absence* of a signal is half of what
- * this program measures. */
+/* How long to iterate the default main context after the credentials request,
+ * to receive the result from the registry. ESource applies D-Bus changes from
+ * an idle on the thread-default context of the `ESourceRegistry`. Only
+ * iteration delivers the signals. This always uses the full time, because the
+ * *absence* of a signal is also a measurement. */
 #define SETTLE_MILLISECONDS 2500
 
-/* How long to wait for the `ca.desrt.dconf` service to rewrite the database
- * file after `g_settings_sync` has handed it the change. A limit at all is so
- * that a session whose GSettings never reached dconf reports that instead of
- * hanging; the wait itself is normally over in milliseconds. */
+/* The maximum wait for the `ca.desrt.dconf` service to write the database
+ * file after `g_settings_sync`. Usually this takes some milliseconds. If
+ * GSettings does not use dconf, the limit makes the run report it, not hang. */
 #define DCONF_WRITE_TIMEOUT_SECONDS 5
 
-/* Whether `needle` appears anywhere in the `length` bytes at `haystack`.
+/* Return TRUE if `needle` is in the `length` bytes at `haystack`.
  *
- * Hand-rolled rather than `g_strstr_len`, which looks like the right tool and
- * is not: its bounded path walks `while (p <= end && *p)` and so stops at the
- * first NUL byte. dconf's database is a binary GVDB blob whose header contains
- * NULs long before any key, so `g_strstr_len` reports "not found" for a UID
- * that is plainly in the file. */
+ * Do not use `g_strstr_len`: its loop `while (p <= end && *p)` stops at the
+ * first NUL byte. The dconf database is a binary GVDB file with NUL bytes in
+ * its header, thus `g_strstr_len` does not find a UID that is in the file. */
 static gboolean
 contains_bytes (const gchar *haystack,
                 gsize length,
@@ -116,8 +109,7 @@ contains_bytes (const gchar *haystack,
 	return FALSE;
 }
 
-/* One `key=value` observation on stdout, the format `jmap_functional::
- * observations` parses. */
+/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
 static void
 observe (const gchar *key,
          const gchar *value)
@@ -132,9 +124,8 @@ observe_boolean (const gchar *key,
 	g_print ("%s=%d\n", key, value ? 1 : 0);
 }
 
-/* Fail the run, naming what broke. Used only for this program's own
- * preconditions — the behaviour under test is always reported, never judged
- * here. */
+/* Fail the run and name the failed step. Use only for preconditions of this
+ * program. Report the behaviour under test, do not judge it here. */
 static int
 fail (const gchar *step,
       GError *error)
@@ -145,8 +136,8 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Iterate this thread's default main context for `milliseconds`. Not a wait
- * for a condition: see SETTLE_MILLISECONDS. */
+/* Iterate the default main context for `milliseconds` (see
+ * SETTLE_MILLISECONDS). */
 static void
 settle (guint milliseconds)
 {
@@ -154,16 +145,14 @@ settle (guint milliseconds)
 
 	while (g_get_monotonic_time () < deadline) {
 		g_main_context_iteration (NULL, FALSE);
-		/* Microseconds: g_usleep's unit, and G_TIME_SPAN_MILLISECOND's. */
+		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
 		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
 	}
 }
 
-/* Every UID the registry currently has, comma-separated, so the Rust side can
- * compare the live set against the `.source` files on disk without this
- * program deciding what that comparison means. One line rather than one line
- * per source because `jmap_functional::observations` is a map: repeated keys
- * would collapse into the last one. */
+/* All UIDs in the registry, comma-separated. The Rust side compares them with
+ * the `.source` files. Use one line: `jmap_functional::observations` is a map
+ * and keeps only the last value of a repeated key. */
 static gchar *
 source_uids (ESourceRegistry *registry)
 {
@@ -187,9 +176,8 @@ source_uids (ESourceRegistry *registry)
 static int
 run_dconf_only (const gchar *dangling_uid)
 {
-	/* Every key in the schema, so that no default-source path is left
-	 * untested — the operator's account had a mail account, but the same
-	 * question applies to the address book and calendar defaults. */
+	/* All keys in the schema. The operator had a mail account, but the same
+	 * question applies to the other defaults. */
 	static const gchar * const keys[] = {
 		"default-address-book",
 		"default-calendar",
@@ -219,18 +207,16 @@ run_dconf_only (const gchar *dangling_uid)
 			return 1;
 		}
 	}
-	/* Push it through the backend before anything reads it: without this the
-	 * write is still queued in this process and `~/.config/dconf/user` would
-	 * not yet name the UID the check below is about. */
+	/* Send the write to the backend now. Without this, the write stays in
+	 * the queue of this process and `~/.config/dconf/user` does not have the
+	 * UID yet. */
 	g_settings_sync ();
 	g_object_unref (settings);
 
-	/* The operator's forensic finding, reproduced: the UID is now in
-	 * `~/.config/dconf/user` and nowhere else. Reported rather than assumed
-	 * so that a session whose GSettings fell back to the memory backend —
-	 * dconf's GIO module missing, or `ca.desrt.dconf` not activatable on this
-	 * private bus — fails the Rust side's precondition instead of quietly
-	 * making the rest of this mode measure nothing. */
+	/* The finding of the operator: the UID is only in `~/.config/dconf/user`.
+	 * Report it. If GSettings uses the memory backend (no dconf GIO module, or
+	 * no `ca.desrt.dconf` on this private bus), the precondition on the Rust
+	 * side fails. Otherwise this mode measures nothing. */
 	dconf_path = g_build_filename (g_get_user_config_dir (), "dconf", "user", NULL);
 	deadline = g_get_monotonic_time () + DCONF_WRITE_TIMEOUT_SECONDS * G_TIME_SPAN_SECOND;
 	for (;;) {
@@ -247,21 +233,17 @@ run_dconf_only (const gchar *dangling_uid)
 			break;
 		}
 
-		/* `g_settings_sync` flushes this process's queue into the dconf
-		 * backend, but the `ca.desrt.dconf` service rewrites the database
-		 * file itself afterwards. Observed to be done by the time the
-		 * first read happens; polled anyway so that a slower machine
-		 * reports a real answer rather than a race. */
+		/* `g_settings_sync` sends the queue to the dconf backend, but the
+		 * `ca.desrt.dconf` service writes the file later. Usually the first
+		 * read finds it. Poll, so that a slow machine gives a correct result. */
 		g_main_context_iteration (NULL, FALSE);
 		g_usleep (20 * G_TIME_SPAN_MILLISECOND);
 	}
 	observe_boolean ("dconf-file-present", g_file_test (dconf_path, G_FILE_TEST_EXISTS));
 	g_free (dconf_path);
 
-	/* Only now. The setting is already in place when the daemon starts, so
-	 * this is the strongest form of the question: not "can a running registry
-	 * be pushed into it" but "does a registry that comes up with this debris
-	 * already present do anything with it at all". */
+	/* Start the registry only now. The setting exists when the daemon starts:
+	 * the question is if a new registry does anything with the stale UID. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -271,11 +253,10 @@ run_dconf_only (const gchar *dangling_uid)
 	g_clear_object (&source);
 
 	/* `e_source_registry_ref_default_mail_account` (`e-source-registry.c:3300`)
-	 * is the one getter that reads a dconf UID and is documented to fall back:
-	 * `e_source_registry_ref_source` on the UID, then the built-in account if
-	 * that came back NULL. What it answers here is the whole dconf-side
-	 * question: a getter that fabricated a source would mean EDS turns dconf
-	 * debris into a live source. */
+	 * reads the dconf UID and has a documented fallback: it calls
+	 * `e_source_registry_ref_source` on the UID, and if that returns NULL,
+	 * it uses the built-in account. If it made a source, EDS changes a stale
+	 * dconf UID into a live source. */
 	default_mail_account = e_source_registry_ref_default_mail_account (registry);
 	observe ("default-mail-account-uid",
 		 default_mail_account ? e_source_get_uid (default_mail_account) : "(none)");
@@ -285,9 +266,8 @@ run_dconf_only (const gchar *dangling_uid)
 	observe ("source-uids", uids);
 	g_free (uids);
 
-	/* Give the registry the same window the other mode gives it, so that
-	 * "nothing happened" is a measurement over a comparable stretch of time
-	 * rather than a snapshot taken before anything could have. */
+	/* Wait the same time as the other mode, so that "no change" is a real
+	 * measurement. */
 	settle (SETTLE_MILLISECONDS);
 
 	uids = source_uids (registry);
@@ -302,11 +282,10 @@ run_dconf_only (const gchar *dangling_uid)
 
 /* ----------------------------------------------------------- collection-child */
 
-/* Counted rather than acted on. In the running application `credentials-
- * required` is what puts the credentials prompter — and, for an OAuth2-method
- * source, the consent window — in front of the user; `authenticate` is the
- * silent path, where the registry found a stored secret and handed it to the
- * backend without anybody being asked. */
+/* Count the signals. In the application, `credentials-required` shows the
+ * credentials prompter (for an OAuth2 source, the consent window).
+ * `authenticate` is the silent path: the registry found a stored secret and
+ * gave it to the backend. */
 static void
 credentials_required_cb (ESource *source,
                          ESourceCredentialsReason reason,
@@ -330,10 +309,9 @@ authenticate_cb (ESource *source,
 	(*count)++;
 }
 
-/* The children of `parent_uid` the registry currently has. Polled rather than
- * awaited on a signal, for the reason `collection-client.c` gives: the
- * children are written to disk by the backend and picked up by the registry's
- * own file monitor. */
+/* The children of `parent_uid` in the registry. Poll, as in
+ * `collection-client.c`: the backend writes the children to disk, and the file
+ * monitor of the registry reads them. */
 static GList *
 children_of (ESourceRegistry *registry,
              const gchar *parent_uid)
@@ -406,47 +384,42 @@ run_collection_child (const gchar *account_uid,
 		return 1;
 	}
 
-	/* Any one of them; they are all children written to the cache directory,
-	 * which is the property under test. The Rust side is told which so it can
-	 * go and look for the keyfile itself rather than take this program's word
-	 * for where it landed. */
+	/* Any child: all are in the cache directory. Report its UID, so that the
+	 * Rust side can find the keyfile itself. */
 	child = E_SOURCE (children->data);
 	observe ("child-uid", e_source_get_uid (child));
 	observe ("child-display-name", e_source_get_display_name (child));
 
-	/* Connected before anything is asked for, so a signal raised by the store
-	 * below would be counted too. */
+	/* Connect before the store below, to count its signals too. */
 	g_signal_connect (child, "credentials-required",
 			  G_CALLBACK (credentials_required_cb), &credentials_required);
 	g_signal_connect (child, "authenticate",
 			  G_CALLBACK (authenticate_cb), &authenticate);
 
-	/* WHICH source actually holds this child's credentials: a finding in its
-	 * own right. `source_credential_provider_ref_impl_for_
-	 * source` (`e-source-credentials-provider.c:216-237`) does not look the
-	 * secret up under the source it was asked about: it first calls
-	 * `e_source_credentials_provider_ref_credentials_source`, which walks up
-	 * the `Parent=` chain to the nearest source carrying `[Collection]`
-	 * (line 416-437), "where the credentials are usually stored on the
-	 * collection source, thus shared between child sources".
+	/* Report WHICH source holds the credentials of this child.
+	 * `source_credential_provider_ref_impl_for_source`
+	 * (`e-source-credentials-provider.c:216-237`) does not use the given
+	 * source for the lookup. It first calls
+	 * `e_source_credentials_provider_ref_credentials_source`, which goes up
+	 * the `Parent=` chain to the nearest source with `[Collection]`
+	 * (line 416-437): "the credentials are usually stored on the collection
+	 * source, thus shared between child sources".
 	 *
-	 * The failure message, however, is formatted from `data->source` — the
-	 * CHILD (`e-server-side-source.c:461-463`). So `Failed to lookup password
-	 * for source <uid>` names one source while the store was searched for
-	 * another, which is the sharpest reason the operator's UID looked
-	 * unfamiliar. Reported here rather than assumed so the Rust side can pin
-	 * that the two UIDs really do differ. */
+	 * But the failure message uses `data->source`, the CHILD
+	 * (`e-server-side-source.c:460-462`). Thus `Failed to lookup password
+	 * for source <uid>` names a source that is different from the source of
+	 * the lookup. This is why the UID was unknown to the operator. The Rust
+	 * side asserts that the two UIDs are different. */
 	provider = e_source_credentials_provider_new (registry);
 	credentials_source = e_source_credentials_provider_ref_credentials_source (provider, child);
 	observe ("credentials-source-uid",
 		 e_source_get_uid (credentials_source ? credentials_source : child));
 
-	/* The control half, stored where the lookup will actually look.
-	 * `e_source_store_password_sync` writes to the secret store under the
-	 * source's own UID (`e-source.c:4062-4083`), which is what
-	 * `e_source_credentials_provider_impl_password_lookup_sync` reads back —
-	 * so this is the one difference between the registry's silent lookup
-	 * succeeding and failing, and nothing else changes between the two runs. */
+	/* The control: store the password where the lookup reads.
+	 * `e_source_store_password_sync` writes to the secret store under the UID
+	 * of the source (`e-source.c:4062-4083`), and
+	 * `e_source_credentials_provider_impl_password_lookup_sync` reads it. This
+	 * is the only difference between the two runs. */
 	observe_boolean ("password-stored", password != NULL);
 	if (password != NULL &&
 	    !e_source_store_password_sync (credentials_source ? credentials_source : child,
@@ -456,10 +429,10 @@ run_collection_child (const gchar *account_uid,
 	g_clear_object (&credentials_source);
 	g_object_unref (provider);
 
-	/* The operator's path, invoked the way `e_backend_schedule_credentials_
-	 * required()` invokes it for a backend that needs credentials. This
-	 * program stands in for that backend, the same way `oauth2-stale-proxy-
-	 * client.c` stands in for a long-lived factory. */
+	/* The path of the operator, called as
+	 * `e_backend_schedule_credentials_required()` calls it for a backend that
+	 * needs credentials. This program is in place of that backend, as
+	 * `oauth2-stale-proxy-client.c` is in place of a long-running factory. */
 	if (!e_source_invoke_credentials_required_sync (child,
 						       E_SOURCE_CREDENTIALS_REASON_REQUIRED,
 						       NULL, 0, NULL, NULL, &error))

@@ -1,30 +1,23 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Live confirmation that an event another client
- * created directly on the server, with JSCalendar-bis `calendarAddress`
- * participants, shows its ORGANIZER/ATTENDEE once a fresh `ECalClient`
- * connects and pulls it.
+ * Tests against a real server that an event with JSCalendar-bis
+ * `calendarAddress` participants, created on the server by a different
+ * client, shows ORGANIZER and ATTENDEE when a new `ECalClient` connects.
  *
- * The mirror of `cal-attendees-client.c`: that file writes through EDS and
- * reads EDS's own cache straight back; this one never writes anything —
- * the event already exists on the server, seeded by a raw `jmap_client`
- * before this program ever runs — and only connects and lists. A fresh
- * meta-backend cache's first connect is `list_existing_sync`
- * (`cal-changes-client.c`'s own header explains why), so no explicit
- * refresh is needed to pick up a write nothing here performed.
+ * This is the opposite of `cal-attendees-client.c`. This program writes
+ * nothing: a raw `jmap_client` creates the event before the program starts.
+ * The first connect of a new meta backend cache calls `list_existing_sync`
+ * (see `cal-changes-client.c`), so no refresh is necessary.
  *
- * `jmap_ical::event::drawn_participants` is the code path being confirmed:
- * it turns a `CalendarEvent.participants` JSON map into ORGANIZER/ATTENDEE
- * lines via `calendar_address`'s `calendarAddress`-with-`sendTo`-fallback
- * read. If that path is right, the component this program reads back
- * states both, despite EDS never having written either itself.
+ * The code under test is `jmap_ical::event::drawn_participants`. It turns
+ * `CalendarEvent.participants` into ORGANIZER and ATTENDEE lines with
+ * `calendar_address`, which reads `calendarAddress` or else `sendTo`.
  *
- * Everything around this file — the scratch XDG tree, the `.source`
- * keyfile, the private D-Bus session, the proxy to the real server and
- * every assertion — belongs to `rust/crates/jmap-functional/tests/
- * live-stalwart-calendar-attendees-remote.rs`, which seeds the event over a
- * raw JMAP connection, runs this program and reads its output.
+ * `rust/crates/jmap-functional/tests/live-stalwart-calendar-attendees-remote.rs`
+ * creates the scratch XDG tree, the `.source` keyfile, the private D-Bus
+ * session and the proxy to the server. It creates the event over JMAP, runs
+ * this program and does all the assertions.
  *
  *   usage: functional-cal-attendees-remote-client <source-uid> <summary>
  */
@@ -43,9 +36,8 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Every value a component states for one property, joined by commas, or the
- * empty string if it states none -- mirrors `cal-attendees-client.c`'s own
- * helper of the same name. */
+/* All values of one property, joined by commas, or an empty string. Copy of
+ * the helper in `cal-attendees-client.c`. */
 static gchar *
 joined_values (ICalComponent *component,
 	       ICalPropertyKind kind)
@@ -127,9 +119,8 @@ main (int argc,
 
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
-	/* "#t" is the S-expression that matches every object -- this connect's
-	 * own list_existing_sync already pulled in the event seeded directly on
-	 * the server before this process started. */
+	/* "#t" matches all objects. The list_existing_sync of the connect
+	 * already got the event from the server. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
 		return fail ("query", error);
 

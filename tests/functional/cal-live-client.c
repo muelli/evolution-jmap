@@ -1,28 +1,20 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The calendar leg's own client against a real server, the twin of
- * `book-client.c`'s `write` phase one file over.
+ * The calendar client against a real server. It is the calendar equivalent
+ * of the `write` phase in `book-client.c`.
  *
- * `cal-client.c` beside this file is the mock-based suite's client, and it
- * deliberately stays untouched: it creates an all-day event, a zoned event, a
- * six-occurrence recurring series with an excluded, an edited and a removed
- * occurrence, a THISANDFUTURE split, and a zoned recurring series with one
- * occurrence moved into a second zone — all in one run, and a real server
- * genuinely differing on any one of those (a split's two writes, say) would
- * fail the whole run rather than just mismeasure one field. This file is the
- * one event at the head of that list only: SUMMARY, LOCATION, CATEGORIES,
- * TRANSP, PRIORITY, CLASS, one VALARM, created and read back — the same scope
- * `book-client.c`'s `write` phase covers for the address book: the simplest
- * connectivity leg first, the richer ones as a later, separate pass.
+ * `cal-client.c` is the client of the mock-based suite. It writes many
+ * events in one run, so one difference on a real server makes the full run
+ * fail. Thus this file writes only one event: SUMMARY, LOCATION, CATEGORIES,
+ * TRANSP, PRIORITY, CLASS and one VALARM. It creates the event and reads it
+ * back.
  *
- * Everything around it — the scratch XDG tree, the `.source` keyfile, the
- * private D-Bus session, the proxy to the real server and every assertion —
- * belongs to `rust/crates/jmap-functional/tests/live-stalwart-calendar.rs`,
- * which runs this program and reads its output. So this file has no test
- * framework in it and no notion of what "correct" is: it reports what EDS
- * told it on stdout, one `key=value` line per observation, and exits non-zero
- * the moment a call fails.
+ * `rust/crates/jmap-functional/tests/live-stalwart-calendar.rs` creates the
+ * scratch XDG tree, the `.source` keyfile, the private D-Bus session and the
+ * proxy to the server, and it does all the assertions. This program writes
+ * one `key=value` line on stdout for each observation. It exits non-zero
+ * when a call fails.
  *
  *   usage: functional-cal-live-client <source-uid> <summary>
  */
@@ -31,41 +23,35 @@
 
 #include "connection-status.h"
 
-/* The event this test writes. A UTC instant, so that nothing here depends on
- * a timezone database being reachable from the scratch session. */
+/* The event that this test writes. A UTC time makes sure that the test does
+ * not need a timezone database. */
 #define TEST_DTSTART "20260115T130000Z"
 #define TEST_DTEND "20260115T143000Z"
 
-/* Where it happens — the LOCATION, which has to reach the server as an entry
- * in a JSCalendar `locations` map (RFC 8984 §4.2.5) rather than being
- * dropped. */
+/* The LOCATION. It must become an entry in a JSCalendar `locations` map
+ * (RFC 8984 §4.2.5). */
 #define TEST_LOCATION "Room 42"
 
-/* What it is filed under — the CATEGORIES, a JSCalendar `keywords` Set
- * (RFC 8984 §4.2.9). Two tags on one line, since libical re-renders a
- * multi-valued CATEGORIES as one property per value. */
+/* The CATEGORIES, a JSCalendar `keywords` Set (RFC 8984 §4.2.9). Two tags
+ * on one line, because libical writes one property for each value. */
 #define TEST_CATEGORIES "offsite,planning"
 
-/* Whether it blocks the time it occupies — TRANSP (RFC 5545 §3.8.2.7), a
- * JSCalendar `freeBusyStatus` (RFC 8984 §4.4.2). TRANSPARENT rather than the
- * OPAQUE both formats default to, since the default is the state a component
- * with no line on it is already in. */
+/* TRANSP (RFC 5545 §3.8.2.7), a JSCalendar `freeBusyStatus` (RFC 8984
+ * §4.4.2). TRANSPARENT, because OPAQUE is the default in both formats. */
 #define TEST_TRANSP "TRANSPARENT"
 
-/* How important it is — PRIORITY (RFC 5545 §3.8.1.9), a JSCalendar
- * `priority` (RFC 8984 §4.4.1). 1 rather than 0, the value both formats treat
- * as no value at all. */
+/* PRIORITY (RFC 5545 §3.8.1.9), a JSCalendar `priority` (RFC 8984 §4.4.1).
+ * 1, because both formats read 0 as no value. */
 #define TEST_PRIORITY "1"
 
-/* Who may see it — CLASS (RFC 5545 §3.8.1.3), a JSCalendar `privacy`
- * (RFC 8984 §4.4.3). CONFIDENTIAL because its JSCalendar spelling (`secret`)
- * differs from its iCalendar one, so this also says the translation
- * happened. */
+/* CLASS (RFC 5545 §3.8.1.3), a JSCalendar `privacy` (RFC 8984 §4.4.3).
+ * CONFIDENTIAL becomes `secret` in JSCalendar, so it also shows the
+ * translation. */
 #define TEST_CLASS "CONFIDENTIAL"
 
-/* When the user is reminded of it — a VALARM, a JSCalendar `alerts` entry
- * (RFC 8984 §4.5.2) keyed by the alarm's RFC 9074 §4 UID. A negative offset,
- * since a reminder is normally before the event. */
+/* A VALARM, a JSCalendar `alerts` entry (RFC 8984 §4.5.2) with the RFC 9074
+ * §4 UID of the alarm as its key. The offset is negative, because a reminder
+ * usually comes before the event. */
 #define TEST_ALARM_UID "k1"
 #define TEST_ALARM_TRIGGER "-PT15M"
 
@@ -79,9 +65,8 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* What EDS hands back from get_object: a bare VEVENT for an event with one
- * instance, or a VCALENDAR wrapping the instance. Mirrors `cal-client.c`'s
- * own helper of the same name. */
+/* get_object gives a bare VEVENT or a VCALENDAR that contains it. Copy of
+ * the helper in `cal-client.c`. */
 static ICalComponent *
 first_vevent (ICalComponent *component)
 {
@@ -91,8 +76,8 @@ first_vevent (ICalComponent *component)
 	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }
 
-/* Every value a component states for one property, joined by commas.
- * Mirrors `cal-client.c`'s own helper of the same name. */
+/* All values of one property, joined by commas. Copy of the helper in
+ * `cal-client.c`. */
 static gchar *
 joined_values (ICalComponent *component,
 	       ICalPropertyKind kind)
@@ -118,8 +103,8 @@ joined_values (ICalComponent *component,
 	return g_string_free (values, FALSE);
 }
 
-/* When the first reminder of a component fires, as text. Mirrors
- * `cal-client.c`'s own helper of the same name. */
+/* The TRIGGER of the first VALARM, as text. Copy of the helper in
+ * `cal-client.c`. */
 static gchar *
 first_alarm_trigger (ICalComponent *event)
 {
@@ -175,8 +160,7 @@ main (int argc,
 	source_uid = argv[1];
 	summary = argv[2];
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry, which reads the scratch sources. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -187,9 +171,8 @@ main (int argc,
 		return 1;
 	}
 
-	/* A real server needs a password the mock never checks, and nothing
-	 * here has a GUI to be prompted through. Stored the ordinary way EDS
-	 * looks one up for Basic auth, mirroring `book-client.c`'s own step. */
+	/* A real server needs a password and no GUI prompt is available. Store
+	 * it where EDS looks for Basic auth, as `book-client.c` does. */
 	{
 		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 
@@ -198,11 +181,9 @@ main (int argc,
 			return fail ("store-password", error);
 	}
 
-	/* Activates evolution-calendar-factory, which is what dlopens
-	 * libecalbackendjmap.so out of EDS_CALENDAR_MODULES and picks the
-	 * factory matching the keyfile's BackendName. (guint32) -1 is EDS's
-	 * "do not wait for connected"; see cal-client.c for why this test does
-	 * not wait either. */
+	/* Starts evolution-calendar-factory, which loads libecalbackendjmap.so
+	 * from EDS_CALENDAR_MODULES. (guint32) -1 tells EDS not to wait for
+	 * "connected"; connection-status.c gives the reason. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
@@ -210,19 +191,17 @@ main (int argc,
 
 	cal = E_CAL_CLIENT (client);
 
-	/* EDS's own verdict on the connect, waited for properly. */
+	/* Wait for the connection status from EDS. */
 	functional_report_connection_status (source, 10);
 
-	/* Over the bus rather than out of the client's cached copy, which is
-	 * updated from D-Bus notifications on a main context this program
-	 * never runs. */
+	/* Get the properties over D-Bus. The cached copy needs a main loop, and
+	 * this program has none. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
 		return fail ("retrieve-properties", error);
 
-	/* Whether the calendar accepts writes at all. */
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
-	/* "#t" is the S-expression that matches every object. */
+	/* "#t" is the S-expression that matches all objects. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
 		return fail ("query", error);
 
@@ -268,8 +247,8 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added=%s\n", added_uid ? added_uid : "");
 
-	/* Out of the meta backend's cache rather than off the server, which is
-	 * the point: EDS is meant to have kept what it just wrote. */
+	/* Read from the meta backend cache, not the server: EDS must keep what
+	 * it wrote. */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
 		return fail ("read-back", error);
