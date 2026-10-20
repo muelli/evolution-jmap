@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles a UTF-8-only subset of `.po` into `.mo` data.
+//! Compile a UTF-8 subset of `.po` into `.mo` data.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compiles `.po` text into `.mo` bytes sorted by `msgid`.
+/// Compile `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Compilation failures with 1-based line numbers.
+/// Compilation failures include 1-based line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Missing empty `msgid` header entry.
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Blank and `#~` obsolete lines end the current entry.
+        // End the current entry on blank lines and `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -202,7 +202,7 @@ fn take(
         });
     };
 
-    // Keep the fuzzy header so `charset=` stays available.
+    // Keep the fuzzy header so `charset=` remains available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // Trailing backslash means the quoted string never closed.
+        // A trailing backslash means the quoted string does not close.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes this subset does not implement.
+            // Reject escapes that this subset does not implement.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Header, two `(length, offset)` tables, then one string blob.
+    // Layout: header, two `(length, offset)` tables, then one string blob.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // `.mo` table lengths exclude the trailing NUL.
+    // `.mo` table lengths do not include the trailing NUL.
     blob.push(0);
     Ok(())
 }
