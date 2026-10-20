@@ -34,7 +34,7 @@ modules:
       - cmake --install _flatpak-build --component cal-backend
       - cmake --install _flatpak-build --component camel-provider
       - cmake --install _flatpak-build --component collection-backend
-      - install -D -m 0755 _flatpak-build/cargo-target/release/libjmap_config_module.so ${FLATPAK_DEST}/lib/evolution/modules/module-jmap-configuration.so
+      - cmake --install _flatpak-build --component config-module
     sources:
       - type: dir
         path: ../..
