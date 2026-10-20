@@ -1,36 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `oauth2_service::Service`, dispatched through EDS's own `e_oauth2_service_*`
-// wrappers — the same style `eds-sys/tests/oauth2.rs` proves the raw ABI with,
-// now proving this crate's actual implementation answers correctly: the four
-// vfuncs with no default read what `oauth2::apply` wrote, the three vfuncs
-// whose default is wrong for a per-account value do too, and `can_process` —
-// deliberately left unfilled, see `oauth2_service`'s module docs — says yes
-// only when `[Authentication] method` is this service's own name.
+// Tests `oauth2_service::Service` through the `e_oauth2_service_*` wrappers of
+// EDS. `eds-sys/tests/oauth2.rs` uses the same style to prove the raw ABI. Here
+// it proves that the implementation of this crate gives correct answers:
 //
-// Instances are built through a real `EOAuth2Services` registry rather than a
-// bare `g_object_new`, because `EOAuth2ServiceBase` is not a bare `GObject`:
-// its `constructed()` (`e-oauth2-service-base.c`, read rather than assumed)
-// reads the `extensible` construct-only property and calls
-// `e_oauth2_services_add()` on it. Omitting that property still constructs an
-// instance — GObject applies the property's `NULL` default either way — but
-// it does so through two `E_IS_EXTENSIBLE`/`E_IS_OAUTH2_SERVICES` assertion
-// failures logged as `CRITICAL`, which is not a shape of "passing" this
-// project accepts anywhere else. Building the real object this type expects
-// to be built with, once, costs one helper and also lets
-// `e_oauth2_services_find` be exercised directly — the entry point real code
-// will actually call.
+// - The two vfuncs with no default that are per-account (`get_client_id`,
+//   `get_authentication_uri`) read what `oauth2::apply` wrote.
+// - The three vfuncs whose default is wrong for a per-account value also read
+//   it.
+// - `can_process` is deliberately not filled (see the module docs of
+//   `oauth2_service`). It says yes only when `[Authentication] method` is the
+//   name of this service.
 //
-// The whole file is compiled only where this project registers a service of
-// its own at all. On an EDS that brings `EOAuth2ServiceDynamic`,
-// `oauth2_service::register` stands ours down and nothing ever constructs or
-// dispatches it; its vfuncs would answer NULL there in any case, because the
-// borrowed storage they read is this crate's `Extension` and the group now
-// belongs to `ESourceOAuth2Client`. What replaces this coverage on such a
-// build is `tests/module.rs`'s `the_entry_point_leaves_the_oauth2_service_to_eds`
-// and the three backend modules' own `oauth2_service.rs`, which assert that
-// the service the registry finds for one of these accounts is upstream's.
+// The tests build instances through a real `EOAuth2Services` registry, not a
+// bare `g_object_new`. `EOAuth2ServiceBase` is not a bare `GObject`: its
+// `constructed()` (`e-oauth2-service-base.c`, read, not assumed) reads the
+// `extensible` construct-only property and calls `e_oauth2_services_add()` on
+// it. Without that property, GObject still constructs an instance with the
+// `NULL` default. But it logs two `E_IS_EXTENSIBLE`/`E_IS_OAUTH2_SERVICES`
+// assertion failures as `CRITICAL`, and this project does not accept that as a
+// pass. The real object costs one helper. It also lets the tests call
+// `e_oauth2_services_find` directly, which is the entry point of real code.
+//
+// The compiler includes this file only where this project registers its own
+// service. On an EDS with `EOAuth2ServiceDynamic`, `oauth2_service::register`
+// does not register this service, and nothing constructs or dispatches it. Its
+// vfuncs would answer NULL there in all cases: they read the `Extension` of
+// this crate, and `ESourceOAuth2Client` then owns the group. On such a build,
+// other tests replace this coverage:
+// `the_entry_point_leaves_the_oauth2_service_to_eds` in `tests/module.rs`, and
+// `oauth2_service.rs` of the three backend modules. They assert that the
+// registry finds the upstream service for these accounts.
 #![cfg(not(eds_oauth2_dynamic))]
 
 use std::ffi::{CStr, CString, c_char};
@@ -61,8 +62,8 @@ use jmap_config::oauth2_service::{NAME, Service};
 use jmap_tracing_capture::capture;
 use tracing::Level;
 
-/// Runs `body` under the shared capturing subscriber, and returns every
-/// emitted event's level, in emission order.
+/// Runs `body` under the shared capturing subscriber. Returns the level of
+/// each emitted event, in emission order.
 fn capture_levels(body: impl FnOnce()) -> Vec<Level> {
     capture(body)
         .1
@@ -74,21 +75,24 @@ fn capture_levels(body: impl FnOnce()) -> Vec<Level> {
 struct TestSource(*mut ESource);
 
 impl TestSource {
-    /// A source with a uid of its own.
+    /// A source with a unique uid.
     ///
-    /// The uid has to differ per source, not merely per test: `oauth2_service`
-    /// stashes the PKCE verifier it generated in a **process-global map keyed
-    /// by source uid** (`pkce_verifiers()`, which is right — both halves of one
-    /// authorization flow run in the credentials prompter's process, and the
-    /// uid is what identifies the account between them). Every source here
-    /// used to be built with the same literal uid, so two tests running in
-    /// parallel shared one entry in that map: whichever one was between its
+    /// The uid must be different for each source, not only for each test.
+    /// `oauth2_service` keeps the PKCE verifier that it makes in a
+    /// **process-global map keyed by source uid** (`pkce_verifiers()`). This
+    /// is correct: the two halves of one authorization flow run in the process
+    /// of the credentials prompter, and the uid identifies the account between
+    /// them.
+    ///
+    /// Previously, all sources here had the same literal uid. Thus two
+    /// parallel tests shared one entry in that map. A test between its
     /// `prepare_authentication_uri_query` and its `prepare_get_token_form`
-    /// could have the other's verifier written over its own, or find one after
-    /// having just redeemed its own and be told a single-use secret was reused.
-    /// That is the intermittent `the_token_form_redeems_the_verifier_behind_
-    /// the_authorization_challenge` failure from 2026-08-24 — collisions
-    /// between tests, not a defect in the keying.
+    /// could get its verifier overwritten by the other test. Or, after it
+    /// redeemed its own verifier, it could find another one and get a report
+    /// that a single-use secret was reused. This caused the intermittent
+    /// `the_token_form_redeems_the_verifier_behind_the_authorization_challenge`
+    /// failure from 2026-08-24. The cause was collisions between tests, not a
+    /// defect in the keying.
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let uid = format!(
@@ -97,7 +101,7 @@ impl TestSource {
         );
         let uid = CString::new(uid).expect("no NUL in a generated uid");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
+        // SAFETY: a NUL-terminated uid, the default main context and a GError
         // out-parameter are the documented arguments.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
@@ -110,11 +114,11 @@ impl TestSource {
         self
     }
 
-    /// Sets `[Authentication] method` — the value `can_process`'s default
-    /// matches against `get_name()`'s answer.
+    /// Sets `[Authentication] method`. The default `can_process` compares this
+    /// value with the answer of `get_name()`.
     fn with_authentication_method(self, method: &CStr) -> Self {
-        // SAFETY: a live source; `E_SOURCE_EXTENSION_AUTHENTICATION` is EDS's
-        // own extension name and always creatable.
+        // SAFETY: a live source. `E_SOURCE_EXTENSION_AUTHENTICATION` is an
+        // extension name of EDS, and EDS can always create it.
         unsafe {
             let auth =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
@@ -143,16 +147,16 @@ fn config() -> Config {
     }
 }
 
-/// A live instance of [`Service`], registered into `registry` the way
-/// `e_oauth2_service_base_constructed` requires — see this file's own header
-/// comment for why a bare `g_object_new` is not that.
+/// A live instance of [`Service`], registered into `registry` as
+/// `e_oauth2_service_base_constructed` requires. The header comment of this
+/// file tells why a bare `g_object_new` is not sufficient.
 fn service_in(registry: *mut EOAuth2Services) -> *mut EOAuth2Service {
     let gtype = register_static::<Service>();
     let name = c"extensible";
 
-    // SAFETY: a freshly zeroed GValue, initialised to hold an object and set
-    // to a live `registry` before `g_object_new_with_properties` reads it;
-    // unset afterwards, which only drops this call's own ref.
+    // SAFETY: a new zeroed GValue. It is initialised to hold an object and set
+    // to a live `registry` before `g_object_new_with_properties` reads it. The
+    // unset after that releases only the ref of this call.
     unsafe {
         let mut value: GValue = std::mem::zeroed();
         g_value_init(&mut value, G_TYPE_OBJECT);
@@ -166,19 +170,18 @@ fn service_in(registry: *mut EOAuth2Services) -> *mut EOAuth2Service {
     }
 }
 
-/// `EOAuth2Services` is a process-wide singleton (`e-oauth2-services.c`'s
-/// `oauth2_services_constructor` hands back the same object for as long as
-/// anything holds a ref) — harmless here, since every test's service answers
-/// identically, but worth naming so a reader does not expect one test's
-/// registrations to be invisible to another's.
+/// `EOAuth2Services` is a process-wide singleton: `oauth2_services_constructor`
+/// in `e-oauth2-services.c` returns the same object while a ref exists. This
+/// has no effect here, because the services of all tests give the same
+/// answers. But the registrations of one test are visible to other tests.
 fn registry() -> *mut EOAuth2Services {
-    // SAFETY: no arguments.
+    // SAFETY: the function has no arguments.
     unsafe { e_oauth2_services_new() }
 }
 
 fn borrowed(pointer: *const c_char) -> Option<String> {
-    // SAFETY: every wrapper below either returns NULL or a NUL-terminated
-    // string valid for the length of this call, which is all `to_owned` needs.
+    // SAFETY: each wrapper below returns NULL or a NUL-terminated string that
+    // is valid for the duration of this call. `to_owned` needs only that.
     (!pointer.is_null()).then(|| {
         unsafe { CStr::from_ptr(pointer) }
             .to_string_lossy()
@@ -195,8 +198,8 @@ fn the_name_and_display_name_are_fixed_and_not_source_specific() {
     let display_name = unsafe { e_oauth2_service_get_display_name(service) };
 
     assert_eq!(borrowed(name).as_deref(), Some("JMAP"));
-    // No catalogue is bound in a test binary, so gettext echoes the msgid
-    // back — the documented "no translation available" case, not a failure.
+    // A test binary binds no catalogue, thus gettext returns the msgid. This
+    // is the documented "no translation available" case, not a failure.
     assert_eq!(borrowed(display_name).as_deref(), Some("JMAP"));
 }
 
@@ -205,7 +208,7 @@ fn every_borrowed_field_reads_back_what_was_applied() {
     let service = service_in(registry());
     let source = TestSource::new().written(&config());
 
-    // SAFETY: a live implementer and a live source, for the length of each
+    // SAFETY: a live implementer and a live source, for the duration of each
     // call.
     unsafe {
         assert_eq!(
@@ -231,20 +234,21 @@ fn every_borrowed_field_reads_back_what_was_applied() {
     }
 }
 
-/// The authorization request must NAME the scope this client registered for —
-/// whether an omitted `scope` falls back to the registration's is
-/// server-discretionary (RFC 6749 §3.3), and Fastmail answered
-/// `error=invalid_scope` to exactly that omission (observed live 2026-08-23).
-/// Driven through EDS's own `e_oauth2_service_prepare_authentication_uri_query`
-/// so the chain to the default (which builds the standard query, here pinned
-/// via `response_type`) is exercised too, not just our added key.
+/// The authorization request must NAME the scope that this client registered.
+/// If `scope` is omitted, the server decides if it uses the registered scope
+/// (RFC 6749 §3.3). Fastmail sent `error=invalid_scope` for that omission
+/// (observed live 2026-08-23).
+///
+/// The test calls `e_oauth2_service_prepare_authentication_uri_query` of EDS.
+/// Thus it also tests the chain to the default (which builds the standard
+/// query, here checked through `response_type`), not only the added key.
 #[test]
 fn prepare_authentication_uri_query_names_the_registered_scope() {
     let service = service_in(registry());
     let source = TestSource::new().written(&config());
 
-    // SAFETY: standard GLib hash-table construction with string keys/values
-    // owned by the table, the same shape EDS's caller builds.
+    // SAFETY: standard GLib hash-table construction. The table owns the
+    // string keys and values, as in the table that the EDS caller builds.
     let query = unsafe {
         g_hash_table_new_full(
             Some(g_str_hash),
@@ -263,25 +267,25 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
             CStr::from_ptr(scope.cast()).to_str().unwrap(),
             "urn:ietf:params:oauth:scope:mail offline_access"
         );
-        // The wrapper ran EDS's default itself before dispatching to our slot,
-        // so the standard query is here alongside our additions. This is the
-        // wrapper's guarantee, not our slot's. See
-        // `the_authentication_query_slot_adds_only_this_services_own_keys`,
-        // which is the test that would actually catch our slot doing it too.
+        // The wrapper ran the EDS default before it dispatched to the slot of
+        // this crate. Thus the standard query is here with the added keys. The
+        // wrapper gives this guarantee, not the slot. The test
+        // `the_authentication_query_slot_adds_only_this_services_own_keys`
+        // fails if the slot also runs the default.
         let response_type = g_hash_table_lookup(query, c"response_type".as_ptr().cast());
         assert!(
             !response_type.is_null(),
             "the standard RFC 6749 query is gone"
         );
-        // RFC 8707: the stored resource rides along.
+        // RFC 8707: the query also contains the stored resource.
         let resource = g_hash_table_lookup(query, c"resource".as_ptr().cast());
         assert!(!resource.is_null(), "the query carries no resource");
         assert_eq!(
             CStr::from_ptr(resource.cast()).to_str().unwrap(),
             "https://jmap.example.com/session"
         );
-        // RFC 7636 PKCE: EDS 3.52 has none, providers mandate it — the
-        // challenge must be here, and S256 the only method ever named.
+        // RFC 7636 PKCE: EDS 3.52 has no PKCE, but providers require it. The
+        // challenge must be here, and S256 is the only permitted method.
         let method = g_hash_table_lookup(query, c"code_challenge_method".as_ptr().cast());
         assert!(
             !method.is_null(),
@@ -301,8 +305,8 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
 }
 
 /// The verifier redeemed at the token endpoint must be the secret behind the
-/// challenge the authorization request named (RFC 7636 §4.5) — driven through
-/// both EDS entry points in order, the way the credentials prompter does.
+/// challenge in the authorization request (RFC 7636 §4.5). The test calls the
+/// two EDS entry points in sequence, as the credentials prompter does.
 #[test]
 fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
     use base64::Engine as _;
@@ -311,7 +315,7 @@ fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
     let service = service_in(registry());
     let source = TestSource::new().written(&config());
 
-    // SAFETY: standard GLib hash tables and live objects throughout.
+    // SAFETY: standard GLib hash tables and live objects in all calls.
     unsafe {
         let query = g_hash_table_new_full(
             Some(g_str_hash),
@@ -365,9 +369,9 @@ fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
     }
 }
 
-/// A deployment that advertises no scopes stores none, and the query must
-/// stay exactly what EDS's default built — no empty `scope`, which RFC 6749
-/// treats as a (likely wrong) request of its own.
+/// A deployment that advertises no scopes stores no scope. The query must
+/// stay the same as the EDS default built it. An empty `scope` is not
+/// permitted, because RFC 6749 treats it as a separate (probably wrong) request.
 #[test]
 fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
     let service = service_in(registry());
@@ -376,7 +380,7 @@ fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
         ..config()
     });
 
-    // SAFETY: as above.
+    // SAFETY: the same as above.
     let query = unsafe {
         g_hash_table_new_full(
             Some(g_str_hash),
@@ -385,7 +389,7 @@ fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
             Some(g_free),
         )
     };
-    // SAFETY: as above.
+    // SAFETY: the same as above.
     unsafe {
         e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
         assert!(
@@ -396,9 +400,9 @@ fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
     }
 }
 
-/// A stored-but-empty scope is not a scope to send either — same rule as
-/// `None`, and the one the raw-pointer presence check this test pins used to
-/// implement by hand.
+/// A stored but empty scope is also not a scope to send: the same rule as
+/// `None`. Previously, a manual raw-pointer presence check did this, and this
+/// test kept that behaviour.
 #[test]
 fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
     let service = service_in(registry());
@@ -407,7 +411,7 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
         ..config()
     });
 
-    // SAFETY: as above.
+    // SAFETY: the same as above.
     let query = unsafe {
         g_hash_table_new_full(
             Some(g_str_hash),
@@ -416,7 +420,7 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
             Some(g_free),
         )
     };
-    // SAFETY: as above.
+    // SAFETY: the same as above.
     unsafe {
         e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
         assert!(
@@ -427,8 +431,8 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
     }
 }
 
-/// Same rule as scope, for the RFC 8707 resource indicator: an empty stored
-/// value is not one worth sending.
+/// The same rule as for scope, for the RFC 8707 resource indicator: do not
+/// send an empty stored value.
 #[test]
 fn prepare_authentication_uri_query_treats_an_empty_stored_resource_as_absent() {
     let service = service_in(registry());
@@ -441,8 +445,8 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_resource_as_absent() 
     let slot = vtable()
         .prepare_authentication_uri_query
         .expect("this crate fills the slot");
-    // SAFETY: the slot's own signature, a live implementer, a live source and
-    // a live table owning both halves of every entry.
+    // SAFETY: the signature of the slot, a live implementer, a live source and
+    // a live table that owns the two halves of each entry.
     unsafe { slot(service, source.0, query) };
 
     assert!(
@@ -450,7 +454,7 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_resource_as_absent() 
         "an empty stored resource must mean no resource parameter at all"
     );
 
-    // SAFETY: a live table this test owns.
+    // SAFETY: a live table that this test owns.
     unsafe { g_hash_table_destroy(query) };
 }
 
@@ -460,7 +464,7 @@ fn an_unconfigured_source_answers_null_for_every_borrowed_field_rather_than_crea
     let service = service_in(registry());
     let source = TestSource::new();
 
-    // SAFETY: as `every_borrowed_field_reads_back_what_was_applied`.
+    // SAFETY: the same as `every_borrowed_field_reads_back_what_was_applied`.
     unsafe {
         assert!(e_oauth2_service_get_client_id(service, source.0).is_null());
         assert!(e_oauth2_service_get_client_secret(service, source.0).is_null());
@@ -499,28 +503,27 @@ fn can_process_says_yes_only_when_the_authentication_method_is_this_services_nam
 
 #[test]
 fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another() {
-    // The path production code actually calls: not `can_process` on a
-    // service in hand, but `e_oauth2_services_find` over every registered
-    // service, which is what a real `EOAuth2Services` singleton and a real
-    // `constructed()`-driven registration are being built for in this file.
+    // The path that production code calls: not `can_process` on a known
+    // service, but `e_oauth2_services_find` over all registered services. For
+    // this path, this file builds a real `EOAuth2Services` singleton and a real
+    // registration through `constructed()`.
     //
-    // Not asserted: pointer identity between `find`'s answer and the
-    // `service` this test just registered. `EOAuth2Services` is the
-    // process-wide singleton `e-oauth2-services.c` documents, this crate's
-    // tests never remove what they add, and every registered `Service` — from
-    // this test or another running concurrently — answers a matching source's
-    // `can_process` identically, being stateless. So more than one may be
-    // registered by the time this runs, and `find` is free to hand back any
-    // of them; what matters, and is unique to *this* service's own
-    // registration, is that a matching source finds something and a
-    // non-matching one finds nothing.
+    // Not asserted: pointer identity between the answer of `find` and the
+    // `service` that this test registered. `EOAuth2Services` is the
+    // process-wide singleton that `e-oauth2-services.c` documents. The tests
+    // of this crate never remove what they add. Each registered `Service`
+    // (from this test or a concurrent test) is stateless and gives the same
+    // `can_process` answer for a matching source. Thus more than one can be
+    // registered when this test runs, and `find` can return any of them. The
+    // important result, unique to the registration of *this* service: a
+    // matching source finds a service and a non-matching source finds none.
     let registry = registry();
     let _service = service_in(registry);
     let matching = TestSource::new().with_authentication_method(NAME);
     let other = TestSource::new().with_authentication_method(c"Basic");
 
     // SAFETY: a live registry with `_service` registered in it, and live
-    // sources; a non-NULL result is a new ref this test drops.
+    // sources. A non-NULL result is a new ref that this test releases.
     unsafe {
         let found = e_oauth2_services_find(registry, matching.0);
         assert!(
@@ -536,15 +539,15 @@ fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another
     }
 }
 
-/// One `EOAuth2ServiceInterface` slot, reached the way EDS's own wrapper
-/// reaches it: `E_OAUTH2_SERVICE_GET_INTERFACE`, i.e. the interface vtable of
-/// [`Service`]'s class, not the interface's *default* vtable, which still
-/// holds `eos_default_*` for every slot this crate never filled.
+/// The `EOAuth2ServiceInterface` vtable, found as the EDS wrapper finds it:
+/// `E_OAUTH2_SERVICE_GET_INTERFACE`. This is the interface vtable of the
+/// [`Service`] class, not the *default* vtable of the interface. The default
+/// vtable still holds `eos_default_*` for each slot that this crate does not fill.
 fn vtable() -> &'static EOAuth2ServiceInterface {
     let gtype = register_static::<Service>();
-    // SAFETY: a registered class type and the interface it implements; the
-    // class ref taken here is deliberately never dropped: the type is
-    // process-global and every other test holds an instance of it anyway.
+    // SAFETY: a registered class type and the interface that it implements.
+    // This class ref is deliberately never released: the type is
+    // process-global, and all other tests also hold an instance of it.
     unsafe {
         let class = g_type_class_ref(gtype);
         let vtable = g_type_interface_peek(class, e_oauth2_service_get_type())
@@ -558,9 +561,9 @@ fn vtable() -> &'static EOAuth2ServiceInterface {
 }
 
 fn empty_table() -> *mut GHashTable {
-    // SAFETY: standard GLib hash-table construction, the shape EDS's
-    // `prepare_*` callers build and the shape `g_hash_table_replace` needs to
-    // own both halves.
+    // SAFETY: standard GLib hash-table construction. The EDS `prepare_*`
+    // callers build this shape, and `g_hash_table_replace` needs it to own the
+    // two halves.
     unsafe {
         g_hash_table_new_full(
             Some(g_str_hash),
@@ -579,18 +582,19 @@ fn has_key(table: *mut GHashTable, key: &CStr) -> bool {
 /// The interface slot is an **additive** hook, not a chain link.
 ///
 /// `e_oauth2_service_prepare_authentication_uri_query` (3.52.3,
-/// `e-oauth2-service.c:648`) calls `eos_default_prepare_authentication_uri_query`
-/// itself, unconditionally, *before* dispatching to the vtable. The slot is
-/// only skipped when it still literally holds that default (`:654`). So a
-/// filled slot that also calls the default runs it twice. EDS's own services
-/// are the convention: `eos_google_prepare_authentication_uri_query` and
-/// `eos_outlook_prepare_authentication_uri_query` each set only their own keys
-/// and neither saves nor invokes the default.
+/// `e-oauth2-service.c:648`) always calls
+/// `eos_default_prepare_authentication_uri_query` itself, *before* it
+/// dispatches to the vtable. It skips the slot only when the slot still holds
+/// that default (`:654`). Thus a filled slot that also calls the default runs
+/// it two times. The EDS services set the convention:
+/// `eos_google_prepare_authentication_uri_query` and
+/// `eos_outlook_prepare_authentication_uri_query` each set only their own keys.
+/// They do not keep or call the default.
 ///
-/// Dispatching the slot directly is what makes the difference visible at all:
-/// through the wrapper both shapes produce the same table, because
-/// `e_oauth2_service_util_set_to_form` is insert-or-remove and running it
-/// twice is idempotent.
+/// Only a direct call to the slot shows the difference. Through the wrapper,
+/// the two shapes make the same table, because
+/// `e_oauth2_service_util_set_to_form` is insert-or-remove, and two runs give
+/// the same result as one.
 #[test]
 fn the_authentication_query_slot_adds_only_this_services_own_keys() {
     let service = service_in(registry());
@@ -600,8 +604,8 @@ fn the_authentication_query_slot_adds_only_this_services_own_keys() {
     let slot = vtable()
         .prepare_authentication_uri_query
         .expect("this crate fills the slot");
-    // SAFETY: the slot's own signature, a live implementer, a live source and
-    // a live table owning both halves of every entry.
+    // SAFETY: the signature of the slot, a live implementer, a live source and
+    // a live table that owns the two halves of each entry.
     unsafe { slot(service, source.0, query) };
 
     assert!(has_key(query, c"scope"), "the slot must add the scope");
@@ -622,32 +626,33 @@ fn the_authentication_query_slot_adds_only_this_services_own_keys() {
         );
     }
 
-    // SAFETY: a live table this test owns.
+    // SAFETY: a live table that this test owns.
     unsafe { g_hash_table_destroy(query) };
 }
 
-/// As above for the code grant.
-/// `e_oauth2_service_prepare_get_token_form` (`e-oauth2-service.c:822`) has the
-/// same shape, and so does `prepare_refresh_token_form` (`:895`).
+/// The same as above, for the code grant.
+/// `e_oauth2_service_prepare_get_token_form` (`e-oauth2-service.c:822`) and
+/// `prepare_refresh_token_form` (`:895`) have the same shape.
 #[test]
 fn the_token_form_slots_add_only_this_services_own_keys() {
     let service = service_in(registry());
     let source = TestSource::new().written(&config());
 
-    // Authorize first, so there is a stashed verifier for the code grant to
-    // redeem, the order the credentials prompter drives these two in.
+    // Authorize first, so that the code grant has a stored verifier to redeem.
+    // The credentials prompter calls the two in this sequence.
     let query = empty_table();
     let authorize = vtable()
         .prepare_authentication_uri_query
         .expect("this crate fills the slot");
-    // SAFETY: as in the test above.
+    // SAFETY: the same as in the test above.
     unsafe { authorize(service, source.0, query) };
 
     let form = empty_table();
     let slot = vtable()
         .prepare_get_token_form
         .expect("this crate fills the slot");
-    // SAFETY: as above; `authorization_code` is a NUL-terminated literal.
+    // SAFETY: the same as above. `authorization_code` is a NUL-terminated
+    // literal.
     unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form) };
 
     assert!(has_key(form, c"resource"), "the slot must add the resource");
@@ -667,7 +672,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
     let slot = vtable()
         .prepare_refresh_token_form
         .expect("this crate fills the slot");
-    // SAFETY: as above.
+    // SAFETY: the same as above.
     unsafe { slot(service, source.0, c"a-refresh-token".as_ptr(), refresh) };
 
     assert!(
@@ -682,7 +687,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
         );
     }
 
-    // SAFETY: live tables this test owns.
+    // SAFETY: live tables that this test owns.
     unsafe {
         g_hash_table_destroy(query);
         g_hash_table_destroy(form);
@@ -690,13 +695,14 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
     }
 }
 
-/// A code exchange prepared with no stashed
-/// PKCE verifier is exactly the failure mode that turns into a repeating,
-/// unattributable consent window, so it must be logged loudly enough to find
-/// in the journal: `warn!`, not `debug!`. A verifier goes missing here only
-/// on a second redemption attempt (single-use) or a never-stashed one (no
-/// uid, which `e_source_new*` never produces, so no test can build one), so
-/// the reachable half this pins is the former: redeeming the same code twice.
+/// A code exchange with no stored PKCE verifier causes a repeating consent
+/// window with no known cause. Thus the log level must be high enough to find
+/// in the journal: `warn!`, not `debug!`.
+///
+/// A verifier is missing here only for a second redemption (single-use), or
+/// when it was never stored (no uid). `e_source_new*` always makes a uid, thus
+/// no test can build the second case. This test covers the first case: it
+/// redeems the same code two times.
 #[test]
 fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
     let service = service_in(registry());
@@ -713,7 +719,7 @@ fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
         .expect("this crate fills the slot");
 
     let first_levels = capture_levels(|| {
-        // SAFETY: live objects and tables throughout.
+        // SAFETY: live objects and tables in all calls.
         unsafe {
             authorize(service, source.0, query);
             slot(service, source.0, c"an-auth-code".as_ptr(), form);
@@ -725,7 +731,7 @@ fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
     );
 
     let second_levels = capture_levels(|| {
-        // SAFETY: as above; the verifier was already redeemed once.
+        // SAFETY: the same as above. The verifier is already redeemed one time.
         unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form2) };
     });
     assert!(
@@ -733,7 +739,7 @@ fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
         "a redemption with no stashed verifier must warn, not just debug!: {second_levels:?}"
     );
 
-    // SAFETY: live tables this test owns.
+    // SAFETY: live tables that this test owns.
     unsafe {
         g_hash_table_destroy(query);
         g_hash_table_destroy(form);

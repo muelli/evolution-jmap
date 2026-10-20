@@ -1,17 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// What a setup refuses to commit — and, in the last test, the reason the
-// refusal is worth having: an account this accepts is an account the collection
-// backend's own reader accepts.
+// Tests what a setup refuses to commit. The last test shows why the refusal is
+// necessary: the reader of the collection backend accepts each account that
+// `check` accepts.
 //
-// The two are separate functions over the same fields, and that is exactly the
-// kind of pair that drifts. `check` runs in Evolution before anything is
-// written, `server_of` runs in the registry after everything is; if the first
-// accepts what the second rejects, the setup has committed an account whose
-// every operation fails, and the user is told about it in an error dialog from
-// a process they did not start rather than in the entry they typed the mistake
-// into.
+// The two are separate functions over the same fields, and such pairs can
+// drift apart. `check` runs in Evolution before the setup writes data.
+// `server_of` runs in the registry after the setup writes all data. If the
+// first accepts what the second rejects, the setup commits an account where
+// each operation fails. The user then sees an error dialog from a process that
+// they did not start, not a message at the entry where they typed the mistake.
 
 use std::ffi::CString;
 use std::ptr;
@@ -25,8 +24,8 @@ use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, apply};
 use jmap_config::complete::{Incomplete, check};
 
-/// The account every case below starts from: complete, and the one the manual
-/// test recipe describes.
+/// The start account of each case: complete, and the same as in the manual
+/// test recipe.
 fn account() -> Account {
     Account {
         identity: "vera@example.com".to_owned(),
@@ -83,9 +82,8 @@ fn a_complete_account_is_complete() {
 
 #[test]
 fn the_server_entry_left_blank_is_the_missing_one() {
-    // Not `InvalidHost("")`: an empty entry is a question the user has not
-    // answered yet, and a keyfile with `Host=` in it reads back as no host at
-    // all.
+    // Not `InvalidHost("")`: an empty entry is a question that the user has
+    // not answered yet. A keyfile with `Host=` reads back as no host.
     let mut account = account();
     account.connection.host = String::new();
     assert_eq!(
@@ -96,8 +94,8 @@ fn the_server_entry_left_blank_is_the_missing_one() {
 
 #[test]
 fn a_server_typed_as_a_url_is_not_a_host() {
-    // The mistake a server entry actually collects, because every other place
-    // a JMAP server is named is a URL.
+    // Users frequently type this mistake in the server entry, because all
+    // other places name a JMAP server with a URL.
     for host in [
         "https://jmap.example.com",
         "jmap.example.com/jmap",
@@ -170,10 +168,10 @@ fn an_identity_that_is_not_an_address_is_incomplete() {
 
 #[test]
 fn an_account_nobody_logs_in_to_is_complete() {
-    // Deliberately not a rule: `credentials()` turns an absent user into an
-    // anonymous connection, which is what the mock server and a local
-    // development instance are reached by. A setup that insisted on a user name
-    // would refuse to commit the account this project is developed against.
+    // Deliberately not a rule: `credentials()` makes an anonymous connection
+    // when there is no user. The mock server and a local development instance
+    // use this connection. If a setup required a user name, it would refuse
+    // the account that this project uses for development.
     let mut account = account();
     account.connection.user = None;
     assert_eq!(check(&account), Ok(()));
@@ -182,9 +180,8 @@ fn an_account_nobody_logs_in_to_is_complete() {
 #[test]
 fn an_account_that_offers_nothing_yet_is_complete() {
     // Also deliberately not a rule. The three parts are switches over sources
-    // that are written either way — `mail::apply` says so at length — so an
-    // account with none of them on is one the user can turn something on in
-    // later, not one that was committed wrong.
+    // that the setup writes in all cases (`mail::apply` gives the details).
+    // Thus the user can enable a part later. The commit is not incorrect.
     let mut account = account();
     account.parts = Parts {
         mail: false,
@@ -196,9 +193,9 @@ fn an_account_that_offers_nothing_yet_is_complete() {
 
 #[test]
 fn the_check_and_the_registry_agree_about_the_server() {
-    // The join, and the reason this file links the collection backend: every
-    // server the check has an opinion about, committed and read back the way
-    // the registry will read it.
+    // The join, and the reason that this file links the collection backend.
+    // Each server that `check` evaluates is committed and read back as the
+    // registry reads it.
     for (host, port, secure) in [
         ("jmap.example.com", Some(8443), true),
         ("jmap.example.com", None, true),

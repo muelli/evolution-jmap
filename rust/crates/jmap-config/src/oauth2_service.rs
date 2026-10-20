@@ -1,112 +1,110 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `EOAuth2Service` implementation itself — the vtable [`oauth2`] built
-//! the storage for.
+//! The `EOAuth2Service` implementation: the vtable that uses the storage in
+//! [`oauth2`].
 //!
-//! ## What is filled, and what is not
+//! ## Which slots are filled
 //!
-//! Read against the installed EDS's own `e-oauth2-service.c`
-//! (`gitlab.gnome.org/GNOME/evolution-data-server`, tag 3.52.3) rather than
-//! against the header alone, which carries no `(transfer …)` or behavioural
-//! annotation for any of this interface's vfuncs. That reading found each
-//! wrapper function falls into one of three shapes, and which shape a vfunc
-//! is in decides whether [`Vtable`] fills it:
+//! This comes from the installed EDS's own `e-oauth2-service.c`
+//! (`gitlab.gnome.org/GNOME/evolution-data-server`, tag 3.52.3), not only from
+//! the header. The header has no `(transfer …)` or behaviour annotation for
+//! the vfuncs of this interface. Each wrapper function has one of three
+//! shapes, and the shape of a vfunc decides if [`Vtable`] fills it:
 //!
-//! - **No default at all.** `get_name`, `get_display_name`, `get_client_id`
-//!   and `get_authentication_uri` are `NULL` in the interface's own
-//!   `default_init` — `eds-sys/tests/oauth2.rs`'s
-//!   `the_slots_eds_leaves_empty_are_the_ones_a_service_must_fill` already
-//!   pins this. Left unfilled, the wrapper's `g_return_val_if_fail` answers
-//!   NULL and the service cannot authenticate anyone. Filled here.
-//! - **A default that exists but only runs unfilled.** `get_refresh_uri`,
-//!   `get_redirect_uri` and `get_client_secret` do have a real default (an
-//!   OOB URN, `NULL`, `NULL` respectively) and the wrapper calls whatever is
-//!   in the vtable unconditionally — no guard, no "try mine first". Ours
-//!   varies per account (a deployment's own token endpoint, the redirect URI
-//!   this client registered, and a secret only some servers issue), so the
-//!   generic default is wrong for us and all three are filled here, each a
-//!   direct read of [`oauth2`]'s storage.
-//! - **A default that runs first, always, whether or not it is also
-//!   filled.** `can_process`, `guess_can_process`,
-//!   `prepare_authentication_uri_query`, `prepare_get_token_form` and
-//!   `prepare_refresh_token_form` each call their own `eos_default_*` body
-//!   *unconditionally*, and only call a filled slot afterwards — and only if
-//!   that slot is not literally the same function pointer as the default,
-//!   which is what stops the default recursing into itself for a type that
-//!   never overrode the slot at all. So a service with nothing to add beyond
-//!   what the RFC 6749 default already does — build the query and both token
-//!   forms from `get_client_id`/`get_client_secret`/`get_redirect_uri`,
-//!   accept or decline a source by its `[Authentication] method`, decline
-//!   every hostname guess, does not need to fill these at all. `can_process`
-//!   and `guess_can_process` are exactly that case and stay unfilled: matching
-//!   on `[Authentication] method` is all this service wants, and no hostname
-//!   pattern is worth guessing (every deployment is a different server).
+//! - **No default.** `get_name`, `get_display_name`, `get_client_id` and
+//!   `get_authentication_uri` are `NULL` in the interface's own
+//!   `default_init`. `eds-sys/tests/oauth2.rs`'s
+//!   `the_slots_eds_leaves_empty_are_the_ones_a_service_must_fill` makes sure
+//!   of this. If a slot is empty, the wrapper's `g_return_val_if_fail` returns
+//!   NULL and the service cannot authenticate. This module fills them.
+//! - **A default that runs only if the slot is empty.** `get_refresh_uri`,
+//!   `get_redirect_uri` and `get_client_secret` have a real default (an OOB
+//!   URN, `NULL` and `NULL`). The wrapper always calls the vtable entry, with
+//!   no guard and no "try mine first". The values of this service change for
+//!   each account (the token endpoint of a deployment, the registered redirect
+//!   URI, and a secret that only some servers issue). Thus the generic default
+//!   is wrong, and this module fills all three. Each reads [`oauth2`]'s
+//!   storage directly.
+//! - **A default that always runs first, also if the slot is filled.**
+//!   `can_process`, `guess_can_process`, `prepare_authentication_uri_query`,
+//!   `prepare_get_token_form` and `prepare_refresh_token_form` each call their
+//!   own `eos_default_*` body *unconditionally*. Then they call a filled slot,
+//!   but only if that slot is not the same function pointer as the default.
+//!   That check stops the default from recursion into itself for a type that
+//!   did not override the slot. The RFC 6749 default builds the query and both
+//!   token forms from `get_client_id`/`get_client_secret`/`get_redirect_uri`,
+//!   accepts or declines a source by its `[Authentication] method`, and
+//!   declines all hostname guesses. A service that adds nothing to this does
+//!   not need to fill these slots. `can_process` and `guess_can_process` are
+//!   that case and stay empty: a match on `[Authentication] method` is
+//!   sufficient, and no hostname pattern is useful (each deployment is a
+//!   different server).
 //!
-//!   The other three of the five *are* filled, because live deployments turned
-//!   out to want parameters the RFC 6749 default knows nothing about: a `scope`
+//!   This module fills the other three of the five. Live deployments need
+//!   parameters that the RFC 6749 default does not know: a `scope`
 //!   (`error=invalid_scope`), an RFC 8707 `resource` (`error=invalid_target`)
-//!   and RFC 7636 PKCE (`error=invalid_request`), all three observed against
-//!   Fastmail on 2026-08-23. Filling them is additive only: see the next
-//!   section for the rule that makes it safe, and
-//!   `e-oauth2-service-google.c`/`-outlook.c` for EDS's own services keeping
-//!   the same rule.
+//!   and RFC 7636 PKCE (`error=invalid_request`). All three errors came from
+//!   Fastmail on 2026-08-23. These slots only add: the next section gives the
+//!   rule that makes this safe. `e-oauth2-service-google.c`/`-outlook.c` show
+//!   EDS's own services with the same rule.
 //!
 //! `extract_authorization_code` and `extract_error_message` are the fourth
-//! and only remaining pair: no anti-recursion guard, a real default
-//! (`e_oauth2_service_util_extract_from_uri` against the navigated-to page's
-//! own URI), and nothing account-specific to add. Left unfilled, for the
-//! same reason as the five above.
+//! and last pair. They have no anti-recursion guard, a real default
+//! (`e_oauth2_service_util_extract_from_uri` on the URI of the page that the
+//! browser opened), and nothing account-specific to add. Thus they stay
+//! empty, for the same reason as `can_process` and `guess_can_process`.
 //!
-//! So seven vfuncs are filled, all of them either a `'static` constant or a
-//! borrow of [`oauth2`]'s own storage — none compute a string that would need
-//! freeing, which is exactly the ownership shape [`oauth2`]'s module docs say
-//! that storage exists to reach. Three more, the `prepare_*` trio, are filled
-//! as *additive hooks*, per the next section.
+//! Thus seven vfuncs are filled. Each returns a `'static` constant or a borrow
+//! of [`oauth2`]'s own storage. None computes a string that must be freed.
+//! [`oauth2`]'s module docs say that this ownership shape is why that storage
+//! exists. The three `prepare_*` slots are also filled, as *additive hooks*
+//! (see the next section).
 //!
 //! ## An additive hook, not a chain link
 //!
-//! For the third shape above, the slot a service fills is **not** a chain
-//! link and must not call EDS's default itself. `e_oauth2_service_default_init`
-//! (3.52.3) installs `eos_default_prepare_authentication_uri_query` and its two
-//! siblings into the interface vtable (`e-oauth2-service.c:320`, `:322`,
-//! `:324`), so the slot a subclass's `interface_init` receives is already
-//! non-NULL. But each public wrapper (`:648`, `:822`, `:895`) calls its
-//! `eos_default_*` body *directly and unconditionally* before dispatching to
-//! the vtable, and skips the vtable only when it still literally holds that
-//! same default (`:654`, `:828`, `:901`). A filled slot that also invoked the
-//! saved default would therefore run it twice.
+//! For the third shape above, the filled slot is **not** a chain link and
+//! must not call EDS's default itself. `e_oauth2_service_default_init`
+//! (3.52.3) installs `eos_default_prepare_authentication_uri_query` and the
+//! two related defaults into the interface vtable (`e-oauth2-service.c:320`,
+//! `:322`, `:324`). Thus the slot that a subclass's `interface_init` receives
+//! is not NULL. But each public wrapper (`:648`, `:822`, `:895`) calls its
+//! `eos_default_*` body *directly and unconditionally* before it dispatches to
+//! the vtable. It skips the vtable only if the vtable still holds that same
+//! default (`:654`, `:828`, `:901`). Thus a filled slot that also calls the
+//! saved default runs the default two times.
 //!
-//! EDS's own services are the convention, not merely the reading of the
-//! wrapper: `eos_google_prepare_authentication_uri_query` and
+//! EDS's own services follow this convention, so it is not only one reading
+//! of the wrapper. `eos_google_prepare_authentication_uri_query` and
 //! `eos_outlook_prepare_authentication_uri_query`/`_prepare_refresh_token_form`
-//! each set only their own keys, and neither saves nor invokes the default.
-//! This crate does the same. The double call it used to make was benign:
-//! `e_oauth2_service_util_set_to_form` is insert-or-remove, so repeating it is
-//! idempotent, and it is invisible through the wrapper for exactly that
-//! reason. But it doubled every `get_client_id`/`get_client_secret`/
-//! `get_redirect_uri` dispatch and would silently corrupt any future default
-//! that appended rather than replaced. `tests/oauth2_service.rs` pins the rule
-//! by dispatching the slots directly.
+//! each set only their own keys, and they do not save or call the default.
+//! This crate does the same. The double call that it made before caused no
+//! damage: `e_oauth2_service_util_set_to_form` inserts or removes, so a
+//! repeat is idempotent, and the wrapper thus shows no difference. But it
+//! doubled each `get_client_id`/`get_client_secret`/`get_redirect_uri`
+//! dispatch. Also, it would silently corrupt a future default that appends
+//! and does not replace. `tests/oauth2_service.rs` makes sure of the rule: it
+//! dispatches the slots directly.
 //!
-//! ## What this crate does not do
+//! ## What this module does not do
 //!
-//! Set `[Authentication] method` to [`NAME`] itself — that is
-//! [`backend::insert_entries`](crate::backend)'s job, the authentication
-//! combo an account's setup writes from, and
-//! [`config_lookup`](crate::config_lookup)'s successful-discovery result.
-//! Both already exist, so an account reaches this service through either
-//! path today, not only through a hand-edited `.source` keyfile.
+//! It does not set `[Authentication] method` to [`NAME`].
+//! [`backend::insert_entries`](crate::backend) does that (it fills the
+//! authentication combo that the account configuration writes from), and so
+//! does the successful-discovery result of
+//! [`config_lookup`](crate::config_lookup). Thus an account gets to this
+//! service through either path, not only through a manually edited
+//! `.source` keyfile.
 //!
-//! Registering the type is no longer on that list: both `e_module_load` entry
-//! points call `register_dynamic::<Service>()`, so an `EOAuth2Services` built
-//! in a process that loaded either module finds it — which is the condition
-//! [`jmap_backend_core::oauth2`] needs for a source naming [`NAME`] to be
-//! recognised as OAuth 2.0 and for its access token to be fetchable at all.
+//! Type registration is not on that list now. Each `e_module_load` entry
+//! point calls [`register`]. Thus an `EOAuth2Services` in a process that
+//! loaded such a module finds the type. [`jmap_backend_core::oauth2`] needs
+//! this before it can recognise a source with [`NAME`] as OAuth 2.0 and get
+//! its access token.
 //!
-//! Tested here the way `eds-sys/tests/oauth2.rs` tests the raw ABI: a
-//! throwaway instance, dispatched through EDS's own `e_oauth2_service_*()`
-//! wrappers.
+//! The tests here use the same method as `eds-sys/tests/oauth2.rs` for the raw
+//! ABI: a temporary instance, dispatched through EDS's own
+//! `e_oauth2_service_*()` wrappers.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
@@ -130,36 +128,36 @@ use zeroize::Zeroizing;
 
 use crate::oauth2;
 
-/// `e_oauth2_service_get_name`'s answer — not user-visible, so not
-/// translated: it is the value the setup UI has to write as
-/// `[Authentication] method` for `can_process`'s default matching (see the
-/// module docs) to ever say yes.
+/// The return value of `e_oauth2_service_get_name`. The user does not see it,
+/// so it is not translated. The configuration UI must write this value as
+/// `[Authentication] method`, or the default match of `can_process` (see the
+/// module docs) never accepts the source.
 ///
-/// Re-exported rather than spelled out: `jmap-mail`'s named `CamelSasl` has to
-/// give the same string as its `authproto` and cannot see this crate, so the
-/// literal lives in the crate both can reach. See
+/// This is a re-export, not a new literal. `jmap-mail`'s named `CamelSasl` must
+/// give the same string as its `authproto`, and it cannot see this crate. Thus
+/// the literal is in a crate that both can use. See
 /// [`jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME`] for the three places
-/// that have to agree.
+/// that must agree.
 pub const NAME: &CStr = jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
 
-/// Registers [`Service`] against `type_module`, unless the EDS in front of us
-/// has an `EOAuth2ServiceDynamic` of its own, in which case it registers
-/// nothing and that service takes the account.
+/// Registers [`Service`] with `type_module`. If the running EDS has its own
+/// `EOAuth2ServiceDynamic`, it registers nothing and that service controls the
+/// account.
 ///
-/// Every module that would otherwise call `register_dynamic::<Service>`
-/// directly calls this instead, so the stand-down is decided once, here,
-/// rather than once per module with a `#[cfg]` and a `build.rs` re-emitting
-/// it in each. The decision reads
+/// All modules call this function, not `register_dynamic::<Service>`
+/// directly. Thus the decision to stand down is made one time, here, not in
+/// each module with a `#[cfg]` and a `build.rs` that emits it again. The
+/// decision reads
 /// [`EDS_HAS_DYNAMIC_OAUTH2`](jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2),
-/// which is a `const bool`, so the call folds away on both kinds of build.
+/// a `const bool`, so the compiler removes the unused branch on both build types.
 ///
-/// Standing down is not merely tidiness. Our service and upstream's would
-/// both answer `can_process` for an account whose method named either one,
-/// and `e_oauth2_services_find` returns the first match out of a list whose
-/// order nothing here controls; and an inert registration still puts a dead
-/// "JMAP" entry in Evolution's *Authentication type* combo, because
-/// `e_auth_combo_box_update_available` builds that list by walking the
-/// registered services.
+/// The stand-down is necessary. This service and upstream's would both accept
+/// `can_process` for an account whose method names either one.
+/// `e_oauth2_services_find` returns the first match in a list, and this crate
+/// does not control the order of that list. Also, an unused registration
+/// still puts an inactive "JMAP" entry in Evolution's *Authentication type*
+/// combo, because `e_auth_combo_box_update_available` builds that list from
+/// the registered services.
 ///
 /// # Safety
 ///
@@ -167,38 +165,36 @@ pub const NAME: &CStr = jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
 /// passed, alive for the duration of the call.
 pub unsafe fn register(type_module: *mut gobject_sys::GTypeModule) {
     if jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2 {
-        // No migration, by design: an account set up against an older EDS
-        // keeps the method "JMAP" and its `[JMAP OAuth2]` group, neither of
-        // which a build that takes this branch looks at, so it stops working
-        // and has to be set up again. Do not add migration code here. The
-        // stored tokens could not be carried over in any case: the keyring
-        // key is
-        // `OAuth2::<service name>[user][credential-store-id]`, so the old
-        // ones are not visible to the new service to begin with.
+        // No migration, by design. An account configured with an older EDS
+        // keeps the method "JMAP" and its `[JMAP OAuth2]` group. A build that
+        // takes this branch reads neither, so the account stops and must be
+        // configured again. Do not add migration code here. A migration
+        // cannot move the stored tokens: the keyring key is
+        // `OAuth2::<service name>[user][credential-store-id]`, so the new
+        // service cannot see the old tokens.
         return;
     }
     // SAFETY: a live `GTypeModule` by this function's contract.
     unsafe { jmap_backend_core::subclass::register_dynamic::<Service>(type_module) };
 }
 
-/// The instance struct: nothing but [`EOAuth2ServiceBase`]'s own state. No
-/// per-instance storage of our own — everything this service answers is
-/// either `'static` or reached through the `source` argument every
-/// per-account vfunc is handed.
+/// The instance struct: only [`EOAuth2ServiceBase`]'s own state. This service
+/// has no per-instance storage. All its return values are `'static` or come
+/// through the `source` argument of each per-account vfunc.
 #[repr(C)]
 pub struct Service {
     parent: EOAuth2ServiceBase,
 }
 
-/// The class struct: nothing but [`EOAuth2ServiceBaseClass`]'s own state.
+/// The class struct: only [`EOAuth2ServiceBaseClass`]'s own state.
 #[repr(C)]
 pub struct ServiceClass {
     parent_class: EOAuth2ServiceBaseClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EOAuth2ServiceBase's own
-// instance/class structs; EOAuth2ServiceBase is `struct { EExtension parent; }`
-// and EExtension derives from GObject (checked in eds-sys/tests/oauth2.rs).
+// SAFETY: both structs are #[repr(C)] and start with EOAuth2ServiceBase's own
+// instance/class structs. EOAuth2ServiceBase is `struct { EExtension parent; }`
+// and EExtension derives from GObject (eds-sys/tests/oauth2.rs checks this).
 unsafe impl ObjectSubclass for Service {
     const NAME: &'static CStr = c"JmapOAuth2Service";
     type Instance = Service;
@@ -214,13 +210,13 @@ unsafe impl ObjectSubclass for Service {
     }
 }
 
-/// The filling of [`Service`]'s copy of `EOAuth2ServiceInterface` — see the
-/// module docs for which slots and why.
+/// Fills [`Service`]'s copy of `EOAuth2ServiceInterface`. The module docs tell
+/// which slots and why.
 pub struct Vtable;
 
 // SAFETY: `EOAuth2ServiceInterface` is bindgen's `#[repr(C)]` binding of the
-// interface struct `e_oauth2_service_get_type` names, and it leads with
-// `GTypeInterface` — eds-sys's tests/oauth2.rs pins the interface's shape.
+// interface struct of `e_oauth2_service_get_type`, and it starts with
+// `GTypeInterface`. eds-sys's tests/oauth2.rs checks the shape of the interface.
 unsafe impl InterfaceImpl for Vtable {
     type Vtable = EOAuth2ServiceInterface;
 
@@ -230,8 +226,8 @@ unsafe impl InterfaceImpl for Vtable {
     }
 
     unsafe fn interface_init(vtable: *mut Self::Vtable) {
-        // SAFETY: the contract of `InterfaceImpl::interface_init` — this is
-        // our own copy of the vtable, and nothing else can reach it yet.
+        // SAFETY: the contract of `InterfaceImpl::interface_init` applies. This
+        // is the copy of the vtable for this type, and nothing else can reach it yet.
         let vtable = unsafe { &mut *vtable };
         vtable.get_name = Some(get_name);
         vtable.get_display_name = Some(get_display_name);
@@ -240,27 +236,26 @@ unsafe impl InterfaceImpl for Vtable {
         vtable.get_authentication_uri = Some(get_authentication_uri);
         vtable.get_refresh_uri = Some(get_refresh_uri);
         vtable.get_redirect_uri = Some(get_redirect_uri);
-        // These three slots arrive pre-filled with EDS's own defaults (3.52.3
+        // These three slots already hold EDS's own defaults (3.52.3
         // `e_oauth2_service_default_init`), which build the standard RFC 6749
-        // query and both token forms. Displacing them loses nothing: each
-        // public wrapper runs its default *itself*, unconditionally, before
-        // dispatching here. See the "additive hook, not a chain link"
-        // section of the module docs. So these override bodies only add.
+        // query and both token forms. Their replacement removes nothing: each
+        // public wrapper runs its default *itself*, unconditionally, before it
+        // dispatches here (see "An additive hook, not a chain link" in the
+        // module docs). Thus these bodies only add.
         vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
         vtable.prepare_get_token_form = Some(prepare_get_token_form);
         vtable.prepare_refresh_token_form = Some(prepare_refresh_token_form);
     }
 }
 
-/// Adds the RFC 6749 §3.3 `scope` this client registered for (stored on the
-/// source by the discovery worker) to the authorization request, after EDS's
-/// default has built the standard query.
+/// Adds the registered RFC 6749 §3.3 `scope` (which the discovery worker stores
+/// on the source) to the authorization request, after EDS's default builds the
+/// standard query. Also adds the `resource` and the PKCE challenge.
 ///
-/// Sent explicitly rather than left to the registered-default fallback:
-/// whether an omitted `scope` falls back to the registration's is
-/// server-discretionary, and Fastmail answered `error=invalid_scope` to
-/// exactly that omission (observed live 2026-08-23). A source with no stored
-/// scope — a deployment that advertises none — keeps the query untouched.
+/// The scope is sent explicitly. The server decides if an omitted `scope` gets
+/// the registered scope, and Fastmail returned `error=invalid_scope` for that
+/// omission (seen live 2026-08-23). A source with no stored scope (a
+/// deployment that advertises none) gets no `scope`.
 unsafe extern "C" fn prepare_authentication_uri_query(
     _service: *mut EOAuth2Service,
     source: *mut ESource,
@@ -274,8 +269,8 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             let scope = oauth2::scope(source);
             let has_scope = read_string(scope).is_some();
             if has_scope {
-                // The table frees both halves (EDS builds it with g_free
-                // destroyers), so both are handed over as fresh copies.
+                // The table frees both key and value (EDS builds it with g_free
+                // destroyers), so both are new copies.
                 g_hash_table_replace(
                     uri_query,
                     g_strdup(c"scope".as_ptr()).cast(),
@@ -283,25 +278,25 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 );
             }
             add_resource(source, uri_query);
-            // RFC 7636 PKCE, which EDS 3.52 does not know at all (its
-            // libedataserver contains no `code_challenge` — checked with
-            // `strings`, not assumed) and which a provider may mandate for
-            // public clients: Fastmail advertises only S256 and its consent
-            // flow answers `error=invalid_request` to a challenge-less
-            // request (observed live 2026-08-23, after scope and resource
-            // were already right). The verifier is stashed per source UID
-            // for `prepare_get_token_form` to redeem; a repeated
-            // authorization attempt simply replaces it (see [`Verifiers`]).
+            // RFC 7636 PKCE. EDS 3.52 does not know it (its libedataserver
+            // contains no `code_challenge`: checked with `strings`, not
+            // assumed). A provider can require it for public clients: Fastmail
+            // advertises only S256, and its consent flow returns
+            // `error=invalid_request` for a request without a challenge (seen
+            // live 2026-08-23, when scope and resource were already correct).
+            // The verifier is stashed per source UID, and
+            // `prepare_get_token_form` redeems it. A repeated authorization
+            // replaces it (see [`Verifiers`]).
             //
-            // All-or-nothing: a challenge is only ever added once its verifier
-            // is stashed. A uid-less source could not be stashed against, and
-            // sending a challenge with nobody able to redeem it is worse than
-            // sending none: RFC 7636 section 4.6 obliges the server to reject
-            // the code exchange that follows, so this would turn into a silent,
-            // unattributable authentication failure rather than the
-            // well-defined "no PKCE" request every deployment this project
-            // targets already tolerates (it is EDS's own default query without
-            // our addition).
+            // All or nothing: a challenge is added only after its verifier is
+            // stashed. A source without a uid has no stash key. A challenge
+            // that nobody can redeem is worse than no challenge: RFC 7636
+            // section 4.6 requires the server to reject the code exchange
+            // that follows. The result would be a silent authentication failure
+            // without a known cause. Without a challenge, the result is the
+            // well-defined "no PKCE" request (EDS's own default query without
+            // this addition), which all deployments that this project targets
+            // accept.
             let has_pkce = if let Some(ref uid) = uid {
                 let verifier = PkceVerifier::generate();
                 pkce_verifiers()
@@ -324,12 +319,11 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 );
                 true
             } else {
-                // Not reached through any path EDS's public API can build
-                // today: `e_source_new*` assigns a uid when the caller passes
-                // none. The fallback is cheap insurance against a source that
-                // somehow has one anyway, and it warns rather than passing
-                // silently, since a plain debug! is exactly what hid the
-                // failure this branch exists to prevent.
+                // EDS's public API cannot make a source that gets here:
+                // `e_source_new*` assigns a uid if the caller gives none. This
+                // fallback is a cheap protection against a source without a
+                // uid. It warns and is not silent, because a plain debug! hid
+                // the failure that this branch prevents.
                 tracing::warn!(
                     "source has no uid; omitting the PKCE challenge rather than \
                      sending one whose verifier cannot be stashed and so can \
@@ -347,44 +341,44 @@ unsafe extern "C" fn prepare_authentication_uri_query(
     );
 }
 
-/// The PKCE verifiers awaiting their token exchange, keyed by source UID —
-/// in-memory only: a verifier is a per-flow secret with no business in the
-/// on-disk keyfile, and both halves of the flow run in the same process (the
-/// credentials prompter's).
+/// The PKCE verifiers that wait for their token exchange, keyed by source UID.
+/// They are in memory only: a verifier is a per-flow secret that must not be
+/// in the on-disk keyfile. Both parts of the flow run in the same process (the
+/// process of the credentials prompter).
 fn pkce_verifiers() -> &'static Mutex<Verifiers> {
     static VERIFIERS: OnceLock<Mutex<Verifiers>> = OnceLock::new();
     VERIFIERS.get_or_init(|| Mutex::new(Verifiers::default()))
 }
 
-/// How long a stashed verifier waits for its token exchange. EDS tells an
-/// `EOAuth2Service` nothing when the user closes the consent window, so an
-/// abandoned flow's verifier would otherwise stay for the life of the
-/// process. The bound has to cover the user's time on the consent page plus
-/// the code's own lifetime, which RFC 6749 section 4.1.2 recommends be at
-/// most ten minutes. A verifier older than this belongs to a consent nobody
-/// is going to finish; if one is finished after all, the exchange goes out
-/// without a verifier, is refused, and EDS asks for consent again.
+/// The maximum time that a stashed verifier waits for its token exchange. EDS
+/// does not tell an `EOAuth2Service` when the user closes the consent window.
+/// Without this limit, the verifier of an abandoned flow stays for the life of
+/// the process. The limit must include the user's time on the consent page
+/// and the lifetime of the code, which RFC 6749 section 4.1.2 recommends to be
+/// ten minutes or less. A verifier older than this is for a consent that
+/// nobody will complete. If the user completes it, the exchange has no
+/// verifier, the server refuses it, and EDS asks for consent again.
 const VERIFIER_LIFETIME: Duration = Duration::from_secs(30 * 60);
 
-/// One verifier awaiting its token exchange.
+/// One verifier that waits for its token exchange.
 struct Pending {
-    /// Wiped wherever it is dropped: replaced, redeemed or evicted.
+    /// Wiped at each drop: when replaced, redeemed or evicted.
     secret: Zeroizing<String>,
     stashed: Instant,
 }
 
-/// The PKCE verifiers awaiting their token exchange, keyed by source UID.
+/// The PKCE verifiers that wait for their token exchange, keyed by source UID.
 ///
-/// Every verifier is held as a [`Zeroizing`] secret, so its bytes are
-/// overwritten when a repeated authorization replaces it, when
-/// [`redeem`](Self::redeem) hands it out and the caller drops it, and when it
-/// is evicted. Eviction runs on every stash and redeem, for every account,
-/// and drops anything older than [`VERIFIER_LIFETIME`]. Moving a `Pending`
-/// (on insert, or when the map grows) moves the `String`'s pointer, never the
-/// heap bytes it points at, so no unwiped copy is left behind.
+/// Each verifier is a [`Zeroizing`] secret. Thus its bytes are overwritten
+/// when a repeated authorization replaces it, when the caller drops it after
+/// [`redeem`](Self::redeem), and when it is evicted. Eviction runs on each
+/// stash and redeem, for all accounts, and drops all entries older than
+/// [`VERIFIER_LIFETIME`]. A move of a `Pending` (on insert, or when the map
+/// grows) moves the `String`'s pointer, not the heap bytes. Thus no unwiped
+/// copy stays.
 ///
-/// Not covered: `jmap_client::oauth::PkceVerifier`, which the generated
-/// secret is copied out of, does not wipe its own copy on drop.
+/// Not covered: `jmap_client::oauth::PkceVerifier`, from which the generated
+/// secret is copied, does not wipe its own copy on drop.
 #[derive(Default)]
 struct Verifiers(HashMap<String, Pending>);
 
@@ -400,8 +394,8 @@ impl Verifiers {
         );
     }
 
-    /// Takes the verifier for `uid`, if one is stashed and still within its
-    /// lifetime. Taken, not copied: a verifier is single-use.
+    /// Removes and returns the verifier for `uid`, if one is stashed and its
+    /// lifetime did not end. It is not copied: a verifier is single-use.
     fn redeem(&mut self, uid: &str, now: Instant) -> Option<Zeroizing<String>> {
         self.evict_expired(now);
         self.0.remove(uid).map(|pending| pending.secret)
@@ -419,17 +413,17 @@ impl Verifiers {
     }
 }
 
-/// Adds the stored RFC 8707 `resource` indicator to `table` when the source
-/// carries one; a source without one (a deployment the discovery probe could
-/// not classify, or that predates resource indicators) leaves the request
-/// exactly as EDS's default built it.
+/// Adds the stored RFC 8707 `resource` indicator to `table` if the source has
+/// one. For a source without one (the discovery probe could not find it, or
+/// the deployment is older than resource indicators), the request stays as
+/// EDS's default built it.
 ///
 /// # Safety
 ///
 /// `source` must be a valid `ESource` and `table` a live `GHashTable` with
 /// `g_free` destroyers for both halves.
 unsafe fn add_resource(source: *mut ESource, table: *mut GHashTable) {
-    // SAFETY: the caller's contract.
+    // SAFETY: the caller's contract applies.
     unsafe {
         let resource = oauth2::resource(source);
         if read_string(resource).is_some() {
@@ -442,10 +436,10 @@ unsafe fn add_resource(source: *mut ESource, table: *mut GHashTable) {
     }
 }
 
-/// RFC 8707 §2.2: the resource is named when the code is redeemed, not only
-/// when it is authorized — a deployment that requires it at one end requires
-/// it at both (Fastmail's `error=invalid_target`, observed live 2026-08-23,
-/// is the authorization half of that requirement).
+/// Adds the `resource` and the PKCE verifier to the token form. RFC 8707 §2.2:
+/// the resource is named when the code is redeemed, not only at authorization.
+/// A deployment that requires it at one step requires it at both (Fastmail's
+/// `error=invalid_target`, seen live 2026-08-23, is the authorization part).
 unsafe extern "C" fn prepare_get_token_form(
     _service: *mut EOAuth2Service,
     source: *mut ESource,
@@ -455,18 +449,18 @@ unsafe extern "C" fn prepare_get_token_form(
     guard("JmapOAuth2Service::prepare_get_token_form", (), || unsafe {
         let uid = read_string(e_source_get_uid(source));
         add_resource(source, form);
-        // Redeem the PKCE verifier stashed when the authorization query was
-        // built (RFC 7636 §4.5). Taken, not copied: a verifier is single-use.
+        // Redeem the PKCE verifier from the authorization query (RFC 7636 §4.5).
+        // It is removed, not copied: a verifier is single-use.
         let has_pkce = if let Some(ref uid) = uid
             && let Some(verifier) = pkce_verifiers()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .redeem(uid, Instant::now())
         {
-            // Copied straight into the form's own allocation, with no
-            // intermediate `CString` that would be freed unwiped. The form's
-            // copy is EDS's to free. A verifier is base64url, so it holds no
-            // NUL for `g_strndup` to stop at.
+            // Copied directly into the form's own allocation, with no
+            // intermediate `CString` that is freed unwiped. EDS frees the
+            // form's copy. A verifier is base64url, so it has no NUL that
+            // stops `g_strndup`.
             g_hash_table_replace(
                 form,
                 g_strdup(c"code_verifier".as_ptr()).cast(),
@@ -474,13 +468,12 @@ unsafe extern "C" fn prepare_get_token_form(
             );
             true
         } else {
-            // Loud on purpose. If the authorization request carried a
-            // challenge, RFC 7636 section 4.6 obliges the server to reject the
-            // exchange this form is being built for, and the user sees only a
-            // consent window that reappears. At debug! that is both below what
-            // anything is likely to be capturing and indistinguishable from
-            // the legitimate "this deployment never used PKCE" case, which is
-            // what made the symptom unattributable from the journal.
+            // A warning on purpose. If the authorization request had a
+            // challenge, RFC 7636 section 4.6 requires the server to reject the
+            // exchange of this form, and the user sees only a consent window
+            // that opens again. At debug! level, logs usually do not capture
+            // it, and it looks the same as the correct "this deployment did not
+            // use PKCE" case. Thus the journal did not show the cause.
             tracing::warn!(
                 account_uid = ?uid,
                 "no stashed PKCE verifier for this account; the authorization \
@@ -497,7 +490,8 @@ unsafe extern "C" fn prepare_get_token_form(
     });
 }
 
-/// As [`prepare_get_token_form`], for the refresh grant.
+/// Adds the `resource` to the refresh grant form, as [`prepare_get_token_form`]
+/// does. A refresh needs no PKCE verifier.
 unsafe extern "C" fn prepare_refresh_token_form(
     _service: *mut EOAuth2Service,
     source: *mut ESource,
@@ -524,11 +518,11 @@ unsafe extern "C" fn get_name(_service: *mut EOAuth2Service) -> *const c_char {
     guard("JmapOAuth2Service::get_name", ptr::null(), || NAME.as_ptr())
 }
 
-/// The one user-visible string here — the account editor's label for this
-/// service — so it goes through [`i18n::translate_static`] rather than
-/// answering [`NAME`] itself. Marked `N_` for `xgettext` since the lookup is
-/// this function's own, not a `CamelProvider`'s `dgettext` call on a
-/// `'static` constant the way `provider.rs`'s strings are.
+/// The only string here that the user sees: the account editor's label for
+/// this service. Thus it goes through [`i18n::translate_static`] and does not
+/// return [`NAME`]. It has the `N_` mark for `xgettext` because this function
+/// does the lookup. `provider.rs`'s strings are different: a `CamelProvider`
+/// calls `dgettext` on a `'static` constant.
 unsafe extern "C" fn get_display_name(_service: *mut EOAuth2Service) -> *const c_char {
     guard("JmapOAuth2Service::get_display_name", ptr::null(), || {
         i18n::translate_static(N_(c"JMAP"))
@@ -605,7 +599,7 @@ mod tests {
         let now = Instant::now();
         let mut verifiers = Verifiers::default();
         verifiers.stash("uid".to_owned(), secret("first"), now);
-        // The annotation is the point: what leaves the map wipes itself.
+        // The type annotation is the test: a value that leaves the map wipes itself.
         let redeemed: Zeroizing<String> = verifiers.redeem("uid", now).expect("stashed");
         assert_eq!(redeemed.as_str(), "first");
         assert!(verifiers.redeem("uid", now).is_none(), "single-use");
@@ -666,8 +660,8 @@ mod tests {
 
     #[test]
     fn the_lifetime_outlasts_the_recommended_code_lifetime() {
-        // RFC 6749 section 4.1.2 recommends at most ten minutes for the code
-        // alone; the consent page comes before it.
+        // RFC 6749 section 4.1.2 recommends ten minutes or less for the code
+        // only. The consent page comes before the code.
         assert!(VERIFIER_LIFETIME > Duration::from_secs(10 * 60));
     }
 }

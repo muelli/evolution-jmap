@@ -3,9 +3,9 @@
 
 //! Structured tracing tests for `jmap-config`.
 //!
-//! Asserts structured fields attached to `tracing` events during OAuth 2.0
-//! discovery, client registration, protected-resource indicator probing,
-//! PKCE query / token form preparation, and JMAP config lookup.
+//! Asserts the structured fields of `tracing` events during OAuth 2.0
+//! discovery, client registration, PKCE query / token form preparation, and
+//! JMAP config lookup.
 
 use jmap_client::resolver::{Resolver, SrvTarget};
 use jmap_client::transport::UreqTransport;
@@ -157,11 +157,12 @@ fn probe_host_traces_domain_and_srv_record() {
     );
 }
 
-/// This project's own `EOAuth2Service` vfuncs, which exist only where EDS has
-/// no `EOAuth2ServiceDynamic` of its own: `oauth2_service::register` stands
-/// ours down where it does, and the vfuncs below read borrowed storage that
-/// belongs to `ESourceOAuth2Client` there. `tests/oauth2_service.rs` is gated
-/// whole for the same reason, and names what covers the account instead.
+/// The `EOAuth2Service` vfuncs of this project. They exist only if EDS has no
+/// `EOAuth2ServiceDynamic`. If EDS has one, `oauth2_service::register` does not
+/// register the service of this project, and the vfuncs below read borrowed
+/// storage that belongs to `ESourceOAuth2Client`. For the same reason,
+/// `tests/oauth2_service.rs` is gated as a whole, and it names the tests that
+/// cover the account in that case.
 #[cfg(not(eds_oauth2_dynamic))]
 mod own_oauth2_service {
     use std::ffi::CString;
@@ -265,12 +266,12 @@ mod own_oauth2_service {
                 has(&captured_query, Level::DEBUG, "has_scope", "true"),
                 "expected has_scope=true in query preparation, got {captured_query:?}"
             );
-            // `has_pkce` rather than the `pkce_challenge_method=S256` this used to
-            // assert: the challenge is now added only when its verifier could be
-            // stashed, so what the query side has to report is whether one was
-            // sent at all. S256 stays the only method this crate ever names, and
-            // `oauth2_service.rs`'s own tests pin the query's `code_challenge_
-            // method` key. The two sides of the flow now log the same field name.
+            // `has_pkce`, not `pkce_challenge_method=S256` as before. The query
+            // gets the challenge only if its verifier was stored, so the query
+            // side reports if it sent a challenge. S256 is the only method that
+            // this crate names, and the tests in `oauth2_service.rs` check the
+            // `code_challenge_method` key of the query. The two sides of the
+            // flow log the same field name.
             assert!(
                 has(&captured_query, Level::DEBUG, "has_pkce", "true"),
                 "expected has_pkce=true in query preparation, got {captured_query:?}"

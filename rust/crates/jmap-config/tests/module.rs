@@ -1,31 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The module entry point — the last piece between Evolution and the
+// The module entry point. It is the last part between Evolution and the
 // `EMailConfigServiceBackend` subclass, and the first part of M7 that is a
-// shared object rather than a library.
+// shared object, not a library.
 //
-// Evolution's shell calls `e_module_load_all_in_directory` over its own module
-// directory at startup, wrapping each `.so` it finds in an `EModule` and
-// `g_type_module_use`-ing it; `EModule`'s `load` dlopens the file, resolves
-// `e_module_load`, and calls it with itself as the `GTypeModule`. Whatever
-// types are registered against that module by the time the call returns are
-// the module's contribution.
+// At startup, the Evolution shell calls `e_module_load_all_in_directory` on its
+// module directory. It puts each `.so` in an `EModule` and calls
+// `g_type_module_use` on it. The `load` of `EModule` dlopens the file, resolves
+// `e_module_load`, and calls it with the `EModule` as the `GTypeModule`. The
+// types registered against that module when the call returns are the
+// contribution of the module.
 //
-// From there Evolution never looks this class up by name. `EMailConfigServicePage`
-// is an `EExtensible`, and its `constructed` calls `e_extensible_load_extensions`,
-// which walks the *children of `EExtension`* that exist by then and instantiates
-// every one whose class `extensible_type` is the page's own type. So the module
-// has exactly two jobs — put the type in the type system, and put it there
-// against the module GLib will unload — and the tests below are those two plus
-// what they are worth only together with: the class that comes out still
-// carrying the name and the vfuncs `tests/backend.rs` pins down.
+// After that, Evolution never finds this class by name. `EMailConfigServicePage`
+// is an `EExtensible`. Its `constructed` calls `e_extensible_load_extensions`,
+// which examines the *children of `EExtension`* that exist at that time. It
+// makes an instance of each child whose class `extensible_type` is the type of
+// the page. Thus the module has two tasks: put the type in the type system, and
+// register it against the module that GLib unloads. The tests below examine
+// these two tasks. They also make sure that the class still has the name and
+// the vfuncs that `tests/backend.rs` pins.
 //
-// As in `jmap-backend-cal`'s `tests/factory.rs`, the `EModule` is stood in for
-// by a `GTypeModule` subclass whose `load` calls our entry point directly.
-// Loading the real built `.so` would need it built first, which is CMake's
-// `install-config-module` test one layer up; this one is about what the entry
-// point does once it is called.
+// As in `tests/factory.rs` of `jmap-backend-cal`, a `GTypeModule` subclass
+// replaces the `EModule`. Its `load` calls the entry point directly. To load
+// the real `.so`, it must be built first: the CMake test `install-config-module`
+// does that, one layer up. This test examines what the entry point does when
+// it is called.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -51,7 +51,7 @@ use jmap_config::module::{load, unload};
 use jmap_config::oauth2_service;
 use jmap_config::source_config::{JmapBookConfig, JmapCalConfig};
 
-/// A `GTypeModule` standing in for the `EModule` Evolution would load us as.
+/// A `GTypeModule` that replaces the `EModule` that Evolution loads this crate as.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -62,7 +62,7 @@ struct TestModuleClass {
     parent_class: GTypeModuleClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
+// SAFETY: both structs are #[repr(C)] and start with the GTypeModule instance
 // and class structs, and GTypeModule derives from GObject.
 unsafe impl ObjectSubclass for TestModule {
     const NAME: &'static CStr = c"JmapConfigTestModule";
@@ -75,8 +75,8 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to a newly allocated class struct of this type.
+        // It starts with GTypeModuleClass, which holds both slots.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -84,8 +84,8 @@ unsafe impl ObjectSubclass for TestModule {
 }
 
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
+    // SAFETY: GLib gives the module that it loads, which the entry point
+    // requires.
     unsafe { load(module) };
     GTRUE
 }
@@ -95,19 +95,19 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// The one module in the process, used, unused, and used again.
+/// The one module in the process: used, unused, and used again.
 ///
 /// One, because two `GTypeModule`s cannot register the same type name. Used
-/// twice around an unuse because that is what happens in the field — see
-/// [`a_module_that_is_unloaded_and_loaded_again_hands_its_types_back`].
+/// two times around an unuse, because that occurs in real use (refer to
+/// [`a_module_that_is_unloaded_and_loaded_again_hands_its_types_back`]).
 struct Loaded {
     module: *mut GTypeModule,
     first_use: gboolean,
     use_after_unload: gboolean,
 }
 
-// SAFETY: the fields are published by the OnceLock and only read afterwards,
-// and the module they describe is deliberately never finalized.
+// SAFETY: the OnceLock publishes the fields, and code only reads them after
+// that. The module that they describe is deliberately never finalized.
 unsafe impl Send for Loaded {}
 unsafe impl Sync for Loaded {}
 
@@ -122,9 +122,9 @@ fn loaded() -> &'static Loaded {
         let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
         assert!(!module.is_null(), "g_object_new returned NULL");
 
-        // SAFETY: `module` is a GTypeModule, and the reference taken by the
-        // second use is never given back — the types stay usable for the rest
-        // of the process, which is what every test below relies on.
+        // SAFETY: `module` is a GTypeModule. The reference from the second use
+        // is never released, so the types stay usable until the process stops.
+        // All tests below need this.
         unsafe {
             let first_use = g_type_module_use(module);
             g_type_module_unuse(module);
@@ -138,46 +138,45 @@ fn loaded() -> &'static Loaded {
     })
 }
 
-/// The setup backend's type, as the module left it in the type system.
+/// The type of the setup backend, as the module registered it.
 fn backend_type() -> GType {
     loaded();
     // SAFETY: NAME is a 'static NUL-terminated string.
     unsafe { g_type_from_name(<JmapConfigServiceBackend as ObjectSubclass>::NAME.as_ptr()) }
 }
 
-/// The registered class, kept referenced for the test's duration.
+/// The registered class. The test keeps a reference to it.
 struct Class(*mut EMailConfigServiceBackendClass);
 
 impl Class {
     fn get() -> Self {
         let gtype = backend_type();
         assert_ne!(gtype, 0, "the setup backend type is not registered");
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init; our class leads with EMailConfigServiceBackendClass.
+        // SAFETY: the type is registered, so a reference to its class runs
+        // class_init. The class starts with EMailConfigServiceBackendClass.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
     fn vfuncs(&self) -> &EMailConfigServiceBackendClass {
-        // SAFETY: the class is referenced for as long as `self` lives.
+        // SAFETY: the class stays referenced while `self` is alive.
         unsafe { &*self.0 }
     }
 }
 
 impl Drop for Class {
     fn drop(&mut self) {
-        // SAFETY: the reference taken in `get` is given back exactly once.
+        // SAFETY: this releases the reference from `get` exactly one time.
         unsafe { g_type_class_unref(self.0.cast()) };
     }
 }
 
-/// The credentials prompter runs in Evolution's SHELL process, and it can
-/// route an `[Authentication] Method=JMAP` source to the OAuth 2.0 sign-in
-/// window only if an `EOAuth2Service` answering that name is registered in
-/// that same process. The collection module registers the service for the
-/// source registry's process; this module must do the same for the shell's,
-/// or the prompter falls back to the password dialog, observed live
-/// (2026-08-23, Fastmail): a freshly discovered OAuth account prompted for a
-/// password that nothing could satisfy.
+/// The credentials prompter runs in the Evolution SHELL process. It sends an
+/// `[Authentication] Method=JMAP` source to the OAuth 2.0 sign-in window only
+/// if an `EOAuth2Service` with that name is registered in the same process. The
+/// collection module registers the service in the process of the source
+/// registry. This module must do the same in the shell process. If not, the
+/// prompter shows the password dialog. Observed live (2026-08-23, Fastmail): a
+/// newly discovered OAuth account asked for a password that nothing could satisfy.
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn the_entry_point_registers_the_oauth2_service_type() {
@@ -191,10 +190,10 @@ fn the_entry_point_registers_the_oauth2_service_type() {
     );
 }
 
-/// The other side of the test above. Where EDS brings its own
+/// The opposite of the test above. Where EDS has its own
 /// `EOAuth2ServiceDynamic`, the prompter already has a service for the method
-/// these accounts carry, and registering a second one that claims the same
-/// account would leave `e_oauth2_services_find` choosing by list order.
+/// of these accounts. A second service for the same account makes
+/// `e_oauth2_services_find` select by list sequence.
 #[cfg(eds_oauth2_dynamic)]
 #[test]
 fn the_entry_point_leaves_the_oauth2_service_to_eds() {
@@ -223,21 +222,21 @@ fn the_entry_point_registers_the_setup_backend_type() {
     );
 }
 
-/// The page does not look this class up by name — it instantiates the children
-/// of `EExtension` whose `extensible_type` is its own. That field is the
-/// parent's, set once in Evolution's own `class_init` and inherited; a subclass
-/// that overwrote it would register a type nothing ever instantiates, with no
-/// error anywhere to say so.
+/// The page does not find this class by name. It makes instances of the
+/// children of `EExtension` whose `extensible_type` is the type of the page.
+/// That field is in the parent class. Evolution's own `class_init` sets it one
+/// time, and the subclass inherits it. If a subclass changed it, no code makes
+/// an instance of the type, and no error tells this.
 #[test]
 fn the_registered_type_is_an_extension_of_the_page_that_will_load_it() {
     let class = Class::get();
-    // SAFETY: EMailConfigServiceBackendClass leads with EExtensionClass.
+    // SAFETY: EMailConfigServiceBackendClass starts with EExtensionClass.
     let extension = unsafe { &*ptr::from_ref(class.vfuncs()).cast::<EExtensionClass>() };
     assert_ne!(
         extension.extensible_type, 0,
         "the class names no extensible type, so no page would ever build one"
     );
-    // SAFETY: a registered type; the name is GLib's and NUL-terminated.
+    // SAFETY: a registered type. GLib owns the name, which is NUL-terminated.
     let extensible = unsafe { read_string(g_type_name(extension.extensible_type)) };
     assert_eq!(
         extensible.as_deref(),
@@ -247,10 +246,10 @@ fn the_registered_type_is_an_extension_of_the_page_that_will_load_it() {
     );
 }
 
-/// Registered *against the module*, not statically. GLib unregisters a
-/// module's types when the module is unloaded; a type the module registered
-/// statically would outlive the code its class_init and vfunc pointers live in,
-/// which is a dangling call the moment Evolution unloads us.
+/// Registered *against the module*, not statically. GLib unregisters the types
+/// of a module when it unloads the module. A static type lives longer than the
+/// code of its class_init and vfunc pointers. When Evolution unloads this
+/// module, a call through them is a dangling call.
 #[test]
 fn the_registered_type_belongs_to_the_module() {
     let loaded = loaded();
@@ -264,11 +263,11 @@ fn the_registered_type_belongs_to_the_module() {
     );
 }
 
-/// Evolution unuses a module when the last thing it provided goes away, and
-/// uses it again when the next one is wanted. The second use calls
-/// `e_module_load` a second time, and an entry point that treated "already
-/// registered" as "nothing to do" would leave every type marked unloaded — GLib
-/// then refuses the module and the account type never appears again.
+/// Evolution unuses a module when the last object that it supplied is removed.
+/// It uses the module again when it needs the next object. The second use calls
+/// `e_module_load` again. Assume an entry point that does nothing for "already
+/// registered". Then all types stay marked unloaded. GLib then refuses the
+/// module, and the account type never shows again.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
     let loaded = loaded();
@@ -279,19 +278,18 @@ fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
     );
 }
 
-/// The type being registered is only worth anything if the class that comes out
-/// of it is the one `tests/backend.rs` pins down: the page reads `backend_name`
-/// to decide which Camel provider this backend is *for*, and dispatches the
-/// three vfuncs. Registration through a `GTypeModule` runs the same
-/// `class_init`, and this is the assertion that says so rather than assuming it
-/// — the dynamic path initialises the class later and re-initialises it after
-/// every reload.
+/// The registered type is useful only if its class is the class that
+/// `tests/backend.rs` pins. The page reads `backend_name` to find the Camel
+/// provider that this backend is *for*, and dispatches the three vfuncs.
+/// Registration through a `GTypeModule` runs the same `class_init`. This test
+/// makes sure of it, because the dynamic path initialises the class later and
+/// initialises it again after each reload.
 #[test]
 fn the_class_the_module_registers_carries_the_name_and_the_vfuncs() {
     let class = Class::get();
     let vfuncs = class.vfuncs();
 
-    // SAFETY: a 'static NUL-terminated string the class was initialised from.
+    // SAFETY: the 'static NUL-terminated string from class initialisation.
     let name = unsafe { read_string(vfuncs.backend_name) };
     assert_eq!(
         name.as_deref(),
@@ -315,23 +313,23 @@ fn the_class_the_module_registers_carries_the_name_and_the_vfuncs() {
     );
 }
 
-/// `JmapConfigLookup`'s type, as the module left it in the type system.
+/// The type of `JmapConfigLookup`, as the module registered it.
 fn lookup_type() -> GType {
     loaded();
     // SAFETY: NAME is a 'static NUL-terminated string.
     unsafe { g_type_from_name(<JmapConfigLookup as ObjectSubclass>::NAME.as_ptr()) }
 }
 
-/// The other type the module registers. Unlike the backend, nothing here
-/// constructs an instance: `JmapConfigLookup::constructed` calls
-/// `e_config_lookup_register_worker` on whatever `e_extension_get_extensible`
-/// answers, and a bare `g_object_new` with no real `EConfigLookup` behind its
-/// construct-only `extensible` property would exercise that with a NULL —
-/// logged as a `CRITICAL` by `e_config_lookup_register_worker`'s own
-/// `g_return_if_fail`, which is not a shape of "passing" this project accepts
-/// (`jmap-config/tests/oauth2_service.rs`'s own `TestSource` comment gives the
-/// same reason for the same avoidance). So these tests stay at the class
-/// level, which needs no instance: `g_type_class_ref` alone runs `class_init`.
+/// The other type that the module registers. Unlike for the backend, no code
+/// here constructs an instance. `JmapConfigLookup::constructed` calls
+/// `e_config_lookup_register_worker` on the return value of
+/// `e_extension_get_extensible`. A bare `g_object_new` with no real
+/// `EConfigLookup` in its construct-only `extensible` property makes that call
+/// with a NULL. The `g_return_if_fail` of `e_config_lookup_register_worker` then
+/// logs a `CRITICAL`, and this project does not accept that as a pass. (The
+/// `TestSource` comment in `jmap-config/tests/oauth2_service.rs` gives the same
+/// reason.) Thus these tests stay at the class level, which needs no instance:
+/// `g_type_class_ref` alone runs `class_init`.
 #[test]
 fn the_lookup_worker_type_is_registered_against_the_module() {
     let loaded = loaded();
@@ -348,21 +346,21 @@ fn the_lookup_worker_type_is_registered_against_the_module() {
     );
 }
 
-/// The two `ESourceConfigBackend`s, held to the same two things the backend and
-/// the lookup worker are held to: in the type system at all, and registered
-/// against the module rather than statically.
+/// The two `ESourceConfigBackend`s, with the same two checks as the backend and
+/// the lookup worker: they are in the type system, and they are registered
+/// against the module, not statically.
 ///
-/// This is the piece whose absence the operator hit. `ESourceConfig` builds one
-/// candidate per registered subclass of `ESourceConfigBackend`, so before these
-/// two the New Address Book and New Calendar dialogs had no JMAP entry, editing
-/// an existing JMAP source found a NULL backend, and OK asserted instead of
-/// saving. `tests/source_config.rs` pins what the classes *say*; this pins that
-/// the entry point puts them where Evolution will look.
+/// The operator found that this part was missing. `ESourceConfig` builds one
+/// candidate for each registered subclass of `ESourceConfigBackend`. Before
+/// these two, the New Address Book and New Calendar dialogs had no JMAP entry,
+/// an edit of an existing JMAP source found a NULL backend, and OK asserted and
+/// did not save. `tests/source_config.rs` pins the *values* of the classes. This
+/// test pins that the entry point registers them where Evolution looks.
 ///
-/// Registered against the module and not statically, for the reason
-/// [`the_registered_type_belongs_to_the_module`] gives: a statically registered
-/// type outlives the code its `class_init` and vfunc pointers live in, which is
-/// a dangling call the moment Evolution unloads us.
+/// Registered against the module, not statically, for the reason that
+/// [`the_registered_type_belongs_to_the_module`] gives: a static type lives
+/// longer than the code of its `class_init` and vfunc pointers. When Evolution
+/// unloads this module, a call through them is a dangling call.
 #[test]
 fn the_source_config_backends_are_registered_against_the_module() {
     let loaded = loaded();
@@ -408,19 +406,19 @@ fn the_lookup_worker_type_implements_econfiglookupworker() {
     );
 }
 
-/// The one thing that would make Evolution's account assistant never find
-/// this worker at all: an `extensible_type` that is not `EConfigLookup`'s,
-/// the same failure mode `the_registered_type_is_an_extension_of_the_page_
-/// that_will_load_it` above guards against for the backend.
+/// The one failure that stops the Evolution account assistant from finding this
+/// worker: an `extensible_type` that is not the type of `EConfigLookup`.
+/// `the_registered_type_is_an_extension_of_the_page_that_will_load_it` above
+/// prevents the same failure for the backend.
 #[test]
 fn the_lookup_worker_extends_econfiglookup() {
     let gtype = lookup_type();
     assert_ne!(gtype, 0, "the lookup worker type is not registered");
-    // SAFETY: the type is registered; JmapConfigLookupClass leads with
+    // SAFETY: the type is registered. JmapConfigLookupClass starts with
     // EExtensionClass, where `class_init` writes `extensible_type`.
     let class = unsafe { g_type_class_ref(gtype) }.cast::<EExtensionClass>();
     let extensible_type = unsafe { (*class).extensible_type };
-    // SAFETY: the reference taken above is given back exactly once.
+    // SAFETY: this releases the reference from above exactly one time.
     unsafe { g_type_class_unref(class.cast()) };
 
     assert_eq!(

@@ -1,24 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Records where Evolution's own libraries live, in the cdylib this crate
-// actually produces (`module-jmap-configuration.so`).
+// Records the location of the Evolution libraries in the cdylib that this
+// crate makes (`module-jmap-configuration.so`).
 //
-// `jmap-config`'s own `build.rs` solves this exact problem, but only for
-// itself: `cargo:rustc-link-arg` is scoped to the package whose build script
-// emits it. The module Evolution loads is built by this separate crate
-// (`crate-type = ["cdylib"]`), not by `jmap-config` directly. Without this,
-// the built module carries no `RUNPATH`/`RPATH` at all, unlike every module
-// Evolution installs alongside it. `dlopen`ing it then fails before this
-// crate's own code ever runs, unless the process already has
-// `libevolution-mail.so.0` resident, or `LD_LIBRARY_PATH` points at
-// `/usr/lib/evolution`. That silently keeps the account-setup module from
-// registering with a real `EConfigLookup`.
+// The `build.rs` of `jmap-config` solves the same problem, but only for its own
+// package: `cargo:rustc-link-arg` applies only to the package whose build
+// script emits it. This separate crate (`crate-type = ["cdylib"]`) builds the
+// module that Evolution loads, not `jmap-config`. Without this script, the
+// module has no `RUNPATH`/`RPATH`, unlike each module that Evolution installs
+// next to it. Then `dlopen` fails before the code of this crate runs, unless
+// `libevolution-mail.so.0` is already loaded in the process or
+// `LD_LIBRARY_PATH` points to `/usr/lib/evolution`. Thus the account setup
+// module silently does not register with a real `EConfigLookup`.
 //
-// `evo-sys` is in `[dependencies]` for metadata only: this crate calls none
-// of its bindings. Cargo sets `DEP_EVOLUTION_SHELL_LIBDIRS` (from `evo-sys`'s
-// `links = "evolution-shell"` key) only for the build script of a package
-// with a direct, non-build dependency on it.
+// `evo-sys` is in `[dependencies]` only for its metadata: this crate calls none
+// of its bindings. Cargo sets `DEP_EVOLUTION_SHELL_LIBDIRS` (from the
+// `links = "evolution-shell"` key of `evo-sys`) only for the build script of a
+// package with a direct, non-build dependency on it.
 
 use std::env;
 
@@ -26,13 +25,13 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=DEP_EVOLUTION_SHELL_LIBDIRS");
 
-    // Absent only if `evo-sys` stopped publishing it. Fail the build then,
-    // rather than quietly produce a module that cannot load.
+    // Missing only if `evo-sys` does not publish it. Then fail the build, and do
+    // not silently make a module that cannot load.
     let libdirs = env::var("DEP_EVOLUTION_SHELL_LIBDIRS")
         .expect("evo-sys published no DEP_EVOLUTION_SHELL_LIBDIRS");
     for dir in libdirs.split(':').filter(|dir| !dir.is_empty()) {
-        // `-rpath` and not `-rpath-link`: this has to be recorded in the file,
-        // not merely used while linking it.
+        // `-rpath` and not `-rpath-link`: the file must record it. The linker
+        // must not only use it during the link.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
     }
 }

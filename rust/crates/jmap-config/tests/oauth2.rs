@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The `[JMAP OAuth2]` extension, against real `ESource`s — both through this
-// crate's own `apply`/`read` door and through the raw GObject property API,
-// which is the door EDS's own `.source` (de)serialisation uses. The second
-// is what actually proves the properties are wired: a typo'd name or a
-// missing flag would still let `apply`/`read` agree with themselves while
-// persisting nothing, which is exactly the "nearly silent" failure
-// `jmap_mail::settings` warns about for the same shape of code.
+// Tests the `[JMAP OAuth2]` extension on real `ESource`s. The tests use the
+// `apply`/`read` door of this crate, and the raw GObject property API, which is
+// the door of the EDS `.source` (de)serialisation. Only the second door proves
+// that the properties are connected. With an incorrect name or a missing flag,
+// `apply` and `read` still agree with each other but persist nothing.
+// `jmap_mail::settings` gives a warning about this "nearly silent" failure for
+// code of the same shape.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
@@ -28,17 +28,18 @@ use gobject_sys::{
 use jmap_backend_core::callback::{CHandler, gcallback};
 use jmap_config::oauth2::{Config, EXTENSION_NAME, PROPERTY_NAMES, apply, client_id, read};
 
-/// Writes one string property through the raw GObject API — the door EDS's
-/// own `.source` parser uses, and the one the re-entrancy handlers below take
-/// because a `notify` handler is handed the `GObject`, not the `ESource`.
+/// Writes one string property through the raw GObject API. The EDS `.source`
+/// parser uses this door. The re-entrancy handlers below also use it, because
+/// a `notify` handler gets the `GObject`, not the `ESource`.
 ///
 /// # Safety
 ///
 /// `object` must be a live instance carrying a `G_TYPE_STRING` property of
 /// that name.
 unsafe fn set_string_property(object: *mut GObject, name: &CStr, value: &CStr) {
-    // SAFETY: the contract above; the `GValue` is initialised, filled and
-    // unset here, and `value` outlives the copy `g_value_set_string` makes.
+    // SAFETY: the contract above. The `GValue` is initialised, filled and
+    // unset here, and `value` lives longer than the copy that
+    // `g_value_set_string` makes.
     unsafe {
         let mut gvalue: GValue = std::mem::zeroed();
         g_value_init(&mut gvalue, G_TYPE_STRING);
@@ -48,13 +49,13 @@ unsafe fn set_string_property(object: *mut GObject, name: &CStr, value: &CStr) {
     }
 }
 
-/// `g_signal_connect`, spelled out — the same shape `jmap-mail`'s own test
-/// helper uses, for the same reason: the macro is C-side only.
+/// `g_signal_connect`, written in full. The test helper of `jmap-mail` has the
+/// same shape, for the same reason: the macro is available only in C.
 ///
 /// # Safety
 ///
-/// `handler` must have the signature `signal` declares, and `data` must stay
-/// alive for as long as emissions can reach it.
+/// `handler` must have the signature that `signal` declares. `data` must stay
+/// alive while emissions can reach it.
 unsafe fn connect(
     instance: *mut GObject,
     signal: &CStr,
@@ -62,52 +63,51 @@ unsafe fn connect(
     data: *mut c_void,
 ) {
     // SAFETY: the contract above. The marshaller casts the erased handler back
-    // to the signature the signal declares.
+    // to the signature that the signal declares.
     let id = unsafe {
         g_signal_connect_data(instance, signal.as_ptr(), gcallback(handler), data, None, 0)
     };
     assert_ne!(id, 0, "nothing connected to {signal:?}");
 }
 
-/// An `ESource` pointer moved to another thread on purpose.
+/// An `ESource` pointer that the tests deliberately move to another thread.
 ///
-/// `ESource` is one of EDS's thread-safe types — the extension table every
-/// call below goes through is behind its own `GRecMutex`, and this crate's own
-/// storage is behind a `Mutex` — which is the whole premise `oauth2::borrowed`
-/// documents when it names "whatever thread the `GDBusProxy` notify arrives
-/// on". These tests are where that premise is exercised rather than asserted.
+/// `ESource` is a thread-safe type of EDS. Its extension table, which all
+/// calls below use, has its own `GRecMutex`. The storage of this crate has a
+/// `Mutex`. The lifetime that `oauth2::borrowed` documents relies on this,
+/// because a write can arrive on the thread of the `GDBusProxy` notify. These
+/// tests exercise that premise, not only assert it.
 #[derive(Clone, Copy)]
 struct Shared(*mut ESource);
 
 impl Shared {
-    /// The pointer, reached through a `self` method so that a `move` closure
-    /// captures the whole wrapper rather than the bare field inside it —
-    /// which, under edition 2021's per-field capture, is exactly the
-    /// `unsafe impl Send` this type exists for being skipped.
+    /// The pointer, through a `self` method, so that a `move` closure captures
+    /// the full wrapper, not the bare field in it. With the per-field capture
+    /// of edition 2021, a capture of the field skips the `unsafe impl Send`
+    /// that is the purpose of this type.
     fn source(self) -> *mut ESource {
         self.0
     }
 }
 
-// SAFETY: see the type's own comment.
+// SAFETY: refer to the comment on the type.
 unsafe impl Send for Shared {}
 
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
-        // In the real module this is done once, at load time, alongside the
-        // rest of this project's types — see `oauth2::ensure_registered`'s own
-        // doc comment for why an unregistered type is invisible to EDS's own
-        // keyfile parser, not only to this crate's `apply`/`read`. Called here
-        // because this test also drives the extension through the raw
-        // GObject property API, which — unlike `apply`/`read` — does not
-        // register the type itself.
+        // The real module does this one time, at load time, with the other
+        // types of this project. The doc comment of `oauth2::ensure_registered`
+        // tells why the EDS keyfile parser cannot see an unregistered type
+        // (and not only `apply`/`read` of this crate). The call is here
+        // because this test also uses the raw GObject property API, which does
+        // not register the type itself (`apply`/`read` do).
         jmap_config::oauth2::ensure_registered();
 
         let uid = CString::new("jmap-account").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
+        // SAFETY: a NUL-terminated uid, the default main context and a GError
         // out-parameter are the documented arguments.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
@@ -125,13 +125,13 @@ impl TestSource {
         unsafe { read(self.0) }
     }
 
-    /// Reads a property by name through the raw GObject API — the same path
-    /// EDS's own keyfile writer uses, and not the one [`Self::config`] takes.
+    /// Reads a property by name through the raw GObject API. The EDS keyfile
+    /// writer uses this path. [`Self::config`] uses a different path.
     fn property(&self, name: &str) -> Option<String> {
         let name = CString::new(name).expect("no NUL in a literal");
-        // SAFETY: a live extension instance and a freshly initialised GValue
-        // of the type every property here declares; `g_object_get_property`
-        // fills it and the value is read out before it is unset.
+        // SAFETY: a live extension instance and a new initialised GValue of
+        // the type that all properties here declare. `g_object_get_property`
+        // fills it, and the test reads the value before the unset.
         unsafe {
             let extension = self.extension();
             let mut value: GValue = std::mem::zeroed();
@@ -150,23 +150,23 @@ impl TestSource {
         let name = CString::new(name).expect("no NUL in a literal");
         let value_c = CString::new(value).expect("no NUL in a literal");
         // SAFETY: a live extension instance, and two NUL-terminated strings
-        // that outlive the call.
+        // that live longer than the call.
         unsafe { set_string_property(self.extension(), &name, &value_c) };
     }
 
-    /// The extension instance itself, for the two raw-property helpers above.
+    /// The extension instance, for the two raw-property helpers above.
     fn extension(&self) -> *mut GObject {
-        // SAFETY: a live source; `EXTENSION_NAME` is the group this crate's
-        // extension registers under.
+        // SAFETY: a live source. `EXTENSION_NAME` is the group name that the
+        // extension of this crate registers with.
         unsafe { e_source_get_extension(self.0, EXTENSION_NAME.as_ptr()).cast() }
     }
 
-    /// The source as EDS itself would write it to disk — the `.source`
-    /// keyfile an Evolution restart reads back.
+    /// The source as EDS writes it to disk: the `.source` keyfile that
+    /// Evolution reads back after a restart.
     fn serialised(&self) -> String {
-        // SAFETY: a live source; `e_source_to_string` is `(transfer full)`
-        // and the length out-parameter is optional, so the NUL-terminated
-        // result is read and freed here.
+        // SAFETY: a live source. `e_source_to_string` is `(transfer full)`
+        // and the length out-parameter is optional. Thus this code reads and
+        // frees the NUL-terminated result.
         unsafe {
             let text = e_source_to_string(self.0, ptr::null_mut());
             assert!(!text.is_null(), "e_source_to_string returned NULL");
@@ -181,8 +181,8 @@ impl TestSource {
         unsafe { e_source_has_extension(self.0, EXTENSION_NAME.as_ptr()) != GFALSE }
     }
 
-    /// The `const gchar *` `EOAuth2Service::get_client_id` hands EDS — the
-    /// borrowed door, not [`Self::config`]'s owned one.
+    /// The `const gchar *` that `EOAuth2Service::get_client_id` gives to EDS:
+    /// the borrowed door, not the owned door of [`Self::config`].
     fn borrowed_client_id(&self) -> *const c_char {
         // SAFETY: a live source.
         unsafe { client_id(self.0) }
@@ -249,9 +249,8 @@ fn committing_a_config_that_dropped_its_secret_clears_the_one_that_was_there() {
 
 #[test]
 fn every_field_is_reachable_through_the_gobject_property_it_was_installed_as() {
-    // The property names `class_init` installed, matched against the fields
-    // `apply` writes — proof the two agree, rather than each independently
-    // claiming to.
+    // Compares the property names that `class_init` installed with the fields
+    // that `apply` writes. This proves that the two agree.
     let source = TestSource::new().written(&config());
 
     assert_eq!(
@@ -283,8 +282,8 @@ fn every_field_is_reachable_through_the_gobject_property_it_was_installed_as() {
 
 #[test]
 fn a_value_set_through_the_gobject_property_is_read_back_through_this_crates_own_door() {
-    // The direction EDS's own `.source` parser writes in: restoring an
-    // account from disk sets properties, it does not call `apply`.
+    // The direction in which the EDS `.source` parser writes: when it restores
+    // an account from disk, it sets properties. It does not call `apply`.
     let source = TestSource::new();
     source.set_property("client-id", "restored-client-id");
 
@@ -295,34 +294,35 @@ fn a_value_set_through_the_gobject_property_is_read_back_through_this_crates_own
 }
 
 // ---------------------------------------------------------------------------
-// The lifetime `oauth2::borrowed` promises the `EOAuth2Service` vtable.
+// The lifetime that `oauth2::borrowed` promises to the `EOAuth2Service` vtable.
 //
-// Those vfuncs return `const gchar *` into this extension's own storage, and
-// EDS's callers use the pointer a few instructions later — `e-oauth2-
-// service.c` passes each one straight into `e_oauth2_service_util_set_to_
-// form` or `eos_create_soup_message`. Nothing in that path takes a lock, and
-// nothing gives the vfunc a chance to free anything afterwards, so the only
-// contract that can hold is the one `borrowed`'s doc states: the pointer
-// stays valid for as long as the extension does. A write that lands in
-// between — `e-source.c`'s `source_parse_dbus_data` → `source_load_from_key_
-// file` → `g_object_set_property`, which re-runs every
-// `E_SOURCE_PARAM_SETTING` property whenever the registry pushes new data,
-// on whatever thread the `GDBusProxy` notify arrives on — must therefore not
-// invalidate it.
+// Those vfuncs return a `const gchar *` into the storage of this extension.
+// The EDS callers use the pointer a few instructions later:
+// `e-oauth2-service.c` passes each one directly into
+// `e_oauth2_service_util_set_to_form` or `eos_create_soup_message`. Nothing in
+// that path takes a lock, and the vfunc cannot free data after it returns.
+// Thus the only possible contract is the one in the doc of `borrowed`: the
+// pointer stays valid while the extension exists.
 //
-// This is the discipline EDS's own OAuth2 services keep:
-// `e-oauth2-service-google.c`'s `eos_google_get_client_id` answers either a
-// `static gchar glob_buff[128]` or a value `eos_google_read_settings` caches
-// with `g_object_set_data_full` behind an `if (!value)` guard — written once
-// and never replaced while the service lives.
+// A write between the two steps must thus not make the pointer invalid. Such a
+// write comes from `source_parse_dbus_data` -> `source_load_from_key_file` ->
+// `g_object_set_property` in `e-source.c`. This path runs each
+// `E_SOURCE_PARAM_SETTING` property again when the registry pushes new data,
+// on the thread where the `GDBusProxy` notify arrives.
+//
+// The EDS OAuth2 services use the same discipline: `eos_google_get_client_id`
+// in `e-oauth2-service-google.c` returns a `static gchar glob_buff[128]`, or a
+// value that `eos_google_read_settings` caches with `g_object_set_data_full`
+// behind an `if (!value)` guard. That value is written one time and never
+// replaced while the service exists.
 
-/// Reads a borrowed `const gchar *` back the way EDS's own callers do.
+/// Reads a borrowed `const gchar *` back as the EDS callers do.
 ///
 /// # Safety
 ///
-/// `pointer` is NULL or points at a NUL-terminated string that is still
-/// alive — which is exactly what these tests exist to establish, so a
-/// failure here is the finding rather than a misuse.
+/// `pointer` is NULL or points to a NUL-terminated string that is still alive.
+/// These tests exist to prove this. Thus a failure here is the finding, not a
+/// misuse.
 #[cfg(not(eds_oauth2_dynamic))]
 unsafe fn text_at(pointer: *const c_char) -> Option<String> {
     (!pointer.is_null()).then(|| {
@@ -332,9 +332,9 @@ unsafe fn text_at(pointer: *const c_char) -> Option<String> {
     })
 }
 
-/// Same-sized allocations, made between a free and a read so that a reused
-/// heap block shows up as changed bytes instead of passing on a stale one
-/// nothing happened to overwrite.
+/// Allocations of the same size, made between a free and a read. Thus a
+/// reused heap block shows as changed bytes. Without them, a stale block that
+/// nothing overwrote can let the test pass.
 #[cfg(not(eds_oauth2_dynamic))]
 fn churn_the_allocator(like: &str) -> Vec<CString> {
     let filler = "X".repeat(like.len());
@@ -346,11 +346,10 @@ fn churn_the_allocator(like: &str) -> Vec<CString> {
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out() {
-    // `apply` is documented as an idempotent rewrite that runs again every
-    // time discovery or registration is redone, so "the same value, written
-    // again" is its ordinary case — and re-seating the storage under a
-    // pointer EDS may still be holding is not something that rewrite is
-    // entitled to do.
+    // The documentation of `apply` says that it is an idempotent rewrite that
+    // runs again each time discovery or registration runs again. Thus "the
+    // same value, written again" is its usual case. The rewrite must not move
+    // the storage under a pointer that EDS possibly still holds.
     let source = TestSource::new().written(&config());
     let first = source.borrowed_client_id();
 
@@ -366,10 +365,10 @@ fn rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out() {
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_out() {
-    // The same rule through EDS's own door. `source_set_property_from_key_
-    // file` skips a set whose value did not differ, so this case is rarer
-    // from that caller than from `apply` — but `g_object_set_property` is
-    // public API and nothing stops any other caller repeating a value.
+    // The same rule through the EDS door. `source_set_property_from_key_file`
+    // skips a set when the value is the same. Thus this case is less frequent
+    // from that caller than from `apply`. But `g_object_set_property` is a
+    // public API, and other callers can write the same value again.
     let source = TestSource::new().written(&config());
     let first = source.borrowed_client_id();
 
@@ -385,18 +384,16 @@ fn setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_ou
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes() {
-    // The race itself, made deterministic: EDS asks for the client id, and
-    // before it has copied the answer the registry pushes a source update
-    // that changes that very field. The pointer EDS is holding has to
-    // survive it.
+    // The race, made deterministic: EDS asks for the client id. Before EDS
+    // copies the answer, the registry pushes a source update that changes
+    // that field. The pointer that EDS holds must stay valid.
     let source = TestSource::new().written(&config());
     let handed_out = source.borrowed_client_id();
 
     source.set_property("client-id", "client-def456");
     let churn = churn_the_allocator("client-abc123");
 
-    // SAFETY: the pointer is expected to still be live — see this function's
-    // own point.
+    // SAFETY: the pointer must still be live. This test exists to prove it.
     assert_eq!(
         unsafe { text_at(handed_out) }.as_deref(),
         Some("client-abc123"),
@@ -408,13 +405,13 @@ fn a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes() 
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn a_pointer_handed_out_survives_writes_arriving_on_another_thread() {
-    // The same rule as the test above, minus the part that made it easy. The
-    // registry pushes source updates on whatever thread the `GDBusProxy`
-    // notify lands on, while `EOAuth2Service`'s vfuncs answer on whichever
-    // thread wanted a token, so the two really are concurrent — and the
-    // storage a retired value moves into is a `Vec`, which reallocates.
-    // Moving a `CString` moves the pointer and not the bytes, so a pointer
-    // into a retired value has to survive every one of those reallocations.
+    // The same rule as the test above, but on two threads. The registry pushes
+    // source updates on the thread where the `GDBusProxy` notify arrives. The
+    // vfuncs of `EOAuth2Service` answer on the thread that wants a token. Thus
+    // the two are truly concurrent. A retired value moves into a `Vec`, which
+    // reallocates. A move of a `CString` moves the pointer, not the bytes.
+    // Thus a pointer into a retired value must stay valid after each
+    // reallocation.
     let source = TestSource::new().written(&config());
     let handed_out = source.borrowed_client_id();
 
@@ -425,14 +422,14 @@ fn a_pointer_handed_out_survives_writes_arriving_on_another_thread() {
                 client_id: Some(format!("rotating-{round}")),
                 ..config()
             };
-            // SAFETY: a live source, kept alive by the `TestSource` the main
-            // thread joins this one before dropping.
+            // SAFETY: a live source. The `TestSource` keeps it alive, and the
+            // main thread joins this thread before it drops the `TestSource`.
             unsafe { apply(shared.source(), &rotating) };
         }
     });
 
     for _ in 0..2000 {
-        // SAFETY: the pointer is expected to still be live — that is the point.
+        // SAFETY: the pointer must still be live. This test exists to prove it.
         assert_eq!(
             unsafe { text_at(handed_out) }.as_deref(),
             Some("client-abc123"),
@@ -444,24 +441,27 @@ fn a_pointer_handed_out_survives_writes_arriving_on_another_thread() {
 }
 
 // ---------------------------------------------------------------------------
-// The three contracts this module states in prose and nothing held it to:
-// that `E_SOURCE_PARAM_SETTING` is what persists these seven properties, that
-// `apply` raises `notify` for each one, and that overriding
-// `GObjectClass`'s two property vfuncs did not swallow the parent class's own.
+// Three contracts that the module states in prose, but that no test held it
+// to:
+//
+// - `E_SOURCE_PARAM_SETTING` persists these seven properties.
+// - `apply` raises `notify` for each property.
+// - The override of the two property vfuncs of `GObjectClass` does not hide
+//   the property of the parent class.
 
-/// Records the `GParamSpec` name of every `notify` emission.
+/// Records the `GParamSpec` name of each `notify` emission.
 ///
 /// # Safety
 ///
-/// `data` must point at a live `Mutex<Vec<String>>` — a `notify` handler's
-/// signature, with the user-data the connection was made with.
+/// `data` must point to a live `Mutex<Vec<String>>`. The signature is that of
+/// a `notify` handler, with the user-data of the connection.
 unsafe extern "C" fn record_notify(
     _object: *mut GObject,
     pspec: *mut GParamSpec,
     data: *mut c_void,
 ) {
-    // SAFETY: the contract above, and `pspec` is the emission's own, alive
-    // for its duration.
+    // SAFETY: the contract above. `pspec` belongs to the emission and stays
+    // alive for its duration.
     unsafe {
         let seen = &*data.cast::<Mutex<Vec<String>>>();
         let name = CStr::from_ptr((*pspec).name).to_string_lossy().into_owned();
@@ -471,14 +471,14 @@ unsafe extern "C" fn record_notify(
     }
 }
 
-/// The property names `notify` fires with while `body` runs.
+/// The property names that `notify` sends while `body` runs.
 ///
-/// Panicking inside a GObject signal handler would unwind through C, so the
-/// handler above only records; every assertion happens out here.
+/// A panic in a GObject signal handler unwinds through C. Thus the handler
+/// above only records, and all assertions are here.
 fn notifications_during(extension: *mut GObject, body: impl FnOnce()) -> Vec<String> {
     let seen: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    // SAFETY: `record_notify` has `notify`'s signature, and `seen` outlives
-    // `body`, which is the only thing that can emit.
+    // SAFETY: `record_notify` has the signature of `notify`. `seen` lives
+    // longer than `body`, which is the only possible source of emissions.
     unsafe {
         connect(
             extension,
@@ -495,7 +495,8 @@ fn notifications_during(extension: *mut GObject, body: impl FnOnce()) -> Vec<Str
         .clone()
 }
 
-/// The names of [`PROPERTY_NAMES`], sorted — what a full `apply` must notify.
+/// The names of [`PROPERTY_NAMES`], sorted: the names that a full `apply`
+/// must notify.
 fn every_property_name() -> Vec<String> {
     let mut names: Vec<String> = PROPERTY_NAMES
         .iter()
@@ -507,15 +508,15 @@ fn every_property_name() -> Vec<String> {
 
 #[test]
 fn applying_a_config_raises_notify_for_every_property_it_wrote() {
-    // `apply`'s doc gives exactly one reason for going through
-    // `g_object_set_property` instead of writing the fields directly: each
-    // write raises `notify`, which is what carries a re-run discovery or
-    // re-registration across the `GBinding`s
-    // `jmap_backend_collection::child_added` puts between an account's
-    // extension and its children's. A write that bypassed the property system
-    // would update the account and silently strand every child on the
-    // registration it had before — no error, no log line, just children whose
-    // token refresh keeps using a client id the server has forgotten.
+    // The doc of `apply` gives one reason why it uses `g_object_set_property`
+    // and does not write the fields directly: each write raises `notify`.
+    // `notify` carries a new discovery or registration across the `GBinding`s
+    // that `jmap_backend_collection::child_added` puts between the extension
+    // of an account and the extensions of its children. A write that bypassed
+    // the property system would update the account but silently keep each
+    // child on its old registration. There would be no error and no log line.
+    // The token refresh of the children would use a client id that the server
+    // no longer knows.
     let source = TestSource::new();
     let extension = source.extension();
 
@@ -532,28 +533,28 @@ fn applying_a_config_raises_notify_for_every_property_it_wrote() {
     );
 }
 
-/// `Fields::set` performs no write at all when the value is unchanged, yet
-/// the property system still emits `notify`, because [`Extension`]'s pspecs
-/// are not `G_PARAM_EXPLICIT_NOTIFY`. The bindings onto an account's children
-/// therefore re-sync on every `apply`, whether or not anything moved.
+/// `Fields::set` does not write when the value is unchanged. But the property
+/// system still emits `notify`, because the pspecs of [`Extension`] are not
+/// `G_PARAM_EXPLICIT_NOTIFY`. Thus the bindings to the children of an account
+/// synchronise again on each `apply`, also when no value changed.
 ///
-/// Not asserted where EDS owns the class: `ESourceOAuth2Client`'s setters do
-/// take `G_PARAM_EXPLICIT_NOTIFY` and return early on an equal value, so an
-/// unchanged rewrite is silent there. Nothing depends on the louder
-/// behaviour. A binding that is already in sync has nothing to carry, and
+/// Not asserted where EDS owns the class: the setters of `ESourceOAuth2Client`
+/// use `G_PARAM_EXPLICIT_NOTIFY` and return early on an equal value. Thus an
+/// unchanged rewrite emits nothing there. No code depends on the additional
+/// emissions. A binding that is already synchronised has nothing to carry, and
 /// `apply` is the only writer.
 #[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn an_unchanged_rewrite_still_raises_notify() {
-    // `Fields::set` returns early when the value did not change — that is what
-    // keeps a handed-out pointer where it was. It must not also suppress the
-    // emission: `apply` is documented as an idempotent rewrite that runs again
-    // whenever discovery or registration is redone, and a child bound with
-    // `G_BINDING_SYNC_CREATE` that was created *after* the account was last
-    // written is brought into line by exactly these redundant notifies.
-    // Nothing in this class asks for `G_PARAM_EXPLICIT_NOTIFY`, so GObject
-    // emits on every set; this pins that, since adding the flag would look
-    // like a tidy-up and would quietly cost the re-sync.
+    // `Fields::set` returns early when the value did not change. This keeps a
+    // pointer that it gave out at the same location. It must not also stop
+    // the emission. The documentation of `apply` says that it is an idempotent
+    // rewrite that runs again when discovery or registration runs again. A
+    // child bound with `G_BINDING_SYNC_CREATE`, created *after* the last write
+    // to the account, gets the current values from these redundant notifies.
+    // This class does not set `G_PARAM_EXPLICIT_NOTIFY`, thus GObject emits on
+    // each set. This test keeps that behaviour: the flag looks like a
+    // clean-up, but it would silently stop the synchronisation.
     let source = TestSource::new().written(&config());
     let extension = source.extension();
 
@@ -573,16 +574,16 @@ fn an_unchanged_rewrite_still_raises_notify() {
 
 #[test]
 fn every_field_persists_into_the_keyfile_an_evolution_restart_reads_back() {
-    // The whole reason this module stores its five — now seven — values as
-    // GObject properties rather than as plain Rust state: only a property
-    // flagged `E_SOURCE_PARAM_SETTING` reaches the account's `.source` file.
-    // That flag is *computed* here — `e-source.h` defines it as a bare
-    // `#define (1 << G_PARAM_USER_SHIFT)` with no symbol for bindgen to bind —
-    // so a wrong shift, or the flag simply going missing from `class_init`,
-    // would leave every test above passing while nothing survived a restart:
-    // discovery and registration would silently re-run on every boot, which
-    // for a deployment that rate-limits RFC 7591 registration is a good deal
-    // worse than a visible failure.
+    // The module stores its seven values (previously five) as GObject
+    // properties, not as plain Rust state, for this reason: only a property
+    // with the flag `E_SOURCE_PARAM_SETTING` gets into the `.source` file of
+    // the account. The module *calculates* that flag: `e-source.h` defines it
+    // as a bare `#define (1 << G_PARAM_USER_SHIFT)`, with no symbol for
+    // bindgen. With a wrong shift, or with no flag in `class_init`, all tests
+    // above would pass, but no value would persist after a restart. Discovery
+    // and registration would then silently run again at each start. For a
+    // deployment that rate-limits RFC 7591 registration, that is much worse
+    // than a visible failure.
     let source = TestSource::new().written(&config());
 
     let text = source.serialised();
@@ -601,11 +602,11 @@ fn every_field_persists_into_the_keyfile_an_evolution_restart_reads_back() {
         "urn:ietf:params:oauth:scope:mail offline_access",
         "https://jmap.example.com/session",
     ]) {
-        // The keyfile key EDS derives from the property name — "client-id"
-        // becomes "ClientId" — asked of EDS rather than spelled out here, so
-        // this test states that the value persists and not what EDS's own
-        // naming rule happens to be.
-        // SAFETY: a NUL-terminated property name; the result is
+        // EDS makes the keyfile key from the property name ("client-id"
+        // becomes "ClientId"). The test gets the key from EDS and does not
+        // write it here. Thus the test asserts only that the value persists,
+        // not the naming rule of EDS.
+        // SAFETY: a NUL-terminated property name. The result is
         // `(transfer full)`.
         let key = unsafe {
             let raw = e_source_parameter_to_key(property.as_ptr());
@@ -623,32 +624,32 @@ fn every_field_persists_into_the_keyfile_an_evolution_restart_reads_back() {
 
 #[test]
 fn overriding_the_property_vfuncs_did_not_swallow_the_parent_classes_own_source_property() {
-    // `class_init` writes this class's own `set_property`/`get_property` into
-    // `GObjectClass`, and installs its first property under id 1 — the same id
-    // the parent `ESourceExtension` installs its construct-only `source`
-    // property under. Ids are per-class, not per-hierarchy, so those two
-    // genuinely collide; what keeps them apart is that GObject dispatches a
-    // set through `g_type_class_peek (pspec->owner_type)` rather than through
-    // the instance's own class, so the parent's `source` reaches the parent's
-    // vfunc and never ours.
+    // `class_init` writes the `set_property`/`get_property` of this class into
+    // `GObjectClass`, and installs its first property with id 1. The parent
+    // `ESourceExtension` installs its construct-only `source` property with
+    // the same id. Ids are per class, not per hierarchy, thus the two ids
+    // truly collide. GObject keeps them separate because it dispatches a set
+    // through `g_type_class_peek (pspec->owner_type)`, not through the class
+    // of the instance. Thus the `source` of the parent goes to the vfunc of
+    // the parent, never to the vfunc of this class.
     //
-    // If that were not so, `e_source_get_extension` would hand the extension
-    // an `ESource` in a `GValue` our `set_property` would read as a string —
-    // `g_value_get_string` on an object value answers NULL after a GLib
-    // critical — and the extension would come out with a NULL source *and*
-    // a cleared `client-id`. Both halves are asserted, since either alone
-    // could be explained away.
+    // If this was not true, `e_source_get_extension` would give the extension
+    // an `ESource` in a `GValue`, and the `set_property` of this class would
+    // read it as a string. `g_value_get_string` on an object value returns
+    // NULL after a GLib critical. The extension would then have a NULL source
+    // *and* a cleared `client-id`. The test asserts the two results, because
+    // each result alone can have a different cause.
     let source = TestSource::new().written(&config());
 
     let extension = source.extension().cast::<ESourceExtension>();
-    // SAFETY: a live extension of this source; `ref_source` is
+    // SAFETY: a live extension of this source. `ref_source` is
     // `(transfer full)`.
     let owner = unsafe { e_source_extension_ref_source(extension) };
     assert_eq!(
         owner, source.0,
         "the extension lost the `ESource` the parent class stores at property id 1"
     );
-    // SAFETY: the reference `ref_source` returned.
+    // SAFETY: the reference that `ref_source` returned.
     unsafe { g_object_unref(owner.cast()) };
 
     assert_eq!(
@@ -659,45 +660,45 @@ fn overriding_the_property_vfuncs_did_not_swallow_the_parent_classes_own_source_
 }
 
 // ---------------------------------------------------------------------------
-// Re-entrancy: what a `notify` handler may do while a write is still on the
+// Re-entrancy: what a `notify` handler can do while a write is still on the
 // stack.
 //
-// This is not hypothetical for this class. Every write raises `notify`
-// synchronously, inside `g_object_set_property`; `child_added` hangs
-// `GBinding`s off exactly these emissions; and EDS's own source-restore path
+// This is a real case for this class. Each write raises `notify`
+// synchronously, in `g_object_set_property`. `child_added` attaches
+// `GBinding`s to these emissions. The EDS source-restore path
 // (`source_parse_dbus_data` -> `source_load_from_key_file` ->
-// `g_object_set_property`) re-runs every `E_SOURCE_PARAM_SETTING` property
-// whenever the registry pushes new data. So a handler that reads this
-// extension back, or writes another of its properties, is an ordinary thing
-// to happen — and the storage behind all seven is one `Mutex`, which is a
-// deadlock waiting to happen if the write were to hold it across the
-// emission.
+// `g_object_set_property`) runs each `E_SOURCE_PARAM_SETTING` property again
+// when the registry pushes new data. Thus a handler that reads this extension
+// back, or writes another of its properties, is a usual event. One `Mutex`
+// holds the storage of all seven properties. If the write held that `Mutex`
+// across the emission, a deadlock would occur.
 
-/// What [`probe_from_another_thread`] carries, and what it leaves behind.
+/// The input and the result of [`probe_from_another_thread`].
 struct Probe {
     source: Shared,
-    /// Only the first emission probes; the rest return at once, so a full
-    /// `apply` does not spawn seven threads.
+    /// Only the first emission probes. The others return immediately, so that
+    /// a full `apply` does not start seven threads.
     armed: AtomicBool,
-    /// `None` until the handler ran; `Some(None)` if the other thread could
-    /// not take the lock in time.
+    /// `None` until the handler runs. `Some(None)` if the other thread could
+    /// not get the lock in time.
     observed: Mutex<Option<Option<Config>>>,
 }
 
-/// Asks another thread to read this extension while `notify` is running, and
-/// records whether it got in.
+/// Asks another thread to read this extension while `notify` runs. Records
+/// if the read was successful.
 ///
-/// The read happens on another thread on purpose. Reading from *this* one
-/// answers the same question — and
+/// The read is deliberately on another thread. A read from *this* thread
+/// answers the same question, and
 /// [`a_notify_handler_can_read_the_extension_back_on_its_own_thread`] does
-/// exactly that — but a regression there expresses itself as a re-locked
-/// `std::sync::Mutex`, i.e. a hang, which is a far worse test failure than an
-/// assertion. A bounded wait from a second thread turns the same finding into
-/// a clean one.
+/// that. But there, a regression shows as a second lock of a
+/// `std::sync::Mutex`, which is a hang. A hang is a much worse test failure
+/// than an assertion. A limited wait from a second thread gives the same
+/// finding as a clean failure.
 ///
 /// # Safety
 ///
-/// `data` must point at a live [`Probe`]; the rest is `notify`'s signature.
+/// `data` must point to a live [`Probe`]. The rest is the signature of
+/// `notify`.
 unsafe extern "C" fn probe_from_another_thread(
     _object: *mut GObject,
     _pspec: *mut GParamSpec,
@@ -712,8 +713,9 @@ unsafe extern "C" fn probe_from_another_thread(
     let shared = probe.source;
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        // SAFETY: a live source — the test joins nothing but outlives this,
-        // and a thread still blocked on the lock is itself the finding.
+        // SAFETY: a live source. The test joins no thread, but it lives longer
+        // than this read. A thread that is still blocked on the lock is the
+        // finding.
         let config = unsafe { read(shared.source()) };
         let _ = sender.send(config);
     });
@@ -733,8 +735,8 @@ fn another_thread_can_read_the_extension_while_notify_is_running() {
         armed: AtomicBool::new(true),
         observed: Mutex::new(None),
     };
-    // SAFETY: the handler has `notify`'s signature, and `probe` outlives every
-    // emission this test causes.
+    // SAFETY: the handler has the signature of `notify`, and `probe` lives
+    // longer than all emissions that this test causes.
     unsafe {
         connect(
             source.extension(),
@@ -766,15 +768,16 @@ fn another_thread_can_read_the_extension_while_notify_is_running() {
     );
 }
 
-/// Where [`read_on_the_emitting_thread`] leaves what it saw.
+/// The location where [`read_on_the_emitting_thread`] puts what it read.
 static SEEN_BY_THE_EMITTING_THREAD: Mutex<Option<Config>> = Mutex::new(None);
 
-/// Reads the extension back from inside its own `notify` handler, on the
-/// thread that is emitting.
+/// Reads the extension back from its own `notify` handler, on the thread that
+/// emits.
 ///
 /// # Safety
 ///
-/// `data` must point at a live `ESource`; the rest is `notify`'s signature.
+/// `data` must point to a live `ESource`. The rest is the signature of
+/// `notify`.
 unsafe extern "C" fn read_on_the_emitting_thread(
     _object: *mut GObject,
     _pspec: *mut GParamSpec,
@@ -789,25 +792,24 @@ unsafe extern "C" fn read_on_the_emitting_thread(
 
 #[test]
 fn a_notify_handler_can_read_the_extension_back_on_its_own_thread() {
-    // The contract stated without the second thread
+    // The same contract, without the second thread that
     // `another_thread_can_read_the_extension_while_notify_is_running` uses to
-    // keep its failure clean: all seven fields sit behind one
-    // `std::sync::Mutex`, so if `notify` were emitted while the write still
-    // held it, a handler that reads the extension back on the emitting thread
-    // would re-lock and wedge.
+    // get a clean failure. One `std::sync::Mutex` holds all seven fields. If
+    // `notify` was emitted while the write still held it, a handler that
+    // reads the extension back on the emitting thread would lock it again and
+    // stop.
     //
-    // It does not, and the reason is worth writing down because it is
-    // GObject's and not this module's: `g_object_set_property` is
-    // `g_object_setv`, which freezes the object's notify queue around the
-    // `set_property` call and thaws it afterwards, so the emission is always
-    // *outside* the critical section. Established rather than read off the
-    // documentation — deliberately emitting `g_object_notify` from inside
-    // this class's own locked section, which is the worst a change here could
-    // do, still did not wedge this test or its sibling, because that emission
-    // was queued too.
+    // This does not occur. The reason is in GObject, not in this module:
+    // `g_object_set_property` is `g_object_setv`, which freezes the notify
+    // queue of the object around the `set_property` call and thaws it after
+    // the call. Thus the emission is always *outside* the critical section.
+    // This was found by experiment, not read from the documentation: a
+    // deliberate `g_object_notify` from the locked section of this class (the
+    // worst possible change here) did not stop this test or the related test.
+    // GObject also put that emission in the queue.
     let source = TestSource::new().written(&config());
-    // SAFETY: the handler has `notify`'s signature, and the source outlives
-    // every emission this test causes.
+    // SAFETY: the handler has the signature of `notify`, and the source lives
+    // longer than all emissions that this test causes.
     unsafe {
         connect(
             source.extension(),
@@ -833,16 +835,16 @@ fn a_notify_handler_can_read_the_extension_back_on_its_own_thread() {
     );
 }
 
-/// Only the first emission writes back; without this a re-entrant write would
-/// recurse for as long as GObject kept emitting.
+/// Only the first emission writes back. Without this flag, a re-entrant write
+/// would recurse while GObject continues to emit.
 static REENTRANT_WRITE_ARMED: AtomicBool = AtomicBool::new(true);
 
-/// Writes a *different* property of the same extension from inside its
-/// `notify` handler.
+/// Writes a *different* property of the same extension from its `notify`
+/// handler.
 ///
 /// # Safety
 ///
-/// `object` is the emitting extension; the rest is `notify`'s signature.
+/// `object` is the emitting extension. The rest is the signature of `notify`.
 unsafe extern "C" fn write_another_property(
     object: *mut GObject,
     _pspec: *mut GParamSpec,
@@ -864,13 +866,15 @@ unsafe extern "C" fn write_another_property(
 
 #[test]
 fn a_notify_handler_can_write_another_property_of_the_same_extension() {
-    // The shape `child_added`'s bindings already have — a handler on one
-    // property setting another — turned on this very object. Two things have
-    // to hold: the nested write must not deadlock against the outer one (this
-    // class keeps all seven fields behind one `Mutex`), and it must *survive*,
-    // rather than be undone when the outer write's own bookkeeping resumes.
+    // The bindings of `child_added` have this shape (a handler on one
+    // property sets another), here applied to the same object. Two conditions
+    // must be true. The nested write must not cause a deadlock with the outer
+    // write (this class keeps all seven fields behind one `Mutex`). And the
+    // nested write must *stay*: the outer write must not undo it when its
+    // bookkeeping continues.
     let source = TestSource::new().written(&config());
-    // SAFETY: the handler has `notify`'s signature and takes no user-data.
+    // SAFETY: the handler has the signature of `notify` and takes no
+    // user-data.
     unsafe {
         connect(
             source.extension(),
@@ -896,22 +900,25 @@ fn a_notify_handler_can_write_another_property_of_the_same_extension() {
     );
 }
 
-/// Exactly one `ESourceExtension` class answers to [`EXTENSION_NAME`], and on
-/// an EDS that brings its own it is upstream's rather than this crate's.
+/// Exactly one `ESourceExtension` class answers to [`EXTENSION_NAME`]. On an
+/// EDS that has its own class, it is the upstream class, not the class of this
+/// crate.
 ///
-/// The group name and the class behind it are one decision, not two, and
-/// getting them out of step is silent in both directions. A build that kept
-/// the name `[JMAP OAuth2]` while upstream's `EOAuth2ServiceDynamic` looked
-/// in `[OAuth2 Client]` would store a registration nothing reads; one that
-/// registered this crate's own `Extension` under the name `OAuth2 Client`
-/// would put two classes under one key in
-/// `source_find_extension_classes_rec`'s hash table, and whichever
-/// `g_type_children` walked last would win the lookup, including for EDS's
-/// own `.source` parser.
+/// The group name and its class are one decision, not two. If they do not
+/// agree, the failure is silent in the two directions:
+///
+/// - If a build kept the name `[JMAP OAuth2]` while the upstream
+///   `EOAuth2ServiceDynamic` looks in `[OAuth2 Client]`, it would store a
+///   registration that nothing reads.
+/// - If a build registered the `Extension` of this crate with the name
+///   `OAuth2 Client`, it would put two classes under one key in the hash
+///   table of `source_find_extension_classes_rec`. The last class that
+///   `g_type_children` found would win the lookup, also for the EDS `.source`
+///   parser.
 #[test]
 fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
     let source = TestSource::new();
-    // SAFETY: a live source; the extension is created on demand, and
+    // SAFETY: a live source. EDS creates the extension on demand, and
     // `EXTENSION_NAME` is a 'static NUL-terminated string.
     let extension = unsafe { e_source_get_extension(source.0, EXTENSION_NAME.as_ptr()) };
     assert!(
@@ -919,8 +926,8 @@ fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
         "no class answers to {EXTENSION_NAME:?}"
     );
 
-    // SAFETY: a live GObject. This is the `G_TYPE_FROM_INSTANCE` macro, spelled out,
-    // and `g_type_name` on a registered type returns a 'static string.
+    // SAFETY: a live GObject. This is the `G_TYPE_FROM_INSTANCE` macro, written
+    // in full, and `g_type_name` on a registered type returns a 'static string.
     let instance_type = unsafe { (*(*extension.cast::<GTypeInstance>()).g_class).g_type };
     let type_name = unsafe { CStr::from_ptr(g_type_name(instance_type)) };
 
@@ -932,7 +939,8 @@ fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
     #[cfg(eds_oauth2_dynamic)]
     {
         assert_eq!(EXTENSION_NAME, c"OAuth2 Client");
-        // SAFETY: no arguments, and the type registers itself on first call.
+        // SAFETY: the function has no arguments, and the type registers itself
+        // on the first call.
         assert_eq!(instance_type, unsafe {
             eds_sys::e_source_oauth2_client_get_type()
         });
@@ -940,24 +948,25 @@ fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
     }
 }
 
-/// A registration written through this crate's own door comes back out of
-/// upstream's accessors, which is the door `EOAuth2ServiceDynamic` reads it
-/// through: `eos_dynamic_get_client_id` and its siblings call
-/// `e_source_oauth2_client_dup_*`, never the property API [`apply`] writes.
+/// The upstream accessors read back a registration that the door of this
+/// crate wrote. `EOAuth2ServiceDynamic` uses these accessors:
+/// `eos_dynamic_get_client_id` and the related functions call
+/// `e_source_oauth2_client_dup_*`, never the property API that [`apply`]
+/// writes.
 ///
-/// Property name and accessor are separately plausible and separately wrong:
-/// `g_object_set_property` with a misspelled name is a runtime `g-critical`
-/// this crate's own `read` would never notice, because it would read the same
-/// misspelled name straight back.
+/// The property name and the accessor can each look correct but be wrong.
+/// `g_object_set_property` with an incorrect name causes a runtime
+/// `g-critical`. The `read` of this crate would not detect it, because it would
+/// read back the same incorrect name.
 #[cfg(eds_oauth2_dynamic)]
 #[test]
 fn what_this_crate_writes_is_what_upstreams_own_service_reads() {
     let source = TestSource::new().written(&config());
-    // SAFETY: a live source carrying the group `written` just created.
+    // SAFETY: a live source with the group that `written` created.
     let extension = unsafe { e_source_get_extension(source.0, EXTENSION_NAME.as_ptr()) };
 
-    // SAFETY: a live `ESourceOAuth2Client`, the type the test above pins,
-    // and each `dup_` returns a newly allocated string or NULL.
+    // SAFETY: a live `ESourceOAuth2Client` (the type that the test above
+    // asserts). Each `dup_` returns a newly allocated string or NULL.
     let read_back =
         |dup: unsafe extern "C" fn(*mut eds_sys::ESourceOAuth2Client) -> *mut c_char| unsafe {
             let text = dup(extension.cast());
@@ -998,18 +1007,18 @@ fn what_this_crate_writes_is_what_upstreams_own_service_reads() {
     );
 }
 
-/// The counterpart to the four pointer-stability tests above, which are about
-/// storage this crate owns and are not compiled where it does not.
+/// The counterpart to the four pointer-stability tests above. Those tests
+/// examine storage that this crate owns. The compiler does not include them
+/// where this crate does not own the storage.
 ///
-/// `jmap_config::oauth2`'s borrowed accessors hand an `EOAuth2Service` vfunc a
-/// `const gchar *` into an [`Extension`]'s own `CString`. Where EDS owns the
-/// class behind the group, the object there is an `ESourceOAuth2Client` and
-/// there is no such `CString` to point at, so they answer NULL rather than
-/// reading one type's memory as another's. Nothing is lost by that: the
-/// service those vfuncs serve is not registered on this build, and upstream's
-/// reads the group through its own accessors. The owned door still works, and
-/// is asserted here too so that a NULL cannot be mistaken for "nothing was
-/// stored".
+/// The borrowed accessors of `jmap_config::oauth2` give an `EOAuth2Service`
+/// vfunc a `const gchar *` into the `CString` of an [`Extension`]. Where EDS
+/// owns the class of the group, the object is an `ESourceOAuth2Client`, and no
+/// such `CString` exists. Thus the accessors return NULL, and do not read the
+/// memory of one type as another type. No function is lost: this build does
+/// not register the service of those vfuncs, and the upstream service reads
+/// the group through its own accessors. The owned door still works. The test
+/// also asserts it, so that a NULL is not mistaken for "nothing was stored".
 #[cfg(eds_oauth2_dynamic)]
 #[test]
 fn the_borrowed_door_is_shut_where_eds_owns_the_class() {

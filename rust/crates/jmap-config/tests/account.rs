@@ -1,19 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The account a setup writes, against real `ESource`s — and read back with the
-// collection backend's own reader rather than with assertions of this crate's
-// own devising.
+// The account that a setup writes, on real `ESource`s. The tests read it back
+// with the reader of the collection backend, not with assertions of this crate.
 //
-// That is the whole point of the file. `jmap-backend-collection`'s
-// `collection_source` is tested against sources built by hand with the EDS
-// setters, and would go on passing if this crate wrote the host into the wrong
-// group; this crate could assert that it wrote what it meant to write and be
-// equally blind. What neither covers alone is the join — that an account
-// committed by the setup is an account the registry's backend recognises. A gap
-// there is not a failed operation: it is an account that appears in the sidebar
-// and never produces a child, which is precisely the failure mode that leaves
-// nothing in any log.
+// That is the purpose of this file. The `collection_source` tests of
+// `jmap-backend-collection` use sources built by hand with the EDS setters.
+// They continue to pass if this crate writes the host into the wrong group.
+// Assertions of this crate on its own output have the same blind spot. Neither
+// tests the join: an account that the setup commits must be an account that
+// the backend of the registry recognises. A gap there is not a failed
+// operation. It is an account that shows in the sidebar but never makes a
+// child, and this failure writes nothing in a log.
 
 use std::ffi::CString;
 use std::ptr;
@@ -24,8 +22,8 @@ use eds_sys::{
     e_source_backend_get_backend_name, e_source_collection_get_identity, e_source_get_extension,
     e_source_has_extension, e_source_new_with_uid, e_source_set_enabled,
 };
-// The token-cache-key getter: whichever one the installed EDS actually has —
-// see `jmap_config::account`'s module comment.
+// The getter for the token cache key that the installed EDS has. Refer to the
+// module comment of `jmap_config::account`.
 #[cfg(not(eds_credential_store_id))]
 use eds_sys::e_source_authentication_get_credential_name as get_credential_id;
 #[cfg(eds_credential_store_id)]
@@ -39,15 +37,14 @@ use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
 
-/// An `ESource` in the state a setup commits into: a uid and nothing else.
-/// `e_source_new_with_uid` with a NULL D-Bus object is what EDS itself uses for
-/// a source read from a keyfile, so the extension machinery behaves as it does
-/// in the registry.
+/// An `ESource` in the state that a setup commits into: only a uid.
+/// EDS uses `e_source_new_with_uid` with a NULL D-Bus object for a source read
+/// from a keyfile. Thus the extensions operate as they do in the registry.
 ///
-/// Nothing here registers an extension GType, deliberately: `apply` is the
-/// first thing in this process to touch `[Collection]`, `[Authentication]` or
-/// `[Security]`, and an unregistered extension type is one
-/// `e_source_get_extension` cannot find and does not create.
+/// This code deliberately registers no extension GType. `apply` is the first
+/// code in this process that uses `[Collection]`, `[Authentication]` or
+/// `[Security]`. `e_source_get_extension` cannot find, and does not create, an
+/// unregistered extension type.
 struct TestSource(*mut ESource);
 
 impl TestSource {
@@ -89,12 +86,12 @@ impl TestSource {
     }
 
     /// `[Authentication] credential-name` (or `credential-store-id` on an EDS
-    /// that has it — see `jmap_config::account`'s module comment), which the
-    /// reader has no accessor for: nothing downstream of the collection
-    /// backend reads it back, only EDS's own credentials engine does.
+    /// that has it, refer to the module comment of `jmap_config::account`).
+    /// The reader has no accessor for it. Only the EDS credentials engine reads
+    /// it, not the code after the collection backend.
     fn credential_name(&self) -> Option<String> {
         let auth: *mut ESourceAuthentication = self.authentication();
-        // SAFETY: a live extension; the string is owned by it.
+        // SAFETY: a live extension, which owns the string.
         unsafe { read_string(get_credential_id(auth)) }
     }
 
@@ -103,49 +100,51 @@ impl TestSource {
             self.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
             "no [Authentication] group was written at all"
         );
-        // SAFETY: the extension is present, so this returns the source's own.
+        // SAFETY: the extension is present, so this returns the extension of
+        // the source.
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast() }
     }
 
     fn uid(&self) -> String {
-        // SAFETY: a live source; the uid is owned by it and never NULL.
+        // SAFETY: a live source, which owns the uid. The uid is never NULL.
         unsafe { read_string(eds_sys::e_source_get_uid(self.0)) }
             .expect("a constructed ESource always has a uid")
     }
 
-    /// `[Collection]`'s own two fields, which the reader has no accessor for:
-    /// the backend name is the registry's business rather than the backend's,
-    /// and the identity is nobody's yet.
+    /// The two fields of `[Collection]`, which the reader has no accessor for.
+    /// The registry uses the backend name, not the backend. No code uses the
+    /// identity yet.
     fn collection(&self) -> *mut ESourceCollection {
         assert!(
             self.has_extension(E_SOURCE_EXTENSION_COLLECTION),
             "no [Collection] group was written at all"
         );
-        // SAFETY: the extension is present, so this returns the source's own.
+        // SAFETY: the extension is present, so this returns the extension of
+        // the source.
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast() }
     }
 
     fn backend_name(&self) -> Option<String> {
         let collection: *mut ESourceBackend = self.collection().cast();
-        // SAFETY: `ESourceCollection` derives from `ESourceBackend`; the string
-        // is owned by the extension.
+        // SAFETY: `ESourceCollection` derives from `ESourceBackend`, and the
+        // extension owns the string.
         unsafe { read_string(e_source_backend_get_backend_name(collection)) }
     }
 
     fn identity(&self) -> Option<String> {
-        // SAFETY: a live extension of the type the name selects.
+        // SAFETY: a live extension of the type that the name selects.
         unsafe { read_string(e_source_collection_get_identity(self.collection())) }
     }
 
-    /// The account as the *setup* reads it back — what the widgets are filled
-    /// from and what `check_complete` is asked about.
+    /// The account as the *setup* reads it. The widgets get their values from
+    /// it, and `check_complete` examines it.
     fn account(&self) -> Account {
         // SAFETY: a live source.
         unsafe { read(self.0) }
     }
 
     fn set_enabled(self, enabled: bool) -> Self {
-        // SAFETY: a live source; the flag is a plain property.
+        // SAFETY: a live source, and the flag is a plain property.
         unsafe { e_source_set_enabled(self.0, if enabled { GTRUE } else { GFALSE }) };
         self
     }
@@ -158,8 +157,8 @@ impl Drop for TestSource {
     }
 }
 
-/// An account with every field filled in, so that a field written into the
-/// wrong group has somewhere wrong to land.
+/// An account with all fields filled in. Thus a field written into the wrong
+/// group gives a wrong value that the test sees.
 fn account() -> Account {
     Account {
         identity: "vera@example.com".to_owned(),
@@ -211,7 +210,7 @@ fn the_identity_is_written_where_the_collection_extension_holds_it() {
     let source = TestSource::new().written(&account());
 
     assert_eq!(source.identity().as_deref(), Some("vera@example.com"));
-    // And it is not the login name, which is the other string on the page.
+    // The identity is not the login name, which is the other string on the page.
     assert_eq!(source.user().as_deref(), Some("vera"));
 }
 
@@ -234,18 +233,18 @@ fn an_account_with_no_part_switched_on_is_written_as_one() {
     account.parts = Parts::NONE;
     let source = TestSource::new().written(&account);
 
-    // Not `Parts::ALL`, which is what a source with no `[Collection]` group at
-    // all reads as: the reader cannot tell "everything off" from "nothing
-    // said" — `e_collection_backend_get_part_enabled` answers TRUE for a
-    // source that says nothing — so the writer has to say it.
+    // Not `Parts::ALL`, which a source with no `[Collection]` group reads as.
+    // `e_collection_backend_get_part_enabled` answers TRUE for a source with no
+    // value. Thus the reader cannot tell "all off" from "no value", and the
+    // writer must write the value.
     assert_eq!(source.parts(), Parts::NONE);
 }
 
 #[test]
 fn a_plain_text_account_is_written_as_one_rather_than_left_to_default() {
-    // Loopback, because that is the only host the shared `origin` rules let an
-    // account reach in the clear — and it is the account the mock-server recipe
-    // documents, which is the one an unattended run of this project produces.
+    // Loopback, because the shared `origin` rules permit plain text only to
+    // that host. The mock-server recipe documents this account, and an
+    // unattended run of this project makes it.
     let mut account = account();
     account.connection.secure = false;
     account.connection.host = "127.0.0.1".to_owned();
@@ -267,15 +266,14 @@ fn a_plain_text_account_is_written_as_one_rather_than_left_to_default() {
 
 #[test]
 fn a_public_host_in_the_clear_is_written_faithfully_and_refused_by_the_reader() {
-    // The writer is not the gate, and must not quietly become one: an account
-    // it silently "fixed" to TLS would be an account whose file disagrees with
-    // what the user was shown. What stops the request going out in the clear is
-    // `origin`, one layer down and shared by every backend — so what this
-    // asserts is that the refusal survives being written to a source and read
-    // back, rather than only holding for hand-built `Connection`s.
+    // The writer is not the gate, and must not secretly become one. If it
+    // silently changed an account to TLS, the file disagrees with what the user
+    // saw. `origin`, one layer down and shared by all backends, stops plain-text
+    // requests. Thus this test makes sure that the refusal stays after a write
+    // to a source and a read back, not only for hand-built `Connection`s.
     //
-    // The UI half of it — telling the user before they commit, rather than
-    // after the first sync fails — is `check_complete`'s
+    // `check_complete` does the UI part: it tells the user before the commit,
+    // not after the first sync fails
     // (`plaintext_to_a_server_that_is_not_this_machine_is_refused` in
     // `tests/complete.rs`).
     let mut account = account();
@@ -297,8 +295,8 @@ fn an_account_that_names_no_port_leaves_the_scheme_to_choose_one() {
     let source = TestSource::new().written(&account);
 
     let server = source.server().expect("the account names a server");
-    // Zero, which is how the keyfile spells "not set", read back as `None`
-    // rather than as a request for port zero.
+    // The keyfile writes "not set" as zero. It reads back as `None`, not as a
+    // request for port zero.
     assert_eq!(server.connection.port, None);
     assert_eq!(
         server.target,
@@ -316,21 +314,20 @@ fn an_anonymous_account_is_read_back_as_anonymous() {
     assert_eq!(source.user(), None);
     let server = source.server().expect("the account names a server");
     assert_eq!(server.connection.user, None);
-    // And *not* `None`: `ESourceAuthentication:method` has no unset state. A
-    // fresh extension already reads "none", and NULL and "" both set it back to
-    // that string rather than to nothing — checked directly against the
-    // installed EDS, not assumed. So an account with no method does not
-    // round-trip through a source as `None`, and a test that expected it to
-    // would be describing a `Connection` no `ESource` can hold.
+    // *Not* `None`: `ESourceAuthentication:method` has no unset state. A new
+    // extension already reads "none", and NULL and "" both set it to that
+    // string, not to nothing. This was checked against the installed EDS. Thus
+    // an account with no method does not come back from a source as `None`.
+    // No `ESource` can hold a `Connection` with that value.
     assert_eq!(server.connection.auth_method.as_deref(), Some("none"));
 }
 
 #[test]
 fn an_oauth2_account_is_given_a_credential_name_of_its_own_uid() {
-    // eds#663: the token-storage key an OAuth2 account's credentials used to
-    // fall out of step with (the account's host) is replaced with its own
-    // uid, stable across a server move and never shared between two accounts
-    // of the same host.
+    // eds#663: the token storage key was the host of the account, and the
+    // credentials of an OAuth2 account did not always agree with it. The key
+    // is now the uid of the account. The uid stays the same when the server
+    // moves, and two accounts on the same host never share it.
     let mut account = account();
     account.connection.auth_method = Some(jmap_backend_core::oauth2::OAUTH2_METHOD.to_owned());
     let source = TestSource::new().written(&account);
@@ -344,11 +341,11 @@ fn an_oauth2_account_is_given_a_credential_name_of_its_own_uid() {
 #[test]
 fn an_account_authenticated_via_the_jmap_oauth2_service_is_given_a_credential_name() {
     // The setup UI and "Look Up Account Details" both write
-    // `OAUTH2_AUTH_METHOD` (the particular service's own name: "JMAP", or
-    // "OAuth2Dynamic" where EDS brings its own service), never the generic
-    // `OAUTH2_METHOD` alias ("OAuth2") the test above uses. A real account
-    // never reaches `apply` with that generic spelling, so a check against it
-    // alone would never see the field a real account actually carries.
+    // `OAUTH2_AUTH_METHOD`: the name of the specific service ("JMAP", or
+    // "OAuth2Dynamic" where EDS has its own service). They never write the
+    // generic `OAUTH2_METHOD` alias ("OAuth2") that the test above uses. A real
+    // account never gets to `apply` with the generic name. Thus a test of only
+    // that name never examines the value that a real account has.
     let mut account = account();
     account.connection.auth_method = Some(
         jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD
@@ -366,9 +363,9 @@ fn an_account_authenticated_via_the_jmap_oauth2_service_is_given_a_credential_na
 
 #[test]
 fn a_password_account_is_never_given_a_credential_name() {
-    // The CAUTION this design was agreed with: on any method but OAuth2, a
-    // non-empty credential-name changes the parameter name the credentials
-    // engine passes to `authenticate`, so a password account must never carry
+    // The CAUTION from the agreed design: for all methods other than OAuth2, a
+    // non-empty credential-name changes the parameter name that the credentials
+    // engine gives to `authenticate`. Thus a password account must never have
     // one.
     let source = TestSource::new().written(&account());
 
@@ -381,12 +378,11 @@ fn a_password_account_is_never_given_a_credential_name() {
 
 #[test]
 fn switching_an_account_away_from_oauth2_clears_its_credential_name() {
-    // `apply` is idempotent in the strong sense the module comment states —
-    // after it, the source says this account and nothing of whatever it said
-    // before — and a stale credential-name left behind after the user
-    // switches an account back to a password would be worse than one never
-    // written: it would silently change which key the credentials engine
-    // looks the password up under.
+    // `apply` is idempotent in the strong sense of the module comment: after
+    // it, the source holds this account and no value from before. Assume the
+    // user changes an account back to a password. A stale credential-name is
+    // then worse than none. It silently changes the key that the credentials
+    // engine uses to find the password.
     let mut oauth2 = account();
     oauth2.connection.auth_method = Some(jmap_backend_core::oauth2::OAUTH2_METHOD.to_owned());
     let source = TestSource::new().written(&oauth2);
@@ -406,11 +402,10 @@ fn switching_an_account_away_from_oauth2_clears_its_credential_name() {
 
 #[test]
 fn committing_an_account_that_dropped_its_user_clears_the_one_that_was_there() {
-    // The case a setup exists for and a fresh-source test cannot reach: an
-    // account being *edited*. A writer that skipped the fields it has nothing
-    // to say about would leave the old login name and the old server behind,
-    // and the account would go on asking libsecret for a password under a name
-    // the user deleted.
+    // An account that the user *edits*: the main case for a setup, which a
+    // test on a new source cannot reach. If the writer skipped fields with no
+    // value, the old login name and the old server stay. The account then
+    // continues to ask libsecret for a password under a deleted name.
     let source = TestSource::new().written(&account());
 
     let second = Account {
@@ -432,9 +427,9 @@ fn committing_an_account_that_dropped_its_user_clears_the_one_that_was_there() {
         server.connection,
         Connection {
             // The one field that cannot be cleared, because EDS has no unset
-            // for it — see `an_anonymous_account_is_read_back_as_anonymous`.
-            // "none" is nevertheless the right answer here: it is what the
-            // account now means, and not the "plain/password" it used to say.
+            // state for it (refer to `an_anonymous_account_is_read_back_as_anonymous`).
+            // "none" is the correct answer: it is the new meaning of the
+            // account, not the old "plain/password".
             auth_method: Some("none".to_owned()),
             ..second.connection.clone()
         }
@@ -448,11 +443,10 @@ fn committing_an_account_that_dropped_its_user_clears_the_one_that_was_there() {
 fn the_three_groups_an_account_is_made_of_are_all_created() {
     let source = TestSource::new().written(&account());
 
-    // The reader tests for each group before reading it and answers a
-    // documented default for an absent one, so a group this never created
-    // would show up as a plausible answer rather than as a failure — except
-    // for `[Collection]`, whose absence means the registry never offers the
-    // file to a collection factory at all.
+    // The reader looks for each group before it reads it, and answers a
+    // documented default for an absent group. Thus a missing group gives a
+    // plausible answer, not a failure. The exception is `[Collection]`: without
+    // it, the registry never gives the file to a collection factory.
     for name in [
         E_SOURCE_EXTENSION_COLLECTION,
         E_SOURCE_EXTENSION_AUTHENTICATION,
@@ -468,9 +462,8 @@ fn the_three_groups_an_account_is_made_of_are_all_created() {
 
 #[test]
 fn an_interior_nul_in_a_typed_string_is_truncated_rather_than_lost() {
-    // Nothing stops a user pasting one, and a C string cannot carry it. What
-    // must not happen is the write being skipped: an account with no host is
-    // one every operation fails on.
+    // A user can paste a NUL, and a C string cannot hold it. The write must not
+    // be skipped: all operations fail on an account with no host.
     let mut account = account();
     account.identity = "vera@example.com\0and more".to_owned();
     account.connection.host = "jmap.example.com\0.evil.example".to_owned();
@@ -481,11 +474,11 @@ fn an_interior_nul_in_a_typed_string_is_truncated_rather_than_lost() {
     assert_eq!(server.connection.host, "jmap.example.com");
 }
 
-// `read`, the inverse: the account the widgets are filled from, and the one
-// `check_complete` and `commit_changes` are handed. Its acceptance is that it
-// and `apply` describe one keyfile — so most of what follows writes an account
-// and asks for it back, and the rest holds it against the reader the registry
-// will use on the same file.
+// `read`, the inverse of `apply`. It gives the account for the widgets, and the
+// account that `check_complete` and `commit_changes` get. It is correct if it
+// and `apply` describe one keyfile. Thus most tests below write an account and
+// read it back. The other tests compare it with the registry reader on the same
+// file.
 
 #[test]
 fn an_account_that_was_written_is_the_account_that_is_read_back() {
@@ -507,13 +500,12 @@ fn an_account_with_nothing_optional_in_it_round_trips_but_for_the_method() {
         source.account(),
         Account {
             connection: Connection {
-                // The one field that does not survive the trip, and the reason
-                // `read` reports what the source says rather than mapping it
-                // back: `ESourceAuthentication:method` has no unset state, so
-                // "none" is what an account with no method *is* once written —
-                // see `an_anonymous_account_is_read_back_as_anonymous`. Turning
-                // it back into `None` here would be this crate disagreeing with
-                // the collection backend about the same string.
+                // The one field that changes. `read` gives the value of the
+                // source and does not map it back. `ESourceAuthentication:method`
+                // has no unset state, so a written account with no method *is*
+                // "none" (refer to `an_anonymous_account_is_read_back_as_anonymous`).
+                // If `read` changed it to `None`, this crate and the collection
+                // backend disagree about the same string.
                 auth_method: Some("none".to_owned()),
                 ..written.connection.clone()
             },
@@ -530,10 +522,10 @@ fn a_plain_text_account_is_read_back_as_one() {
     written.connection.port = Some(8080);
     let source = TestSource::new().written(&written);
 
-    // The account the mock-server recipe documents, and the one case where the
-    // difference between "TLS off" and "said nothing" decides whether a
-    // password goes out in the clear: an absent `[Security]` group reads as
-    // TLS, so this only comes back as insecure because `apply` wrote it.
+    // The account from the mock-server recipe. Here, "TLS off" versus "no
+    // value" decides if a password goes out in plain text. An absent
+    // `[Security]` group reads as TLS, so this reads as insecure only because
+    // `apply` wrote it.
     assert_eq!(source.account(), written);
 }
 
@@ -541,10 +533,10 @@ fn a_plain_text_account_is_read_back_as_one() {
 fn the_connection_the_setup_reads_back_is_the_one_the_registry_will_read() {
     let source = TestSource::new().written(&account());
 
-    // The join, in the direction `read` adds: two descriptions of one keyfile,
-    // one used to fill the dialog's entries and one used to open the
-    // connection the account is for. A field this crate read out of the wrong
-    // group would show the user a server the backend never contacts.
+    // The join, in the direction that `read` adds. Two descriptions of one
+    // keyfile: one fills the entries of the dialog, and one opens the
+    // connection. If this crate read a field from the wrong group, the user
+    // sees a server that the backend never connects to.
     let server = source.server().expect("the account names a server");
     assert_eq!(source.account().connection, server.connection);
     assert_eq!(source.account().parts, source.parts());
@@ -559,25 +551,23 @@ fn a_source_that_says_nothing_reads_as_an_account_with_nothing_in_it() {
         Account {
             identity: String::new(),
             connection: Connection {
-                // Empty rather than absent: `Account` is what the entries hold,
-                // and an entry the user has not filled in is the empty string.
-                // `complete::check` is where that becomes the `None` the shared
-                // `origin` rules take.
+                // Empty, not absent: `Account` holds the entry values, and an
+                // entry with no input is the empty string. `complete::check`
+                // changes it to the `None` that the shared `origin` rules use.
                 host: String::new(),
                 port: None,
                 user: None,
                 auth_method: None,
-                // Absent `[Security]` is TLS, which is the collection
-                // backend's rule and not a second one: reading the `secure`
-                // property of an extension that is not there would answer
-                // FALSE, and a dialog opened on a hand-written account would
-                // offer to commit it back with TLS switched off.
+                // Absent `[Security]` is TLS. This is the rule of the
+                // collection backend, not a second rule. The `secure` property
+                // of an absent extension reads FALSE. Then a dialog on a
+                // hand-written account offers to commit it with TLS off.
                 secure: true,
             },
-            // And absent `[Collection]` is every part, because that is what
-            // `e_collection_backend_get_part_enabled` answers for a source that
-            // says nothing — the dialog has to show the account the registry
-            // sees, not an emptier one.
+            // Absent `[Collection]` is all parts, because
+            // `e_collection_backend_get_part_enabled` answers that for a source
+            // with no value. The dialog must show the account that the registry
+            // sees, not an account with fewer parts.
             parts: Parts::ALL,
             // Absent `[JMAP OAuth2]` reads as `Config::default()`, whose
             // `client_id` is `None`.
@@ -592,9 +582,9 @@ fn reading_an_account_does_not_add_a_group_to_it() {
 
     let _ = source.account();
 
-    // `read` is handed the user's own file, and `e_source_get_extension`
-    // creates what it cannot find. A read that left three groups behind would
-    // turn opening the account editor and pressing Cancel into a write.
+    // `read` gets the file of the user, and `e_source_get_extension` creates a
+    // missing extension. If a read added three groups, to open the account
+    // editor and push Cancel becomes a write.
     for name in [
         E_SOURCE_EXTENSION_COLLECTION,
         E_SOURCE_EXTENSION_AUTHENTICATION,
@@ -618,21 +608,22 @@ fn the_parts_of_a_disabled_account_are_still_the_ones_it_was_set_up_with() {
     };
     let source = TestSource::new().written(&written).set_enabled(false);
 
-    // Deliberately *not* the registry's answer, which is the one place the two
-    // readers differ on purpose. `parts_of` folds in the source's own `enabled`
-    // flag because a disabled account has no parts to populate; `read` must not,
-    // because `enabled` is not a field of `Account` and `apply` writes all three
-    // switches every time. A `read` that answered `NONE` here would show the
-    // user three cleared check boxes and then commit them, turning "hide this
-    // account for now" into permanently losing which parts it offered.
+    // Deliberately *not* the answer of the registry. This is the one place
+    // where the two readers differ on purpose. `parts_of` includes the
+    // `enabled` flag of the source, because a disabled account has no parts to
+    // populate. `read` must not, because `enabled` is not a field of `Account`
+    // and `apply` writes all three switches each time. If `read` answered
+    // `NONE`, the user sees three cleared check boxes, and the commit writes
+    // them. Then "hide this account for now" permanently loses its parts.
     assert_eq!(source.parts(), Parts::NONE);
     assert_eq!(source.account(), written);
 }
 
 #[test]
 fn a_read_on_another_thread_copies_strings_the_main_thread_is_replacing() {
-    // A config lookup worker reads the collection source on a pool thread
-    // while the assistant's widgets can set its host on the main thread.
+    // A config lookup worker reads the collection source on a pool thread. At
+    // the same time, the widgets of the assistant can set its host on the main
+    // thread.
     struct Shared(*mut ESource);
     // SAFETY: an `ESource` and its extensions guard their state with a lock.
     unsafe impl Send for Shared {}
@@ -648,8 +639,8 @@ fn a_read_on_another_thread_copies_strings_the_main_thread_is_replacing() {
     let writer = {
         let shared = std::sync::Arc::clone(&shared);
         std::thread::spawn(move || {
-            // SAFETY: a live source with an `[Authentication]` extension, as
-            // `apply` wrote it.
+            // SAFETY: a live source with the `[Authentication]` extension that
+            // `apply` wrote.
             let auth = unsafe {
                 eds_sys::e_source_get_extension(
                     shared.0,

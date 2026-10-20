@@ -2,143 +2,137 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The JMAP account setup (M7): what Evolution's account editor writes, and
-//! eventually the `module-jmap-configuration.so` it writes it from.
+//! the `module-jmap-configuration.so` that writes it.
 //!
-//! Everything in this repository so far *reads* an account. `jmap-backend-book`
-//! and `jmap-backend-cal` read the child source they are handed,
-//! `jmap-backend-collection` reads the account source the registry hands it and
-//! writes the children that hang off it — and every one of those tests starts
-//! from a `.source` keyfile written by hand, because in Evolution the account
-//! file itself is written by the setup UI and this project had none. That is
-//! what this crate is for.
+//! The other crates in this repository *read* an account. `jmap-backend-book`
+//! and `jmap-backend-cal` read the child source that they get.
+//! `jmap-backend-collection` reads the account source from the registry and
+//! writes its child sources. All of their tests start from a `.source` keyfile
+//! written by hand: in Evolution, the setup UI writes the account file, and this
+//! project had no setup UI. This crate is that setup UI.
 //!
-//! - [`account`] is the first piece and the one the rest hangs off: the
-//!   collection `ESource` an account *is*, written from what the user typed.
-//!   It is the exact inverse of the collection backend's
-//!   `collection_source`, which is not a coincidence and is not left to be
-//!   one — `tests/account.rs` writes an
-//!   account with this and reads it back with that, because two descriptions of
-//!   one keyfile that are only checked separately are two descriptions that
-//!   drift. It reads as well as writes: [`account::read`] is what the widgets
-//!   are filled from and what the two vfuncs that decide anything are handed,
-//!   and it is total where the collection backend's reader is fallible —
-//!   a dialog being typed into is full of accounts that are not yet accounts.
-//! - [`mail`] is the three sources that hang off it — `[Mail Account]`,
-//!   `[Mail Identity]`, `[Mail Transport]`. Separate sources rather than three
-//!   more groups in the account's file, and not children of the collection
-//!   *backend* either, which is why writing them is a different operation from
-//!   writing the account rather than a longer version of it. Here the other
-//!   side of the join is not a reader but a second *writer*: the collection
-//!   backend's `prepare_mail` writes the same three sources from the registry,
-//!   and `tests/mail.rs` holds the two against each other. It also has a reader
-//!   the account source does not: the `CamelSettings` object an
-//!   `ESourceCamel` extension hands a `CamelJmapStore`, which is where the
-//!   server a setup wrote turns into the server the provider connects to, and
-//!   which `jmap-mail`'s own `ServerConfig` is asked about in the same test.
-//! - [`defaults`] is what comes before either of them: the account the dialog
-//!   already says when the user first reaches it, from the one answer the
-//!   assistant has by then — the address off its identity page. For JMAP that
-//!   is unusually well-determined, because RFC 8620 §2.2 makes the address's
-//!   own domain the place a client asks; the module says so at length. Its
-//!   joins are with both of the above: the account it offers is one
-//!   [`complete::check`] accepts, so the assistant does not open on a page
-//!   whose *Next* is greyed out with nothing on it to fix, and one the
-//!   collection backend reads back as the origin the address named.
-//! - [`complete`] is the other direction: not what a commit writes but whether
-//!   there is to be one. It is the deciding half of
-//!   `EMailConfigServiceBackend`'s `check_complete` vfunc, and it is here
-//!   for the same reason the two writers are — the decision is ordinary Rust
-//!   over an [`account::Account`] and can be tested, while the widget that will
-//!   ask it cannot be. Its join is with the *readers*: an account it accepts is
-//!   one the collection backend's `server_of` accepts, asserted by committing
-//!   each case and reading it back, because a setup that accepts what the
-//!   registry rejects has written an account that fails everywhere except in
-//!   the dialog it was typed into.
-//! - [`oauth2`] is not part of the setup dialog at all, but the storage the
-//!   real-server-readiness track needs beside it: a fifth `ESource`
-//!   extension, `[JMAP OAuth2]`, holding a deployment's discovered endpoints
-//!   and this client's registered id — the answer the `EOAuth2Service`
-//!   interface reads out synchronously, since discovering and registering
-//!   both need the network and its vfuncs cannot.
+//! - [`account`] is the base for all other modules: the collection `ESource`
+//!   that *is* the account, written from what the user typed. It is the exact
+//!   inverse of the collection backend's `collection_source`.
+//!   `tests/account.rs` writes an account with this module and reads it back
+//!   with that function, so that the two descriptions of one keyfile cannot
+//!   drift. [`account::read`] fills the widgets and gives the vfuncs their
+//!   account. It is total, but the collection backend's reader is fallible:
+//!   while the user types, most accounts in the dialog are not complete yet.
+//! - [`mail`] writes the three mail sources of the account: `[Mail Account]`,
+//!   `[Mail Identity]` and `[Mail Transport]`. They are separate sources, not
+//!   groups in the account file, and not children of the collection *backend*.
+//!   Thus, to write them is a different operation from writing the account.
+//!   The collection backend's `prepare_mail` is a second *writer* of the same
+//!   three sources, and `tests/mail.rs` compares the two. [`mail`] also has a
+//!   reader: the `CamelSettings` object that an `ESourceCamel` extension gives
+//!   a `CamelJmapStore`. There, the server that a setup wrote becomes the
+//!   server that the provider connects to. The same test compares it with the
+//!   `ServerConfig` of `jmap-mail`.
+//! - [`defaults`] is the account that the dialog shows when the user first
+//!   opens it. It comes from the only answer the assistant has at that time:
+//!   the address from its identity page. For JMAP this is a good default,
+//!   because RFC 8620 §2.2 makes the domain of the address the place where a
+//!   client asks (the module tells why). [`complete::check`] accepts this
+//!   account, so the assistant does not open on a page with a disabled *Next*
+//!   and nothing to correct. The collection backend reads it back with the
+//!   origin that the address named.
+//! - [`complete`] decides if a commit can occur. It is the deciding half of
+//!   the `check_complete` vfunc of `EMailConfigServiceBackend`. The decision
+//!   is ordinary Rust over an [`account::Account`], so tests can examine it,
+//!   but they cannot examine the widget that calls it. An account that it
+//!   accepts is also an account that the collection backend's `server_of`
+//!   accepts. The tests commit each case and read it back to prove this: an
+//!   account that the setup accepts and the registry rejects fails everywhere
+//!   except in the dialog.
+//! - [`oauth2`] is not part of the setup dialog. It is the storage for the
+//!   discovered endpoints and the registered client id of a deployment: the
+//!   `[JMAP OAuth2]` extension, or upstream's `[OAuth2 Client]` on EDS 3.63.1
+//!   and newer. The `EOAuth2Service` interface reads these values
+//!   synchronously, because discovery and registration need the network and
+//!   its vfuncs cannot use the network.
 //! - [`oauth2_service`] is that interface: a service that answers every
-//!   per-account vfunc out of [`oauth2`]'s storage and leaves every other
-//!   vfunc at EDS's own default, which already does the right thing once the
-//!   per-account ones are filled in. Not yet registered with an
-//!   `EOAuth2Services` registry or reachable from any module load path —
-//!   also the setup UI's job, once it exists.
-//! - [`oauth2_setup`] is the network half neither of the above can be: RFC
-//!   8414 discovery and RFC 7591 registration, turning a host name into the
-//!   [`oauth2::Config`] [`oauth2::apply`] stores. Deliberately not reachable
-//!   from the dialog yet — driving the user to the authorization endpoint and
-//!   choosing a redirect URI is the consent exchange itself, `insert_widgets`'
-//!   job once it exists.
-//! - [`backend`] is the GObject the four above are reached through: the
-//!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
-//!   instantiates for the JMAP provider. It carries the name the page finds
-//!   this backend by, the account a new one starts as, and whether the one on
-//!   screen may be committed — each further vfunc lands there as the decision
-//!   behind it becomes testable, which is the same order the four modules above
-//!   were written in.
+//!   per-account vfunc from the storage of [`oauth2`]. All other vfuncs keep
+//!   the EDS default, which is correct when the per-account vfuncs have
+//!   values. [`module`] registers it if EDS has no `EOAuth2ServiceDynamic`.
+//! - [`oauth2_setup`] is the network part: RFC 8414 discovery and RFC 7591
+//!   registration. It changes a host name into the [`oauth2::Config`] that
+//!   [`oauth2::apply`] stores. Only [`config_lookup`] calls it, not the
+//!   server settings page.
+//! - [`config_lookup`] is the `EConfigLookupWorker` behind the "Look Up
+//!   Account Details" step of the assistant.
+//! - [`source_config`] contains the two `ESourceConfigBackend` subclasses that
+//!   show JMAP in the *New Address Book* and *New Calendar* dialogs.
+//! - [`backend`] is the GObject that gives access to [`account`], [`mail`],
+//!   [`defaults`] and [`complete`]: the `EMailConfigServiceBackend` subclass
+//!   that the *Receiving Email* page of Evolution creates for the JMAP
+//!   provider. It holds the name that the page uses to find this backend, the
+//!   initial account, and the decision if the account on screen can be
+//!   committed. Each vfunc was added when the decision behind it became
+//!   testable, in the same sequence as these four modules.
 //!
-//! - [`module`] is how the rest of it arrives: the bodies of `e_module_load`
-//!   and `e_module_unload`, the two symbols Evolution's shell resolves out of
-//!   `module-jmap-configuration.so` (the symbols themselves are in the
-//!   `jmap-config-module` cdylib), and the dynamic registration of
-//!   [`backend`]'s class against the `GTypeModule` it is handed. There is no
-//!   factory and nothing to register the class *with* — Evolution's account
-//!   editor finds a mail config backend by walking the children of `EExtension`,
-//!   so putting the type in the type system is the whole of it; the module says
-//!   why at length.
+//! - [`module`] contains the bodies of `e_module_load` and `e_module_unload`,
+//!   the two symbols that the Evolution shell resolves from
+//!   `module-jmap-configuration.so`. The symbols themselves are in the
+//!   `jmap-config-module` cdylib. [`module`] also registers the class of
+//!   [`backend`] dynamically against the `GTypeModule` that it gets. There is
+//!   no factory, and no registry to register the class *with*: the account
+//!   editor of Evolution finds a mail config backend in the children of
+//!   `EExtension`. Thus it is sufficient to put the type in the type system.
+//!   The module tells why.
 //!
 //! ## Why the decisions came before the module
 //!
-//! M7's deliverable is a GObject module Evolution dlopens out of *its* module
-//! directory (`pkg-config --variable=moduledir evolution-shell-3.0`), one
-//! directory over from the registry module M6 installs. But the parts of it
-//! that decide anything — which properties an account is, and what the user's
-//! answers turn into — need no Evolution headers at all: they are `ESource`
-//! writes, and an `ESource` can be built and read back in a plain test with no
-//! display, no session bus and no running Evolution.
+//! The M7 deliverable is a GObject module that Evolution dlopens from *its*
+//! module directory (`pkg-config --variable=moduledir evolution-shell-3.0`),
+//! one directory away from the registry module that M6 installs. But the parts
+//! that make decisions (which properties make an account, and what the answers
+//! of the user become) need no Evolution headers. They are `ESource` writes,
+//! and a plain test can make and read back an `ESource` with no display, no
+//! session bus and no running Evolution.
 //!
-//! So those came first and are tested, then the `EMailConfigServiceBackend`
-//! subclass that calls them ([`backend`]), and only then the module that
-//! registers it. GUI code cannot be verified on the machine this is
-//! developed on, so the smaller the part of M7 that is GUI, the more of M7
-//! is actually *checked* rather than merely compiled. It is also why the two
-//! writers above are as complete as they are — an account this crate commits
-//! is one a store can open and a transport can send through, with no step
-//! left for the caller to remember — and why [`complete`] is a function
-//! rather than a vfunc: everything the subclass has to *decide* is decided
-//! here, so what is left for it is the widgets and the plumbing, which is
-//! the part no test on this machine could cover anyway.
+//! Thus these parts came first, with tests. Then came the
+//! `EMailConfigServiceBackend` subclass that calls them ([`backend`]), and
+//! then the module that registers it. GUI code cannot be verified on the
+//! development machine, so a smaller GUI part of M7 means that more of M7 is
+//! *checked*, not only compiled. For the same reason, the two writers are
+//! complete: a store can open an account that this crate commits, and a
+//! transport can send through it, with no step left for the caller. Also for
+//! this reason, [`complete`] is a function and not a vfunc. This crate makes
+//! all *decisions* of the subclass. The subclass keeps only the widgets and
+//! the plumbing, and no test on this machine can cover those.
 //!
 //! ## What is not here yet
 //!
-//! **The dialog actually working.** The module registers a class Evolution will
-//! instantiate, and that is as far as anything here has been checked: that a
-//! shell which dlopens the installed `.so` then offers JMAP in the account type
-//! list, and that the page it opens behaves, needs a running Evolution and a
-//! display this machine has neither of. See [`backend`] for the state the
-//! dialog is left in and exactly what a human still has to confirm.
+//! **A dialog that is known to operate.** The module registers a class that
+//! Evolution will create, and nothing more is checked. These items need a
+//! running Evolution and a display, and this machine has neither: a shell that
+//! dlopens the installed `.so` shows JMAP in the account type list, and the
+//! page that opens behaves correctly. See [`backend`] for the state of the
+//! dialog and for the items that a person must still confirm.
 //!
-//! **The one vfunc that has to build something**: `insert_widgets`, now written
-//! but — like everything else GUI in this milestone — not run on this machine.
-//! It puts two of [`Connection`](jmap_collection_sync::child_source::Connection)'s five fields on screen, the server
-//! and the login name, bound to the same collection the other four vfuncs
-//! already read and write; a port entry, a security toggle and a status label
-//! for [`complete::Incomplete`]'s refusal reason are not there yet. The other
-//! four vfuncs are compositions of the modules above — `setup_defaults` is
-//! [`defaults::from_identity`] narrowed onto the collection, `check_complete` is
-//! [`account::read`] and [`complete::check`] over it, and `commit_changes` is
-//! that same reader followed by [`mail::apply_server`] onto the one scratch mail
-//! source a backend holds. What a test here can drive is those compositions
-//! rather than the vfuncs Evolution dispatches, and `insert_widgets` itself not
-//! at all. [`backend`] says so slot by slot, including which source a commit
-//! still leaves without a server.
+//! **`insert_widgets`**, the one vfunc that builds something, is written but
+//! not run on this machine (as with all GUI code in this milestone). It shows
+//! all five fields of
+//! [`Connection`](jmap_collection_sync::child_source::Connection) (the server,
+//! the port, the login name, the authentication method and the encryption),
+//! and a status label for the refusal reason of [`complete::Incomplete`].
+//! They are bound to the same collection that the other vfuncs read and write.
+//! The other vfuncs are compositions of the modules above:
 //!
-//! Like the backends, this crate needs the installed EDS headers and so stays
-//! out of the workspace's `default-members`; CMake runs its tests via the
-//! `rust-test-eds` target.
+//! - `setup_defaults` is [`defaults::from_identity`], limited to the fields
+//!   that the address determines, on the collection.
+//! - `check_complete` is [`account::read`] and then [`complete::check`].
+//! - `commit_changes` is the same reader and then [`mail::apply_server`] on
+//!   the one scratch mail source of the backend.
+//!
+//! The tests here can operate those compositions, but not the vfuncs that
+//! Evolution dispatches, and not `insert_widgets`. [`backend`] tells the
+//! state of each slot, and which source a commit still leaves with no server.
+//!
+//! As with the backends, this crate needs the installed EDS headers, so it is
+//! not in the `default-members` of the workspace. CMake runs its tests through
+//! the `rust-test-eds` target.
 
 pub mod account;
 pub mod backend;

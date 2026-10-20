@@ -15,69 +15,71 @@ workspace = true
 
 [lib]
 name = "jmap_config"
-# rlib only. What Evolution dlopens (installed as
-# module-jmap-configuration.so) is the companion `jmap-config-module` crate,
-# which is a cdylib holding nothing but the two `#[unsafe(no_mangle)]` entry
-# points and delegating both to `module::load`/`module::unload` here. The
-# dev-dependency on `jmap-backend-collection` below is what forced the split:
-# both rlibs used to define `e_module_load`, and in one link they became one.
+# rlib only. Evolution dlopens the companion `jmap-config-module` crate
+# (installed as module-jmap-configuration.so). That crate is a cdylib that
+# holds only the two `#[unsafe(no_mangle)]` entry points, which call
+# `module::load`/`module::unload` here. The dev-dependency on
+# `jmap-backend-collection` below made the split necessary: both rlibs defined
+# `e_module_load`, and in one link the two became one.
 crate-type = ["rlib"]
 
 [features]
-# Compiler-enforced (not just documented) test-only gate on `detached()`,
-# which builds an instance by zeroing memory outside the GObject type system.
-# Enabled for this crate's own test builds
-# via the self dev-dependency below; never on for a normal build. Reaches
-# through to jmap-backend-core's own `testing` gate on `instance::zeroed_box`,
-# the shared helper `detached()` is built on.
+# A test-only gate on `detached()` that the compiler enforces (not only the
+# docs). `detached()` builds an instance from zeroed memory, outside the
+# GObject type system. The self dev-dependency below enables it for the test
+# builds of this crate. A normal build never enables it. It also enables the
+# `testing` gate of jmap-backend-core on `instance::zeroed_box`, the shared
+# helper that `detached()` uses.
 testing = ["jmap-backend-core/testing"]
 
 [dependencies]
 eds-sys = { workspace = true }
-# The Evolution side of the ABI: the one class `backend` subclasses. Every EDS
-# and GLib type it mentions comes back out of `eds-sys` above, so an `ESource`
-# handed over by a vfunc is the same Rust type the writers here take.
+# The Evolution side of the ABI: the classes that this crate subclasses. Each
+# EDS and GLib type in it comes from `eds-sys` above, so an `ESource` from a
+# vfunc is the same Rust type that the writers here accept.
 evo-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 evolution-jmap-collection-sync = { workspace = true }
-# `oauth2_setup`'s discovery and registration calls: the RFC 8414/7591 client
-# `jmap_backend_collection` also links, and the only piece of this crate that
-# talks to the network directly rather than through an `ESource`.
+# The discovery and registration calls of `oauth2_setup`: the RFC 8414/7591
+# client that `jmap_backend_collection` also links. It is the only part of this
+# crate that uses the network directly, not through an `ESource`.
 evolution-jmap-client = { workspace = true }
 glib-sys = { workspace = true }
-# `EConfigLookupWorker::run`'s `GCancellable` argument, bridged onto a
-# `CancelFlag` via `jmap_backend_core::cancel::CancelBridge`.
+# The `GCancellable` argument of `EConfigLookupWorker::run`, connected to a
+# `CancelFlag` through `jmap_backend_core::cancel::CancelBridge`.
 gio-sys = { workspace = true }
-# For the `GTypeModule` the module entry point registers the class against, and
-# nothing else: every other GObject call this crate makes is behind
-# `jmap-backend-core`'s subclass helpers.
+# For the `GTypeModule` that the module entry point registers the classes
+# against, and for the GObject calls (properties, bindings, signals, values,
+# references) that the subclass helpers of `jmap-backend-core` do not supply.
 gobject-sys = { workspace = true }
 tracing = { workspace = true }
-# The PKCE verifiers `oauth2_service` stashes between the two halves of a
-# consent flow are wiped when they are replaced, redeemed or evicted.
+# `oauth2_service` stores PKCE verifiers between the two halves of a consent
+# flow. It erases them when they are replaced, redeemed or evicted.
 zeroize = { workspace = true }
 
 [dev-dependencies]
-# Self dev-dependency to turn on `testing` (and so `detached()`) for this
-# crate's own test builds only — see the `[features]` comment above.
+# Self dev-dependency that enables `testing` (and thus `detached()`) only for
+# the test builds of this crate. See the `[features]` comment above.
 jmap-config = { path = ".", features = ["testing"] }
-# The PKCE round-trip test recomputes BASE64URL(SHA256(verifier)) to hold the
-# token form's verifier against the authorization query's challenge — the same
-# two crates jmap-client's own PKCE type uses, so nothing new in the lockfile.
+# The PKCE round-trip test calculates BASE64URL(SHA256(verifier)) again, to
+# compare the verifier of the token form with the challenge of the
+# authorization query. The PKCE type of jmap-client uses the same two crates,
+# so the lockfile does not change.
 base64 = { workspace = true }
 sha2 = { workspace = true }
-# The account this writes is only right if the collection backend reads it back
-# as the account that was written, so the tests link the reader and hold the two
-# against each other.
+# The account that this crate writes is correct only if the collection backend
+# reads it back as the same account. Thus the tests link the reader and compare
+# the two.
 jmap-backend-collection = { workspace = true }
-# And the mail sources are only right if the Camel provider connects to the
-# server they name. A dev-dependency and deliberately not a dependency: what
-# the library writes is `ESource` groups, and the only thing the provider is
-# needed for is the `CamelJmapSettings` GType an `ESourceCamel` subtype is
-# generated from — which is a reader of this crate's output, not a part of it.
+# Also, the mail sources are correct only if the Camel provider connects to the
+# server that they name. This is deliberately a dev-dependency, not a
+# dependency. The library writes `ESource` groups. The tests need the provider
+# only for the `CamelJmapSettings` GType, from which an `ESourceCamel` subtype
+# is generated. That GType reads the output of this crate. It is not part of
+# this crate.
 jmap-mail = { workspace = true }
-# `oauth2_setup`'s tests drive discovery and registration against a served
-# deployment rather than mocking the transport by hand.
+# The tests of `oauth2_setup` run discovery and registration against a served
+# deployment, not against a transport mocked by hand.
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
 serde_json = { workspace = true }
