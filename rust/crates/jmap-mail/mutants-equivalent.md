@@ -196,3 +196,48 @@ send-retry path (there is one for the store's fetch path,
   `Default`, the same recurring pattern as this crate's other Default-mutant
   entries. Confirmed with `cargo check -p jmap-mail` against each mutated
   source.
+
+## `src/search_sexp.rs`
+
+- `crates/jmap-mail/src/search_sexp.rs:93:9`, delete match arm `')' => None,`
+  in `parse_value` (falls through to `_ => Some(parse_token(input))`).
+  `parse_value` only ever sees a leading `)` from one call site:
+  `translate`'s own top-level call on the raw input. (`parse_list`'s loop
+  checks `input.strip_prefix(')')` itself before ever calling `parse_value`,
+  so a list body never passes one through.) At that one call site,
+  `parse_token` on a string starting with `)` stops immediately (`)` is one
+  of its own stop characters) and returns an empty `Ident` with the input
+  unconsumed, so `translate`'s own trailing-garbage check
+  (`rest.trim().is_empty()`) rejects it exactly as the removed arm would
+  have. Verified empirically: patched the arm out and ran a battery of
+  probes (`")"`, `") garbage"`, `"(and )"`, `"(and ))"`, `"(and () )"`,
+  `"(and (body-contains \"a\") )"`, `"(not )"`) plus the crate's own test
+  suite; every result was identical with the arm present or removed.
+- `crates/jmap-mail/src/search_sexp.rs:105:40`, `replace + with * in
+  skip_ignorable` (`&rest[pos + 1..]` becomes `&rest[pos * 1..]`, i.e.
+  `&rest[pos..]`). `pos` is the index of the `\n` ending a `;` comment, so
+  the correct `pos + 1` skips past it and the mutant's `pos` stops one
+  character short, right at the newline itself. That newline is always
+  whitespace, and the very next loop iteration starts by calling
+  `input.trim_start()`, which strips it (and anything after it) unasked;
+  the one-character difference never survives past that line, for any
+  comment body. Verified empirically: patched the mutant in, confirmed the
+  crate's full test suite (including the two comment tests added for the
+  neighbouring `- ` mutant below) stays green.
+- `crates/jmap-mail/src/search_sexp.rs:162:55`, `replace || with && in
+  parse_token` (`c.is_whitespace() || c == '(' || c == ')'` becomes
+  `c.is_whitespace() || c == '(' && c == ')'`, and `&&` binds tighter, so
+  the second disjunct is always false: a token now ends only at
+  whitespace). Every legitimate argument in this grammar is a quoted
+  string (parsed by `parse_string`, untouched by this mutant); a bare
+  token touching `)` with no separating space is therefore always either
+  a function name with zero required args (already rejected by an
+  explicit `args.is_empty()`/`[x] = args` check) or garbage that fails
+  `as_str`'s `Str`-only match, and when the swallowed `)` instead
+  mis-closes an enclosing list, the list that should have closed last runs
+  out of input first, which `parse_list` already turns into `None`. Every
+  path converges on the same `None` the un-mutated parser gives, so no
+  input distinguishes them. Verified empirically: patched the mutant in
+  and diffed `translate` on a battery of touching-paren cases (bare
+  function names, nested `and`/`or`/`not`/`match-all`, siblings) against
+  the un-mutated parser; every result matched.

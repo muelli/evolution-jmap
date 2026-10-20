@@ -557,6 +557,29 @@ mod tests {
         assert_eq!(translate(""), None);
     }
 
+    /// `skip_ignorable` must skip past the newline that ends a comment, not
+    /// up to it: a comment with no text before the newline puts that newline
+    /// right at the start of the matched range, the one case where getting
+    /// the offset wrong (one before it instead of one after) underflows.
+    #[test]
+    fn empty_comment_right_before_a_newline_is_skipped() {
+        assert_eq!(
+            translate(";\n(body-contains \"x\")"),
+            translate(r#"(body-contains "x")"#)
+        );
+    }
+
+    /// A comment with text before the newline exercises the same offset on a
+    /// non-zero index: skipping to the newline itself instead of past it
+    /// would leave the newline's preceding character in the parsed input.
+    #[test]
+    fn comment_with_text_before_an_expression_is_skipped() {
+        assert_eq!(
+            translate(";a comment\n(body-contains \"x\")"),
+            translate(r#"(body-contains "x")"#)
+        );
+    }
+
     #[test]
     fn trailing_garbage_is_untranslatable() {
         assert_eq!(
