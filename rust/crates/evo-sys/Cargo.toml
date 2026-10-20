@@ -9,21 +9,21 @@ license.workspace = true
 rust-version.workspace = true
 description = "Raw FFI bindings to the Evolution application libraries the setup module extends"
 publish = false
-# As in eds-sys: build.rs does the linking, so cargo must not invent `-levo-sys`.
+# As in eds-sys, build.rs does the linking. Cargo must not invent `-levo-sys`.
 links = "evolution-shell"
 
 [lints]
 workspace = true
 
 [dependencies]
-# Every EDS and GLib type in these headers comes from there rather than being
-# generated a second time; see build.rs for what that costs and buys.
+# Every EDS and GLib type in these headers comes from eds-sys, not from a
+# second generation. See build.rs for what that costs and buys.
 eds-sys = { workspace = true }
 
 [dev-dependencies]
 # tests/config_lookup.rs dispatches through the raw GObject type-system calls
-# (g_type_fundamental, g_type_interface_prerequisites, ...) the same way
-# eds-sys/tests/oauth2.rs does, and needs both spellings for the same reason.
+# (g_type_fundamental, g_type_interface_prerequisites, ...), the same way
+# eds-sys/tests/oauth2.rs does. It needs both spellings for the same reason.
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
