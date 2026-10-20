@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:SERVICE-TYPE Parameter Seed
+IMPP;SERVICE-TYPE=skype:skype:alice.example
+END:VCARD

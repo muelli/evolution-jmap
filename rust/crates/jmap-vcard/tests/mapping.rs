@@ -23225,3 +23225,50 @@ fn phonetic_and_script_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn service_type_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:SERVICE-TYPE Parameter Probe\r\n",
+        "IMPP;SERVICE-TYPE=skype:skype:alice.example\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse SERVICE-TYPE parameter profile probe");
+    let services = parsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services.len(), 1, "one IMPP line must remain mapped");
+
+    let service = services.get("s1").expect("first online service entry");
+    assert_eq!(service.service.as_deref(), Some("Skype"));
+    assert_eq!(service.user.as_deref(), Some("alice.example"));
+    assert_eq!(service.uri, None);
+    assert!(
+        service.extra.is_empty(),
+        "profile does not retain RFC 9555 SERVICE-TYPE metadata on IMPP"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let service_line = line(&emitted, "X-SKYPE;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE=HOME"));
+    assert!(service_line.ends_with(":alice.example"));
+    assert!(
+        !emitted.contains("SERVICE-TYPE="),
+        "non-projected SERVICE-TYPE metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("IMPP;"),
+        "emission uses EDS service slots rather than IMPP in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized SERVICE-TYPE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
