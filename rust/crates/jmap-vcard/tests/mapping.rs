@@ -23324,3 +23324,43 @@ fn value_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn label_parameter_maps_to_address_full_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:LABEL Parameter Probe\r\n",
+        "ADR;LABEL=Apartment 4B;TYPE=home:;;42 Example Street;Berlin;;10115;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse LABEL parameter profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.full.as_deref(), Some("Apartment 4B"));
+    assert_eq!(address.contexts, Some(json!({"private": true})));
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;42 Example Street;Berlin;;10115;Germany"));
+    assert!(
+        !adr_line.contains("LABEL="),
+        "ADR output carries address fields while LABEL moves to a dedicated line"
+    );
+
+    let label_line = line(&emitted, "LABEL;");
+    assert!(label_line.contains("X-JMAP-KEY=a1"));
+    assert!(label_line.contains("TYPE=HOME"));
+    assert!(label_line.ends_with(":Apartment 4B"));
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized LABEL parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}

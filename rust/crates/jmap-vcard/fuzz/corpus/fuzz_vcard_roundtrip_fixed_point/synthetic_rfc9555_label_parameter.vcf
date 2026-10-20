@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:LABEL Parameter Seed
+ADR;LABEL=Apartment 4B;TYPE=home:;;42 Example Street;Berlin;;10115;Germany
+END:VCARD
