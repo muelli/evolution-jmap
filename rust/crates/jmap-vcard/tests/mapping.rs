@@ -21265,19 +21265,19 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
     ];
 
     for original_card in test_cards {
-        // Pass 1: Card -> vCard1 -> Card1
+        // Run pass 1: card -> vCard1 -> card1.
         let vcard1 = card_to_vcard(&original_card);
         let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
 
-        // Pass 2: Card1 -> vCard2 -> Card2
+        // Run pass 2: card1 -> vCard2 -> card2.
         let vcard2 = card_to_vcard(&card1);
         let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
 
-        // Pass 3: Card2 -> vCard3 -> Card3
+        // Run pass 3: card2 -> vCard3 -> card3.
         let vcard3 = card_to_vcard(&card2);
         let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
-        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        // Pass 2 and pass 3 must be strictly identical.
         assert_eq!(
             vcard2, vcard3,
             "vCard output must reach fixed point at pass 2"
@@ -21295,10 +21295,10 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
 
 #[test]
 fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
-    // Only complete dates with year >= 1000 are anniversary-significant.
-    // Bare year, partial dates, ancient years, and deathday never emit anniversary lines.
+    // Emit anniversary lines only for complete dates with year >= 1000.
+    // Do not emit anniversary lines for bare year, partial calendar value, ancient year, or deathday.
 
-    // Birth variants.
+    // Birth cases.
     let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
     let bday_year_month = one_anniversary("birth", json!({"year": 1984, "month": 5}));
     let bday_month_day = one_anniversary("birth", json!({"month": 5, "day": 20}));
@@ -21307,13 +21307,13 @@ fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
     let bday_date_ancient = one_anniversary("birth", json!({"year": 800, "month": 6, "day": 21}));
     let bday_full = one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20}));
 
-    // Wedding variants.
+    // Wedding cases.
     let wedding_bare_year = one_anniversary("wedding", json!({"year": 2005}));
     let wedding_year_month = one_anniversary("wedding", json!({"year": 2005, "month": 11}));
     let wedding_month_day = one_anniversary("wedding", json!({"month": 11, "day": 15}));
     let wedding_full = one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15}));
 
-    // Death variants.
+    // Death cases.
     let death_bare_year = one_anniversary("death", json!({"year": 2020}));
     let death_full = one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15}));
 
@@ -21644,8 +21644,8 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
 
 #[test]
 fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
-    // Unescaped trailing whitespace in inbound NICKNAME survives pass 1 emit, then
-    // calcard trims it on pass 2. Passes 2 and 3 must be byte-identical.
+    // Inbound NICKNAME with trailing whitespace survives pass 1 emit.
+    // calcard trims the trailing whitespace on pass 2. Passes 2 and 3 must match bytes.
     let raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
     let parsed1 = vcard_to_card(raw_vcard).expect("first parse of raw vcard");
     assert_eq!(
