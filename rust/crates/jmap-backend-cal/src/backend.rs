@@ -557,6 +557,7 @@ unsafe extern "C" fn get_free_busy_sync(
 /// Dismisses one reminder by setting alarm acknowledged timestamp in cached component.
 ///
 /// Saves the modified component through meta backend, sending acknowledged state to server (RFC 8984 §4.5.2).
+/// The save never asks the server to mail the guests, whatever `opflags` says.
 #[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 unsafe extern "C" fn discard_alarm_sync(
     backend: *mut ECalBackendSync,
@@ -598,7 +599,7 @@ unsafe extern "C" fn discard_alarm_sync(
                 cancellable,
                 objects,
                 scope,
-                opflags,
+                scheduling::dismissal(opflags),
                 &mut old_components,
                 &mut new_components,
                 error,

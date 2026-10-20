@@ -21,8 +21,8 @@ use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::scheduling::{
-    CREATE_MESSAGES, ITIP_SUPPRESS_ON_REMOVE_SUPPORTED, SAVE_SCHEDULES, capabilities, itip,
-    server_handles_invitations,
+    CREATE_MESSAGES, ITIP_SUPPRESS_ON_REMOVE_SUPPORTED, SAVE_SCHEDULES, capabilities, dismissal,
+    itip, server_handles_invitations,
 };
 use jmap_backend_core::subclass::register_static;
 use jmap_cal_sync::Itip;
@@ -135,6 +135,25 @@ fn with_the_switch_off_no_change_asks_the_server() {
     assert_eq!(
         itip(false, E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE),
         Itip::Suppress
+    );
+}
+
+#[test]
+fn a_reminder_dismissal_never_asks_the_server_to_send() {
+    // EDS's reminder watcher dismisses with no flags (e-reminder-watcher.c).
+    assert_eq!(
+        itip(true, dismissal(E_CAL_OPERATION_FLAG_NONE)),
+        Itip::Suppress
+    );
+    assert_eq!(
+        itip(true, dismissal(E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER)),
+        Itip::Suppress
+    );
+    assert_eq!(
+        dismissal(E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER)
+            & E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER,
+        E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER,
+        "the other flags pass through"
     );
 }
 
