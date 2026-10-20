@@ -195,11 +195,56 @@ impl EntryExt for ICalendarEntry {
         for val in values {
             self.params.push(ICalendarParameter::new(
                 param_name.clone(),
-                ICalendarParameterValue::Text(val.as_ref().to_owned()),
+                ICalendarParameterValue::Text(caret_encoded(val.as_ref())),
             ));
         }
         self
     }
+}
+
+/// A parameter value with RFC 6868 §3's caret escapes applied, so that a `"`
+/// or a line break survives in it.
+///
+/// RFC 5545 §3.1 has no escape inside a quoted value, and calcard writes a
+/// `\"` there, which libical keeps as a backslash. A lone CR counts as a line
+/// break.
+pub fn caret_encoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '^' => out.push_str("^^"),
+            '"' => out.push_str("^'"),
+            '\n' => out.push_str("^n"),
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push_str("^n");
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A parameter value with RFC 6868 §3's caret escapes resolved. A caret before
+/// any other character stays as it is.
+pub fn caret_decoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let decoded = match (ch, chars.peek()) {
+            ('^', Some('^')) => '^',
+            ('^', Some('\'')) => '"',
+            ('^', Some('n' | 'N')) => '\n',
+            _ => {
+                out.push(ch);
+                continue;
+            }
+        };
+        chars.next();
+        out.push(decoded);
+    }
+    out
 }
 
 pub fn rrule_entry(rrule_str: &str) -> Option<ICalendarEntry> {
@@ -2200,7 +2245,7 @@ pub fn date_time_text(stamp: &PartialDateTime) -> String {
 
 pub fn param_text(value: &ICalendarParameterValue) -> String {
     match value {
-        ICalendarParameterValue::Text(text) => text.clone(),
+        ICalendarParameterValue::Text(text) => caret_decoded(text),
         ICalendarParameterValue::Integer(number) => number.to_string(),
         ICalendarParameterValue::Bool(true) => "TRUE".to_owned(),
         ICalendarParameterValue::Bool(false) => "FALSE".to_owned(),
