@@ -23213,6 +23213,53 @@ fn index_parameter_metadata_is_not_retained_in_eds_profile() {
 }
 
 #[test]
+fn level_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:LEVEL Parameter Probe\r\n",
+        "EXPERTISE;LEVEL=high:Chess openings\r\n",
+        "HOBBY;LEVEL=medium:Trail running\r\n",
+        "INTEREST;LEVEL=low:Classical guitar\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse LEVEL parameter profile probe");
+    assert_eq!(
+        parsed.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some("LEVEL Parameter Probe")
+    );
+    assert!(
+        parsed.personal_info.is_none(),
+        "profile does not retain RFC 9555 LEVEL metadata as personal_info"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        !emitted.contains("LEVEL="),
+        "non-projected LEVEL parameter metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+    assert!(
+        !emitted.contains("HOBBY:") && !emitted.contains("HOBBY;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+    assert!(
+        !emitted.contains("INTEREST:") && !emitted.contains("INTEREST;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized LEVEL parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
 fn phonetic_and_script_parameter_metadata_is_not_retained_in_eds_profile() {
     let source = concat!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\n",
