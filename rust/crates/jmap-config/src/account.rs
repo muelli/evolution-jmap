@@ -116,13 +116,13 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection, ESourceSecurity,
-    e_source_authentication_get_host, e_source_authentication_get_method,
-    e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_authentication_get_user, e_source_authentication_set_host,
+    e_source_authentication_dup_host, e_source_authentication_dup_method,
+    e_source_authentication_dup_user, e_source_authentication_get_port,
+    e_source_authentication_get_type, e_source_authentication_set_host,
     e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_backend_set_backend_name,
-    e_source_collection_get_calendar_enabled, e_source_collection_get_contacts_enabled,
-    e_source_collection_get_identity, e_source_collection_get_mail_enabled,
+    e_source_collection_dup_identity, e_source_collection_get_calendar_enabled,
+    e_source_collection_get_contacts_enabled, e_source_collection_get_mail_enabled,
     e_source_collection_get_type, e_source_collection_set_calendar_enabled,
     e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
     e_source_collection_set_mail_enabled, e_source_get_extension, e_source_get_uid,
@@ -136,7 +136,7 @@ use eds_sys::e_source_authentication_set_credential_name as set_credential_id;
 use eds_sys::e_source_authentication_set_credential_store_id as set_credential_id;
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::marshal::{extension_if_present, read_string};
+use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::oauth2::{OAUTH2_AUTH_METHOD, OAUTH2_METHOD};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -367,11 +367,12 @@ pub unsafe fn read(source: *mut ESource) -> Account {
     };
 
     // SAFETY: a live extension, by `extension_if_present`'s contract. Every
-    // string getter returns NULL or a NUL-terminated string owned by the
-    // extension.
+    // `dup` getter returns NULL or a copy the caller owns. A config lookup
+    // reads on a worker thread, so a borrowed string can be freed during the
+    // copy.
     let (identity, parts) = collection.map_or((None, None), |collection| unsafe {
         (
-            read_string(e_source_collection_get_identity(collection)),
+            take_string(e_source_collection_dup_identity(collection)),
             Some(Parts {
                 mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
                 contacts: e_source_collection_get_contacts_enabled(collection) != GFALSE,
@@ -387,10 +388,10 @@ pub unsafe fn read(source: *mut ESource) -> Account {
     // SAFETY: as above.
     let (host, port, user, auth_method) = auth.map_or((None, 0, None, None), |auth| unsafe {
         (
-            read_string(e_source_authentication_get_host(auth)),
+            take_string(e_source_authentication_dup_host(auth)),
             e_source_authentication_get_port(auth),
-            read_string(e_source_authentication_get_user(auth)),
-            read_string(e_source_authentication_get_method(auth)),
+            take_string(e_source_authentication_dup_user(auth)),
+            take_string(e_source_authentication_dup_method(auth)),
         )
     });
 
