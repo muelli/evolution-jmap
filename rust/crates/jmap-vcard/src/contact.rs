@@ -626,7 +626,7 @@ fn normalised_service(name: &str) -> String {
 }
 
 /// The EDS IM slot for this handle.
-/// Uses JSContact `contexts`; ambiguous or unsupported contexts fall back to [`DEFAULT_SLOT`].
+/// Read JSContact `contexts` first. Use [`DEFAULT_SLOT`] for ambiguous or unsupported contexts.
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
         service
@@ -652,7 +652,7 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
 }
 
 /// Whether a tag has leading or trailing ASCII whitespace.
-/// This superset avoids tags EDS may trim and rename on the next save.
+/// This superset rejects tags that EDS can trim and rename on the next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
@@ -2471,8 +2471,7 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     }
 
     // No FN, no usable N, and no fileAs means the card does not name anyone.
-    // We do not split FN to guess N fields, because a wrong guess would be
-    // written back on the next save.
+    // Do not split FN to guess N fields. A wrong guess can be saved on the next write.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
