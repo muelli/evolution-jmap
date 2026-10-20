@@ -241,3 +241,49 @@ send-retry path (there is one for the store's fetch path,
   and diffed `translate` on a battery of touching-paren cases (bare
   function names, nested `and`/`or`/`not`/`match-all`, siblings) against
   the un-mutated parser; every result matched.
+
+## `src/service.rs`
+
+Six mutants found, five caught, one unviable (`Default::default()` on
+`CamelServiceClass`, the usual pattern), one genuinely missed and not yet
+fixed:
+
+- `crates/jmap-mail/src/service.rs:555:5` (`parent_service_class`), `replace
+  ... with None`. This is not equivalent and not out of scope for the usual
+  "no `CamelSession`" reason this crate's other FFI-glue entries give:
+  `parent_service_class` backs `disconnect_sync`'s chain-up to
+  `CamelOfflineStoreClass`'s own `disconnect_sync`, and `tests/transport.rs`
+  plus the live `functional-transport` test already dispatch this same
+  generic function (parameterised on `JmapTransport` there, `JmapStore`
+  here) through a real vfunc call, so a live test reaching it is not
+  hypothetical.
+  Tried this session: added a disconnect step to
+  `tests/functional/mail-client.c` and asserted
+  `camel_service_get_connection_status` reports `CAMEL_SERVICE_DISCONNECTED`
+  afterward, the same shape `transport-client.c` already uses for the
+  transport side. Built and ran `functional-mail` five times in a row
+  against a real `libcameljmap.so` and a real `CamelOfflineStore` (rootless
+  podman, the pinned Fedora image, `--privileged` for
+  `gnome-keyring-daemon`'s capability drop, per `docs/eds-version-matrix.md`):
+  it failed three times out of five, every time with
+  `camel_service_disconnect_sync` itself returning `G_IO_ERROR_CANCELLED`
+  ("Operation was cancelled"), plus a stray "A connection to the bus can't
+  be made" on stderr. `functional-transport`, run five times the same way
+  straight after, was green every time, so the flake is specific to the
+  store's disconnect path, not a general property of this container.
+  Read `camel-service.c` and `camel-offline-store.c` from the matching EDS
+  3.60.2 source: the default `CamelServiceClass::disconnect_sync` does
+  nothing but clear the connectable and return `TRUE`, unconditionally, no
+  cancellable use; `camel_service_disconnect_sync` itself wraps the vfunc in
+  a `GTask` run through `camel_service_disconnect`'s own connection-state
+  machine. Nothing in either file reaches D-Bus. The cancellation and the
+  bus message most likely come from something outside this call chain
+  entirely (`evolution-source-registry`'s own shutdown racing the private
+  bus this harness tears down, or a GIO extension point specific to the
+  sandboxed container), not from a bug in this crate's `disconnect_sync` or
+  `parent_service_class`. Reverted the test addition rather than merge a
+  test that fails for a reason unrelated to what it means to assert, so this
+  mutant stays MISSED. Whoever picks this up next: reproduce outside podman
+  (a real Ubuntu 24.04 runner, `ci/functional.sh`'s own recipe) before
+  trying again, since the flake may be an artifact of this sandbox and not
+  reproduce there at all.
