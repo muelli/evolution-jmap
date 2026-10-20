@@ -1,39 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `create_collection`/`delete_collection` against a real JMAP server — the
-//! functions `ECollectionBackendClass::create_resource_sync`/
-//! `delete_resource_sync` actually call, exercised end to end for the first
-//! time.
+//! Tests `create_collection` and `delete_collection` against a real JMAP server.
 //!
-//! `jmap-client/tests/live_server.rs` already proves `AddressBook/set` and
-//! `Calendar/set` round-trip through `Client` directly, but nothing there
-//! drives this crate's own `create_collection`/`delete_collection` — the
-//! account resolution through [`CollectionLayout`], the create/destroy
-//! dispatch by [`ChildKind`], and the [`Child`] a create derives from what the
-//! server answered with. Only `jmap-mockd` has ever exercised these functions
-//! (`jmap-collection-sync/tests/{create,delete}.rs`); this file is their
-//! live-server counterpart, following the same recipe as `jmap-cal-sync`'s and
-//! `jmap-book-sync`'s.
+//! `ECollectionBackendClass::create_resource_sync` and `delete_resource_sync`
+//! call these functions. `tests/create.rs` and `tests/delete.rs` test them
+//! against the mock. These tests examine the account resolution through
+//! [`CollectionLayout`], the dispatch by [`ChildKind`] and the [`Child`] that a
+//! create makes from the response.
 //!
 //! ## Running it
 //!
-//! Same environment as `jmap-cal-sync`'s and `jmap-book-sync`'s live-server
-//! tests — see `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up for
-//! `jmap-client`'s write-path tests:
+//! Use the environment of the live-server tests of `jmap-cal-sync` and
+//! `jmap-book-sync` (refer to `docs/manual-test-live-server.md`). Set
+//! `JMAP_LIVE_SERVER_URL`, `_WRITE_USER` and `_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-collection-sync -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like `jmap-cal-sync` and
-//! `jmap-book-sync`, this crate has no such feature, and `#[ignore]` alone
-//! already keeps it out of a plain `cargo test`.
+//! This crate has no `live-server` feature: `#[ignore]` keeps the tests out of a
+//! plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The tests skip (and do not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -42,8 +31,7 @@ use jmap_collection_sync::{
     ChildKind, Fanout, Parts, Requested, create_collection, delete_collection,
 };
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover collection can never be mistaken for this run's own.
+/// A value unique to this run, so collections of other runs do not match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,7 +39,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Like `connect_for_write` in `jmap-cal-sync/tests/live_server.rs`, without the user.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,25 +55,11 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates an address book and a calendar via `create_collection`, confirms
-/// each is listed by a fresh `Fanout::discover` under the requested name,
-/// then destroys both via `delete_collection` and confirms neither is
-/// listed anymore.
+/// Creates, discovers and deletes an address book and a calendar.
 ///
-/// The name check exercises `create.rs`'s `created_resource` name fallback:
-/// RFC 8620 section 5.3 lets a `created` response omit any property the
-/// server itself did not set, and a real server's create response for this
-/// call has never been asserted on for `name` here before, only inferred
-/// from a single hand-tested Fastmail session (`create.rs`'s doc comment).
-///
-/// The `read_only`/`remote_deletable`/`is_default`/`color` checks exercise
-/// the same fallback for `myRights`/`isDefault`/`color`: a raw-curl probe
-/// against real Stalwart found its `AddressBook/set`/`Calendar/set` create
-/// responses carry only `id`, none of those three, even though a follow-up
-/// `get` on the same object shows `myRights` fully populated. So the path
-/// actually exercised live is `created_resource`'s fallback for an absent
-/// `myRights` — the freshly created child must come back at the
-/// account-wide permissive default, not silently read-only or undeletable.
+/// RFC 8620 §5.3 lets a `created` response omit properties that the server
+/// did not set. Stalwart returns only `id`, so the checks examine the fallbacks
+/// of `created_resource` for `name`, `myRights`, `isDefault` and `color`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
@@ -169,19 +143,10 @@ fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
     }
 }
 
-/// Exercises `created_resource`'s "accepted as asked" fallback (`create.rs`)
-/// with a name a server might plausibly normalise: whitespace padding.
+/// Tests the "accepted as asked" name fallback of `created_resource` with padding.
 ///
-/// `jmap-mail-sync`'s `created_folder_name` has the identical fallback for
-/// `Mailbox/set`, and against real Stalwart a padded name is silently
-/// trimmed server-side even though the `created` response omits `name` just
-/// as it does here — the two cases are indistinguishable from the response
-/// alone. Whether the same is true for `AddressBook/set`/`Calendar/set` has
-/// never been checked. It is not: a raw probe before writing this test
-/// showed Stalwart's stored name for both stays padded, unchanged. So unlike
-/// the mail case, the fallback here is exercising a true "accepted as asked"
-/// response with nothing hidden underneath, and a fresh discovery should
-/// show the same padded name the create response implied, not a trimmed one.
+/// Stalwart trims a padded `Mailbox` name but keeps the padding of address book
+/// and calendar names. In both cases, the `created` response omits `name`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_a_collection_with_a_padded_name_round_trips_the_padding_unchanged() {

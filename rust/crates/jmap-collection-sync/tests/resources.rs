@@ -1,17 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The address books and calendars behind one login, listed off a running
-//! server.
+//! Tests the address books and calendars of one login against a running mock server.
 //!
-//! `src/resources.rs`'s unit tests cover the collection objects a server *may*
-//! send; these cover the ones it does, fetched over HTTP by the same client the
-//! backends use — including the thing no hand-written object can show, which is
-//! *which calls the discovery makes*. A listing sent for a capability this login
-//! does not have is not a slightly wasteful request: RFC 8620 §3.3 has the
-//! server answer a `using` it does not advertise with `unknownCapability`, which
-//! fails the whole request, so the fan-out would come back empty rather than
-//! short.
+//! These tests also examine which methods the discovery calls. A server rejects
+//! a capability that it does not advertise with `unknownCapability` (RFC 8620
+//! §3.6.1), and this error fails the whole request.
 
 use std::sync::{Arc, Mutex};
 
@@ -25,14 +19,14 @@ fn fanout_of(server: &MockServer) -> Fanout {
     fanout_with(server, Parts::ALL)
 }
 
-/// The fan-out of a login whose account has only some of its parts switched on.
+/// The fan-out of a login with only the given `parts` switched on.
 fn fanout_with(server: &MockServer, parts: Parts) -> Fanout {
     let client = Client::connect(server.origin(), Credentials::none())
         .expect("the mock serves a session document");
     Fanout::discover(&client, parts).expect("the mock answers every listing it is asked for")
 }
 
-/// Runs `f` against the default account's state.
+/// Runs `f` on the state of the default account.
 fn with_account(state: &Arc<Mutex<ServerState>>, f: impl FnOnce(&mut AccountState)) {
     let mut state = state.lock().expect("the mock server thread is alive");
     let id = Id::new(DEFAULT_ACCOUNT_ID);
@@ -69,8 +63,7 @@ fn every_subscribed_collection_of_the_resolved_account_is_a_resource() {
             .collect::<Vec<_>>(),
         ["Work"]
     );
-    // The ids are what a child source names in `[Resource] Identity`, so they
-    // have to be the server's own, not an index into the listing.
+    // `[Resource] Identity` needs the ids of the server, not listing indexes.
     assert!(fanout.address_books[0].id != fanout.address_books[1].id);
 }
 
@@ -205,8 +198,7 @@ fn an_account_offering_contacts_and_holding_none_warrants_no_address_book() {
 
     let fanout = fanout_of(&server);
 
-    // The capability is there, so the question was asked — and answered with
-    // an empty list, which is a real state (a fresh account) and not an error.
+    // The discovery asks, and an empty list (a new account) is not an error.
     assert!(
         server
             .method_calls()
@@ -223,10 +215,7 @@ fn an_account_offering_contacts_and_holding_none_warrants_no_address_book() {
 
 #[test]
 fn a_part_the_user_switched_off_is_never_asked_about() {
-    // The account offers both, and the user said they keep their contacts
-    // elsewhere. Sending `AddressBook/get` anyway is a request for data they
-    // said they did not want — and, on an account that has to be authenticated
-    // for, a credential prompt to fetch it with.
+    // The user switched off contacts: do not fetch them (and maybe ask for credentials).
     let server = MockServer::builder().start();
     let state = server.state();
     with_account(&state, |account| {
@@ -271,9 +260,7 @@ fn a_part_the_user_switched_off_is_never_asked_about() {
 
 #[test]
 fn an_account_with_nothing_switched_on_is_asked_nothing_at_all() {
-    // `e_collection_backend_get_part_enabled()` with every bit set is false
-    // here — a disabled account, or one the user switched every part off on.
-    // Its populate has nothing to create, so it has nothing to ask.
+    // No part is on (`e_collection_backend_get_part_enabled()` is false), so no request.
     let server = MockServer::builder().start();
     let state = server.state();
     with_account(&state, |account| {

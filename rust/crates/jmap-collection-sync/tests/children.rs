@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The child sources one login warrants, off a running server.
+//! Tests the child sources of one login against a running mock server.
 //!
-//! `src/children.rs`'s unit tests cover the naming rules against hand-built
-//! fan-outs. These cover the one thing a hand-built fan-out cannot: that the
-//! ids a real server hands out survive the whole way — session document,
-//! listing, resource id, and back out of the parse the `dup_resource_id` vfunc
-//! will do. A rule that holds for `AB1` and not for the mock's actual ids is a
-//! rule that holds for nothing.
+//! The unit tests in `src/children.rs` use hand-built fan-outs. These tests
+//! make sure that the ids that a server issues stay correct through the
+//! listing, the resource id and the parse that `dup_resource_id` does.
 
 use std::sync::{Arc, Mutex};
 
@@ -25,7 +22,7 @@ fn fanout_of(server: &MockServer) -> Fanout {
     Fanout::discover(&client, Parts::ALL).expect("the mock answers every listing it is asked for")
 }
 
-/// Runs `f` against the default account's state.
+/// Runs `f` on the state of the default account.
 fn with_account(state: &Arc<Mutex<ServerState>>, f: impl FnOnce(&mut AccountState)) {
     let mut state = state.lock().expect("the mock server thread is alive");
     let id = Id::new(DEFAULT_ACCOUNT_ID);
@@ -70,10 +67,8 @@ fn a_child_per_collection_the_server_lists() {
 
 #[test]
 fn every_resource_id_reads_back_as_the_collection_it_was_made_from() {
-    // The pairing EDS relies on: the string `populate` hands
-    // `e_collection_backend_new_child` is the string `dup_resource_id` has to
-    // return for the child that came back, or the next populate creates a
-    // second source for a collection that already has one.
+    // EDS needs `dup_resource_id` to return the resource id that
+    // `e_collection_backend_new_child` got, or the next populate adds a second source.
     let server = MockServer::builder().start();
     let state = server.state();
     with_account(&state, |account| {
@@ -111,12 +106,8 @@ fn every_resource_id_reads_back_as_the_collection_it_was_made_from() {
 
 #[test]
 fn the_identity_written_on_a_child_is_an_id_the_server_answers_to() {
-    // Two claims at once, and neither survives hand-written ids alone: the
-    // `[Resource] Identity` a child is written with is the id the book or
-    // calendar backend will put in an `AddressBook/get`, so it has to be one the
-    // server issued and not the prefixed resource id; and the pair
-    // (extension, identity) — the only two settings that outlive a restart — is
-    // what `dup_resource_id` reconstructs the resource id from.
+    // `[Resource] Identity` must be a server-issued id, and `resource_id_for` must
+    // rebuild the resource id from it (as `dup_resource_id` does after a restart).
     let server = MockServer::builder().start();
     let state = server.state();
     with_account(&state, |account| {
@@ -133,8 +124,7 @@ fn the_identity_written_on_a_child_is_an_id_the_server_answers_to() {
         .collect();
     assert_eq!(served.len(), 2, "the mock listed both collections");
 
-    // The connection settings are the account's, not the collection's, and
-    // nothing here turns on them.
+    // The connection settings have no effect on this test.
     let connection = Connection {
         host: "127.0.0.1".to_owned(),
         port: None,
@@ -168,9 +158,7 @@ fn the_identity_written_on_a_child_is_an_id_the_server_answers_to() {
 
 #[test]
 fn a_login_that_serves_no_collections_has_no_children() {
-    // A mail-only account authenticates, resolves, and warrants no address book
-    // and no calendar. That is an account, not an error — and the fan-out has
-    // to say so with an empty child list rather than a child that fails on use.
+    // A mail-only account is valid: it gives an empty child list, not an error.
     let server = MockServer::builder()
         .without_capability(jmap_proto::session::CAPABILITY_CONTACTS)
         .without_capability(jmap_proto::session::CAPABILITY_CALENDARS)

@@ -3,46 +3,43 @@
 
 //! Which JMAP account serves which of Evolution's three services.
 //!
-//! The session document has two statements about capabilities and they are not
-//! the same statement:
+//! The session document makes two different statements about capabilities:
 //!
-//! - `capabilities` is what the *server* implements. RFC 8620 §3.3 has every
-//!   request name the capabilities it uses, and a server answers a `using` it
-//!   does not advertise with `unknownCapability` — which fails the whole
-//!   request, not the one call.
-//! - `accountCapabilities` is what *this account* offers. The methods are
-//!   per-account, so an account that does not list `…:jmap:mail` has no
-//!   mailboxes to list however thoroughly the server implements mail.
+//! - `capabilities` is what the *server* implements. RFC 8620 §3.3 makes each
+//!   request name the capabilities it uses. A server answers a `using` that it
+//!   does not advertise with `unknownCapability`, which fails the whole
+//!   request, not only one call.
+//! - `accountCapabilities` is what *this account* offers. Methods operate on
+//!   one account, so an account that does not list `…:jmap:mail` has no
+//!   mailboxes, even if the server implements mail.
 //!
-//! So a service is offered here only when both say so. Trusting either alone
-//! produces a child source that cannot work: the account's word alone gives a
-//! mail folder whose every refresh is an `unknownCapability`, and the server's
-//! word alone gives one whose every refresh is an `accountNotFound`.
+//! Thus this module offers a service only when both statements include it.
+//! With only the account's statement, each refresh of the child source fails
+//! with `unknownCapability`. With only the server's statement, each refresh
+//! fails with `accountNotSupportedByMethod`.
 //!
 //! ## Which account
 //!
-//! `primaryAccounts` is the server's own answer to "which account is this
-//! user's mail" (RFC 8620 §2), and it is taken as given wherever it has an
-//! entry — including when it names an account that is not the user's own,
-//! because a server that designates a shared account as primary has said
-//! something deliberate.
+//! `primaryAccounts` is the server's answer to "which account holds this
+//! user's mail" (RFC 8620 §2). Where it has an entry, the layout uses that
+//! account if the account lists the capability. This is also true when it is
+//! not the user's own account: a server that makes a shared account primary
+//! does so deliberately.
 //!
-//! Where it has no entry for a capability, the account is inferred, but only
-//! from a position where there is nothing to guess: exactly one account
-//! belonging to this user (`isPersonal`) offers the capability. Two of them and
-//! the answer is none — an account fanned out to the wrong mailbox is worse
-//! than one that reports it could not tell, because the user cannot see which
-//! JMAP account a folder came from and would have to be told by us.
+//! Where it has no entry for a capability, the layout uses the account only if
+//! exactly one personal account (`isPersonal`) offers the capability. If two
+//! accounts offer it, the layout uses neither. A wrong account is worse than
+//! no account, because the user cannot see which JMAP account a folder comes
+//! from.
 //!
 //! ## Sending
 //!
-//! `urn:ietf:params:jmap:submission` is its own capability with its own
-//! `primaryAccounts` entry, but a transport is only warranted when it resolves
-//! to the *same* account as mail. An `EmailSubmission` names an `emailId`
-//! (RFC 8621 §7) and ids are scoped to an account, so submitting through
-//! account B a message uploaded into account A is not a thing the protocol can
-//! express. A different submission account is therefore not a second transport
-//! to offer — it is no transport at all.
+//! `urn:ietf:params:jmap:submission` is a separate capability with a separate
+//! `primaryAccounts` entry. A transport is necessary only when it resolves to
+//! the *same* account as mail. An `EmailSubmission` names an `emailId`
+//! (RFC 8621 §7), and an id is valid in one account only. Thus the protocol
+//! cannot send through account B a message that is in account A. A different
+//! submission account gives no transport.
 
 use jmap_proto::Id;
 use jmap_proto::session::{
@@ -56,12 +53,12 @@ use crate::children::ChildKind;
 pub struct ServiceAccount {
     /// The `accountId` every method call for this service carries.
     pub id: Id,
-    /// The account's name as the server states it (RFC 8620 §1.6.2) — a
-    /// display string, and the obvious default name for the child source.
+    /// The account's name from the server (RFC 8620 §1.6.2): a display string,
+    /// and the default name for the child source.
     pub name: String,
-    /// The account's `isReadOnly`: the whole data set is read-only, not one
-    /// collection in it. A child made from this may be shown, but nothing in it
-    /// may be created, changed or deleted.
+    /// The account's `isReadOnly`: all data in the account is read-only, not
+    /// only one collection. Evolution can show a child of this account, but
+    /// cannot create, change or delete anything in it.
     pub read_only: bool,
 }
 
@@ -69,18 +66,17 @@ pub struct ServiceAccount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailService {
     pub account: ServiceAccount,
-    /// Whether the account also offers `urn:ietf:params:jmap:submission`, i.e.
-    /// whether the collection warrants a Camel *transport* beside its store.
+    /// Whether `urn:ietf:params:jmap:submission` resolves to this same
+    /// account, so that the account has a Camel *transport* with its store.
     /// False is a receive-only account, which is a usable account.
     pub can_send: bool,
 }
 
-/// The children one JMAP login warrants.
+/// The services that one JMAP login offers.
 ///
-/// Each field is `None` when the login does not offer that service at all,
-/// not when the user switched it off. Whether a source the user disabled is
-/// created is EDS's business (`ESourceCollection:mail-enabled` and its two
-/// siblings); what is here is what *exists* to enable.
+/// Each field is `None` when the login does not offer that service. It is not
+/// `None` when the user switched the service off: [`Parts`](crate::Parts) holds
+/// that choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectionLayout {
     pub mail: Option<MailService>,
@@ -106,16 +102,14 @@ impl CollectionLayout {
 
     /// Whether the login offers nothing at all.
     ///
-    /// A login can authenticate successfully and still have no service this
-    /// backend can use — a server implementing only `…:jmap:core`, or an
-    /// account with every capability stripped. That is a sentence for the user,
-    /// not an empty account tree to leave them puzzling over.
+    /// A login can authenticate and still have no service that this backend
+    /// can use: for example, a server that implements only `…:jmap:core`.
+    /// Tell the user this, instead of showing an empty account.
     pub fn is_empty(&self) -> bool {
         self.mail.is_none() && self.contacts.is_none() && self.calendars.is_none()
     }
 
-    /// The account whose collections of `kind` this login's children come from,
-    /// if it has one.
+    /// The account that holds this login's collections of `kind`, if any.
     pub fn account_for(&self, kind: ChildKind) -> Option<&ServiceAccount> {
         match kind {
             ChildKind::AddressBook => self.contacts.as_ref(),
@@ -123,9 +117,9 @@ impl CollectionLayout {
         }
     }
 
-    /// Whether the login offers collections of `kind` at all — which is a
-    /// different question from whether the user wants them (see
-    /// [`Parts`](crate::Parts)) and from whether the account holds any.
+    /// Whether the login offers collections of `kind`. This is not whether the
+    /// user wants them (see [`Parts`](crate::Parts)), and not whether the
+    /// account holds any.
     pub fn serves(&self, kind: ChildKind) -> bool {
         self.account_for(kind).is_some()
     }
@@ -134,9 +128,8 @@ impl CollectionLayout {
 /// An account shared with this login, and which collection kinds it offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedService {
-    /// The owner's account. Its `name` is the server's display string for the
-    /// account (RFC 8620 §1.6.2 gives "the email address representing the
-    /// owner" as the example), which is what tells the user whose it is.
+    /// The owner's account. Its `name` tells the user who owns it: RFC 8620
+    /// §1.6.2 gives "the email address representing the owner" as an example.
     pub account: ServiceAccount,
     pub contacts: bool,
     pub calendars: bool,
@@ -156,10 +149,10 @@ impl CollectionLayout {
     /// The accounts shared with this login that offer contacts or calendars,
     /// in the session's account id order.
     ///
-    /// Only `isPersonal: false` accounts: a second personal account is not a
-    /// share, and the layout above already decides which personal account is
-    /// used. A kind is offered only when the server and the account both list
-    /// its capability, and not when the server names this account as primary
+    /// Only accounts with `isPersonal: false`: a second personal account is not
+    /// a share, and [`CollectionLayout::from_session`] selects the personal
+    /// account. A kind is offered only when the server and the account both
+    /// list its capability, and the account is not the resolved primary account
     /// for it.
     pub fn shared_accounts(session: &Session) -> Vec<SharedService> {
         let offers = |id: &Id, capability: &str| {
@@ -192,11 +185,11 @@ impl CollectionLayout {
 
 /// The account serving `capability`, if this login has one.
 ///
-/// The inference (server capability, then `primaryAccounts`, then the sole
-/// personal account offering it) lives on
-/// [`Session::resolve_primary_account`] itself now, shared with
-/// [`jmap_client::Client::primary_account`] — this just attaches the name and
-/// read-only bit the child source needs.
+/// [`Session::resolve_primary_account`] selects the account (also for
+/// [`jmap_client::Client::primary_account`]): the server must list the
+/// capability, then `primaryAccounts` or the sole personal account offering it
+/// gives the id, and that account must list the capability. This function
+/// adds the name and the read-only flag.
 fn service(session: &Session, capability: &str) -> Option<ServiceAccount> {
     let id = session.resolve_primary_account(capability)?.clone();
     let account = session.accounts.get(&id)?;
@@ -256,9 +249,9 @@ mod tests {
 
     #[test]
     fn a_capability_the_server_does_not_implement_is_not_offered_however_the_account_answers() {
-        // The account claims all four; the server advertises only mail. A
-        // `using` naming contacts would be answered with unknownCapability, so
-        // there is no address book here — and no calendar either.
+        // The account lists all four; the server advertises only mail. A
+        // `using` with contacts gets unknownCapability, so there is no address
+        // book and no calendar.
         let layout = CollectionLayout::from_session(&session(
             &[CAPABILITY_MAIL],
             json!({"a": account("Vera", ALL)}),
@@ -292,9 +285,8 @@ mod tests {
         ));
 
         assert_eq!(layout.mail, None);
-        // The other two have no primary entry and one personal candidate, so
-        // they are found the other way — the point being that the mail failure
-        // is about mail's own entry, not about the document being unusable.
+        // Contacts has no primary entry and one personal account, so it
+        // resolves. Only the mail entry fails, not the whole document.
         assert_eq!(layout.contacts.unwrap().id, Id::new("a"));
     }
 
@@ -327,7 +319,7 @@ mod tests {
             "nothing says which mailbox is the user's"
         );
         assert_eq!(layout.calendars, None);
-        // Named, so not guessed at: the server's own entry still decides.
+        // The server's primary entry for contacts still decides.
         assert_eq!(layout.contacts.unwrap().id, Id::new("b"));
     }
 
@@ -337,12 +329,11 @@ mod tests {
         shared["isPersonal"] = json!(false);
         let accounts = json!({"personal": account("Vera", ALL), "shared": shared});
 
-        // Two accounts offer mail; only one of them is the user's, so there is
-        // nothing to choose between and it serves.
+        // Two accounts offer mail, but only one is personal, so it serves.
         let inferred = CollectionLayout::from_session(&session(ALL, accounts.clone(), json!({})));
         assert_eq!(inferred.mail.unwrap().account.id, Id::new("personal"));
 
-        // Named as primary, a shared account is what the server says it is.
+        // When the server names a shared account as primary, it serves.
         let named = CollectionLayout::from_session(&session(
             ALL,
             accounts,
@@ -376,8 +367,8 @@ mod tests {
 
     #[test]
     fn a_personal_account_is_never_a_shared_one() {
-        // Two personal accounts and no primary entry: the layout serves none
-        // of them, and neither is a share either.
+        // Two personal accounts and no primary entry: the layout uses neither,
+        // and neither is a share.
         let accounts = json!({"a": account("Vera", ALL), "b": account("Vera at work", ALL)});
         assert_eq!(
             CollectionLayout::shared_accounts(&session(ALL, accounts, json!({}))),
@@ -399,8 +390,8 @@ mod tests {
         assert!(shared[0].offers(ChildKind::Calendar));
         assert!(!shared[0].offers(ChildKind::AddressBook));
 
-        // The server does not implement calendars: the account's word alone
-        // would make every request an unknownCapability.
+        // The server does not implement calendars, so each calendar request
+        // would get unknownCapability.
         assert_eq!(
             CollectionLayout::shared_accounts(&session(
                 &[CAPABILITY_MAIL, CAPABILITY_CONTACTS],

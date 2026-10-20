@@ -1,30 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Creating a collection *on the server*, and the child source it becomes.
+//! Creation of a collection *on the server*, and the child source that it
+//! becomes.
 //!
-//! [`Fanout::discover`](crate::Fanout::discover) is this crate's read direction:
-//! ask the server what it holds, decide which children that is. This is the one
-//! write direction it has — Evolution's "New Address Book"/"New Calendar" asked
-//! for a collection that does not exist yet, so it is made, and then the same
-//! [`Child`] is derived for it that the next discovery would have derived.
+//! [`Fanout::discover`](crate::Fanout::discover) is the read direction of this
+//! crate: it asks the server what it holds and decides which children that
+//! gives. This module is a write direction ([`crate::delete`] is the other).
+//! Evolution's "New Address Book"/"New Calendar" asks for a collection that does
+//! not exist yet. This module creates it, and then derives the same [`Child`]
+//! for it that the next discovery derives.
 //!
-//! It lives here, beside the discovery, rather than in the collection backend,
-//! for the reason the crate split exists at all: what a child *is* is decided
-//! without the EDS headers, so it can be tested against a running `jmap-mockd`
-//! in the ordinary workspace test run. What the backend keeps is the two ends
-//! that need EDS — reading the kind and name off the scratch `ESource`, and
-//! writing the child's settings back onto it.
+//! It is here, next to the discovery, and not in the collection backend, for the
+//! reason that the crate split exists: this crate decides what a child *is*
+//! without the EDS headers. Thus the ordinary workspace test run can test it
+//! against a running `jmap-mockd`. The backend keeps the two ends that need EDS:
+//! - it reads the kind and the name from the scratch `ESource`;
+//! - it writes the settings of the child back onto that `ESource`.
 //!
 //! ## The account is resolved, never assumed
 //!
 //! [`create_collection`] asks [`CollectionLayout`] which JMAP account serves the
-//! kind in question, exactly as a discovery does, and refuses when it serves
-//! none. Sending the create to the session's primary account instead would, on a
-//! server whose contacts and calendars sit in different accounts, put the new
-//! address book in an account whose collections this backend never lists — a
-//! collection that exists on the server and never appears in Evolution, which is
-//! a worse outcome than a create that said no.
+//! kind, as a discovery does, and refuses when no account serves it. The
+//! alternative is to send the create to the primary account of the session. On a
+//! server that keeps contacts and calendars in different accounts, this puts the
+//! new address book in an account that this backend never lists. The collection
+//! then exists on the server but never appears in Evolution, which is worse than
+//! a refused create.
 
 use jmap_client::Client;
 use jmap_proto::Id;
@@ -39,22 +41,21 @@ use crate::resources::{Resource, shown_name};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Requested {
     pub kind: ChildKind,
-    /// The name to create it under — in Evolution's case whatever the user typed
-    /// in the dialog.
+    /// The name for the new collection. In Evolution, this is the text that the
+    /// user typed in the dialog.
     ///
-    /// May be empty, and is sent as such rather than refused: a name is the
-    /// server's to validate, and refusing one here would answer a name the
-    /// server would have accepted with an error of this code's own. What is
-    /// never empty is the name written back onto the child — see
-    /// [`shown_name`](crate::resources::shown_name).
+    /// It can be empty, and is then sent as it is, not refused. The server
+    /// validates names. If this code refused a name, it could refuse a name that
+    /// the server accepts. The name written back onto the child is never empty:
+    /// see [`shown_name`](crate::resources::shown_name).
     pub display_name: String,
 }
 
 /// Why a collection could not be created.
 #[derive(Debug)]
 pub enum CreateFailure {
-    /// The login holds no JMAP account serving collections of that kind, so
-    /// there is nowhere to create one.
+    /// The login has no JMAP account that serves collections of that kind, so
+    /// no place exists to create one.
     Unserved(ChildKind),
     /// The server refused the create, or could not be reached.
     Client(jmap_client::Error),
@@ -84,31 +85,28 @@ impl std::fmt::Display for CreateFailure {
 
 impl std::error::Error for CreateFailure {}
 
-/// Creates `requested` on the server and answers the child source it is to
-/// become.
+/// Creates `requested` on the server and returns the child source that it
+/// becomes.
 ///
-/// The `Child` is built by [`Child::for_resource`] from the object the *server*
-/// answered with, not from what was asked for: a server may normalise the name,
-/// may flag the new collection default, and — for a calendar — may assign it a
-/// colour. All three reach the child that way, so a created child is the child
-/// the next discovery would have written rather than a near-miss of it. One
-/// exception: `name` alone falls back to what was *requested*, not the id,
-/// when the response leaves it out — RFC 8620 §5.3 lets a `created` response
-/// omit any property the server did not itself set, and a name it accepted
-/// unchanged is exactly that: a real server can leave `name` out entirely
-/// rather than echo the requested name back.
+/// [`Child::for_resource`] builds the `Child` from the object in the *server's*
+/// response, not from the request. A server can normalise the name, mark the new
+/// collection as the default, and give a calendar a colour. All three get to the
+/// child, so a created child is the same child that the next discovery writes.
 ///
-/// The create explicitly asks for `isSubscribed: true`. Both specifications
-/// leave a freshly created collection's subscription state up to the server,
-/// and a real server (confirmed against Stalwart, which is not merely
-/// theoretical) defaults it to *unsubscribed* rather than leaving the property
-/// absent — and [`crate::resources`]'s own discovery filter drops
-/// `isSubscribed == Some(false)` on purpose, treating it exactly like a
-/// collection the user removed. Left to that default, "New Address Book"/"New
-/// Calendar" would create a collection that then vanishes from the sidebar
-/// until some other client happens to subscribe it. A user who just asked to
-/// create a collection has unambiguously asked to see it, so subscription is
-/// requested, not assumed from the server's silence.
+/// One exception: when the response has no `name`, the requested name is used,
+/// not the id. RFC 8620 §5.3 lets a `created` response omit each property that
+/// the server did not set. A name that the server accepted without change is
+/// such a property, so a real server can omit `name`.
+///
+/// The create asks for `isSubscribed: true`. Both specifications let the server
+/// decide the subscription state of a new collection. A real server (Stalwart,
+/// confirmed) sets it to *unsubscribed* and does not omit the property. The
+/// discovery filter in [`crate::resources`] intentionally drops
+/// `isSubscribed == Some(false)`, as for a collection that the user removed.
+/// With that default, "New Address Book"/"New Calendar" creates a collection
+/// that disappears from the sidebar until a different client subscribes it. A
+/// user who asks to create a collection wants to see it, so the create requests
+/// the subscription.
 pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child, CreateFailure> {
     let layout = CollectionLayout::from_session(client.session());
     let kind = requested.kind;
@@ -192,25 +190,21 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
     Ok(Child::for_resource(requested.kind, account, &resource))
 }
 
-/// The [`Resource`] a just-created collection is, or `None` if the server named
-/// it no id.
+/// The [`Resource`] for a new collection, or `None` if the server gave it no id.
 ///
-/// A `/set` create that reports no `id` for the object it created is a server
-/// breaking RFC 8620 §5.3, and not a corner to shrug at: the id is what
-/// `[Resource] Identity` carries, and a child written without one is a child
-/// whose cache file EDS deletes on the next start. So it is refused here rather
-/// than turned into an empty identity two layers down.
+/// A `/set` create that reports no `id` for the new object breaks RFC 8620 §5.3.
+/// This is important: `[Resource] Identity` contains the id, and EDS deletes the
+/// cache file of a child without one on the next start. Thus this function
+/// refuses it, and does not give an empty identity two layers lower.
 ///
-/// `server_name` is what the create's response stated, which may be blank: a
-/// `created` response need only carry properties the server itself set (RFC
-/// 8620 §5.3), and `name` is not one of those when the server accepted the
-/// requested name unchanged, so a real server can leave it out entirely
-/// rather than echo it back. A blank `server_name` therefore means "accepted
-/// as asked", not "the server named it nothing", so it falls back to
-/// `requested_name`, never straight to the id, and only a `server_name` the
-/// response actually states (a genuine normalisation) overrides what was
-/// requested. The id is the last resort, for the one case neither name can
-/// cover: both blank.
+/// `server_name` is the name in the create response, and can be blank. A
+/// `created` response must only contain the properties that the server set
+/// (RFC 8620 §5.3). When the server accepted the requested name without change,
+/// `name` is not one of them. Thus a blank `server_name` means "accepted as
+/// requested", not "the server gave no name". The result is as follows:
+/// - a `server_name` that is not blank (a normalisation) is used;
+/// - if not, `requested_name` is used;
+/// - if both are blank, the id is used.
 fn created_resource(
     id: Option<Id>,
     server_name: &str,
@@ -236,7 +230,7 @@ fn created_resource(
     })
 }
 
-/// The error for a `/set` create the server answered with no id.
+/// The error for a `/set` create that the server answered with no id.
 fn missing_id(kind: ChildKind) -> jmap_client::Error {
     jmap_client::Error::Protocol(format!(
         "the server created {} and reported no id for it",
@@ -253,9 +247,8 @@ mod tests {
 
     #[test]
     fn a_created_collection_takes_the_servers_name_not_the_requested_one() {
-        // The server answers a create with the object it created; a server that
-        // stated a normalised name is telling the client what the collection is
-        // actually called, and that overrides what was asked for.
+        // A normalised name in the response is the real name of the
+        // collection, so it overrides the requested name.
         let resource = created_resource(
             Some(Id::new("AB9")),
             "Work Contacts",
@@ -273,13 +266,10 @@ mod tests {
 
     #[test]
     fn a_created_collection_whose_response_omits_the_name_shows_the_requested_name() {
-        // RFC 8620 §5.3: a `created` response need only carry properties the
-        // server itself set. `name` is not one of those when the server
-        // accepted the requested name unchanged, so a real server can leave
-        // it out entirely: an absent name means "accepted as asked", not
-        // "the server named it nothing", and must not fall back to the id
-        // the way `created_resource`'s caller passes an empty string for
-        // "the response omitted this".
+        // RFC 8620 §5.3: a `created` response must only contain the properties
+        // that the server set. The caller gives an empty string when the
+        // response has no `name`. This means "accepted as requested", so the
+        // result is the requested name, not the id.
         let resource =
             created_resource(Some(Id::new("CiV")), "", "testcal", None, None, None, None)
                 .expect("the server named an id");
@@ -288,11 +278,10 @@ mod tests {
 
     #[test]
     fn a_created_collection_neither_name_names_anything_shows_its_id() {
-        // The same never-blank rule a listing applies — a blank row in the
-        // sidebar is one the user cannot tell from another blank row. This is
-        // the one case genuinely reachable only via the id: Evolution refuses
-        // an empty display name in its own create dialogs, but `Requested`
-        // documents that a blank request is sent rather than rejected here.
+        // A listing uses the same rule: a name is never blank, because the user
+        // cannot tell two blank rows in the sidebar apart. Evolution refuses an
+        // empty name in its create dialogs, but `Requested` sends a blank name
+        // and does not refuse it.
         let resource = created_resource(Some(Id::new("Cal9")), "   ", "  ", None, None, None, None)
             .expect("the server named an id");
         assert_eq!(resource.name, "Cal9");
@@ -300,8 +289,8 @@ mod tests {
 
     #[test]
     fn a_create_the_server_reported_no_id_for_is_no_resource() {
-        // `[Resource] Identity` is what this becomes, and a child written
-        // without one is a child EDS deletes the cache file of.
+        // The id becomes `[Resource] Identity`. EDS deletes the cache file of a
+        // child without one.
         assert!(created_resource(None, "Work", "Work", None, None, None, None).is_none());
     }
 
@@ -323,11 +312,10 @@ mod tests {
 
     #[test]
     fn the_servers_my_rights_reach_the_resource_as_writable() {
-        // A create's response can carry `myRights` right away (RFC 8620 §5.3
-        // confirms whichever properties the server chooses in a create's
-        // response), and the same reading `resources()` gives a discovered
-        // collection has to apply here too, or a freshly created read-only
-        // share would show as writable until the next populate corrected it.
+        // A create response can contain `myRights` (RFC 8620 §5.3 lets the
+        // server add properties to it). The reading of `resources()` for a
+        // discovered collection applies here too. If not, a new read-only share
+        // shows as writable until the next populate.
         let resource = created_resource(
             Some(Id::new("AB9")),
             "Read-only share",
@@ -343,10 +331,9 @@ mod tests {
 
     #[test]
     fn the_servers_my_rights_reach_the_resource_as_deletable() {
-        // The same pairing as `writable` above, for `mayDelete`: a create's
-        // response naming rights up front must reach the resource `created`
-        // reads, or a freshly created undeletable share would show as
-        // deletable until the next populate corrected it.
+        // As `writable` above, for `mayDelete`. If the rights in the response
+        // do not get to the resource, a new share that cannot be deleted shows
+        // as deletable until the next populate.
         let resource = created_resource(
             Some(Id::new("AB9")),
             "Locked share",

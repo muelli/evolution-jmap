@@ -1,86 +1,97 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Which parts of an account the user has switched on, and what a switched-off
-//! part means for the children.
+//! The parts of an account that the user has switched on, and what a
+//! switched-off part means for the children.
 //!
-//! An Evolution account is not all-or-nothing: `ESourceCollection` carries
-//! `mail-enabled`, `contacts-enabled` and `calendar-enabled`, and the user turns
-//! them off one at a time — "use this account for mail, but I have my contacts
-//! elsewhere". EDS exposes the same three to a backend as
-//! `ECollectionBackendParts` / `e_collection_backend_get_part_enabled()`, and a
-//! populate that ignores them fetches, creates and shows what the user said they
-//! did not want.
+//! An Evolution account is not all-or-nothing. `ESourceCollection` has the
+//! flags `mail-enabled`, `contacts-enabled` and `calendar-enabled`, and the user
+//! can switch off each one separately (for example: "use this account for mail,
+//! but my contacts are in a different place"). EDS gives the same three flags to
+//! a backend as `ECollectionBackendParts` / `e_collection_backend_get_part_enabled()`.
+//! A populate that ignores them fetches, creates and shows data that the user
+//! does not want.
 //!
-//! [`Parts`] is those three flags, and this module is the two decisions they
-//! drive: what a populate *asks the server for*, and what it does with the
-//! children a previous populate already created.
+//! [`Parts`] holds the three flags. This module makes the two decisions that
+//! they control:
+//! - what a populate *asks the server for*;
+//! - what a populate does with the children that a previous populate created.
 //!
 //! ## A switched-off part is not asked about
 //!
 //! [`Fanout::discover`] sends `AddressBook/get` only when the contacts part is
-//! on, and `Calendar/get` only when the calendar part is on — the same gate
-//! `EWebDAVCollectionBackend` puts in front of its own discovery, which returns
-//! before contacting anything when neither part is enabled. The children of a
-//! switched-off part are therefore not created either, since there is nothing
-//! listed to create them from ([`Fanout::children`] holds that line a second
-//! time, so a hand-built fan-out cannot route around it).
+//! on, and `Calendar/get` only when the calendar part is on. This is the same
+//! gate that `EWebDAVCollectionBackend` puts in front of its discovery: it
+//! returns before it contacts the server when neither part is enabled. Thus a
+//! switched-off part also gets no children, because no listing exists to create
+//! them from. [`Fanout::children`] applies the same rule a second time, so a
+//! fan-out that is built by hand cannot avoid it.
 //!
-//! Not creating them, rather than creating them disabled, is a choice: EDS binds
-//! every child's `enabled` to its part
-//! (`collection_backend_bind_child_enabled()`), so a child created for a
-//! switched-off part would immediately be a switched-off child — the same thing
-//! the user sees, at the cost of a request, a `.source` file and a credential
-//! prompt for data they said they did not want.
+//! This backend does not create these children at all, and does not create them
+//! disabled. The reason: EDS binds the `enabled` property of each child to its
+//! part (`collection_backend_bind_child_enabled()`). Thus a child created for a
+//! switched-off part is immediately a switched-off child. The user sees the same
+//! result, but it costs a request, a `.source` file and a credential prompt for
+//! data that the user does not want.
 //!
-//! ## But a switched-off part is not *deleted* either
+//! ## A switched-off part is also not *deleted*
 //!
-//! The other half is the one that can lose data, and it is where this backend
-//! deliberately parts company with EDS's WebDAV one.
+//! This half can lose data, and here this backend is intentionally different
+//! from the WebDAV backend of EDS.
 //!
-//! A collection backend has to remove the children of collections that are gone
-//! from the server, or an address book deleted in the web UI stays in the
-//! sidebar forever. `EWebDAVCollectionBackend` does that by listing every
-//! existing child up front, striking off the ones discovery found again, and
-//! calling `e_source_remove_sync()` on the leftovers. The trouble is that it
-//! fills that list with children of *both* kinds while discovering only the
-//! enabled ones, so with contacts switched off every address book child becomes
-//! a leftover and is removed — its uid, its `.source` file and its offline cache
-//! with it. Switching contacts back on then rediscovers the same address books
-//! as brand new sources.
+//! A collection backend must remove the children of collections that the server
+//! no longer has. If not, an address book deleted in the web UI stays in the
+//! sidebar permanently. `EWebDAVCollectionBackend` does this as follows:
+//! 1. It lists all existing children.
+//! 2. It removes from that list each child that discovery finds again.
+//! 3. It calls `e_source_remove_sync()` on the children that remain.
 //!
-//! [`Fanout::is_obsolete`] does not do that. A cached child is obsolete only
-//! when this populate *asked the question its answer would be*: its part is on,
-//! the login resolved an account for its kind, and the listing came back without
-//! it. A child of a switched-off part is dormant, not obsolete — EDS's binding
-//! has already switched it off, and switching the part back on brings it back
-//! with its cache intact. The same reasoning covers the login that stopped
-//! advertising a capability: silence is not a deletion.
+//! The problem: the list has children of *both* kinds, but discovery finds only
+//! the enabled kinds. Thus, when contacts are switched off, each address book
+//! child remains on the list and is removed, together with its uid, its
+//! `.source` file and its offline cache. When the user switches contacts on
+//! again, discovery finds the same address books as new sources.
 //!
-//! Nothing here handles a *failed* discovery, because a failed discovery has no
-//! [`Fanout`] to ask — [`Fanout::discover`] returns the error instead, and a
-//! populate that got an error has learned nothing and must remove nothing. That
-//! is the same rule ("prevent lost of already known calendars when the discover
-//! failed", as the WebDAV backend puts it), reached by not having the object.
+//! [`Fanout::is_obsolete`] does not do this. A cached child of the user's own
+//! account is obsolete only when this populate *asked the question that it
+//! answers*:
+//! - its part is on;
+//! - the login resolved an account for its kind;
+//! - the listing did not contain it.
+//!
+//! A child of a switched-off part is dormant, not obsolete. The EDS binding has
+//! already switched it off, and when the user switches the part on again, the
+//! child returns with its cache. The same rule applies to a login that no
+//! longer advertises a capability: an absent answer is not a deletion.
+//!
+//! A shared child also needs its part to be on. It is obsolete when its account
+//! is no longer in the session (the owner withdrew the last grant), or when its
+//! account was listed and the listing did not contain it. A shared listing that
+//! fails is `None`, and thus removes nothing.
+//!
+//! This module does not handle a *failed* discovery, because a failed discovery
+//! has no [`Fanout`]: [`Fanout::discover`] returns the error instead. A populate
+//! that gets an error knows nothing new and must remove nothing. The WebDAV
+//! backend states the same rule ("prevent lost of already known calendars when
+//! the discover failed"). Here, the missing object enforces it.
 
 use crate::children::{ChildKind, parse_resource_id, split_shared_identity};
 use crate::resources::Fanout;
 
-/// Which of an account's three parts the user has switched on.
+/// The parts of an account that the user has switched on.
 ///
-/// The names are `ESourceCollection`'s: `mail-enabled`, `contacts-enabled` and
-/// `calendar-enabled` (EDS spells the last one singular; it is spelled
-/// [`calendars`](Parts::calendars) here to match
-/// [`CollectionLayout`](crate::CollectionLayout), which has one account per
-/// *kind* of collection).
+/// The names come from `ESourceCollection`: `mail-enabled`, `contacts-enabled`
+/// and `calendar-enabled`. EDS uses the singular for the last one. Here it is
+/// [`calendars`](Parts::calendars), to agree with
+/// [`CollectionLayout`](crate::CollectionLayout), which has one account for each
+/// *kind* of collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Parts {
-    /// `ESourceCollection:mail-enabled`. Nothing turns on it yet: this backend
-    /// creates no mail children (see [`crate::children`]), and the mail service
-    /// costs no request of its own — it is read out of the session document
-    /// every populate fetches anyway. It is here because the flag exists and a
-    /// [`Parts`] that quietly had two thirds of EDS's three parts would be a
-    /// trap for whoever writes the mail children.
+    /// `ESourceCollection:mail-enabled`. Only [`Parts::any`] reads it: the
+    /// populate creates no mail children (see [`crate::children`]). The mail
+    /// service costs no request, because it comes from the session document
+    /// that each populate fetches. The field exists because EDS has the flag,
+    /// and a [`Parts`] with only two of the three EDS parts is a trap.
     pub mail: bool,
     /// `ESourceCollection:contacts-enabled`.
     pub contacts: bool,
@@ -89,28 +100,28 @@ pub struct Parts {
 }
 
 impl Parts {
-    /// Every part, which is what a collection source that says nothing means.
+    /// All parts: the value for a collection source that does not state its parts.
     pub const ALL: Self = Self {
         mail: true,
         contacts: true,
         calendars: true,
     };
 
-    /// No part, which is what a *disabled* collection source means.
+    /// No parts: the value for a *disabled* collection source.
     pub const NONE: Self = Self {
         mail: false,
         contacts: false,
         calendars: false,
     };
 
-    /// What the collection source says, by
-    /// `e_collection_backend_get_part_enabled()`'s own two rules.
+    /// The parts of the collection source, by the two rules of
+    /// `e_collection_backend_get_part_enabled()`.
     ///
-    /// `source_enabled` is the collection `ESource`'s own `enabled`: a disabled
-    /// account has no enabled parts, whatever its extension says. `collection`
-    /// is the `[Collection]` extension's three flags, and `None` is a source
-    /// that has no such extension — which EDS answers `TRUE` for, so it is
-    /// [`ALL`](Parts::ALL) rather than [`NONE`](Parts::NONE).
+    /// `source_enabled` is the `enabled` property of the collection `ESource`. A
+    /// disabled account has no enabled parts, whatever its extension contains.
+    /// `collection` is the three flags of the `[Collection]` extension. `None`
+    /// is a source without that extension. EDS answers `TRUE` for it, so the
+    /// result is [`ALL`](Parts::ALL), not [`NONE`](Parts::NONE).
     pub fn from_collection(source_enabled: bool, collection: Option<Self>) -> Self {
         match (source_enabled, collection) {
             (false, _) => Self::NONE,
@@ -127,47 +138,48 @@ impl Parts {
         }
     }
 
-    /// Whether any part is on — `e_collection_backend_get_part_enabled()` with
-    /// every bit set. A populate of an account with nothing enabled has nothing
-    /// to do, including nothing to ask the server.
+    /// Whether a part is on, as `e_collection_backend_get_part_enabled()` with
+    /// all bits set. For an account with no enabled part, a populate has nothing
+    /// to do and sends no request to the server.
     pub fn any(self) -> bool {
         self.mail || self.contacts || self.calendars
     }
 }
 
 impl Fanout {
-    /// Whether this populate actually listed the collections of `kind`.
+    /// Whether this populate listed the collections of `kind` in the user's own
+    /// account.
     ///
     /// True only when the part is on *and* the login resolved an account for
-    /// that kind — the same pair [`Fanout::discover`] gates the listing on, so
-    /// what was asked and what may be concluded from the answer cannot drift
-    /// apart. False means this fan-out's vector for that kind is empty because
-    /// nothing was asked, not because the account holds nothing.
+    /// that kind. [`Fanout::discover`] uses the same two conditions for the
+    /// listing, so the question and the conclusions from its answer cannot
+    /// drift apart. False means that the vector for that kind is empty because
+    /// nothing was asked, not because the account has no collections.
     pub fn listed(&self, kind: ChildKind) -> bool {
         self.parts.wants(kind) && self.layout.serves(kind)
     }
 
     /// Whether the cached child named `resource_id` should be removed.
     ///
-    /// The question a populate asks of every child it already has, and the one
-    /// place a wrong answer destroys data rather than merely showing the wrong
-    /// thing: `true` means `e_source_remove_sync()`, which takes the child's
-    /// uid, its `.source` file and its offline cache.
+    /// A populate asks this for each child that it has. Here, a wrong answer
+    /// destroys data: `true` means `e_source_remove_sync()`, which removes the
+    /// uid, the `.source` file and the offline cache of the child.
     ///
-    /// So it is `true` in exactly one case — the resource id is one of ours,
-    /// its collections *were* listed ([`Fanout::listed`]), and the listing did
-    /// not contain it. A resource id this backend did not write, and a child
-    /// whose kind was not listed (its part is off, or the login no longer offers
-    /// it), are both kept.
+    /// The result is `true` only when the resource id is one of ours, its part
+    /// is on, and one of these is true:
+    /// - for a child of the user's own account: its collections *were* listed
+    ///   ([`Fanout::listed`]) and the listing did not contain it;
+    /// - for a shared child: its account is no longer in the session, or the
+    ///   listing of its account was sent, succeeded and did not contain it.
+    ///
+    /// All other children are kept: a resource id that this backend did not
+    /// write, a switched-off part, and a kind that the login no longer offers.
     pub fn is_obsolete(&self, resource_id: &str) -> bool {
         let Some((kind, identity)) = parse_resource_id(resource_id) else {
             return false;
         };
         if let Some((account, _)) = split_shared_identity(identity.as_str()) {
-            // A shared child is gone when its account left the session (the
-            // last grant was withdrawn), or when its account was listed and
-            // the collection was not. A listing that was not sent, or failed,
-            // concludes nothing.
+            // A listing that was not sent, or that failed, proves nothing.
             return self.parts.wants(kind)
                 && self
                     .shared
@@ -217,8 +229,8 @@ mod tests {
         }
     }
 
-    /// A login serving both collection kinds, discovered under `parts` — with
-    /// the vectors gated the way [`Fanout::discover`] would have gated them.
+    /// A login that serves both collection kinds, discovered under `parts`. The
+    /// caller gives the vectors as [`Fanout::discover`] would give them.
     fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
         Fanout {
             shared: Vec::new(),
@@ -236,16 +248,15 @@ mod tests {
     #[test]
     fn a_source_that_says_nothing_about_its_parts_has_all_of_them() {
         // `e_collection_backend_get_part_enabled()` returns TRUE when the
-        // source has no [Collection] extension, so the absence is "yes" and not
-        // "no" — reading it the other way would populate nothing at all.
+        // source has no [Collection] extension. Thus no extension means "yes".
+        // If it meant "no", a populate would do nothing.
         assert_eq!(Parts::from_collection(true, None), Parts::ALL);
     }
 
     #[test]
     fn a_disabled_account_has_no_enabled_parts() {
-        // The first thing `e_collection_backend_get_part_enabled()` checks is
-        // the collection source's own `enabled`, before it looks at the
-        // extension at all.
+        // `e_collection_backend_get_part_enabled()` checks the `enabled`
+        // property of the collection source before it examines the extension.
         let mail_only = Parts {
             mail: true,
             ..Parts::NONE
@@ -271,8 +282,8 @@ mod tests {
 
     #[test]
     fn a_mail_only_account_still_has_something_to_populate() {
-        // `any()` gates the populate as a whole, and a mail-only account is the
-        // ordinary shape of a JMAP login used for mail — not an empty one.
+        // `any()` gates the whole populate. A mail-only account is a usual JMAP
+        // login for mail, not an empty account.
         let mail_only = Parts {
             mail: true,
             ..Parts::NONE
@@ -285,10 +296,9 @@ mod tests {
 
     #[test]
     fn a_switched_off_part_is_not_listed_and_warrants_no_children() {
-        // Nothing was asked, so nothing is known and nothing is created. The
-        // vectors are gated by `discover`; `children()` holds the same line so
-        // that a fan-out assembled any other way cannot produce a child of a
-        // part the user switched off.
+        // Nothing was asked, so nothing is created. `discover` gates the
+        // vectors. `children()` applies the same gate, so a fan-out built in a
+        // different way cannot give a child of a switched-off part.
         let parts = Parts {
             calendars: false,
             ..Parts::ALL
@@ -313,9 +323,9 @@ mod tests {
 
     #[test]
     fn a_kind_the_login_does_not_serve_was_not_listed_either() {
-        // The part is on, so the user wants their contacts — but the session
-        // document resolved no account for them, so no `AddressBook/get` was
-        // sent and the empty vector is ignorance rather than an empty account.
+        // The part is on, but the session document resolved no contacts
+        // account. Thus no `AddressBook/get` was sent, and the empty vector
+        // means "not known", not "an empty account".
         let fanout = Fanout {
             shared: Vec::new(),
             layout: CollectionLayout {
@@ -332,9 +342,9 @@ mod tests {
 
     #[test]
     fn a_collection_the_server_no_longer_lists_is_obsolete() {
-        // The one case that removes a source: its part is on, its account
-        // answered, and the answer did not contain it. Without this an address
-        // book deleted in the web UI stays in the sidebar forever.
+        // An own child is removed only when its part is on, its account answered,
+        // and the answer did not contain it. If not, an address book deleted in
+        // the web UI stays in the sidebar permanently.
         let fanout = fanout(Parts::ALL, &["AB1"], &["Cal1"]);
 
         assert!(fanout.is_obsolete("addressbook:AB2"));
@@ -345,11 +355,11 @@ mod tests {
 
     #[test]
     fn a_child_of_a_switched_off_part_is_dormant_and_not_obsolete() {
-        // The WebDAV backend removes these, and its user loses the uid and the
-        // offline cache of every address book to a "don't use this account for
-        // contacts" tick. EDS has already bound the child's `enabled` to the
-        // part, so keeping it costs a hidden `.source` file and buys back the
-        // whole cache when the part is switched on again.
+        // The WebDAV backend removes these children. Its user then loses the
+        // uid and the offline cache of each address book when contacts are
+        // switched off. EDS binds the `enabled` property of the child to the
+        // part. To keep the child costs a hidden `.source` file, and the user
+        // gets back the full cache when the part is switched on again.
         let parts = Parts {
             contacts: false,
             ..Parts::ALL
@@ -368,10 +378,9 @@ mod tests {
 
     #[test]
     fn a_child_of_a_kind_the_login_stopped_serving_is_kept() {
-        // A login that no longer advertises `urn:ietf:params:jmap:contacts` is
-        // one no `AddressBook/get` was sent for. Reading that silence as "the
-        // server has no address books" would delete every contacts child of an
-        // account whose server was mid-upgrade.
+        // For a login that no longer advertises `urn:ietf:params:jmap:contacts`,
+        // no `AddressBook/get` is sent. If that meant "the server has no address
+        // books", an upgrade of the server could delete each contacts child.
         let fanout = Fanout {
             shared: Vec::new(),
             layout: CollectionLayout {
@@ -387,9 +396,8 @@ mod tests {
 
     #[test]
     fn a_child_this_backend_did_not_create_is_never_obsolete() {
-        // `is_obsolete` will be asked about every child of the collection,
-        // including the mail ones once they exist. Answering `true` for one of
-        // those is deleting a source that is not ours to delete.
+        // `is_obsolete` gets every child of the collection, also the mail
+        // children. `true` for one of those deletes a source that is not ours.
         let fanout = fanout(Parts::ALL, &["AB1"], &["Cal1"]);
 
         for foreign in ["", "AB1", "mail:A1", "task:T1", "addressbook:"] {
@@ -435,8 +443,8 @@ mod tests {
             "address books of A2 were not listed either"
         );
 
-        // Switched off: dormant, as for the user's own collections, even when
-        // the account is gone.
+        // A switched-off part keeps the child dormant, as for the user's own
+        // collections, also when the account is gone.
         let mut off = fanout(
             Parts {
                 calendars: false,
@@ -451,8 +459,8 @@ mod tests {
 
     #[test]
     fn a_malformed_shared_identity_is_judged_as_the_users_own() {
-        // `/C1` is not a share; it is a collection id of the user's own
-        // account, and the user's calendars were listed without it.
+        // `/C1` is not a share. It is a collection id in the user's own
+        // account, and the listing of the user's calendars did not contain it.
         let fanout = fanout(Parts::ALL, &[], &["C1"]);
         assert!(fanout.is_obsolete("calendar:/C1"));
         assert!(!fanout.is_obsolete("calendar:C1"));
