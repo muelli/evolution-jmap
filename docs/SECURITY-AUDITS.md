@@ -92,7 +92,7 @@ paths are relative to `rust/crates/`.
 | F35 | The client followed a redirect from HTTPS to plain HTTP. A session document from the plain connection could then send the credentials to a different host. | Fixed. The client refuses a redirect that leaves TLS. `jmap-client/src/url.rs`, `a_redirect_from_https_to_plain_http_is_a_downgrade`. |
 | F36 | The account setup lookup read the collection source on a worker thread through borrowed strings. The main thread could free a string during the copy. | Fixed. The lookup holds a reference to the source and reads copies. `jmap-config/tests/account.rs`, `a_read_on_another_thread_copies_strings_the_main_thread_is_replacing`. |
 | F37 | A `"` in a vCard parameter value from the server, such as a JSContact map key, is written with a backslash. EDS then drops the complete property. | Open. The fix is the same as F34. |
-| F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Open. |
+| F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Fixed. The reader refuses a line longer than 1 MiB and connects again. `jmap-client/src/eventsource.rs`, `an_endless_line_ends_the_connection_and_the_next_one_delivers` and `stream_events_refuses_a_data_line_longer_than_the_cap`. |
 | F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Open. |
 
 ### FFI soundness audit, 2026-08-19

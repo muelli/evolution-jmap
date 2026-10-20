@@ -32,6 +32,8 @@ use crate::transport::CancelFlag;
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// The longest line the reader accepts, line terminator included.
+const MAX_LINE_BYTES: usize = 1 << 20;
 
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_READ_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -575,12 +577,33 @@ pub fn expand_url(
     expanded
 }
 
+/// Append one line of at most [`MAX_LINE_BYTES`] bytes to `line`.
+///
+/// A longer line fails with `InvalidData`, so a server cannot exhaust memory with one endless line.
+fn read_bounded_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
+    let mut bytes = Vec::new();
+    let n = reader
+        .by_ref()
+        .take(MAX_LINE_BYTES as u64)
+        .read_until(b'\n', &mut bytes)?;
+    if n == MAX_LINE_BYTES && bytes.last() != Some(&b'\n') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("eventsource line longer than {MAX_LINE_BYTES} bytes"),
+        ));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    line.push_str(text);
+    Ok(n)
+}
+
 /// Read the status line and headers.
 ///
 /// Verifies HTTP 200 and chunked transfer encoding.
 fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
     let mut status_line = String::new();
-    reader.read_line(&mut status_line)?;
+    read_bounded_line(reader, &mut status_line)?;
     if !status_line.contains(" 200 ") {
         return Err(io::Error::other(format!(
             "eventsource request failed: {}",
@@ -590,7 +613,7 @@ fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
     let mut chunked = false;
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line)?;
+        let n = read_bounded_line(reader, &mut line)?;
         if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
             break;
         }
@@ -629,7 +652,7 @@ fn stream_events(
             return Ok(());
         }
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        if read_bounded_line(reader, &mut line)? == 0 {
             return Ok(());
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -690,7 +713,7 @@ impl<R: BufRead> Read for ChunkedBody<R> {
         }
         if self.remaining_in_chunk == 0 {
             let mut size_line = String::new();
-            if self.inner.read_line(&mut size_line)? == 0 {
+            if read_bounded_line(&mut self.inner, &mut size_line)? == 0 {
                 self.finished = true;
                 return Ok(0);
             }
@@ -705,7 +728,7 @@ impl<R: BufRead> Read for ChunkedBody<R> {
                 // blank line, then this body is over.
                 loop {
                     let mut trailer = String::new();
-                    let n = self.inner.read_line(&mut trailer)?;
+                    let n = read_bounded_line(&mut self.inner, &mut trailer)?;
                     if n == 0 || trailer.trim_end_matches(['\r', '\n']).is_empty() {
                         break;
                     }
@@ -1205,5 +1228,132 @@ mod tests {
         let malformed = b"xyz\r\nhello\r\n";
         let mut malformed_body = ChunkedBody::new(BufReader::new(Cursor::new(malformed)));
         assert!(malformed_body.read(&mut buf).is_err());
+    }
+
+    /// `len` bytes of `a`, longer than any line the reader accepts.
+    fn overlong(len: usize) -> Vec<u8> {
+        vec![b'a'; len]
+    }
+
+    fn assert_line_too_long(result: io::Result<()>) {
+        let err = result.expect_err("an overlong line must fail the read");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
+        assert!(err.to_string().contains("line longer than"), "{err}");
+    }
+
+    #[test]
+    fn stream_events_refuses_a_data_line_longer_than_the_cap() {
+        let mut raw = b"event: state\ndata: ".to_vec();
+        raw.extend(overlong(2 * MAX_LINE_BYTES));
+        raw.extend(b"\n\n");
+        let mut reader = BufReader::new(Cursor::new(raw));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        assert_line_too_long(stream_events(
+            &mut reader,
+            &CancelFlag::new(),
+            &sender,
+            &last_id_slot,
+        ));
+        assert!(receiver.try_recv().is_err(), "nothing may be forwarded");
+    }
+
+    #[test]
+    fn stream_events_accepts_a_line_of_exactly_the_cap() {
+        let head = b"data: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}";
+        let mut raw = b"event: state\n".to_vec();
+        raw.extend(head);
+        raw.extend(vec![b' '; MAX_LINE_BYTES - head.len() - 1]);
+        raw.extend(b"\n\n");
+        let mut reader = BufReader::new(Cursor::new(raw));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("a line of exactly the cap is accepted");
+        assert_eq!(
+            receiver.try_recv().expect("the state event is forwarded"),
+            EventSourceItem::State(changed("a1", "Mailbox", "1"))
+        );
+    }
+
+    #[test]
+    fn read_response_head_refuses_an_overlong_status_line() {
+        let mut raw = b"HTTP/1.1 200 OK ".to_vec();
+        raw.extend(overlong(2 * MAX_LINE_BYTES));
+        raw.extend(b"\r\nTransfer-Encoding: chunked\r\n\r\n");
+        assert_line_too_long(read_response_head(&mut Cursor::new(raw)));
+    }
+
+    #[test]
+    fn read_response_head_refuses_an_overlong_header_line() {
+        let mut raw = b"HTTP/1.1 200 OK\r\nX-Pad: ".to_vec();
+        raw.extend(overlong(2 * MAX_LINE_BYTES));
+        raw.extend(b"\r\nTransfer-Encoding: chunked\r\n\r\n");
+        assert_line_too_long(read_response_head(&mut Cursor::new(raw)));
+    }
+
+    #[test]
+    fn chunked_body_refuses_an_overlong_chunk_size_line() {
+        let mut raw = b"5;".to_vec();
+        raw.extend(overlong(2 * MAX_LINE_BYTES));
+        raw.extend(b"\r\nhello\r\n0\r\n\r\n");
+        let mut body = ChunkedBody::new(BufReader::new(Cursor::new(raw)));
+        let mut out = Vec::new();
+        assert_line_too_long(body.read_to_end(&mut out).map(drop));
+    }
+
+    #[test]
+    fn chunked_body_refuses_an_overlong_trailer_line() {
+        let mut raw = b"5\r\nhello\r\n0\r\nX-Trailer: ".to_vec();
+        raw.extend(overlong(2 * MAX_LINE_BYTES));
+        raw.extend(b"\r\n\r\n");
+        let mut body = ChunkedBody::new(BufReader::new(Cursor::new(raw)));
+        let mut out = Vec::new();
+        assert_line_too_long(body.read_to_end(&mut out).map(drop));
+    }
+
+    #[test]
+    fn an_endless_line_ends_the_connection_and_the_next_one_delivers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        thread::spawn(move || {
+            for (attempt, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { return };
+                thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        if stream.read(&mut byte).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        request.push(byte[0]);
+                    }
+                    let _ =
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+                    if attempt == 0 {
+                        // One chunk that never ends a line, then hold the connection open.
+                        let _ =
+                            stream.write_all(format!("{:x}\r\n", 8 * MAX_LINE_BYTES).as_bytes());
+                        let _ = stream.write_all(&overlong(2 * MAX_LINE_BYTES));
+                        let _ = stream.read(&mut byte);
+                    } else {
+                        let frame = "event: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+                        let _ = stream.write_all(
+                            format!("{:x}\r\n{frame}\r\n0\r\n\r\n", frame.len()).as_bytes(),
+                        );
+                    }
+                });
+            }
+        });
+
+        let subscription = EventSourceSubscription::start(
+            format!("http://{addr}/eventsource"),
+            SharedHeaders::new(Vec::new()),
+            CancelFlag::new(),
+        );
+        let received = subscription
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the reader drops the endless line and reconnects");
+        assert_eq!(received, changed("a1", "Mailbox", "1"));
     }
 }
