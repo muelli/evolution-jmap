@@ -3,10 +3,12 @@
 
 //! The blocking JMAP client.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{PoisonError, RwLock};
 use std::time::Duration;
 
+use jmap_proto::Id;
 use jmap_proto::error::{MethodError, RequestError, SetError};
 use jmap_proto::methods::{SetRequest, SetResponse};
 use jmap_proto::request::{Invocation, Request};
@@ -524,9 +526,22 @@ impl Client {
         method: &str,
         arguments: &impl serde::Serialize,
     ) -> Result<Value, Error> {
+        self.single_call_with_created_ids(using, method, arguments, &BTreeMap::new())
+    }
+
+    /// Send one method call with the request's initial `createdIds` map (RFC 8620 §3.3).
+    ///
+    /// The server resolves `#creationId` references from the map. An empty map is not sent.
+    pub(crate) fn single_call_with_created_ids(
+        &self,
+        using: &[&str],
+        method: &str,
+        arguments: &impl serde::Serialize,
+        created_ids: &BTreeMap<Id, Id>,
+    ) -> Result<Value, Error> {
         let call_id = self.next_call_id();
         tracing::debug!(method, call_id, "sending JMAP method call");
-        let result = self.single_call_inner(using, method, arguments, &call_id);
+        let result = self.single_call_inner(using, method, arguments, created_ids, &call_id);
         if let Err(error) = &result {
             tracing::warn!(method, call_id, %error, "JMAP method call failed");
         }
@@ -538,6 +553,7 @@ impl Client {
         using: &[&str],
         method: &str,
         arguments: &impl serde::Serialize,
+        created_ids: &BTreeMap<Id, Id>,
         call_id: &str,
     ) -> Result<Value, Error> {
         let is_idempotent = Self::is_method_idempotent(method);
@@ -550,7 +566,11 @@ impl Client {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let request = Request::new(using.iter().copied()).call(method, arguments, call_id)?;
+            let mut request =
+                Request::new(using.iter().copied()).call(method, arguments, call_id)?;
+            if !created_ids.is_empty() {
+                request = request.with_created_ids(created_ids.clone());
+            }
             let response = self.api_call(&request)?;
             let invocation = response
                 .responses_for(call_id)
@@ -613,8 +633,9 @@ impl Client {
             .max_objects_in_set()
             .and_then(|l| usize::try_from(l).ok());
 
-        crate::set::execute_set_chunked(request, limit, |chunk_req| {
-            let arguments = self.single_call(using, method, chunk_req)?;
+        crate::set::execute_set_chunked(request, limit, |chunk_req, created_ids| {
+            let arguments =
+                self.single_call_with_created_ids(using, method, chunk_req, created_ids)?;
             Ok(serde_json::from_value(arguments)?)
         })
     }

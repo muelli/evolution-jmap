@@ -3,8 +3,10 @@
 
 //! Helpers for splitting `/set` method calls across `maxObjectsInSet` (RFC 8620 Section 2).
 //!
-//! Splitting preserves creation-id back-references across chunk boundaries.
-//! If a chunk boundary breaks a circular or unresolved reference, splitting fails.
+//! Each chunk carries the creation ids of the earlier chunks as the request's `createdIds`
+//! (RFC 8620 Section 3.3), so the server resolves `#creationId` references itself. Only the
+//! server knows which properties have the type `Id`, so the client never rewrites an object.
+//! If a chunk boundary breaks a circular reference, splitting fails.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -42,9 +44,10 @@ impl<T> SetChunk<T> {
     }
 }
 
-/// Find creation-id references in a JSON value.
+/// Find the creation ids that a JSON value can refer to.
 ///
-/// Collects IDs that match entries in `candidates`.
+/// The result can contain false matches, for example a title equal to `#c1`. Use it only to
+/// order and group creates, never to change the value.
 pub(crate) fn find_creation_references(
     val: &Value,
     candidates: &HashSet<String>,
@@ -81,48 +84,6 @@ fn collect_creation_references(
         Value::Array(arr) => {
             for item in arr {
                 collect_creation_references(item, candidates, refs);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Replace creation-id references in a JSON value with resolved IDs.
-pub(crate) fn substitute_creation_references(val: &mut Value, resolved: &HashMap<String, Id>) {
-    match val {
-        Value::String(s) => {
-            if let Some(real_id) = s.strip_prefix('#').and_then(|target| resolved.get(target)) {
-                *s = real_id.as_str().to_owned();
-            }
-        }
-        Value::Object(map) => {
-            let mut keys_to_replace = Vec::new();
-            for key in map.keys() {
-                if key.starts_with('#') || key.contains("/#") {
-                    keys_to_replace.push(key.clone());
-                }
-            }
-            for old_key in keys_to_replace {
-                if let Some(value) = map.remove(&old_key) {
-                    let mut new_key = old_key.clone();
-                    for (target, real_id) in resolved {
-                        let needle = format!("#{target}");
-                        if new_key == needle {
-                            new_key = real_id.as_str().to_owned();
-                        } else {
-                            new_key = new_key.replace(&needle, real_id.as_str());
-                        }
-                    }
-                    map.insert(new_key, value);
-                }
-            }
-            for v in map.values_mut() {
-                substitute_creation_references(v, resolved);
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                substitute_creation_references(item, resolved);
             }
         }
         _ => {}
@@ -202,7 +163,7 @@ fn sort_creation_components(
         }
     }
 
-    let mut sccs = tarjan.sccs;
+    let sccs = tarjan.sccs;
 
     // Verify no component exceeds the chunk limit.
     for scc in &sccs {
@@ -218,8 +179,7 @@ fn sort_creation_components(
         }
     }
 
-    // Tarjan produces reverse topological order. Reverse gives forward order.
-    sccs.reverse();
+    // Tarjan emits a component after the components it refers to, so the order is already correct.
     Ok(sccs)
 }
 
@@ -307,7 +267,7 @@ pub(crate) fn execute_set_chunked<T, F>(
 ) -> Result<SetResponse<T>, Error>
 where
     T: Clone + Serialize + DeserializeOwned,
-    F: FnMut(&SetRequest<T>) -> Result<SetResponse<T>, Error>,
+    F: FnMut(&SetRequest<T>, &BTreeMap<Id, Id>) -> Result<SetResponse<T>, Error>,
 {
     let total_items = request.create.as_ref().map_or(0, |m| m.len())
         + request.update.as_ref().map_or(0, |m| m.len())
@@ -315,37 +275,63 @@ where
 
     let limit = match limit {
         Some(limit) if limit > 0 => limit,
-        _ => return execute_chunk(request),
+        _ => return execute_chunk(request, &BTreeMap::new()),
     };
 
     if total_items <= limit {
-        return execute_chunk(request);
+        return execute_chunk(request, &BTreeMap::new());
     }
 
     let chunks = partition_set_request(request, limit)?;
+    let mut merged = SetResponse::new(request.account_id.clone(), State::new(""));
+    merged.new_state = None;
+    let mut applied = false;
+    match send_chunks(request, chunks, &mut merged, &mut applied, execute_chunk) {
+        Ok(()) => Ok(merged),
+        Err(cause) if applied => Err(Error::SetPartiallyApplied {
+            committed: Box::new(serde_json::from_value(serde_json::to_value(&merged)?)?),
+            cause: Box::new(cause),
+        }),
+        Err(cause) => Err(cause),
+    }
+}
+
+/// Send `chunks` in order and merge each response into `merged`.
+///
+/// Set `applied` when the server answers the first chunk. Stop at the first error.
+fn send_chunks<T, F>(
+    request: &SetRequest<T>,
+    chunks: Vec<SetChunk<T>>,
+    merged: &mut SetResponse<T>,
+    applied: &mut bool,
+    mut execute_chunk: F,
+) -> Result<(), Error>
+where
+    T: Clone + Serialize + DeserializeOwned,
+    F: FnMut(&SetRequest<T>, &BTreeMap<Id, Id>) -> Result<SetResponse<T>, Error>,
+{
     let candidates: HashSet<String> = request
         .create
         .as_ref()
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
 
-    let mut resolved_ids: HashMap<String, Id> = HashMap::new();
+    let mut created_ids: BTreeMap<Id, Id> = BTreeMap::new();
     let mut failed_creates: HashSet<String> = HashSet::new();
     let mut current_state = request.if_in_state.clone();
 
-    let mut merged = SetResponse::new(request.account_id.clone(), State::new(""));
-    merged.new_state = None;
-
     for mut chunk in chunks {
-        // Substitute resolved IDs in create objects.
+        let in_chunk: HashSet<String> = chunk.create.keys().cloned().collect();
+        let known =
+            |r: &String| created_ids.contains_key(&Id::new(r.as_str())) || in_chunk.contains(r);
+
         let mut ready_create = BTreeMap::new();
         for (cid, obj) in chunk.create {
-            let mut val = serde_json::to_value(&obj)?;
-            let refs = find_creation_references(&val, &candidates);
+            let refs = find_creation_references(&serde_json::to_value(&obj)?, &candidates);
 
-            // Check if object references a creation ID that failed.
-            let failed_ref = refs.iter().find(|r| failed_creates.contains(*r));
-            if let Some(failed_id) = failed_ref {
+            // A possible reference to a failed create: do not send it (conservative).
+            if let Some(failed_id) = refs.iter().find(|r| failed_creates.contains(*r)) {
+                let failed_id = failed_id.clone();
                 failed_creates.insert(cid.clone());
                 merged.not_created.get_or_insert_with(BTreeMap::new).insert(
                     cid,
@@ -356,31 +342,17 @@ where
                 continue;
             }
 
-            // Check if object references an ID not yet resolved and not in current batch.
-            let unresolved = refs
-                .iter()
-                .find(|r| !resolved_ids.contains_key(*r) && *r != &cid);
-            if let Some(unresolved_id) = unresolved {
-                return Err(Error::ChunkBoundaryReferenceBroken {
-                    creation_id: unresolved_id.clone(),
-                    reason: format!(
-                        "creation reference #{unresolved_id} was not resolved before chunk boundary"
-                    ),
-                });
+            if let Some(unresolved_id) = refs.iter().find(|r| !known(r)) {
+                return Err(unresolved(unresolved_id));
             }
-
-            substitute_creation_references(&mut val, &resolved_ids);
-            let updated_obj: T = serde_json::from_value(val)?;
-            ready_create.insert(cid, updated_obj);
+            ready_create.insert(cid, obj);
         }
 
-        // Substitute resolved IDs in updates.
         let mut ready_update = BTreeMap::new();
-        for (id, mut patch) in chunk.update {
+        for (id, patch) in chunk.update {
             let refs = find_creation_references(&patch, &candidates);
 
-            let failed_ref = refs.iter().find(|r| failed_creates.contains(*r));
-            if let Some(failed_id) = failed_ref {
+            if let Some(failed_id) = refs.iter().find(|r| failed_creates.contains(*r)) {
                 merged.not_updated.get_or_insert_with(BTreeMap::new).insert(
                     id,
                     SetError::new(jmap_proto::error::set::INVALID_PROPERTIES).with_description(
@@ -390,17 +362,9 @@ where
                 continue;
             }
 
-            let unresolved = refs.iter().find(|r| !resolved_ids.contains_key(*r));
-            if let Some(unresolved_id) = unresolved {
-                return Err(Error::ChunkBoundaryReferenceBroken {
-                    creation_id: unresolved_id.clone(),
-                    reason: format!(
-                        "creation reference #{unresolved_id} was not resolved before chunk boundary"
-                    ),
-                });
+            if let Some(unresolved_id) = refs.iter().find(|r| !known(r)) {
+                return Err(unresolved(unresolved_id));
             }
-
-            substitute_creation_references(&mut patch, &resolved_ids);
             ready_update.insert(id, patch);
         }
 
@@ -423,7 +387,8 @@ where
             chunk_request.destroy = Some(chunk.destroy);
         }
 
-        let response = execute_chunk(&chunk_request)?;
+        let response = execute_chunk(&chunk_request, &created_ids)?;
+        *applied = true;
 
         if merged.old_state.is_none() {
             merged.old_state = response.old_state;
@@ -437,7 +402,7 @@ where
             for (cid, obj) in created {
                 let obj_val = serde_json::to_value(&obj)?;
                 if let Some(id_str) = obj_val.get("id").and_then(Value::as_str) {
-                    resolved_ids.insert(cid.clone(), Id::new(id_str));
+                    created_ids.insert(Id::new(cid.as_str()), Id::new(id_str));
                 }
                 merged
                     .created
@@ -485,5 +450,171 @@ where
         }
     }
 
-    Ok(merged)
+    Ok(())
+}
+
+fn unresolved(creation_id: &str) -> Error {
+    Error::ChunkBoundaryReferenceBroken {
+        creation_id: creation_id.to_owned(),
+        reason: format!("creation reference #{creation_id} was not resolved before chunk boundary"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// One chunk the fake server received, with the `createdIds` map it carried.
+    type Sent = (SetRequest<Value>, BTreeMap<Id, Id>);
+
+    /// Run `request` against a fake server that assigns `id-<creationId>` to every create.
+    ///
+    /// Return the response and each chunk with the `createdIds` map it carried.
+    fn run(
+        request: &SetRequest<Value>,
+        limit: usize,
+    ) -> (Result<SetResponse<Value>, Error>, Vec<Sent>) {
+        let mut sent = Vec::new();
+        let result = execute_set_chunked(request, Some(limit), |chunk, created_ids| {
+            sent.push((chunk.clone(), created_ids.clone()));
+            Ok(answer(chunk))
+        });
+        (result, sent)
+    }
+
+    fn answer(chunk: &SetRequest<Value>) -> SetResponse<Value> {
+        let mut response = SetResponse::new(chunk.account_id.clone(), State::new("s"));
+        response.created = chunk.create.as_ref().map(|create| {
+            create
+                .keys()
+                .map(|cid| (cid.clone(), json!({ "id": format!("id-{cid}") })))
+                .collect()
+        });
+        response.updated = chunk
+            .update
+            .as_ref()
+            .map(|update| update.keys().map(|id| (id.clone(), None)).collect());
+        response.destroyed = chunk.destroy.clone();
+        response
+    }
+
+    fn sent_create<'a>(sent: &'a [Sent], cid: &str) -> &'a Value {
+        sent.iter()
+            .find_map(|(chunk, _)| chunk.create.as_ref()?.get(cid))
+            .expect("create sent")
+    }
+
+    #[test]
+    fn a_later_chunk_carries_the_earlier_creation_ids_for_the_server() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "parent" }))
+            .create("c1", json!({ "name": "child", "parentId": "#c0" }));
+        let (result, sent) = run(&request, 1);
+        result.unwrap();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[0].1.is_empty());
+        assert_eq!(
+            sent[1].1,
+            BTreeMap::from([(Id::new("c0"), Id::new("id-c0"))])
+        );
+        // The server resolves the reference from `createdIds`; the client sends it unchanged.
+        assert_eq!(sent_create(&sent, "c1")["parentId"], "#c0");
+    }
+
+    #[test]
+    fn a_chain_of_references_is_sent_targets_first() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "parentId": "#c1" }))
+            .create("c1", json!({ "parentId": "#c2" }))
+            .create("c2", json!({ "name": "root" }));
+        let (result, sent) = run(&request, 1);
+        assert_eq!(result.unwrap().created.unwrap().len(), 3);
+        let order: Vec<&String> = sent
+            .iter()
+            .flat_map(|(chunk, _)| chunk.create.as_ref().unwrap().keys())
+            .collect();
+        assert_eq!(order, ["c2", "c1", "c0"]);
+        assert_eq!(sent[2].1.len(), 2);
+    }
+
+    #[test]
+    fn a_plain_string_equal_to_a_creation_id_is_sent_unchanged() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "title": "first" }))
+            .create("c1", json!({ "title": "#c0", "tags": ["#c0"] }));
+        let (result, sent) = run(&request, 1);
+        result.unwrap();
+        assert_eq!(
+            sent_create(&sent, "c1"),
+            &json!({ "title": "#c0", "tags": ["#c0"] })
+        );
+    }
+
+    #[test]
+    fn a_patch_key_that_starts_with_a_shorter_creation_id_is_sent_unchanged() {
+        let request = SetRequest::new("a")
+            .create("c1", json!({ "name": "one" }))
+            .update(
+                "m",
+                json!({ "keywords/#c10": true, "mailboxIds/#c1": true }),
+            );
+        let (result, sent) = run(&request, 1);
+        result.unwrap();
+        let (chunk, created_ids) = &sent[1];
+        assert_eq!(
+            chunk.update.as_ref().unwrap()[&Id::new("m")],
+            json!({ "keywords/#c10": true, "mailboxIds/#c1": true })
+        );
+        assert_eq!(created_ids[&Id::new("c1")], Id::new("id-c1"));
+    }
+
+    #[test]
+    fn a_reference_to_a_create_in_the_same_chunk_is_sent() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "parent" }))
+            .create("c1", json!({ "name": "child", "parentId": "#c0" }))
+            .destroy("old");
+        let (result, sent) = run(&request, 2);
+        let response = result.unwrap();
+        assert_eq!(response.created.unwrap().len(), 2);
+        assert_eq!(sent[0].0.create.as_ref().unwrap().len(), 2);
+        assert_eq!(sent_create(&sent, "c1")["parentId"], "#c0");
+    }
+
+    #[test]
+    fn a_failing_later_chunk_keeps_the_results_of_the_applied_chunks() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "zero" }))
+            .create("c1", json!({ "name": "one" }))
+            .destroy("old");
+        let mut calls = 0;
+        let result = execute_set_chunked(&request, Some(1), |chunk, _| {
+            calls += 1;
+            if calls == 2 {
+                return Err(Error::Transport("connection reset".into()));
+            }
+            Ok(answer(chunk))
+        });
+        assert_eq!(calls, 2, "no chunk is sent after a failure");
+        let Err(Error::SetPartiallyApplied { committed, cause }) = result else {
+            panic!("expected SetPartiallyApplied, got {result:?}");
+        };
+        assert!(matches!(*cause, Error::Transport(_)));
+        let created = committed.created.expect("created map");
+        assert_eq!(created.keys().collect::<Vec<_>>(), ["c0"]);
+        assert_eq!(created["c0"]["id"], "id-c0");
+        assert_eq!(committed.new_state, Some(State::new("s")));
+    }
+
+    #[test]
+    fn a_failing_first_chunk_returns_the_plain_error() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "zero" }))
+            .create("c1", json!({ "name": "one" }));
+        let result = execute_set_chunked(&request, Some(1), |_: &SetRequest<Value>, _| {
+            Err(Error::Transport("connection refused".into()))
+        });
+        assert!(matches!(result, Err(Error::Transport(_))), "{result:?}");
+    }
 }

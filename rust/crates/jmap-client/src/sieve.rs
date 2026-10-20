@@ -162,11 +162,16 @@ impl Client {
             .max_objects_in_set()
             .and_then(|l| usize::try_from(l).ok());
 
-        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set, created_ids| {
             let mut chunk_req = SieveScriptSetRequest::new(chunk_set.clone());
             chunk_req.on_success_activate_script = request.on_success_activate_script.clone();
             chunk_req.on_success_deactivate_script = request.on_success_deactivate_script;
-            let arguments = self.single_call(USING, "SieveScript/set", &chunk_req)?;
+            let arguments = self.single_call_with_created_ids(
+                USING,
+                "SieveScript/set",
+                &chunk_req,
+                created_ids,
+            )?;
             Ok(serde_json::from_value(arguments)?)
         })
     }

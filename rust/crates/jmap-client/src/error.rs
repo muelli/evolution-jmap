@@ -70,6 +70,13 @@ pub enum Error {
     ///
     /// The client cannot resolve the reference before creating the referenced object.
     ChunkBoundaryReferenceBroken { creation_id: String, reason: String },
+    /// A later chunk of a split `/set` failed after the server applied earlier chunks.
+    ///
+    /// `committed` holds the merged results of the applied chunks. Do not send those objects again.
+    SetPartiallyApplied {
+        committed: Box<jmap_proto::methods::SetResponse<serde_json::Value>>,
+        cause: Box<Error>,
+    },
     /// Rate limit or resource limit exceeded (HTTP 429 or RFC 8620 limit).
     ///
     /// For non-idempotent operations, the client surfaces this error without retrying.
@@ -255,6 +262,12 @@ impl std::fmt::Display for Error {
                 f,
                 "creation reference #{creation_id} broken by chunk boundary: {reason}"
             ),
+            Error::SetPartiallyApplied { cause, .. } => {
+                write!(
+                    f,
+                    "split /set failed after earlier chunks were applied: {cause}"
+                )
+            }
             Error::RateLimited {
                 retry_after,
                 method,
@@ -280,6 +293,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Json(error) => Some(error),
+            Error::SetPartiallyApplied { cause, .. } => Some(cause.as_ref()),
             _ => None,
         }
     }
