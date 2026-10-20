@@ -287,3 +287,72 @@ fixed:
   (a real Ubuntu 24.04 runner, `ci/functional.sh`'s own recipe) before
   trying again, since the flake may be an artifact of this sandbox and not
   reproduce there at all.
+
+## `src/cache.rs`
+
+69 mutants: 41 caught (40 plus the new test below), 15 unviable
+(`Default::default()`, the usual pattern), 2 genuinely missed and not yet
+fixed, 11 out of scope for this build's environment.
+
+- `crates/jmap-mail/src/cache.rs:163:25` (`CHUNK`), `replace * with +`
+  (`64 * 1024` to `64 + 1024`). `CHUNK` only sizes the local buffer
+  `read_all` reuses across `g_input_stream_read` calls (line 693); the loop
+  reads until a 0-byte read regardless of how large that buffer is, so any
+  positive size reads back the same bytes, only in a different number of
+  calls. Checked by hand against `read_all` and confirmed: no test can see
+  the buffer size, only the bytes it assembles.
+- `crates/jmap-mail/src/cache.rs:174:53`, `:174:58`, `:174:63` (`UNUSED_FOR`),
+  `replace * with +` and `replace * with /`, 6 mutants (`30 * 24 * 60 * 60`,
+  three operators, two replacements each). `UNUSED_FOR` reaches Camel only
+  through `open`, which hands it to `open_bounded` as the real sweep bound
+  (`camel_data_cache_set_expire_access`, a setter with no matching getter in
+  `eds-sys`'s bindings). `open_bounded`'s own doc comment states why every
+  test in this file calls it directly with a bound of its own instead:
+  proving the sweep needs a bound a test can cross inside a test run, and a
+  real thirty-day bound cannot be crossed, read back, or otherwise observed
+  without a month of wall-clock time this project will never spend on a
+  test. A different constant here changes the real sweep's actual bound, so
+  this is not equivalent code, only code no test here or in
+  `jmap-functional` can tell apart from the original without an accessor
+  this crate does not have and an elapsed time no CI run provides.
+- `crates/jmap-mail/src/cache.rs:504:15`, `:505:17`, `:505:28`, `:528:16`
+  (`MessageCache::store`, the `#[cfg(camel_data_cache_atomic)]` half), 4
+  mutants. This build's EDS is 3.52.3, which has no
+  `camel_data_cache_add_atomic`
+  (`eds-sys/build.rs`'s own probe for the symbol), so `camel_data_cache_atomic`
+  is not set and this whole arm is dead code, never compiled into the test
+  binary at all. A mutant inside it cannot change the binary under test, so
+  it is caught by nothing, on any file in this crate, until the runner's EDS
+  gains `camel_data_cache_add_atomic`. Same category as `transport.rs`'s
+  `eds_oauth2_dynamic` entry: re-check once that happens.
+- `crates/jmap-mail/src/cache.rs:676:70` (`valid_key`), `replace || with &&`
+  (the middle `byte == b'_' || byte == b'-'` joint). Fixed this session: no
+  prior test stored a uid containing `_` or `-` other than a leading dash
+  (refused earlier, by the separate `!key.starts_with('-')` check, so it
+  never reached this line's own acceptance of an *interior* `_`/`-`).
+  RFC 8620 §1.2 allows both in a JMAP `Id`. New test
+  `a_uid_with_underscore_or_dash_is_a_key` in `tests/cache.rs` stores and
+  reads back uids using each; verified red against this exact mutant by hand
+  before adding it.
+
+Two mutants stay genuinely missed, both in `MessageCache::store`'s non-atomic
+arm (`#[cfg(not(camel_data_cache_atomic))]`, the one this build's EDS 3.52.3
+actually compiles and runs):
+
+- `crates/jmap-mail/src/cache.rs:449:38`, `:449:48`, `replace && with ||`
+  (`written_all && closed && written == source.len()`). Distinguishing these
+  needs a write that reports success while the matching close reports
+  failure, or the reverse: a real divergence between
+  `g_output_stream_write_all` and `g_io_stream_close`'s outcomes on the same
+  entry. Camel opens the backing file itself (a path this crate does not
+  choose, hashed from the key into one of sixty-four buckets), so there is
+  no seam here to make only the close fail once the write has already
+  succeeded: no permission change, disk-full condition, or unlink reliably
+  targets the close half alone on a local filesystem, and this crate has no
+  fault-injection point into the `GIOStream` Camel hands back. This is a
+  real correctness gap, not equivalent code: with `||` in place of `&&`, one
+  success among the three would wrongly mark a short or unflushed entry as
+  stored. It stays MISSED rather than disposed of; it needs either a
+  fault-injection seam added to this file on purpose or a live-EDS proof
+  that can force the distinction, neither of which fits this session's
+  increment.

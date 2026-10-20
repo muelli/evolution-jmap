@@ -288,6 +288,25 @@ fn a_uid_that_is_a_path_is_not_a_key() {
     );
 }
 
+/// RFC 8620 §1.2 spells a JMAP `Id` as 1 to 255 characters from
+/// `[A-Za-z0-9_-]`, so `_` and `-` inside a uid are not hostile the way a
+/// leading dash or a path separator is: an ordinary id using them must still
+/// be cached.
+#[test]
+fn a_uid_with_underscore_or_dash_is_a_key() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    for uid in ["M_1", "M-1", "under_score", "em-dash-id"] {
+        assert!(cache.store(uid, SOURCE, None), "{uid:?} was not cached");
+        assert_eq!(
+            cache.load(uid, None).as_deref(),
+            Some(SOURCE),
+            "{uid:?} did not read back"
+        );
+    }
+}
+
 /// The check the rest of this block is about: a summary row carries the octet
 /// count RFC 8621 §4.1 defines for the message, and an entry that agrees with it
 /// is the ordinary case — served, unremarkably. Here to pin that the check costs
