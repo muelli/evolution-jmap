@@ -6283,3 +6283,78 @@ fn vacation_response_round_trips_through_the_real_api() {
         "cleanup must leave the autoresponder disabled"
     );
 }
+
+/// Session proxy that lowers `maxObjectsInSet` to 1, so every `/set` with more objects splits.
+struct SetLimitOfOne(jmap_client::transport::UreqTransport);
+
+impl jmap_client::transport::Transport for SetLimitOfOne {
+    fn execute(
+        &self,
+        request: jmap_client::transport::HttpRequest<'_>,
+    ) -> Result<jmap_client::transport::HttpResponse, jmap_client::transport::TransportError> {
+        let mut response = self.0.execute(request)?;
+        if let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&response.body)
+            && let Some(core) = doc
+                .get_mut("capabilities")
+                .and_then(|caps| caps.get_mut(CAPABILITY_CORE))
+        {
+            core["maxObjectsInSet"] = json!(1);
+            response.body = serde_json::to_vec(&doc).unwrap();
+        }
+        Ok(response)
+    }
+}
+
+/// A `Mailbox/set` split into one create per request: the server resolves `#m0` from the
+/// request's `createdIds` (RFC 8620 Section 3.3) and keeps a name equal to `#m0` as text.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_split_mailbox_set_resolves_creation_ids_on_the_real_server() {
+    let (Ok(user), Ok(password)) = (
+        env::var("JMAP_LIVE_SERVER_WRITE_USER"),
+        env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD"),
+    ) else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the split /set test");
+        return;
+    };
+    let origin = env::var("JMAP_LIVE_SERVER_URL").expect("set JMAP_LIVE_SERVER_URL");
+    let client = Client::builder()
+        .transport(SetLimitOfOne(Default::default()))
+        .rebase_urls_to_origin(env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|v| v != "0"))
+        .connect(&origin, Credentials::basic(user, password))
+        .expect("could not fetch the session document for the write-test account");
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let suffix = unique_suffix();
+    let mut child = Mailbox::new(format!("split-child-{suffix}"));
+    child.parent_id = Some(Id::new("#m0"));
+    let request = SetRequest::<Mailbox>::new(account_id.clone())
+        .create("m0", Mailbox::new(format!("split-parent-{suffix}")))
+        .create("m1", child)
+        .create("m2", Mailbox::new("#m0"));
+    let response = client.mailbox_set(&request).expect("split Mailbox/set");
+    let created = response.created.expect("created map");
+    let id = |cid: &str| created[cid].id.clone().expect("server id");
+    let (parent, child, literal) = (id("m0"), id("m1"), id("m2"));
+
+    let mailboxes = client.mailbox_get(&account_id).unwrap().list;
+    let find = |wanted: &Id| {
+        mailboxes
+            .iter()
+            .find(|m| m.id.as_ref() == Some(wanted))
+            .unwrap()
+    };
+    assert_eq!(find(&child).parent_id.as_ref(), Some(&parent));
+    assert_eq!(find(&literal).name, "#m0");
+
+    let cleanup =
+        SetRequest::<Mailbox>::new(account_id.clone()).with_destroy([child, literal, parent]);
+    let cleanup = client.mailbox_set(&cleanup).expect("destroy");
+    assert!(
+        cleanup.not_destroyed.is_none(),
+        "{:?}",
+        cleanup.not_destroyed
+    );
+}

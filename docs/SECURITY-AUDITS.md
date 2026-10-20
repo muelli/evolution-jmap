@@ -93,7 +93,7 @@ paths are relative to `rust/crates/`.
 | F36 | The account setup lookup read the collection source on a worker thread through borrowed strings. The main thread could free a string during the copy. | Fixed. The lookup holds a reference to the source and reads copies. `jmap-config/tests/account.rs`, `a_read_on_another_thread_copies_strings_the_main_thread_is_replacing`. |
 | F37 | A `"` in a vCard parameter value from the server, such as a JSContact map key, is written with a backslash. EDS then drops the complete property. | Open. The fix is the same as F34. |
 | F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Fixed. The reader refuses a line longer than 1 MiB and connects again. `jmap-client/src/eventsource.rs`, `an_endless_line_ends_the_connection_and_the_next_one_delivers` and `stream_events_refuses_a_data_line_longer_than_the_cap`. |
-| F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Open. |
+| F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Fixed. Each part sends the earlier creation ids as `createdIds`, and the server resolves the references. The client does not change the objects. A failed later part keeps the results of the earlier parts. `jmap-client/src/set.rs`, `a_patch_key_that_starts_with_a_shorter_creation_id_is_sent_unchanged` and `a_failing_later_chunk_keeps_the_results_of_the_applied_chunks`. |
 
 ### FFI soundness audit, 2026-08-19
 

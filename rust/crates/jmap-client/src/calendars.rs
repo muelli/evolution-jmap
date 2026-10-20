@@ -269,13 +269,18 @@ impl Client {
             .max_objects_in_set()
             .and_then(|l| usize::try_from(l).ok());
 
-        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set, created_ids| {
             let chunk_req = if let Some(send) = request.send_scheduling_messages {
                 CalendarEventSetRequest::new(chunk_set.clone()).send_scheduling_messages(send)
             } else {
                 CalendarEventSetRequest::new(chunk_set.clone())
             };
-            let arguments = self.single_call(USING, "CalendarEvent/set", &chunk_req)?;
+            let arguments = self.single_call_with_created_ids(
+                USING,
+                "CalendarEvent/set",
+                &chunk_req,
+                created_ids,
+            )?;
             Ok(serde_json::from_value(arguments)?)
         })
     }
@@ -455,10 +460,15 @@ impl Client {
             .max_objects_in_set()
             .and_then(|l| usize::try_from(l).ok());
 
-        crate::set::execute_set_chunked(&request.set, limit, |chunk_set| {
+        crate::set::execute_set_chunked(&request.set, limit, |chunk_set, created_ids| {
             let mut chunk_req = ParticipantIdentitySetRequest::new(chunk_set.clone());
             chunk_req.on_success_set_is_default = request.on_success_set_is_default.clone();
-            let arguments = self.single_call(USING, "ParticipantIdentity/set", &chunk_req)?;
+            let arguments = self.single_call_with_created_ids(
+                USING,
+                "ParticipantIdentity/set",
+                &chunk_req,
+                created_ids,
+            )?;
             Ok(serde_json::from_value(arguments)?)
         })
     }
