@@ -850,9 +850,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     let mut entries = Vec::new();
 
     // EDS keys its cache on the vCard UID and passes it back to
-    // load_contact_sync()/remove_contact_sync(), so it has to be the
-    // identifier the JMAP methods take — the server-assigned id. The
-    // JSContact uid, which is a different namespace, rides alongside.
+    // `load_contact_sync()` and `remove_contact_sync()`.
+    // Set this UID to the server-assigned identifier that JMAP methods use.
+    // Store the JSContact UID beside it because it uses a different namespace.
     if let Some(uid) = card
         .id
         .as_ref()
@@ -868,11 +868,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     if let Some(name) = &card.name {
-        // An empty stated `full` reads back as absent (`read_name` below filters
-        // an empty FN to `None`, the same way it treats no FN at all), so it must
-        // be treated as absent here too — otherwise the first round trip keeps a
-        // literal empty FN while every later one derives and keeps a non-empty
-        // one, and the two never reach the same fixed point.
+        // `read_name` treats an empty `FN` as absent.
+        // Treat an empty stated `full` as absent here too.
+        // This keeps every round trip at the same fixed point.
         let full = name
             .full
             .as_deref()
@@ -906,9 +904,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // One line per entry rather than RFC 2426 §3.1.3's comma-separated list,
-    // so that each keeps its JSContact key — and because EDS reads the value
-    // as one string either way.
+    // Write one line per entry, not the RFC 2426 §3.1.3 comma-separated list.
+    // This keeps each JSContact key and matches EDS, which reads one text
+    // value either way.
     for (key, nickname) in card.nicknames.iter().flatten() {
         if !states_nickname(nickname) {
             continue;
@@ -1009,9 +1007,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     .with_values(fields.into_iter().map(VCardValue::Text).collect()),
             );
         }
-        // The same address written out for an envelope, on the line RFC 2426
-        // §3.2.2 gives it — directly after its own `ADR`, and on its own when
-        // the components are not known and there is no `ADR` to follow.
+        // Write the same address for envelopes on RFC 2426 §3.2.2 `LABEL`.
+        // Place it after its `ADR` line.
+        // Emit it alone when no components are known and no `ADR` line exists.
         if let Some(full) = address_label(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
@@ -1316,9 +1314,9 @@ fn fold_overlong_lines(vcard: String) -> String {
             while cut > 0 && !rest.is_char_boundary(cut) {
                 cut -= 1;
             }
-            // An odd run of backslashes ending at the cut means the last one
-            // escapes the octet on the far side — step inside the run so the
-            // pair stays on one line.
+            // If the cut ends with an odd run of backslashes, the last slash
+            // escapes the next octet.
+            // Move the cut into the run so the pair stays on one line.
             if rest[..cut]
                 .bytes()
                 .rev()
@@ -1918,10 +1916,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     }
                 }
             }
-            // One of the `X-` lines EDS keeps instant-messaging handles on, and
-            // nothing else: a line for a service this mapping does not state is
-            // left where it is rather than read as an entry the server never
-            // had. The `TYPE` is not read — it is the slot, not the contexts.
+            // This is one of the `X-` lines where EDS stores IM handles.
+            // Ignore lines for services this mapping does not state.
+            // Do not read `TYPE`: this slot name, not contexts, selects the
+            // service.
             name => {
                 let Some(service) = service_of(name) else {
                     continue;
@@ -2105,8 +2103,8 @@ fn is_known_image_subtype(subtype: &str) -> bool {
     )
 }
 
-/// A media entry for a picture of the contact — the one kind a `PHOTO` line
-/// states, so the only kind this side reads back.
+/// A media entry for a contact picture.
+/// `PHOTO` states this kind, so this reader accepts only this kind.
 fn photo_entry(uri: String, media_type: Option<String>) -> Media {
     Media {
         kind: Some(PHOTO_KIND.to_owned()),
