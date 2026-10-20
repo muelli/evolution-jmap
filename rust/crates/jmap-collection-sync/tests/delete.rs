@@ -1,17 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Deleting a collection from a running server — `tests/create.rs`'s mirror,
-//! and the one operation in this crate that destroys something the user cannot
-//! get back.
+//! Tests the delete of a collection on a running mock server.
 //!
-//! The create tests are about a *join*: that a created child is the child the
-//! next discovery would write. A delete has no join to check, so what is tested
-//! instead is the other property, which is the one with teeth — that the
-//! collection that disappears is the one that was named and nothing else. Two
-//! failures in particular have no symptom short of lost data: a destroy sent
-//! through the wrong `/set` call, and a destroy sent to the wrong JMAP account.
-//! The mock is seeded so that both would show up here.
+//! The delete must destroy only the named collection. The mock data makes these
+//! two silent failures visible: a destroy through the wrong `/set` method, and a
+//! destroy in the wrong JMAP account.
 
 use jmap_client::{Client, Credentials};
 use jmap_collection_sync::{
@@ -34,8 +28,7 @@ fn requested(kind: ChildKind, display_name: &str) -> Requested {
     }
 }
 
-/// Every collection of both kinds the server holds, as a populate would list
-/// them.
+/// All address books and calendars on the server, as a populate lists them.
 fn discovered(server: &MockServer) -> Fanout {
     Fanout::discover(&client(server), Parts::ALL)
         .expect("the mock answers every listing it is asked for")
@@ -102,12 +95,7 @@ fn deleting_a_calendar_takes_it_off_the_server() {
 
 #[test]
 fn deleting_an_address_book_leaves_a_calendar_of_the_same_id_alone() {
-    // The failure this file exists for. Ids are scoped per account *and per
-    // object type* (RFC 8620 §1.2), so an address book and a calendar may both
-    // be `X1` — and on a server that numbers its objects from one, they will be.
-    // A delete that read the id and guessed the `/set` call would destroy the
-    // user's calendar because they asked to remove an address book, and nothing
-    // would report an error: the destroy succeeds, on the wrong object.
+    // Ids are unique per account and type (RFC 8620 §1.2): both get the same id.
     let server = MockServer::builder().start();
     let client = client(&server);
     let book = create_collection(&client, &requested(ChildKind::AddressBook, "Work"))
@@ -168,10 +156,7 @@ fn deleting_the_collection_leaves_every_other_one_of_its_kind_alone() {
 
 #[test]
 fn deleting_a_collection_the_server_does_not_hold_is_an_error() {
-    // Reported rather than shrugged at: a destroy the server refused means the
-    // collection is still there, and answering the vfunc `TRUE` would have EDS
-    // remove the child source for a collection that goes on existing — which the
-    // next populate then writes a *new* source for.
+    // On `TRUE`, EDS removes the source, and the next populate adds it again.
     let server = MockServer::builder().start();
 
     let failure = delete_collection(
@@ -191,10 +176,7 @@ fn deleting_a_collection_the_server_does_not_hold_is_an_error() {
 
 #[test]
 fn a_login_whose_server_serves_no_contacts_refuses_the_delete() {
-    // The same rule the create applies, and for a sharper reason: the account
-    // that serves contacts is resolved from the session document, so a delete
-    // that fell back to the primary account would send a destroy naming this id
-    // to an account where that id means something else entirely.
+    // Do not use the primary account: there, the id can name a different object.
     let server = MockServer::builder()
         .without_capability(CAPABILITY_CONTACTS)
         .start();
@@ -235,12 +217,10 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_delete() {
     );
 }
 
-/// A mock whose login also sees `zz-shared`, an account another user shares
-/// with it (`isPersonal: false`). The id sorts after the mock's own account,
-/// which therefore stays primary. Both accounts get a calendar and an address
-/// book, and they get the same ids in both, because each account numbers its
-/// objects from one: a destroy sent to the wrong account names a real object
-/// there.
+/// A mock with a shared account `zz-shared` (`isPersonal: false`).
+///
+/// The own account stays primary. Both accounts hold a calendar and an address book
+/// with the same ids.
 fn with_a_share() -> (MockServer, Id, Id, Id) {
     let server = MockServer::builder().start();
     let own = server.account_id();
@@ -313,8 +293,7 @@ fn deleting_a_shared_collection_destroys_it_in_the_sharing_account_only() {
 
 #[test]
 fn deleting_from_an_account_that_is_no_longer_shared_is_refused() {
-    // The share was withdrawn after the child was written. Falling back to the
-    // primary account would destroy the user's own collection of that id.
+    // The share is gone: the primary account must not get the destroy.
     let (server, _, calendar, _) = with_a_share();
     let own = server.account_id();
     let own_before = held_by(&server, &own, ChildKind::Calendar);
@@ -337,9 +316,7 @@ fn deleting_from_an_account_that_is_no_longer_shared_is_refused() {
 
 #[test]
 fn deleting_through_a_personal_account_id_in_the_identity_is_refused() {
-    // Only an account the session lists as shared (`isPersonal: false`)
-    // is reached through a `<accountId>/<collectionId>` identity. The
-    // user's own collections are written with bare ids.
+    // Only a shared account (`isPersonal: false`) can be `<accountId>` in an identity.
     let (server, _, calendar, _) = with_a_share();
     let own = server.account_id();
 

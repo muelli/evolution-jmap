@@ -1,19 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Creating a collection on a running server, and the child it becomes.
+//! Tests `AddressBook/set` and `Calendar/set` creates against a running mock
+//! server over HTTP, and the [`Child`] made from the response.
 //!
-//! `tests/resources.rs` covers the read direction — what a login holds. This is
-//! the write one: `AddressBook/set` and `Calendar/set` against a real
-//! `jmap-mockd` over HTTP, and the [`Child`] derived from what the server
-//! answered.
-//!
-//! The thing worth testing here that no unit test can show is the *join*: that
-//! the child a create produces is the child the next discovery would produce for
-//! the same collection. A create that got the resource id, the account id or the
-//! identity even slightly different would not fail — it would put a second source
-//! in the sidebar for one server-side address book on the next populate, or a
-//! source whose cache file EDS deletes.
+//! The main check: a created child must be equal to the child that the next
+//! discovery finds. Otherwise the next populate adds a second source, or EDS
+//! deletes the cache file of the source.
 
 use jmap_client::{Client, Credentials, Error};
 use jmap_collection_sync::{
@@ -35,8 +28,7 @@ fn requested(kind: ChildKind, display_name: &str) -> Requested {
     }
 }
 
-/// The child the discovery finds for `resource_id`, which is what a created
-/// child has to be identical to.
+/// The child that a new discovery finds for `resource_id`.
 fn discovered(server: &MockServer, resource_id: &str) -> Child {
     let fanout = Fanout::discover(&client(server), Parts::ALL)
         .expect("the mock answers every listing it is asked for");
@@ -63,7 +55,7 @@ fn creating_an_address_book_makes_one_on_the_server_and_answers_its_child() {
         "the resource id has to be derived from the id the server assigned"
     );
 
-    // The join: the same collection, found the way a populate finds it.
+    // The populate must find a child equal to the created child.
     assert_eq!(
         discovered(&server, &child.resource_id),
         child,
@@ -89,10 +81,7 @@ fn creating_a_calendar_makes_one_on_the_server_and_answers_its_child() {
 
 #[test]
 fn an_address_book_and_a_calendar_created_together_stay_two_children() {
-    // Ids are scoped per account *and per object type* (RFC 8620 §1.2), so a
-    // server that numbers its objects from one gives both the same id — and the
-    // resource id namespace is flat. A create that named children by the bare id
-    // would have the second resolve to the first one's source.
+    // Ids are unique per account and type (RFC 8620 §1.2): both can get the same id.
     let server = MockServer::builder().start();
     let client = client(&server);
 
@@ -114,9 +103,7 @@ fn an_address_book_and_a_calendar_created_together_stay_two_children() {
 
 #[test]
 fn a_created_collection_is_the_only_new_child_of_its_kind() {
-    // The other half of "the create is what the discovery finds": exactly one
-    // collection appears, under the name that was asked for. A create that sent
-    // the object twice, or that created it in the wrong account, shows up here.
+    // Exactly one collection must appear, with the requested name.
     let server = MockServer::builder().start();
     let before = Fanout::discover(&client(&server), Parts::ALL).expect("the mock answers");
 
@@ -133,11 +120,7 @@ fn a_created_collection_is_the_only_new_child_of_its_kind() {
     assert!(after.address_books.iter().any(|book| book.name == "Work"));
 }
 
-/// `Calendar/set`'s `created` response echoes only SERVER-set properties
-/// (RFC 8620 §5.3), so a server that accepted the requested name unchanged
-/// can leave `name` out entirely: an absent name means "accepted as asked",
-/// not "the server named it nothing", and must not fall back to the id the
-/// way a server-stated blank name would.
+/// A `created` response can omit an unchanged `name` (RFC 8620 §5.3).
 #[test]
 fn a_create_whose_response_omits_the_name_shows_the_requested_name_not_the_id() {
     let server = MockServer::builder().terse_collection_create().start();
@@ -153,12 +136,7 @@ fn a_create_whose_response_omits_the_name_shows_the_requested_name_not_the_id() 
     }
 }
 
-/// `AddressBook/set`/`Calendar/set` store a padded requested name exactly as
-/// sent, never trimming it server-side. But `shown_name` (used for both this
-/// fallback and discovery) matched on `name.trim()` and then bound the
-/// *trimmed* match arm's own name back as the display value, so a requested
-/// name with leading/trailing whitespace lost its padding purely client-side,
-/// even though nothing about the server's response justified it.
+/// The server keeps the padding of a name, so the client must not trim it.
 #[test]
 fn a_create_whose_response_omits_the_name_keeps_whitespace_padding() {
     let server = MockServer::builder().terse_collection_create().start();
@@ -177,11 +155,7 @@ fn a_create_whose_response_omits_the_name_keeps_whitespace_padding() {
 
 #[test]
 fn a_login_whose_server_serves_no_contacts_refuses_the_create() {
-    // Not "send it to the primary account and hope": on a server whose contacts
-    // and calendars live in different accounts, guessing would put the new
-    // address book in an account this backend never lists, and a collection that
-    // exists on the server and never appears in Evolution is worse than one that
-    // was refused.
+    // Do not guess an account: Evolution does not show collections in unlisted accounts.
     let server = MockServer::builder()
         .without_capability(CAPABILITY_CONTACTS)
         .start();
@@ -210,16 +184,9 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_create() {
     );
 }
 
-/// A real server (Stalwart, confirmed against the live deployment) defaults a
-/// freshly created collection to `isSubscribed: false` when the create does
-/// not say otherwise — and `resources.rs`'s own discovery drops
-/// `isSubscribed == Some(false)` on purpose, the same as a collection the
-/// user unsubscribed from. Left unrequested, "New Address Book"/"New
-/// Calendar" would create a collection that immediately vanishes from the
-/// next discovery. `MockServerBuilder::new_collections_default_unsubscribed`
-/// reproduces the real server's default headlessly; `create_collection`
-/// must ask for `isSubscribed: true` explicitly so the new collection is
-/// discoverable regardless of what the server would have defaulted it to.
+/// Stalwart sets `isSubscribed: false` on new collections, and discovery drops them.
+///
+/// `create_collection` must request `isSubscribed: true`. The mock copies Stalwart.
 #[test]
 fn a_created_collection_is_discoverable_even_when_the_server_defaults_new_collections_to_unsubscribed()
  {
@@ -231,9 +198,7 @@ fn a_created_collection_is_discoverable_even_when_the_server_defaults_new_collec
         let child = create_collection(&client(&server), &requested(kind, "Work"))
             .unwrap_or_else(|error| panic!("the mock creates {kind:?}s: {error}"));
 
-        // `discovered` panics if the resource id is not found by a fresh
-        // discovery — exactly the failure a server-defaulted-unsubscribed
-        // create would have produced without the fix.
+        // `discovered` panics if the new discovery does not find the resource id.
         assert_eq!(
             discovered(&server, &child.resource_id),
             child,
@@ -243,10 +208,7 @@ fn a_created_collection_is_discoverable_even_when_the_server_defaults_new_collec
     }
 }
 
-/// A server may refuse a create outright (over quota, a read-only account,
-/// …) — RFC 8620 §5.3's `notCreated` map, not a method-level error. This must
-/// reach the caller as `CreateFailure::Client`, not panic on an absent
-/// `created` entry.
+/// A `notCreated` entry (RFC 8620 §5.3) must become `CreateFailure::Client`, not a panic.
 #[test]
 fn a_create_the_server_refuses_is_a_client_failure_not_a_panic() {
     let server = MockServer::builder().reject_collection_create().start();
@@ -262,11 +224,7 @@ fn a_create_the_server_refuses_is_a_client_failure_not_a_panic() {
     }
 }
 
-/// The other failure branch of the same function: a `created` response that
-/// carries a resource but leaves out `id` altogether is a server breaking
-/// RFC 8620 §5.3's requirement that a create name the id. `created_resource`
-/// is unit-tested against this directly, but nothing before this test drove
-/// it end to end through `create_collection` and the mock.
+/// A `created` entry without an `id` breaks RFC 8620 §5.3 and must be a client failure.
 #[test]
 fn a_create_whose_response_omits_the_id_is_a_client_failure_not_a_panic() {
     let server = MockServer::builder()

@@ -1,53 +1,48 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The child sources a populate creates, and the name each is created under.
+//! The child sources that a populate creates, and the name of each one.
 //!
-//! [`Fanout`] answers what a login holds. This answers what `populate` does
-//! with it: `e_collection_backend_new_child (backend, resource_id)` takes a
-//! *resource id* and hands back the child `ESource` — so a backend does not
-//! invent child uids, it names resources and EDS assigns and remembers the
-//! uids. The same string has to come back out of the `dup_resource_id` vfunc
-//! for that child, because that pairing is how EDS recognises, on the next
-//! populate, that this resource already has a source and must not get a second
-//! one.
+//! [`Fanout`] tells what a login holds. This module tells what `populate` does
+//! with it. `e_collection_backend_new_child (backend, resource_id)` takes a
+//! *resource id* and returns the child `ESource`. Thus a backend does not make
+//! child uids: it names resources, and EDS assigns and keeps the uids. The
+//! `dup_resource_id` vfunc must return the same string for that child. On the
+//! next populate, EDS uses this pair to find that the resource already has a
+//! source, and does not make a second one.
 //!
-//! ## Why a resource id is not just the JMAP id
+//! ## Why a resource id is not only the JMAP id
 //!
-//! Ids in JMAP are scoped to an account *and an object type* (RFC 8620 §1.2):
-//! nothing stops a server from having an `AddressBook` with id `a` and a
-//! `Calendar` with id `a`, and on a server that numbers its objects from one
-//! that is the expected case rather than a corner one. The resource id
-//! namespace, though, is flat — it is every child of this one collection —
-//! so handing EDS the bare JMAP id would have the calendar named `a` resolve
-//! to the address book's child source, and the account would come up one
-//! source short with a calendar's data in a contacts backend.
+//! JMAP ids are unique per account *and per object type* (RFC 8620 §1.2). A
+//! server can have an `AddressBook` with id `a` and a `Calendar` with id `a`.
+//! On a server that numbers its objects from one, this is the usual case. But
+//! the resource id namespace is flat: it holds all children of this one
+//! collection. With the bare JMAP id, the calendar `a` resolves to the child
+//! source of the address book. The account then has one source too few, and a
+//! contacts backend gets the data of a calendar.
 //!
-//! So the kind is part of the name: `addressbook:<id>` and `calendar:<id>`.
-//! The separator cannot be ambiguous either, which is why parsing splits at the
-//! *first* colon and keeps the rest whole — the id charset in RFC 8620 §1.2 has
-//! no colon in it, but nothing here is in a position to insist on that, and a
-//! server that sends one should get a wrong-looking source rather than a
-//! silently mismatched one.
+//! Thus the kind is part of the name: `addressbook:<id>` and `calendar:<id>`.
+//! Parsing splits at the *first* colon and keeps the rest whole. The id charset
+//! in RFC 8620 §1.2 has no colon, but this code cannot enforce that. If a
+//! server sends a colon, the source must look wrong, not silently point at a
+//! different collection.
 //!
 //! ## What is deliberately not here
 //!
-//! **The mail children.** Whether the mail account, identity and transport
-//! sources are created by this backend's populate or by the account-setup
-//! module (M7), and which of the `[Mail Account]`/`[Mail Identity]`/
-//! `[Mail Submission]`/`[Mail Transport]` extensions sits on which of them, is
-//! Evolution convention rather than anything the installed headers state, and
-//! this machine has no reference account to read it off. Guessing it here would
-//! put a shape into the child list that the tests could only confirm was the
-//! shape we guessed. [`Fanout::layout`] carries the mail service either way;
-//! the child list stops where the certainty stops.
+//! **The mail sources.** They are not children of the collection backend. If
+//! `dup_resource_id` returns `NULL` for a cached child, EDS deletes its file,
+//! and reference backends return `NULL` for mail extensions. Thus the account
+//! setup (`jmap_config::mail`) writes them in the registry directory, with the
+//! account as parent. `jmap-backend-collection`'s `prepare_mail` module tells
+//! the full reason. [`Fanout::layout`] holds the mail service, but the child
+//! list has only address books and calendars.
 
 use jmap_proto::Id;
 
 use crate::layout::ServiceAccount;
 use crate::resources::{Fanout, Resource};
 
-/// Which of Evolution's backends a child source is for.
+/// The Evolution backend that a child source is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildKind {
     AddressBook,
@@ -63,18 +58,18 @@ impl ChildKind {
         }
     }
 
-    /// The name `e_collection_backend_new_child` is called with for
-    /// `collection`, and the string `dup_resource_id` has to return for the
-    /// child it produced.
+    /// The resource id of `collection` in the primary account. This code
+    /// gives it to `e_collection_backend_new_child`, and `dup_resource_id`
+    /// must return it for the child that results.
     pub fn resource_id(self, collection: &Id) -> String {
         format!("{}:{}", self.prefix(), collection)
     }
 
     /// The resource id of `collection` in the shared `account`:
     /// `<kind>:<accountId>/<collectionId>`. The part after the colon is the
-    /// child's `[Resource] Identity`, which the book and calendar backends
-    /// split back into the account and the collection. JMAP ids cannot hold a
-    /// `/` (RFC 8620 §1.2), so the split is unambiguous.
+    /// `[Resource] Identity` of the child. The book and calendar backends split
+    /// it into the account and the collection. JMAP ids cannot contain a `/`
+    /// (RFC 8620 §1.2), so the split has only one result.
     pub fn shared_resource_id(self, account: &Id, collection: &Id) -> String {
         format!("{}:{account}/{collection}", self.prefix())
     }
@@ -83,69 +78,74 @@ impl ChildKind {
 /// The account and collection of a shared child's identity
 /// (`<accountId>/<collectionId>`), or `None` for a primary child's bare id.
 ///
-/// The same rule as the backends' own reading: exactly one `/` with something
-/// on both sides. Anything else is left whole, as a primary id.
+/// This is the rule that `SourceConfig` in the backends uses: exactly one `/`,
+/// with text on each side. All other values stay whole, as a primary id.
 pub fn split_shared_identity(identity: &str) -> Option<(&str, &str)> {
     let (account, collection) = identity.split_once('/')?;
     (!account.is_empty() && !collection.is_empty() && !collection.contains('/'))
         .then_some((account, collection))
 }
 
-/// One `ESource` a populate creates, with everything its keyfile needs.
+/// One `ESource` that a populate creates, with all that its keyfile needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Child {
-    /// What `e_collection_backend_new_child` is called with, and what
-    /// `dup_resource_id` must give back for this child. Unique across the whole
-    /// child list, which the bare JMAP id would not be.
+    /// The argument to `e_collection_backend_new_child`, and the value that
+    /// `dup_resource_id` must return for this child. It is unique in the full
+    /// child list. The bare JMAP id is not.
     pub resource_id: String,
     pub kind: ChildKind,
-    /// `ESource:display-name` — the collection's name, as the server states it.
+    /// `ESource:display-name`. For the user's own collections, this is the
+    /// name that the server gives. For a shared one, it also has the owner.
     pub display_name: String,
-    /// The `accountId` this child's method calls carry. Not a constant of the
-    /// collection: contacts and calendars can resolve to different JMAP
-    /// accounts, and each child talks to its own.
+    /// The `accountId` that the method calls of this child use. It is not a
+    /// constant of the collection: contacts and calendars can be in different
+    /// JMAP accounts, and each child uses its own.
     pub account_id: Id,
-    /// The collection this child is for, which is what `[Resource] Identity`
-    /// carries.
+    /// The JMAP id of the collection that this child is for.
     pub collection_id: Id,
-    /// The account's default collection of this kind.
+    /// True for the default collection of this kind in the account.
     pub is_default: bool,
-    /// [`Resource::color`], carried straight through — `None` for every
-    /// address book child, and for a calendar the server named none.
+    /// [`Resource::color`], unchanged. It is `None` for each address book
+    /// child, and for a calendar that has no color from the server.
     pub color: Option<String>,
-    /// Whether nothing in this child may be created, changed or removed:
-    /// the account-wide bit, narrowed (never widened) by the collection's own
-    /// `myRights` when the server sent one. A writable account with a
-    /// collection whose `myRights` says not writable is read-only; a
-    /// read-only account is read-only regardless of what any one
-    /// collection's `myRights` claims — see [`Child::for_resource`].
+    /// True when no item in this child may be created, changed or removed.
+    /// The value is the account-wide bit, which the `myRights` of the
+    /// collection can narrow but never widen:
+    ///
+    /// - A writable account with a collection whose `myRights` says not
+    ///   writable gives a read-only child.
+    /// - A read-only account always gives read-only children.
+    ///
+    /// See [`Child::for_resource`].
     pub read_only: bool,
-    /// What EDS's `remote-deletable` `ESource` property should say — unlike
-    /// [`Child::read_only`], a real property
-    /// (`e_server_side_source_set_remote_deletable`) rather than a fact for
-    /// the backend to consult at call time, because it is what makes
-    /// Evolution grey out "Delete" instead of offering it and then
-    /// surfacing the server's `forbidden` error after the click. No
-    /// account-wide bit to narrow against — `myRights.mayDelete` is
-    /// per-collection to begin with, and [`Resource::deletable`] is `true`
-    /// absent an opinion from the server, matching the permissive default
-    /// every child had before this field existed.
+    /// The value for the `remote-deletable` `ESource` property of EDS.
+    ///
+    /// Unlike [`Child::read_only`], this is a real property
+    /// (`e_server_side_source_set_remote_deletable`), not a fact that the
+    /// backend examines at call time. It makes Evolution disable "Delete".
+    /// Without it, Evolution offers "Delete" and then shows the `forbidden`
+    /// error of the server after the click.
+    ///
+    /// No account-wide bit applies: `myRights.mayDelete` is per collection.
+    /// For the user's own collections, an absent `mayDelete` gives `true`.
+    /// For a shared one, it gives `false` (see [`Child::for_shared_resource`]).
     pub remote_deletable: bool,
 }
 
 impl Fanout {
-    /// The children this login warrants, in the order they are created in.
+    /// The children of this login, in the order of creation.
     ///
-    /// Address books first, then calendars, each in the order
-    /// [`Fanout::discover`] put them in — which is the server's own sort order.
-    /// A collection the server listed twice becomes one child: two children
-    /// with one resource id is not two sources, it is one source created and
-    /// then overwritten.
+    /// The order is: address books, then calendars, then the shared children.
+    /// Each group keeps the order of [`Fanout::discover`], which is the sort
+    /// order from the server. A collection that the server lists two times
+    /// becomes one child, and the first listing wins. Two children with one
+    /// resource id are not two sources: they are one source that is created
+    /// and then overwritten.
     ///
-    /// A kind whose [`Parts`](crate::Parts) flag is off has no children here,
-    /// which for a discovered fan-out follows already from its listing never
-    /// having been sent — this holds the same line for a fan-out assembled by
-    /// hand, so that "the user switched contacts off" cannot mean two things.
+    /// A kind whose [`Parts`](crate::Parts) flag is off has no children here.
+    /// For a discovered fan-out, this is already true because the listing was
+    /// not sent. This method applies the same rule to a fan-out made by hand,
+    /// so "the user switched contacts off" has only one meaning.
     pub fn children(&self) -> Vec<Child> {
         let books = self
             .layout
@@ -160,8 +160,8 @@ impl Fanout {
             .into_iter()
             .flat_map(|account| children(ChildKind::Calendar, account, &self.calendars));
 
-        // Shared children after the user's own, account by account in the
-        // order the session lists them.
+        // Shared children come after the user's own, one account at a time,
+        // in the order of `Fanout::shared`.
         let shared = self.shared.iter().flat_map(|listing| {
             [ChildKind::AddressBook, ChildKind::Calendar]
                 .into_iter()
@@ -193,15 +193,14 @@ impl Fanout {
 }
 
 impl Child {
-    /// The child source one collection of `account` becomes.
+    /// The child source for one collection of `account`.
     ///
-    /// Public because a collection is not only ever *discovered*: a
-    /// `create_resource_sync` has just made one on the server and has to write
-    /// the same child for it that the next populate would have written. A second
-    /// spelling of this mapping there would be a created source that differs
-    /// from the discovered one in some field nobody compares — and the fields in
-    /// question are the ones that decide whether EDS keeps the cache file and
-    /// which server the child talks to.
+    /// This is public because discovery is not the only source of collections.
+    /// A `create_resource_sync` makes one on the server, and must write the same
+    /// child that the next populate writes. A second copy of this mapping can
+    /// give a created source that differs from the discovered one in a field
+    /// that nothing compares. These fields decide if EDS keeps the cache file,
+    /// and which server the child uses.
     pub fn for_resource(kind: ChildKind, account: &ServiceAccount, resource: &Resource) -> Self {
         Self {
             resource_id: kind.resource_id(&resource.id),
@@ -211,30 +210,25 @@ impl Child {
             collection_id: resource.id.clone(),
             is_default: resource.is_default,
             color: resource.color.clone(),
-            // Narrows, never widens: `resource.writable == Some(false)` can
-            // only turn a writable account's child read-only, never turn a
-            // read-only account's child writable. Absent `myRights`
-            // (`resource.writable` is `None`) leaves this exactly the
-            // account-wide bit, unchanged from before per-collection rights
-            // were read at all.
+            // Narrows, never widens. Absent `myRights` (`writable` is `None`)
+            // gives the account-wide bit.
             read_only: account.read_only || resource.writable == Some(false),
-            // Absent `mayDelete` (`resource.deletable` is `None`) leaves this
-            // deletable — the state every child was in before per-collection
-            // deletion rights were read at all.
+            // Absent `mayDelete` (`deletable` is `None`) gives deletable.
             remote_deletable: resource.deletable.unwrap_or(true),
         }
     }
 }
 
 impl Child {
-    /// The child source one collection of the shared `account` becomes.
+    /// The child source for one collection of the shared `account`.
     ///
-    /// The display name carries the owner, `<collection> (<account name>)`,
-    /// so a shared "Calendar" is not mistaken for the user's own. Rights
-    /// narrow as for the user's own collections. It is offered for deletion
-    /// only when `myRights.mayDelete` says so: deleting it removes the owner's
-    /// collection for everyone, so a server that states no rights does not get
-    /// the permissive default the user's own collections get.
+    /// The display name has the owner, `<collection> (<account name>)`, so the
+    /// user does not confuse a shared "Calendar" with the user's own. Rights
+    /// narrow as for the user's own collections. Evolution offers deletion
+    /// only when `myRights.mayDelete` is true. A deletion removes the
+    /// collection of the owner for all users. Thus, when the server gives no
+    /// rights, the permissive default of the user's own collections does not
+    /// apply.
     pub fn for_shared_resource(
         kind: ChildKind,
         account: &ServiceAccount,
@@ -248,9 +242,9 @@ impl Child {
         }
     }
 
-    /// What `[Resource] Identity` carries for this child: the resource id
-    /// minus its kind, i.e. the bare collection id for the user's own
-    /// collections and `<accountId>/<collectionId>` for a shared one.
+    /// The `[Resource] Identity` of this child: the resource id without its
+    /// kind. This is the bare collection id for the user's own collections,
+    /// and `<accountId>/<collectionId>` for a shared one.
     pub fn identity(&self) -> &str {
         self.resource_id
             .split_once(':')
@@ -258,12 +252,12 @@ impl Child {
     }
 }
 
-/// Reads `resource_id` back into the child it names.
+/// Reads `resource_id` back into the kind and the identity of its child.
 ///
-/// `None` is a resource id this backend did not write — a child of some other
-/// collection backend, or one written by a future version of this one — and the
-/// `dup_resource_id` vfunc turns that into the `NULL` that tells EDS it does not
-/// know this child.
+/// The identity is [`Child::identity`]: for a shared child, it is
+/// `<accountId>/<collectionId>`. `None` is a resource id that this backend did
+/// not write, for example from a different collection backend or a future
+/// version of this one. [`Fanout::is_obsolete`] keeps such a child.
 pub fn parse_resource_id(resource_id: &str) -> Option<(ChildKind, Id)> {
     let (prefix, collection) = resource_id.split_once(':')?;
     let kind = match prefix {
@@ -277,7 +271,7 @@ pub fn parse_resource_id(resource_id: &str) -> Option<(ChildKind, Id)> {
     Some((kind, Id::new(collection)))
 }
 
-/// One kind's worth of children, all in `account`.
+/// The children of one kind, all in `account`.
 fn children<'a>(
     kind: ChildKind,
     account: &'a ServiceAccount,
@@ -315,7 +309,7 @@ mod tests {
         }
     }
 
-    /// A fan-out of one account serving both collection kinds.
+    /// A fan-out with one account for both collection kinds.
     fn fanout(address_books: Vec<Resource>, calendars: Vec<Resource>) -> Fanout {
         Fanout {
             shared: Vec::new(),
@@ -350,11 +344,9 @@ mod tests {
 
     #[test]
     fn an_address_book_and_a_calendar_with_one_id_are_two_children() {
-        // Ids are scoped per account *and per object type* (RFC 8620 §1.2), so
-        // this is not a broken server, it is what a server that numbers its
-        // objects from one looks like. The resource id namespace is flat, so
-        // the bare id would have the calendar resolve to the address book's
-        // child and the account come up one source short.
+        // Ids are unique per account *and per object type* (RFC 8620 §1.2).
+        // A server that numbers its objects from one gives this result. The
+        // resource id namespace is flat, so a bare id loses one source.
         let fanout = fanout(vec![resource("a", "Personal")], vec![resource("a", "Work")]);
 
         let children = fanout.children();
@@ -365,14 +357,13 @@ mod tests {
 
     #[test]
     fn a_resource_id_reads_back_as_the_child_it_names() {
-        // The round trip is not a nicety: `dup_resource_id` is asked for this
-        // string again on the next populate, and a child whose id does not come
-        // back is a child EDS creates a second source for.
+        // `Fanout::is_obsolete` reads cached resource ids back. A wrong read
+        // can remove a child that exists, or keep a child that is gone.
         for (kind, id) in [
             (ChildKind::AddressBook, "AB1"),
             (ChildKind::Calendar, "Cal1"),
-            // Out of spec — the id charset has no colon in it — but a wrong
-            // looking source beats one silently pointed at another collection.
+            // Not in the id charset, but the rest after the first colon stays
+            // whole, so the source does not point at a different collection.
             (ChildKind::Calendar, "odd:id"),
         ] {
             let resource_id = kind.resource_id(&Id::new(id));
@@ -386,8 +377,8 @@ mod tests {
 
     #[test]
     fn a_resource_id_this_backend_did_not_write_is_not_read_as_one() {
-        // `dup_resource_id` is called for children this backend may never have
-        // created; claiming one is claiming a source that belongs elsewhere.
+        // A child that this backend did not create belongs to a different
+        // backend, and `Fanout::is_obsolete` must keep it.
         for foreign in ["AB1", "", ":", "addressbook", "addressbook:", "task:1"] {
             assert_eq!(
                 parse_resource_id(foreign),
@@ -399,8 +390,8 @@ mod tests {
 
     #[test]
     fn a_collection_listed_twice_is_one_child() {
-        // Two children under one resource id are not two sources: the second
-        // `new_child` call resolves to the first one's source.
+        // Two children with one resource id are not two sources: the second
+        // `new_child` call resolves to the source of the first.
         let fanout = fanout(
             vec![resource("AB1", "Personal"), resource("AB1", "Personal too")],
             Vec::new(),
@@ -417,8 +408,8 @@ mod tests {
 
     #[test]
     fn each_child_carries_the_account_that_serves_its_kind() {
-        // Contacts and calendars resolve independently in `CollectionLayout`,
-        // and a child that carries the wrong `accountId` fails every call.
+        // `CollectionLayout` resolves contacts and calendars separately. A
+        // child with the wrong `accountId` fails each call.
         let fanout = Fanout {
             shared: Vec::new(),
             parts: Parts::ALL,
@@ -463,9 +454,8 @@ mod tests {
 
     #[test]
     fn a_collections_own_my_rights_narrows_a_writable_account_to_read_only() {
-        // The known-wrong heuristic `Child`'s doc used to name, made correct:
-        // a writable account with one collection whose `myRights` says not
-        // writable produces a read-only child for that collection alone.
+        // A writable account with one collection whose `myRights` says not
+        // writable gives a read-only child for only that collection.
         let mut locked = resource("AB1", "Locked share");
         locked.writable = Some(false);
         let fanout = fanout(vec![locked, resource("AB2", "Personal")], Vec::new());
@@ -480,9 +470,8 @@ mod tests {
 
     #[test]
     fn a_collections_own_my_rights_never_widens_a_read_only_account() {
-        // The other half of "narrows, never widens": a collection whose
-        // `myRights` says writable does not override a read-only account —
-        // the account bit stays the ceiling.
+        // A collection whose `myRights` says writable does not override a
+        // read-only account: the account bit is the upper limit.
         let mut read_only_account = account("A1");
         read_only_account.read_only = true;
         let mut writable_looking = resource("AB1", "Says writable");
@@ -504,10 +493,8 @@ mod tests {
 
     #[test]
     fn a_collections_own_my_rights_decides_whether_it_is_remote_deletable() {
-        // `myRights.mayDelete` has no account-wide bit to narrow against: it
-        // is per-collection to begin with, so `false` and `true` both read
-        // straight through, and an absent `myRights` stays deletable,
-        // matching every child's state before this field existed.
+        // `myRights.mayDelete` is per collection, with no account-wide bit.
+        // `false` and `true` stay unchanged, and an absent value gives deletable.
         let mut undeletable = resource("AB1", "Locked share");
         undeletable.deletable = Some(false);
         let fanout = fanout(vec![undeletable, resource("AB2", "Personal")], Vec::new());
@@ -545,9 +532,8 @@ mod tests {
 
     #[test]
     fn a_login_whose_collections_were_never_listed_has_no_children_of_that_kind() {
-        // `Fanout::discover` leaves the vector empty both when the login offers
-        // no contacts and when the account holds no address book; neither is an
-        // error and neither is a child.
+        // With no contacts account in the layout, a listed address book is
+        // not a child. `Fanout::discover` never makes this fan-out.
         let fanout = Fanout {
             shared: Vec::new(),
             parts: Parts::ALL,
@@ -565,11 +551,8 @@ mod tests {
 
     #[test]
     fn the_mail_account_is_not_one_of_these_children() {
-        // Not an oversight: which sources the mail service becomes, and which
-        // of the four mail extensions sits on which of them, is Evolution
-        // convention that the installed headers do not state and this machine
-        // cannot check. The module comment says so; this says so where it would
-        // be noticed if someone added mail children without settling it.
+        // Deliberate: the account setup writes the mail sources outside the
+        // backend cache (see the module comment).
         let fanout = Fanout {
             shared: Vec::new(),
             parts: Parts::ALL,

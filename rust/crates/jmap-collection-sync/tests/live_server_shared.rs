@@ -1,31 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Fanout::discover` against a *shared* collection, i.e. one owned by a
-//! different real account, through an ACL grant.
+//! Tests `Fanout::discover` and `delete_collection` on a real server with a
+//! collection that another account shares through an ACL grant.
 //!
-//! `jmap-book-sync/tests/live_server_shared_book.rs` and `jmap-cal-sync/
-//! tests/live_server_shared_calendar.rs` already prove that once a child is
-//! pointed at a specific (owner account id, collection id) pair, `BookSync`/
-//! `CalSync` can read and then write a shared collection's contents. Neither
-//! goes through this crate's own discovery at all, because a child source is
-//! built by hand in those tests, naming the owner's account id directly.
-//! This file confirms that `Fanout::discover`, which a real populate calls,
-//! finds a shared collection through the owner's `isPersonal: false` account
-//! in the recipient's session, and lets it go once the grant is withdrawn.
-//! It also confirms that the recipient's delete of a shared collection goes to
-//! the owner's account and succeeds only where the grant includes `mayDelete`.
+//! The shared-collection tests of `jmap-book-sync` and `jmap-cal-sync` make
+//! their child sources by hand. These tests make sure that:
+//!
+//! - The discovery finds a shared collection through the `isPersonal: false`
+//!   account of the owner, and drops it when the owner withdraws the grant.
+//! - A delete by the recipient goes to the account of the owner, and succeeds
+//!   only when the grant includes `mayDelete`.
 //!
 //! ## Running it
 //!
-//! Same two-account recipe as `jmap-book-sync`'s and `jmap-cal-sync`'s
-//! shared-collection tests — see `docs/manual-test-live-server.md`.
+//! Use the two-account setup of the shared-collection tests of `jmap-book-sync`
+//! and `jmap-cal-sync` (refer to `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-collection-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either pair is unset.
+//! The tests skip (and do not fail) when one of the two `_USER` variables is unset.
 
 use std::env;
 
@@ -43,7 +39,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_shared_book.rs::connect_owner`.
+/// Same as `connect_owner` in `jmap-book-sync/tests/live_server_shared_book.rs`.
 fn connect_owner() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -59,7 +55,7 @@ fn connect_owner() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_shared_book.rs::connect_recipient`.
+/// Same as `connect_recipient` in `jmap-book-sync/tests/live_server_shared_book.rs`.
 fn connect_recipient() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -76,19 +72,9 @@ fn connect_recipient() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Creates an address book and a calendar on the owner account, shares the
-/// book writable and the calendar read-only with the recipient account, and
-/// follows them through the recipient's own `Fanout::discover`:
+/// Shares a writable book and a read-only calendar, then withdraws both grants.
 ///
-/// 1. Freshly shared, both carry `isSubscribed: false` on Stalwart (the
-///    drafts' initial state for a share), and the recipient cannot subscribe
-///    to the read-only calendar (`forbidden`). Both are children all the
-///    same, under `<kind>:<owner account>/<collection>`, named with the
-///    owner's account name, the calendar read-only, and neither retargets
-///    the recipient's own resolved accounts.
-/// 2. Once the owner withdraws both grants, both children are obsolete.
-///
-/// Destroys both collections at the end.
+/// On Stalwart, new shares have `isSubscribed: false`, but both are children.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() {
@@ -177,8 +163,7 @@ fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() 
     let book_child = format!("addressbook:{owner_contacts_account}/{book_id}");
     let calendar_child = format!("calendar:{owner_calendars_account}/{calendar_id}");
 
-    // A fresh client: the session document is fetched once per connection,
-    // and the owner's account only appears in it after the grant.
+    // A new client gets a new session document, which shows the account of the owner.
     let (recipient, _) = connect_recipient().expect("connected once already");
     let subscribed = Fanout::discover(&recipient, Parts::ALL)
         .expect("discovery failed for the recipient after the grants");
@@ -300,14 +285,9 @@ fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() 
         .expect("Calendar/set destroy failed against the real server (cleanup)");
 }
 
-/// Deleting a shared collection from the recipient's side, as Evolution's
-/// "Delete" on a shared child does.
+/// The recipient deletes a calendar shared with `mayDelete` and a book shared without it.
 ///
-/// The owner shares a calendar with `mayDelete` and an address book without
-/// it. The recipient's children offer only the calendar for deletion, a
-/// delete of the calendar through the child's own identity removes it from
-/// the owner's account, and a delete of the book (forced past the flag) is the
-/// server's refusal, with the book still there.
+/// Only the calendar delete succeeds. The server refuses the book delete.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_shared_collection_is_deleted_in_the_owners_account_only_with_may_delete() {
@@ -422,8 +402,7 @@ fn a_shared_collection_is_deleted_in_the_owners_account_only_with_may_delete() {
     );
     eprintln!("the recipient deleting the calendar shared with mayDelete: {deleted:?}");
 
-    // Listed directly rather than through a discovery, which drops the
-    // owner's own collections that Stalwart creates unsubscribed.
+    // Not a discovery: it drops the collections that Stalwart creates unsubscribed.
     let calendar_left = owner
         .calendars(&owner_calendars_account)
         .expect("Calendar/get failed for the owner")
@@ -435,7 +414,7 @@ fn a_shared_collection_is_deleted_in_the_owners_account_only_with_may_delete() {
         .iter()
         .any(|held| held.id.as_ref() == Some(&book_id));
 
-    // Clean up before asserting, so a failure leaves nothing behind.
+    // Clean up before the asserts, so that a failure leaves no collections.
     owner
         .address_book_destroy(&owner_contacts_account, &book_id)
         .expect("AddressBook/set destroy failed against the real server (cleanup)");

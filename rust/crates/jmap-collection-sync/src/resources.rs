@@ -1,51 +1,47 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The address books and calendars inside the accounts the layout resolved.
+//! The address books and calendars in the accounts that the layout resolved.
 //!
-//! [`CollectionLayout`] answers *which account* serves contacts and calendars;
-//! it does not answer how many address books and how many calendars are in it,
-//! and that is a second question with a second answer. JMAP puts contact cards
-//! in `AddressBook`s and events in `Calendar`s (RFC 9610 §2,
-//! draft-ietf-jmap-calendars §4), several of each per account, and Evolution
-//! shows one source per address book and one per calendar — so the fan-out is
-//! not three children, it is one mail account plus however many collections the
-//! server lists.
+//! [`CollectionLayout`] tells *which account* serves contacts and calendars. It
+//! does not tell how many address books and calendars the account holds. JMAP
+//! keeps contact cards in `AddressBook`s and events in `Calendar`s (RFC 9610
+//! §2, draft-ietf-jmap-calendars §4), with many of each in one account.
+//! Evolution shows one source for each address book and each calendar. Thus
+//! the fan-out is not three children: it is one child for each collection that
+//! the server lists.
 //!
-//! ## Only what the layout resolved, and only what the user asked for
+//! ## Only what the layout resolved, and only what the user switched on
 //!
-//! A listing is sent for a capability only when the layout found an account for
-//! it. The saving is not the round trip: RFC 8620 §3.3 has a server answer a
-//! `using` naming a capability it does not advertise with `unknownCapability`,
-//! and that error fails the *whole request* rather than the one call. Asking a
-//! contacts-less server for its address books anyway would therefore be a
-//! request that comes back with nothing in it at all.
+//! A listing for a capability is sent only when the layout found an account
+//! for it. This is not only to save a round trip: RFC 8620 §3.3 makes a server
+//! answer a `using` with a capability that it does not advertise with
+//! `unknownCapability`. That error fails the *whole request*, not only one
+//! call, so the request returns no data.
 //!
-//! The second gate is the user's: a part switched off on the account is not
-//! listed either — see [`Parts`], which also has what a fan-out may and may not
-//! conclude from a listing it never sent.
+//! The user's choice is the second gate: a part that the user switched off is
+//! not listed. [`Parts`] also tells what a fan-out can conclude from a listing
+//! that it did not send.
 //!
-//! ## What is left out, and why that is a decision
+//! ## What is not shown, and why
 //!
-//! - **`isSubscribed == Some(false)` is dropped.** Both objects carry it and
-//!   both mean the same thing by it: this collection exists, and the user has
-//!   said they do not want it. Creating a source for it puts a calendar the
-//!   user removed back in their sidebar at every populate.
-//! - **Except in a shared account.** The calendars draft (-33 §4) has a share
-//!   start out unsubscribed, a subscription is something the sharee sets from
-//!   a client, Evolution has no place to set it, and Stalwart refuses it
-//!   (`forbidden`) to a sharee without write rights, which the draft allows
-//!   (§4.3, "The server MAY forbid users from subscribing"). Honouring the flag
-//!   there would hide every read-only share for good, so a shared collection
-//!   is shown whatever `isSubscribed` says.
+//! - **A collection with `isSubscribed == Some(false)`.** Both objects have
+//!   this property, with the same meaning: the collection exists, and the user
+//!   does not want it. A source for it puts a collection that the user removed
+//!   back in the sidebar at each populate.
+//! - **But a shared collection is shown, whatever `isSubscribed` says.** The
+//!   calendars draft (-33 §4) makes a share start unsubscribed. Only a client of
+//!   the sharee can subscribe, and Evolution has no control for it. Stalwart
+//!   refuses the subscription (`forbidden`) to a sharee without write rights,
+//!   which the draft allows (§4.3, "The server MAY forbid users from
+//!   subscribing"). If this module used the flag, each read-only share would
+//!   stay hidden.
 //! - **An absent `isSubscribed` is a subscription.** The property is optional
-//!   in both specifications, and a server that says nothing has not said no —
-//!   reading silence as "unsubscribed" would empty the sidebar of every server
-//!   that omits it.
-//! - **A collection with no `id` is dropped.** `[Resource] Identity` is how a
-//!   child source names the collection it is for; without an id there is
-//!   nothing to write there, and the child would be a source pointing at
-//!   whatever the account's default happened to be.
+//!   in both specifications. If absence meant "unsubscribed", the sidebar would
+//!   be empty for each server that omits it.
+//! - **A collection with no `id` is not shown.** A child source names its
+//!   collection in `[Resource] Identity`. Without an id, there is nothing to
+//!   write there, and the child would use the account's default collection.
 
 use jmap_client::Client;
 use jmap_proto::Id;
@@ -59,55 +55,51 @@ use crate::parts::Parts;
 /// One address book or calendar, as a child source is made from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resource {
-    /// The JMAP id, which is what `[Resource] Identity` carries and what every
-    /// method call for this collection filters on.
+    /// The JMAP id. `[Resource] Identity` holds it (after the account id, for a
+    /// shared collection), and each method call for this collection uses it.
     pub id: Id,
-    /// The name to show. Never empty: a collection the server named nothing
-    /// falls back to its id, because a blank row in Evolution's sidebar is one
-    /// the user cannot tell from another blank row.
+    /// The name to show. It is never empty: if the server gives no name, the
+    /// id is used, because the user cannot tell two blank rows in the sidebar
+    /// apart.
     pub name: String,
-    /// The account's default collection for its kind — where a card or an event
-    /// created without a collection lands.
+    /// Whether this is the account's default collection for its kind: the
+    /// collection for a card or an event that is created without a collection.
     pub is_default: bool,
-    /// `Calendar.color`, threaded straight through. `None` for an address
-    /// book (JMAP defines no such property on `AddressBook`) and for a
-    /// calendar the server named none.
+    /// `Calendar.color`, unchanged. `None` for an address book (JMAP defines no
+    /// such property on `AddressBook`) and for a calendar without a color.
     pub color: Option<String>,
-    /// Whether `myRights` says this collection may be written to
+    /// Whether `myRights` permits writes to this collection
     /// (`AddressBookRights`/`CalendarRights::is_writable`). `None` when the
-    /// server sent no `myRights` at all, which is what keeps
-    /// [`crate::children::Child::for_resource`] on the account-wide
-    /// `read_only` fallback exactly as before this field existed.
+    /// server sent no `myRights`. Then [`crate::children::Child::for_resource`]
+    /// uses only the account-wide `read_only`.
     pub writable: Option<bool>,
     /// `myRights.mayDelete` (`AddressBookRights`/`CalendarRights::may_delete`),
-    /// read straight through. `None` when the server sent no `myRights` at
-    /// all, or sent one that leaves `mayDelete` out — both of which
-    /// [`crate::children::Child::for_resource`] reads as "deletable", the
-    /// permissive default EDS itself defaults a child to absent any opinion.
+    /// unchanged. `None` when the server sent no `myRights`, or sent one without
+    /// `mayDelete`. [`crate::children::Child::for_resource`] reads `None` as
+    /// "deletable", which is also the EDS default for a child.
     pub deletable: Option<bool>,
 }
 
 /// Everything one JMAP login fans out into.
 ///
-/// The [`CollectionLayout`] is the question "which account", the two vectors
-/// are the question "which collections in it", and together they are the whole
-/// child list a populate has to produce.
+/// The [`CollectionLayout`] answers "which account". The vectors answer "which
+/// collections are in it". Together they give all the children of a populate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fanout {
-    /// The parts the discovery was run under, kept so that what may be
-    /// concluded from the vectors cannot drift from what was asked — see
-    /// [`Fanout::listed`].
+    /// The parts that the discovery used. [`Fanout::listed`] uses them, so its
+    /// conclusions agree with what was asked.
     pub parts: Parts,
     pub layout: CollectionLayout,
-    /// In the order the server sorted them, which is the order the children are
-    /// created in. Empty when the login offers no contacts *or* when the
-    /// account holds no address book — a fresh account is not an error.
+    /// Sorted by `sortOrder`, then name, then id. The children are created in
+    /// this order. Empty when the login offers no contacts, when the contacts
+    /// part is off, *or* when the account holds no address book. A new account
+    /// is not an error.
     pub address_books: Vec<Resource>,
     pub calendars: Vec<Resource>,
     /// The accounts shared with this login that offer contacts or calendars
-    /// ([`CollectionLayout::shared_accounts`]), each with what was listed in
-    /// it. Every such account in the session is here, listed or not, so that
-    /// an account missing from this vector means the share is gone.
+    /// ([`CollectionLayout::shared_accounts`]), each with its listings. Each
+    /// such account in the session is here, also if not listed. Thus a missing
+    /// account means that the share is gone.
     pub shared: Vec<SharedListing>,
 }
 
@@ -134,17 +126,16 @@ impl SharedListing {
 }
 
 impl Fanout {
-    /// Reads the session document, then lists the collections of whichever
-    /// accounts it resolved — for the parts the account has switched on.
+    /// Reads the session document, then lists the collections of the accounts
+    /// that it resolved, for the parts that are switched on.
     ///
-    /// A part that is off costs no request, so the vector for it comes back
-    /// empty whether or not the server holds anything; [`Fanout::listed`] is
-    /// how a caller tells that emptiness from an account that really holds no
-    /// address book.
+    /// A part that is off sends no request, so its vector is empty, also if
+    /// the server holds collections. Use [`Fanout::listed`] to tell this from
+    /// an account that holds no collection of that kind.
     ///
-    /// The error is `jmap_client`'s own rather than a wrapper: everything that
-    /// can fail here is one of its calls, and the GObject layer already maps
-    /// that type onto Evolution's error codes.
+    /// The error is the `jmap_client` error, not a wrapper: each call that can
+    /// fail here is a `jmap_client` call. The GObject layer maps that type to
+    /// Evolution's error codes.
     pub fn discover(client: &Client, parts: Parts) -> Result<Self, jmap_client::Error> {
         let layout = CollectionLayout::from_session(client.session());
 
@@ -157,11 +148,9 @@ impl Fanout {
             None => Vec::new(),
         };
 
-        // A shared account that cannot be listed costs its own children
-        // nothing and the rest of the populate nothing: the owner may have
-        // withdrawn the grant between the session fetch and the listing, and
-        // a share is not the user's own data. Its listing stays `None`, which
-        // keeps its existing children rather than removing them.
+        // A failed listing of a shared account does not stop the populate. The
+        // owner can withdraw the grant after the session fetch. The listing
+        // stays `None`, so the existing children of the share stay.
         let shared = CollectionLayout::shared_accounts(client.session())
             .into_iter()
             .map(|service| {
@@ -190,14 +179,12 @@ impl Fanout {
     }
 }
 
-/// The name to show for a collection the server called `name`, which is never
-/// blank — see [`Resource::name`] for why.
+/// The name to show for a collection that the server calls `name`. It is never
+/// blank (see [`Resource::name`]).
 ///
-/// Public because a `create_resource_sync` has to apply the same rule to the
-/// collection it has just made as a listing applies to the ones it finds: the
-/// server answers a create with the object it created, and a server that
-/// normalised the requested name to nothing would otherwise produce the one row
-/// in Evolution's sidebar with no text in it.
+/// It is public because `create_resource_sync` must apply the same rule to the
+/// collection that it creates. The server can change the requested name to a
+/// blank name, and the sidebar must not show a row without text.
 pub fn shown_name(name: &str, id: &Id) -> String {
     if name.trim().is_empty() {
         id.to_string()
@@ -206,8 +193,8 @@ pub fn shown_name(name: &str, id: &Id) -> String {
     }
 }
 
-/// The child-worthy collections of a shared account's listing, or `None` with
-/// a warning when the listing failed.
+/// The collections of a shared account's listing that get a child, or `None`
+/// with a warning when the listing failed.
 fn shared_resources<C: Collection>(
     account: &ServiceAccount,
     what: &str,
@@ -226,16 +213,15 @@ fn shared_resources<C: Collection>(
     }
 }
 
-/// Whether a listing drops the collections with `isSubscribed: false`: yes for
-/// the user's own accounts, no for shared ones (see the module comment).
+/// Whether a listing removes the collections with `isSubscribed: false`: yes
+/// for the user's own accounts, no for shared accounts (see the module doc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subscription {
     Honoured,
     Ignored,
 }
 
-/// The child-worthy collections of a `/get` listing, in the order the server
-/// asked for them to be shown.
+/// The collections of a `/get` listing that get a child, in display order.
 fn resources<C: Collection>(listing: Vec<C>, subscription: Subscription) -> Vec<Resource> {
     let mut resources: Vec<(u32, Resource)> = listing
         .into_iter()
@@ -259,12 +245,10 @@ fn resources<C: Collection>(listing: Vec<C>, subscription: Subscription) -> Vec<
         })
         .collect();
 
-    // `sortOrder` first, then the name, which is what a JMAP client is told to
-    // do with the equal ones (RFC 8621 §2 says it of `Mailbox` and both
-    // collection specifications copy the property from it). The id is the last
-    // tie-break, and it is there only so that two identically named collections
-    // come back in the same order every populate — a child list that reshuffles
-    // between runs is one Evolution recreates sources for.
+    // Sort by `sortOrder`, then by name for equal values. RFC 8621 §2 states
+    // this for `Mailbox`, and both collection specifications copy the property.
+    // The id is the last tie-break, so that two collections with the same name
+    // have the same order at each populate.
     resources.sort_by(|(left_order, left), (right_order, right)| {
         left_order
             .cmp(right_order)
@@ -280,27 +264,24 @@ fn resources<C: Collection>(listing: Vec<C>, subscription: Subscription) -> Vec<
 
 /// The properties an `AddressBook` and a `Calendar` share.
 ///
-/// The two objects are defined in different documents and neither derives from
-/// the other, but the four properties a child source is made from are spelled
-/// identically in both — so the selection is written once rather than twice,
-/// and a rule fixed for address books cannot silently not apply to calendars.
+/// Different documents define the two objects, but the shared properties have
+/// the same names in both. Thus the selection is written once, and a rule for
+/// address books also applies to calendars.
 trait Collection {
     fn id(&self) -> Option<&Id>;
     fn name(&self) -> &str;
-    /// Defaulted to 0, as both specifications define the property's absence.
+    /// 0 when absent, as both specifications define.
     fn sort_order(&self) -> u32;
     fn is_default(&self) -> Option<bool>;
     fn is_subscribed(&self) -> Option<bool>;
-    /// `Calendar.color`. `None` for every `AddressBook`, which has no such
-    /// property to begin with.
+    /// `Calendar.color`. `None` for each `AddressBook`, which has no such
+    /// property.
     fn color(&self) -> Option<String>;
     /// `myRights.is_writable()`, or `None` when the server sent no `myRights`
-    /// for this collection at all — the case [`Resource::writable`]'s own doc
-    /// says falls back to the account-wide bit unchanged.
+    /// for this collection (see [`Resource::writable`]).
     fn writable(&self) -> Option<bool>;
-    /// `myRights.mayDelete`, or `None` when the server sent no `myRights` at
-    /// all, or one with no `mayDelete` — the case [`Resource::deletable`]'s
-    /// own doc says falls back to deletable.
+    /// `myRights.mayDelete`, or `None` when the server sent no `myRights`, or
+    /// sent one without `mayDelete` (see [`Resource::deletable`]).
     fn deletable(&self) -> Option<bool>;
 }
 
@@ -379,27 +360,24 @@ mod tests {
 
     #[test]
     fn a_collection_saying_nothing_about_subscription_is_kept() {
-        // Both specifications make `isSubscribed` optional, so silence is the
-        // shape of a plain server, not of a collection the user hid. Reading it
-        // as "no" would empty the sidebar of every server that omits it.
+        // Both specifications make `isSubscribed` optional. An absent value does
+        // not mean that the user hid the collection.
         assert_eq!(names(vec![book(Some("AB1"), "Personal")]), ["Personal"]);
     }
 
     #[test]
     fn a_collection_with_no_id_is_dropped_rather_than_pointed_somewhere() {
-        // Without an id there is nothing to write in `[Resource] Identity`, and
-        // a child source with no identity is one the backend resolves to the
-        // account's *default* collection — so keeping it would silently show
-        // the wrong address book under the right name.
+        // Without an id, `[Resource] Identity` stays empty, and the backend
+        // uses the account's *default* collection. That shows the wrong address
+        // book under the correct name.
         let listing = vec![book(None, "Nameless"), book(Some("AB2"), "Personal")];
         assert_eq!(names(listing), ["Personal"]);
     }
 
     #[test]
     fn a_collection_the_server_named_nothing_is_shown_under_its_id() {
-        // `name` is required by both specifications, so this is a server out of
-        // spec — but the alternative to a fallback is a blank row in Evolution's
-        // sidebar, which the user cannot tell from another blank row.
+        // Both specifications require `name`, so this server is not compliant.
+        // Without the id as name, the sidebar would show a blank row.
         let resources = resources(vec![book(Some("AB7"), "   ")], Subscription::Honoured);
         assert_eq!(resources[0].name, "AB7");
     }
@@ -444,9 +422,8 @@ mod tests {
 
     #[test]
     fn my_rights_absent_leaves_writable_none_and_present_is_read_through() {
-        // Absent `myRights` is the case `Resource::writable`'s doc points at:
-        // `None` here is what keeps `Child::for_resource` on the account-wide
-        // fallback rather than concluding anything about this one collection.
+        // Absent `myRights` gives `None`, so `Child::for_resource` uses the
+        // account-wide `read_only` only.
         assert_eq!(
             resources(vec![book(Some("AB1"), "Personal")], Subscription::Honoured)[0].writable,
             None
@@ -480,9 +457,8 @@ mod tests {
 
     #[test]
     fn my_rights_absent_leaves_deletable_none_and_present_is_read_through() {
-        // The same shape as `writable`'s test above, for `mayDelete` instead:
-        // an absent `myRights`, or one that says nothing about `mayDelete`,
-        // must not be mistaken for the server actually stating a rights answer.
+        // As the `writable` test, for `mayDelete`: an absent `myRights`, or one
+        // without `mayDelete`, gives `None`, not a value.
         assert_eq!(
             resources(vec![book(Some("AB1"), "Personal")], Subscription::Honoured)[0].deletable,
             None
@@ -515,9 +491,8 @@ mod tests {
 
     #[test]
     fn a_calendars_color_is_carried_and_an_address_books_never_is() {
-        // `AddressBook` has no `color` property to begin with, so its
-        // `Resource` is always `None`; a `Calendar`'s is whatever the server
-        // named, verbatim.
+        // `AddressBook` has no `color` property, so its color is always `None`.
+        // A `Calendar` keeps the server's value unchanged.
         let calendar = Calendar {
             id: Some(Id::new("Cal1")),
             name: "Work".to_owned(),

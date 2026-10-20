@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `create_collection`/`delete_collection` trace their writes with
-//! `account_id`/`kind`.
+//! Tests that `create_collection` and `delete_collection` trace their writes with
+//! `account_id` and `kind`.
 
 use jmap_client::{Client, Credentials};
 use jmap_collection_sync::{ChildKind, Doomed, Requested, create_collection, delete_collection};

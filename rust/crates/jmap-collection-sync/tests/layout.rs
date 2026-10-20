@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The layout read off a running server rather than a hand-written document.
+//! Tests the layout from the session document of a running mock server.
 //!
-//! The unit tests in `src/layout.rs` cover the session shapes a server *may*
-//! present; these cover the one it does — fetched over HTTP by the same client
-//! the backends use, so that the reading is tested against a session document
-//! nobody wrote for it.
+//! The unit tests in `src/layout.rs` use hand-written session documents.
 
 use jmap_client::{Client, Credentials};
 use jmap_collection_sync::CollectionLayout;
