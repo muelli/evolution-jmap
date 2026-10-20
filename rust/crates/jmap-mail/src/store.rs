@@ -566,6 +566,22 @@ impl JmapStore {
         Ok(tree)
     }
 
+    /// Whether the last folder listing says this mailbox refuses new
+    /// messages ([`FolderInfo::may_add_items`]).
+    ///
+    /// Reads the tree already in hand (`flags` of 0, [`Self::folders`]'s own
+    /// no-network path) rather than asking the server again: an append
+    /// already knows its folder is open, which means a listing exists, and a
+    /// local permission check that made a round trip would add latency to
+    /// every append to learn something the last one already answered.
+    /// `None` on a store with no listing yet or a mailbox the listing does
+    /// not name, both of which every other reader of `myRights` here already
+    /// treats as "nothing to refuse on".
+    pub fn may_add_items(&self, mailbox: &Id) -> Option<bool> {
+        let tree = self.folders(0).ok()?;
+        tree.by_id(mailbox)?.may_add_items
+    }
+
     /// A pushed `Mailbox` change's folder-list half: refreshes the cached
     /// tree and reports whether what changed was structural — a mailbox
     /// created, destroyed, renamed, moved, or (un)subscribed — rather than a

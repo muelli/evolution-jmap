@@ -160,6 +160,19 @@ unsafe extern "C" fn append_message_sync(
             let Some(store) = parent_store(folder) else {
                 return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
+
+            // Refused locally, from the last listing, rather than sent and
+            // refused by the server: a shared mailbox given read-only still
+            // accepts an upload RFC 8621 §4.8 would then reject, and the user
+            // waits for a round trip to be told what this folder already knew.
+            if store.may_add_items(mailbox) == Some(false) {
+                return fail_bool(
+                    error,
+                    &StoreError::NoPermission(name_of(folder)),
+                    StoreError::to_gerror,
+                );
+            }
+
             match store.import_message(mailbox, source, &keywords, received_at) {
                 Ok(uid) => {
                     report(appended_uid, &uid);

@@ -953,6 +953,9 @@ impl MailSync {
             total: 0,
             unread: 0,
             subscribed: created.is_subscribed.unwrap_or(true),
+            // The server was not asked for `myRights` on a create, and the
+            // caller who just created the mailbox is its owner.
+            may_add_items: None,
             children: Vec::new(),
         })
     }

@@ -9,7 +9,7 @@
 
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree, path};
 use jmap_proto::Id;
-use jmap_proto::mail::{Mailbox, role};
+use jmap_proto::mail::{Mailbox, MailboxRights, role};
 
 /// A mailbox with an id, a name and nothing else set.
 fn mailbox(id: &str, name: &str) -> Mailbox {
@@ -34,6 +34,14 @@ fn with_role(mut mailbox: Mailbox, role: &str) -> Mailbox {
 
 fn with_sort_order(mut mailbox: Mailbox, sort_order: u32) -> Mailbox {
     mailbox.sort_order = Some(sort_order);
+    mailbox
+}
+
+fn with_may_add_items(mut mailbox: Mailbox, allowed: bool) -> Mailbox {
+    mailbox.my_rights = Some(MailboxRights {
+        may_add_items: Some(allowed),
+        ..MailboxRights::default()
+    });
     mailbox
 }
 
@@ -133,6 +141,39 @@ fn known_roles_map_and_unknown_ones_do_not() {
             ("Project".to_owned(), None),
         ]
     );
+}
+
+#[test]
+fn may_add_items_follows_my_rights_and_defaults_to_unset() {
+    let tree = tree(&[
+        with_may_add_items(mailbox("M1", "Shared read-only"), false),
+        with_may_add_items(mailbox("M2", "Shared writable"), true),
+        mailbox("M3", "Owned, no myRights at all"),
+    ]);
+
+    assert_eq!(
+        tree.find("Shared read-only").unwrap().may_add_items,
+        Some(false)
+    );
+    assert_eq!(
+        tree.find("Shared writable").unwrap().may_add_items,
+        Some(true)
+    );
+    assert_eq!(
+        tree.find("Owned, no myRights at all")
+            .unwrap()
+            .may_add_items,
+        None,
+        "a server that said nothing about the right must not read as a refusal"
+    );
+}
+
+#[test]
+fn by_id_finds_a_folder_by_mailbox_id_not_by_its_current_path() {
+    let tree = tree(&[mailbox("M1", "Inbox"), child("M2", "Sub", "M1")]);
+
+    assert_eq!(tree.by_id(&Id::new("M2")).unwrap().path, "Inbox/Sub");
+    assert!(tree.by_id(&Id::new("M9")).is_none());
 }
 
 #[test]
@@ -632,6 +673,7 @@ fn made(id: &str, path: &str) -> FolderInfo {
         total: 0,
         unread: 0,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     }
 }

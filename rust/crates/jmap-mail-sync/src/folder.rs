@@ -91,6 +91,14 @@ pub struct FolderInfo {
     pub total: u32,
     pub unread: u32,
     pub subscribed: bool,
+    /// `Mailbox.myRights.mayAddItems` (RFC 8621 §2): the right to file a
+    /// message into this mailbox.
+    ///
+    /// `None` when the server said nothing about it. Treat `None` as
+    /// allowed: most servers omit `myRights` for a mailbox the caller owns,
+    /// and reading that silence as a refusal would mark every ordinary
+    /// folder of every account read-only.
+    pub may_add_items: Option<bool>,
     pub children: Vec<FolderInfo>,
 }
 
@@ -208,6 +216,15 @@ impl FolderTree {
     /// The folder at a Camel path, if the account has one.
     pub fn find(&self, path: &str) -> Option<&FolderInfo> {
         self.iter().find(|folder| folder.path == path)
+    }
+
+    /// The folder with a mailbox id, if the account has one.
+    ///
+    /// By id, not by path. [`set_subscribed`](Self::set_subscribed) uses the
+    /// same key for the same reason: the caller names a mailbox, not a place
+    /// in the tree.
+    pub fn by_id(&self, id: &Id) -> Option<&FolderInfo> {
+        self.iter().find(|folder| folder.id == *id)
     }
 
     /// The folder with a role, if a mailbox of the account has that role.
@@ -505,6 +522,10 @@ impl FolderTree {
                 // A server without subscriptions sends no value. If that means
                 // "not subscribed", all mail of the account is hidden.
                 subscribed: mailbox.is_subscribed.unwrap_or(true),
+                may_add_items: mailbox
+                    .my_rights
+                    .as_ref()
+                    .and_then(|rights| rights.may_add_items),
                 children,
             };
             match parent[index] {
