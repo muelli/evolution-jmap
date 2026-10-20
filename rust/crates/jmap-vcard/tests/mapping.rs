@@ -23461,3 +23461,66 @@ fn type_parameter_maps_contexts_and_drops_unmapped_tokens_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn pref_parameter_rank_is_normalized_to_flag_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PREF Parameter Probe\r\n",
+        "EMAIL;PREF=7;TYPE=WORK:primary.rank@example.test\r\n",
+        "TEL;PREF=9;TYPE=HOME,VOICE:tel:+1-202-555-0134\r\n",
+        "ADR;PREF=5;TYPE=WORK:;;700 Preference Way;Berlin;;10117;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PREF parameter profile probe");
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "EMAIL line must remain mapped");
+    let email = emails.get("e1").expect("first email entry");
+    assert_eq!(email.address, "primary.rank@example.test");
+    assert_eq!(email.contexts, Some(json!({"work": true})));
+    assert_eq!(email.pref, Some(1));
+
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0134");
+    assert_eq!(phone.contexts, Some(json!({"private": true})));
+    assert_eq!(phone.features, Some(json!({"voice": true})));
+    assert_eq!(phone.pref, Some(1));
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"work": true})));
+    assert_eq!(address.extra.get("pref"), Some(&json!(1)));
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK,PREF"));
+    assert!(email_line.ends_with(":primary.rank@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=HOME,VOICE,PREF"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0134"));
+
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=WORK,PREF"));
+    assert!(adr_line.ends_with(":;;700 Preference Way;Berlin;;10117;Germany"));
+
+    assert!(
+        !emitted.contains("PREF=7") && !emitted.contains("PREF=9") && !emitted.contains("PREF=5"),
+        "profile normalizes PREF ranking to a preferred flag"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized PREF parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
