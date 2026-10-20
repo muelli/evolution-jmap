@@ -94,6 +94,16 @@ add_test(
 )
 set_tests_properties(rust-test-eds PROPERTIES ENVIRONMENT "${_test_env}")
 
+# Plain `cargo clippy` lints only the default members. This test lints the
+# whole workspace, so the EDS-gated crates get the same -D warnings gate.
+add_test(
+	NAME rust-clippy-workspace
+	COMMAND ${CARGO_EXECUTABLE} clippy --workspace --all-targets --locked
+		-- -D warnings
+	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+)
+set_tests_properties(rust-clippy-workspace PROPERTIES ENVIRONMENT "${_test_env}")
+
 # Install a cdylib built by `rust-build` as a loadable module of some host —
 # EDS names its address book backends libebookbackend<name>.so and looks for
 # them in one directory, Camel has its own convention, and cargo knows about
