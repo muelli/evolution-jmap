@@ -48,5 +48,8 @@ if [[ "${rpm_count}" -eq 0 ]]; then
 	exit 1
 fi
 
-# --strict: a warning fails too, as any lintian tag fails the .deb gate.
+# The --strict flag makes rpmlint fail on a warning too, not only on an
+# error.
+# This matches the package-rpm-lint check, where any rpmlint tag fails the
+# build.
 rpmlint --strict "${build_dir}"/*.rpm

@@ -2,36 +2,48 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Resolve a .deb's Depends against the dpkg database of the host it was built
-# on, and write what was found as JSON for ci/sbom.sh. Run it where the package
-# was built: dpkg-shlibdeps derived those Depends from the libraries installed
-# there, so that host is the only one that knows which version of each library
-# the package was linked against. The release job that assembles the SBOM runs
-# on a different machine, where most of these libraries are not installed.
+# This script resolves a .deb's Depends field against the dpkg database of
+# its build host.
+# It writes the result as JSON for ci/sbom.sh.
+# Run this script on the host where the package was built.
+# dpkg-shlibdeps derived the Depends field from the libraries installed on
+# that host.
+# Only that host knows which version of each library the package was linked
+# against.
+# The release job that assembles the SBOM runs on a different machine.
+# That machine does not have most of these libraries installed.
 #
-# For each Depends clause the first alternative that is installed for the
-# native architecture (or "all") and satisfies the clause's version constraint
-# is recorded. A clause with no such alternative is an error: the SBOM would
-# otherwise name a library version the package was never built against.
+# For each Depends clause, the script records the first alternative that
+# meets two conditions.
+# The alternative must be installed for the native architecture, or marked
+# "all".
+# The alternative must also satisfy the clause's version constraint.
+# A clause with no matching alternative is an error.
+# Otherwise the SBOM would name a library version the package was never
+# built against.
 #
 # Output:
 #   {"depends": "<the Depends field, verbatim>",
 #    "distro": {"id": ..., "version_id": ..., "codename": ...},
 #    "packages": [{"name": ..., "version": ..., "arch": ...}, ...]}
 #
-# Needs bash, dpkg and awk only: it runs in the pinned image the package is
-# built in, which has no jq.
+# This script needs only bash, dpkg, and awk.
+# It runs inside the pinned image where the package is built, and that image
+# has no jq.
 set -euo pipefail
 
-deb="$1"   # path to the built .deb
-out="$2"   # output JSON path
+deb="$1"   # path to the built .deb file
+out="$2"   # path for the output JSON file
 
 native_arch="$(dpkg --print-architecture)"
 depends="$(dpkg-deb -f "$deb" Depends)"
 
-# Prints $1 as a JSON string. Escapes what a control field or os-release
-# value can plausibly hold (a folded field brings newlines); any other control
-# character makes invalid JSON, which ci/sbom.sh's jq then rejects loudly.
+# This function prints argument $1 as a JSON string.
+# It escapes the characters that a control field or an os-release value can
+# plausibly hold.
+# For example, a folded field can bring a literal newline.
+# Any other control character would make the JSON invalid.
+# ci/sbom.sh's jq step would then reject invalid JSON with an error.
 json_string() {
     local s="${1//\\/\\\\}"
     s="${s//\"/\\\"}"
@@ -41,8 +53,10 @@ json_string() {
     printf '"%s"' "$s"
 }
 
-# Prints "version<TAB>arch" of the installed instance of package $1 that is
-# native or arch-independent, or nothing.
+# This function prints "version<TAB>arch" for the installed instance of
+# package $1.
+# The instance must be native or architecture-independent.
+# It prints nothing if no such instance is installed.
 installed() {
     dpkg-query -W -f '${db:Status-Abbrev}\t${Version}\t${Architecture}\n' "$1" \
         2>/dev/null \
@@ -51,8 +65,9 @@ installed() {
         || true
 }
 
-# "name[:archqual] [(op version)]"; a variable, because [[ =~ ]] cannot take
-# the literal parentheses inline.
+# This pattern matches "name[:archqual] [(op version)]".
+# It is stored in a variable because [[ =~ ]] cannot take literal
+# parentheses inline.
 alternative_pattern='^[[:space:]]*([a-z0-9][a-z0-9.+-]*)(:[a-z0-9-]+)?[[:space:]]*(\(([<>=]+)[[:space:]]*([^)[:space:]]+)[[:space:]]*\))?[[:space:]]*$'
 
 packages=""

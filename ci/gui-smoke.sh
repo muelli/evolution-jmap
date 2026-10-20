@@ -2,16 +2,20 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# M9 Tier 2: launch Evolution under Xvfb with a JMAP mail account against
-# jmap-mockd, and assert via AT-SPI (ci/gui-smoke-assert.py) that the account
-# appears and its inbox is non-empty. A canary, not coverage — see
-# docs/gui-smoke-test.md. Retries once; a green run leaves no artifacts, a
-# failing one leaves a screenshot, a recording of the session, the AT-SPI
-# tree and both processes' logs under $GUI_SMOKE_ARTIFACTS.
+# This script launches Evolution under Xvfb with a JMAP mail account and
+# jmap-mockd. It asserts through AT-SPI (ci/gui-smoke-assert.py) that the
+# account appears and its inbox is not empty.
+#
+# This test is a canary, not full coverage. See docs/gui-smoke-test.md for
+# details. The script retries once. A passing run leaves no artifacts. A
+# failing run leaves a screenshot, a recording of the session, the AT-SPI
+# tree, and the logs of Evolution, jmap-mockd, and Xvfb, under
+# $GUI_SMOKE_ARTIFACTS.
 #
 # Requires: evolution, Xvfb, dbus-daemon, python3-pyatspi, imagemagick
-# (`import`), ffmpeg, and a built jmap-mockd + libcameljmap.so/.urls installed
-# where Camel scans (see docs/gui-smoke-test.md for both).
+# (`import`), and ffmpeg. Also requires a built jmap-mockd and
+# libcameljmap.so/.urls installed where Camel scans. See
+# docs/gui-smoke-test.md for both.
 
 set -uo pipefail
 
@@ -99,8 +103,8 @@ run_attempt() {
 	local verdict=0
 	"${session_env[@]}" python3 "$ROOT/ci/gui-smoke-assert.py" || verdict=$?
 
-	# SIGINT (not SIGKILL) lets ffmpeg flush the mp4 moov atom so the file
-	# it leaves behind is playable rather than truncated.
+	# SIGINT, not SIGKILL, lets ffmpeg flush the mp4 moov atom. This keeps
+	# the recording file playable instead of truncated.
 	kill -INT "$REC_PID" 2>/dev/null
 	wait "$REC_PID" 2>/dev/null
 	REC_PID=""

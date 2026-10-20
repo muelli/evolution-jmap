@@ -2,18 +2,22 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# A live-Evolution caveat: the packaged example-module's merged
-# mail-message-menu item must actually appear, not merely link, under a real
-# Evolution shell. Same harness as ci/gui-smoke.sh (private Xvfb/D-Bus/XDG
-# tree against jmap-mockd), a different assertion
-# (ci/gui-smoke-example-module-assert.py) and no shared state with it: see
-# docs/gui-smoke-test.md, which keeps each caveat its own small script
-# rather than growing the one canary.
+# This is a live-Evolution caveat check.
+# The packaged example-module's merged mail-message-menu item must actually
+# appear under a real Evolution shell, not merely link against it.
+# This script uses the same test setup as ci/gui-smoke.sh: a private Xvfb,
+# D-Bus, and XDG tree against jmap-mockd.
+# This script uses a different assertion script, ci/gui-smoke-example-module-assert.py,
+# and shares no state with ci/gui-smoke.sh.
+# See docs/gui-smoke-test.md for the reason: each caveat gets its own small
+# script, instead of growing the one canary.
 #
-# Requires everything ci/gui-smoke.sh requires, plus example-module
-# installed where Evolution scans modules (`cmake --install build`, no
-# --component filter, so the Unspecified-component example-module target is
-# included alongside camel-provider).
+# This script requires everything ci/gui-smoke.sh requires.
+# It also requires example-module installed where Evolution scans for
+# modules.
+# Run `cmake --install build` with no --component filter for that.
+# That command includes the Unspecified-component example-module target
+# alongside camel-provider.
 
 set -uo pipefail
 

@@ -2,12 +2,16 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The lint/test gate — the single definition of "green", run identically
-# by CI (GitHub, GitLab), the autonomous agent before every push, and you
-# on your laptop. Needs only a Rust toolchain and (for the last two
-# checks) Python's pipx / cargo; both bootstrap themselves if missing, so
-# `ci/checks.sh` works on a bare machine. No Evolution headers required —
-# it operates on the workspace's default members.
+# This gate is the single definition of "green". CI (GitHub, GitLab), the
+# autonomous agent before every push, and you on your laptop, all run it
+# the same way.
+#
+# It needs only a Rust toolchain. Two checks also need Python's pipx (or
+# uvx) and cargo. Each of those installs its missing tool automatically,
+# so `ci/checks.sh` still runs on a bare machine.
+#
+# No Evolution headers are required: it operates on the workspace's default
+# members.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -35,10 +39,11 @@ echo "== clippy (-D warnings) =="
 cargo clippy --all-targets --locked -- -D warnings
 
 echo "== unsafe-count meter =="
-# rustc/clippy already gate *known* unsafe idioms (forbid(unsafe_code) on the
-# pure crates, deny(unsafe_op_in_unsafe_fn) everywhere); this catches the
-# thing they can't: a crate's unsafe surface growing silently. Growth stays
-# possible, it just needs unsafe-baseline.txt updated in the same commit.
+# rustc and clippy already gate known unsafe idioms: forbid(unsafe_code) on
+# the pure crates, and deny(unsafe_op_in_unsafe_fn) everywhere. This meter
+# catches what they cannot: a crate's unsafe surface growing silently.
+# Growth stays allowed. Update unsafe-baseline.txt in the same commit that
+# adds the new unsafe code.
 unsafe_meter_fail=0
 unsafe_meter_pattern='unsafe (fn|impl|\{|extern)'
 while read -r crate baseline_count; do
@@ -51,10 +56,10 @@ while read -r crate baseline_count; do
         unsafe_meter_fail=1
         continue
     fi
-    # `|| true` inside the substitution: grep exits 1 when a crate has zero
-    # unsafe sites (the pure crates: evo-sys, jmap-*-sync), and under
-    # `set -o pipefail` that would abort this whole script mid-loop before the
-    # meter could report anything.
+    # `|| true` inside the substitution handles grep exiting 1 when a crate
+    # has zero unsafe sites, for example evo-sys or a jmap-*-sync crate.
+    # Under `set -o pipefail`, that exit would otherwise abort this script
+    # mid-loop before the meter reports anything.
     actual_count=$({ grep -rEo "$unsafe_meter_pattern" "$crate_src" 2>/dev/null || true; } | wc -l)
     if [ "$actual_count" -gt "$baseline_count" ]; then
         echo "FAIL: $crate grew from $baseline_count to $actual_count unsafe sites." >&2
@@ -84,28 +89,30 @@ cargo deny check
 cd ..
 
 echo "== CMake/CTest suite, if EDS dev headers/cmake/ninja are present =="
-# Runs everything the build job's own `ctest --test-dir build` runs except
-# plain `rust-test` (already covered by `cargo test --locked` above):
-# rust-test-eds (the EDS-gated crates default-members excludes),
-# rust-clippy-workspace (clippy over those crates too), the
-# translations/release-workflow/install-*-backend staging tests, and the
-# packaging checks below. Narrowing this to just the packaging tests has
-# let real regressions in the other legs sit red in CI unnoticed; don't.
+# This step runs everything the build job's own `ctest --test-dir build`
+# runs, except plain `rust-test` (already covered by `cargo test --locked`
+# above). It covers: rust-test-eds (the crates the EDS-gated default-members
+# list excludes), rust-clippy-workspace (clippy over those same crates),
+# the translations/release-workflow/install-*-backend staging tests, and
+# the packaging checks below.
+#
+# Do not narrow this step to just the packaging checks. That narrowing has
+# already let real regressions in the other legs sit red in CI unnoticed.
 if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
-    # -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules's own configure line:
-    # without it, CMAKE_INSTALL_PREFIX defaults to /usr/local, which
-    # LANGUAGE_SUPPORT_DIRECTORY (CMakeLists.txt) bakes into both the
-    # translation catalogue's install destination and the
-    # EVOLUTION_JMAP_LOCALEDIR compiled into the Rust modules — the one
-    # installed path in this tree that doesn't come from pkg-config or a
-    # hardcoded /usr (cmake/Packaging.cmake's doc/lintian-override installs).
+    # -DCMAKE_INSTALL_PREFIX=/usr matches debian/rules's own configure line.
+    # Without it, CMAKE_INSTALL_PREFIX defaults to /usr/local. CMakeLists.txt's
+    # LANGUAGE_SUPPORT_DIRECTORY bakes that prefix into both the translation
+    # catalogue's install destination and the EVOLUTION_JMAP_LOCALEDIR
+    # compiled into the Rust modules. This is the only installed path here
+    # that does not come from pkg-config or a hardcoded /usr, unlike the doc
+    # and lintian-override installs in cmake/Packaging.cmake.
     cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr >/dev/null
     ninja -C build
-    # package-deb-lintian only registers when `find_program(lintian)`
-    # succeeds, so a machine without lintian would otherwise run the other
-    # packaging tests, report success, and never touch lintian at all.
-    # Fail loudly instead; CI_CHECKS_ALLOW_MISSING_LINTIAN=1 is the explicit
-    # escape hatch for a deliberately bare machine.
+    # package-deb-lintian registers only when `find_program(lintian)`
+    # succeeds. Without lintian, a machine would otherwise run the other
+    # packaging tests, report success, and never run the lintian check.
+    # This script fails loudly instead. CI_CHECKS_ALLOW_MISSING_LINTIAN=1 is
+    # the explicit escape hatch for a deliberately bare machine.
     if ! have lintian && [ -z "${CI_CHECKS_ALLOW_MISSING_LINTIAN:-}" ]; then
         echo "FAIL: lintian is not installed, so package-deb-lintian would silently" >&2
         echo "not run, the exact check CI enforces. Install lintian, or set" >&2
@@ -117,7 +124,8 @@ if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution
         echo "!! CI_CHECKS_ALLOW_MISSING_LINTIAN set: package-deb-lintian will NOT run here !!" >&2
     fi
     # debian-copyright-in-sync is gated on `find_program(python3)` the same
-    # way package-deb-lintian is gated on lintian; same reasoning applies.
+    # way package-deb-lintian is gated on lintian. The same reasoning
+    # applies.
     if ! have python3 && [ -z "${CI_CHECKS_ALLOW_MISSING_PYTHON3:-}" ]; then
         echo "FAIL: python3 is not installed, so debian-copyright-in-sync would silently" >&2
         echo "not run, the exact check CI enforces. Install python3, or set" >&2
@@ -134,10 +142,10 @@ else
 fi
 
 echo "== repository-split boundary lint =="
-# NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/BACKLOG.md/MILESTONES.md live in a
-# private harness repository; this repository's own ROADMAP.md is a thin,
-# human-facing file with no item numbers. Hard-fails on any new mention of
-# those files, or of a ROADMAP.md item number, in the product tree.
+# Several agent bookkeeping files live in a private harness repository, not
+# this one. This repository's own ROADMAP.md is a thin, human-facing file
+# with no item numbers. This check fails hard on any new mention of those
+# harness files, or of a ROADMAP.md item number, in the product tree.
 boundary_lint_paths=(rust cmake ci debian docs)
 boundary_lint_exclude=(
     --exclude=NIGHT-LOG.md --exclude=NIGHT-LOG-archive.md
@@ -145,8 +153,8 @@ boundary_lint_exclude=(
     --exclude=BACKLOG.md --exclude=MILESTONES.md
     --exclude=ROADMAP.md --exclude=checks.sh
 )
-# Matches any mention of these filenames, not just a "<name> item N" shape:
-# a narrower pattern silently undercounts real references.
+# Matches any mention of these filenames, not only a "<name> item N" shape.
+# A narrower pattern would silently undercount real references.
 boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md'
 boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null || true; } | wc -l)
 if [ "$boundary_lint_count" -gt 0 ]; then

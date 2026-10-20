@@ -2,12 +2,14 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The Fedora (dnf) twin of ci/install-deps-gui-smoke.sh: a full Evolution,
-# Xvfb, D-Bus, AT-SPI, openbox, and the screenshot and recording tools
-# ci/gui-smoke.sh keeps on failure. Additional to ci/install-deps-rpm.sh
-# (the build dependencies), not a replacement. Used by
-# ci/gui-smoke-fedora.sh inside the pinned Fedora image. sudo used only
-# when not already root.
+# This script is the Fedora (dnf) equivalent of ci/install-deps-gui-smoke.sh.
+# It installs a full Evolution, Xvfb, D-Bus, AT-SPI, and openbox.
+# It installs the screenshot and recording tools that ci/gui-smoke.sh keeps
+# on failure.
+# These packages are additional, not a replacement, for the build
+# dependencies in ci/install-deps-rpm.sh.
+# ci/gui-smoke-fedora.sh uses this script inside the pinned Fedora image.
+# sudo runs only when the user is not already root.
 
 set -euo pipefail
 

@@ -2,13 +2,17 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# ci/gui-smoke.sh against a newer Evolution than Ubuntu 24.04's 3.52: the
-# same assertion (the JMAP account appears, its inbox is non-empty), run in
-# the pinned Fedora image ci/rpm.sh and the EDS matrix job use, which ships
-# Evolution and EDS 3.60. Rootless podman by default; `--host` runs the
-# build and the smoke test directly, for a job that already runs in that
-# image. Artifacts of a failing run land in build-gui-smoke-fedora/artifacts
-# unless GUI_SMOKE_ARTIFACTS names another directory.
+# This script runs ci/gui-smoke.sh against a newer Evolution than Ubuntu
+# 24.04's 3.52.
+# It runs the same assertion: the JMAP account appears, and its inbox is
+# not empty.
+# It runs inside the pinned Fedora image that ci/rpm.sh and the EDS matrix
+# job use, which ships Evolution and EDS 3.60.
+# By default, this script uses rootless podman.
+# The --host flag runs the build and the smoke test directly, for a job
+# that already runs inside that image.
+# Artifacts of a failing run go to build-gui-smoke-fedora/artifacts.
+# Set GUI_SMOKE_ARTIFACTS to use a different directory.
 
 set -euo pipefail
 

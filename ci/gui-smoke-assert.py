@@ -119,7 +119,8 @@ def dismiss_transient_dialogs(evolution):
             click(ok_button)
             print("dismissed: Mail authentication request")
 
-    # Only the Fedora 3.60 image asks this, once per fresh profile.
+    # Only the Fedora 3.60 image asks this question, and only once per
+    # fresh profile.
     default_client_button = find_button(evolution, "Do not change settings")
     if default_client_button is not None:
         click(default_client_button)
@@ -138,10 +139,12 @@ def account_inbox_count(evolution):
 
     account_index = names.index(ACCOUNT_NAME)
     # The account's children are the cells listed after it, up to the next
-    # account-level node (Evolution has no other reliable way through AT-SPI
-    # to say "this cell's parent is that one" in a tree table). The account's
-    # own Inbox is always its first child in the JMAP collection's fan-out
-    # order, which this script does not control — it reads it back.
+    # account-level node. AT-SPI gives no other reliable way to say "this
+    # cell's parent is that one" in a tree table.
+    #
+    # The account's own Inbox is always its first child, in the order the
+    # JMAP collection produces it. This script does not control that order.
+    # It only reads the order back.
     for name in names[account_index + 1 :]:
         match = INBOX_PATTERN.match(name)
         if match is not None:

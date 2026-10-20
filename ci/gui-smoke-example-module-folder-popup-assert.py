@@ -172,9 +172,10 @@ def find_account_cell(evolution):
 
 
 def right_click(cell):
-    # grabFocus scrolls the row into view and makes the tree realize it, which
-    # a freshly-added account row needs before its Component extents resolve
-    # to a real, on-screen (x, y) rather than a stale or default one.
+    # grabFocus scrolls the row into view and makes the tree widget realize
+    # the row. A freshly added account row needs this step before its
+    # Component extents give real x, y screen coordinates, not stale or
+    # default ones.
     cell.queryComponent().grabFocus()
     time.sleep(0.3)
     extents = cell.queryComponent().getExtents(pyatspi.XY_SCREEN)

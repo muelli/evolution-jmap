@@ -2,26 +2,30 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Another live-Evolution caveat: the packaged example-module's merged
-# mail-folder-popup item must actually appear in the folder tree's real
-# context menu, not merely link, under a real Evolution shell. Same harness
-# as ci/gui-smoke.sh and ci/gui-smoke-example-module.sh (private
-# Xvfb/D-Bus/XDG tree against jmap-mockd), a different assertion
-# (ci/gui-smoke-example-module-folder-popup-assert.py) and no shared state
-# with either: see docs/gui-smoke-test.md, which keeps each caveat its own
-# small script rather than growing the one canary.
+# This script checks a live Evolution instance. It confirms that the
+# packaged example-module's merged mail-folder-popup item appears in the
+# folder tree's real context menu, not only in the module's own registration.
 #
-# Unlike the mail-message-menu item, this one merges into a context menu
-# Evolution builds fresh on demand when a folder's popup menu is triggered, so
-# this script's assertion actually triggers it (focus the row, send the Menu
-# key) via AT-SPI instead of reading the tree statically; see the assertion's
-# own docstring for why that is a keyboard trigger rather than a coordinate-
-# based mouse right-click.
+# This script uses the same private Xvfb, D-Bus, and XDG tree against
+# jmap-mockd as ci/gui-smoke.sh and ci/gui-smoke-example-module.sh use. This
+# script uses a different assertion script
+# (ci/gui-smoke-example-module-folder-popup-assert.py) and shares no state
+# with either of the other two scripts. See docs/gui-smoke-test.md: it keeps
+# each check in its own small script instead of growing one large script.
 #
-# Requires everything ci/gui-smoke.sh requires, plus example-module
-# installed where Evolution scans modules (`cmake --install build`, no
-# --component filter, so the Unspecified-component example-module target is
-# included alongside camel-provider).
+# Unlike the mail-message-menu item, this item merges into a context menu
+# that Evolution builds fresh on demand, when a folder's popup menu opens.
+# For this reason, the assertion script must open the popup menu itself
+# instead of reading the folder tree in its static state. The assertion
+# script opens the popup menu with a real, coordinate-based mouse right-click
+# through AT-SPI, not with a direct AT-SPI action call. See the assertion
+# script's own docstring for the reason.
+#
+# This script requires everything that ci/gui-smoke.sh requires. This script
+# also requires the example-module installed where Evolution scans modules.
+# Install it with `cmake --install build` and no --component filter, so the
+# install includes the example-module target (component "Unspecified")
+# together with the camel-provider component.
 
 set -uo pipefail
 
@@ -42,15 +46,17 @@ if ! command -v openbox >/dev/null 2>&1; then
 	exit 2
 fi
 
-# Camel's own default provider-directory lookup (camel_provider_init's
-# camel_util_get_directory_variants against its compiled-in E_DATA_SERVER_PREFIX)
-# comes up empty under the rootless-podman Ubuntu recipe this harness falls back
-# to when no root is available (see docs/gui-smoke-test.md): every account this
-# script configures fails with "No provider available for protocol jmap", not
-# because the module is missing or broken, but because that lookup never finds
-# the directory it is already installed in. Pointing EDS_CAMEL_PROVIDER_DIR at
-# the same directory the OS package's own camel providers live in works around
-# it; harmless on a host where the default resolution already works.
+# Camel has its own default lookup for the provider directory.
+# camel_provider_init calls camel_util_get_directory_variants against its own
+# compiled-in E_DATA_SERVER_PREFIX. This lookup finds no directory under the
+# rootless-podman Ubuntu setup that this script uses when no root account is
+# available (see docs/gui-smoke-test.md). As a result, every account that
+# this script configures fails with "No provider available for protocol
+# jmap". The module is not missing or broken: the lookup only fails to find
+# the directory where the module is already installed. Setting
+# EDS_CAMEL_PROVIDER_DIR to the same directory that holds the OS package's
+# own camel providers corrects this. Setting it has no effect on a host where
+# the default lookup already finds the directory.
 CAMEL_PROVIDER_DIR="$(dpkg -L evolution-data-server 2>/dev/null | grep -m1 '/camel-providers/lib' | xargs -r dirname)"
 
 mkdir -p "$ARTIFACTS"
@@ -110,19 +116,21 @@ run_attempt() {
 	DBUS_PID="$(cat "$run_dir/dbus-pid")"
 	session_env+=(DBUS_SESSION_BUS_ADDRESS="$(cat "$run_dir/dbus-address")")
 
-	# D-Bus activates at-spi2-registryd (the process that actually owns the
-	# X display connection XTestFakeKeyEvent/XTestFakeButtonEvent go through)
-	# with its own environment, not the env of whichever client triggers the
-	# activation, so DISPLAY has to be pushed into it explicitly or
-	# pyatspi.Registry's synthetic input calls silently reach no display.
+	# D-Bus activates at-spi2-registryd with its own environment, not the
+	# environment of the client that causes the activation. at-spi2-registryd
+	# is the process that owns the X display connection that
+	# XTestFakeKeyEvent and XTestFakeButtonEvent use. For this reason, this
+	# script must push DISPLAY into at-spi2-registryd's environment
+	# explicitly. Otherwise, pyatspi.Registry's synthetic input calls reach
+	# no display, with no error.
 	"${session_env[@]}" dbus-update-activation-environment DISPLAY
 
 	"${session_env[@]}" gsettings set org.gnome.desktop.interface toolkit-accessibility true
 
-	# A minimal window manager: without one, this Xvfb never assigns Evolution's
-	# toplevel an absolute screen position or X input focus, so the assertion's
-	# AT-SPI-driven right-click (both the coordinate-based and the keyboard
-	# route it falls back to) has nothing to land on.
+	# openbox is a minimal window manager. Without a window manager, Xvfb
+	# never assigns Evolution's top-level window an absolute screen position
+	# or X input focus. Without a screen position and input focus, the
+	# assertion script's AT-SPI-driven right-click has no target.
 	"${session_env[@]}" openbox >"$run_dir/openbox.log" 2>&1 &
 	OPENBOX_PID=$!
 	sleep 1
