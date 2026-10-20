@@ -23400,3 +23400,64 @@ fn label_parameter_maps_to_address_full_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn type_parameter_maps_contexts_and_drops_unmapped_tokens_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:TYPE Parameter Probe\r\n",
+        "EMAIL;TYPE=HOME,X-LEGACY:home-type@example.test\r\n",
+        "TEL;TYPE=WORK,CELL,PREF,X-LEGACY:tel:+1-202-555-0123\r\n",
+        "ADR;TYPE=WORK,X-LEGACY:;;500 Example Avenue;Berlin;;10999;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse TYPE parameter profile probe");
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "EMAIL line must remain mapped");
+    let email = emails.get("e1").expect("first email entry");
+    assert_eq!(email.address, "home-type@example.test");
+    assert_eq!(email.contexts, Some(json!({"private": true})));
+
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0123");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert_eq!(phone.features, Some(json!({"mobile": true})));
+    assert_eq!(phone.pref, Some(1));
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"work": true})));
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=HOME"));
+    assert!(email_line.ends_with(":home-type@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK,CELL,PREF"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0123"));
+
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=WORK"));
+    assert!(adr_line.ends_with(":;;500 Example Avenue;Berlin;;10999;Germany"));
+
+    assert!(
+        !emitted.contains("X-LEGACY"),
+        "non-projected TYPE tokens must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized TYPE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
