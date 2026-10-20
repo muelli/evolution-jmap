@@ -356,3 +356,34 @@ actually compiles and runs):
   fault-injection seam added to this file on purpose or a live-EDS proof
   that can force the distinction, neither of which fits this session's
   increment.
+
+## `src/folder.rs`
+
+- `crates/jmap-mail/src/folder.rs:375:9` through `:382:9`, eight mutants,
+  `replace | with ^` in `get_permanent_flags`'s `|`-chain of
+  `CAMEL_MESSAGE_*` constants. Every member is a distinct power of two
+  (`camel-message-info.h`: `ANSWERED` through `SEEN` are `1 << 0` to
+  `1 << 4`, `JUNK` is `1 << 7`, `NOTJUNK` is `1 << 9`, `FORWARDED` is
+  `1 << 10`, `USER` is `1u << 31`), the same pattern already recorded for
+  `provider.rs`'s `FLAGS`/`URL_FLAGS` and `folder_info.rs`'s per-role
+  `flags`. For disjoint operands `|` and `^` compute the same value, so
+  these are equivalent code, not a test gap.
+- `crates/jmap-mail/src/folder.rs:739:63` and `:742:41`, `replace | with ^`
+  in `flags`. `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` is `1 << 0`,
+  `CAMEL_FOLDER_FILTER_RECENT` is `1 << 2`, `CAMEL_FOLDER_FILTER_JUNK` is
+  `1 << 6` (`camel-enums.h`): all three disjoint, so both `|`s compute the
+  same result as `^` for every value `role` takes. Checked by hand against
+  `tests/folder.rs`'s `new_mail_is_filtered_where_it_arrives` before
+  disposing of these.
+  One related mutant at `:739:63`, `replace | with &`, is not equivalent
+  (`&` of two disjoint nonzero bits is 0, so an inbox would lose both
+  filter flags) and cargo-mutants' own run reported it inconsistently: a
+  bare `--jobs 1` pass timed out on it once and reported `Success` on an
+  immediate retry, both without the test actually failing or the output
+  showing a real run to completion. Reproduced by hand instead: editing the
+  `|` to `&` and running `cargo test -p jmap-mail --test folder
+  new_mail_is_filtered_where_it_arrives` directly fails every time
+  (`left: 0, right: 68`), so the mutant is genuinely caught; the harness
+  result here was noise, most likely a stale incremental build reused
+  across cargo-mutants' scratch copy, not a disposition this file needs to
+  record.
