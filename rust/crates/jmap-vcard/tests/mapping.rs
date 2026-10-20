@@ -1927,6 +1927,32 @@ fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
 }
 
 #[test]
+fn nickname_list_value_reaches_fixed_point_in_eds_profile() {
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME:Jim,Jimmie\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(raw_vcard).expect("parse nickname list");
+    let nicknames = parsed.nicknames.as_ref().expect("nicknames");
+    assert_eq!(nicknames.len(), 1);
+    assert_eq!(nicknames["k1"].name, "Jim,Jimmie");
+
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        line(&emitted, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k1:Jim\\,Jimmie"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized nickname list");
+    assert_eq!(reparsed.nicknames, parsed.nicknames);
+
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, re_emitted);
+}
+
+#[test]
 fn a_nickname_that_names_nothing_is_skipped_in_both_directions() {
     // Empty nickname text emits no line and stays absent on read.
     assert!(!card_to_vcard(&one_nickname("k1", "")).contains("\r\nNICKNAME"));
