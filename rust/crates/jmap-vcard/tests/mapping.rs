@@ -2677,6 +2677,42 @@ fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
 }
 
 #[test]
+fn photo_mediatype_parameter_on_value_uri_is_parse_only_in_this_profile() {
+    // RFC 9555 section 2.3.14 maps MEDIATYPE into JSContact media type on read.
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo MEDIATYPE VALUE URI\r\n",
+        "PHOTO;MEDIATYPE=image/jpeg;VALUE=uri:https://vera.example/me.jpg\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(input).expect("parse MEDIATYPE VALUE=uri photo");
+    let parsed_media = parsed.media.as_ref().expect("media");
+    assert_eq!(parsed_media["m1"].uri, "https://vera.example/me.jpg");
+    assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+
+    // EDS stores URI photos without media type metadata, so normalized emit drops MEDIATYPE.
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        line(&emitted, "PHOTO"),
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://vera.example/me.jpg"
+    );
+    assert!(
+        !emitted.contains("MEDIATYPE="),
+        "normalized URI photo must not emit MEDIATYPE in this profile: {emitted}"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized photo");
+    let reparsed_media = reparsed.media.as_ref().expect("media");
+    assert_eq!(reparsed_media["m1"].media_type, None);
+
+    let emitted_again = card_to_vcard(&reparsed);
+    let reparsed_again = vcard_to_card(&emitted_again).expect("reparse emitted again");
+    assert_eq!(emitted, emitted_again);
+    assert_eq!(reparsed, reparsed_again);
+}
+
+#[test]
 fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
     // Non-UTF-8 payload bytes must roundtrip via bytes, not text coercion.
     let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");

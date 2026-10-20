@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:MEDIATYPE VALUE URI Seed
+PHOTO;MEDIATYPE=image/jpeg;VALUE=uri:https://cdn.example.test/photo.jpg
+END:VCARD
