@@ -3019,8 +3019,8 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
     // Services with EDS HOME or WORK slots get dedicated lines.
-    // Matching is case-insensitive and punctuation-insensitive to keep save
-    // behavior stable across spelling variants.
+    // Match service names case-insensitively and punctuation-insensitively.
+    // This keeps save behavior stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
         ("aim", "X-AIM"),
@@ -3047,10 +3047,9 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
-    // Skip services without an editable EDS slot. Emitting a hidden line would
-    // mislead save logic into treating unseen data as user-visible.
-    // Missing service names are also skipped because there is no property line
-    // to select.
+    // Skip services without an editable EDS slot.
+    // A hidden line would make save logic treat unseen data as user-visible.
+    // Skip missing service names because no property line can be selected.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
@@ -3062,10 +3061,11 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 knows X-TWITTER and X-SIP as EContactAttrList fields
-    // with no slotted fields (_HOME_1..3, _WORK_1..3). When parsing a vCard with
-    // X-TWITTER, X-SIP, or unknown X-SIGNAL, vcard_to_card safely ignores them rather
-    // than creating unmodeled online_services entries.
+    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted
+    // EContactAttrList fields.
+    // No _HOME_1..3 or _WORK_1..3 slot exists for these properties.
+    // The reader ignores X-TWITTER, X-SIP, and unknown X-SIGNAL.
+    // This avoids creating unmodeled `online_services` entries.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
                  FN:Vera\r\n\
@@ -3114,8 +3114,9 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
 
 #[test]
 fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
-    // RFC 9553 §2.3.2 allows `uri` or `user`; this mapping derives a handle only
-    // from known bare schemes whose payload is exactly that handle.
+    // RFC 9553 §2.3.2 allows `uri` or `user`.
+    // This mapping derives a handle only from known bare schemes.
+    // The URI payload must be exactly that handle.
     let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3227,8 +3228,9 @@ fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
 
 #[test]
 fn the_work_context_files_the_handle_in_evolutions_work_slot() {
-    // `contexts` selects HOME or WORK, and unknown or mixed contexts fall back
-    // to HOME so each line maps to one editable slot.
+    // `contexts` selects HOME or WORK.
+    // Unknown or mixed contexts fall back to HOME.
+    // This keeps each line mapped to one editable slot.
     let slotted = |contexts: Value| {
         let mut card = on_service(Some("Jabber"), Some("handle"));
         let services = card.online_services.as_mut().expect("online services");
