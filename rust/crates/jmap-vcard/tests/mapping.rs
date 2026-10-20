@@ -23272,3 +23272,55 @@ fn service_type_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn value_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:VALUE Parameter Probe\r\n",
+        "TEL;VALUE=uri;TYPE=work:tel:+1-202-555-0110\r\n",
+        "PHOTO;VALUE=uri:https://cdn.example.test/value-probe.png\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse VALUE parameter profile probe");
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0110");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert!(
+        phone.extra.is_empty(),
+        "profile does not retain RFC 9555 VALUE metadata on TEL"
+    );
+
+    let media = parsed.media.as_ref().expect("media map");
+    assert_eq!(media.len(), 1, "PHOTO line must remain mapped");
+
+    let photo = media.get("m1").expect("first media entry");
+    assert_eq!(photo.uri, "https://cdn.example.test/value-probe.png");
+    assert_eq!(photo.media_type, None);
+
+    let emitted = card_to_vcard(&parsed);
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0110"));
+    assert!(
+        !tel_line.contains("VALUE=uri"),
+        "non-projected VALUE metadata must be dropped on emit for TEL in this profile"
+    );
+
+    let photo_line = line(&emitted, "PHOTO;");
+    assert!(photo_line.contains("X-JMAP-KEY=m1"));
+    assert!(photo_line.contains("VALUE=uri"));
+    assert!(photo_line.ends_with(":https://cdn.example.test/value-probe.png"));
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized VALUE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
