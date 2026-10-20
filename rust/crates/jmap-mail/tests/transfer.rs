@@ -4,81 +4,80 @@
 //! `transfer_messages_to_sync`: the vfunc behind dragging a message into
 //! another folder.
 //!
-//! The `Email/set` a copy or a move becomes was built and tested one increment
-//! ago, in `jmap-mail-sync`'s `Filing`. This is the Camel half: two folders of
-//! one store, the uids Evolution hands over, and the summary the source folder
-//! is left holding afterwards.
+//! The previous increment built and tested the `Email/set` call for a copy
+//! or a move, in `jmap-mail-sync`'s `Filing`. This file covers the Camel
+//! half: two folders of one store, the uids Evolution passes in, and the
+//! summary the source folder keeps afterward.
 //!
 //! ## What a JMAP move is, from inside one folder
 //!
-//! There is no `Email/move` and no `Email/copy` — RFC 8621 §4.6 makes
-//! `mailboxIds` the set of mailboxes a message is in, so a copy adds a member
-//! and a move adds one and takes another away, and either way the message stays
-//! *one* object with one id. Two consequences run through this file:
+//! JMAP has no `Email/move` and no `Email/copy`. RFC 8621 §4.6 defines
+//! `mailboxIds` as the set of mailboxes a message belongs to. A copy adds a
+//! member to the set. A move adds one member and removes another. Either
+//! way the message stays one object with one id. Two facts follow:
 //!
-//! - The uid does not change. [`the_uid_of_a_transferred_message_is_the_one_it_had`]
-//!   is that, asserted through the out-parameter Camel offers for it — where
-//!   IMAPX, whose server does mint a new uid in the destination, has nothing to
-//!   say and says nothing.
-//! - A move out of a folder is the same event the next listing of that folder
-//!   would report as a message that has left it. The rows go now rather than
-//!   then, because a message list that keeps showing what the user just moved
-//!   away is a message list that is wrong for as long as the refresh timer
-//!   takes.
+//! - The uid does not change.
+//!   [`the_uid_of_a_transferred_message_is_the_one_it_had`] checks this
+//!   through the out-parameter Camel provides for it. IMAPX has no
+//!   equivalent assertion, because its server mints a new uid in the
+//!   destination.
+//! - A move out of a folder is the same event a later listing of that
+//!   folder would report as a removed message. The row leaves now, not
+//!   later. A message list that still shows a message the user just moved
+//!   away is wrong until the next refresh.
 //!
-//! ## The click that has not been saved yet
+//! ## An unsaved flag change
 //!
-//! Camel keeps the user's unsaved flag changes on the summary row, and
-//! `synchronize_sync` is what writes them. A move that removed the row would
-//! therefore take the change with it, which is
-//! [`a_move_settles_a_flag_the_user_had_not_saved_yet`]: marking a message read
-//! and dragging it into another folder before anything synchronised is an
-//! ordinary sequence, and losing the flag in it would be this provider dropping
-//! a change of the user's in silence.
+//! Camel keeps the user's unsaved flag changes on the summary row.
+//! `synchronize_sync` writes them to the server. A move that removed the
+//! row would discard the change too. Marking a message read, then dragging
+//! it to another folder before anything synchronizes, is an ordinary
+//! sequence. Losing the flag in it would silently drop a change the user
+//! made. [`a_move_settles_a_flag_the_user_had_not_saved_yet`] checks this.
 //!
-//! ## The message list that is already on screen
+//! ## The message list already on screen
 //!
-//! Removing the row is what the *next* listing of the source folder is drawn
-//! from; `changed` is what the one the user is looking at is redrawn from. The
-//! two are separate and the second was, until this increment, written the way
-//! IMAPX writes it and never watched. It is watched here, through
-//! `common::signals` — which means a [`Context`] pushed before the account is
-//! opened and a pump before every read, for the reason that module's header
-//! gives.
+//! Removing the row controls what the *next* listing of the source folder
+//! shows. The folder's `changed` signal controls what the list already on
+//! screen shows. The two are separate. Until this increment, the signal was
+//! written the way IMAPX writes it, and never tested. This file tests it
+//! through `common::signals`: push a [`Context`] before opening the
+//! account, and pump before every read (see that module's header for why).
 //!
-//! Four things are asserted about it, and three of them are silences:
+//! Four things are asserted about the signal. Three of them are silences:
 //!
-//! - A move announces the rows it took away, and nothing else.
-//! - A copy announces nothing, because it took none.
-//! - The *destination* announces nothing either. The message appears there when
-//!   that folder is next listed, which is the decision this file's "what is not
-//!   decided here" section makes: a row built from a uid alone would be a line
-//!   with no subject, sender or date.
-//! - A transfer that failed without moving a row announces nothing. The one
-//!   failure that does announce is a message another client destroyed, which
-//!   leaves the folder precisely because it is not in it any more.
+//! - A move announces the rows it removed, and nothing else.
+//! - A copy announces nothing, because it removed none.
+//! - The *destination* also announces nothing. The message appears there
+//!   only when that folder is next listed: a row built from a uid alone
+//!   would show no subject, sender, or date.
+//! - A transfer that failed without moving a row announces nothing. The
+//!   exception is a message destroyed by another client: it leaves the
+//!   folder because the server no longer has it.
 //!
-//! ## A selection, and what only a selection can say
+//! ## A selection, not only a message
 //!
-//! Everything above transfers one message, and the vfunc is handed a *list* —
-//! whatever the user had highlighted when they dragged. Three of this file's
-//! claims are about the list rather than about a message, and none of them can
-//! be made with one uid in it:
+//! The sections above transfer one message. The vfunc actually receives a
+//! *list*: whatever the user had selected when dragging. Three claims in
+//! this file need more than one message:
 //!
-//! - **The walk is a request per uid, and it finishes.** This is the module's
-//!   own "one request per message, not one per transfer" decision, seen from
-//!   outside: a message another client destroyed must not take the rest of the
-//!   user's selection with it, so
-//!   [`a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection`] moves
-//!   the second message behind a first that cannot move.
-//! - **The out-parameter's slots line up with the list that came in.** Camel
-//!   reads the answer for a message by its position, so a half-worked transfer
-//!   leaves NULL in the slot of the message that did not land rather than a
-//!   shorter array — [`a_partial_transfer_reports_only_the_messages_that_landed`].
-//! - **One emission for the whole selection.** Camel's change info is four
-//!   *lists* precisely so that a drag of twenty messages redraws the message
-//!   list once, and
-//!   [`the_rows_a_selection_left_behind_are_announced_together`] is that.
+//! - **The walk sends one request per uid, and it finishes.** This is the
+//!   module's own design: one request per message, not one per transfer. A
+//!   message destroyed by another client must not block the rest of the
+//!   selection.
+//!   [`a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection`]
+//!   checks that the second message still moves after the first one fails.
+//! - **The out-parameter's slots match the input list by position.** Camel
+//!   reads the result for a message by its position in the array. A
+//!   partially failed transfer leaves NULL in the slot of the message that
+//!   did not move, instead of shortening the array.
+//!   [`a_partial_transfer_reports_only_the_messages_that_landed`] checks
+//!   this.
+//! - **One signal emission for the whole selection.** Camel's change info
+//!   holds four *lists* so that moving twenty messages redraws the message
+//!   list once.
+//!   [`the_rows_a_selection_left_behind_are_announced_together`] checks
+//!   this.
 
 mod common;
 
@@ -112,8 +111,8 @@ use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
-/// The messages the fixture can seed, in the order it seeds them. A transfer of
-/// a *message* takes the first; a transfer of a *selection* takes both.
+/// The messages the fixture can seed, in seeding order. A transfer of a
+/// *message* uses the first. A transfer of a *selection* uses both.
 const MESSAGES: [(&str, &str, &str, &str, &str); 2] = [
     (
         "Bob",
@@ -131,9 +130,9 @@ const MESSAGES: [(&str, &str, &str, &str, &str); 2] = [
     ),
 ];
 
-/// One connected account with two folders open — an inbox holding the seeded
-/// messages, and an archive holding none — which is the state every transfer
-/// starts from.
+/// One connected account with two folders open: an inbox holding the seeded
+/// messages, and an archive holding none. Every transfer test starts from
+/// this state.
 struct Fixture {
     server: MockServer,
     account: Account,
@@ -145,17 +144,16 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// One message in the inbox: a transfer of a single message, which is what
-    /// most of this file is about.
+    /// One message in the inbox. Most of this file tests a transfer of a
+    /// single message.
     fn start() -> Self {
         Self::seeded(1)
     }
 
-    /// Two, for the transfers that are about a selection rather than a message.
-    /// Evolution hands the vfunc whatever the user had highlighted, and what a
-    /// selection asserts is what one message cannot: that the walk makes a
-    /// request per uid, that the out-parameter's slots line up with the list
-    /// that came in, and that the rows that left are announced together.
+    /// Two messages, for the tests about a selection rather than a single
+    /// message: the walk sends one request per uid, the out-parameter's
+    /// slots match the input list by position, and the removed rows are
+    /// announced together.
     fn selection() -> Self {
         Self::seeded(2)
     }
@@ -192,10 +190,10 @@ impl Fixture {
         let archive = open(&account, "Archive");
 
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: a live folder of ours, and an out-parameter that is writable
-        // and currently NULL. Only the inbox is refreshed: what the archive
-        // holds is not this vfunc's business, and a folder that was never
-        // listed is the ordinary state of the one a message is dragged into.
+        // SAFETY: a live folder of ours, and an out-parameter that is
+        // writable and currently NULL. Only the inbox is refreshed. The
+        // archive stays unlisted, because that is the ordinary state of a
+        // folder a message gets dragged into.
         unsafe {
             assert_ne!(
                 camel_folder_refresh_info_sync(inbox, ptr::null_mut(), &mut error),
@@ -215,32 +213,32 @@ impl Fixture {
         }
     }
 
-    /// The first seeded message, which is the one a test transfers unless it
-    /// says otherwise.
+    /// The first seeded message. Tests transfer this one unless stated
+    /// otherwise.
     fn uid(&self) -> &Id {
         &self.uids[0]
     }
 
-    /// The second, for a fixture built by [`Fixture::selection`].
+    /// The second message, for a fixture built by [`Fixture::selection`].
     fn second(&self) -> &Id {
         &self.uids[1]
     }
 
     /// The same fixture, with one of its folders listened to from here on.
     ///
-    /// The setup is pumped away first and only then is the handler connected,
-    /// because the emission the inbox's refresh queued would otherwise be
-    /// delivered into a test that is asking what the *transfer* announced. The
-    /// context is the caller's, and has to have been pushed before the fixture
-    /// opened the account: see `common::signals::Context`.
+    /// This drains pending emissions first, then connects the handler.
+    /// Otherwise the emission queued by the inbox's own refresh would reach a
+    /// test that asks what the *transfer* announced. `context` must have been
+    /// pushed before the fixture opened the account: see
+    /// `common::signals::Context`.
     fn watched(self, context: &Context, folder: fn(&Self) -> *mut CamelFolder) -> Self {
         emissions(context);
         watch(folder(&self));
         self
     }
 
-    /// Through Camel's own wrapper, which is what Evolution calls when the user
-    /// drags a message or picks "Move to Folder".
+    /// Through Camel's own wrapper, the function Evolution calls when the
+    /// user drags a message or picks "Move to Folder".
     fn transfer(&self, uids: &[&Id], delete_originals: bool) -> Transferred {
         self.transfer_between(self.inbox, self.archive, uids, delete_originals)
     }
@@ -256,8 +254,8 @@ impl Fixture {
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: two live folders of one store, an array of NUL-terminated
-        // uids alive across the call, and two out-parameters that are writable
-        // and currently NULL.
+        // uids alive across the call, and two out-parameters that are
+        // writable and currently NULL.
         let ok = unsafe {
             camel_folder_transfer_messages_to_sync(
                 source,
@@ -272,10 +270,10 @@ impl Fixture {
         Transferred::new(ok, transferred, error)
     }
 
-    /// Through the pointer in the class, skipping what the wrapper settles on
-    /// the way in — a transfer into the folder the message is already in, and
-    /// one of no messages at all, are both answered by Camel before any
-    /// provider is asked.
+    /// Through the pointer in the class, skipping the checks Camel's own
+    /// wrapper makes before calling a provider. Camel itself answers a
+    /// transfer into the message's own folder, and a transfer of no
+    /// messages, without asking the provider.
     fn transfer_straight(
         &self,
         source: *mut CamelFolder,
@@ -286,8 +284,8 @@ impl Fixture {
         let list = UidList::of(uids);
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc; both folders are instances of that class, and the two
+        // SAFETY: referencing the class runs the class_init that installs
+        // the vfunc. Both folders are instances of that class, and the two
         // out-parameters are writable and currently NULL.
         let ok = unsafe {
             let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
@@ -309,7 +307,7 @@ impl Fixture {
         Transferred::new(ok, transferred, error)
     }
 
-    /// Which mailboxes the server has the message in now.
+    /// The mailboxes the server has the message in now.
     fn mailboxes_on_server(&self, uid: &Id) -> BTreeMap<Id, bool> {
         let account_id = self.server.account_id();
         let state = self.server.state();
@@ -324,7 +322,7 @@ impl Fixture {
             .unwrap_or_default()
     }
 
-    /// And what it holds for its keywords.
+    /// The keywords the server has for the message now.
     fn keywords_on_server(&self, uid: &Id) -> BTreeMap<String, bool> {
         let account_id = self.server.account_id();
         let state = self.server.state();
@@ -339,7 +337,7 @@ impl Fixture {
             .unwrap_or_default()
     }
 
-    /// Destroys the message the way another client would.
+    /// Destroys the message, as another client would.
     fn destroyed_elsewhere(&self, uid: &Id) {
         let account_id = self.server.account_id();
         let state = self.server.state();
@@ -351,11 +349,11 @@ impl Fixture {
         });
     }
 
-    /// Changes the message's flags the way Evolution's message list does, and
+    /// Changes the message's flags the way Evolution's message list does,
     /// without saving them.
     fn mark_read(&self) {
         let uid = CString::new(self.uid().as_str()).expect("a uid with no NUL");
-        // SAFETY: a live folder that has a summary, a NUL-terminated uid alive
+        // SAFETY: a live folder with a summary, a NUL-terminated uid alive
         // across the call, and one reference to the row, released here.
         unsafe {
             let summary = camel_folder_get_folder_summary(self.inbox);
@@ -370,8 +368,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // SAFETY: the two references this fixture took from `get_folder_sync`,
-        // released before the store they hang off.
+        // SAFETY: the two references this fixture took from
+        // `get_folder_sync`, released before the store they belong to.
         unsafe {
             g_object_unref(self.inbox.cast());
             g_object_unref(self.archive.cast());
@@ -381,9 +379,9 @@ impl Drop for Fixture {
 
 /// A raw folder pointer, sent to a background thread.
 ///
-/// Sound for the same reason `transfer_race.rs`'s own copy is: the folder is a
-/// real `CamelFolder` GObject, kept alive by the fixture for as long as the
-/// background thread using it runs.
+/// Sound for the same reason as `transfer_race.rs`'s own copy: the folder is
+/// a real `CamelFolder` GObject, kept alive by the fixture for as long as
+/// the background thread using it runs.
 #[derive(Clone, Copy)]
 struct FolderPtr(*mut CamelFolder);
 // SAFETY: the folder outlives every use of this wrapper, and every use goes
@@ -412,11 +410,11 @@ fn open(account: &Account, path: &str) -> *mut CamelFolder {
     }
 }
 
-/// The uids Camel would draw a message list from, asked for the way Evolution
-/// asks — of the folder rather than of its summary.
+/// The uids Camel would draw a message list from, asked of the folder
+/// rather than of its summary, the way Evolution asks.
 fn listed(folder: *mut CamelFolder) -> Vec<String> {
-    // SAFETY: a live folder; the array comes back owned and is freed with the
-    // function Camel documents for it.
+    // SAFETY: a live folder. The array comes back owned and is freed with
+    // the function Camel documents for it.
     unsafe {
         let array = folder_dup_uids(folder);
         let uids = uid_list(array);
@@ -434,7 +432,7 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<String> {
     if array.is_null() {
         return Vec::new();
     }
-    // SAFETY: the contract above; the strings live as long as the array.
+    // SAFETY: the contract above. The strings live as long as the array.
     unsafe {
         (0..(*array).len)
             .map(|index| {
@@ -445,7 +443,8 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<String> {
     }
 }
 
-/// The array of uids Camel hands the vfunc, owned for the length of one call.
+/// The array of uids Camel hands the vfunc, owned for the length of one
+/// call.
 struct UidList {
     array: *mut GPtrArray,
     // The strings the array points at; freed with it.
@@ -458,8 +457,8 @@ impl UidList {
             .iter()
             .map(|uid| CString::new(uid.as_str()).expect("a uid with no NUL"))
             .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
+        // SAFETY: a fresh array, filled with pointers into strings that this
+        // value owns and outlives.
         let array = unsafe {
             let array = g_ptr_array_new();
             for uid in &uids {
@@ -473,14 +472,15 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointers in
-        // it belong to `self.uids`.
+        // SAFETY: the one array, allocated above. FALSE, because the
+        // pointers in it belong to `self.uids`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
         self.uids.clear();
     }
 }
 
-/// One transfer and all three of its answers, owned the way Camel owns them.
+/// One transfer and all three of its results, owned the way Camel owns
+/// them.
 struct Transferred {
     ok: bool,
     uids: *mut GPtrArray,
@@ -506,8 +506,8 @@ impl Transferred {
         if self.uids.is_null() {
             return Vec::new();
         }
-        // SAFETY: a live array this value owns, of NUL-terminated strings and
-        // NULLs.
+        // SAFETY: a live array this value owns, holding NUL-terminated
+        // strings and NULLs.
         unsafe {
             (0..(*self.uids).len)
                 .map(|index| {
@@ -534,9 +534,10 @@ impl Transferred {
 
 impl Drop for Transferred {
     fn drop(&mut self) {
-        // SAFETY: both are references this value took from the call that made
-        // it. The array is owned whole — Camel's own callers free its members
-        // with `g_free` and then the array — and the error is one allocation.
+        // SAFETY: both are references this value took from the call that
+        // made it. The array is owned whole: Camel's own callers free its
+        // members with `g_free`, then the array. The error is one
+        // allocation.
         unsafe {
             if !self.uids.is_null() {
                 for index in 0..(*self.uids).len {
@@ -551,8 +552,8 @@ impl Drop for Transferred {
     }
 }
 
-/// The copy half: the message gains a mailbox and keeps the one it was in,
-/// because in JMAP a mailbox is a member of a set rather than a place.
+/// The copy half: the message gains a mailbox and keeps the one it was in.
+/// In JMAP a mailbox is a member of a set, not a place.
 #[test]
 fn a_message_the_user_copied_is_in_both_mailboxes() {
     let fixture = Fixture::start();
@@ -568,8 +569,8 @@ fn a_message_the_user_copied_is_in_both_mailboxes() {
     );
 }
 
-/// And it stays in the folder it was copied out of — which is the difference
-/// the `delete_originals` flag makes, seen from this side.
+/// The message stays in the folder it was copied out of. This is the
+/// effect of the `delete_originals` flag, seen from this side.
 #[test]
 fn a_copied_message_stays_in_the_folder_it_came_from() {
     let fixture = Fixture::start();
@@ -579,8 +580,8 @@ fn a_copied_message_stays_in_the_folder_it_came_from() {
     assert_eq!(listed(fixture.inbox), vec![fixture.uid().to_string()]);
 }
 
-/// The move half: one patch, and the mailbox it came out of is gone from the
-/// set.
+/// The move half: one patch, and the mailbox it came out of is gone from
+/// the set.
 #[test]
 fn a_message_the_user_moved_is_only_in_the_destination() {
     let fixture = Fixture::start();
@@ -593,9 +594,9 @@ fn a_message_the_user_moved_is_only_in_the_destination() {
     );
 }
 
-/// And the row goes with it. Waiting for the next listing to notice would leave
+/// The row goes with it. Waiting for the next listing to notice would leave
 /// the message the user just moved sitting in the message list they moved it
-/// out of, for as long as the refresh timer takes.
+/// out of, until the next refresh.
 #[test]
 fn a_moved_message_leaves_the_folder_it_came_from() {
     let fixture = Fixture::start();
@@ -608,11 +609,11 @@ fn a_moved_message_leaves_the_folder_it_came_from() {
     );
 }
 
-/// `transfer_messages_to_sync` takes `camel_folder_lock` on the source folder
-/// itself, because Camel's own wrapper does not (this module's header
-/// explains why). A lock a transfer takes and never releases would wedge
-/// every later operation on that folder, so a lock taken from another thread
-/// right after a transfer must still return.
+/// `transfer_messages_to_sync` takes `camel_folder_lock` on the source
+/// folder itself, because Camel's own wrapper does not (see this module's
+/// header for why). A lock that a transfer takes and never releases would
+/// block every later operation on that folder. This test checks that a lock
+/// taken from another thread, right after a transfer, still returns.
 #[test]
 fn a_transfer_releases_the_source_folders_lock() {
     let fixture = Fixture::start();
@@ -623,7 +624,7 @@ fn a_transfer_releases_the_source_folders_lock() {
     let (done_tx, done_rx) = channel();
     thread::spawn(move || {
         let inbox = inbox;
-        // SAFETY: a live folder, locked and unlocked in balance.
+        // SAFETY: a live folder, locked and unlocked in a balanced pair.
         unsafe {
             camel_folder_lock(inbox.0);
             camel_folder_unlock(inbox.0);
@@ -638,10 +639,10 @@ fn a_transfer_releases_the_source_folders_lock() {
     );
 }
 
-/// RFC 8621 §4.1 gives an `Email` one immutable id per account, and filing it
-/// somewhere else does not make a second object — so the message in the
-/// destination is the message that was in the source, under the uid the caller
-/// passed in. Camel offers an out-parameter for exactly this answer.
+/// RFC 8621 §4.1 gives an `Email` one immutable id per account. Filing it
+/// somewhere else does not make a second object, so the message in the
+/// destination is the same message that was in the source, under the uid
+/// the caller passed in. Camel's out-parameter reports exactly this.
 #[test]
 fn the_uid_of_a_transferred_message_is_the_one_it_had() {
     let fixture = Fixture::start();
@@ -656,11 +657,11 @@ fn the_uid_of_a_transferred_message_is_the_one_it_had() {
     );
 }
 
-/// The user marks a message read and drags it into another folder before
-/// anything has synchronised. The flag lives on the summary row until
-/// `synchronize_sync` writes it, so a move that dropped the row would drop the
-/// change with it — and the destination would never learn of it either, because
-/// what it lists is what the server holds.
+/// The user marks a message read, then drags it into another folder before
+/// anything synchronizes. The flag lives on the summary row until
+/// `synchronize_sync` writes it. A move that dropped the row would drop the
+/// change with it. The destination would never learn of the change either,
+/// because what it lists is what the server holds.
 #[test]
 fn a_move_settles_a_flag_the_user_had_not_saved_yet() {
     let fixture = Fixture::start();
@@ -679,12 +680,12 @@ fn a_move_settles_a_flag_the_user_had_not_saved_yet() {
     );
 }
 
-/// A move into the folder the message is already in cannot be written down —
-/// the same `mailboxIds` member would have to be both set and cleared — so
-/// nothing is sent, and in particular the row is not removed as though the
-/// message had left. Called through the class because Camel's own wrapper
-/// answers `source == destination` before any provider is asked; succeeding
-/// with no connection is what proves no request was made.
+/// A move into the folder the message is already in cannot be written down:
+/// the same `mailboxIds` member would have to be both set and cleared. So
+/// nothing is sent, and the row is not removed as though the message had
+/// left. This test calls the vfunc through the class, because Camel's own
+/// wrapper answers `source == destination` before asking any provider.
+/// Succeeding with no connection proves no request was made.
 #[test]
 fn a_move_into_the_folder_the_message_is_already_in_is_not_a_request() {
     let fixture = Fixture::start();
@@ -701,9 +702,10 @@ fn a_move_into_the_folder_the_message_is_already_in_is_not_a_request() {
     );
 }
 
-/// A transfer of nothing asks the server nothing, for the same reason a folder
-/// with nothing queued synchronises without one: Camel calls a provider for
-/// selections a user can make empty.
+/// A transfer of an empty selection asks the server nothing, the same way a
+/// folder with nothing queued synchronizes without a server call. This test
+/// calls the vfunc directly, bypassing the wrapper's own shortcut for an
+/// empty selection, to check that the provider itself handles it too.
 #[test]
 fn a_transfer_of_no_messages_needs_no_server() {
     let fixture = Fixture::start();
@@ -714,10 +716,10 @@ fn a_transfer_of_no_messages_needs_no_server() {
         .expect_ok();
 }
 
-/// The folder is asked and the connection belongs to the store. `NOT_CONNECTED`
-/// is the code that makes Camel connect and ask again rather than showing the
-/// account as broken — the same rule the other three folder vfuncs follow — and
-/// the message stays where it is, row and all.
+/// The folder is asked, but the connection belongs to the store.
+/// `NOT_CONNECTED` is the code that makes Camel connect and ask again,
+/// rather than showing the account as broken. The other three folder
+/// vfuncs follow the same rule. The message stays where it is, row and all.
 #[test]
 fn a_folder_whose_store_has_no_connection_reports_it() {
     let fixture = Fixture::start();
@@ -743,13 +745,13 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     );
 }
 
-/// A uid in a summary is a claim about the last listing, and another client
-/// destroying the message since is ordinary. Unlike a flag write — which is a
-/// consequence the user never asked for and which is therefore settled in
-/// silence — a transfer is something they did, so it is reported: as
-/// `INVALID_UID`, which Evolution reads as "that message is gone" rather than
-/// as a reason to take the account offline. The row still goes, because the
-/// message is not in this folder either.
+/// A uid in a summary is a claim about the last listing. Another client
+/// destroying the message since then is ordinary. A flag write is a
+/// consequence the user never asked for, so it is settled in silence. A
+/// transfer is something the user did, so it is reported, as `INVALID_UID`.
+/// Evolution reads this code as "that message is gone", not as a reason to
+/// take the account offline. The row still goes, because the message is not
+/// in this folder either.
 #[test]
 fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     let fixture = Fixture::start();
@@ -772,9 +774,10 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     );
 }
 
-/// Taking the row away settles what the next listing of the folder would show.
-/// This is the folder saying so to the list that is on screen now — and a move
-/// is the one transfer that has anything to say about the folder it left.
+/// Taking the row away settles what the next listing of the folder would
+/// show. This emission tells the list already on screen the same thing. A
+/// move is the only kind of transfer with anything to announce about the
+/// folder it left.
 #[test]
 fn a_move_tells_camel_the_row_that_left() {
     let context = Context::push();
@@ -794,8 +797,8 @@ fn a_move_tells_camel_the_row_that_left() {
 }
 
 /// A copy leaves every row where it was, so there is nothing to announce.
-/// Announcing anyway would redraw the message list the user is reading — and
-/// lose where they were in it — for a folder in which nothing has happened.
+/// Announcing anyway would redraw the message list the user is reading, and
+/// lose their place in it, for a folder where nothing happened.
 #[test]
 fn a_copy_says_nothing_about_the_folder_it_came_from() {
     let context = Context::push();
@@ -810,14 +813,15 @@ fn a_copy_says_nothing_about_the_folder_it_came_from() {
     );
 }
 
-/// And the folder the message arrived in says nothing either, which is the
-/// visible half of this file's decision not to build a row there: the message
-/// appears in the destination when that folder is next listed, because the
-/// listing is the only thing that knows what its row should say.
+/// The folder the message arrived in says nothing either. This is the
+/// visible half of this file's decision not to build a row there: the
+/// message appears in the destination when that folder is next listed,
+/// because the listing is the only thing that knows what its row should
+/// say.
 ///
-/// Watched on the archive rather than the inbox — the recorder is one list for
-/// whatever it is connected to, so a test that watched both would not be able
-/// to tell which folder spoke.
+/// This test watches the archive, not the inbox. The recorder tracks one
+/// list for whatever folder it is connected to, so watching both folders at
+/// once would not show which folder emitted.
 #[test]
 fn a_move_says_nothing_about_the_folder_it_arrives_in() {
     let context = Context::push();
@@ -836,11 +840,12 @@ fn a_move_says_nothing_about_the_folder_it_arrives_in() {
     );
 }
 
-/// A message another client destroyed is the one failure that still changes the
-/// folder: it is not in this mailbox because it is not anywhere, so the row goes
-/// and the list on screen is told. The transfer is reported as failed all the
-/// same — see [`a_message_another_client_deleted_is_reported_and_leaves_the_folder`],
-/// which asserts the other half.
+/// A message another client destroyed is the one failure that still changes
+/// the folder: it is not in this mailbox because it is not anywhere, so the
+/// row goes and the list on screen is told. The transfer is still reported
+/// as failed. See
+/// [`a_message_another_client_deleted_is_reported_and_leaves_the_folder`] for
+/// that half.
 #[test]
 fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
     let context = Context::push();
@@ -863,10 +868,10 @@ fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
     );
 }
 
-/// Every other failure leaves the message list alone, because it leaves the rows
-/// alone. A disconnected store is the case Camel retries after reconnecting, and
-/// a folder that had announced the message as removed in the meantime would have
-/// taken it off the user's screen for the duration.
+/// Every other failure leaves the message list alone, because it leaves the
+/// rows alone. Camel retries a disconnected store after reconnecting. A
+/// folder that had announced the message as removed in the meantime would
+/// have taken it off the user's screen until the retry.
 #[test]
 fn a_transfer_that_failed_leaves_the_message_list_alone() {
     let context = Context::push();
@@ -887,8 +892,8 @@ fn a_transfer_that_failed_leaves_the_message_list_alone() {
 // ---------------------------------------------------------------------------
 // a selection rather than a message
 
-/// The ordinary drag: the user highlighted two messages and dropped both. Each
-/// is its own `Email/set`, and both are written.
+/// The ordinary drag: the user highlighted two messages and dropped both.
+/// Each is its own `Email/set` call, and both are written.
 #[test]
 fn every_message_of_a_selection_is_filed() {
     let fixture = Fixture::selection();
@@ -906,16 +911,16 @@ fn every_message_of_a_selection_is_filed() {
     );
 }
 
-/// The reason the walk is a request per uid rather than one `Email/set` for the
-/// whole selection: a message another client destroyed must not take the rest of
-/// the user's selection with it. One `Email/set` carrying every update would be
-/// applied as a single state change, so a half-failed transfer would come back
-/// as one failure with no way to say which messages moved — and a walk that
-/// stopped at the first error would leave messages behind for a reason that says
-/// nothing about them.
+/// The walk sends a request per uid, not one `Email/set` for the whole
+/// selection, because a message another client destroyed must not block the
+/// rest of the user's selection. One `Email/set` call carrying every update
+/// would apply as a single state change: a half-failed transfer would come
+/// back as one failure with no way to say which messages moved. A walk that
+/// stopped at the first error would also leave later messages unmoved for a
+/// reason unrelated to them.
 ///
-/// The transfer is still reported as failed, because one of the messages the
-/// user asked about did not move.
+/// The transfer is still reported as failed, because one of the messages
+/// the user asked about did not move.
 #[test]
 fn a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection() {
     let fixture = Fixture::selection();
@@ -939,13 +944,13 @@ fn a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection() {
     );
 }
 
-/// And what the caller is told about a transfer that half worked. Camel's
-/// out-parameter is an array with one slot per uid the caller passed, so the
-/// answer for a message is read by its position: the uid it kept for the one
-/// that landed — see [`the_uid_of_a_transferred_message_is_the_one_it_had`] for
-/// why that is the uid it came in as — and NULL in the slot of the one that did
-/// not. A shorter array, or one that closed the gap up, would tell the caller
-/// the wrong message had moved.
+/// What the caller is told about a transfer that half worked. Camel's
+/// out-parameter is an array with one slot per uid the caller passed. The
+/// answer for a message is read by its position: the uid for the one that
+/// landed (see [`the_uid_of_a_transferred_message_is_the_one_it_had`] for
+/// why it is the same uid it came in as), and NULL for the one that did
+/// not. A shorter array, or one with the gap closed up, would tell the
+/// caller the wrong message had moved.
 #[test]
 fn a_partial_transfer_reports_only_the_messages_that_landed() {
     let fixture = Fixture::selection();
@@ -960,17 +965,17 @@ fn a_partial_transfer_reports_only_the_messages_that_landed() {
     );
 }
 
-/// One emission for the whole selection, not one per message. Camel's change
-/// info is four *lists* for exactly this reason: a message list redrawn once
-/// for a drag of twenty messages is the point of it, and twenty emissions would
-/// be twenty redraws of a list the user is looking at.
+/// One emission for the whole selection, not one per message. Camel's
+/// change info is four *lists* for exactly this reason: redrawing the
+/// message list once for a drag of twenty messages, rather than twenty
+/// times, is the point of it.
 ///
-/// Both rows are on it although only one message moved — the other is not in
-/// this mailbox because it is not anywhere, which is what
-/// [`a_message_another_client_deleted_is_announced_as_its_row_goes`] asserts for
-/// a selection of one. So this is also the case where the announcement and the
-/// reported outcome deliberately disagree: the transfer failed, and both rows
-/// still left the folder.
+/// Both rows are on the emission although only one message moved. The other
+/// is not in this mailbox because it is not anywhere, the same case
+/// [`a_message_another_client_deleted_is_announced_as_its_row_goes`] checks
+/// for a selection of one. So this test also shows the emission and the
+/// reported outcome deliberately disagree: the transfer failed, but both
+/// rows still left the folder.
 #[test]
 fn the_rows_a_selection_left_behind_are_announced_together() {
     let context = Context::push();

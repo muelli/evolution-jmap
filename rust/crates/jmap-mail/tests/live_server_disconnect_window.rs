@@ -1,33 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `disconnect_window.rs`'s disconnect-does-not-wait-out-an-in-flight-call
-//! bound, proven against a real JMAP server rather than a fake blocking
-//! [`Transport`].
+//! `disconnect_window.rs`'s bound on waiting out an in-flight call, proven
+//! against a real JMAP server rather than a fake blocking [`Transport`].
 //!
 //! `disconnect_window.rs` proves that `JmapStore::drop_connection` no longer
-//! waits out a `messages` call's whole network round trip, using a fake
-//! transport that blocks the request itself before it is ever sent. That
-//! shows the store clones the connection's `Arc` and drops its read guard
-//! before making the request, but it cannot show what happens when a real
-//! network round trip to a real server is genuinely in flight while the
-//! drop runs. This file reruns the same race with the delayed-delivery
-//! technique `live_server_folder_listing_race.rs` already uses: a real
-//! request is genuinely answered by Stalwart, only its delivery back to the
-//! caller is held, so `drop_connection` races an in-flight real round trip
-//! rather than a request that never left the process.
+//! waits out the whole network round trip of a `messages` call. It does
+//! this with a fake transport that blocks the request itself before the
+//! request is ever sent. That proves the store clones the connection's
+//! `Arc` and drops its read guard before making the request. It cannot
+//! prove what happens when a real network round trip to a real server is
+//! genuinely in flight while the drop runs. This file reruns the same race
+//! with the delayed-delivery technique that
+//! `live_server_folder_listing_race.rs` already uses: a real request is
+//! genuinely answered by Stalwart, but only its delivery back to the caller
+//! is held. So `drop_connection` races an in-flight real round trip, not a
+//! request that never left the process.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! This test needs the same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,9 +49,9 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Lets the test park a transport call and learn when it actually parked,
-/// rather than racing a sleep against it. Copy of `disconnect_window.rs`'s
-/// `Gate`.
+/// Lets the test park a transport call, and learn when the call actually
+/// parked, instead of racing a sleep against it. Copy of
+/// `disconnect_window.rs`'s `Gate`.
 #[derive(Default)]
 struct Gate {
     started: Mutex<bool>,
@@ -86,17 +86,18 @@ impl Gate {
     }
 }
 
-/// Forwards every request to a real transport, but holds back the delivery
-/// of the first `Email/get` request until the test releases it — after the
+/// Forwards every request to a real transport, but holds back delivery of
+/// the first `Email/get` request until the test releases it. By then, the
 /// real server has already answered it. `messages()` makes exactly this
-/// call (fetching the account's `Email` state) right after cloning the
-/// connection's `Arc` and dropping the read guard, so holding its delivery
-/// is exactly the window `drop_connection` needs to race. Matched on the
-/// request body rather than a raw call index: `create_folder` (`Mailbox/set`)
-/// runs on the same client and transport before the race even starts, so a
-/// plain call counter would arm on one of *its* requests instead and
-/// deadlock the calling thread against a gate nothing else will ever
-/// release.
+/// call (it fetches the account's `Email` state) right after cloning the
+/// connection's `Arc` and dropping the read guard. Holding this delivery
+/// creates exactly the window that `drop_connection` needs to race.
+///
+/// The match is on the request body, not a raw call index. `create_folder`
+/// (`Mailbox/set`) runs on the same client and transport before the race
+/// starts. A plain call counter would arm on one of those requests instead,
+/// and deadlock the calling thread against a gate that nothing else would
+/// ever release.
 struct DelayedDeliveryTransport {
     inner: UreqTransport,
     gate: Arc<Gate>,
@@ -120,13 +121,13 @@ impl Transport for DelayedDeliveryTransport {
 
 /// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
 /// real thread boundary the way Rust's `Sync` would want proof of; see
-/// `disconnect_window.rs`'s copy of the same wrapper for why that is sound
+/// `disconnect_window.rs`'s copy of the same wrapper for why this is sound
 /// here too.
 #[derive(Clone, Copy)]
 struct StorePtr(*const JmapStore);
-// SAFETY: every use below only dereferences this while the `Box<JmapStore>`
-// it was taken from is still alive on the test's main thread, and the test
-// joins both threads before that box is dropped.
+// SAFETY: every use below dereferences this only while the `Box<JmapStore>`
+// it came from is still alive on the test's main thread. The test joins
+// both threads before that box drops.
 unsafe impl Send for StorePtr {}
 
 impl StorePtr {
@@ -158,10 +159,10 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
     Some(client)
 }
 
-/// Same scenario as `disconnect_window.rs`, against real Stalwart: a
-/// `messages` listing's first request is genuinely in flight (answered by
-/// the server, held before delivery) when `drop_connection` runs
-/// concurrently; the drop must not wait out the round trip.
+/// Same scenario as `disconnect_window.rs`, against real Stalwart. A
+/// `messages` listing's first request is genuinely in flight (the server
+/// has answered it, but delivery is held) when `drop_connection` runs
+/// concurrently. The drop must not wait out the round trip.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_real_server() {

@@ -4,27 +4,33 @@
 //! `synchronize_sync`'s dirty-row walk against a real JMAP server.
 //!
 //! `jmap-mail-sync/tests/live_server_keywords.rs` already proves
-//! `MailSync::set_keywords` against real Stalwart, and
+//! `MailSync::set_keywords` against real Stalwart.
+//!
 //! `jmap-mail/tests/synchronize.rs` already proves the walk from a dirty
-//! `CamelMessageInfo` row to a `KeywordChange` against `jmap-mockd`. Neither
-//! reaches the other's gap: the full stack from a real `CamelFolderSummary`
-//! row, built by a real refresh, through `synchronize_sync`'s work-list walk
-//! and `CamelJmapMessageInfo`'s own "what did we last write" column, to a
-//! real server's `Email/set` answer, has never run against anything but the
-//! mock. This is that confirmation, the same shape as
+//! `CamelMessageInfo` row to a `KeywordChange`, against `jmap-mockd`.
+//!
+//! Neither test reaches the gap between them: the full stack has never run
+//! against anything but the mock.
+//!
+//! That stack runs from a real `CamelFolderSummary` row, built by a real
+//! refresh, through `synchronize_sync`'s work-list walk. It continues
+//! through `CamelJmapMessageInfo`'s own "what did we last write" column, to
+//! a real server's `Email/set` answer.
+//!
+//! This test is that confirmation. It has the same shape as
 //! `jmap-mail/tests/live_server_folder.rs` for the folder cache.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! This test needs the same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test skips instead of failing when
+//! `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
 
 mod common;
 
@@ -68,12 +74,16 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports a message through `JmapStore::import_message`, opens a real
-/// `CamelFolder` on it, refreshes it (a real listing builds the summary row),
-/// flags the row through Camel's own setter, drives a real
-/// `camel_folder_synchronize_sync`, then confirms two things: the row's own
-/// dirty bit was cleared, and a second, independent connection sees
-/// `$flagged` on the server. Cleans up via `delete_folder`.
+/// Imports a message through `JmapStore::import_message`, then opens a real
+/// `CamelFolder` on it. Refreshes the folder. A real listing builds the
+/// summary row.
+///
+/// Flags the row through Camel's own setter, then drives a real
+/// `camel_folder_synchronize_sync`.
+///
+/// Confirms two things: the row's own dirty bit cleared, and a second,
+/// independent connection sees `$flagged` on the server. Cleans up with
+/// `delete_folder`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
@@ -111,15 +121,15 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
         .import_message(&created.id, source, &Keywords::default(), None)
         .expect("import_message failed against the real server");
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
-    // returned.
+    // SAFETY: `account.store` is a live `CamelStore`. `created` is a
+    // `FolderInfo` that a real discovery over the same store's connection
+    // just returned.
     let folder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a live folder, never refreshed before, and an out-parameter
-    // that is writable and currently NULL.
+    // SAFETY: a live folder, never refreshed before. The out-parameter is
+    // writable and currently NULL.
     unsafe {
         assert_ne!(
             camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),
@@ -129,7 +139,7 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
     }
 
     let uid_c = CString::new(uid.as_str()).expect("a uid with no NUL");
-    // SAFETY: the folder has a summary once refreshed, and `uid_c` is
+    // SAFETY: the folder has a summary once refreshed. `uid_c` is
     // NUL-terminated and alive across the call.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
@@ -150,9 +160,9 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
     }
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a live folder with one dirty row, and an out-parameter that is
-    // writable and currently NULL. FALSE for `expunge`: this test is only
-    // about the flag.
+    // SAFETY: a live folder with one dirty row. The out-parameter is writable
+    // and currently NULL. The call passes FALSE for `expunge`: this test
+    // covers only the flag.
     let ok = unsafe { camel_folder_synchronize_sync(folder, GFALSE, ptr::null_mut(), &mut error) };
     assert_ne!(
         ok, GFALSE,
@@ -176,8 +186,8 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
         g_object_unref(row.cast());
     }
 
-    // Independent confirmation: a fresh connection, sharing nothing with the
-    // one `synchronize_sync` used, sees the keyword the server now holds.
+    // A fresh connection, sharing nothing with the one `synchronize_sync`
+    // used, confirms the server now holds the keyword.
     let verify_client = connect_for_write().expect("the write-test account is still there");
     let verify_sync = MailSync::new(verify_client, account_id);
     let (_, messages) = verify_sync
@@ -192,8 +202,8 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
         "the real server should hold $flagged for the message synchronize_sync just wrote"
     );
 
-    // The server refuses to delete a non-empty mailbox, so the message goes
-    // first.
+    // The server refuses to delete a non-empty mailbox, so the test deletes
+    // the message first.
     account
         .jmap()
         .expunge_message(&uid, &created.id)

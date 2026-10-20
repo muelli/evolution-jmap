@@ -3,30 +3,31 @@
 
 //! The folder listing a store keeps, and what Camel's flags word asks of it.
 //!
-//! `jmap-mail-sync` already answers both halves — the listing, and whether it
-//! is still current. What is tested here is the third thing
-//! `get_folder_info_sync` needs and neither half provides: somewhere to keep
-//! the answer between calls. Camel asks a store for its folder tree constantly
-//! — every folder the user clicks, every counter update — and passes
-//! `CAMEL_STORE_FOLDER_INFO_REFRESH` on the few of those that mean "go and
-//! look".
+//! `jmap-mail-sync` already answers two questions: what the listing contains,
+//! and whether it is still current. This file tests a third thing that
+//! `get_folder_info_sync` needs, which neither half provides: a place to keep
+//! the answer between calls. Camel asks a store for its folder tree
+//! constantly, for every folder the user clicks and every counter update. It
+//! passes `CAMEL_STORE_FOLDER_INFO_REFRESH` only on the few calls that mean
+//! "look again".
 //!
-//! The second part of the file is the other question the vfunc's arguments ask
-//! of that tree: not *whether it is current* but *which part of it the caller
-//! wants* — the `top` the answer is rooted at, and the depth
-//! `CAMEL_STORE_FOLDER_INFO_RECURSIVE` cuts it to.
+//! The second part of the file tests another question in the vfunc's
+//! arguments. The question is not whether the tree is current, but which
+//! part of it the caller wants. This is the `top` the answer is rooted at,
+//! and the depth `CAMEL_STORE_FOLDER_INFO_RECURSIVE` cuts it to.
 //!
-//! The third part is the vfunc itself, called the way Camel calls it: through
-//! the pointer in the class rather than by name. That is the only test that
-//! proves the two halves above are actually joined to each other and to the
-//! slot — a `Request` that is never built from a real `top`, or an
-//! implementation that never reaches the class, is a store with no folders and
-//! a suite that still passes.
+//! The third part tests the vfunc itself, called the way Camel calls it:
+//! through the pointer in the class, not by name. This is the only test that
+//! proves the two parts above are joined to each other and to the vfunc slot.
+//! A `Request` built without a real `top`, or an implementation that never
+//! reaches the class, would leave the store with no folders. The rest of
+//! the suite would still pass.
 //!
-//! The fourth is the other direction: `get_folder_sync`, which takes a path out
-//! of that listing and gives back the folder it names. It needs a real store —
-//! a GObject one — because it is the first vfunc that builds something Camel
-//! keeps, and Camel refuses to build a folder on a store it cannot type-check.
+//! The fourth part tests the other direction: `get_folder_sync`, which takes a
+//! path from the listing and returns the folder it names. It needs a real,
+//! GObject-backed store, because this is the first vfunc that builds
+//! something Camel keeps. Camel refuses to build a folder on a store it
+//! cannot type-check.
 
 mod common;
 
@@ -63,17 +64,18 @@ use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
 
-/// No flags at all: what Camel passes when it wants the tree it was given last
-/// time.
+/// No flags at all. Camel passes this when it wants the tree it was given
+/// last time.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 const REFRESH: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_REFRESH;
-/// Every real caller in Camel and Evolution sets this one; the two that do not
-/// are `camel_store_get_folder_info_sync`'s own virtual-folder paths.
+/// Every real caller in Camel and Evolution sets this flag. The only
+/// exceptions are the virtual-folder paths inside
+/// `camel_store_get_folder_info_sync` itself.
 const RECURSIVE: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_RECURSIVE;
 /// What Evolution's folder tree adds for a store that is `CamelSubscribable`:
 /// only the folders the user ticked.
 const SUBSCRIBED: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_SUBSCRIBED;
-/// And what its subscription editor asks with: every folder there is to tick.
+/// What the subscription editor asks with: every folder there is to tick.
 const SUBSCRIPTION_LIST: eds_sys::CamelStoreGetFolderInfoFlags =
     CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST;
 
@@ -93,8 +95,8 @@ fn connected() -> (MockServer, Box<JmapStore>) {
     (server, store)
 }
 
-/// Mutate the account the way another client would — as a state transition,
-/// which is what a refresh has a chance of noticing.
+/// Mutate the account the way another client would: as a state transition.
+/// A refresh has a chance of noticing a state transition.
 fn edit<R>(server: &MockServer, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
     let account_id = server.account_id();
     let state = server.state();
@@ -106,10 +108,10 @@ fn paths(tree: &FolderTree) -> Vec<&str> {
     tree.iter().map(|folder| folder.path.as_str()).collect()
 }
 
-/// Camel calls `get_folder_info_sync` on a store it believes is connected, but
-/// "believes" is the operative word: a store whose connection went away has no
-/// tree of its own to fall back on, and `NOT_CONNECTED` is the code that makes
-/// Camel connect and ask again rather than showing the account as broken.
+/// Camel calls `get_folder_info_sync` on a store it believes is connected.
+/// A store whose connection went away has no tree of its own to fall back
+/// on. `NOT_CONNECTED` is the code that makes Camel connect and ask again,
+/// instead of showing the account as broken.
 #[test]
 fn a_store_with_no_connection_has_no_folders_to_list() {
     let store = JmapStore::detached();
@@ -131,9 +133,9 @@ fn a_store_with_no_connection_has_no_folders_to_list() {
     }
 }
 
-/// The first call has nothing to serve from, so it lists — flags or no flags.
-/// A store that answered "no folders" until someone asked it to refresh would
-/// be an account that opens empty.
+/// The first call has nothing to serve from, so it lists, with or without
+/// flags. A store that answered "no folders" until someone asked it to
+/// refresh would open as an empty account.
 #[test]
 fn the_first_listing_reaches_the_server_with_no_refresh_asked_for() {
     let (_server, store) = connected();
@@ -142,8 +144,8 @@ fn the_first_listing_reaches_the_server_with_no_refresh_asked_for() {
     assert_eq!(paths(&tree), ["Inbox"]);
 }
 
-/// And the second call does not. The server is stopped between the two, so the
-/// tree that comes back cannot have come from it.
+/// The second call does not reach the server. The server is stopped between
+/// the two calls, so the tree that comes back cannot have come from it.
 #[test]
 fn a_second_listing_is_answered_without_the_server() {
     let (server, store) = connected();
@@ -154,9 +156,9 @@ fn a_second_listing_is_answered_without_the_server() {
     assert_eq!(paths(&tree), ["Inbox"]);
 }
 
-/// The cached tree is the same tree, not an equal one: `get_folder_info_sync`
-/// is called often enough that re-walking the account's mailboxes on each of
-/// them would be work with no answer attached to it.
+/// The cached tree is the same tree, not an equal one. Camel calls
+/// `get_folder_info_sync` often enough that re-walking the account's
+/// mailboxes on every call would be wasted work.
 #[test]
 fn the_cached_listing_is_the_one_that_was_listed() {
     let (_server, store) = connected();
@@ -166,8 +168,8 @@ fn the_cached_listing_is_the_one_that_was_listed() {
     assert!(Arc::ptr_eq(&first, &second));
 }
 
-/// Without the flag, a store does not go and look — which is the whole point of
-/// the flag. A mailbox another client made after the listing is not in the
+/// Without the flag, a store does not look again. This is the whole point of
+/// the flag: a mailbox another client made after the listing is not in the
 /// answer.
 #[test]
 fn a_mailbox_made_after_the_listing_is_not_noticed_until_a_refresh() {
@@ -184,10 +186,11 @@ fn a_mailbox_made_after_the_listing_is_not_noticed_until_a_refresh() {
     );
 }
 
-/// A refresh that finds nothing keeps the tree it has, rather than replacing it
-/// with an equal one: Camel compares the `CamelFolderInfo` forests it is given
-/// to decide which folders to signal as created or deleted, so a tree that is
-/// new every refresh is churn no folder actually did.
+/// A refresh that finds nothing keeps the tree it has, rather than replacing
+/// it with an equal one. Camel compares the `CamelFolderInfo` forests it is
+/// given to decide which folders to signal as created or deleted. A tree
+/// that is rebuilt on every refresh would signal churn no folder actually
+/// did.
 #[test]
 fn a_refresh_that_finds_nothing_keeps_the_tree_it_has() {
     let (_server, store) = connected();
@@ -197,10 +200,10 @@ fn a_refresh_that_finds_nothing_keeps_the_tree_it_has() {
     assert!(Arc::ptr_eq(&first, &refreshed));
 }
 
-/// A refresh after the listing was rebuilt is asked from the *new* state. The
-/// mailbox created here moved the account on twice over; a store that kept
-/// asking from the state of its first listing would rebuild the tree on every
-/// refresh forever after.
+/// A refresh after the listing was rebuilt is asked from the new state. The
+/// mailbox created here moves the account state forward twice. A store that
+/// kept asking from the state of its first listing would rebuild the tree on
+/// every later refresh.
 #[test]
 fn a_rebuilt_listing_is_what_the_next_refresh_is_measured_against() {
     let (server, store) = connected();
@@ -217,11 +220,11 @@ fn a_rebuilt_listing_is_what_the_next_refresh_is_measured_against() {
     );
 }
 
-/// `JmapStore::folder_list_changed_structurally` is what a pushed `Mailbox`
-/// change is checked against before `jmap_mail::push` tells Camel its folder
-/// list is stale — see that module's own docs. With nothing listed yet there
-/// is nothing to compare against, so it reports no change rather than forcing
-/// a listing of its own.
+/// `jmap_mail::push` checks a pushed `Mailbox` change against
+/// `JmapStore::folder_list_changed_structurally` before it tells Camel the
+/// folder list is stale. See that module's own docs for details. With
+/// nothing listed yet, there is nothing to compare against, so this reports
+/// no change instead of forcing a listing of its own.
 #[test]
 fn with_no_cached_listing_nothing_is_reported_as_structural() {
     let (_server, store) = connected();
@@ -229,12 +232,11 @@ fn with_no_cached_listing_nothing_is_reported_as_structural() {
     assert!(!store.folder_list_changed_structurally());
 }
 
-/// RFC 8621 puts `totalEmails` and
-/// `unreadEmails` on the `Mailbox` object itself, so a delivery bumps the
-/// account's `Mailbox` state exactly as visibly as a folder being created
-/// would — but the shape of the tree does not move. Camel's folder list must
-/// not be told it is stale for that: the open folder's own refresh already
-/// carries the new counts to Camel.
+/// RFC 8621 puts `totalEmails` and `unreadEmails` on the `Mailbox` object
+/// itself. A delivery bumps the account's `Mailbox` state as visibly as
+/// creating a folder does, but the shape of the tree does not change.
+/// Camel's folder list must not be told it is stale for that case: the open
+/// folder's own refresh already carries the new counts to Camel.
 #[test]
 fn a_delivery_that_only_moves_counts_is_not_structural() {
     let (server, store) = connected();
@@ -255,9 +257,9 @@ fn a_delivery_that_only_moves_counts_is_not_structural() {
             "text",
             "2026-01-15T09:00:00Z",
         ));
-        // `seed_email` alone does not bump state, so bump it by hand the way
-        // a real server's own delivery would: the mailbox's derived counts
-        // changed, so the account's `Mailbox` state advances with it.
+        // `seed_email` alone does not bump state. Bump it by hand, the way a
+        // real server's own delivery would: the mailbox's derived counts
+        // changed, so the account's `Mailbox` state advances too.
         let mailbox = account
             .mailboxes
             .get(&inbox)
@@ -274,8 +276,8 @@ fn a_delivery_that_only_moves_counts_is_not_structural() {
     );
 }
 
-/// A folder actually created is the opposite case: the shape did move, so
-/// this must say so.
+/// A folder actually created is the opposite case: the shape did change, so
+/// this must report it.
 #[test]
 fn a_new_mailbox_is_structural() {
     let (server, store) = connected();
@@ -289,9 +291,9 @@ fn a_new_mailbox_is_structural() {
 }
 
 /// A listing belongs to the connection it was read over. Camel reconnects a
-/// store whose connection it believes has gone away, and the account behind the
-/// new one may be a different account entirely — the user edited the server, or
-/// the password, or both.
+/// store whose connection it believes has gone away. The account behind the
+/// new connection may be a different account entirely, if the user edited the
+/// server, the password, or both.
 #[test]
 fn a_new_connection_discards_the_listing_the_old_one_answered() {
     let (server, store) = connected();
@@ -308,13 +310,13 @@ fn a_new_connection_discards_the_listing_the_old_one_answered() {
     );
 }
 
-/// And a disconnected store does not answer from the tree it had, which is the
-/// connection's doing rather than the listing's: there is nothing to read the
-/// account over, so there is no answer to give. Coming back is a fresh listing
-/// for the same reason as above.
+/// A disconnected store does not answer from the tree it had. This is the
+/// connection's doing, not the listing's: there is nothing to read the
+/// account over, so there is no answer to give. Reconnecting produces a
+/// fresh listing, for the same reason as above.
 ///
-/// `drop_connection` frees the tree as well, which nothing here can see —
-/// deliberately, since a listing no reader can reach is memory and not
+/// `drop_connection` also frees the tree, which nothing here can observe.
+/// This is deliberate: a listing no reader can reach is memory, not
 /// behaviour.
 #[test]
 fn a_disconnected_store_does_not_answer_from_the_tree_it_had() {
@@ -337,14 +339,15 @@ fn a_disconnected_store_does_not_answer_from_the_tree_it_had() {
     );
 }
 
-/// A server that cannot be reached is reported, not papered over with an empty
-/// tree — and a store that never listed successfully has nothing else to say.
+/// A server that cannot be reached is reported, not papered over with an
+/// empty tree. A store that never listed successfully has nothing else to
+/// say.
 ///
-/// A short timeout, because the socket this reaches for is one the mock server
-/// was listening on a moment ago rather than a port nothing ever answered: the
-/// request goes out on a pooled connection whose peer has gone, and waiting the
-/// client's default half-minute for that to become obvious is half a minute of
-/// test suite.
+/// The timeout is short because the socket this test reaches for was
+/// listening a moment ago, not a port nothing ever answered. The request
+/// goes out on a pooled connection whose peer is gone. Waiting the client's
+/// default half-minute to notice that would add half a minute to the test
+/// suite.
 #[test]
 fn a_listing_that_fails_is_reported_rather_than_answered_empty() {
     let server = MockServer::builder().start();
@@ -363,10 +366,10 @@ fn a_listing_that_fails_is_reported_rather_than_answered_empty() {
     );
 }
 
-/// A store whose account has no mailboxes at all lists an empty tree, and keeps
-/// it: "nothing yet" is an answer, and re-asking the server for it on every
-/// call would be the cache never engaging on exactly the accounts that are
-/// cheapest to be wrong about.
+/// A store whose account has no mailboxes at all lists an empty tree and
+/// keeps it. "Nothing yet" is a valid answer. Re-asking the server on every
+/// call would mean the cache never engages for the accounts that are
+/// cheapest to get wrong.
 #[test]
 fn an_account_with_no_mailboxes_caches_its_empty_tree() {
     let server = MockServer::builder().start();
@@ -378,10 +381,10 @@ fn an_account_with_no_mailboxes_caches_its_empty_tree() {
     assert!(Arc::ptr_eq(&first, &store.folders(CACHED).expect("cached")));
 }
 
-/// The tree a folder id is looked up in is the account's own. Nothing here
-/// depends on the ids themselves, but a listing that came back for some other
-/// account would still pass every assertion above, so the account it was read
-/// for is checked once.
+/// The tree a folder id is looked up in belongs to the account itself.
+/// Nothing here depends on the ids themselves, but a listing that came back
+/// for a different account would still pass every assertion above. So this
+/// test checks the account the listing was read for, once.
 #[test]
 fn the_listing_is_the_connected_accounts() {
     let (server, store) = connected();
@@ -402,9 +405,9 @@ fn the_listing_is_the_connected_accounts() {
 // ---------------------------------------------------------------------------
 // which part of the tree the call asks for
 
-/// A tree built by hand, for the questions that are about the request rather
-/// than about the server. Sibling order is RFC 8621's — `sortOrder`, then the
-/// name — so `Personal` comes before `Work`.
+/// A tree built by hand, for questions about the request rather than about
+/// the server. Sibling order follows RFC 8621: `sortOrder`, then name. So
+/// `Personal` comes before `Work`.
 fn hand_built() -> FolderTree {
     let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
         id: Some(Id::new(id)),
@@ -421,8 +424,8 @@ fn hand_built() -> FolderTree {
     .expect("a well-formed mailbox list")
 }
 
-/// The request one call makes, as something a test can compare: the paths it is
-/// rooted at, and how far down it goes.
+/// The request one call makes, as something a test can compare: the paths it
+/// is rooted at, and how far down it goes.
 fn requested(
     tree: &FolderTree,
     top: Option<&str>,
@@ -437,9 +440,9 @@ fn requested(
     (paths, request.depth)
 }
 
-/// `top` is nullable, and NULL means the account: Camel's own documentation
-/// calls it "the name of the folder to start from", and starting from nowhere
-/// is starting from the root.
+/// `top` is nullable, and NULL means the account. Camel's own documentation
+/// calls it "the name of the folder to start from". Starting from nowhere
+/// means starting from the root.
 #[test]
 fn a_call_with_no_top_is_rooted_at_every_top_level_folder() {
     let tree = hand_built();
@@ -448,10 +451,10 @@ fn a_call_with_no_top_is_rooted_at_every_top_level_folder() {
     assert_eq!(paths, ["Personal", "Work"]);
 }
 
-/// The empty string is the same thing, and not a folder whose path is empty:
+/// The empty string means the same thing, not a folder whose path is empty.
 /// `camel_store_get_folder_info_sync` tests `top == NULL || *top == '\0'` for
-/// its own "start at root" decision, so a store that read the two differently
-/// would disagree with the wrapper calling it.
+/// its own "start at root" decision. A store that read the two cases
+/// differently would disagree with the wrapper calling it.
 #[test]
 fn an_empty_top_is_the_account_too() {
     let tree = hand_built();
@@ -462,9 +465,9 @@ fn an_empty_top_is_the_account_too() {
     );
 }
 
-/// A `top` roots the answer at that folder — which is *included*, not skipped:
-/// it is the head of the chain the caller gets back, the way IMAPX's is. Its
-/// siblings are not.
+/// A `top` roots the answer at that folder, which is included, not skipped.
+/// It is the head of the chain the caller gets back, the way IMAPX's answer
+/// is. Its siblings are not included.
 #[test]
 fn a_top_is_answered_with_that_folder_at_the_root() {
     let tree = hand_built();
@@ -473,9 +476,10 @@ fn a_top_is_answered_with_that_folder_at_the_root() {
     assert_eq!(paths, ["Work"]);
 }
 
-/// And it is matched on the Camel path, at any depth — not on the display name,
-/// and not only among the top-level folders. Camel keys every folder by the
-/// `full_name` this side produced, so that is the only string it can ask with.
+/// The match uses the Camel path, at any depth, not the display name, and
+/// not only among the top-level folders. Camel keys every folder by the
+/// `full_name` this side produced, so that is the only string it can ask
+/// with.
 #[test]
 fn a_top_deeper_in_the_tree_is_found_by_its_path() {
     let tree = hand_built();
@@ -484,12 +488,12 @@ fn a_top_deeper_in_the_tree_is_found_by_its_path() {
     assert_eq!(paths, ["Work/Invoices"]);
 }
 
-/// A `top` no folder answers to asks for nothing, which Camel reads as a NULL
-/// chain with no error set — IMAPX's own `get_folder_info_offline` answers an
-/// empty match the same way, since an empty array handed to
-/// `camel_folder_info_build` comes back NULL with nothing having set a
-/// GError. An error instead would turn a folder deleted by another client
-/// into a broken account.
+/// A `top` that names no folder asks for nothing. Camel reads this as a NULL
+/// chain with no error set. IMAPX's own `get_folder_info_offline` answers an
+/// empty match the same way, because an empty array handed to
+/// `camel_folder_info_build` comes back NULL with no GError set. An error
+/// instead would turn a folder deleted by another client into a broken
+/// account.
 #[test]
 fn a_top_that_names_no_folder_asks_for_nothing() {
     let tree = hand_built();
@@ -509,11 +513,11 @@ fn recursive_asks_for_every_level_below_the_root() {
     assert_eq!(requested(&tree, Some("Work"), RECURSIVE).1, None);
 }
 
-/// Without it, one level below `top` — and the two cases differ by one, because
-/// the folder `top` names is itself in the answer and the account's root is
-/// not. `top` = `Work` returns `Work` and its children; no `top` at all returns
-/// the top-level folders, which *are* the root's children, and nothing under
-/// them.
+/// Without it, the answer goes one level below `top`. The two cases differ
+/// by one level, because the folder `top` names is itself in the answer, and
+/// the account's root is not. `top` = `Work` returns `Work` and its
+/// children. No `top` at all returns the top-level folders, which are the
+/// root's children, and nothing below them.
 #[test]
 fn without_recursive_only_the_level_below_top_is_asked_for() {
     let tree = hand_built();
@@ -522,9 +526,9 @@ fn without_recursive_only_the_level_below_top_is_asked_for() {
     assert_eq!(requested(&tree, Some("Work"), CACHED).1, Some(1));
 }
 
-/// The refresh flag is the listing's business and not the request's: a call
+/// The refresh flag is the listing's business, not the request's. A call
 /// that asks for one subtree still refreshes the whole tree, because JMAP has
-/// no way to ask for part of a `Mailbox/changes` and a partial answer would
+/// no way to ask for part of a `Mailbox/changes`. A partial answer would
 /// leave the store's state describing folders it did not fetch.
 #[test]
 fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
@@ -539,12 +543,12 @@ fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
 // ---------------------------------------------------------------------------
 // the ticks the user set, as a filter on that part
 
-/// The shape [`hand_built`] has, with only the named mailboxes ticked.
+/// The same shape as [`hand_built`], with only the named mailboxes ticked.
 ///
-/// Every mailbox says which it is rather than leaving the property out: RFC
-/// 8621 §2 gives `isSubscribed` no default, and `jmap-mail-sync` reads a
-/// missing one as a tick, so an omission here would be the opposite of what a
-/// test about unsubscribed folders wants.
+/// Every mailbox states whether it is subscribed, rather than leaving the
+/// property out. RFC 8621 §2 gives `isSubscribed` no default, and
+/// `jmap-mail-sync` reads a missing value as a tick. Omitting it here would
+/// give the opposite of what a test about unsubscribed folders wants.
 fn ticked(subscribed: &[&str]) -> FolderTree {
     let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
         id: Some(Id::new(id)),
@@ -564,9 +568,9 @@ fn ticked(subscribed: &[&str]) -> FolderTree {
 
 /// Every path one request asks for, parents before children.
 ///
-/// [`requested`] reads the roots alone, which is all the `top` and the depth
-/// can change; a filter changes what hangs below them too, so these tests need
-/// the whole of what was asked for.
+/// [`requested`] reads only the roots, which is all that `top` and the depth
+/// can change. A filter also changes what hangs below the roots, so these
+/// tests need the whole answer.
 fn requested_paths(
     tree: &FolderTree,
     top: Option<&str>,
@@ -582,9 +586,9 @@ fn requested_paths(
     paths
 }
 
-/// The baseline the rest of this section is measured against: the ticks are a
-/// property of the folders either way, and without the flag they change
-/// nothing about which of them the call asks for.
+/// The baseline the rest of this section is measured against. The ticks are
+/// a property of the folders either way. Without the flag, they change
+/// nothing about which folders the call asks for.
 #[test]
 fn the_ticks_change_nothing_when_the_flag_is_not_set() {
     let tree = ticked(&["Personal"]);
@@ -595,10 +599,10 @@ fn the_ticks_change_nothing_when_the_flag_is_not_set() {
     );
 }
 
-/// And with it, the folders the user unticked are gone. This is the flag
-/// Evolution's folder tree passes for a store that is `CamelSubscribable`, so
-/// it is the whole reason the tick in the subscription editor changes what the
-/// user sees.
+/// With the flag set, the folders the user unticked are gone. Evolution's
+/// folder tree passes this flag for a store that is `CamelSubscribable`.
+/// This is the whole reason the tick in the subscription editor changes
+/// what the user sees.
 #[test]
 fn the_subscribed_flag_leaves_out_the_folders_the_user_unticked() {
     let tree = ticked(&["Personal", "Work"]);
@@ -609,10 +613,10 @@ fn the_subscribed_flag_leaves_out_the_folders_the_user_unticked() {
     );
 }
 
-/// An unticked folder with a ticked one below it stays, because dropping it
-/// would drop the ticked folder with it: `CamelFolderInfo` hangs a child off
-/// its parent, so there is no answer in which `Work/Invoices` is present and
-/// `Work` is not.
+/// An unticked folder with a ticked folder below it stays. Dropping it
+/// would drop the ticked folder with it, because `CamelFolderInfo` hangs a
+/// child off its parent. There is no answer in which `Work/Invoices` is
+/// present and `Work` is not.
 #[test]
 fn an_unticked_folder_stays_when_something_below_it_is_ticked() {
     let tree = ticked(&["Invoices"]);
@@ -634,9 +638,9 @@ fn every_level_above_a_ticked_folder_is_kept() {
     );
 }
 
-/// And a folder kept only for what is below it is still described as unticked
-/// — it is in the answer because of its children, and saying otherwise would
-/// put a tick in the subscription editor the user never set.
+/// A folder kept only for what is below it is still described as unticked.
+/// It is in the answer because of its children. Saying otherwise would put
+/// a tick in the subscription editor that the user never set.
 #[test]
 fn a_folder_kept_only_for_its_children_is_not_called_subscribed() {
     let tree = ticked(&["Invoices"]);
@@ -648,11 +652,12 @@ fn a_folder_kept_only_for_its_children_is_not_called_subscribed() {
     assert!(!work.subscribed, "a folder the user never ticked");
 }
 
-/// The other direction of the same question, and the one place the filter and
-/// the depth cut visibly differ. `from_forest` deliberately leaves
-/// `CAMEL_FOLDER_CHILDREN` on a folder whose children the *depth* left out —
-/// they exist, and the expander is how the caller asks for them. Children the
-/// *ticks* left out are not part of this view at all, so the folder has none.
+/// The other direction of the same question, and the one place where the
+/// filter and the depth cut visibly differ. `from_forest` deliberately
+/// leaves `CAMEL_FOLDER_CHILDREN` on a folder whose children the depth left
+/// out: they exist, and the expander is how the caller asks for them.
+/// Children the ticks left out are not part of this view at all, so the
+/// folder has none.
 #[test]
 fn a_folder_whose_children_are_all_unticked_has_none_in_the_answer() {
     let tree = ticked(&["Work"]);
@@ -664,9 +669,8 @@ fn a_folder_whose_children_are_all_unticked_has_none_in_the_answer() {
     assert!(work.children.is_empty(), "an unticked child came along");
 }
 
-/// An account the user has unticked entirely asks for nothing — which Camel
-/// reads as a NULL chain with no error, the same as a `top` that names no
-/// folder.
+/// An account the user unticked entirely asks for nothing. Camel reads this
+/// as a NULL chain with no error, the same as a `top` that names no folder.
 #[test]
 fn an_account_with_nothing_ticked_asks_for_nothing() {
     let tree = ticked(&[]);
@@ -674,8 +678,8 @@ fn an_account_with_nothing_ticked_asks_for_nothing() {
     assert!(requested_paths(&tree, None, RECURSIVE | SUBSCRIBED).is_empty());
 }
 
-/// The filter is applied to the subtree `top` names rather than instead of it:
-/// a `top` whose subtree holds nothing ticked asks for nothing, even though
+/// The filter applies within the subtree `top` names, not instead of it. A
+/// `top` whose subtree holds nothing ticked asks for nothing, even though
 /// the account has ticked folders elsewhere.
 #[test]
 fn a_top_with_nothing_ticked_below_it_asks_for_nothing() {
@@ -684,7 +688,8 @@ fn a_top_with_nothing_ticked_below_it_asks_for_nothing() {
     assert!(requested_paths(&tree, Some("Work"), RECURSIVE | SUBSCRIBED).is_empty());
 }
 
-/// And a `top` that does is filtered like any other root, ancestors and all.
+/// A `top` with something ticked below it is filtered like any other root,
+/// ancestors included.
 #[test]
 fn a_top_is_filtered_like_any_other_root() {
     let tree = ticked(&["Work", "Paid"]);
@@ -695,10 +700,10 @@ fn a_top_is_filtered_like_any_other_root() {
     );
 }
 
-/// The depth is still the depth. `Work` is in the answer only for the ticked
-/// folder below it, and the caller asked for one level: the depth the request
-/// carries is the one an ordinary parent would have got, and cutting to it
-/// stays `from_forest`'s job rather than becoming the filter's.
+/// The depth is still the depth. `Work` is in the answer only because of
+/// the ticked folder below it, and the caller asked for one level. The
+/// depth the request carries is the depth an ordinary parent would get.
+/// Cutting to that depth stays `from_forest`'s job, not the filter's.
 #[test]
 fn the_filter_does_not_change_the_depth_the_call_asks_for() {
     let tree = ticked(&["Invoices"]);
@@ -709,11 +714,11 @@ fn the_filter_does_not_change_the_depth_the_call_asks_for() {
     );
 }
 
-/// `SUBSCRIPTION_LIST` is the subscription editor's own question — "which
-/// folders are there to tick" — so it is answered with all of them. For JMAP
-/// that is the listing this store already has: `Mailbox/get` returns every
-/// mailbox of the account with its `isSubscribed`, so there is no second,
-/// wider request to make the way an IMAP store makes `LIST` beside `LSUB`.
+/// `SUBSCRIPTION_LIST` is the subscription editor's own question: "which
+/// folders are there to tick". The answer is all of them. For JMAP that is
+/// the listing this store already has: `Mailbox/get` returns every mailbox
+/// of the account with its `isSubscribed`. There is no second, wider request
+/// to make, the way an IMAP store makes `LIST` beside `LSUB`.
 #[test]
 fn the_subscription_list_flag_asks_for_every_folder() {
     let tree = ticked(&["Personal"]);
@@ -724,9 +729,9 @@ fn the_subscription_list_flag_asks_for_every_folder() {
     );
 }
 
-/// And it outranks `SUBSCRIBED` if a caller sets both, because a subscription
-/// editor showing only the folders that are already ticked is one the user
-/// cannot tick anything new in.
+/// `SUBSCRIPTION_LIST` outranks `SUBSCRIBED` if a caller sets both. A
+/// subscription editor that shows only the folders already ticked is one
+/// where the user cannot tick anything new.
 #[test]
 fn the_subscription_list_flag_outranks_the_subscribed_one() {
     let tree = ticked(&["Personal"]);
@@ -737,16 +742,17 @@ fn the_subscription_list_flag_outranks_the_subscribed_one() {
     );
 }
 
-/// And the slot itself. `CamelStore` leaves `get_folder_info_sync` NULL and
-/// `camel_store_get_folder_info_sync` refuses to call a store that has not
-/// filled it in, so an override that never reached the class is an account with
-/// no folders and a runtime warning rather than a compile error.
+/// The vfunc slot itself. `CamelStore` leaves `get_folder_info_sync` NULL,
+/// and `camel_store_get_folder_info_sync` refuses to call a store that has
+/// not filled it in. An override that never reached the class would show up
+/// as an account with no folders and a runtime warning, not a compile
+/// error.
 #[test]
 fn the_store_class_overrides_the_folder_listing_vfunc() {
-    // SAFETY: the store type is registered by `store_type`, and referencing its
-    // class is what runs the class_init that installs the vfunc; the reference
-    // is released below. Peeking the parent's class is safe because referencing
-    // the child's has initialised it.
+    // SAFETY: `store_type` registers the store type. Referencing its class
+    // runs the class_init that installs the vfunc, and the reference is
+    // released below. Peeking the parent's class is safe because
+    // referencing the child's class has already initialised it.
     unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         assert!(
@@ -778,9 +784,9 @@ struct Answered {
 }
 
 impl Answered {
-    /// Calls the vfunc through the pointer in the class, which is the only way
-    /// Camel ever reaches it — by name would test a function that might not be
-    /// installed anywhere.
+    /// Calls the vfunc through the pointer in the class, the only way Camel
+    /// ever reaches it. Calling it by name would test a function that might
+    /// not be installed anywhere.
     fn of(
         store: &JmapStore,
         top: Option<&str>,
@@ -789,10 +795,10 @@ impl Answered {
         let top = top.map(|top| CString::new(top).expect("a top with no NUL"));
         let mut error: *mut GError = ptr::null_mut();
 
-        // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc. The store is an instance of ours, which is what the vfunc's
-        // contract asks for; `top` is NULL or a NUL-terminated string alive for
-        // the call, and `error` is writable and currently NULL. The class
+        // SAFETY: referencing the class runs the class_init that installs
+        // the vfunc. The store is an instance of ours, which the vfunc's
+        // contract requires. `top` is NULL or a NUL-terminated string alive
+        // for the call. `error` is writable and currently NULL. The class
         // reference is released after the call, and the store outlives it.
         unsafe {
             let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
@@ -857,8 +863,9 @@ impl Drop for Answered {
     }
 }
 
-/// A store with something worth rooting an answer at: `Work`, a child, and a
-/// grandchild, plus a sibling that must stay out of a `top`ped answer.
+/// A store with something worth rooting an answer at: `Work`, a child, and
+/// a grandchild. It also has a sibling that must stay out of a `top`ped
+/// answer.
 fn nested() -> (MockServer, Box<JmapStore>) {
     let server = MockServer::builder().start();
     edit(&server, |account| {
@@ -872,10 +879,10 @@ fn nested() -> (MockServer, Box<JmapStore>) {
     (server, store)
 }
 
-/// The whole point of the vfunc, end to end: a connected store, a NULL `top`,
-/// and the account's folders coming back as a C forest. Everything under it has
-/// its own test; this is the one that proves they are wired to each other and
-/// to the class.
+/// The whole point of the vfunc, end to end: a connected store, a NULL
+/// `top`, and the account's folders coming back as a C forest. Everything
+/// below this has its own test. This test proves they are wired to each
+/// other and to the class.
 #[test]
 fn the_vfunc_answers_a_connected_store_with_its_folders() {
     let (_server, store) = nested();
@@ -892,9 +899,8 @@ fn the_vfunc_answers_a_connected_store_with_its_folders() {
     );
 }
 
-/// A NULL `top` and an empty one are the same question, and the vfunc has to
-/// read a C NULL as such rather than as a folder whose path is the empty
-/// string.
+/// A NULL `top` and an empty one are the same question. The vfunc must
+/// read a C NULL that way, not as a folder whose path is the empty string.
 #[test]
 fn the_vfunc_reads_an_empty_top_as_the_whole_account() {
     let (_server, store) = nested();
@@ -905,10 +911,10 @@ fn the_vfunc_reads_an_empty_top_as_the_whole_account() {
     );
 }
 
-/// The `top` reaching the answer, not just the [`Request`]: the folder named is
-/// the head of the chain, its sibling `Inbox` is absent, and the chain's head
-/// has no `next` — a root chain that still linked the siblings would hand Camel
-/// the whole account under the name of a subtree.
+/// The `top` reaching the answer, not just the [`Request`]. The folder
+/// named is the head of the chain, its sibling `Inbox` is absent, and the
+/// chain's head has no `next`. A root chain that still linked the siblings
+/// would hand Camel the whole account under the name of a subtree.
 #[test]
 fn the_vfunc_roots_the_answer_at_the_top_it_was_given() {
     let (_server, store) = nested();
@@ -920,13 +926,13 @@ fn the_vfunc_roots_the_answer_at_the_top_it_was_given() {
         ["Work", "Work/Invoices", "Work/Invoices/Paid"]
     );
     // SAFETY: the chain is the forest the vfunc handed over, and it is not
-    // empty — the assertion above walked it.
+    // empty: the assertion above walked it.
     unsafe { assert!((*answered.chain).next.is_null(), "a sibling came along") };
 }
 
-/// And the depth reaching it. Without `RECURSIVE` the answer is `top` and its
-/// immediate children, which is the level below a folder that is itself in the
-/// answer — so `Paid`, a level further down, is left out.
+/// The depth also reaches the answer. Without `RECURSIVE`, the answer is
+/// `top` and its immediate children: the level below a folder that is
+/// itself in the answer. So `Paid`, a level further down, is left out.
 #[test]
 fn the_vfunc_cuts_the_answer_when_recursive_is_not_asked_for() {
     let (_server, store) = nested();
@@ -937,9 +943,9 @@ fn the_vfunc_cuts_the_answer_when_recursive_is_not_asked_for() {
 }
 
 /// The subscription flag reaching the answer, against a real account rather
-/// than a hand-built tree: the ticks come off through the same
-/// `Mailbox/set` the subscription editor writes, and the folder that keeps
-/// `Work` in the answer is the ticked one below it.
+/// than a hand-built tree. The ticks come off through the same `Mailbox/set`
+/// write the subscription editor uses. The folder that keeps `Work` in the
+/// answer is the ticked folder below it.
 #[test]
 fn the_vfunc_leaves_out_the_folders_the_user_unticked() {
     let (_server, store) = nested();
@@ -955,8 +961,8 @@ fn the_vfunc_leaves_out_the_folders_the_user_unticked() {
     assert_eq!(answered.paths(), ["Inbox", "Work", "Work/Invoices"]);
 }
 
-/// And the editor's own question, which has to reach the vfunc as the *whole*
-/// account or the user has no way to tick a folder back on.
+/// The editor's own question must reach the vfunc as the whole account.
+/// Otherwise the user has no way to tick a folder back on.
 #[test]
 fn the_vfunc_answers_the_subscription_list_with_every_folder() {
     let (_server, store) = nested();
@@ -971,11 +977,11 @@ fn the_vfunc_answers_the_subscription_list_with_every_folder() {
 }
 
 /// The case that must not be an error. IMAPX's own `get_folder_info_offline`
-/// answers an empty match the same way — an empty array handed to
-/// `camel_folder_info_build` comes back NULL with nothing having set a
-/// GError — and a folder another client deleted between one call and the
-/// next is asked for once more before Camel notices; reporting that as a
-/// failure would turn someone else's tidying into a broken account.
+/// answers an empty match the same way: an empty array handed to
+/// `camel_folder_info_build` comes back NULL with no GError set. A folder
+/// another client deleted between one call and the next is asked for once
+/// more before Camel notices. Reporting that as a failure would turn
+/// someone else's tidying into a broken account.
 #[test]
 fn a_top_naming_no_folder_is_an_empty_answer_and_not_a_failure() {
     let (_server, store) = nested();
@@ -986,9 +992,9 @@ fn a_top_naming_no_folder_is_an_empty_answer_and_not_a_failure() {
     assert!(answered.error.is_null(), "an empty answer set an error");
 }
 
-/// The other NULL, which *is* a failure and has to be told apart from the one
+/// The other NULL, which is a failure, and must be told apart from the one
 /// above by the error alone. `NOT_CONNECTED` is the code that makes Camel
-/// connect and ask again rather than showing the account as broken.
+/// connect and ask again, instead of showing the account as broken.
 #[test]
 fn the_vfunc_answers_a_disconnected_store_with_null_and_an_error() {
     let store = JmapStore::detached();
@@ -1007,15 +1013,15 @@ fn the_vfunc_answers_a_disconnected_store_with_null_and_an_error() {
     }
 }
 
-/// A NULL instance pointer is not something Camel does, but it is what the
-/// guard's failure path looks like from here, and the vfunc must answer it with
-/// the same NULL-and-an-error rather than dereferencing it.
+/// A NULL instance pointer is not something Camel does. It is what the
+/// guard's failure path looks like from here. The vfunc must answer it with
+/// the same NULL-and-an-error, not by dereferencing it.
 #[test]
 fn a_null_store_is_reported_rather_than_dereferenced() {
     let mut error: *mut GError = ptr::null_mut();
 
-    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
-    // instance pointer under test, and `error` is writable and NULL.
+    // SAFETY: referencing the class installs the vfunc. NULL is exactly
+    // the instance pointer under test, and `error` is writable and NULL.
     let chain = unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         let vfunc = (*class).get_folder_info_sync.expect("the vfunc");
@@ -1039,11 +1045,11 @@ fn a_null_store_is_reported_rather_than_dereferenced() {
 // ---------------------------------------------------------------------------
 // opening one of them
 
-/// A real store — connected, with a nested mailbox to open — and the id of the
-/// mailbox the tests below ask for.
+/// A real store: connected, with a nested mailbox to open, and the id of
+/// the mailbox the tests below ask for.
 ///
-/// Real rather than [`JmapStore::detached`], which every test above uses,
-/// because this vfunc is the first one that *builds* something: Camel refuses
+/// Real, rather than [`JmapStore::detached`] which every test above uses,
+/// because this vfunc is the first one that builds something. Camel refuses
 /// to construct a folder whose parent is not a `CamelStore`, and a detached
 /// store is not a GObject at all.
 fn opened() -> (MockServer, Account, Id) {
@@ -1071,9 +1077,9 @@ impl Opened {
         let path = CString::new(path).expect("a path with no NUL");
         let mut error: *mut GError = ptr::null_mut();
 
-        // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc. `store` is an instance of ours or NULL, which is what the
-        // tests below hand over deliberately; `path` is NUL-terminated and
+        // SAFETY: referencing the class runs the class_init that installs
+        // the vfunc. `store` is an instance of ours, or NULL, which the
+        // tests below hand over deliberately. `path` is NUL-terminated and
         // alive for the call, and `error` is writable and currently NULL.
         unsafe {
             let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
@@ -1130,9 +1136,9 @@ impl Drop for Opened {
     }
 }
 
-/// The whole point of the vfunc: a path Camel took out of a folder listing goes
-/// back in, and the folder that comes out carries the JMAP mailbox id that path
-/// cannot be turned back into.
+/// The whole point of the vfunc: a path Camel took from a folder listing
+/// goes back in. The folder that comes out carries the JMAP mailbox id that
+/// the path cannot be turned back into.
 #[test]
 fn the_vfunc_opens_the_folder_a_path_names() {
     let (_server, account, invoices) = opened();
@@ -1144,9 +1150,9 @@ fn the_vfunc_opens_the_folder_a_path_names() {
     assert_eq!(opened.mailbox(), invoices);
 }
 
-/// A path no mailbox answers to. Unlike `get_folder_info_sync`, where an empty
-/// answer is a legitimate one, there is no such thing as half a folder: NULL is
-/// the only thing to return and an error is what says why.
+/// A path no mailbox answers to. Unlike `get_folder_info_sync`, where an
+/// empty answer is legitimate, there is no such thing as half a folder.
+/// NULL is the only thing to return, and the error says why.
 #[test]
 fn a_path_naming_no_mailbox_is_a_failure_with_a_reason() {
     let (_server, account, _) = opened();
@@ -1162,11 +1168,11 @@ fn a_path_naming_no_mailbox_is_a_failure_with_a_reason() {
     }
 }
 
-/// A folder that appeared after the listing the store is holding. Evolution
-/// reopens the folder the user last had selected at startup, from a URI in its
-/// settings, before anything asks the store to refresh — so a path that is not
-/// in the held tree is a reason to look again rather than to report a folder
-/// that plainly exists as missing.
+/// A folder that appeared after the listing the store is holding.
+/// Evolution reopens the folder the user last selected at startup, from a
+/// URI in its settings, before anything asks the store to refresh. So a
+/// path not in the held tree is a reason to look again, not to report a
+/// folder that plainly exists as missing.
 #[test]
 fn a_mailbox_created_since_the_listing_is_found_by_looking_again() {
     let (server, account, _) = opened();
@@ -1180,8 +1186,8 @@ fn a_mailbox_created_since_the_listing_is_found_by_looking_again() {
 }
 
 /// The other NULL, told apart from the one above by the error alone.
-/// `NOT_CONNECTED` is what makes Camel connect and ask again rather than show
-/// the account as broken.
+/// `NOT_CONNECTED` is what makes Camel connect and ask again, instead of
+/// showing the account as broken.
 #[test]
 fn a_disconnected_store_has_no_folder_to_open() {
     let account = Account::open();
@@ -1210,19 +1216,20 @@ fn a_null_store_has_no_folder_to_open_either() {
 }
 
 /// Camel keeps the folder, and this provider must not keep a second one.
-/// `CamelStore` owns a `CamelObjectBag` of open folders — reachable as
-/// `camel_store_get_folders_bag`, keyed with the class's own
-/// `hash_folder_name` — which `camel_store_get_folder_sync` reserves in before
-/// it calls the vfunc at all. So the vfunc's contract is to build a folder
-/// every time it is reached, and reaching it twice for one path is Camel's
-/// business rather than ours. Called through the wrapper here, because the
-/// caching is the wrapper's and calling the vfunc directly would test nothing.
+/// `CamelStore` owns a `CamelObjectBag` of open folders, reachable as
+/// `camel_store_get_folders_bag` and keyed with the class's own
+/// `hash_folder_name`. `camel_store_get_folder_sync` reserves a slot in it
+/// before it calls the vfunc at all. So the vfunc's contract is to build a
+/// folder every time it is reached. Reaching it twice for one path is
+/// Camel's business, not ours. This test calls the wrapper, because the
+/// caching is the wrapper's job, and calling the vfunc directly would test
+/// nothing.
 #[test]
 fn camel_hands_back_the_folder_it_already_opened() {
     let (_server, account, _) = opened();
 
     // SAFETY: a live store of ours, a NUL-terminated path, and an error
-    // out-parameter that is NULL — the wrapper tolerates a NULL GError **.
+    // out-parameter that is NULL. The wrapper tolerates a NULL GError **.
     let (first, second) = unsafe {
         let first = camel_store_get_folder_sync(
             account.store,
@@ -1254,17 +1261,18 @@ fn camel_hands_back_the_folder_it_already_opened() {
 // ---------------------------------------------------------------------------
 // and the three folders Camel asks for by purpose rather than by name
 
-/// A store whose inbox is not where a name-matching provider would look for
-/// it: nested under another mailbox, called something else entirely, and with a
-/// decoy mailbox named `inbox` sitting at the top level.
+/// A store whose inbox is not where a name-matching provider would look
+/// for it. It is nested under another mailbox, called something else
+/// entirely. A decoy mailbox named `inbox` sits at the top level.
 ///
-/// The decoy is what `CamelStoreClass`'s *inherited* implementation opens — it
-/// asks `get_folder_sync` for the folder called `inbox`, in exactly that case —
-/// so an account laid out like this is the one that tells the override apart
-/// from the default it replaces. Camel's own IMAPX does the same thing one
-/// spelling up, matching a folder's name against `"INBOX"`. Both are IMAP
-/// conventions rather than facts about mail stores: RFC 8621 §2 gives a mailbox
-/// a `role`, and says nothing about its name or where in the hierarchy it sits.
+/// The decoy is what `CamelStoreClass`'s inherited implementation opens. It
+/// asks `get_folder_sync` for the folder called `inbox` in exactly that
+/// case. An account laid out like this tells the override apart from the
+/// default it replaces. Camel's own IMAPX does the same thing one spelling
+/// up, matching a folder's name against `"INBOX"`. Both are IMAP
+/// conventions, not facts about mail stores. RFC 8621 §2 gives a mailbox a
+/// `role`, and says nothing about its name or where in the hierarchy it
+/// sits.
 fn with_inbox() -> (MockServer, Account, Id) {
     let server = MockServer::builder().start();
     let inbox = edit(&server, |account| {
@@ -1280,17 +1288,17 @@ fn with_inbox() -> (MockServer, Account, Id) {
 /// One "open the folder for this purpose" call and both of its answers, owned
 /// the way Camel owns them.
 ///
-/// The three wrappers have one signature, so one type covers all of them; which
-/// of the three was asked is the constructor.
+/// The three wrappers have one signature, so one type covers all of them.
+/// Which of the three was asked is decided by the constructor.
 struct Purpose {
     folder: *mut CamelFolder,
     error: *mut GError,
 }
 
 impl Purpose {
-    /// Through the public wrapper, which is how Evolution asks — and which
-    /// returns NULL without even reaching the store if the class left the vfunc
-    /// unset, so calling it is also what pins the override.
+    /// Through the public wrapper, which is how Evolution asks. The wrapper
+    /// returns NULL without even reaching the store if the class left the
+    /// vfunc unset, so calling it also pins the override in place.
     fn asked(
         store: *mut CamelStore,
         wrapper: unsafe extern "C" fn(
@@ -1300,8 +1308,8 @@ impl Purpose {
         ) -> *mut CamelFolder,
     ) -> Self {
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: `store` is a live store of ours or NULL — which every one of
-        // these wrappers type-checks — and `error` is writable and currently
+        // SAFETY: `store` is a live store of ours, or NULL, which every one
+        // of these wrappers type-checks. `error` is writable and currently
         // NULL.
         let folder = unsafe { wrapper(store, ptr::null_mut(), &mut error) };
         Self { folder, error }
@@ -1362,9 +1370,9 @@ impl Drop for Purpose {
     }
 }
 
-/// The account's inbox is the mailbox whose role says so — not the one whose
-/// name does, and not a top-level one. Left to the inherited implementation
-/// this account opens the decoy instead, which is a folder the user's incoming
+/// The account's inbox is the mailbox whose role says so, not the one whose
+/// name does, and not a top-level one. Left to the inherited implementation,
+/// this account opens the decoy instead: a folder the user's incoming
 /// filters would then run over.
 #[test]
 fn the_inbox_is_the_mailbox_holding_the_inbox_role() {
@@ -1377,19 +1385,19 @@ fn the_inbox_is_the_mailbox_holding_the_inbox_role() {
     assert_eq!(opened.mailbox(), inbox);
 }
 
-/// Evolution opens the inbox both ways — by purpose at startup and by path
-/// when the user clicks it in the folder tree — and two `CamelFolder`s over one
-/// mailbox would be two summaries and two sets of flags. Going through
-/// `camel_store_get_folder_sync` rather than building a folder here is what
-/// puts the answer through the store's folder bag, where the first of the two
-/// calls left it.
+/// Evolution opens the inbox both ways: by purpose at startup, and by path
+/// when the user clicks it in the folder tree. Two `CamelFolder`s over one
+/// mailbox would mean two summaries and two sets of flags. Going through
+/// `camel_store_get_folder_sync`, rather than building a folder here, puts
+/// the answer through the store's folder bag. That is where the first of
+/// the two calls left it.
 #[test]
 fn the_inbox_is_the_folder_camel_already_has_open_for_that_path() {
     let (_server, account, _) = with_inbox();
 
     let by_purpose = Purpose::inbox(account.store);
-    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL GError **
-    // which the wrapper tolerates.
+    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL
+    // GError **, which the wrapper tolerates.
     let by_path = unsafe {
         camel_store_get_folder_sync(
             account.store,
@@ -1411,11 +1419,11 @@ fn the_inbox_is_the_folder_camel_already_has_open_for_that_path() {
 }
 
 /// An account whose server assigns no roles. RFC 8621 §2 makes `role`
-/// nullable, so this is a legal account rather than a broken one — but Camel
-/// asked for the inbox, and there is no such thing as half a folder. Picking
-/// the mailbox called "Inbox" would be the provider guessing where the user's
-/// mail arrives, and guessing wrong means new mail filtered into a folder
-/// nobody reads.
+/// nullable, so this is a legal account, not a broken one. Camel still asked
+/// for the inbox, though, and there is no such thing as half a folder.
+/// Picking the mailbox called "Inbox" would be the provider guessing where
+/// the user's mail arrives. Guessing wrong means new mail filtered into a
+/// folder nobody reads.
 #[test]
 fn an_account_with_no_inbox_role_has_no_inbox_to_open() {
     let server = MockServer::builder().start();
@@ -1434,10 +1442,11 @@ fn an_account_with_no_inbox_role_has_no_inbox_to_open() {
     }
 }
 
-/// The same second look `get_folder_sync` takes, for the same reason: Camel
-/// asks a store for its inbox early — it is where the incoming filters run —
-/// and an account whose inbox arrived after the listing this store is holding
-/// would otherwise report having none until something else refreshed it.
+/// The same second look `get_folder_sync` takes, for the same reason. Camel
+/// asks a store for its inbox early, because this is where the incoming
+/// filters run. An account whose inbox arrived after the listing this store
+/// is holding would otherwise report having none, until something else
+/// refreshed it.
 #[test]
 fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
     let server = MockServer::builder().start();
@@ -1477,15 +1486,15 @@ fn a_disconnected_store_has_no_inbox_to_open() {
     }
 }
 
-/// The same guard as the other two vfuncs', reached the same way: the wrapper
-/// asserts `CAMEL_IS_STORE`, so a NULL instance can only arrive through the
-/// class pointer.
+/// The same guard as the other two vfuncs', reached the same way. The
+/// wrapper asserts `CAMEL_IS_STORE`, so a NULL instance can only arrive
+/// through the class pointer.
 #[test]
 fn a_null_store_has_no_inbox_either() {
     let mut error: *mut GError = ptr::null_mut();
 
-    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
-    // instance pointer under test, and `error` is writable and NULL.
+    // SAFETY: referencing the class installs the vfunc. NULL is exactly
+    // the instance pointer under test, and `error` is writable and NULL.
     let folder = unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         let vfunc = (*class).get_inbox_folder_sync.expect("the vfunc");
@@ -1503,14 +1512,14 @@ fn a_null_store_has_no_inbox_either() {
 // ---------------------------------------------------------------------------
 // and the other two: where deleted mail and spam are delivered
 
-/// An account whose trash and junk are named and placed the way a real server
-/// is free to name and place them: in the user's own language, nested under
-/// another mailbox — and with decoys called `Trash` and `Junk` at the top level
+/// An account whose trash and junk are named and placed the way a real
+/// server is free to. They sit nested, in the user's own language, under
+/// another mailbox. Decoys called `Trash` and `Junk` sit at the top level,
 /// claiming no role at all.
 ///
 /// The decoys are what a provider that matched on names would open, and what
-/// makes this account tell the two apart. RFC 8621 §2 gives a mailbox a `role`;
-/// its name is a label for the user.
+/// makes this account tell the two apart. RFC 8621 §2 gives a mailbox a
+/// `role`. Its name is only a label for the user.
 fn with_trash_and_junk() -> (MockServer, Account, Id, Id) {
     let server = MockServer::builder().start();
     let (trash, junk) = edit(&server, |account| {
@@ -1528,12 +1537,13 @@ fn with_trash_and_junk() -> (MockServer, Account, Id, Id) {
     (server, account, trash, junk)
 }
 
-/// "The folder in @store into which trash is delivered", which for a JMAP
-/// account is the mailbox holding the `trash` role and nothing else. Camel's own
-/// answer — the one this override replaces — is a virtual folder over the
-/// `DELETED` flag, and that flag is local to this client: no JMAP keyword
-/// carries it, so a message another client moved to trash is not in it and a
-/// message this one deleted is in no folder any other client can see.
+/// "The folder in @store into which trash is delivered". For a JMAP
+/// account that is the mailbox holding the `trash` role, and nothing else.
+/// Camel's own answer, the one this override replaces, is a virtual folder
+/// over the `DELETED` flag. That flag is local to this client: no JMAP
+/// keyword carries it. A message another client moved to trash is not in
+/// it. A message this client deleted is in no folder any other client can
+/// see.
 #[test]
 fn the_trash_is_the_mailbox_holding_the_trash_role() {
     let (_server, account, trash, _) = with_trash_and_junk();
@@ -1543,18 +1553,18 @@ fn the_trash_is_the_mailbox_holding_the_trash_role() {
     assert!(opened.error.is_null(), "opening the trash set an error");
     assert_eq!(opened.path(), "System/Papierkorb");
     assert_eq!(opened.mailbox(), trash);
-    // And nothing about the folder says "trash" yet: Camel's wrapper does not
+    // Nothing about the folder says "trash" yet. Camel's wrapper does not
     // mark what a store hands it, so `CAMEL_FOLDER_IS_TRASH` stays off until
-    // something sets it. `crate::folder`'s `flags` is where that decision will
-    // have to be taken, and it is not this increment's — see the note there.
+    // something sets it. `crate::folder`'s `flags` is where that decision
+    // will be made. It is not part of this increment; see the note there.
     assert_eq!(opened.flags(), CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY);
 }
 
-/// And the same for junk. `$junk` *is* a JMAP keyword, so Camel's virtual folder
-/// over the `JUNK` flag would not be empty here — it would be a second, and
-/// differently populated, spam folder sitting next to the account's own: the
-/// server files spam into the mailbox, and marking a message read on a phone
-/// does not move it out of a search.
+/// The same applies to junk. `$junk` is a JMAP keyword, so Camel's virtual
+/// folder over the `JUNK` flag would not be empty here. It would be a
+/// second, differently populated spam folder next to the account's own.
+/// The server files spam into the mailbox. Marking a message read on a
+/// phone does not move it out of a search.
 #[test]
 fn the_junk_is_the_mailbox_holding_the_junk_role() {
     let (_server, account, _, junk) = with_trash_and_junk();
@@ -1567,17 +1577,17 @@ fn the_junk_is_the_mailbox_holding_the_junk_role() {
     assert_eq!(opened.flags(), CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY);
 }
 
-/// The same folder Camel already has open for that path, for the reason the
-/// inbox has to be: Evolution reaches the trash both ways — by purpose when the
-/// user empties it, by path when they click it — and two `CamelFolder`s over one
-/// mailbox would be two summaries and two sets of flags.
+/// The same folder Camel already has open for that path, for the same
+/// reason as the inbox. Evolution reaches the trash both ways: by purpose
+/// when the user empties it, by path when they click it. Two `CamelFolder`s
+/// over one mailbox would mean two summaries and two sets of flags.
 #[test]
 fn the_trash_is_the_folder_camel_already_has_open_for_that_path() {
     let (_server, account, _, _) = with_trash_and_junk();
 
     let by_purpose = Purpose::trash(account.store);
-    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL GError **
-    // which the wrapper tolerates.
+    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL
+    // GError **, which the wrapper tolerates.
     let by_path = unsafe {
         camel_store_get_folder_sync(
             account.store,
@@ -1598,11 +1608,12 @@ fn the_trash_is_the_folder_camel_already_has_open_for_that_path() {
     unsafe { g_object_unref(by_path.cast()) };
 }
 
-/// An account whose server assigns neither role — legal, like the role-less
-/// inbox, and answered the same way. Camel documents NULL as meaning "no such
-/// folder exists" as well as "it went wrong", but the error is set regardless:
-/// the account plainly has mailboxes called `Trash` and `Junk`, and a silent
-/// NULL would leave nothing anywhere saying why neither of them is the trash.
+/// An account whose server assigns neither role. This is legal, like the
+/// role-less inbox, and answered the same way. Camel documents NULL as
+/// meaning both "no such folder exists" and "it went wrong", but the error
+/// is set regardless. The account plainly has mailboxes called `Trash` and
+/// `Junk`, and a silent NULL would leave nothing saying why neither of them
+/// is the trash.
 #[test]
 fn an_account_with_no_trash_or_junk_role_has_neither_to_open() {
     let server = MockServer::builder().start();
@@ -1624,10 +1635,10 @@ fn an_account_with_no_trash_or_junk_role_has_neither_to_open() {
     }
 }
 
-/// The second look the other two openers take, for the same reason: a mailbox
-/// the user made in webmail after this store listed the account is one the
-/// server would file deleted mail into, and reporting no trash until something
-/// else refreshed would send the next delete nowhere.
+/// The second look the other two openers take, for the same reason. A
+/// mailbox the user made in webmail after this store listed the account is
+/// one the server would file deleted mail into. Reporting no trash until
+/// something else refreshed would send the next delete nowhere.
 #[test]
 fn a_trash_that_appeared_since_the_listing_is_found_by_looking_again() {
     let server = MockServer::builder().start();
@@ -1667,12 +1678,12 @@ fn a_disconnected_store_has_no_trash_or_junk_to_open() {
     }
 }
 
-/// And the same guard as every other vfunc here, reached through the class
+/// The same guard as every other vfunc here, reached through the class
 /// because the wrappers assert `CAMEL_IS_STORE`.
 #[test]
 fn a_null_store_has_no_trash_or_junk_either() {
-    // SAFETY: referencing the class installs the vfuncs; NULL is exactly the
-    // instance pointer under test, and each `error` is writable and NULL.
+    // SAFETY: referencing the class installs the vfuncs. NULL is exactly
+    // the instance pointer under test, and each `error` is writable and NULL.
     unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         let vfuncs = [
@@ -1690,21 +1701,22 @@ fn a_null_store_has_no_trash_or_junk_either() {
     }
 }
 
-/// The other half of the same decision, and the visible one: Camel's listing
-/// *wrapper* adds `.#evolution/Trash` and `.#evolution/Junk` to whatever a
-/// store answers with, for as long as the store's flags claim it wants them.
-/// A JMAP account that kept them would show the user two trash folders — the
-/// server's, where their phone puts deleted mail, and a search over a flag only
-/// this client ever sets — and two junk folders, disagreeing about what spam is.
+/// The other half of the same decision, and the visible one. Camel's
+/// listing wrapper adds `.#evolution/Trash` and `.#evolution/Junk` to
+/// whatever a store answers with, for as long as the store's flags claim it
+/// wants them. A JMAP account that kept them would show the user two trash
+/// folders. One is the server's, where their phone puts deleted mail. The
+/// other is a search over a flag only this client ever sets. The account
+/// would also show two junk folders, disagreeing about what spam is.
 ///
-/// Through the wrapper rather than the vfunc, because the virtual folders are
-/// the wrapper's doing: the vfunc never sees them.
+/// This test calls the wrapper, not the vfunc, because the virtual folders
+/// are the wrapper's doing: the vfunc never sees them.
 #[test]
 fn the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own() {
     let (_server, account, _, _) = with_trash_and_junk();
 
     let mut paths = Vec::new();
-    // SAFETY: a live store of ours, a NULL `top` — the whole account — and an
+    // SAFETY: a live store of ours, a NULL `top` (the whole account), and an
     // error out-parameter the wrapper tolerates being NULL. The forest is
     // walked and then freed with the function Camel's contract names.
     unsafe {
@@ -1737,8 +1749,8 @@ fn the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own() {
 // initial_setup_sync: what the account wizard learns about Sent and Drafts
 
 /// An account whose Sent and Drafts are named and placed the way a real
-/// server is free to: nested, in the user's own language, with decoys
-/// carrying no role at the top level.
+/// server is free to. They are nested, in the user's own language, with
+/// decoys carrying no role at the top level.
 fn with_sent_and_drafts() -> (MockServer, Account, Id, Id) {
     let server = MockServer::builder().start();
     let (sent, drafts) = edit(&server, |account| {
@@ -1765,7 +1777,7 @@ struct Setup {
 
 impl Setup {
     /// Through the public wrapper, which is how Evolution's account wizard
-    /// asks — and which creates the hash table the vfunc inserts into.
+    /// asks. The wrapper creates the hash table the vfunc inserts into.
     fn run(store: *mut CamelStore) -> Self {
         let mut save: *mut GHashTable = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
@@ -1805,9 +1817,9 @@ impl Drop for Setup {
     }
 }
 
-/// The account wizard learns both roles' Camel paths, keyed the way
-/// `e_mail_store_save_initial_setup_sync` reads them — a `sent-folder` and a
-/// `drafts-folder` key, each carrying the path rather than the display name.
+/// The account wizard learns both roles' Camel paths. They are keyed the
+/// way `e_mail_store_save_initial_setup_sync` reads them: a `sent-folder` key
+/// and a `drafts-folder` key, each carrying the path, not the display name.
 #[test]
 fn initial_setup_reports_sent_and_drafts_by_role() {
     let (_server, account, _, _) = with_sent_and_drafts();
@@ -1826,9 +1838,9 @@ fn initial_setup_reports_sent_and_drafts_by_role() {
     );
 }
 
-/// An account whose server assigns neither role — legal, like the role-less
-/// inbox elsewhere in this file — and answered the way the vfunc's own
-/// contract states: succeed, with nothing to save.
+/// An account whose server assigns neither role. This is legal, like the
+/// role-less inbox elsewhere in this file, and answered the way the vfunc's
+/// own contract states: succeed, with nothing to save.
 #[test]
 fn initial_setup_reports_nothing_for_roles_nobody_claims() {
     let server = MockServer::builder().start();
@@ -1848,8 +1860,8 @@ fn initial_setup_reports_nothing_for_roles_nobody_claims() {
     );
 }
 
-/// The other failure, told apart from the one above by the error: a store
-/// that never connected has no tree to read a role out of at all.
+/// The other failure, told apart from the one above by the error. A store
+/// that never connected has no tree to read a role from at all.
 #[test]
 fn a_disconnected_store_has_nothing_to_set_up() {
     let account = Account::open();
@@ -1868,14 +1880,14 @@ fn a_disconnected_store_has_nothing_to_set_up() {
     }
 }
 
-/// And the same guard as every other vfunc here, reached through the class
+/// The same guard as every other vfunc here, reached through the class
 /// because the wrapper asserts `CAMEL_IS_STORE`.
 #[test]
 fn a_null_store_has_nothing_to_set_up_either() {
-    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
-    // instance pointer under test, and `error` is writable and NULL. The
-    // vfunc is called directly, bypassing the wrapper that would otherwise
-    // refuse a NULL store before ever reaching it.
+    // SAFETY: referencing the class installs the vfunc. NULL is exactly
+    // the instance pointer under test, and `error` is writable and NULL.
+    // The vfunc is called directly, bypassing the wrapper that would
+    // otherwise refuse a NULL store before ever reaching it.
     unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         let vfunc = (*class).initial_setup_sync.expect("the vfunc");
@@ -1896,12 +1908,12 @@ fn a_null_store_has_nothing_to_set_up_either() {
 // ---------------------------------------------------------------------------
 // which folders Send / Receive checks for new mail
 
-/// A listing with all four cases in it: the inbox, a folder the user ticked,
-/// one they unticked, and one kept in the answer only because something below
-/// it is ticked.
+/// A listing with all four cases in it: the inbox, a folder the user
+/// ticked, and one they unticked. A fourth folder is kept in the answer only
+/// because something below it is ticked.
 ///
-/// Every mailbox says whether it is subscribed rather than leaving the property
-/// out, for the reason [`ticked`] gives.
+/// Every mailbox states whether it is subscribed, rather than leaving the
+/// property out, for the reason [`ticked`] gives.
 fn checkable() -> FolderTree {
     let mailbox =
         |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| Mailbox {
@@ -1924,18 +1936,18 @@ fn checkable() -> FolderTree {
 
 /// The folders of a listing that Evolution would check for new mail, by path.
 ///
-/// This is `get_folders` out of Evolution's `mail-send-recv.c`, which walks the
+/// This is `get_folders` out of Evolution's `mail-send-recv.c`. It walks the
 /// forest `get_folder_info_sync` answered with and asks
-/// `camel_store_can_refresh_folder` about each info in it. Going through the
-/// wrapper rather than the class pointer because that is the call Evolution
-/// makes, and it is the wrapper that refuses a store whose slot is empty.
+/// `camel_store_can_refresh_folder` about each info in it. This test calls
+/// the wrapper, not the class pointer, because that is the call Evolution
+/// makes. It is also the wrapper that refuses a store whose slot is empty.
 fn checked(tree: &FolderTree, store: *mut CamelStore) -> Vec<String> {
     let chain = FolderInfoChain::from_tree(tree);
     let mut checked = Vec::new();
-    // SAFETY: the chain is the forest just built and still owned here, so every
-    // info in it is live and its `full_name` is NUL-terminated; `store` is a
-    // real `CamelStore` of ours, which is what the wrapper type-checks; the
-    // error out-parameter is NULL, which the wrapper tolerates.
+    // SAFETY: the chain is the forest just built and still owned here, so
+    // every info in it is live and its `full_name` is NUL-terminated.
+    // `store` is a real `CamelStore` of ours, which the wrapper type-checks.
+    // The error out-parameter is NULL, which the wrapper tolerates.
     unsafe {
         walk(chain.as_ptr(), &mut |info| {
             if camel_store_can_refresh_folder(store, info, ptr::null_mut()) != GFALSE {
@@ -1950,8 +1962,8 @@ fn checked(tree: &FolderTree, store: *mut CamelStore) -> Vec<String> {
     checked
 }
 
-/// Depth-first over a sibling chain and its children, parents first — the order
-/// Evolution's `get_folders` walks one in.
+/// Depth-first over a sibling chain and its children, parents first. This
+/// is the order Evolution's `get_folders` walks one in.
 ///
 /// # Safety
 ///
@@ -1967,16 +1979,16 @@ unsafe fn walk(head: *mut CamelFolderInfo, visit: &mut impl FnMut(*mut CamelFold
     }
 }
 
-/// What the vfunc is *for*: Evolution asks it once per folder to build the list
-/// Send / Receive refreshes, and a folder that answers no is one whose new mail
-/// the user never hears about until they click it.
+/// What the vfunc is for: Evolution asks it once per folder to build the
+/// list Send / Receive refreshes. A folder that answers no is one whose new
+/// mail the user never hears about until they click it.
 ///
 /// The rule is the inbox plus the folders the user ticked. Two of the four
 /// cases are the interesting ones. `Old` is unticked and stays out, which is
-/// the whole point of a tick. `Work` is unticked too and is only in the listing
-/// at all because `Work/Invoices` under it is ticked — see `ticked` in
-/// `crate::folders` — so it is a folder the user does not see and must not be
-/// checked, while the ticked folder below it must.
+/// the whole point of a tick. `Work` is unticked too, and is only in the
+/// listing because `Work/Invoices` under it is ticked (see `ticked` in
+/// `crate::folders`). So `Work` is a folder the user does not see and must
+/// not be checked, while the ticked folder below it must be checked.
 #[test]
 fn send_receive_checks_the_inbox_and_the_folders_the_user_ticked() {
     let account = Account::open();
@@ -1987,10 +1999,11 @@ fn send_receive_checks_the_inbox_and_the_folders_the_user_ticked() {
     );
 }
 
-/// The one folder that is checked whether or not it is ticked. Mail arrives in
-/// the inbox by definition, an account whose inbox is never checked is one that
-/// never reports new mail at all, and this is the rule `CamelStore`'s own
-/// default implements — the override widens it rather than replacing it.
+/// The one folder that is checked whether or not it is ticked. Mail
+/// arrives in the inbox by definition. An account whose inbox is never
+/// checked never reports new mail at all. This is the rule `CamelStore`'s
+/// own default implements; the override widens it, rather than replacing
+/// it.
 #[test]
 fn the_inbox_is_checked_even_when_the_user_unticked_it() {
     let account = Account::open();
@@ -2006,21 +2019,22 @@ fn the_inbox_is_checked_even_when_the_user_unticked_it() {
     assert_eq!(checked(&tree, account.store), ["Inbox"]);
 }
 
-/// And why the override has to exist at all: left to `CamelStore`'s inherited
-/// answer, a ticked folder that is not the inbox is not checked for new mail.
+/// Why the override has to exist at all. Left to `CamelStore`'s inherited
+/// answer, a ticked folder that is not the inbox is not checked for new
+/// mail.
 ///
-/// Called on the parent class directly, so a Camel that widened its own default
-/// fails here with a sentence rather than leaving this provider carrying an
-/// override nobody needs any more.
+/// This test calls the parent class directly. A Camel that widened its own
+/// default fails here with a clear message, instead of leaving this
+/// provider carrying an override nobody needs any more.
 #[test]
 fn the_inherited_answer_checks_nothing_but_the_inbox() {
     let account = Account::open();
     let chain = FolderInfoChain::from_tree(&checkable());
     let mut checked = Vec::new();
 
-    // SAFETY: the store type is registered and its class initialised, so the
-    // parent's class is live; every info in the chain is owned here; the error
-    // out-parameter is NULL, which the default tolerates.
+    // SAFETY: the store type is registered and its class initialised, so
+    // the parent's class is live. Every info in the chain is owned here.
+    // The error out-parameter is NULL, which the default tolerates.
     unsafe {
         let class = g_type_class_ref(store_type());
         let parent = g_type_class_peek(camel_offline_store_get_type()).cast::<CamelStoreClass>();

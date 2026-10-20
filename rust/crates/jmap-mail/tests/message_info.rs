@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelMessageInfo`: one summary row, as the object Camel keeps it in.
+//! `CamelMessageInfo`: one summary row, as Camel stores it.
 //!
-//! `jmap-mail-sync`'s [`MessageSummary`] is the same row in Rust, read off an
-//! `Email/get` — and the two are not a field-for-field copy of each other.
-//! Three of Camel's columns are not values the server sent but things computed
-//! from them: the flags word, which is a bitfield over the keywords; the
-//! address columns, which Camel stores as one formatted string per header; and
-//! the two threading columns, which Camel stores as 64-bit digests rather than
-//! as the `Message-ID` text they are derived from.
+//! `jmap-mail-sync`'s [`MessageSummary`] is the same row in Rust, read from an
+//! `Email/get` response. The two are not a field-for-field copy of each other.
+//! Camel computes three columns instead of copying them from the server. The
+//! flags word is a bitfield over the keywords. The address columns are one
+//! formatted string per header. The two threading columns are 64-bit digests
+//! derived from the `Message-ID` text.
 //!
-//! The last of those is the reason half of this file is written against an
-//! oracle. Camel builds message infos itself — `camel_message_info_new_from_
-//! headers` is the path a locally-parsed message takes — and a provider whose
-//! digests disagreed with that path would thread the same conversation into two
-//! when the two ever met. So the test does not assert a digest this crate chose:
-//! it hands Camel the headers the JMAP properties came from and asserts that
-//! what Camel computed is what we computed.
+//! Half of this file tests the threading columns against an oracle, for this
+//! reason: Camel also builds message infos itself, through
+//! `camel_message_info_new_from_headers`, for a locally-parsed message. If this
+//! crate's digests disagreed with that path, the two paths would thread the
+//! same conversation as two conversations when they met. So the tests do not
+//! assert a digest this crate chose. Each test gives Camel the same headers the
+//! JMAP properties came from, and asserts that Camel's own computed digest
+//! matches this crate's digest.
 
 mod common;
 
@@ -48,7 +48,7 @@ use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
 use jmap_proto::Id;
 use jmap_proto::mail::EmailAddress;
 
-/// A row with nothing in it but the one thing a row cannot be without.
+/// A row with every field empty except the uid, which every row must have.
 fn row(uid: &str) -> MessageSummary {
     MessageSummary {
         uid: Id::new(uid),
@@ -77,9 +77,9 @@ fn info_of(message: &MessageSummary) -> *mut CamelMessageInfo {
 }
 
 /// Reads a summary column back as Camel stores it: a borrowed C string, or
-/// `None` where Camel kept nothing at all. The difference matters — an empty
-/// `Cc` column and an absent one are the same to a reader and not to the
-/// database Camel writes the summary to.
+/// `None` when Camel kept nothing at all. The difference matters. An empty
+/// `Cc` column and an absent one look the same to a reader. The database
+/// Camel writes the summary to stores them as different values.
 ///
 /// # Safety
 ///
@@ -88,8 +88,8 @@ unsafe fn column(text: *const gchar) -> Option<String> {
     if text.is_null() {
         return None;
     }
-    // SAFETY: the accessors return a string owned by the info, which the
-    // caller keeps alive across this.
+    // SAFETY: the accessor returns a string owned by the info. The caller
+    // keeps the info alive across this call.
     Some(
         unsafe { CStr::from_ptr(text) }
             .to_string_lossy()
@@ -99,12 +99,13 @@ unsafe fn column(text: *const gchar) -> Option<String> {
 
 /// What Camel itself makes of the headers a JMAP `Email` was derived from.
 ///
-/// The oracle for everything below that is a computation rather than a copy.
-/// `NULL` for the summary is what `camel_message_info_new` falls back on when
-/// a summary declares no message-info type of its own, which is the case this
-/// provider is in — the row comes out a `CamelMessageInfoBase` either way.
+/// This is the oracle for every column below that Camel computes rather than
+/// copies. The summary argument is NULL, which is what `camel_message_info_new`
+/// falls back on when a summary declares no message-info type of its own. This
+/// provider's summary is in that case, so the row comes out a
+/// `CamelMessageInfoBase` either way.
 fn camel_info_from(headers: &[(&str, &str)]) -> *mut CamelMessageInfo {
-    // SAFETY: the array is freshly allocated and owned here; `append` copies
+    // SAFETY: the array is freshly allocated and owned here. `append` copies
     // both strings, and every string passed in is NUL-terminated.
     unsafe {
         let array = camel_name_value_array_new();
@@ -126,8 +127,8 @@ fn camel_info_from(headers: &[(&str, &str)]) -> *mut CamelMessageInfo {
 ///
 /// `info` must be a live message info.
 unsafe fn references(info: *mut CamelMessageInfo) -> Vec<u64> {
-    // SAFETY: the array is owned by the info and read-only here; its elements
-    // are `guint64` by `camel_message_info_take_references`'s contract.
+    // SAFETY: the array is owned by the info and read-only here. Its elements
+    // are `guint64`, by the contract of `camel_message_info_take_references`.
     unsafe {
         let array = camel_message_info_get_references(info);
         if array.is_null() {
@@ -140,8 +141,9 @@ unsafe fn references(info: *mut CamelMessageInfo) -> Vec<u64> {
 
 /// The columns that are a copy rather than a computation: the uid Camel keys
 /// the row by, the three plain values, and the two dates. The uid is the JMAP
-/// email id verbatim — a server-assigned immutable identifier is what Camel
-/// wants a uid to be, so unlike the folder path there is nothing to invent.
+/// email id verbatim. Camel wants a uid to be a server-assigned immutable
+/// identifier. The email id already is one, so there is nothing to invent
+/// here, unlike the folder path.
 #[test]
 fn a_row_is_the_camel_view_of_one_email() {
     let mut message = row("Em0001");
@@ -173,11 +175,11 @@ fn a_row_is_the_camel_view_of_one_email() {
     }
 }
 
-/// The two dates are different columns and are read from different JMAP
-/// properties: `receivedAt` is the server's clock and what a mailbox is sorted
-/// by, `sentAt` is the `Date` header and therefore the sender's. Reading one
-/// out of the other is invisible on almost every message and wrong on the ones
-/// that matter, so the row that pins it has them far apart.
+/// The two dates are different columns, read from different JMAP properties.
+/// `receivedAt` is the server's clock, and a mailbox sorts by it. `sentAt` is
+/// the `Date` header, and gives the sender's clock instead. Reading one date
+/// in place of the other is invisible on most messages, but wrong on the ones
+/// that matter. This test keeps the two dates far apart, so a mix-up shows.
 #[test]
 fn the_senders_clock_and_the_servers_are_not_the_same_column() {
     let mut message = row("Em0002");
@@ -228,11 +230,11 @@ fn the_keywords_camel_has_a_bit_for_become_the_flags_word() {
     }
 }
 
-/// A message with no keywords set has none of those bits — the mapping is not
-/// allowed to be a constant that happens to satisfy the test above. Nor may it
-/// invent `DELETED`: JMAP has no deleted keyword, and a row that arrived marked
-/// deleted would be one Evolution hides and the next expunge takes off the
-/// server.
+/// A message with no keywords set has none of those bits. The mapping must
+/// not be a constant that happens to satisfy the test above. It also must not
+/// set `DELETED`: JMAP has no deleted keyword. A row marked deleted by mistake
+/// would be a message Evolution hides, and the next expunge would remove it
+/// from the server.
 #[test]
 fn a_message_with_no_keywords_carries_no_bits() {
     let info = info_of(&row("Em0004"));
@@ -249,10 +251,10 @@ fn a_message_with_no_keywords_carries_no_bits() {
     }
 }
 
-/// Keywords Camel has no bit for are Evolution's labels, and they go in
-/// verbatim — leading `$` included. A flag change sends the keyword back to the
-/// server, so a label renamed on the way in would not be the same keyword on
-/// the way out.
+/// Keywords Camel has no bit for are Evolution's labels. They go in verbatim,
+/// including a leading `$`. A flag change sends the keyword back to the
+/// server. Renaming a label on the way in would therefore send the wrong
+/// keyword back on the way out.
 #[test]
 fn the_keywords_camel_has_no_bit_for_become_user_flags() {
     let mut message = row("Em0005");
@@ -283,11 +285,10 @@ fn the_keywords_camel_has_no_bit_for_become_user_flags() {
     }
 }
 
-/// The address columns. JMAP hands the parts over — a name and an address per
-/// entry — and Camel stores one string per header, so the formatting happens
-/// here; `CamelInternetAddress` is where RFC 5322's quoting rules already live,
-/// and the oracle is that same formatter reading the header a mail client would
-/// have sent.
+/// The address columns. JMAP sends a name and an address for each entry, but
+/// Camel stores one formatted string per header, so this code formats them.
+/// `CamelInternetAddress` already implements RFC 5322's quoting rules, so the
+/// oracle is that same formatter, reading the header a mail client would send.
 #[test]
 fn an_address_list_is_formatted_the_way_camel_formats_one() {
     let mut message = row("Em0006");
@@ -318,9 +319,9 @@ fn an_address_list_is_formatted_the_way_camel_formats_one() {
     }
 }
 
-/// A header the message did not carry leaves the column unset rather than
-/// empty. Camel writes the summary to a database and reads it back; an empty
-/// string there is a `Cc:` that was present and blank.
+/// A header the message did not carry leaves the column unset, not empty.
+/// Camel writes the summary to a database and reads it back. There, an empty
+/// string means a `Cc:` header that was present but blank.
 #[test]
 fn a_header_the_message_did_not_carry_leaves_no_column() {
     let info = info_of(&row("Em0007"));
@@ -336,10 +337,10 @@ fn a_header_the_message_did_not_carry_leaves_no_column() {
     }
 }
 
-/// The digest, against Camel's own. Camel stores a message id as 64 bits of an
-/// MD5 it computes over the `Message-ID` value with the angle brackets off,
-/// which is exactly what JMAP's `messageId` property already is — so the two
-/// have to agree, and nothing but Camel can say what agreeing means.
+/// The digest, checked against Camel's own. Camel stores a message id as 64
+/// bits of an MD5 it computes over the `Message-ID` value with the angle
+/// brackets removed. This is exactly what JMAP's `messageId` property already
+/// is, so the two digests must agree. Only Camel can say what agreeing means.
 #[test]
 fn the_message_id_is_the_digest_camel_computes_from_the_header() {
     let mut message = row("Em0008");
@@ -357,12 +358,13 @@ fn the_message_id_is_the_digest_camel_computes_from_the_header() {
     }
 }
 
-/// The ancestors, against Camel's own — including their order, which is not the
-/// order the header lists them in. `camel_message_info_new_from_headers` stores
-/// the chain nearest-ancestor first, with the `In-Reply-To` parent at the head,
-/// and Camel's threader walks it from the front looking for an ancestor it
-/// already has. A provider that filled the array in header order would thread
-/// every reply onto the root of its conversation instead of onto its parent.
+/// The ancestors, checked against Camel's own, including their order. The
+/// stored order is not the order the header lists them in.
+/// `camel_message_info_new_from_headers` stores the chain nearest-ancestor
+/// first, with the `In-Reply-To` parent at the head. Camel's threader walks
+/// the chain from the front, looking for an ancestor it already has. A
+/// provider that filled the array in header order would thread every reply
+/// onto the root of its conversation, instead of onto its parent.
 #[test]
 fn the_ancestors_are_stored_in_the_order_camel_threads_on() {
     let mut message = row("Em0009");
@@ -392,9 +394,9 @@ fn the_ancestors_are_stored_in_the_order_camel_threads_on() {
 }
 
 /// A message with no `Message-ID` and no ancestors. Camel leaves the digest
-/// zero and the array absent, and so must this: a row with an empty references
-/// array is one the threader walks for nothing on every rebuild, and a zero
-/// digest is how Camel says "this message threads on nothing".
+/// zero and the array absent, and this provider must do the same. An empty
+/// references array makes the threader walk the array for nothing on every
+/// rebuild. A zero digest is how Camel says a message threads on nothing.
 #[test]
 fn a_message_that_threads_on_nothing_stores_nothing() {
     let info = info_of(&row("Em0010"));
@@ -417,10 +419,11 @@ fn a_message_that_threads_on_nothing_stores_nothing() {
     }
 }
 
-/// A JMAP string is a JSON string, so any of these can carry a NUL that RFC
-/// 5322 forbids. Handing the bytes to Camel would cut the value there — a
-/// subject line that ends where the sender hid a NUL — so it is rewritten
-/// rather than obeyed, exactly as the folder names are.
+/// A JMAP string is a JSON string, so any JMAP value can carry a NUL byte,
+/// which RFC 5322 forbids. Handing the raw bytes to Camel would cut the value
+/// at the NUL: a subject line would end where the sender hid a NUL. So this
+/// code replaces the NUL rather than passing it through, the same way it
+/// handles folder names.
 #[test]
 fn a_value_with_a_nul_in_it_does_not_truncate_the_row() {
     let mut message = row("Em0011");
@@ -442,9 +445,9 @@ fn a_value_with_a_nul_in_it_does_not_truncate_the_row() {
     }
 }
 
-/// The keywords the row remembers the *server* holding, which is a fourth
-/// column and the only one that is neither a copy nor a computation: it is what
-/// this provider knows and Camel has no field for.
+/// The keywords the row remembers the server holding. This is a fourth
+/// column, and the only one that is neither a copy nor a computation. It is
+/// what this provider knows, and Camel has no field for it.
 ///
 /// # Safety
 ///
@@ -454,11 +457,12 @@ unsafe fn remembered(info: *mut CamelMessageInfo) -> Keywords {
     unsafe { server_keywords(info) }.expect("a row of this provider's own kind")
 }
 
-/// A row is not a `CamelMessageInfoBase` any more, and the reason is one
-/// column: the keywords the last listing found. Without them a flag change has
-/// no *before* to be the difference from — the row's own flags word is the
-/// after, mutated in place by the user — so every write would have to be a
-/// whole-set replacement over keywords no client here has ever seen.
+/// A row is no longer a `CamelMessageInfoBase`, for one reason: the keywords
+/// the last listing found. Without that column, a flag change has no before
+/// state to compare against. The row's own flags word is only the after
+/// state, mutated in place by the user. Without the before state, every write
+/// would have to replace the whole keyword set, over keywords no client here
+/// has ever seen.
 #[test]
 fn a_row_is_the_provider_s_own_kind_of_row() {
     let info = info_of(&row("Em0020"));
@@ -491,10 +495,10 @@ fn a_row_remembers_the_keywords_the_listing_carried() {
     }
 }
 
-/// The whole point of the column. The user marking a row read writes Camel's
-/// flags word and nothing else, so the row now claims `$seen` and the column
-/// still says the server has not been told — which is what makes the one
-/// keyword to send a difference rather than a guess.
+/// The whole point of the column. Marking a row read writes Camel's flags
+/// word and nothing else. The row now claims `$seen`, but the column still
+/// says the server has not been told. This difference is what lets the
+/// provider send exactly the one changed keyword, instead of guessing.
 #[test]
 fn a_flag_the_user_changed_does_not_change_what_the_row_remembers() {
     let mut message = row("Em0022");
@@ -516,9 +520,10 @@ fn a_flag_the_user_changed_does_not_change_what_the_row_remembers() {
     }
 }
 
-/// The row's other end of the same difference, read back out of the two columns
-/// the user's click lands in. A row nobody has touched has to claim exactly what
-/// it remembers, or every synchronisation would write every message back.
+/// The other end of the same difference, read back out of the two columns a
+/// user's click changes. An untouched row must claim exactly what it
+/// remembers, or every synchronisation would write every message back to the
+/// server.
 #[test]
 fn an_untouched_row_claims_the_keywords_it_remembers() {
     let mut message = row("Em0031");
@@ -534,10 +539,10 @@ fn an_untouched_row_claims_the_keywords_it_remembers() {
     }
 }
 
-/// And once the user has clicked, it claims the click. `attachments` is the one
-/// bit of the flags word that must not travel: `hasAttachment` is a property RFC
-/// 8621 §4.1.4 has the server compute, so sending it back would put a label on
-/// the message every other client would then show.
+/// Once the user clicks, the row claims the click. `attachments` is the one
+/// bit of the flags word that must not travel back to the server. RFC 8621
+/// §4.1.4 has the server compute `hasAttachment`, so sending it back would add
+/// a label that every other client would then show.
 #[test]
 fn a_row_claims_the_flag_the_user_just_set() {
     let mut message = row("Em0032");
@@ -554,11 +559,11 @@ fn a_row_claims_the_flag_the_user_just_set() {
     }
 }
 
-/// A row built out of a listing carries no change of the user's — it did not
-/// exist a moment ago — so it must not arrive on the folder's work list. Camel's
-/// column setters put it there, which is what `new_message_info` undoes: left
-/// alone, every message of every mailbox would be written back to the server it
-/// was just listed from.
+/// A row built from a listing carries no change of the user's, because it did
+/// not exist a moment ago. So it must not arrive on the folder's work list.
+/// Camel's column setters put every new row there, and `new_message_info`
+/// undoes this. Left alone, every message in every mailbox would be written
+/// back to the server it was just listed from.
 #[test]
 fn a_row_a_listing_built_is_not_waiting_for_the_server() {
     let mut message = row("Em0033");
@@ -573,10 +578,10 @@ fn a_row_a_listing_built_is_not_waiting_for_the_server() {
     }
 }
 
-/// And a refresh that meets a row the user has changed and not yet saved leaves
-/// it waiting: taking the row off the work list would lose the change in silence
-/// rather than retry it. What the listing does to the *flags* of such a row is
-/// the group of tests below.
+/// A refresh that meets a row the user changed, but has not yet saved, leaves
+/// the row waiting. Taking the row off the work list would lose the change
+/// silently, instead of retrying it. The group of tests below covers what the
+/// listing does to the flags of such a row.
 #[test]
 fn a_listing_does_not_take_an_unsaved_change_off_the_work_list() {
     let info = info_of(&row("Em0034"));
@@ -604,13 +609,15 @@ fn a_listing_does_not_take_an_unsaved_change_off_the_work_list() {
     }
 }
 
-/// The race the work list on its own does not settle. Evolution's refresh timer
-/// goes off between the user marking a message read and the folder being
-/// synchronised, and the listing it brings back is one the server made before
-/// the click: it says unread. Written whole, it would undo the click on screen
-/// *and* leave the row claiming what the server already holds — so the diff the
-/// next synchronisation makes would be empty and the change would never be sent.
-/// The row stays queued either way; what is lost is what it has to say.
+/// The race that the work list alone does not settle. Evolution's refresh
+/// timer can fire between the user marking a message read and the folder
+/// synchronising. The listing it brings back is one the server made before
+/// the click, so it still reports the message unread. Writing that listing
+/// whole would undo the click on screen. It would also make the row claim
+/// exactly what the server already holds. Then the next synchronisation would
+/// see no difference, and never send the change. The row stays queued either
+/// way: what a wrong write loses is not the queued bit, but what the row has
+/// to say.
 #[test]
 fn a_listing_does_not_undo_a_flag_the_user_has_not_saved_yet() {
     let info = info_of(&row("Em0035"));
@@ -637,10 +644,10 @@ fn a_listing_does_not_undo_a_flag_the_user_has_not_saved_yet() {
     }
 }
 
-/// The other half of the same rule, and why the row cannot simply refuse a
-/// listing while it is queued: what another client did in the meantime is news,
-/// and the user's outstanding change says nothing about it. The listing is
-/// applied and the change replayed on top.
+/// The other half of the same rule: why a queued row cannot simply refuse a
+/// listing. What another client did meanwhile is news that the user's
+/// outstanding change says nothing about. So the row applies the listing, and
+/// replays the user's change on top of it.
 #[test]
 fn a_listing_still_brings_a_queued_row_what_the_server_changed() {
     let info = info_of(&row("Em0036"));
@@ -675,10 +682,10 @@ fn a_listing_still_brings_a_queued_row_what_the_server_changed() {
     }
 }
 
-/// A keyword the server *stopped* holding comes off a queued row too — the row
-/// keeps only what it is itself waiting to say. Both directions matter: a rule
-/// that only ever added would leave a label another client removed on screen
-/// until the user next touched the message.
+/// A keyword the server stopped holding comes off a queued row too. The row
+/// keeps only what it is itself waiting to say. Both directions matter. A rule
+/// that only ever added keywords would leave a label on screen after another
+/// client removed it, until the user next touched the message.
 #[test]
 fn a_listing_takes_a_keyword_off_a_queued_row_when_the_server_did() {
     let mut message = row("Em0037");
@@ -708,10 +715,10 @@ fn a_listing_takes_a_keyword_off_a_queued_row_when_the_server_did() {
     }
 }
 
-/// And a row with nothing outstanding takes the listing whole, which is the
-/// ordinary case and the only thing that ever brings a row that has drifted back
-/// to what the server says. The replay above is for the row that is *waiting* to
-/// speak; a row that is not has nothing to add to the server's answer.
+/// A row with no outstanding change takes the listing whole. This is the
+/// ordinary case, and the only way a drifted row returns to what the server
+/// says. The replay above is only for a row waiting to speak; a row that is
+/// not waiting has nothing to add to the server's answer.
 #[test]
 fn a_listing_that_dropped_a_flag_takes_it_off_an_untouched_row() {
     let mut message = row("Em0038");
@@ -739,9 +746,9 @@ fn a_listing_that_dropped_a_flag_takes_it_off_an_untouched_row() {
 }
 
 /// The bit of the flags word that is not a keyword. `hasAttachment` is the
-/// server's own conclusion about the message, so it comes off the listing on
-/// every path — a queued row would otherwise lose it, since the set the replay
-/// works on cannot carry it.
+/// server's own conclusion about the message, so every path takes it from the
+/// listing. Without this, a queued row would lose it: the keyword set the
+/// replay works on cannot carry this bit.
 #[test]
 fn a_queued_row_still_takes_the_servers_word_on_an_attachment() {
     let info = info_of(&row("Em0039"));
@@ -764,9 +771,9 @@ fn a_queued_row_still_takes_the_servers_word_on_an_attachment() {
     }
 }
 
-/// A refresh is where the set is renewed: the listing that reports a keyword
-/// another client added is the listing after which that keyword is no longer
-/// something this folder would remove.
+/// A refresh renews the remembered set. After a listing reports a keyword
+/// another client added, this folder no longer treats that keyword as
+/// something to remove.
 #[test]
 fn a_later_listing_replaces_the_keywords_the_row_remembers() {
     let mut first = row("Em0023");
@@ -785,12 +792,12 @@ fn a_later_listing_replaces_the_keywords_the_row_remembers() {
     }
 }
 
-/// The set is written into the one field of the summary database Camel reserves
-/// for what a provider knows and it does not, and read back out of it in the
-/// same order. Asserted through Camel's own `load`/`save` entry points rather
-/// than against the encoding, because the encoding is Camel's: a keyword with a
-/// space in it is what says so, since a format that joined the names would come
-/// back as two keywords.
+/// The set is written into the one field of the summary database that Camel
+/// reserves for what a provider knows and Camel does not. It is read back in
+/// the same order. The test calls Camel's own `load` and `save` entry points,
+/// rather than checking the encoding directly, because the encoding belongs to
+/// Camel. A keyword containing a space proves this: a format that joined
+/// names with spaces would read the keyword back as two keywords.
 #[test]
 fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
     let mut message = row("Em0025");
@@ -829,10 +836,10 @@ fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
     }
 }
 
-/// A row whose stored data says nothing about keywords — one written by a
-/// summary from before this column existed — is a row that remembers nothing,
-/// not one that fails to load. The empty set is also the safe answer: the
-/// difference from it only ever *adds* keywords, so a folder that lost the
+/// A row whose stored data says nothing about keywords is a row written by a
+/// summary from before this column existed. Such a row remembers nothing; it
+/// does not fail to load. The empty set is also the safe answer. A difference
+/// from the empty set only ever adds keywords, so a folder that lost the
 /// column removes none.
 #[test]
 fn a_row_stored_without_the_column_loads_as_a_row_that_remembers_nothing() {
@@ -861,8 +868,9 @@ fn a_row_stored_without_the_column_loads_as_a_row_that_remembers_nothing() {
     }
 }
 
-/// Verifying that headers containing multiple occurrences (e.g. repeated `Received` headers)
-/// and custom `X-` headers are safely processed into `CamelMessageInfo` via `CamelNameValueArray`.
+/// Checks that repeated headers (for example, multiple `Received` headers) and
+/// custom `X-` headers convert safely into a `CamelMessageInfo`, through a
+/// `CamelNameValueArray`.
 #[test]
 fn the_name_value_array_handles_duplicate_and_special_headers() {
     let headers = &[
@@ -897,8 +905,8 @@ fn the_name_value_array_handles_duplicate_and_special_headers() {
     }
 }
 
-/// Verifying that multi-level reply chains and references maintain proper nearest-ancestor
-/// ordering and non-zero 64-bit digests in `CamelMessageInfo`.
+/// Checks that a multi-level reply chain keeps nearest-ancestor ordering, and
+/// that `CamelMessageInfo` stores non-zero 64-bit digests for it.
 #[test]
 fn multiple_references_and_long_in_reply_to_chains_maintain_ancestry_ordering() {
     let mut message = row("Em0099");
@@ -930,13 +938,13 @@ fn multiple_references_and_long_in_reply_to_chains_maintain_ancestry_ordering() 
 }
 
 /// The `$junk` keyword becomes `CAMEL_MESSAGE_JUNK` in the flags word, and
-/// `$notjunk` becomes `CAMEL_MESSAGE_NOTJUNK`.  This verifies the bit-level
-/// correspondence between our keyword→flag mapping and the CamelMessageInfo
-/// flags that Camel (and, in turn, a `CamelJunkFilter` implementation) reads.
+/// `$notjunk` becomes `CAMEL_MESSAGE_NOTJUNK`. This checks the bit-level
+/// mapping between keywords and the `CamelMessageInfo` flags that Camel, and
+/// in turn a `CamelJunkFilter` implementation, reads.
 ///
-/// The positioning (`CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK = 2`,
-/// `CAMEL_JUNK_STATUS_MESSAGE_IS_NOT_JUNK = 3`) is an EDS invariant checked in
-/// `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`.
+/// The values (`CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK = 2`,
+/// `CAMEL_JUNK_STATUS_MESSAGE_IS_NOT_JUNK = 3`) are an EDS invariant, checked
+/// in `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`.
 #[test]
 fn junk_and_not_junk_keywords_map_to_camel_message_flags() {
     // Message with only $junk set (server believes it is spam).
@@ -990,12 +998,13 @@ fn junk_and_not_junk_keywords_map_to_camel_message_flags() {
     }
 }
 
-/// A flag-word update round-trip: set `CAMEL_MESSAGE_JUNK` on an info created
-/// from a non-junk row, then read back the current keywords through
-/// `row_keywords` and confirm `$junk` appears.  This tests that
-/// `camel_message_info_set_flags` + `row_keywords` stay consistent when the
-/// local Camel state changes independently of the server (e.g. a
-/// `CamelJunkFilter` reclassified the message after sync).
+/// A flag-word round trip. Set `CAMEL_MESSAGE_JUNK` on an info built from a
+/// non-junk row, then read the current keywords back through `row_keywords`,
+/// and confirm `$junk` appears.
+///
+/// This checks that `camel_message_info_set_flags` and `row_keywords` stay
+/// consistent when local Camel state changes independently of the server. For
+/// example, a `CamelJunkFilter` might reclassify the message after a sync.
 #[test]
 fn junk_flag_update_round_trips_through_row_keywords() {
     let clean = row("Em-junk-03");
@@ -1022,9 +1031,9 @@ fn junk_flag_update_round_trips_through_row_keywords() {
     }
 }
 
-/// The thread id `Email/get` reported, which is a fifth column and, like the
-/// keywords the server was last seen holding, something only this provider
-/// knows: Camel has no field for a server-assigned thread.
+/// The thread id `Email/get` reported. This is a fifth column, and like the
+/// keywords the server was last seen holding, it is something only this
+/// provider knows: Camel has no field for a server-assigned thread.
 #[test]
 fn a_row_remembers_the_thread_id_the_listing_carried() {
     let mut message = row("Em0040");
@@ -1038,9 +1047,9 @@ fn a_row_remembers_the_thread_id_the_listing_carried() {
     }
 }
 
-/// A message `Email/get` reported no thread for remembers none — not a digest
-/// computed some other way, since only the server can say two messages share a
-/// thread.
+/// A message `Email/get` reported no thread for remembers none. It does not
+/// get a digest computed some other way, because only the server can say two
+/// messages share a thread.
 #[test]
 fn a_row_with_no_thread_id_remembers_none() {
     let info = info_of(&row("Em0041"));
@@ -1052,8 +1061,8 @@ fn a_row_with_no_thread_id_remembers_none() {
     }
 }
 
-/// The thread id survives the same round trip through the summary database
-/// the keywords column does, through the same `save`/`load` entry points.
+/// The thread id survives the same round trip through the summary database as
+/// the keywords column, through the same `save` and `load` entry points.
 #[test]
 fn the_thread_id_survives_a_trip_through_the_summary_database() {
     let mut message = row("Em0042");
@@ -1088,9 +1097,9 @@ fn the_thread_id_survives_a_trip_through_the_summary_database() {
     }
 }
 
-/// A row stored without the column — one written before it existed — loads as
-/// a row that remembers no thread id, the same conservative answer the
-/// keywords column falls back to.
+/// A row stored without the column, one written before the column existed,
+/// loads as a row that remembers no thread id. This is the same conservative
+/// fallback the keywords column uses.
 #[test]
 fn a_row_stored_without_the_thread_column_loads_as_remembering_none() {
     let info = info_of(&row("Em0043"));

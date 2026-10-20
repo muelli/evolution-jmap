@@ -3,21 +3,22 @@
 
 //! `CamelFolderSummary`: the folder's own copy of what is in the mailbox.
 //!
-//! The previous increment built one row. This is the collection those rows go
-//! into, and it is what turns a folder from an object with a name into a folder
-//! with contents: Camel asks a summary for the message count it shows beside
-//! the folder, for the uid list the message list is drawn from, and for the row
-//! behind every line in it. A folder without one answers none of those, which
-//! is why `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` — the flag that says the
-//! question may be asked at all — could not be set before now.
+//! The previous increment built one row. This is the collection those rows
+//! go into. It turns a folder from an object with a name into a folder with
+//! contents. Camel asks a summary for the message count it shows beside the
+//! folder, for the uid list the message list is drawn from, and for the row
+//! behind every line in it. A folder without one answers none of those,
+//! which is why `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` (the flag that says
+//! the question may be asked at all) could not be set before now.
 //!
-//! Filling it is not a copy of the listing either, because a listing arrives
-//! more than once. The second one meets rows that are already there, and the
-//! tests below are mostly about what happens then: which columns a refresh is
-//! allowed to rewrite (the ones JMAP calls mutable, and no others), what
-//! happens to a row whose message has left the mailbox, and what happens to the
-//! marks the *user* made, which the server has never heard of and would
-//! otherwise be undone by every refresh.
+//! Filling it is not a copy of the listing either, because a listing
+//! arrives more than once. The second one meets rows that are already
+//! there, and the tests below are mostly about what happens then: which
+//! columns a refresh is allowed to rewrite (the ones JMAP calls mutable,
+//! and no others), what happens to a row whose message has left the
+//! mailbox, and what happens to the marks the *user* made. The server has
+//! never heard of those marks, and they would otherwise be undone by every
+//! refresh.
 
 mod common;
 
@@ -51,8 +52,8 @@ use jmap_mail::summary::{
 use jmap_mail_sync::{FolderInfo, Keywords, MessageFlags, MessageSummary};
 use jmap_proto::{Id, State};
 
-/// A folder for a mailbox nobody has listed yet, together with the account it
-/// hangs off — the store has to outlive the folder, so both are returned.
+/// A folder for a mailbox nobody has listed yet, together with the account
+/// it hangs off. The store has to outlive the folder, so this returns both.
 fn open_folder(account: &Account) -> *mut CamelFolder {
     let mailbox = FolderInfo {
         id: Id::new("Mbx0001"),
@@ -127,8 +128,8 @@ unsafe fn uids(summary: *mut CamelFolderSummary) -> BTreeSet<String> {
     }
 }
 
-/// The row for one uid, or `None` where the summary has none — the caller owns
-/// what it gets back.
+/// The row for one uid, or `None` where the summary has none. The caller
+/// owns what it gets back.
 ///
 /// # Safety
 ///
@@ -150,12 +151,12 @@ unsafe fn row(
     }
 }
 
-/// A folder is a name until it has somewhere to keep its contents. Camel gives
-/// a summary a back-pointer to its folder — that is how it reaches the store's
-/// database — and the flag is Camel's own precondition: it tests
-/// `HAS_SUMMARY_CAPABILITY` before it asks a folder for a message count, so a
-/// folder with a summary and without the flag is one whose contents are never
-/// asked for.
+/// A folder is a name until it has somewhere to keep its contents. Camel
+/// gives a summary a back-pointer to its folder; that is how it reaches the
+/// store's database. The flag is Camel's own precondition: it tests
+/// `HAS_SUMMARY_CAPABILITY` before it asks a folder for a message count. So
+/// a folder with a summary and without the flag is one whose contents are
+/// never asked for.
 #[test]
 fn a_folder_keeps_a_summary_of_its_own() {
     let account = Account::open();
@@ -183,9 +184,9 @@ fn a_folder_keeps_a_summary_of_its_own() {
     }
 }
 
-/// The listing, as rows. One row per message and no others: a summary is what
-/// Camel draws the message list from, so a row too many is a message the user
-/// sees and cannot open.
+/// The listing, as rows. One row per message, and no others. A summary is
+/// what Camel draws the message list from, so a row too many is a message
+/// the user sees and cannot open.
 #[test]
 fn a_listing_becomes_the_folders_rows() {
     let account = Account::open();
@@ -205,13 +206,14 @@ fn a_listing_becomes_the_folders_rows() {
     }
 }
 
-/// A JMAP `Email` id is already everything Camel wants a uid to be: unique in
-/// the mailbox, immutable, and the thing every later request names the message
-/// by. A row under any other name is one nothing can ever be fetched for, and
-/// Camel has a counter of its own it numbers rows from — so what is asserted
-/// here is not only that the row can be found under the server's id but that
-/// the counter never moved, which is the half that would still be wrong if a
-/// row had been numbered and had happened to land on its own name.
+/// A JMAP `Email` id is already everything Camel wants a uid to be: unique
+/// in the mailbox, immutable, and the thing every later request names the
+/// message by. A row under any other name is one that nothing can ever be
+/// fetched for. Camel also has a counter of its own that it numbers rows
+/// from. So this asserts not only that the row can be found under the
+/// server's id, but also that the counter never moved. That second half
+/// would still be wrong if a row had been numbered and had happened to land
+/// on its own name.
 #[test]
 fn a_row_keeps_the_id_the_server_gave_it() {
     let account = Account::open();
@@ -239,9 +241,9 @@ fn a_row_keeps_the_id_the_server_gave_it() {
     }
 }
 
-/// The rest of the row comes along with it: the columns `message_info` fills
-/// are what a summary is read for, and the unread count Camel shows beside the
-/// folder is maintained out of the flags word as rows go in.
+/// The rest of the row comes along with it. The columns `message_info`
+/// fills are what a summary is read for. The unread count Camel shows
+/// beside the folder is maintained out of the flags word as rows go in.
 #[test]
 fn a_row_carries_what_the_message_said() {
     let account = Account::open();
@@ -292,10 +294,10 @@ fn a_second_listing_does_not_list_the_same_message_twice() {
     }
 }
 
-/// A message that left the mailbox — deleted, or moved somewhere else, which in
-/// JMAP is the same `Email/set` — is a row Camel would otherwise keep showing
-/// and be unable to open. `Email/query` answering without it is the only notice
-/// there is.
+/// A message that left the mailbox (deleted, or moved somewhere else, which
+/// in JMAP is the same `Email/set`) is a row that Camel would otherwise keep
+/// showing and be unable to open. `Email/query` answering without it is the
+/// only notice there is.
 #[test]
 fn a_message_that_left_the_mailbox_loses_its_row() {
     let account = Account::open();
@@ -319,11 +321,11 @@ fn a_message_that_left_the_mailbox_loses_its_row() {
     }
 }
 
-/// What a refresh is allowed to rewrite. RFC 8621 §4.1 makes every property of
-/// an `Email` immutable except `keywords` and `mailboxIds`, so a message that
-/// was read since the last listing is the same row with one bit different — and
-/// rewriting the whole row would be re-deriving a dozen columns that cannot
-/// have changed, on every message, on every refresh.
+/// What a refresh is allowed to rewrite. RFC 8621 §4.1 makes every property
+/// of an `Email` immutable except `keywords` and `mailboxIds`. So a message
+/// that was read since the last listing is the same row with one bit
+/// different. Rewriting the whole row would re-derive a dozen columns that
+/// cannot have changed, on every message, on every refresh.
 #[test]
 fn a_message_read_since_the_last_listing_is_marked_read_on_the_row_it_has() {
     let account = Account::open();
@@ -350,12 +352,13 @@ fn a_message_read_since_the_last_listing_is_marked_read_on_the_row_it_has() {
     }
 }
 
-/// The marks the server has never heard of. `CAMEL_MESSAGE_DELETED` is one the
-/// user made locally — JMAP has no deleted keyword, so nothing in a listing
-/// says anything about it — and a refresh that cleared it because the server
-/// was silent would undo a deletion the user is waiting to have expunged.
-/// `FLAGGED` is the opposite case in the same word: the server does speak to
-/// it, so a listing that stops carrying `$flagged` takes it off.
+/// The marks the server has never heard of. `CAMEL_MESSAGE_DELETED` is one
+/// the user made locally. JMAP has no deleted keyword, so nothing in a
+/// listing says anything about it. A refresh that cleared it because the
+/// server was silent would undo a deletion the user is waiting to have
+/// expunged. `FLAGGED` is the opposite case in the same word: the server
+/// does speak to it, so a listing that stops carrying `$flagged` takes it
+/// off.
 #[test]
 fn a_refresh_does_not_undo_a_mark_the_server_never_saw() {
     let account = Account::open();
@@ -392,16 +395,17 @@ fn a_refresh_does_not_undo_a_mark_the_server_never_saw() {
     }
 }
 
-/// Labels are keywords too — the ones Camel has no bit for — so the same rule
-/// applies to them, and it has to be applied to the set rather than to one
-/// name: a keyword the listing no longer carries is a label the user took off
-/// in some other client, and Camel is only told about it by its absence.
+/// Labels are keywords too (the ones Camel has no bit for), so the same
+/// rule applies to them. It has to apply to the whole set, not to one name
+/// at a time: a keyword the listing no longer carries is a label the user
+/// took off in some other client, and Camel is only told about it by its
+/// absence.
 ///
-/// Taken off one at a time and then down to none, because the last one is the
-/// case an implementation gets wrong: a listing that carries no keywords at
-/// all looks exactly like a listing with nothing to say about them, and it is
-/// not — user flags have no way to spell "absent", so an empty set is the
-/// whole answer rather than a missing one.
+/// This test takes labels off one at a time, then down to none, because the
+/// last one is the case an implementation gets wrong. A listing that
+/// carries no keywords at all looks exactly like a listing with nothing to
+/// say about them, but it is not. User flags have no way to spell "absent",
+/// so an empty set is the whole answer, not a missing one.
 #[test]
 fn a_label_taken_off_at_the_server_comes_off_the_row() {
     let account = Account::open();
@@ -443,9 +447,9 @@ fn a_label_taken_off_at_the_server_comes_off_the_row() {
     }
 }
 
-/// A mailbox that lost everything. Camel's own answer to an empty listing is an
-/// empty folder, not an untouched one — a folder whose rows all vanished is
-/// exactly what emptying the trash looks like.
+/// A mailbox that lost everything. Camel's own answer to an empty listing
+/// is an empty folder, not an untouched one. A folder whose rows all
+/// vanished is exactly what emptying the trash looks like.
 #[test]
 fn a_mailbox_that_emptied_empties_the_summary() {
     let account = Account::open();
@@ -466,10 +470,11 @@ fn a_mailbox_that_emptied_empties_the_summary() {
 // ---------------------------------------------------------------------------
 // what the listing is reported to have changed
 
-/// The rows are only half of what a listing produces. The other half is the
-/// diff: Camel draws a message list once and then redraws it from the `changed`
-/// signal, so a folder that filled its summary and said nothing is a folder
-/// whose new mail appears when the user next clicks away and back.
+/// The rows are only half of what a listing produces. The other half is
+/// the diff. Camel draws a message list once, and then redraws it from the
+/// `changed` signal. So a folder that filled its summary and said nothing
+/// is a folder whose new mail appears only when the user next clicks away
+/// and back.
 #[test]
 fn a_first_listing_reports_every_row_as_added() {
     let account = Account::open();
@@ -488,10 +493,11 @@ fn a_first_listing_reports_every_row_as_added() {
     }
 }
 
-/// The listing that found what it found last time. A refresh is a poll — Camel
-/// runs one on a timer and one every time the folder is opened — so the common
-/// answer is that nothing happened, and reporting it as a change would redraw
-/// the user's message list, and lose their scroll position, every minute.
+/// The listing that found what it found last time. A refresh is a poll
+/// (Camel runs one on a timer, and one every time the folder is opened), so
+/// the common answer is that nothing happened. Reporting it as a change
+/// would redraw the user's message list, and lose the scroll position,
+/// every minute.
 #[test]
 fn a_listing_that_found_nothing_new_reports_nothing() {
     let account = Account::open();
@@ -535,8 +541,9 @@ fn a_row_whose_flags_moved_is_reported_as_changed() {
     }
 }
 
-/// A label is the same kind of change through a column Camel has no bit for,
-/// and it has to count as one: Evolution colours the message list by label.
+/// A label is the same kind of change, through a column Camel has no bit
+/// for. It has to count as one: Evolution colours the message list by
+/// label.
 #[test]
 fn a_row_whose_labels_moved_is_reported_as_changed() {
     let account = Account::open();
@@ -556,8 +563,8 @@ fn a_row_whose_labels_moved_is_reported_as_changed() {
     }
 }
 
-/// The row that went. Camel takes a message off the list on this and no other
-/// notice, so a removal reported as nothing is a line the user can click and
+/// The row that went. Camel takes a message off the list only on this
+/// notice. A removal reported as nothing is a line the user can click and
 /// not open.
 #[test]
 fn a_message_that_left_the_mailbox_is_reported_as_removed() {
@@ -577,11 +584,12 @@ fn a_message_that_left_the_mailbox_is_reported_as_removed() {
     }
 }
 
-/// Nothing is ever recent, and that is a decision rather than an omission.
-/// Camel's fourth list is what runs the user's incoming filters, and a JMAP
-/// listing cannot tell a message that just arrived from one that was always
-/// there: the first refresh of an account finds the whole mailbox. Reporting
-/// those as recent would file, or delete, every message the user already had.
+/// Nothing is ever recent, and that is a decision, not an omission. Camel's
+/// fourth list is what runs the user's incoming filters. A JMAP listing
+/// cannot tell a message that just arrived from one that was always there:
+/// the first refresh of an account finds the whole mailbox. Reporting
+/// those as recent would file, or delete, every message the user already
+/// had.
 #[test]
 fn nothing_a_listing_found_is_recent() {
     let account = Account::open();
@@ -597,11 +605,12 @@ fn nothing_a_listing_found_is_recent() {
     }
 }
 
-/// Both mutable columns in one listing. A message read *and* relabelled between
-/// two refreshes is ordinary — Evolution's own "mark as read and file it" rule
-/// does both at once — and it is the case a verdict built with `||` gets wrong:
-/// short-circuiting on the flags means the labels are never written at all, and
-/// the row keeps a label that was taken off days ago.
+/// Both mutable columns in one listing. A message read *and* relabelled
+/// between two refreshes is ordinary (Evolution's own "mark as read and
+/// file it" rule does both at once). It is the case a verdict built with
+/// `||` gets wrong: short-circuiting on the flags means the labels are
+/// never written at all, and the row keeps a label that was taken off days
+/// ago.
 #[test]
 fn a_row_that_moved_in_both_columns_has_both_of_them_written() {
     let account = Account::open();
@@ -632,10 +641,10 @@ fn a_row_that_moved_in_both_columns_has_both_of_them_written() {
 }
 
 /// The reason the summary is a subclass at all. Camel builds rows itself
-/// whenever it reads a folder back off disk, and this class field is the only
-/// thing that says which kind to build — so the answer here and the answer
-/// `new_message_info` gives have to be the same one, or a folder would hold two
-/// kinds of row depending on where each came from.
+/// whenever it reads a folder back off disk, and this class field is the
+/// only thing that says which kind to build. So the answer here and the
+/// answer `new_message_info` gives have to be the same one, or a folder
+/// would hold two kinds of row, depending on where each came from.
 #[test]
 fn the_summary_declares_the_provider_s_own_row_type() {
     let account = Account::open();
@@ -655,11 +664,11 @@ fn the_summary_declares_the_provider_s_own_row_type() {
     }
 }
 
-/// Camel clones a row when one has to exist outside the summary it belongs to,
-/// and the summary the copy is being made for is what decides its type. Cloned
-/// into one of ours, the copy is one of ours — and a copy that had forgotten the
-/// keywords the server holds would be a row whose next flag change looked like
-/// the removal of every one of them.
+/// Camel clones a row when one has to exist outside the summary it belongs
+/// to. The summary the copy is being made for decides the copy's type.
+/// Cloned into this provider's summary, the copy is this provider's own
+/// row. A copy that had forgotten the keywords the server holds would be a
+/// row whose next flag change looked like the removal of every one of them.
 #[test]
 fn a_row_cloned_into_the_summary_keeps_the_keywords_it_remembered() {
     let account = Account::open();
@@ -687,9 +696,9 @@ fn a_row_cloned_into_the_summary_keeps_the_keywords_it_remembered() {
     }
 }
 
-/// The thread id survives the same clone, for the same reason: a copy that
-/// forgot it would be a row this provider can no longer say which JMAP thread
-/// it belongs to.
+/// The thread id survives the same clone, for the same reason. A copy that
+/// forgot it would be a row for which this provider can no longer say
+/// which JMAP thread it belongs to.
 #[test]
 fn a_row_cloned_into_the_summary_keeps_the_thread_id_it_remembered() {
     let account = Account::open();
@@ -714,10 +723,11 @@ fn a_row_cloned_into_the_summary_keeps_the_thread_id_it_remembered() {
     }
 }
 
-/// And the whole point of storing the set at all: it has to be there after a
-/// restart. A folder closed and opened again is a new summary over the same
-/// rows, read back out of the store's database — the state in which a flag
-/// change made this morning is diffed against a listing made yesterday.
+/// The whole point of storing the set at all: it has to be there after a
+/// restart. A folder closed and opened again is a new summary over the
+/// same rows, read back out of the store's database. This is the state in
+/// which a flag change made this morning is diffed against a listing made
+/// yesterday.
 #[test]
 fn the_keywords_a_row_remembers_outlive_the_folder_that_listed_it() {
     let account = Account::open();
@@ -739,8 +749,9 @@ fn the_keywords_a_row_remembers_outlive_the_folder_that_listed_it() {
         assert!(error.is_null());
         g_object_unref(folder.cast());
 
-        // The same mailbox opened a second time: a folder with a summary that
-        // holds nothing until it is loaded, which is what a restart amounts to.
+        // The same mailbox, opened a second time. This is a folder with a
+        // summary that holds nothing until it is loaded, which is what a
+        // restart amounts to.
         let reopened = open_folder(&account);
         assert_ne!(
             camel_folder_summary_load(summary_of(reopened), ptr::addr_of_mut!(error)),
@@ -760,11 +771,12 @@ fn the_keywords_a_row_remembers_outlive_the_folder_that_listed_it() {
     }
 }
 
-/// A summary that has never listed anything has no state to ask a delta from,
-/// and the question has to be answerable before the first listing rather than
-/// only after it: a folder opened for the first time is exactly the case where
-/// there is nothing, and `None` is what makes the next refresh list the whole
-/// mailbox instead of asking `Email/changes` from a state it invented.
+/// A summary that has never listed anything has no state to ask a delta
+/// from. The question has to be answerable before the first listing, not
+/// only after it. A folder opened for the first time is exactly the case
+/// where there is nothing. `None` is what makes the next refresh list the
+/// whole mailbox, instead of asking `Email/changes` from a state it
+/// invented.
 #[test]
 fn a_summary_that_never_listed_holds_no_state() {
     let account = Account::open();
@@ -781,10 +793,10 @@ fn a_summary_that_never_listed_holds_no_state() {
     }
 }
 
-/// The state a listing came with, asked back. It belongs to the summary rather
-/// than to the folder because it is a fact about the *rows*: it says what they
-/// are current as of, so it has to be stored where they are and loaded when
-/// they are.
+/// The state a listing came with, asked back. It belongs to the summary,
+/// not the folder, because it is a fact about the *rows*. It says what the
+/// rows are current as of, so it has to be stored where they are, and
+/// loaded when they are.
 #[test]
 fn the_state_a_summary_was_told_is_the_state_it_reports() {
     let account = Account::open();
@@ -798,9 +810,9 @@ fn the_state_a_summary_was_told_is_the_state_it_reports() {
             Some(State::new("EmailState7"))
         );
 
-        // And a later listing replaces it. The state is the *last* answer's,
-        // never the first one's: a delta asked from a stale state re-reports
-        // everything that happened in between, which is a refresh that grows
+        // A later listing replaces it. The state is the *last* answer's,
+        // never the first one's. A delta asked from a stale state re-reports
+        // everything that happened in between. That is a refresh that grows
         // more expensive every time it runs.
         set_summary_state(summary_of(folder), State::new("EmailState9"));
         assert_eq!(
@@ -811,13 +823,15 @@ fn the_state_a_summary_was_told_is_the_state_it_reports() {
     }
 }
 
-/// And the point of keeping it at all: it has to survive the folder that
-/// learnt it. A state that lived only in memory would be no state at all after
-/// a restart — Evolution would list every mailbox in full on the first refresh
-/// of every session, which is the cost this whole mechanism exists to avoid.
+/// The point of keeping it at all: it has to survive the folder that
+/// learnt it. A state that lived only in memory would be no state at all
+/// after a restart. Evolution would list every mailbox in full on the
+/// first refresh of every session, which is the cost this whole mechanism
+/// exists to avoid.
 ///
-/// Stored in the summary's own on-disk header, which is the record Camel keeps
-/// beside the rows and hands back through `summary_header_load`.
+/// The state is stored in the summary's own on-disk header, which is the
+/// record Camel keeps beside the rows and hands back through
+/// `summary_header_load`.
 #[test]
 fn the_state_outlives_the_folder_that_listed_it() {
     let account = Account::open();
@@ -836,7 +850,7 @@ fn the_state_outlives_the_folder_that_listed_it() {
         assert!(error.is_null());
         g_object_unref(folder.cast());
 
-        // The same mailbox opened again, and its header read back — which is
+        // The same mailbox, opened again, with its header read back. This is
         // what Camel does when it builds a folder over rows that are already
         // on disk.
         let reopened = open_folder(&account);
@@ -865,21 +879,22 @@ fn the_state_outlives_the_folder_that_listed_it() {
 /// The `summary_header_load` vfunc Camel would dispatch on one of this
 /// provider's summaries, checked to be the provider's own.
 ///
-/// The check is what makes the two tests below say anything: both of them
+/// The check is what makes the two tests below say anything. Both of them
 /// assert that a header produces *no* state, which is also what the base
-/// class's vfunc does — by never looking at the field. Asserting the vfunc is
-/// ours first is what tells "the record was read and had nothing in it" from
-/// "nobody read the record".
+/// class's vfunc does, by never looking at the field. Asserting the vfunc
+/// is this provider's own first is what tells "the record was read and had
+/// nothing in it" apart from "nobody read the record".
 ///
 /// # Safety
 ///
-/// The classes are alive for as long as this crate is loaded; the ref taken
+/// The classes are alive for as long as this crate is loaded. The ref taken
 /// here is dropped by the caller.
 unsafe fn header_load(
     class: *mut CamelFolderSummaryClass,
 ) -> unsafe extern "C" fn(*mut CamelFolderSummary, *mut CamelSummaryFolderRecord) -> gboolean {
-    // SAFETY: both classes are live — ours because the ref is held by the
-    // caller, the parent's because ours keeps it alive.
+    // SAFETY: both classes are live. This class is live because the ref is
+    // held by the caller. The parent class is live because this class keeps
+    // it alive.
     unsafe {
         let parent =
             g_type_class_peek(camel_folder_summary_get_type()).cast::<CamelFolderSummaryClass>();
@@ -896,18 +911,18 @@ unsafe fn header_load(
     }
 }
 
-/// A header written before this column existed — or by some other provider —
-/// loads as a summary without a state rather than as a failure or as a state
-/// made of whatever was in the field. The fallback costs one full listing; the
-/// alternatives cost the rows.
+/// A header written before this column existed (or by some other provider)
+/// loads as a summary without a state, rather than as a failure, or as a
+/// state made of whatever was in the field. The fallback costs one full
+/// listing. The alternatives cost the rows.
 #[test]
 fn a_header_with_no_state_in_it_loads_without_one() {
     let account = Account::open();
 
-    // SAFETY: the folder is live until it is unreffed once; the record is a
-    // zeroed `CamelSummaryFolderRecord` that outlives the call, which is the struct the
-    // vfunc is defined over, and the class is alive for as long as the ref is
-    // held.
+    // SAFETY: the folder is live until it is unreffed once. The record is a
+    // zeroed `CamelSummaryFolderRecord` that outlives the call, which is the
+    // struct the vfunc is defined over. The class is alive for as long as
+    // the ref is held.
     unsafe {
         let folder = open_folder(&account);
         let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
@@ -930,10 +945,11 @@ fn a_header_with_no_state_in_it_loads_without_one() {
     }
 }
 
-/// And a header written in a format this version does not know — by a later
-/// version of this provider, on a profile that was downgraded — is the same
-/// answer rather than a state made of a field that means something else. The
-/// number in front of the state is what makes the two cases tellable apart.
+/// A header written in a format this version does not know (by a later
+/// version of this provider, on a profile that was downgraded) is the same
+/// answer, rather than a state made of a field that means something else.
+/// The number in front of the state is what makes the two cases tellable
+/// apart.
 #[test]
 fn a_header_from_an_unknown_format_loads_without_a_state() {
     let account = Account::open();
@@ -941,10 +957,10 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
     // like a state. Nothing after the number is ever read.
     let bdata = CString::new(" 99 11-EmailState7").expect("a header with no NUL in it");
 
-    // SAFETY: the folder is live until it is unreffed once; the record is a
-    // zeroed `CamelSummaryFolderRecord` whose `bdata` borrows a string that outlives the
-    // call — nothing takes ownership of it — and the class is alive for as
-    // long as the ref is held.
+    // SAFETY: the folder is live until it is unreffed once. The record is a
+    // zeroed `CamelSummaryFolderRecord` whose `bdata` borrows a string that
+    // outlives the call (nothing takes ownership of it). The class is alive
+    // for as long as the ref is held.
     unsafe {
         let folder = open_folder(&account);
         let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
@@ -968,11 +984,12 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
     }
 }
 
-/// A delta is not a listing, and the whole difference is here: `Email/changes`
-/// answers for the *account*, so what it names is what moved and never what is
-/// there. A row it did not mention is a row nothing was said about, and
-/// `apply_listing`'s rule — anything unnamed has left the mailbox — would empty
-/// the folder on the first refresh that found one new message.
+/// A delta is not a listing, and the whole difference is here.
+/// `Email/changes` answers for the *account*, so what it names is what
+/// moved, never what is there. A row it did not mention is a row that
+/// nothing was said about. `apply_listing`'s rule (anything unnamed has
+/// left the mailbox) would empty the folder on the first refresh that
+/// found one new message.
 #[test]
 fn a_delta_leaves_alone_the_rows_it_did_not_mention() {
     let account = Account::open();
@@ -998,9 +1015,9 @@ fn a_delta_leaves_alone_the_rows_it_did_not_mention() {
 }
 
 /// The uids the delta says this mailbox no longer holds: destroyed, filed
-/// elsewhere, or moved out by another client — one answer, because from inside
-/// one folder those are the same thing. The row goes and Camel is told, which
-/// is the only notice the message list gets.
+/// elsewhere, or moved out by another client. One answer covers all three,
+/// because from inside one folder those are the same thing. The row goes,
+/// and Camel is told, which is the only notice the message list gets.
 #[test]
 fn a_message_the_delta_reports_absent_loses_its_row() {
     let account = Account::open();
@@ -1020,11 +1037,11 @@ fn a_message_the_delta_reports_absent_loses_its_row() {
     }
 }
 
-/// Most of what a delta calls absent was never here. `Email/changes` reports on
-/// every mailbox of the account, so a message the user filed in some other
-/// folder arrives on this folder's `absent` list too — and a removal announced
-/// for a uid the message list never drew is a change Camel is asked to make to
-/// nothing.
+/// Most of what a delta calls absent was never here. `Email/changes`
+/// reports on every mailbox of the account, so a message the user filed in
+/// some other folder arrives on this folder's `absent` list too. A removal
+/// announced for a uid the message list never drew is a change that Camel
+/// is asked to make to nothing.
 #[test]
 fn an_absent_uid_this_folder_never_held_is_not_reported() {
     let account = Account::open();
@@ -1047,12 +1064,12 @@ fn an_absent_uid_this_folder_never_held_is_not_reported() {
     }
 }
 
-/// A message the delta found in this mailbox and the folder has no row for has
-/// just arrived in it, and this is the one place that can be said honestly —
-/// which is what Camel's fourth list is for. A listing cannot: it finds the
-/// whole mailbox, so its "added" is every message the user already had, and the
-/// incoming filters would run over all of them. A delta's added rows are the
-/// ones that moved since a state the folder itself recorded.
+/// A message the delta found in this mailbox, with no row for it yet, has
+/// just arrived. This is the one place that can be said honestly, which is
+/// what Camel's fourth list is for. A listing cannot say this: it finds the
+/// whole mailbox, so its "added" is every message the user already had, and
+/// the incoming filters would run over all of them. A delta's added rows
+/// are the ones that moved since a state the folder itself recorded.
 #[test]
 fn a_message_a_delta_saw_arrive_is_recent() {
     let account = Account::open();
@@ -1081,10 +1098,11 @@ fn a_message_a_delta_saw_arrive_is_recent() {
     }
 }
 
-/// The other half of that: a message the delta named because its flags moved is
-/// one the folder already holds, so it is a change and emphatically not an
-/// arrival. Reported as recent it would be filed, forwarded or deleted by the
-/// user's rules every time somebody marked it read.
+/// The other half of that. A message the delta named because its flags
+/// moved is one the folder already holds, so it is a change, and
+/// emphatically not an arrival. Reported as recent, it would be filed,
+/// forwarded, or deleted by the user's rules every time somebody marked it
+/// read.
 #[test]
 fn a_row_the_delta_only_reflagged_is_changed_and_not_recent() {
     let account = Account::open();
@@ -1111,10 +1129,10 @@ fn a_row_the_delta_only_reflagged_is_changed_and_not_recent() {
     }
 }
 
-/// A row the delta mentioned and nothing about it moved. `Email/changes` is
-/// account-wide, so this is ordinary: another mailbox's message can be the
-/// reason this folder was handed a delta at all, and a row rewritten to what it
-/// already said is not a redraw.
+/// A row the delta mentioned, and nothing about it moved. `Email/changes`
+/// is account-wide, so this is ordinary: another mailbox's message can be
+/// the reason this folder was handed a delta at all. A row rewritten to
+/// what it already said is not a redraw.
 #[test]
 fn a_delta_that_moved_nothing_reports_nothing() {
     let account = Account::open();
@@ -1136,11 +1154,11 @@ fn a_delta_that_moved_nothing_reports_nothing() {
     }
 }
 
-/// A row a delta adds is not a row waiting to be written back to the server —
-/// the same rule `apply_listing` follows and for the same reason: Camel marks
-/// an added row as having to be sent, and `crate::synchronize` walks that list.
-/// Left set, every message that arrived would be written straight back to the
-/// server it arrived from.
+/// A row a delta adds is not a row waiting to be written back to the
+/// server. `apply_listing` follows the same rule, for the same reason:
+/// Camel marks an added row as having to be sent, and `crate::synchronize`
+/// walks that list. Left set, every message that arrived would be written
+/// straight back to the server it arrived from.
 #[test]
 fn a_row_a_delta_added_is_not_queued_for_the_server() {
     let account = Account::open();

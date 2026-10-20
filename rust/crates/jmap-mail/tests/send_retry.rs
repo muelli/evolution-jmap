@@ -7,17 +7,17 @@
 //! `JmapTransport::send_message` retries staging (`Email/import`, via
 //! `MailSync::stage_outgoing_message`) and submitting (`EmailSubmission/set`,
 //! via `MailSync::submit_staged_message`) as two separate `retry_once_after`
-//! attempts, not one composite attempt: staging already commits a real,
-//! visible draft on success, and retrying it again just because the
-//! *submission* that followed needed a fresh token would leave an orphaned
+//! attempts, not as one combined attempt. Staging already commits a real,
+//! visible draft on success. Retrying staging again, only because the
+//! following submission needed a fresh token, would leave an orphaned
 //! duplicate draft behind once the retried submission succeeds.
 //!
-//! This proves that shape directly against `MailSync` and the very
-//! `retry_once_after` `jmap-mail`'s transport calls, rather than through
-//! `JmapTransport` itself: a `JmapTransport::detached` instance has no
-//! `CamelService`, so `refresh_credentials` always reports "nothing to
-//! refresh" and its own internal retry never fires. See
-//! `transport_stale_token.rs`'s doc comment for the same limitation.
+//! This test proves that shape directly against `MailSync` and the same
+//! `retry_once_after` that `jmap-mail`'s transport calls. It does not go
+//! through `JmapTransport` itself: a `JmapTransport::detached` instance has
+//! no `CamelService`, so `refresh_credentials` always reports "nothing to
+//! refresh", and its own internal retry never fires. See the doc comment of
+//! `transport_stale_token.rs` for the same limitation.
 
 use jmap_backend_core::retry::retry_once_after;
 use jmap_client::{Client, Credentials};
@@ -62,8 +62,8 @@ fn a_submission_that_needs_a_credential_refresh_does_not_restage_the_message() {
         destination: Some(sent.clone()),
     };
 
-    // Exactly `jmap-mail`'s transport: staging and submitting are retried as
-    // two separate attempts, not one.
+    // Exactly like `jmap-mail`'s transport: staging and submitting are each
+    // retried as a separate attempt, not as one combined attempt.
     let uid = retry_once_after(
         || sync.stage_outgoing_message(&outgoing),
         SyncError::is_unauthorized,
@@ -71,8 +71,8 @@ fn a_submission_that_needs_a_credential_refresh_does_not_restage_the_message() {
     )
     .expect("the message stages");
 
-    // The token goes stale in the window between staging and submitting:
-    // the window the old, composite-retrying code got wrong.
+    // The token goes stale in the window between staging and submitting.
+    // The old, combined-retry code got this window wrong.
     server.expire_bearer_token_after(0);
     let result = retry_once_after(
         || sync.submit_staged_message(&uid, &outgoing),

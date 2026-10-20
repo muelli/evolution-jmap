@@ -4,30 +4,31 @@
 //! `subscribe::set_subscribed` against a real JMAP server.
 //!
 //! `jmap-mail/tests/live_server_folder.rs` already proves
-//! `JmapStore::set_subscribed` (by mailbox id) against real Stalwart. What
-//! it does not reach is `subscribe::set_subscribed`, the function
-//! `subscribe_folder_sync`/`unsubscribe_folder_sync` (the actual
-//! `CamelSubscribable` vfuncs Evolution's subscription editor calls) hand a
-//! Camel *path* to: resolving that path against the store's held folder
-//! tree via `tree_holding`, including its "look again" refresh for a folder
-//! created by another client since the last listing, before writing through
-//! to `set_subscribed`. Every existing test of that resolution
-//! (`tests/subscriptions.rs`) runs against `jmap-mockd`. This is the
-//! live-server counterpart, the same shape as `tests/live_server_connect.rs`
-//! proving `open_mail` (the layer above a already-live-tested primitive)
-//! against a real server.
+//! `JmapStore::set_subscribed` (by mailbox id) against real Stalwart. It
+//! does not reach `subscribe::set_subscribed`, the function that
+//! `subscribe_folder_sync` and `unsubscribe_folder_sync` call. These two
+//! are the actual `CamelSubscribable` vfuncs that Evolution's subscription
+//! editor calls, and they hand `subscribe::set_subscribed` a Camel *path*.
+//! `subscribe::set_subscribed` resolves that path against the store's held
+//! folder tree through `tree_holding`, including its "look again" refresh
+//! for a folder created by another client since the last listing, before
+//! it writes through to `set_subscribed`. Every existing test of that
+//! resolution (`tests/subscriptions.rs`) runs against `jmap-mockd`. This
+//! file is the live-server counterpart. It has the same shape as
+//! `tests/live_server_connect.rs`, which proves `open_mail` (the layer
+//! above an already-live-tested primitive) against a real server.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
-//! `docs/manual-test-live-server.md`:
+//! This test needs the same environment as the other live-server tests.
+//! See `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 use std::env;
 
@@ -60,10 +61,10 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Resolves a real folder's path to a write, toggles it off and back on
-/// again, and confirms a folder created by another connection *after* the
-/// store's last listing is still found by `tree_holding`'s look-again
-/// refresh rather than reported missing.
+/// Resolves a real folder's path for a write. Toggles the subscription
+/// off, then back on. Confirms that a folder another connection created
+/// *after* the store's last listing is still found by `tree_holding`'s
+/// look-again refresh, not reported missing.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn set_subscribed_resolves_a_real_path_and_looks_again_for_a_new_one() {
@@ -79,8 +80,8 @@ fn set_subscribed_resolves_a_real_path_and_looks_again_for_a_new_one() {
     let store = JmapStore::detached();
     store.store_connection(sync);
 
-    // Primes the cache with whatever the account already holds, same as
-    // live_server_folder.rs.
+    // Primes the cache with whatever the account already holds. Same
+    // priming as in live_server_folder.rs.
     store.folders(0).expect("initial listing failed");
 
     let name = format!("agent-jmapstore-subscribe-{}", unique_suffix());
@@ -95,8 +96,8 @@ fn set_subscribed_resolves_a_real_path_and_looks_again_for_a_new_one() {
     assert_eq!(folder.path, name);
     assert!(!folder.subscribed, "the answer describes the new state");
 
-    // Read back over a connection of its own, so the answer is the
-    // server's, not the store's own copy of it.
+    // Reads back over a separate connection, so the answer comes from
+    // the server, not from the store's own copy.
     let client = connect_for_write().expect("write account still configured");
     let account_id = client
         .primary_account(CAPABILITY_MAIL)

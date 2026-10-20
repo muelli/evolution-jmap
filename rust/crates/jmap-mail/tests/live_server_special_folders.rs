@@ -1,31 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `get_inbox_folder_sync`/`get_trash_folder_sync`/`get_junk_folder_sync`
-//! against a real JMAP server — the vfuncs behind
-//! `camel_store_get_{inbox,trash,junk}_folder_sync`, which Camel calls by
-//! purpose rather than by path (incoming filters, "Empty Trash", junk
-//! handling).
+//! `get_inbox_folder_sync`, `get_trash_folder_sync`, and `get_junk_folder_sync`
+//! against a real JMAP server. These are the vfuncs behind
+//! `camel_store_get_{inbox,trash,junk}_folder_sync`. Camel calls them by
+//! purpose, not by path (incoming filters, "Empty Trash", junk handling).
 //!
 //! `jmap-mail-sync`'s own `FolderTree::role` is already exercised against
-//! real Stalwart by several `jmap-mail-sync` live-server tests. What none of
-//! them reach is `jmap-mail/src/folders.rs`'s `open_by_role`, the three
-//! vfuncs built on it, and the join between a role lookup and
-//! `camel_store_get_folder_sync` that opens the folder by the path the role
-//! resolved to. `tests/folders.rs` proves all of that, but only against
-//! `jmap-mockd`. This is that confirmation, against Stalwart's own default
-//! role assignments.
+//! real Stalwart by several `jmap-mail-sync` live-server tests. None of them
+//! reach `jmap-mail/src/folders.rs`'s `open_by_role`, the three vfuncs built
+//! on it, or the join between a role lookup and
+//! `camel_store_get_folder_sync` that opens the folder at the resolved path.
+//! `tests/folders.rs` proves all of that, but only against `jmap-mockd`.
+//! This test confirms it against Stalwart's own default role assignments.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing --test live_server_special_folders -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
+//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or `_PASSWORD` are
 //! unset.
 
 mod common;
@@ -120,10 +118,10 @@ impl Drop for Purpose {
     }
 }
 
-/// Each of the three role-purpose vfuncs opens the mailbox Stalwart itself
-/// assigned that role to, not a folder guessed by name — cross-checked
-/// against a second, independent connection's own `FolderTree::role`, so the
-/// assertion is the server's own role assignment rather than this store's
+/// Each of the three role-purpose vfuncs opens the mailbox that Stalwart
+/// itself assigned to that role, not a folder guessed by name. This is
+/// checked against a second, independent connection's own `FolderTree::role`.
+/// The assertion tests the server's own role assignment, not this store's
 /// cached copy of it.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]

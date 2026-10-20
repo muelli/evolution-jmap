@@ -1,37 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `send_to_sync`: the vfunc a JMAP account's mail leaves through.
+//! `send_to_sync`: the vfunc that sends mail for a JMAP account.
 //!
-//! Every piece under it has been built and tested on its own — [`jmap_mail::envelope`]
-//! for the two address lists Camel hands over, [`jmap_mail::mime`] for the bytes
-//! the message goes up as, and `MailSync`'s `identity_for`,
-//! `outgoing_mailboxes` and `send_message` for the account-side lookups and the
-//! import-and-submit itself. What these tests are about is the join: that
-//! pressing Send in Evolution reaches all five in the right order, that a
-//! refusal costs nothing when it can be known before the upload, and that the
-//! one answer Camel takes back besides success or failure —
-//! `out_sent_message_saved` — is right.
+//! Each part is already tested alone: [`jmap_mail::envelope`] builds the two
+//! address lists that Camel passes in, [`jmap_mail::mime`] builds the message
+//! bytes, and `MailSync`'s `identity_for`, `outgoing_mailboxes`, and
+//! `send_message` do the account lookups and the import-and-submit step. These
+//! tests check the join: pressing Send in Evolution must reach all five steps
+//! in order. A refusal must cost nothing when the code can detect it before
+//! the upload. The one extra answer Camel reads, `out_sent_message_saved`,
+//! must be correct.
 //!
 //! ## The out-parameter is not a detail
 //!
-//! `out_sent_message_saved` tells Evolution whether the transport has already
-//! saved the sent copy, and a caller told `FALSE` saves one of its own into
-//! whatever folder the account names. Getting it wrong is not a cosmetic
-//! failure in either direction: `FALSE` when the message *is* in Sent gives the
-//! user two of every message they send, and `TRUE` when it is not loses the
-//! sent copy. It is [`OutgoingMailboxes::saves_sent_copy`] all the way down, and
+//! `out_sent_message_saved` tells Evolution whether the transport already
+//! saved the sent copy. If a caller reads `FALSE`, Evolution saves its own
+//! copy into the account's folder. Either wrong answer causes a real failure:
+//! `FALSE` when the message is already in Sent gives the user two copies of
+//! each message. `TRUE` when the message is not in Sent loses the sent copy.
+//! The value always equals [`OutgoingMailboxes::saves_sent_copy`].
 //! [`an_account_whose_only_outgoing_mailbox_is_sent_has_already_saved_the_copy`]
-//! is the case where it differs from "was a destination mailbox needed".
+//! covers the case where this differs from "did the code need a destination
+//! mailbox".
 //!
 //! ## What is not sent
 //!
-//! Four refusals reach the wire not at all: an envelope with no sender or no
-//! recipients, a transport with no connection, an address the account has no
-//! identity for, and an account with nowhere to stage an outgoing message. The
-//! tests below check the code Camel gets *and* that the account is untouched —
-//! a refusal that had already imported the message would leave a draft behind
-//! for a send the user was told did not happen.
+//! Four refusals never reach the wire: an envelope with no sender or no
+//! recipients, a transport with no connection, an address with no identity on
+//! the account, and an account with no mailbox to stage an outgoing message
+//! in. The tests below check both the error code Camel gets and that the
+//! account stays unchanged. A refusal must not import the message first; an
+//! imported draft would remain after a send the user was told did not happen.
 //!
 //! [`OutgoingMailboxes::saves_sent_copy`]: jmap_mail_sync::OutgoingMailboxes::saves_sent_copy
 
@@ -57,9 +57,9 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::Envelope;
 
-/// The RFC 5322 bytes Evolution's composer hands a transport. The addresses in
-/// the headers are deliberately *not* the ones the envelope carries in most of
-/// the tests below — that is the ordinary case, not a contrived one.
+/// The RFC 5322 bytes that Evolution's composer passes to a transport. The
+/// header addresses deliberately differ from the envelope addresses used in
+/// most tests below, because that is the normal case, not a special one.
 const MESSAGE: &[u8] = b"From: Alice <alice@example.com>\r\n\
 To: Bob <bob@example.com>\r\n\
 Subject: Lunch?\r\n\
@@ -91,8 +91,8 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// The transport Camel would construct, with a connection already on it —
-    /// which is what `authenticate_sync` leaves behind.
+    /// The transport that Camel would construct, already connected. This is
+    /// the state that `authenticate_sync` leaves behind.
     fn transport(&self) -> Transport<'_> {
         let transport = Transport::open(&self.account);
         transport.connect(self.sync());
@@ -149,9 +149,9 @@ struct Message(*mut CamelMimeMessage);
 
 impl Message {
     fn parsed(source: &[u8]) -> Self {
-        // SAFETY: a fresh message is a valid `CamelDataWrapper`, `source` is a
-        // live buffer of the length given, and the error out-parameter is a
-        // local that starts NULL.
+        // SAFETY: a fresh message is a valid `CamelDataWrapper`. `source` is a
+        // live buffer with the given length. The error out-parameter is a
+        // local variable that starts as NULL.
         unsafe {
             let message = camel_mime_message_new();
             let mut error: *mut GError = ptr::null_mut();
@@ -179,11 +179,11 @@ impl Drop for Message {
 struct Addresses(*mut CamelInternetAddress);
 
 impl Addresses {
-    /// A list of `(display name, addr-spec)` pairs; an empty name is the
-    /// bare-address case Evolution's outbox produces.
+    /// A list of `(display name, addr-spec)` pairs. An empty name is the
+    /// bare-address case that Evolution's outbox produces.
     fn of(entries: &[(&str, &str)]) -> Self {
-        // SAFETY: a fresh address list, and NUL-terminated strings the setter
-        // copies.
+        // SAFETY: a fresh address list. The setter copies NUL-terminated
+        // strings.
         unsafe {
             let list = camel_internet_address_new();
             for (name, email) in entries {
@@ -207,8 +207,8 @@ impl Drop for Addresses {
     }
 }
 
-/// What one call to the vfunc answered: whether it succeeded, whether it says
-/// the sent copy is saved, and the failure it reported.
+/// The result of one call to the vfunc: success, whether it reports the sent
+/// copy as saved, and the reported failure.
 struct Outcome {
     sent: bool,
     saved: bool,
@@ -218,12 +218,13 @@ struct Outcome {
 impl Outcome {
     /// The `GError`'s domain and code, or `None` where there was no failure.
     fn failure(&self) -> Option<(u32, i32)> {
-        // SAFETY: the pointer is NULL or an owned `GError` this value holds.
+        // SAFETY: the pointer is NULL, or an owned `GError` that this value
+        // holds.
         unsafe { self.error.as_ref() }.map(|error| (error.domain, error.code))
     }
 
     fn message(&self) -> Option<String> {
-        // SAFETY: as above; the string belongs to the error and outlives this
+        // SAFETY: as above. The string belongs to the error and outlives this
         // borrow.
         unsafe {
             self.error
@@ -240,9 +241,9 @@ impl Drop for Outcome {
     }
 }
 
-/// Sends `message` through `transport` the way `e_mail_session_send_to` does —
-/// through the public wrapper, so that Camel's own preconditions are in the
-/// path.
+/// Sends `message` through `transport` through the public wrapper, the same
+/// way `e_mail_session_send_to` does. This way, Camel's own preconditions run
+/// too.
 fn send(
     transport: &Transport,
     message: &Message,
@@ -251,8 +252,8 @@ fn send(
 ) -> Outcome {
     let mut saved: gboolean = GTRUE;
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a live transport of ours, a live message, two live address lists,
-    // and two out-parameters that are locals; the error starts NULL.
+    // SAFETY: a live transport, a live message, and two live address lists.
+    // Both out-parameters are locals, and the error starts as NULL.
     let sent = unsafe {
         camel_transport_send_to_sync(
             transport.service.cast::<CamelTransport>(),
@@ -273,7 +274,7 @@ fn send(
 
 /// The service-domain quark every refusal below is reported in.
 fn service_domain() -> u32 {
-    // SAFETY: no arguments, and the quark registers itself on first use.
+    // SAFETY: no arguments. The quark registers itself on first use.
     unsafe { camel_service_error_quark() }
 }
 
@@ -287,13 +288,14 @@ fn only(messages: Vec<MessageSummary>) -> MessageSummary {
 // the slot
 
 /// Camel dispatches `send_to_sync` through the class, from the worker thread
-/// `camel_transport_send_to_sync` waits on; that thread's own helper is a
-/// `g_return_if_fail (class->send_to_sync != NULL)`, not the synchronous
-/// wrapper itself: a transport that installed none would be an account that
-/// offers to send and answers a GLib critical.
+/// that `camel_transport_send_to_sync` waits on. That thread's helper only
+/// runs `g_return_if_fail (class->send_to_sync != NULL)`, not the synchronous
+/// wrapper. A transport with no vfunc installed would offer to send mail and
+/// then answer with a GLib critical.
 #[test]
 fn the_transport_installs_the_send_vfunc() {
-    // SAFETY: a live GType of a class that has one; the reference is given back.
+    // SAFETY: a live GType of a class that has one. The code returns the
+    // reference afterward.
     unsafe {
         let class = g_type_class_ref(transport_type()).cast::<CamelTransportClass>();
         assert!(
@@ -324,14 +326,14 @@ fn a_message_the_composer_built_is_submitted_and_filed_where_sent_mail_belongs()
 
     assert!(outcome.sent, "the send failed: {:?}", outcome.message());
 
-    // The submission the server would have handed its MTA. A send that reached
-    // the account and never reached the submission machinery is a message the
-    // user believes went out.
+    // The submission that the server would pass to its MTA. If a send reaches
+    // the account but not the submission step, the user wrongly believes it
+    // went out.
     let (email_id, identity_id, _) = fixture.only_submission();
     assert_eq!(identity_id, identity);
 
-    // And the copy: out of the mailbox it waited in, into the one the account
-    // keeps sent mail in, and no longer a draft.
+    // The copy moves from the mailbox it waited in to the account's sent
+    // mailbox, and it is no longer a draft.
     assert!(fixture.listing(&drafts).is_empty(), "left behind in Drafts");
     let row = only(fixture.listing(&sent));
     assert_eq!(row.uid, email_id);
@@ -352,10 +354,10 @@ fn the_addresses_camel_hands_over_are_the_envelope_that_goes_out() {
     fixture.seed_identity("Alice", "alice@lists.example.com");
     let transport = fixture.transport();
 
-    // Neither address is in the message's headers — the `Bcc` case, where the
-    // recipient is in the envelope and in no header. A transport that let the
-    // server derive the envelope from the headers would deliver to Bob, whom
-    // the user did not address, and not to Carol, whom they did.
+    // Neither address is in the message headers: this is the `Bcc` case,
+    // where the recipient is in the envelope and in no header. If the
+    // transport let the server derive the envelope from the headers, it would
+    // deliver to Bob (not addressed) and not to Carol (addressed).
     let outcome = send(
         &transport,
         &Message::parsed(MESSAGE),
@@ -374,10 +376,10 @@ fn the_addresses_camel_hands_over_are_the_envelope_that_goes_out() {
     assert_eq!(rcpt_to, ["carol@example.net", "dave@example.org"]);
 }
 
-/// The identity is looked up by the *envelope* sender rather than by the `From`
-/// header, which is what the account is sending as. Here the two disagree on
-/// purpose: only the envelope address has an identity, so a transport that read
-/// the header would find none and refuse a send that is perfectly ordinary.
+/// The code looks up the identity by the envelope sender, not by the `From`
+/// header. Here the two addresses deliberately differ: only the envelope
+/// address has an identity. A transport that read the header instead would
+/// find none, and would refuse a send that is perfectly ordinary.
 #[test]
 fn the_identity_is_the_one_the_envelope_sender_names() {
     let fixture = Fixture::start();
@@ -399,10 +401,10 @@ fn the_identity_is_the_one_the_envelope_sender_names() {
     assert_eq!(identity_id, identity);
 }
 
-/// The case `out_sent_message_saved` exists for and the one where it differs
-/// from "did the message have to be moved": the account stages in Sent because
-/// it has no Drafts, so nothing is filed anywhere afterwards and the copy is
-/// nevertheless saved exactly where the user looks for sent mail.
+/// The case that `out_sent_message_saved` exists for, where it differs from
+/// "did the code have to move the message": the account has no Drafts, so it
+/// stages the message in Sent. Nothing moves afterward, but the copy is still
+/// saved where the user expects sent mail.
 #[test]
 fn an_account_whose_only_outgoing_mailbox_is_sent_has_already_saved_the_copy() {
     let fixture = Fixture::start();
@@ -426,9 +428,9 @@ fn an_account_whose_only_outgoing_mailbox_is_sent_has_already_saved_the_copy() {
     );
 }
 
-/// And the other way: an account with a Drafts and no Sent keeps the message in
-/// Drafts, which is not where sent mail belongs, so Evolution is told to save
-/// its own copy.
+/// The opposite case: an account with a Drafts mailbox and no Sent mailbox
+/// keeps the message in Drafts. Sent mail does not belong there, so Evolution
+/// must save its own copy.
 #[test]
 fn an_account_with_no_sent_mailbox_leaves_the_copy_to_evolution() {
     let fixture = Fixture::start();
@@ -473,8 +475,9 @@ fn a_message_with_no_recipients_is_refused_before_anything_is_uploaded() {
     );
 
     assert!(!outcome.sent, "a message with no recipients was sent");
-    // The account is not broken and retrying cannot help, so deliberately not
-    // `UNAVAILABLE`, which is what Evolution reads to put an account offline.
+    // The account is not broken, and a retry cannot help, so the error is
+    // deliberately not `UNAVAILABLE`. Evolution reads `UNAVAILABLE` as a
+    // reason to put the account offline.
     assert_eq!(
         outcome.failure(),
         Some((service_domain(), CAMEL_SERVICE_ERROR_INVALID as i32))
@@ -486,10 +489,9 @@ fn a_message_with_no_recipients_is_refused_before_anything_is_uploaded() {
     );
 }
 
-/// The recipient the user typed a name for and no address. Refusing is the
-/// point: the alternative is a shorter `rcptTo`, which is a perfectly valid
-/// submission and a message the user believes reached somebody who never got
-/// it.
+/// A recipient with a name but no address. The code must refuse the send. The
+/// alternative, a shorter `rcptTo`, is a valid submission, so the user would
+/// believe the message reached someone who never received it.
 #[test]
 fn a_recipient_with_no_address_is_named_in_the_refusal() {
     let fixture = Fixture::start();
@@ -521,8 +523,8 @@ fn a_transport_that_is_not_connected_sends_nothing() {
     let fixture = Fixture::start();
     fixture.seed_mailbox("Drafts", Some("drafts"));
     fixture.seed_identity("Alice", "alice@example.com");
-    // Constructed the way Camel constructs one and never authenticated, which
-    // is the state a transport is in until the user presses Send.
+    // Constructed the way Camel constructs a transport, never authenticated.
+    // This is the transport's state until the user presses Send.
     let transport = Transport::open(&fixture.account);
 
     let outcome = send(
@@ -533,9 +535,9 @@ fn a_transport_that_is_not_connected_sends_nothing() {
     );
 
     assert!(!outcome.sent);
-    // `NOT_CONNECTED` rather than a generic failure: it is what makes Camel
-    // connect the service and ask again instead of showing the account as
-    // broken.
+    // The code reports `NOT_CONNECTED`, not a generic failure. This code
+    // makes Camel connect the service and retry, instead of showing the
+    // account as broken.
     assert_eq!(
         outcome.failure(),
         Some((service_domain(), CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32))
@@ -568,9 +570,8 @@ fn an_address_the_account_cannot_send_as_is_refused_before_the_upload() {
         message.contains("mallory@example.net"),
         "the refusal does not name the address: {message}"
     );
-    // Before the upload, which is the one request whose body is the whole
-    // message — and, more importantly, before the message is in the account at
-    // all.
+    // The refusal happens before the upload (the request whose body is the
+    // whole message), and before the message enters the account at all.
     assert!(
         fixture.listing(&drafts).is_empty(),
         "a refused send left a draft behind"
@@ -598,9 +599,9 @@ fn an_account_with_nowhere_to_stage_a_message_is_refused_before_the_upload() {
         outcome.failure(),
         Some((service_domain(), CAMEL_SERVICE_ERROR_INVALID as i32))
     );
-    // Not the Inbox: that is where the *server* delivers, and importing the
-    // user's own outgoing mail into it would manufacture arrivals they then
-    // have to sort out.
+    // Not the Inbox: the server delivers there. Importing the user's own
+    // outgoing mail into it would create false arrivals for the user to sort
+    // out.
     assert!(fixture.listing(&inbox).is_empty());
     assert!(fixture.outbox_is_empty());
 }
@@ -608,14 +609,14 @@ fn an_account_with_nowhere_to_stage_a_message_is_refused_before_the_upload() {
 // ---------------------------------------------------------------------------
 // the out-parameter itself
 
-/// Dispatches the slot itself rather than through
-/// `camel_transport_send_to_sync`, with `saved` as whatever the caller's
-/// variable happened to hold — which is the whole point: the wrapper clears the
-/// out-parameter before it calls the vfunc, so nothing that goes through it can
-/// tell a vfunc that writes the parameter from one that leaves it alone.
+/// Dispatches the vfunc directly, not through `camel_transport_send_to_sync`.
+/// `saved` starts as whatever value the caller gives it, which is the point:
+/// the wrapper clears the out-parameter before calling the vfunc, so a caller
+/// that goes through the wrapper cannot tell a vfunc that writes the
+/// parameter from one that leaves it alone.
 ///
-/// `out` decides whether the parameter is passed at all; `saved` is what it
-/// starts as when it is.
+/// `out` decides whether the code passes the parameter at all. `saved` is its
+/// starting value when the code does pass it.
 fn send_through_the_class(
     transport: &Transport,
     message: &Message,
@@ -625,10 +626,10 @@ fn send_through_the_class(
     saved: gboolean,
 ) -> (gboolean, gboolean) {
     let mut saved = saved;
-    // SAFETY: a live GType of a class that has one; the vfunc is called with a
-    // live transport of ours, a live message, two live address lists, an
-    // out-parameter that is a local or NULL, and an error out-parameter that is
-    // a local starting NULL. The class reference is given back.
+    // SAFETY: a live GType of a class that has one vfunc. The vfunc call uses
+    // a live transport, a live message, and two live address lists. The
+    // out-parameter is a local or NULL, and the error out-parameter is a
+    // local starting as NULL. The code returns the class reference afterward.
     unsafe {
         let class = g_type_class_ref(transport_type()).cast::<CamelTransportClass>();
         let vfunc = (*class).send_to_sync.expect("the class installs one");
@@ -648,8 +649,8 @@ fn send_through_the_class(
     }
 }
 
-/// Camel declares `out_sent_message_saved` and its own transports leave it
-/// alone; a caller may pass NULL.
+/// Camel declares `out_sent_message_saved`, and its own transports leave it
+/// unset. A caller may pass NULL for it.
 #[test]
 fn the_out_parameter_may_be_null() {
     let fixture = Fixture::start();
@@ -670,20 +671,20 @@ fn the_out_parameter_may_be_null() {
     assert!(!fixture.outbox_is_empty(), "nothing was submitted");
 }
 
-/// A send that fails leaves the out-parameter saying the copy is *not* saved,
-/// whatever it said before.
+/// A failed send must leave the out-parameter saying the copy is not saved,
+/// whatever value it held before.
 ///
-/// `camel_transport_send_to_sync` clears it on the way in, so this can only be
-/// checked by dispatching the slot — but it is not a hypothetical: a vfunc that
-/// writes the parameter only on success is one whose answer, for every caller
-/// that does not clear it, is whatever was on their stack. A stale `TRUE` there
-/// is a failed send after which Evolution keeps no copy of the message the user
-/// wrote.
+/// `camel_transport_send_to_sync` clears the parameter on the way in, so this
+/// test must dispatch the vfunc directly to check it. The risk is real: a
+/// vfunc that writes the parameter only on success gives any caller that
+/// skips the clear whatever value was already on its stack. A stale `TRUE`
+/// there means Evolution keeps no copy of a message after a failed send.
 #[test]
 fn a_failed_send_says_no_copy_was_saved() {
     let fixture = Fixture::start();
-    // An account that could send, so that the refusal is about the addresses
-    // and the parameter is reached on a path with a real failure on it.
+    // An account that could otherwise send, so the refusal is about the
+    // addresses, and the code reaches the parameter through a real failure
+    // path.
     fixture.seed_mailbox("Sent", Some("sent"));
     fixture.seed_identity("Alice", "alice@example.com");
     let transport = fixture.transport();

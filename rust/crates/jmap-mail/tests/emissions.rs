@@ -1,41 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the store says back: the five folder signals the management and
+//! What the store says back: the five folder signals that the management and
 //! subscription vfuncs end in.
 //!
-//! Every one of them has been written and none has ever been observed.
-//! `tests/manage.rs` and `tests/subscriptions.rs` both say so in their headers,
-//! and both give the same reason: `camel_store_folder_created` begins by taking
-//! the service's session and queueing the emission on it, so a store without a
-//! `CamelSession` behind it cannot emit at all — and the stores those two files
-//! use are [`JmapStore::detached`] instances that are not GObjects. What each
-//! vfunc *decides* is tested there, thoroughly. The last two lines of each are
-//! tested here, and nowhere else.
+//! Every one of these signals is written but never observed elsewhere.
+//! `tests/manage.rs` and `tests/subscriptions.rs` both say so in their
+//! headers, for the same reason: `camel_store_folder_created` begins by
+//! taking the service's session and queueing the emission on it. A store with
+//! no `CamelSession` behind it cannot emit at all, and the stores those two
+//! files use are [`JmapStore::detached`] instances, which are not GObjects.
+//! Those two files thoroughly test what each vfunc *decides*. This file tests
+//! the last two lines of each, and nothing else tests them.
 //!
-//! That gap is worth closing on its own account rather than for tidiness. Camel
-//! emits none of the five for us — its own `camel_store_create_folder_sync` and
-//! `camel_store_delete_folder_sync` call the vfunc and nothing else, and the
-//! emitters are called nowhere in libcamel outside `CamelVeeStore` — so these
-//! lines are the *only* thing that tells Evolution's folder tree that the
-//! account changed. A provider that got them wrong would look correct in every
-//! other test in this crate and leave the user staring at a tree that never
-//! moves.
+//! Closing this gap matters beyond tidiness. Camel emits none of the five
+//! signals for us: its own `camel_store_create_folder_sync` and
+//! `camel_store_delete_folder_sync` call only the vfunc, and the emitters are
+//! called nowhere in libcamel outside `CamelVeeStore`. These lines are the
+//! *only* thing that tells Evolution's folder tree the account changed. A
+//! provider that gets them wrong looks correct in every other test in this
+//! crate, and leaves the user staring at a tree that never moves.
 //!
-//! Three things about the emissions this file had to establish, none of which
-//! is visible from the source of the vfuncs:
+//! This file establishes three facts about the emissions, none visible from
+//! the vfuncs' source:
 //!
-//! - **They are queued, not delivered.** See `common::signals`; every test here
-//!   holds a [`Context`] and reads through [`events`], which pumps first.
-//! - **The queue belongs to the session, not to the store.** The context is
-//!   captured once, by `camel_session_init`, which is why [`Context::push`] runs
-//!   before [`Account::open`] in every test below and not merely first out of
-//!   habit.
-//! - **The emitters clone what they are handed.** They have to: the vfunc frees
-//!   its `CamelFolderInfo` chain when it returns, which is long before the idle
-//!   source runs. What the handler reads here is a copy that outlived the chain
-//!   the vfunc built — so these tests are also the check that the ownership rule
-//!   `crate::manage` states is the one Camel actually follows.
+//! - **They are queued, not delivered.** See `common::signals`. Every test
+//!   here holds a [`Context`] and reads through [`events`], which pumps first.
+//! - **The queue belongs to the session, not the store.** `camel_session_init`
+//!   captures the context once. For this reason, [`Context::push`] runs before
+//!   [`Account::open`] in every test below, not merely first out of habit.
+//! - **The emitters clone what they are handed.** They must: the vfunc frees
+//!   its `CamelFolderInfo` chain when it returns, long before the idle source
+//!   runs. The handler reads a copy that outlives the chain the vfunc built.
+//!   These tests also confirm Camel follows the ownership rule that
+//!   `crate::manage` states.
 //!
 //! [`JmapStore::detached`]: jmap_mail::store::JmapStore::detached
 
@@ -62,12 +60,12 @@ fn sync_against(server: &MockServer) -> MailSync {
     MailSync::new(client, server.account_id())
 }
 
-/// An account with an inbox, a folder beside it and a folder under that — the
-/// third so that a rename has descendants to carry, which is the one thing that
-/// makes `folder-renamed` more than `folder-created` with an extra string.
+/// An account with an inbox, a folder beside it, and a folder under that. The
+/// third folder gives a rename descendants to carry, the one thing that makes
+/// `folder-renamed` more than `folder-created` with an extra string.
 struct Mail {
-    /// Held for the account's sake: the store's connection is to this server,
-    /// and dropping it would take the port down under the vfunc.
+    /// Held for the account's sake. The store connects to this server.
+    /// Dropping it would take the port down under the vfunc.
     _server: MockServer,
     account: Account,
 }
@@ -87,7 +85,7 @@ fn connected() -> Mail {
     let account = Account::open();
     account.connect(sync_against(&server));
     // The listing every vfunc below resolves its paths against. Taken here so
-    // that the request it costs is not something a test has to think about.
+    // a test does not need to account for its cost.
     account.jmap().folders(0).expect("a listing");
     Mail {
         _server: server,
@@ -97,9 +95,9 @@ fn connected() -> Mail {
 
 impl Mail {
     fn create(&self, parent: Option<&str>, name: &str) {
-        // Bound rather than converted inline: `as_ptr` on a temporary `CString`
-        // hands Camel a pointer to a string freed at the end of the expression,
-        // which the vfunc then reads as the empty path.
+        // Bound to a variable, not converted inline. `as_ptr` on a temporary
+        // `CString` would hand Camel a pointer freed at the end of the
+        // expression, and the vfunc would read it as an empty path.
         let parent = parent.map(|parent| CString::new(parent).expect("a path with no NUL"));
         let name = CString::new(name).expect("a name with no NUL");
         let mut error: *mut GError = ptr::null_mut();
@@ -214,10 +212,10 @@ unsafe fn why(error: *mut GError) -> String {
     }
 }
 
-/// The one event a test expected, or a failure naming everything that did
-/// arrive — which is the assertion that matters twice over, since a store that
-/// announced a subscribe *and* a create would redraw the tree wrongly just as
-/// surely as one that announced nothing.
+/// The one event a test expected, or a failure naming everything that
+/// arrived. This assertion matters twice over: a store that announces a
+/// subscribe *and* a create redraws the tree as wrongly as one that announces
+/// nothing.
 fn one(events: Vec<FolderEvent>, signal: &str) -> FolderEvent {
     assert_eq!(events.len(), 1, "the store announced {events:?}");
     let event = events.into_iter().next().expect("one event");
@@ -225,12 +223,12 @@ fn one(events: Vec<FolderEvent>, signal: &str) -> FolderEvent {
     event
 }
 
-/// A create is announced, and it is announced with the folder that was made.
+/// A create is announced, with the folder that was made.
 ///
-/// Evolution's folder tree adds a row from this signal and from nothing else:
-/// the `CamelFolderInfo` the vfunc *returns* goes to whoever called it, which
-/// for a folder made from the New Folder dialog is one window, and every other
-/// view of the account learns about it here.
+/// Evolution's folder tree adds a row only from this signal. The
+/// `CamelFolderInfo` the vfunc *returns* goes only to its caller: one window,
+/// for a folder made from the New Folder dialog. Every other view of the
+/// account learns about the new folder here.
 #[test]
 fn a_created_folder_is_announced() {
     let context = Context::push();
@@ -245,10 +243,10 @@ fn a_created_folder_is_announced() {
     assert_eq!(event.old_name, None);
 }
 
-/// And a delete, with the folder that went. The info has to describe the folder
-/// as it *was*: it is the only handle Evolution has for the row it is being
-/// told to take out, and by the time the signal is delivered there is nothing
-/// left on the server to look it up in.
+/// A delete, with the folder that went. The info must describe the folder as
+/// it *was*: it is the only handle Evolution has for the row it must remove,
+/// and by the time the signal delivers, nothing remains on the server to look
+/// it up.
 #[test]
 fn a_deleted_folder_is_announced() {
     let context = Context::push();
@@ -279,12 +277,12 @@ fn a_renamed_folder_is_announced_under_both_paths() {
     assert_eq!(event.folders[0].display_name, "Twenty");
 }
 
-/// And it carries what is *under* the folder, which is the whole reason the
-/// rename's chain is built to full depth where a create's and a delete's are
-/// one folder deep. Every descendant's path changed, and every one of them is a
-/// key Camel opens a folder by; the handler for this signal walks the children
-/// of what it is handed, so a chain that stopped at the folder itself would
-/// leave the account with rows nothing can open.
+/// A rename also carries what is *under* the folder. This is why the rename's
+/// chain is built to full depth, where a create's and a delete's chains are
+/// one folder deep. Every descendant's path changed, and each path is a key
+/// Camel uses to open a folder. The handler for this signal walks the
+/// children it is handed, so a chain stopping at the folder itself would
+/// leave rows nothing can open.
 #[test]
 fn a_renamed_folder_is_announced_with_its_children() {
     let context = Context::push();
@@ -298,10 +296,10 @@ fn a_renamed_folder_is_announced_with_its_children() {
     assert_eq!(event.paths(), ["Archive", "Archive/Nineteen"]);
 }
 
-/// The tick going on. Camel's wrapper does not emit this for the
-/// implementation — `camel_subscribable_subscribe_folder_sync` calls the vfunc
-/// and returns — so the folder tree learns that the user's tick took effect
-/// from the line at the end of our own vfunc or not at all.
+/// The tick going on. Camel's wrapper does not emit this signal for the
+/// implementation: `camel_subscribable_subscribe_folder_sync` calls the vfunc
+/// and returns. The folder tree learns the user's tick took effect only from
+/// the line at the end of this vfunc.
 #[test]
 fn a_subscribed_folder_is_announced() {
     let context = Context::push();
@@ -320,9 +318,9 @@ fn a_subscribed_folder_is_announced() {
     );
 }
 
-/// And off again, with the mirror image of the flag. The info is what the tree
-/// redraws the row from, so an unsubscribe that announced the folder still
-/// carrying `CAMEL_FOLDER_SUBSCRIBED` would put the tick straight back.
+/// The tick going off, with the mirror image of the flag. The tree redraws
+/// the row from this info, so an unsubscribe that still announces
+/// `CAMEL_FOLDER_SUBSCRIBED` would put the tick straight back.
 #[test]
 fn an_unsubscribed_folder_is_announced_without_the_flag() {
     let context = Context::push();
@@ -342,10 +340,10 @@ fn an_unsubscribed_folder_is_announced_without_the_flag() {
     );
 }
 
-/// Nothing is announced for a call that did nothing. A create under a parent
-/// that is not there writes nothing to the server, and a store that told the
-/// folder tree about it anyway would add a row for a folder that does not
-/// exist — which Evolution then offers to open, and cannot.
+/// Nothing is announced for a call that did nothing. A create under a missing
+/// parent writes nothing to the server. A store that announces it anyway adds
+/// a row for a folder that does not exist, and Evolution then offers to open
+/// it, and fails.
 #[test]
 fn a_vfunc_that_failed_announces_nothing() {
     let context = Context::push();
@@ -377,31 +375,31 @@ fn a_vfunc_that_failed_announces_nothing() {
     assert!(events.is_empty(), "a failed create announced {events:?}");
 }
 
-/// The one folder Camel says nothing about: a subtree with nothing subscribed
-/// anywhere in it.
+/// The one case Camel announces nothing for: a subtree with nothing
+/// subscribed anywhere in it.
 ///
-/// This is the price of leaving the rename's announcement to Camel, and it is
-/// pinned rather than papered over. The info Camel builds is asked of the store
-/// with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` — because this store is
-/// subscribable — so a subtree the subscription filter drops entirely comes back
-/// as nothing, and there is nothing to announce. The line above shows the same
-/// filter's other half: an unsubscribed folder kept for a subscribed child *is*
-/// announced, so what is silent here is exactly what the folder tree the rename
-/// was invoked from is not showing.
+/// This is the price of leaving the rename's announcement to Camel. This test
+/// pins the behavior instead of hiding it. Camel asks the store for the info
+/// with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, because this store is
+/// subscribable. A subtree the subscription filter drops entirely comes back
+/// as nothing, so there is nothing to announce. The test above shows the
+/// other half of the same filter: an unsubscribed folder kept for a
+/// subscribed child *is* announced. What stays silent here is exactly what
+/// the folder tree is not showing, from the rename's own view.
 ///
-/// A folder the user cannot see is one they cannot rename from the tree, which
-/// is why this is Camel's rule rather than a gap of ours — every provider has
-/// it. It is still the reason to be careful about calling the rename path done.
+/// A folder the user cannot see is one they cannot rename from the tree. This
+/// is Camel's rule, not a gap in this provider: every provider has it. It
+/// still means the rename path needs care before calling it complete.
 #[test]
 fn a_rename_of_a_subtree_nothing_is_subscribed_to_is_announced_by_no_one() {
     let context = Context::push();
     let mail = connected();
     mail.set_subscribed("Projects/Nineteen", false);
     mail.set_subscribed("Projects", false);
-    // Those two queued announcements of their own, and a handler connected
-    // between the queueing and the delivery would still catch them: the
-    // emission itself happens when the idle source runs. Pumped away first, so
-    // that what is watched below is the rename alone.
+    // Those two calls queue announcements of their own. A handler connected
+    // between the queueing and the delivery would still catch them, because
+    // the emission happens when the idle source runs. Pumped away first, so
+    // only the rename is watched below.
     context.pump();
     watch_store(mail.account.store);
 
@@ -416,8 +414,8 @@ fn a_rename_of_a_subtree_nothing_is_subscribed_to_is_announced_by_no_one() {
     );
 }
 
-/// And the other half of the same filter: an unsubscribed folder that is kept
-/// because something under it is subscribed is announced, once.
+/// The other half of the same filter: an unsubscribed folder kept because a
+/// descendant is subscribed is announced, once.
 #[test]
 fn a_rename_of_an_unsubscribed_folder_with_a_subscribed_child_is_announced() {
     let context = Context::push();

@@ -3,26 +3,28 @@
 
 //! `get_message_sync`: the vfunc that turns a row into mail the user can read.
 //!
-//! `refresh_info_sync` filled the folder with rows — a subject, a sender, a
-//! date, a size. None of that is the message; it is what a message list draws,
-//! and clicking a line of it asks this vfunc for the rest. The previous
-//! increment built the fetch half in `jmap-mail-sync` (`MailSync::message_source`,
-//! an `Email/get` for the blob id and a download of the blob) and stopped at the
-//! bytes. This is the other half: a `CamelMimeMessage` parsed out of them.
+//! `refresh_info_sync` filled the folder with rows: a subject, a sender, a
+//! date, a size. None of that is the message. It is what a message list
+//! draws, and clicking a line of it asks this vfunc for the rest. The
+//! previous increment built the fetch half in `jmap-mail-sync`
+//! (`MailSync::message_source`, an `Email/get` for the blob id, and a
+//! download of the blob), and stopped at the bytes. This is the other half:
+//! a `CamelMimeMessage` parsed out of them.
 //!
 //! The assertions are deliberately not "the bytes came back". A test that
-//! compared the download against the mock's own rendering would be testing the
-//! mock; what has to be true is that *Camel* can read the result, so the message
-//! is asked what it is through Camel's own accessors — the subject, the sender,
-//! and the body, which is the one that needs the whole message rather than its
-//! first few hundred bytes.
+//! compared the download against the mock's own rendering would test the
+//! mock. What has to be true is that *Camel* can read the result. So the
+//! message is asked what it is through Camel's own accessors: the subject,
+//! the sender, and the body, which is the one that needs the whole message
+//! rather than its first few hundred bytes.
 //!
 //! Two failures matter as much as the success, and they are two different
 //! domains. A uid the account no longer holds is
-//! `CAMEL_FOLDER_ERROR_INVALID_UID` — the message went away, the account is
-//! fine — and a store with no connection is `CAMEL_SERVICE_ERROR_NOT_CONNECTED`,
-//! which is what makes Camel reconnect and ask again. Reported the other way
-//! round, a single deleted message would take the account offline.
+//! `CAMEL_FOLDER_ERROR_INVALID_UID` (the message went away, but the account
+//! is fine). A store with no connection is
+//! `CAMEL_SERVICE_ERROR_NOT_CONNECTED`, which is what makes Camel reconnect
+//! and ask again. Reported the other way round, a single deleted message
+//! would take the account offline.
 
 mod common;
 
@@ -109,8 +111,8 @@ fn with_one_message() -> (MockServer, Account, *mut CamelFolder) {
 /// The uid Evolution would pass to `get_message_sync`: one it read out of the
 /// folder after a refresh, rather than one the test invented.
 fn the_one_uid(folder: *mut CamelFolder) -> CString {
-    // SAFETY: a live folder; the refresh is Camel's own wrapper, and the uid
-    // array comes back owned and is freed with the function Camel documents.
+    // SAFETY: a live folder. The refresh is Camel's own wrapper, and the uid
+    // array comes back owned, and is freed with the function Camel documents.
     unsafe {
         let mut error: *mut GError = ptr::null_mut();
         assert_ne!(
@@ -150,13 +152,14 @@ impl Opened {
     }
 
     /// Through the pointer in the class, skipping whatever the wrapper does
-    /// first — the same reason tests/refresh.rs has this pair: a store Camel
-    /// would have reconnected on the way in is not the state under test.
+    /// first. `tests/refresh.rs` has this same pair for the same reason: a
+    /// store that Camel would have reconnected on the way in is not the
+    /// state under test.
     fn straight(folder: *mut CamelFolder, uid: &CStr) -> Self {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc; `folder` is an instance of that class, and `error` is writable
-        // and currently NULL.
+        // vfunc. `folder` is an instance of that class, and `error` is
+        // writable and currently NULL.
         let message = unsafe {
             let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
             let vfunc = (*class)
@@ -206,12 +209,12 @@ impl Drop for Opened {
     }
 }
 
-/// Through `get_message_cached` directly — the lock-free slot
-/// `camel_folder_get_message_sync` tries before it ever locks the folder and
-/// falls back to `get_message_sync`. Reached the same way `Opened::straight`
-/// reaches `get_message_sync`: no store, no connection, nothing but the
-/// pointer in the class, since this vfunc's whole point is answering without
-/// either.
+/// Through `get_message_cached` directly. This is the lock-free slot that
+/// `camel_folder_get_message_sync` tries before it ever locks the folder,
+/// and before it falls back to `get_message_sync`. It is reached the same
+/// way `Opened::straight` reaches `get_message_sync`: no store, no
+/// connection, nothing but the pointer in the class. This vfunc's whole
+/// point is answering without either.
 struct Cached {
     message: *mut CamelMimeMessage,
 }
@@ -219,7 +222,7 @@ struct Cached {
 impl Cached {
     fn of(folder: *mut CamelFolder, uid: &CStr) -> Self {
         // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc; `folder` is an instance of that class.
+        // vfunc. `folder` is an instance of that class.
         let message = unsafe {
             let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
             let vfunc = (*class)
@@ -244,7 +247,7 @@ impl Drop for Cached {
     }
 }
 
-/// Before any open, there is nothing to answer with — and nowhere to report
+/// Before any open, there is nothing to answer with, and nowhere to report
 /// that, since the slot has no `GError` out-parameter at all. NULL is the
 /// whole of the miss.
 #[test]
@@ -263,10 +266,10 @@ fn get_message_cached_is_null_before_any_open() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// Once a message has been opened — and so cached — the lock-free vfunc
-/// serves it on its own, with no store and no connection: this is what lets
-/// `camel_folder_get_message_sync` skip the folder lock entirely on a repeat
-/// open.
+/// Once a message has been opened (and so cached), the lock-free vfunc
+/// serves it on its own, with no store and no connection. This is what
+/// lets `camel_folder_get_message_sync` skip the folder lock entirely on a
+/// repeat open.
 #[test]
 fn get_message_cached_serves_an_already_opened_message_disconnected() {
     let (server, _account, folder) = with_one_message();
@@ -309,14 +312,14 @@ unsafe fn borrowed(s: *const glib_sys::gchar) -> Option<String> {
 
 /// The message's body, decoded the way a renderer decodes it.
 ///
-/// Through `camel_medium_get_content` and the data wrapper's own decoder rather
-/// than by re-reading the download: what is being asked is whether the bytes
-/// reached the part of the object Camel renders from, and only Camel's own path
-/// through the message answers that.
+/// This uses `camel_medium_get_content` and the data wrapper's own decoder,
+/// not a re-read of the download. The question this answers is whether the
+/// bytes reached the part of the object Camel renders from. Only Camel's
+/// own path through the message can answer that.
 fn body_of(message: *mut CamelMimeMessage) -> String {
-    // SAFETY: a live message of ours; the content is borrowed from it, the
-    // stream is owned here and unreffed below, and the error out-parameter is
-    // writable and currently NULL.
+    // SAFETY: a live message. The content is borrowed from it. The stream is
+    // owned here and unreffed below. The error out-parameter is writable and
+    // currently NULL.
     unsafe {
         let content: *mut CamelDataWrapper =
             camel_medium_get_content(message.cast::<CamelMedium>());
@@ -335,10 +338,10 @@ fn body_of(message: *mut CamelMimeMessage) -> String {
         let memory = stream.cast::<GMemoryOutputStream>();
         let size = g_memory_output_stream_get_data_size(memory);
         let data = g_memory_output_stream_get_data(memory).cast::<u8>();
-        // A resizable memory stream nothing was written to has no buffer at
-        // all, and `from_raw_parts` on its NULL is undefined behaviour rather
-        // than an empty slice — which turns a test that should fail with "the
-        // body decoded to \"\"" into an abort with no assertion in it.
+        // A resizable memory stream that nothing was written to has no buffer
+        // at all. `from_raw_parts` on its NULL is undefined behavior, not an
+        // empty slice. Without this check, a test that should fail with "the
+        // body decoded to \"\"" would abort instead, with no assertion in it.
         let body = if data.is_null() || size == 0 {
             String::new()
         } else {
@@ -384,9 +387,9 @@ fn an_opened_uid_becomes_the_message_the_server_holds() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// A uid is a claim about the last listing, and another client deleting the
-/// message since is ordinary. `CAMEL_FOLDER_ERROR_INVALID_UID` is how Evolution
-/// hears "that one is gone" instead of "this account is broken".
+/// A uid is a claim about the last listing. Another client deleting the
+/// message since then is ordinary. `CAMEL_FOLDER_ERROR_INVALID_UID` is how
+/// Evolution hears "that one is gone" instead of "this account is broken".
 #[test]
 fn a_uid_the_account_does_not_hold_is_an_invalid_uid() {
     let (_server, _account, folder) = with_one_message();
@@ -412,10 +415,10 @@ fn a_uid_the_account_does_not_hold_is_an_invalid_uid() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// The second open of a message is not a second download. Asserted by taking
-/// the server away between the two: what answers the second call cannot have
-/// come from the network, and it still has to be the whole message rather than
-/// its headers.
+/// The second open of a message is not a second download. This test asserts
+/// it by taking the server away between the two opens. What answers the
+/// second call cannot have come from the network, and it still has to be
+/// the whole message, not just its headers.
 #[test]
 fn a_message_opened_once_opens_again_with_the_server_gone() {
     let (server, _account, folder) = with_one_message();
@@ -445,12 +448,13 @@ fn a_message_opened_once_opens_again_with_the_server_gone() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// And it lands in the *account's* cache directory rather than the folder's. A
-/// JMAP message is filed in mailboxes the way a mail is labelled, so the same id
-/// is a row in several folders and has to be one file — which is only true while
-/// every folder of the account keys its cache off the same directory. Read back
-/// through a cache of the test's own, which is the second holder that property
-/// is about.
+/// The cache entry lands in the *account's* cache directory, not the
+/// folder's. A JMAP message is filed in mailboxes the way a mail is
+/// labelled, so the same id is a row in several folders, and has to be one
+/// file. This is only true while every folder of the account keys its cache
+/// off the same directory. This test reads the entry back through a
+/// separate cache handle, which is the second holder that property is
+/// about.
 #[test]
 fn the_cached_message_is_the_account_s_rather_than_the_folder_s() {
     let (_server, account, folder) = with_one_message();
@@ -472,20 +476,21 @@ fn the_cached_message_is_the_account_s_rather_than_the_folder_s() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// A cache entry is a file, and a file written by a process that died mid-write
-/// is a short one. MIME has no length in it, so Camel's parser reads a truncated
-/// message as a complete one with a truncated body — silently, and for as long
-/// as the entry survives. The row already carries the one number that closes
-/// that: RFC 8621 §4.1's `size`, the octets of exactly these bytes.
+/// A cache entry is a file, and a file written by a process that died
+/// mid-write is a short one. MIME has no length field, so Camel's parser
+/// reads a truncated message as a complete one with a truncated body. It
+/// does this silently, for as long as the entry survives. The row already
+/// carries the one number that closes this gap: RFC 8621 §4.1's `size`, the
+/// octet count of exactly these bytes.
 #[test]
 fn a_cached_message_shorter_than_its_row_is_fetched_again() {
     let (_server, account, folder) = with_one_message();
     let uid = the_one_uid(folder);
     let key = uid.to_str().expect("a UTF-8 uid");
 
-    // The entry the first open leaves, cut short the way a crash would cut it:
-    // a prefix of the real message, so what is lost is the end of the body and
-    // not a header the parser would have refused the message over.
+    // The entry the first open leaves, cut short the way a crash would cut it.
+    // It is a prefix of the real message, so what is lost is the end of the
+    // body, not a header that would make the parser refuse the message.
     Opened::of(folder, &uid).expect_message();
     let cache = MessageCache::open(&account.cache_dir()).expect("the account's cache directory");
     let whole = cache
@@ -511,9 +516,9 @@ fn a_cached_message_shorter_than_its_row_is_fetched_again() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// And the other domain. The message is fetched over the store's connection, so
-/// a store that has none cannot answer — and `NOT_CONNECTED` is what makes Camel
-/// connect and ask again rather than show the account as broken.
+/// The other domain. The message is fetched over the store's connection, so
+/// a store with no connection cannot answer. `NOT_CONNECTED` is what makes
+/// Camel connect and ask again, rather than show the account as broken.
 #[test]
 fn a_folder_whose_store_has_no_connection_reports_it() {
     let (_server, account, folder) = with_one_message();

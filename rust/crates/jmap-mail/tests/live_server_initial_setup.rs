@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `initial_setup_sync` against a real JMAP server: the vfunc behind
-//! `camel_store_initial_setup_sync`, which Evolution's account wizard calls
-//! right after a store first connects.
+//! `camel_store_initial_setup_sync`. Evolution's account wizard calls this
+//! vfunc right after a store first connects.
 //!
 //! `tests/folders.rs` proves the vfunc's logic against `jmap-mockd`: a
 //! mailbox claiming `FolderRole::Sent` or `FolderRole::Drafts` gets its Camel
-//! path saved under the matching `CAMEL_STORE_SETUP_*_FOLDER` key. This is
-//! the same confirmation against Stalwart's own default role assignments,
-//! the way `tests/live_server_special_folders.rs` does for the Inbox/Trash/
-//! Junk vfuncs: a freshly seeded Stalwart account already has Sent and
-//! Drafts mailboxes with those roles (confirmed directly over `Mailbox/get`
-//! before writing this test), so the write-test account needs no setup
-//! beyond what every other live-server test here already assumes.
+//! path saved under the matching `CAMEL_STORE_SETUP_*_FOLDER` key. This test
+//! confirms the same behavior against Stalwart's own default role
+//! assignments, the way `tests/live_server_special_folders.rs` does for the
+//! Inbox/Trash/Junk vfuncs. A freshly seeded Stalwart account already has
+//! Sent and Drafts mailboxes with those roles (confirmed directly over
+//! `Mailbox/get` before writing this test). So the write-test account needs
+//! no setup beyond what every other live-server test here already assumes.
 //!
 //! ## Running it
 //!
@@ -24,8 +24,8 @@
 //! $ cargo test -p jmap-mail --features testing --test live_server_initial_setup -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! This test is skipped, not failed, when
+//! `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
 
 mod common;
 
@@ -69,13 +69,13 @@ struct Setup {
 }
 
 impl Setup {
-    /// Through the public wrapper, which is how Evolution's account wizard
-    /// asks, and which creates the hash table the vfunc inserts into.
+    /// Calls the public wrapper, the same way Evolution's account wizard
+    /// asks. The wrapper creates the hash table that the vfunc inserts into.
     fn run(store: *mut eds_sys::CamelStore) -> Self {
         let mut save: *mut GHashTable = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: `store` is a live store of ours, and both out-parameters
-        // are writable and currently NULL.
+        // SAFETY: `store` is a live store of ours. Both out-parameters are
+        // writable and currently NULL.
         let ok = unsafe {
             camel_store_initial_setup_sync(store, &mut save, ptr::null_mut(), &mut error)
         };
@@ -86,8 +86,8 @@ impl Setup {
         if self.save.is_null() {
             return None;
         }
-        // SAFETY: `save` is a live table for the length of this call, and a
-        // non-NULL answer is a NUL-terminated string it owns.
+        // SAFETY: `save` is a live table for the length of this call. A
+        // non-NULL answer is a NUL-terminated string that the table owns.
         unsafe {
             let value = g_hash_table_lookup(self.save, key.as_ptr().cast());
             (!value.is_null()).then(|| CStr::from_ptr(value.cast()).to_string_lossy().into_owned())
@@ -97,8 +97,8 @@ impl Setup {
 
 impl Drop for Setup {
     fn drop(&mut self) {
-        // SAFETY: `save`, if not NULL, is the table the wrapper transferred
-        // ownership of; `error`, if not NULL, is ours to free.
+        // SAFETY: if `save` is not NULL, it is the table whose ownership the
+        // wrapper transferred. If `error` is not NULL, it is ours to free.
         unsafe {
             if !self.save.is_null() {
                 g_hash_table_destroy(self.save);
@@ -111,9 +111,9 @@ impl Drop for Setup {
 }
 
 /// `initial_setup_sync` reports the real server's own Sent and Drafts
-/// mailboxes by their Camel path, cross-checked against a second,
-/// independent connection's own `FolderTree::role`, so the assertion is the
-/// server's own role assignment rather than this store's cached copy of it.
+/// mailboxes by their Camel path. A second, independent connection's own
+/// `FolderTree::role` cross-checks this, so the assertion tests the server's
+/// own role assignment, not this store's cached copy of it.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn initial_setup_reports_the_real_servers_sent_and_drafts_paths() {

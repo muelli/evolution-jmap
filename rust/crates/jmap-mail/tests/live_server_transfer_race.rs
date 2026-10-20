@@ -4,22 +4,23 @@
 //! `transfer_race.rs`'s transfer-vs-in-flight-listing race, proven against a
 //! real JMAP server rather than `jmap-mock`.
 //!
-//! `transfer_race.rs` already proves the fix (`camel_folder_lock` must
-//! serialise `transfer_messages_to_sync` against a refresh already
+//! `transfer_race.rs` already proves the fix. `camel_folder_lock` must
+//! serialize `transfer_messages_to_sync` against a refresh that is already
 //! reconciling the same summary, or the refresh's stale-but-honest listing
-//! can write the just-moved message's row back in after the move commits)
-//! with a transport that wraps a real one against a real `jmap_mock::
-//! MockServer`: the refresh's `Email/query` is genuinely answered, only its
-//! delivery back to the caller is held. `live_server_transfer.rs` already
-//! proves the plain-case transfer against real Stalwart. This file reruns
-//! the race itself, gate and all, against real Stalwart instead of the mock,
-//! with two real folders and one real imported message: the one thing the
-//! mock version cannot show is whether a real `Email/query` answer's own
-//! shape and timing still exercise the same lock correctly.
+//! can write the just-moved message's row back in after the move commits.
+//! It proves this with a transport that wraps a real one against a real
+//! `jmap_mock::MockServer`: the refresh's `Email/query` is genuinely
+//! answered, and only its delivery back to the caller is held.
+//! `live_server_transfer.rs` already proves the plain-case transfer against
+//! real Stalwart. This file reruns the race itself, gate and all, against
+//! real Stalwart instead of the mock, with two real folders and one real
+//! imported message. The one thing the mock version cannot show is whether a
+//! real `Email/query` answer's own shape and timing still exercise the same
+//! lock correctly.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
@@ -76,8 +77,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Lets the test park the racing request's response and learn when it
-/// actually parked, rather than racing a sleep against it. Copy of
+/// Lets the test park the racing request's response, and learn when it has
+/// actually parked, instead of racing a sleep against it. Copy of
 /// `transfer_race.rs`'s `Gate`.
 #[derive(Default)]
 struct Gate {
@@ -114,10 +115,10 @@ impl Gate {
 }
 
 /// Forwards every request to a real transport, but holds the *first*
-/// `Email/query` response back until the test releases it — after actually
-/// making the request against the real server, so the answer is honest (the
-/// message still shows present) for the mailbox's contents at the time it
-/// was asked, before the race's transfer moves it away. Copy of
+/// `Email/query` response back until the test releases it. The request is
+/// made first, against the real server, so the answer is honest (the
+/// message still shows present) for the mailbox's contents at the time of
+/// the request, before the race's transfer moves it away. Copy of
 /// `transfer_race.rs`'s `DelayedDeliveryTransport`.
 struct DelayedDeliveryTransport {
     inner: UreqTransport,
@@ -159,8 +160,9 @@ struct UidList {
 impl UidList {
     fn of(uid: &str) -> Self {
         let uid = CString::new(uid).expect("a uid with no NUL");
-        // SAFETY: a fresh array, filled with one pointer into `uid`, which
-        // this value owns and outlives it by.
+        // SAFETY: a fresh array, filled with one pointer into `uid`. This
+        // struct owns `uid`, and drops it after the array, so the pointer
+        // stays valid for as long as the array exists.
         let array = unsafe {
             let array = glib_sys::g_ptr_array_new();
             glib_sys::g_ptr_array_add(array, uid.as_ptr() as gpointer);
@@ -172,8 +174,8 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointer
-        // in it belongs to `self.uid`.
+        // SAFETY: the one array, allocated above. FALSE, because the
+        // pointer in it belongs to `self.uid`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
     }
 }
@@ -251,8 +253,9 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         .import_message(&source_info.id, source_bytes, &Keywords::default(), None)
         .expect("import_message failed against the real server");
 
-    // Swaps the account's connection for the gated one: source_info/dest_info
-    // are plain data from the plain connection above and stay valid.
+    // Swaps the account's connection for the gated one. source_info and
+    // dest_info are plain data from the plain connection above, and stay
+    // valid.
     let gate = Arc::new(Gate::default());
     let gated = connect_for_write_with_gate(Arc::clone(&gate));
     account.connect(MailSync::new(gated, account_id.clone()));
@@ -266,10 +269,9 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         "the folders would not construct"
     );
 
-    // Never refreshed, so this is the full listing the race needs: a delta
-    // would ask only what changed since a recorded state, and "nothing
-    // changed" cannot resurrect a row the way a listing's "still present"
-    // can.
+    // Never refreshed, so this is the full listing the race needs. A delta
+    // would ask only what changed since a recorded state. "Nothing changed"
+    // cannot resurrect a row the way a listing's "still present" can.
     let refresh = thread::spawn(move || {
         // Named again so the closure captures the whole `Send` wrapper
         // rather than just the raw pointer field inside it.
@@ -291,9 +293,9 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         let list = UidList::of(uid_to_move.as_str());
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: two live folders of one store, an array of one
-        // NUL-terminated uid alive across the call, and two out-parameters
-        // that are writable and currently NULL.
+        // SAFETY: two live folders of one store, and an array of one
+        // NUL-terminated uid alive across the call. Two out-parameters,
+        // both writable and currently NULL.
         let ok = unsafe {
             let ok = camel_folder_transfer_messages_to_sync(
                 source.0,
@@ -312,20 +314,20 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
             }
             ok != GFALSE
         };
-        // The test is done listening once it has answered either way, so a
-        // send that fails (the check below already gave up) is not a bug in
-        // this thread.
+        // The test stops listening once it has answered either way. So a
+        // send that fails (the check below already gave up) is not a bug
+        // in this thread.
         let _ = done_tx.send(ok);
     });
 
-    // `camel_folder_transfer_messages_to_sync`'s own wrapper takes no lock —
-    // see `transfer_race.rs` for the confirmation against evolution-data-
-    // server 3.52.3's `camel-folder.c`. So the vfunc itself must take it, or
-    // the transfer above races ahead of the in-flight (and, at this instant,
-    // still-parked) listing instead of waiting for it. A full second gives
-    // real network latency plenty of room without weakening the check: an
-    // unlocked transfer would still complete on its own round trip well
-    // inside it.
+    // `camel_folder_transfer_messages_to_sync`'s own wrapper takes no lock.
+    // See `transfer_race.rs` for the confirmation against
+    // evolution-data-server 3.52.3's `camel-folder.c`. So the vfunc itself
+    // must take the lock, or the transfer above races ahead of the
+    // in-flight (and, at this instant, still-parked) listing, instead of
+    // waiting for it. A full second gives real network latency plenty of
+    // room, without weakening the check: an unlocked transfer would still
+    // complete on its own round trip well inside that second.
     match done_rx.recv_timeout(Duration::from_secs(1)) {
         Ok(_) => panic!(
             "transfer_messages_to_sync completed while a refresh held the folder's summary; \
@@ -336,7 +338,8 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         Err(RecvTimeoutError::Disconnected) => panic!("the transfer thread died without answering"),
     }
 
-    // Lets the parked, now-stale (message still shows present) listing land.
+    // Lets the parked, now-stale listing land (the message still shows as
+    // present).
     gate.release();
 
     let transferred_ok = done_rx
@@ -352,8 +355,8 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         "the refresh failed against the real server"
     );
 
-    // The message the transfer moved away must not have come back: the
-    // listing that named it was answered before the move and must not be
+    // The message the transfer moved away must not have come back. The
+    // listing that named it was answered before the move, and must not be
     // allowed to write its row back in after the move committed.
     let uid_c = CString::new(uid.as_str()).expect("a uid with no NUL");
     // SAFETY: a live folder with a summary, and a NUL-terminated uid.
@@ -369,8 +372,8 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         unsafe { g_object_unref(row.cast()) };
     }
 
-    // Independent confirmation: a fresh connection, sharing nothing with the
-    // ones above, sees the real server agrees.
+    // Independent confirmation. A fresh connection, sharing nothing with
+    // the ones above, confirms that the real server agrees.
     let verify_client = connect_for_write().expect("the write-test account is still there");
     let verify_sync = MailSync::new(verify_client, account_id);
     let (_, dest_messages) = verify_sync

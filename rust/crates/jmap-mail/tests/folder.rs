@@ -3,18 +3,19 @@
 
 //! `CamelJmapFolder`: the object a store hands out for one mailbox.
 //!
-//! Everything the store has answered with so far is a *description* of the
-//! folders — a `CamelFolderInfo` forest, plain structs Camel frees and forgets.
-//! A `CamelFolder` is the folder itself: the object `camel_store_get_folder_sync`
-//! returns, that Evolution keeps open while the user reads it, and that every
-//! later message operation is a method on. It is therefore the first place the
-//! provider has to hold per-folder state, and the state that matters is the one
-//! nothing in Camel's own model has a field for: the JMAP mailbox id. A Camel
-//! path is a display-derived identifier this crate invented (see
-//! `jmap-mail-sync`'s `path`), and no request can be built from it — `Email/query`
-//! filters on `inMailbox`, which is the id.
+//! Everything the store has answered with so far is only a *description* of
+//! the folders: a `CamelFolderInfo` forest, made of plain structs that Camel
+//! frees and forgets. A `CamelFolder` is the folder itself: the object that
+//! `camel_store_get_folder_sync` returns, that Evolution keeps open while the
+//! user reads it, and that every later message operation is a method on. It
+//! is therefore the first place where the provider must hold per-folder
+//! state. The state that matters is the one field that nothing in Camel's own
+//! model has: the JMAP mailbox id. A Camel path is a display-derived
+//! identifier that this crate invented (see `jmap-mail-sync`'s `path`), and no
+//! request can be built from the path alone: `Email/query` filters on
+//! `inMailbox`, which is the id.
 //!
-//! So the tests below are about the three things a folder is constructed from
+//! The tests below check the three things that a folder is constructed from,
 //! and the one thing it is constructed *with*: the path Camel keys it by, the
 //! name the user sees, the store it belongs to, and the mailbox id underneath.
 
@@ -38,8 +39,8 @@ use jmap_mail::folder::{JmapFolder, folder_type, new_folder};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
-/// One mailbox as the tree describes it — the only input a folder is built
-/// from.
+/// One mailbox as the tree describes it. This is the only input that a
+/// folder is built from.
 fn mailbox(path: &str, display_name: &str, role: Option<FolderRole>) -> FolderInfo {
     FolderInfo {
         id: Id::new("Mbx0001"),
@@ -56,12 +57,12 @@ fn mailbox(path: &str, display_name: &str, role: Option<FolderRole>) -> FolderIn
 
 /// The folder for one mailbox, owned by the caller.
 ///
-/// A real store is needed for this and not merely convenient: Camel refuses to
-/// construct a folder without one — `folder_set_parent_store` asserts
+/// A real store is required here, not merely convenient: Camel refuses to
+/// construct a folder without one. `folder_set_parent_store` asserts
 /// `CAMEL_IS_STORE`.
 fn folder_of(account: &Account, mailbox: &FolderInfo) -> *mut CamelFolder {
     // SAFETY: `account.store` is a live `CamelStore` for as long as the
-    // `Account` is.
+    // `Account` is live.
     let folder = unsafe { new_folder(account.store, mailbox) };
     assert!(!folder.is_null(), "no folder for {}", mailbox.path);
     folder
@@ -81,11 +82,11 @@ unsafe fn name(text: *const gchar) -> String {
         .into_owned()
 }
 
-/// The parent Camel dispatches from. `CamelOfflineFolder` rather than
-/// `CamelFolder`, for the same reason the store is a `CamelOfflineStore`: it is
-/// the class that knows how to keep a folder's content on disk for a
-/// disconnected client, and a folder that derives from `CamelFolder` directly
-/// would have to grow that itself.
+/// The parent class that Camel dispatches from. This is `CamelOfflineFolder`
+/// rather than `CamelFolder`, for the same reason the store is a
+/// `CamelOfflineStore`: it is the class that knows how to keep a folder's
+/// content on disk for a disconnected client. A folder that derived from
+/// `CamelFolder` directly would have to implement that itself.
 #[test]
 fn the_folder_type_is_an_offline_folder() {
     let gtype = folder_type();
@@ -103,12 +104,12 @@ fn the_folder_type_is_an_offline_folder() {
     }
 }
 
-/// The three things Camel keys, shows and routes a folder by. The path is the
-/// key — it is what `camel_store_get_folder_sync` was called with and what the
-/// store's cache would look it up by — and the display name is the mailbox
-/// name as the server spells it, which is not derivable from the path: the
-/// encoding that makes a name a path component is not reversible by anything
-/// that reads it.
+/// The three things that Camel keys, shows, and routes a folder by. The path
+/// is the key: it is what `camel_store_get_folder_sync` was called with, and
+/// what the store's cache looks it up by. The display name is the mailbox
+/// name as the server spells it. The display name cannot be derived from the
+/// path: the encoding that turns a name into a path component is not
+/// reversible by anything that reads it.
 #[test]
 fn a_folder_is_the_camel_view_of_one_mailbox() {
     let account = Account::open();
@@ -128,10 +129,11 @@ fn a_folder_is_the_camel_view_of_one_mailbox() {
     }
 }
 
-/// The state that makes it a *JMAP* folder. Nothing in `CamelFolder` has a
-/// field for it, and nothing can reconstruct it: the path is an identifier this
-/// crate invented from the mailbox's name, and `Email/query` filters on the id.
-/// A folder that lost it could describe itself and fetch nothing.
+/// The state that makes a folder a *JMAP* folder. Nothing in `CamelFolder` has
+/// a field for the mailbox id, and nothing can reconstruct it: the path is an
+/// identifier that this crate invented from the mailbox's name, and
+/// `Email/query` filters on the id, not the path. A folder that lost the id
+/// could describe itself but fetch nothing.
 #[test]
 fn a_folder_knows_the_mailbox_its_requests_filter_on() {
     let account = Account::open();
@@ -149,10 +151,10 @@ fn a_folder_knows_the_mailbox_its_requests_filter_on() {
     }
 }
 
-/// The message cache every later read asks instead of the server first. The
-/// account this test opens has a real cache directory, so a folder built on
-/// it must come back with a working cache, not the `None` a folder's own
-/// construction could not find a directory for.
+/// The message cache that every later read checks before asking the server.
+/// The account that this test opens has a real cache directory. A folder
+/// built on it must come back with a working cache, not the `None` that
+/// results when folder construction cannot find a directory.
 #[test]
 fn a_folder_on_an_account_with_a_cache_directory_has_one() {
     let account = Account::open();
@@ -170,12 +172,11 @@ fn a_folder_on_an_account_with_a_cache_directory_has_one() {
     }
 }
 
-/// What the inbox is, in Camel's vocabulary. `FILTER_RECENT` is what runs the
-/// user's incoming filters over new mail, and `FILTER_JUNK` what runs the junk
-/// test over it; Camel's own IMAPX sets exactly these two, on the folder it
-/// finds by name. This provider knows which mailbox is the inbox from its JMAP
-/// role instead, which is the same decision made from data rather than from a
-/// convention about a name.
+/// What the inbox is, in Camel's vocabulary. `FILTER_RECENT` runs the user's
+/// incoming filters over new mail, and `FILTER_JUNK` runs the junk test over
+/// it. Camel's own IMAPX sets exactly these two flags, on the folder it finds
+/// by name. This provider instead identifies the inbox from its JMAP role:
+/// the same decision, made from data rather than from a naming convention.
 #[test]
 fn new_mail_is_filtered_where_it_arrives() {
     let account = Account::open();
@@ -203,10 +204,11 @@ fn new_mail_is_filtered_where_it_arrives() {
     }
 }
 
-/// A JMAP string is a JSON string, so a mailbox name can carry a NUL that RFC
-/// 8621 forbids. Handing the bytes to Camel would truncate the name there — a
-/// folder called `Work` sitting beside the real `Work` — so the NUL is rewritten
-/// rather than obeyed, exactly as the `CamelFolderInfo` forest does it.
+/// A JMAP string is a JSON string, so a mailbox name can carry a NUL, although
+/// RFC 8621 forbids this. Handing the raw bytes to Camel would truncate the
+/// name there, producing a folder called `Work` that sits beside the real
+/// `Work`. Instead, the code rewrites the NUL rather than passing it through,
+/// exactly as the `CamelFolderInfo` forest does.
 #[test]
 fn a_name_with_a_nul_in_it_does_not_truncate_the_folder() {
     let account = Account::open();
@@ -222,7 +224,8 @@ fn a_name_with_a_nul_in_it_does_not_truncate_the_folder() {
     }
 }
 
-/// A nested subfolder hierarchy retains full paths, display names, and mailbox ids.
+/// A nested subfolder hierarchy keeps its full paths, display names, and
+/// mailbox ids.
 #[test]
 fn folder_properties_and_custom_subfolder_nesting() {
     let account = Account::open();
@@ -253,18 +256,19 @@ fn folder_properties_and_custom_subfolder_nesting() {
     }
 }
 
-/// How Camel orders two uids. Its own default parses each uid as a decimal
-/// number, which is IMAP's uid; a JMAP id is an opaque string, so every id
-/// that does not start with a digit parsed as 0 and every pair of messages
-/// compared equal. Byte order is arbitrary, but it is a total order, and
-/// `sort_uids` is only stable on top of one.
+/// How Camel orders two uids. Camel's own default comparator parses each uid
+/// as a decimal number, because that is what an IMAP uid is. A JMAP id is an
+/// opaque string instead. Under that default, every id that does not start
+/// with a digit would parse as 0, and every pair of such messages would
+/// compare equal. Byte order is an arbitrary choice, but it is a total order,
+/// and `sort_uids` is stable only on top of a total order.
 #[test]
 fn uids_compare_as_strings_not_as_numbers() {
     let account = Account::open();
     let folder = folder_of(&account, &mailbox("Inbox", "Inbox", None));
 
     let ids = [c"Mc", c"Ma2", c"Ma10", c"Mb"];
-    // SAFETY: `folder` is a live folder this test owns; the uid strings are
+    // SAFETY: `folder` is a live folder this test owns. The uid strings are
     // static, and the array only borrows them until it is freed below.
     unsafe {
         assert!(camel_folder_cmp_uids(folder, c"Ma".as_ptr(), c"Mb".as_ptr()) < 0);
@@ -289,10 +293,11 @@ fn uids_compare_as_strings_not_as_numbers() {
     }
 }
 
-/// The flags a folder can keep on a message between sessions: the ones the
-/// server keeps as keywords (with the user's labels, `USER`), plus `DELETED`,
-/// which Camel's own summary keeps until the expunge. Camel's default answers
-/// 0, which tells a caller nothing survives, not even the read state.
+/// The flags that a folder can keep on a message between sessions: the flags
+/// that the server keeps as keywords (including the user's labels, `USER`),
+/// plus `DELETED`, which Camel's own summary keeps until the expunge. Camel's
+/// default answer is 0, which tells a caller that nothing survives, not even
+/// the read state.
 #[test]
 fn permanent_flags_are_the_ones_the_server_keeps() {
     let account = Account::open();

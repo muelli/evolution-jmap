@@ -1,22 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelJmapTransport`: the second service a JMAP account has, and the one
-//! that never reads a folder.
+//! `CamelJmapTransport`: the second service of a JMAP account. It never reads
+//! a folder.
 //!
-//! Camel gives an account two services and no way for either to reach the
-//! other: a `CamelStore` for the mail it holds and a `CamelTransport` for the
-//! mail it sends. Evolution constructs them from two `ESource`s, hands each its
-//! own settings object, and connects each on its own. So a JMAP transport is
-//! not a view of the store — it is a service of its own, with a connection of
-//! its own to the same server, and these tests are about exactly that: that it
-//! is a `CamelTransport`, that it is configured through the account's settings
-//! class rather than through a stock one with no host in it, that authenticating
-//! it opens a connection, and that the connection is *its* and not the store's.
+//! Camel gives an account two services, with no way for either to reach the
+//! other: a `CamelStore` for the mail it holds, and a `CamelTransport` for the
+//! mail it sends. Evolution builds both from two `ESource`s, gives each its
+//! own settings object, and connects each independently. So a JMAP transport
+//! is not a view of the store. It is a separate service, with its own
+//! connection to the same server.
 //!
-//! What is deliberately not here is `send_to_sync` itself, which has a file of
-//! its own — `tests/send.rs`. The split is the same one the source takes: this
-//! is the service and its connection, that is what a message does with one.
+//! These tests check that:
+//! - the type is a `CamelTransport`.
+//! - it is configured through the account's settings class, not a stock class
+//!   with no host.
+//! - authenticating it opens a connection.
+//! - that connection belongs to the transport, not to the store.
+//!
+//! `send_to_sync` itself is not here; see `tests/send.rs`. That split matches
+//! the source: this file covers the service and its connection, that file
+//! covers what a message does with one.
 
 mod common;
 
@@ -67,10 +71,10 @@ fn seeded() -> MockServer {
 // ---------------------------------------------------------------------------
 // the type
 
-/// The parent is the whole reason this type exists: `send_to_sync` is declared
-/// on `CamelTransportClass` and nowhere else, and `camel_session_add_service`
-/// refuses a type that is not one when Evolution asks it for the sending half
-/// of an account.
+/// The parent class is the reason this type exists. `send_to_sync` is declared
+/// only on `CamelTransportClass`. `camel_session_add_service` refuses a type
+/// that is not a `CamelTransport` when Evolution asks for the sending half of
+/// an account.
 #[test]
 fn the_transport_is_a_camel_transport() {
     let gtype = transport_type();
@@ -81,7 +85,7 @@ fn the_transport_is_a_camel_transport() {
         "registering it twice made two types"
     );
 
-    // SAFETY: a live GType, and a type that registers itself on first use.
+    // SAFETY: a live GType; the type registers itself on first use.
     assert_ne!(
         unsafe { g_type_is_a(gtype, camel_transport_get_type()) },
         GFALSE,
@@ -89,9 +93,9 @@ fn the_transport_is_a_camel_transport() {
     );
 }
 
-/// `Camel<Protocol>Transport`, like every transport in Camel's own tree: the
-/// type name is what a user sees in a GObject warning about the wrong service
-/// type, and it is what `g_type_from_name` finds the type by.
+/// The name follows `Camel<Protocol>Transport`, like every transport in
+/// Camel's own tree. A GObject warning about the wrong service type shows this
+/// name to the user. `g_type_from_name` looks up the type by this name.
 #[test]
 fn the_transport_is_named_the_way_camels_own_transports_are() {
     assert_eq!(
@@ -100,19 +104,20 @@ fn the_transport_is_named_the_way_camels_own_transports_are() {
     );
 
     let gtype = transport_type();
-    // SAFETY: NAME is a 'static NUL-terminated string.
+    // SAFETY: NAME is a 'static, NUL-terminated string.
     assert_eq!(gtype, unsafe {
         g_type_from_name(<JmapTransport as ObjectSubclass>::NAME.as_ptr())
     });
 }
 
-/// The same settings class as the store's, because it is the same account: a
-/// transport that inherited `CamelSettings` would have no host, no port and no
-/// user, and `e_source_camel_configure_service` would have nowhere to write the
-/// server the user typed.
+/// The transport uses the same settings class as the store, because both
+/// belong to the same account. A transport that inherited `CamelSettings`
+/// would have no host, port, or user field. `e_source_camel_configure_service`
+/// would then have nowhere to write the server the user typed.
 #[test]
 fn the_transport_is_configured_through_the_accounts_settings_class() {
-    // SAFETY: a live GType of a class that has one; the reference is given back.
+    // SAFETY: a live GType of a class that has a settings_type; the code
+    // returns the reference.
     unsafe {
         let class = g_type_class_ref(transport_type()).cast::<CamelServiceClass>();
         assert_eq!(
@@ -127,17 +132,18 @@ fn the_transport_is_configured_through_the_accounts_settings_class() {
 // ---------------------------------------------------------------------------
 // its connection
 
-/// A transport Camel has constructed and not yet connected holds nothing, and
-/// says so — which is what `connect_sync`'s short-circuit reads.
+/// A transport that Camel constructed but has not yet connected holds no
+/// connection, and reports that correctly. `connect_sync` reads this state to
+/// short-circuit.
 #[test]
 fn a_new_transport_holds_no_connection() {
     let transport = JmapTransport::detached();
     assert!(!transport.is_connected());
 }
 
-/// The same `authenticate` the store's `authenticate_sync` calls, on the other
-/// service: one function, because opening an account is the same operation
-/// whichever half of it asked.
+/// This test calls the same `authenticate` function that the store's
+/// `authenticate_sync` calls. Opening an account is the same operation for
+/// either service.
 #[test]
 fn authenticating_a_transport_opens_a_connection() {
     let server = seeded();
@@ -148,10 +154,11 @@ fn authenticating_a_transport_opens_a_connection() {
     assert!(transport.is_connected());
 }
 
-/// The point of the type. Evolution connects the two services of an account
-/// independently — the store when the user opens a folder, the transport when
-/// they press Send — and neither can reach the other's connection, so a
-/// transport that had none of its own would have nothing to submit over.
+/// This is the purpose of the type. Evolution connects the two services of an
+/// account independently: the store when the user opens a folder, the
+/// transport when the user sends a message. Neither service can reach the
+/// other's connection. A transport with no connection of its own would have
+/// nothing to send over.
 #[test]
 fn the_transports_connection_is_its_own_and_not_the_stores() {
     let server = seeded();
@@ -168,9 +175,9 @@ fn the_transports_connection_is_its_own_and_not_the_stores() {
         .expect("the transport authenticated");
     assert!(store.is_connected() && transport.is_connected());
 
-    // And the other way round: Camel disconnects a store on its own schedule —
-    // an account going offline, a folder tree that has been idle — and a send
-    // is not part of that.
+    // The reverse also holds. Camel disconnects a store on its own schedule,
+    // for example when an account goes offline or a folder tree sits idle.
+    // A send is not part of that schedule.
     assert!(store.drop_connection());
     assert!(
         transport.is_connected(),
@@ -178,8 +185,8 @@ fn the_transports_connection_is_its_own_and_not_the_stores() {
     );
 }
 
-/// What `disconnect_sync` amounts to on this service, including on one that
-/// never connected — which is what Camel asks of every service on shutdown.
+/// What `disconnect_sync` does on this service, including a service that
+/// never connected. Camel asks this of every service on shutdown.
 #[test]
 fn disconnecting_drops_whatever_the_authentication_installed() {
     let server = seeded();
@@ -191,11 +198,10 @@ fn disconnecting_drops_whatever_the_authentication_installed() {
     assert!(!transport.is_connected());
 }
 
-/// The store's rule, on the transport: Camel re-authenticates a service it
-/// already has a connection for, and an attempt that fails must not take the
-/// working one with it — a user whose password prompt is still open should not
-/// find that the message they were about to send now has nothing to go out
-/// over.
+/// The store's rule applies to the transport too. Camel re-authenticates a
+/// service that already has a connection, and a failed attempt must not break
+/// the working connection. A user whose password prompt is still open should
+/// not lose the ability to send the message they were about to send.
 #[test]
 fn a_failed_attempt_leaves_a_working_connection_alone() {
     let server = seeded();
@@ -216,12 +222,12 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
 // ---------------------------------------------------------------------------
 // what Camel calls it
 
-/// The `get_name` slot, on a transport Camel itself constructed. It is the same
-/// answer the store gives — one account, one server, one name — and the test is
-/// that the slot is filled at all: `camel_service_get_name` is a
-/// `g_return_val_if_fail (class->get_name != NULL, NULL)`, so a transport that
-/// installed none would answer NULL and log a critical every time Camel wrote a
-/// sentence about a send.
+/// The `get_name` slot, on a transport that Camel itself constructed. The
+/// store gives the same answer, because there is one account, one server, and
+/// one name. This test checks only that the slot is filled.
+/// `camel_service_get_name` contains `g_return_val_if_fail (class->get_name !=
+/// NULL, NULL)`. A transport with no `get_name` slot would return NULL and log
+/// a critical message every time Camel described a send.
 #[test]
 fn the_transport_names_the_account_it_sends_through() {
     let account = Account::open();
@@ -242,9 +248,9 @@ fn the_transport_names_the_account_it_sends_through() {
 fn configure(transport: &Transport, host: &str, port: u16, user: Option<&str>) {
     let host = std::ffi::CString::new(host).expect("a host with no NUL in it");
     let user = user.map(|user| std::ffi::CString::new(user).expect("a user with no NUL in it"));
-    // SAFETY: a live `CamelService`, whose settings are a `CamelJmapSettings`
-    // and therefore a `CamelNetworkSettings`; the strings are copied by the
-    // setters and the reference is given back.
+    // SAFETY: a live `CamelService`. Its settings are a `CamelJmapSettings`,
+    // which is also a `CamelNetworkSettings`. The setters copy the strings.
+    // The code returns the reference.
     unsafe {
         let settings = camel_service_ref_settings(transport.service);
         assert!(!settings.is_null(), "the transport has no settings");
@@ -259,12 +265,12 @@ fn configure(transport: &Transport, host: &str, port: u16, user: Option<&str>) {
     }
 }
 
-/// What `camel_service_get_name` answers, as a Rust string; NULL — which is
-/// what Camel returns for a class that filled none of the slot in — comes back
-/// as `None`.
+/// What `camel_service_get_name` answers, as a Rust string. Camel returns NULL
+/// for a class that left the slot empty; this function returns `None` for
+/// that case.
 fn name_of(transport: &Transport, brief: bool) -> Option<String> {
-    // SAFETY: a live `CamelService`; the string returned is a GLib allocation
-    // this call owns and frees.
+    // SAFETY: a live `CamelService`. The returned string is a GLib allocation
+    // that this call owns and frees.
     unsafe {
         let name = camel_service_get_name(
             transport.service.cast::<CamelService>(),

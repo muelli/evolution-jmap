@@ -3,16 +3,16 @@
 
 //! `service::authenticate` against a real JMAP server.
 //!
-//! `service::authenticate` is the safe-Rust body of `authenticate_sync` — per
-//! that module's own doc comment, "the two functions a test can reach without
-//! a `CamelSession`... are exactly `authenticate` and `report_authentication`".
-//! `tests/service.rs` already proves it thoroughly against `jmap-mockd`, and
-//! `live_server_connect.rs` already proves `open_mail` (which `authenticate`
-//! calls first) against real Stalwart, but nothing has ever driven
-//! `authenticate` itself — the actual entry point Camel's `authenticate_sync`
-//! calls, which installs the connection through the [`Connected`] trait rather
-//! than a hand-built `MailSync` — against a real server. This is that
-//! confirmation.
+//! `service::authenticate` is the safe-Rust body of `authenticate_sync`. Per
+//! that module's own doc comment, the two functions a test can reach without
+//! a `CamelSession` are exactly `authenticate` and `report_authentication`.
+//! `tests/service.rs` already proves `authenticate` thoroughly against
+//! `jmap-mockd`. `live_server_connect.rs` already proves `open_mail` (which
+//! `authenticate` calls first) against real Stalwart. But nothing has driven
+//! `authenticate` itself against a real server: the actual entry point that
+//! Camel's `authenticate_sync` calls, which installs the connection through
+//! the [`Connected`] trait rather than a hand-built `MailSync`. This file is
+//! that confirmation.
 //!
 //! [`Connected`]: jmap_mail::service::Connected
 //!
@@ -25,8 +25,8 @@
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 use std::env;
 
@@ -41,7 +41,7 @@ const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 
 /// The write-test account's origin and username, or `None` if the standing
 /// live-server account is not configured here. Mirrors
-/// `live_server_connect.rs::write_account_config`.
+/// `write_account_config` in `live_server_connect.rs`.
 fn write_account_config() -> Option<(ServerConfig, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let origin = env::var("JMAP_LIVE_SERVER_URL")
@@ -54,9 +54,10 @@ fn write_account_config() -> Option<(ServerConfig, String)> {
 }
 
 /// `authenticate` opens the real account and installs it on the store, the
-/// same as `open_mail` proves in `live_server_connect.rs` — but this drives
-/// it through the actual `Connected`-trait wiring `authenticate_sync` uses,
-/// and confirms the folder listing that installed connection now serves.
+/// same as `open_mail` proves in `live_server_connect.rs`. But this test
+/// drives `authenticate` through the actual `Connected`-trait wiring that
+/// `authenticate_sync` uses, and confirms that the installed connection now
+/// serves the folder listing.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn authenticate_installs_a_working_connection_against_the_real_server() {
@@ -86,10 +87,10 @@ fn authenticate_installs_a_working_connection_against_the_real_server() {
         .expect("the connection authenticate installed could not list folders");
 }
 
-/// The other half of `tests/service.rs`'s
-/// `a_rejected_password_is_reported_without_a_gerror_so_camel_asks_again`,
-/// against a real server's own wrong-password 401 rather than
-/// `jmap-mockd`'s.
+/// The other half of
+/// `a_rejected_password_is_reported_without_a_gerror_so_camel_asks_again` in
+/// `tests/service.rs`, this time against a real server's own wrong-password
+/// 401, rather than `jmap-mockd`'s.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn authenticate_reports_a_real_wrong_password_as_rejected_and_holds_no_connection() {

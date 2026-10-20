@@ -5,16 +5,16 @@
 //! chain back.
 //!
 //! `jmap-mail-sync` already tests the tree itself, on the inputs a server can
-//! get wrong. What is left, and what this file is about, is the crossing: a
-//! `Vec<FolderInfo>` with owned `String`s becomes a linked forest of
-//! `g_malloc`ed structs whose `next`/`parent`/`child` pointers Camel will walk
-//! and whose names Camel will `g_free`. So every test here builds a chain and
-//! then walks it the way Camel does — pointer by pointer, `CStr` by `CStr` —
-//! rather than trusting the Rust side of the boundary.
+//! get wrong. This file tests the crossing: a `Vec<FolderInfo>` with owned
+//! `String`s becomes a linked forest of `g_malloc`ed structs. Camel walks these
+//! structs through the `next`, `parent`, and `child` pointers, and frees the
+//! names with `g_free`. Each test builds a chain, then walks it the way Camel
+//! does: pointer by pointer, `CStr` by `CStr`. This checks the C side instead
+//! of trusting the Rust side of the boundary.
 //!
-//! The tests deliberately let the chain drop, which frees it. Under a leak
-//! checker that is the other half of the assertion; without one it is at least
-//! a use-after-free the moment a `Drop` frees something Camel still owns.
+//! Each test lets the chain drop, which frees it. Under a leak checker, this is
+//! the other half of the assertion. Without a leak checker, this still causes
+//! a use-after-free the moment `Drop` frees something Camel still owns.
 
 use std::ffi::CStr;
 
@@ -81,7 +81,7 @@ unsafe fn read_chain(head: *mut CamelFolderInfo, parent: *mut CamelFolderInfo) -
 }
 
 fn read(chain: &FolderInfoChain) -> Vec<Read> {
-    // SAFETY: the chain owns a forest built by the code under test; its roots
+    // SAFETY: the chain owns a forest built by the code under test. Its roots
     // have no parent.
     unsafe { read_chain(chain.as_ptr(), std::ptr::null_mut()) }
 }
@@ -133,9 +133,9 @@ fn folder_type(flags: CamelFolderInfoFlags) -> CamelFolderInfoFlags {
     flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags
 }
 
-/// An account with no mailboxes at all is a NULL chain, not an error and not an
-/// empty struct: `get_folder_info_sync` returning NULL with no error set is how
-/// Camel is told a store has no folders.
+/// An account with no mailboxes is a NULL chain, not an error and not an empty
+/// struct. `get_folder_info_sync` returns NULL with no error set to tell Camel
+/// a store has no folders.
 #[test]
 fn an_empty_tree_is_a_null_chain() {
     let chain = chain(&[]);
@@ -151,10 +151,10 @@ fn top_level_folders_become_one_sibling_chain() {
     assert_eq!(full_names(&read(&chain)), ["Inbox", "Sent"]);
 }
 
-/// Both name fields, and the fact that they are different fields: `full_name`
-/// is the path Camel keys the folder by, `display_name` the string the user
-/// sees. A mailbox whose name needs encoding is where the two come apart, and
-/// swapping them is a folder tree that looks right and cannot be opened.
+/// Both name fields are different. `full_name` is the path Camel keys the
+/// folder by. `display_name` is the string the user sees. When a mailbox name
+/// needs encoding, the two values differ. Swapped values produce a folder tree
+/// that looks right but cannot be opened.
 #[test]
 fn the_path_is_the_full_name_and_the_mailbox_name_is_displayed() {
     let chain = chain(&[mailbox("M1", "Two/Parts")]);
@@ -164,10 +164,10 @@ fn the_path_is_the_full_name_and_the_mailbox_name_is_displayed() {
     assert_eq!(read[0].display_name, "Two/Parts");
 }
 
-/// The shape Camel walks: a parent's first child hangs off `child`, the rest
-/// off that child's `next`, and every one of them points back at the parent.
-/// `read_chain` asserts the back-pointers, which is the field a store gets
-/// wrong by building the chain top-down and forgetting a level.
+/// The shape Camel walks: a parent's first child hangs off `child`. The rest
+/// hang off that child's `next`. Each child points back at the parent.
+/// `read_chain` asserts these back-pointers, the field a store gets wrong when
+/// it builds the chain top-down and forgets a level.
 #[test]
 fn children_hang_off_their_parent_in_sibling_order() {
     let chain = chain(&[
@@ -191,10 +191,10 @@ fn children_hang_off_their_parent_in_sibling_order() {
     assert_eq!(read[0].children.len(), 2);
 }
 
-/// `CHILDREN` and `NOCHILDREN` are what the folder tree draws its expander
-/// from. `NOINFERIORS` is a different claim — that the folder can never have
-/// children — and JMAP mailboxes accept a child at any time, so a leaf must not
-/// carry it or Evolution hides "New Subfolder" forever.
+/// The folder tree draws its expander from `CHILDREN` and `NOCHILDREN`.
+/// `NOINFERIORS` is a different claim: the folder can never have children. A
+/// JMAP mailbox accepts a child at any time, so a leaf must not carry
+/// `NOINFERIORS`, or Evolution hides "New Subfolder" forever.
 #[test]
 fn a_leaf_says_it_has_no_children_but_not_that_it_can_have_none() {
     let chain = chain(&[mailbox("M1", "Parent"), child("M2", "Leaf", "M1")]);
@@ -214,9 +214,9 @@ fn a_leaf_says_it_has_no_children_but_not_that_it_can_have_none() {
 }
 
 /// The six roles `jmap-mail-sync` maps, in the flags word. Evolution reads the
-/// type field to decide which folder Send puts a copy in, which one Delete
-/// moves to, and which icon each gets — so a role that arrives as
-/// `TYPE_NORMAL` is a Trash folder the user has to find themselves.
+/// type field to choose the folder Send copies to, the folder Delete moves to,
+/// and the icon for each folder. A role that arrives as `TYPE_NORMAL` becomes a
+/// Trash folder the user must find manually.
 #[test]
 fn roles_become_camel_folder_types() {
     let with_role = |id: &str, name: &str, role: &str| Mailbox {
@@ -254,9 +254,9 @@ fn roles_become_camel_folder_types() {
     );
 }
 
-/// A role folder is also a *system* folder, which is what stops Evolution from
-/// offering to rename or delete it — the server would refuse, and on JMAP the
-/// refusal arrives long after the user believed the folder was gone.
+/// A role folder is also a *system* folder. This stops Evolution from offering
+/// to rename or delete it. The server would refuse the request, and on JMAP
+/// the refusal arrives long after the user believes the folder is gone.
 #[test]
 fn a_role_folder_is_a_system_folder_and_an_ordinary_one_is_not() {
     let chain = chain(&[
@@ -313,11 +313,11 @@ fn counts_cross_as_they_are() {
     assert_eq!(read[0].unread, 7);
 }
 
-/// Camel counts in a *signed* 32-bit field, and uses negative values for "not
-/// known yet". A count that arrives larger than `i32::MAX` therefore cannot be
-/// truncated — the top bit would make it a small negative number, which reads
-/// as an unknown count rather than as an implausible one. It saturates instead,
-/// the same way `jmap-mail-sync` saturates into 32 bits in the first place.
+/// Camel counts use a *signed* 32-bit field, with negative values meaning "not
+/// known yet". A count larger than `i32::MAX` must not be truncated: the top
+/// bit would turn it into a small negative number, read as unknown rather than
+/// as implausible. The count saturates instead, the same way `jmap-mail-sync`
+/// saturates into 32 bits in the first place.
 #[test]
 fn a_count_too_large_for_camel_saturates_rather_than_going_negative() {
     let chain = chain(&[Mailbox {
@@ -332,11 +332,12 @@ fn a_count_too_large_for_camel_saturates_rather_than_going_negative() {
 }
 
 /// A JMAP string is a JSON string, so a mailbox name may contain a NUL even
-/// though RFC 8621 forbids it; a C string may not. Handing the bytes over
-/// unchanged would truncate the display name at the NUL — a folder called
-/// `Work\0Secret` shown as `Work`, indistinguishable from the real `Work` next
-/// to it. The replacement character keeps the name distinct and visibly broken.
-/// The path has no such problem: `jmap-mail-sync` already encodes the NUL.
+/// though RFC 8621 forbids it. A C string may not contain a NUL. Passing the
+/// bytes through unchanged would truncate the display name at the NUL: a
+/// folder called `Work\0Secret` would show as `Work`, indistinguishable from a
+/// real folder named `Work`. The replacement character keeps the name distinct
+/// and visibly broken. The path has no such problem, because `jmap-mail-sync`
+/// already encodes the NUL.
 #[test]
 fn a_nul_in_a_mailbox_name_does_not_truncate_the_display_name() {
     let chain = chain(&[mailbox("M1", "Work\0Secret")]);
@@ -346,10 +347,10 @@ fn a_nul_in_a_mailbox_name_does_not_truncate_the_display_name() {
     assert_eq!(read[0].full_name, "Work%00Secret");
 }
 
-/// `CAMEL_STORE_FOLDER_INFO_RECURSIVE` is the difference between the whole
-/// subtree and one level of it, and this is the end the depth is applied at:
-/// building the forest whole and pruning it afterwards would allocate every
-/// folder of a deep account to throw all but the first level away.
+/// `CAMEL_STORE_FOLDER_INFO_RECURSIVE` chooses between the whole subtree and
+/// one level of it. This function applies the depth at build time. Building
+/// the whole forest first and pruning it afterwards would allocate every
+/// folder of a deep account only to discard all but the first level.
 #[test]
 fn no_depth_at_all_emits_every_level() {
     let chain = forest(&three_levels(), None);
@@ -360,7 +361,7 @@ fn no_depth_at_all_emits_every_level() {
     );
 }
 
-/// What a non-recursive call with no `top` asks for: the account's top-level
+/// A non-recursive call with no `top` asks for the account's top-level
 /// folders, and nothing under them.
 #[test]
 fn a_depth_of_zero_emits_the_roots_and_nothing_below_them() {
@@ -369,7 +370,7 @@ fn a_depth_of_zero_emits_the_roots_and_nothing_below_them() {
     assert_eq!(full_names(&read(&chain)), ["Parent"]);
 }
 
-/// And what a non-recursive call with one does: the folder named, plus its
+/// A non-recursive call with depth 1 returns the named folder, plus its
 /// immediate subfolders.
 #[test]
 fn a_depth_of_one_emits_the_immediate_children_and_stops() {
@@ -378,11 +379,11 @@ fn a_depth_of_one_emits_the_immediate_children_and_stops() {
     assert_eq!(full_names(&read(&chain)), ["Parent", "Parent/Child"]);
 }
 
-/// The cut is on what is emitted, not on what the folder *is*. A folder whose
-/// children were left out still carries `CHILDREN`, because that flag is what
-/// makes the folder tree draw an expander — and the expander is how the user
-/// asks for the level that was cut. A cut folder that reported itself a leaf
-/// would be a subtree nothing could ever go and fetch.
+/// The cut applies to what is emitted, not to what the folder *is*. A folder
+/// whose children were left out still carries `CHILDREN`, because that flag
+/// makes the folder tree draw an expander. The expander is how the user asks
+/// for the level that was cut. A cut folder that reported itself as a leaf
+/// would hide a subtree nothing could ever fetch.
 #[test]
 fn a_folder_whose_children_were_cut_still_says_it_has_them() {
     let chain = forest(&three_levels(), Some(0));
@@ -393,9 +394,9 @@ fn a_folder_whose_children_were_cut_still_says_it_has_them() {
     assert_eq!(read[0].flags & CAMEL_FOLDER_NOCHILDREN, 0);
 }
 
-/// A chain rooted at one folder rather than at the account: what a call with a
-/// `top` is answered with. The folder's siblings are not in the answer, and the
-/// one that is has no `next` — a root chain that still linked the siblings
+/// A chain rooted at one folder, not at the account: the answer to a call with
+/// a `top` argument. The folder's siblings are not in the answer, and the
+/// folder that is has no `next`. A root chain that still linked the siblings
 /// would hand Camel the whole account under the name of a subtree.
 #[test]
 fn a_forest_of_one_folder_is_a_chain_of_one() {
@@ -418,10 +419,10 @@ fn a_forest_of_one_folder_is_a_chain_of_one() {
 }
 
 /// The other half of the ownership story. `get_folder_info_sync` hands the
-/// chain to its caller, who frees it with `camel_folder_info_free`; the wrapper
-/// has to be able to let go without also freeing. If `into_raw` left the `Drop`
-/// in place this is a double free, which is why the test does the caller's free
-/// itself.
+/// chain to its caller, who frees it with `camel_folder_info_free`. The wrapper
+/// must let go of the chain without also freeing it. If `into_raw` left the
+/// `Drop` in place, this would be a double free, so the test performs the
+/// caller's free itself.
 #[test]
 fn into_raw_hands_the_chain_over_and_the_wrapper_stops_owning_it() {
     let chain = chain(&[mailbox("M1", "Parent"), child("M2", "Child", "M1")]);
@@ -437,13 +438,13 @@ fn into_raw_hands_the_chain_over_and_the_wrapper_stops_owning_it() {
     }
 }
 
-/// A `parentId` chain the server chose can be arbitrarily long, and every layer
-/// that walks it recursively is a stack the server sizes: `FolderTree`'s own
-/// `Drop`, and `camel_folder_info_free`'s recursion over `child` and `next`.
-/// `FolderTree` therefore caps the depth it will produce (see
-/// `jmap_mail_sync::folder::MAX_DEPTH`), which is
-/// what this checks on the C side: the forest is broad rather than deep, and no
-/// folder was dropped to get there.
+/// A `parentId` chain the server chose can be arbitrarily long. Each layer that
+/// walks it recursively uses stack space the server must size: `FolderTree`'s
+/// own `Drop`, and `camel_folder_info_free`'s recursion over `child` and
+/// `next`. `FolderTree` therefore caps the depth it produces (see
+/// `jmap_mail_sync::folder::MAX_DEPTH`). This test checks the C side of that
+/// cap: the forest stays broad rather than deep, and no folder is dropped to
+/// get there.
 #[test]
 fn a_deep_parent_chain_becomes_a_broad_forest_rather_than_a_deep_one() {
     const DEPTH: usize = 2_000;

@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The SMTP envelope, read out of the two `CamelAddress` arguments a
-//! transport's `send_to_sync` is handed.
+//! The SMTP envelope, read from the two `CamelAddress` arguments that a
+//! transport's `send_to_sync` receives.
 //!
-//! These are the addresses the mail is actually *delivered* to, which is not
-//! the same list as the headers say — a `Bcc` recipient is in the envelope and
-//! in no header, which is the whole point of one. So every test here builds the
-//! arguments the way Evolution does, out of real `CamelInternetAddress`
-//! objects, and asserts on what comes out the other side rather than on
-//! anything the message says.
+//! These are the addresses the mail is actually *delivered* to, not the same
+//! list the headers show. A `Bcc` recipient is in the envelope and in no
+//! header: that is the whole point of a `Bcc`. Every test here builds the
+//! arguments the way Evolution does, from real `CamelInternetAddress` objects,
+//! and asserts on what the envelope contains, not on anything the message
+//! itself says.
 
 use std::ffi::CString;
 use std::ptr;
@@ -22,12 +22,12 @@ use gobject_sys::g_object_unref;
 use jmap_mail::envelope::{EnvelopeError, read_envelope};
 use jmap_proto::mail::EnvelopeAddress;
 
-/// A `CamelInternetAddress` holding `entries`, as the `CamelAddress *` Camel
-/// passes. A `None` name is the NULL Camel allows for an address nobody put a
-/// display name on.
+/// Builds a `CamelInternetAddress` holding `entries`, as the `CamelAddress *`
+/// pointer Camel passes. A `None` name becomes the NULL Camel allows for an
+/// address with no display name.
 fn internet(entries: &[(Option<&str>, &str)]) -> *mut CamelAddress {
-    // SAFETY: a fresh address object, and every string handed over is
-    // NUL-terminated, alive for the call, and copied by Camel.
+    // SAFETY: the address object is fresh. Every string passed in is
+    // NUL-terminated, stays alive for the call, and Camel copies it.
     unsafe {
         let address = camel_internet_address_new();
         for (name, email) in entries {
@@ -45,12 +45,12 @@ fn internet(entries: &[(Option<&str>, &str)]) -> *mut CamelAddress {
 
 fn release(address: *mut CamelAddress) {
     // SAFETY: the caller owns the only reference, taken from `internet` or
-    // `camel_address_new`.
+    // from `camel_address_new`.
     unsafe { g_object_unref(address.cast()) };
 }
 
-/// The ordinary send: one sender, several recipients, and nothing unusual
-/// about any of them.
+/// An ordinary send: one sender, several recipients, nothing unusual about
+/// any of them.
 #[test]
 fn the_addresses_camel_was_handed_become_the_envelope() {
     let from = internet(&[(None, "sender@example.com")]);
@@ -81,9 +81,10 @@ fn the_addresses_camel_was_handed_become_the_envelope() {
     release(recipients);
 }
 
-/// The envelope is addresses, not addresses-with-names: RFC 5321's `RCPT TO`
-/// takes an addr-spec, and RFC 8621 §7's `EnvelopeAddress` has nowhere to put a
-/// display name. The name is in the message's headers, which go up verbatim.
+/// The envelope holds addresses, not addresses with names. RFC 5321's `RCPT
+/// TO` takes an addr-spec, and RFC 8621 §7's `EnvelopeAddress` has no field for
+/// a display name. The display name stays in the message headers, sent
+/// unchanged.
 #[test]
 fn the_display_name_is_not_part_of_the_envelope() {
     let from = internet(&[(Some("A Sender"), "sender@example.com")]);
@@ -105,10 +106,10 @@ fn the_display_name_is_not_part_of_the_envelope() {
     release(recipients);
 }
 
-/// A message with nobody to deliver it to is not a message that goes out with
-/// an empty envelope — there is no SMTP transaction without a `RCPT TO`, and a
-/// submission with an empty `rcptTo` is one the server refuses after the whole
-/// message has been uploaded.
+/// A message with no recipients does not go out with an empty envelope. SMTP
+/// has no transaction without a `RCPT TO`. A submission with an empty
+/// `rcptTo` is one the server refuses only after it receives the whole
+/// message.
 #[test]
 fn a_message_with_no_recipients_is_refused_before_the_upload() {
     let from = internet(&[(None, "sender@example.com")]);
@@ -123,10 +124,10 @@ fn a_message_with_no_recipients_is_refused_before_the_upload() {
     release(recipients);
 }
 
-/// And no sender either. The transport does not fall back to the message's
-/// `From` header: which identity a message goes out as is the caller's
-/// decision, and a transport that read one out of the headers instead would be
-/// choosing who the mail is from.
+/// No sender either. The transport does not fall back to the message's `From`
+/// header. Which identity a message goes out as is the caller's decision, not
+/// the transport's. A transport that reads the sender from the headers would
+/// be choosing who the mail is from.
 #[test]
 fn a_message_with_no_sender_is_refused() {
     let empty = internet(&[]);
@@ -137,8 +138,8 @@ fn a_message_with_no_sender_is_refused() {
         unsafe { read_envelope(empty, recipients) },
         Err(EnvelopeError::NoSender)
     );
-    // A NULL `from` is the same answer and not a different failure: absent is
-    // absent, however Camel spells it.
+    // A NULL `from` gives the same answer, not a different failure: absent is
+    // absent, however Camel represents it.
     // SAFETY: NULL is allowed by `read_envelope`'s contract.
     assert_eq!(
         unsafe { read_envelope(ptr::null_mut(), recipients) },
@@ -149,9 +150,9 @@ fn a_message_with_no_sender_is_refused() {
     release(recipients);
 }
 
-/// A sender Camel listed with a display name and no address is no sender at
-/// all — `MAIL FROM:<>` is the null reverse-path a bounce is sent with, not a
-/// user's message.
+/// A sender with a display name but no address is no sender at all.
+/// `MAIL FROM:<>` is the null reverse-path used for a bounce, not for a user's
+/// message.
 #[test]
 fn a_sender_with_no_address_is_no_sender() {
     let from = internet(&[(Some("A Sender"), "")]);
@@ -167,9 +168,9 @@ fn a_sender_with_no_address_is_no_sender() {
     release(recipients);
 }
 
-/// The same on the other side, and this is the one that must not be silent: a
-/// recipient dropped from the envelope is a message the user believes they sent
-/// to somebody who never got it.
+/// The same rule applies to a recipient, and the failure must not be silent.
+/// A recipient dropped from the envelope lets the user believe they sent the
+/// message to someone who never received it.
 #[test]
 fn a_recipient_with_no_address_is_refused_rather_than_dropped() {
     let from = internet(&[(None, "sender@example.com")]);
@@ -195,10 +196,10 @@ fn a_recipient_with_no_address_is_refused_rather_than_dropped() {
     release(recipients);
 }
 
-/// SMTP's reverse-path is one address. Every Camel transport reads entry zero
-/// and every caller in Evolution passes exactly one, so this is what the rest
-/// of Camel does rather than a policy of ours — but it is worth pinning, since
-/// the alternative to taking the first would be refusing a send Evolution
+/// SMTP's reverse-path is one address. Every Camel transport reads entry zero,
+/// and every caller in Evolution passes exactly one sender. This behavior
+/// comes from Camel, not from a policy here, but the test still pins it: the
+/// alternative to taking the first sender is refusing a send that Evolution
 /// cannot produce.
 #[test]
 fn the_first_of_several_senders_is_the_reverse_path() {
@@ -217,10 +218,10 @@ fn the_first_of_several_senders_is_the_reverse_path() {
     release(recipients);
 }
 
-/// `send_to_sync` is declared over `CamelAddress`, which has other subclasses;
-/// reading one that is not a `CamelInternetAddress` through
-/// `camel_internet_address_get` would be undefined behaviour rather than an
-/// empty answer, so the type is checked before the emptiness is.
+/// `send_to_sync` is declared over `CamelAddress`, which has other subclasses.
+/// Reading one that is not a `CamelInternetAddress` through
+/// `camel_internet_address_get` causes undefined behavior, not an empty
+/// answer. So the code checks the type before it checks for emptiness.
 #[test]
 fn an_address_that_is_not_an_internet_address_is_refused() {
     // SAFETY: no arguments, and the caller owns the reference.
@@ -244,10 +245,9 @@ fn an_address_that_is_not_an_internet_address_is_refused() {
     release(ordinary);
 }
 
-/// Two recipients that are the same address stay two entries. Whether a
-/// duplicate `RCPT TO` delivers twice is the server's rule to apply, and a
-/// transport that deduplicated would be quietly editing the list the user was
-/// shown.
+/// Two recipients with the same address stay two entries. Whether a duplicate
+/// `RCPT TO` delivers twice is the server's rule to apply. A transport that
+/// deduplicated the list would quietly edit what the user was shown.
 #[test]
 fn a_repeated_recipient_is_not_deduplicated() {
     let from = internet(&[(None, "sender@example.com")]);
@@ -271,8 +271,8 @@ fn a_repeated_recipient_is_not_deduplicated() {
     release(recipients);
 }
 
-/// A NULL recipient list is the empty one, for the reason a NULL `from` is the
-/// empty sender: absent is absent.
+/// A NULL recipient list means no recipients, for the same reason a NULL
+/// `from` means no sender: absent is absent.
 #[test]
 fn a_null_recipient_list_is_no_recipients() {
     let from = internet(&[(None, "sender@example.com")]);
@@ -286,9 +286,9 @@ fn a_null_recipient_list_is_no_recipients() {
     release(from);
 }
 
-/// Quoted display names with commas, semicolons, brackets, and subaddressed emails
-/// in the envelope must be extracted cleanly without leaking display name artifacts into
-/// the EnvelopeAddress.
+/// Quoted display names can contain commas, semicolons, and brackets. Email
+/// addresses can carry a subaddress tag. Extraction must not leak any display
+/// name artifact into the `EnvelopeAddress`.
 #[test]
 fn the_envelope_preserves_special_characters_in_quoted_names_and_subaddresses() {
     let from = internet(&[(Some("Doe, Jane (Work)"), "jane.doe+tag@example.com")]);
@@ -322,10 +322,10 @@ fn the_envelope_preserves_special_characters_in_quoted_names_and_subaddresses() 
     release(recipients);
 }
 
-/// Every variant's displayed sentence names what is actually wrong, including
-/// the 1-based position `UnusableRecipient` reports for an entry with no
-/// display name: Camel's `index` is 0-based, and the sentence must not repeat
-/// it unchanged or combine it with the wrong arithmetic.
+/// Every error variant's displayed sentence names the actual problem. This
+/// includes the 1-based position that `UnusableRecipient` reports for an entry
+/// with no display name. Camel's `index` field is 0-based, and the sentence
+/// must convert it, not repeat it unchanged or apply the wrong arithmetic.
 #[test]
 fn the_display_text_names_the_failure() {
     assert!(
@@ -349,9 +349,9 @@ fn the_display_text_names_the_failure() {
         .contains("Nobody In Particular")
     );
 
-    // A nameless entry at Camel's index 2 must be reported as recipient 3,
-    // the 1-based position: `index + 1`, not `index * 1` (which would read 2)
-    // or any other arithmetic that happens to agree at index 0 or 1.
+    // A nameless entry at Camel's index 2 must be reported as recipient 3 (the
+    // 1-based position): `index + 1`, not `index * 1` (which also gives 2) or
+    // any other formula that happens to agree at index 0 or 1.
     let message = EnvelopeError::UnusableRecipient {
         index: 2,
         name: None,
@@ -363,15 +363,15 @@ fn the_display_text_names_the_failure() {
     );
 }
 
-/// `to_gerror` must actually build a `GError` in the transport's own domain,
-/// not hand back a null pointer or an empty struct.
+/// `to_gerror` must build a real `GError` in the transport's own domain, not
+/// return a null pointer or an empty struct.
 #[test]
 fn to_gerror_builds_a_real_camel_service_error() {
     let error = EnvelopeError::NoSender;
     let gerror = error.to_gerror();
     assert!(!gerror.is_null());
 
-    // SAFETY: `to_gerror` handed over an owned GError, freed below.
+    // SAFETY: `to_gerror` returns an owned `GError`, freed below.
     unsafe {
         assert_eq!((*gerror).domain, camel_service_error_quark());
         assert_eq!((*gerror).code, CAMEL_SERVICE_ERROR_INVALID as i32);

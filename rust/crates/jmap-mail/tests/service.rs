@@ -3,22 +3,22 @@
 
 //! What the `CamelService` vfuncs do once the GObject is peeled off.
 //!
-//! `connect_sync`, `authenticate_sync` and `disconnect_sync` are three vfuncs
-//! and one operation: Camel's rule is that the service opens nothing itself but
-//! asks its `CamelSession` to authenticate it, and the session calls
-//! `authenticate_sync` back — once, or once per password the user types. So
-//! everything that actually happens happens in `authenticate_sync`, and what is
-//! testable without a `CamelSession` is exactly that: [`authenticate`], which
-//! opens the account and installs it on the store, and
-//! [`report_authentication`], which turns the outcome into the two answers the
-//! vfunc returns — a verdict, and an error that is deliberately absent for one
-//! of the three verdicts.
+//! `connect_sync`, `authenticate_sync`, and `disconnect_sync` are three
+//! vfuncs and one operation. Camel's rule is that the service opens nothing
+//! itself, but asks its `CamelSession` to authenticate it. The session then
+//! calls `authenticate_sync` back, once, or once per password the user
+//! types. So everything that actually happens happens in
+//! `authenticate_sync`. What is testable without a `CamelSession` is exactly
+//! that: [`authenticate`], which opens the account and installs it on the
+//! store, and [`report_authentication`], which turns the outcome into the
+//! two answers the vfunc returns (a verdict, and an error that is
+//! deliberately absent for one of the three verdicts).
 //!
-//! The fourth vfunc has nothing to do with connecting at all: `get_name` is how
-//! every message Camel writes about this account refers to it, and it is
-//! testable both ways round — as [`describe`], which is the whole of the
-//! decision, and through `camel_service_get_name` on a real store, which is the
-//! only thing that proves the slot was filled in.
+//! The fourth vfunc has nothing to do with connecting. `get_name` is how
+//! every message Camel writes about this account refers to it. It is
+//! testable both ways round: as [`describe`], which is the whole of the
+//! decision, and through `camel_service_get_name` on a real store, which is
+//! the only thing that proves the slot was filled in.
 
 mod common;
 
@@ -127,9 +127,9 @@ fn a_successful_attempt_is_accepted_and_sets_no_error() {
 }
 
 /// The rule that makes the prompt loop work. `camel_session_authenticate_sync`
-/// reads `REJECTED` as "ask the user for another password and call back", and
-/// only propagates a `GError` when the verdict is `ERROR`; setting one here
-/// would be a failure reported for an attempt that has not failed yet.
+/// reads `REJECTED` as "ask the user for another password and call back". It
+/// only propagates a `GError` when the verdict is `ERROR`. Setting one here
+/// would report a failure for an attempt that has not failed yet.
 #[test]
 fn a_rejected_password_is_reported_without_a_gerror_so_camel_asks_again() {
     let server = MockServer::builder().basic_auth("vera", "hunter2").start();
@@ -148,8 +148,8 @@ fn a_rejected_password_is_reported_without_a_gerror_so_camel_asks_again() {
     assert!(reported.error.is_null(), "a rejected attempt set an error");
 }
 
-/// The other half of it: an attempt that failed for a reason no password can
-/// fix has to say why, or Camel reports a service that failed without a
+/// The other half of it. An attempt that failed for a reason no password
+/// can fix must say why, or Camel reports a service that failed without a
 /// message.
 #[test]
 fn an_unreachable_server_is_an_error_with_the_gerror_camel_routes_on() {
@@ -174,9 +174,10 @@ fn an_unreachable_server_is_an_error_with_the_gerror_camel_routes_on() {
     }
 }
 
-/// Not Camel's domain and not ours: the user pressed Stop, and every caller
-/// above tests for `G_IO_ERROR_CANCELLED` before deciding anything went wrong.
-/// It is still an `ERROR` verdict, because there is no third thing to say.
+/// Not Camel's domain, and not this crate's own. The user pressed Stop, and
+/// every caller above tests for `G_IO_ERROR_CANCELLED` before deciding
+/// anything went wrong. It is still an `ERROR` verdict, because there is no
+/// third thing to say.
 #[test]
 fn a_cancelled_attempt_is_an_error_reported_in_glibs_own_domain() {
     let reported = Reported::of(Err(StoreError::Client(Error::Cancelled)));
@@ -190,8 +191,8 @@ fn a_cancelled_attempt_is_an_error_reported_in_glibs_own_domain() {
 }
 
 /// An account whose settings do not describe a server never reaches one, so
-/// there is nothing for a password to be wrong about — and re-prompting for a
-/// misconfigured account is a loop no password ends.
+/// there is nothing for a password to be wrong about. Re-prompting for a
+/// misconfigured account would be a loop that no password ends.
 #[test]
 fn an_account_with_no_server_fails_without_asking_for_a_password() {
     let store = JmapStore::detached();
@@ -207,16 +208,17 @@ fn an_account_with_no_server_fails_without_asking_for_a_password() {
     );
     assert_eq!(Reported::of(outcome).result, CAMEL_AUTHENTICATION_ERROR);
 
-    // And the same for the one the settings reader produces itself.
+    // The same check, for the error the settings reader produces itself.
     let reported = Reported::of(Err(StoreError::Config(SourceError::MissingHost)));
     assert_eq!(reported.result, CAMEL_AUTHENTICATION_ERROR);
     assert!(!reported.error.is_null());
 }
 
-/// Camel re-authenticates a service it already has a connection for — a
-/// password change, a session that lost track. The attempt that fails must not
-/// take the working connection with it: the store would be left unable to serve
-/// a folder it was serving a moment ago, for a password nobody has typed yet.
+/// Camel re-authenticates a service it already has a connection for: a
+/// password change, or a session that lost track. The attempt that fails
+/// must not take the working connection with it. Otherwise the store would
+/// be left unable to serve a folder it was serving a moment ago, for a
+/// password nobody has typed yet.
 #[test]
 fn a_failed_attempt_leaves_a_working_connection_alone() {
     let server = seeded();
@@ -234,9 +236,10 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
     assert!(Arc::ptr_eq(&tree, &store.folders(CACHED).expect("listed")));
 }
 
-/// A successful one does replace it, listing and all: the account was
-/// re-authenticated because something about it changed, and the tree the old
-/// connection produced describes a server this one may not be talking to.
+/// A successful attempt does replace it, listing and all. The account was
+/// re-authenticated because something about it changed. The tree the old
+/// connection produced describes a server that this one may not be talking
+/// to.
 #[test]
 fn a_second_authentication_replaces_the_connection_and_its_listing() {
     let server = seeded();
@@ -256,7 +259,7 @@ fn a_second_authentication_replaces_the_connection_and_its_listing() {
 }
 
 /// The store is what holds the connection, so a `disconnect_sync` is a
-/// `drop_connection` and nothing else — including on a store that never
+/// `drop_connection` and nothing else. This includes a store that never
 /// connected, which is what Camel asks of every service on shutdown.
 #[test]
 fn disconnecting_drops_whatever_the_authentication_installed() {
@@ -273,8 +276,9 @@ fn disconnecting_drops_whatever_the_authentication_installed() {
     ));
 }
 
-/// The connection the store ends up with is the one that was just opened, not
-/// a second one opened behind it: the account id it carries is the server's.
+/// The connection the store ends up with is the one that was just opened,
+/// not a second one opened behind it. The account id it carries is the
+/// server's.
 #[test]
 fn the_installed_connection_is_the_one_the_attempt_opened() {
     let server = seeded();
@@ -303,8 +307,8 @@ fn configure(account: &Account, host: &str, port: u16, user: Option<&str>) {
     let host = std::ffi::CString::new(host).expect("a host with no NUL in it");
     let user = user.map(|user| std::ffi::CString::new(user).expect("a user with no NUL in it"));
     // SAFETY: a live `CamelService`, whose settings are a `CamelJmapSettings`
-    // and therefore a `CamelNetworkSettings`; the strings are copied by the
-    // setters and the reference is given back.
+    // and therefore a `CamelNetworkSettings`. The setters copy the strings,
+    // and this call returns the reference.
     unsafe {
         let settings = camel_service_ref_settings(account.store.cast::<CamelService>());
         assert!(!settings.is_null(), "the store has no settings");
@@ -319,12 +323,13 @@ fn configure(account: &Account, host: &str, port: u16, user: Option<&str>) {
     }
 }
 
-/// What `camel_service_get_name` answers, as a Rust string. NULL — which is
-/// what Camel returns for a class that filled none of the slot in — comes back
-/// as `None` rather than as a panic, so the test that cares says so itself.
+/// What `camel_service_get_name` answers, as a Rust string. Camel returns
+/// NULL for a class that left the slot unfilled. This function returns
+/// `None` for that case, instead of panicking, so the test that cares
+/// checks for it itself.
 fn name_of(account: &Account, brief: bool) -> Option<String> {
-    // SAFETY: a live `CamelService`; the string returned is a GLib allocation
-    // this call owns and frees.
+    // SAFETY: a live `CamelService`. The string returned is a GLib
+    // allocation that this call owns and frees.
     unsafe {
         let name = camel_service_get_name(
             account.store.cast::<CamelService>(),
@@ -353,9 +358,9 @@ fn the_brief_name_of_an_account_is_the_server_it_reaches() {
     );
 }
 
-/// The long form is documented as "complete and mostly unambiguous", and the
-/// thing that most often tells two accounts on one server apart is which user
-/// they are.
+/// The long form is documented as "complete and mostly unambiguous". The
+/// thing that most often tells two accounts on one server apart is which
+/// user they are.
 #[test]
 fn the_full_name_of_an_account_names_the_user_as_well_as_the_server() {
     assert_eq!(
@@ -364,9 +369,9 @@ fn the_full_name_of_an_account_names_the_user_as_well_as_the_server() {
     );
 }
 
-/// An account with no user name is not an error — the credential may be a
-/// bearer token — so it is named by its server alone rather than by an empty
-/// slot in a sentence.
+/// An account with no user name is not an error (the credential may be a
+/// bearer token). So it is named by its server alone, rather than by an
+/// empty slot in a sentence.
 #[test]
 fn an_account_with_no_user_is_named_by_its_server_alone() {
     assert_eq!(
@@ -375,9 +380,10 @@ fn an_account_with_no_user_is_named_by_its_server_alone() {
     );
 }
 
-/// JMAP is HTTP, so two accounts differing only in port are ordinary — a local
-/// server and a test one. The port goes in the form whose job is to be
-/// unambiguous, and stays out of the one whose job is to be short.
+/// JMAP is HTTP, so two accounts differing only in port are ordinary: for
+/// example, a local server and a test one. The port goes in the form whose
+/// job is to be unambiguous, and stays out of the one whose job is to be
+/// short.
 #[test]
 fn a_port_the_account_names_belongs_to_the_unambiguous_form() {
     assert_eq!(
@@ -400,9 +406,9 @@ fn an_account_with_no_server_is_named_without_one() {
 }
 
 /// The slot itself. `camel_service_get_name` is `g_return_val_if_fail
-/// (class->get_name != NULL, NULL)`, so a class that overrides nothing answers
-/// NULL and logs a critical every time Camel mentions the account — which is
-/// what this asserts is no longer true.
+/// (class->get_name != NULL, NULL)`, so a class that overrides nothing
+/// answers NULL, and logs a critical message every time Camel mentions the
+/// account. This test asserts that is no longer true.
 #[test]
 fn camel_asks_the_store_what_the_account_is_called_and_is_answered() {
     let account = Account::open();
@@ -418,9 +424,9 @@ fn camel_asks_the_store_what_the_account_is_called_and_is_answered() {
     );
 }
 
-/// The name is read off the settings each time it is asked for, not frozen at
-/// construction: an account whose server the user edits is one Camel goes on
-/// naming after the edit.
+/// The name is read off the settings each time it is asked for, not frozen
+/// at construction. An account whose server the user edits is one that
+/// Camel goes on naming correctly after the edit.
 #[test]
 fn the_name_follows_the_server_the_account_is_reconfigured_to() {
     let account = Account::open();
@@ -433,9 +439,9 @@ fn the_name_follows_the_server_the_account_is_reconfigured_to() {
     );
 }
 
-/// The name is a human's spelling of the host rather than the wire's: nothing
-/// connects with it, and an account configured in an internationalised domain
-/// name should be described in the one its owner typed.
+/// The name is a human's spelling of the host, not the wire's. Nothing
+/// connects with it. An account configured with an internationalized domain
+/// name should be described using the spelling its owner typed.
 #[test]
 fn an_internationalised_host_is_named_as_the_account_spells_it() {
     let account = Account::open();

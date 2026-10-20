@@ -5,17 +5,17 @@
 //!
 //! `jmap-mail-sync/tests/live_server_filing.rs` already proves
 //! `MailSync::file_message`, the function a transfer's patch is built from,
-//! against real Stalwart. What that file cannot reach is this crate's own
-//! vfunc on top of it: the folder lock, the per-uid walk, the immediate
-//! removal of a moved row from the source folder's local summary and the
-//! `transferred_uids` array Camel reads back. Every test of that layer so far
-//! (`tests/transfer_race.rs`) has run against `jmap-mockd`, and only in its
-//! race variant — there is no plain-case test even against the mock. This is
-//! the live-server counterpart.
+//! against real Stalwart. That file cannot reach this crate's own vfunc on
+//! top of it: the folder lock, the per-uid walk, the immediate removal of a
+//! moved row from the source folder's local summary, and the
+//! `transferred_uids` array Camel reads back. Every test of that layer so
+//! far (`tests/transfer_race.rs`) has run against `jmap-mockd`, and only in
+//! its race variant. There is no plain-case test, even against the mock.
+//! This test is the live-server counterpart.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
@@ -78,8 +78,9 @@ struct UidList {
 impl UidList {
     fn of(uid: &str) -> Self {
         let uid = CString::new(uid).expect("a uid with no NUL");
-        // SAFETY: a fresh array, filled with one pointer into `uid`, which
-        // this value owns and outlives it by.
+        // SAFETY: a fresh array, filled with one pointer into `uid`. This
+        // struct owns `uid`, and drops it after the array, so the pointer
+        // stays valid for as long as the array exists.
         let array = unsafe {
             let array = glib_sys::g_ptr_array_new();
             glib_sys::g_ptr_array_add(array, uid.as_ptr() as gpointer);
@@ -91,21 +92,21 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointer
-        // in it belongs to `self.uid`.
+        // SAFETY: the one array, allocated above. FALSE, because the
+        // pointer in it belongs to `self.uid`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
     }
 }
 
-/// Imports a message into a real source folder, opens real `CamelFolder`s on
-/// it and a second, empty destination folder, refreshes the source (a real
-/// listing builds its summary row), then drives a real
-/// `camel_folder_transfer_messages_to_sync` moving the message across.
-/// Confirms the source folder's row is gone immediately, with no further
-/// refresh, and that an independent connection sees the message filed under
-/// the destination on the real server. Cleans up by expunging from the
-/// destination (the server refuses to delete a non-empty mailbox) and
-/// deleting both folders.
+/// Imports a message into a real source folder. Opens real `CamelFolder`s
+/// on the source and on a second, empty destination folder. Refreshes the
+/// source, so a real listing builds its summary row. Then drives a real
+/// `camel_folder_transfer_messages_to_sync`, moving the message across.
+/// Confirms that the source folder's row is gone immediately, with no
+/// further refresh, and that an independent connection sees the message
+/// filed under the destination on the real server. Cleans up by expunging
+/// from the destination (the server refuses to delete a non-empty mailbox)
+/// and deleting both folders.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
@@ -219,7 +220,7 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
     }
 
     // The row must be gone from the source folder's local summary right
-    // away, with no further refresh: that is what lets the message list
+    // away, with no further refresh. This is what lets the message list
     // already on screen stop showing it the moment the drag completes.
     // SAFETY: as above.
     unsafe {
@@ -231,9 +232,9 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
         );
     }
 
-    // Independent confirmation: a fresh connection, sharing nothing with the
-    // one the transfer used, sees the message filed under the destination on
-    // the real server.
+    // Independent confirmation. A fresh connection, sharing nothing with the
+    // one the transfer used, sees the message filed under the destination
+    // on the real server.
     let verify_client = connect_for_write().expect("the write-test account is still there");
     let verify_sync = MailSync::new(verify_client, account_id);
     let (_, dest_messages) = verify_sync

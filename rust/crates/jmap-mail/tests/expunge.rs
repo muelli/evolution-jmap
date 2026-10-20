@@ -1,41 +1,42 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `expunge_sync`: the vfunc that carries out the deletions the user has made.
+//! `expunge_sync`: the vfunc that carries out the user's deletions.
 //!
-//! Everything up to here has left `CAMEL_MESSAGE_DELETED` alone. It is a bit of
-//! Camel's own — `jmap-mail-sync`'s `MessageFlags` has said since it was written
-//! that JMAP has no deleted keyword — so pressing Delete in Evolution marks a
-//! row and reaches no server at all, and [`crate::synchronize`] deliberately
-//! produced no keyword change for it. This is where the mark is finally read.
+//! Until now, nothing has acted on `CAMEL_MESSAGE_DELETED`. This flag belongs
+//! to Camel: `jmap-mail-sync`'s `MessageFlags` has always noted that JMAP has
+//! no deleted keyword. Pressing Delete in Evolution marks a row and reaches no
+//! server. [`crate::synchronize`] deliberately produces no keyword change for
+//! it. This vfunc is where the mark is finally read.
 //!
-//! ## What "expunge" has to mean here
+//! ## What "expunge" means here
 //!
-//! Camel's vfunc asks a *folder* to get rid of the messages marked deleted in
-//! it, and `jmap-mail-sync`'s `expunge_message` is where the two writes that
-//! could mean are decided between — destroy for a message this mailbox is the
-//! last home of, `mailboxIds/<this>: null` for one the user also filed
-//! elsewhere. What is decided *here* is everything around that: which rows are
-//! on the work list, what becomes of a row whose message is gone, and what the
-//! folder announces.
+//! Camel's vfunc asks a *folder* to get rid of its messages marked deleted.
+//! `jmap-mail-sync`'s `expunge_message` decides between the two writes this
+//! can mean: destroy, for a message whose last mailbox is this one, or
+//! `mailboxIds/<this>: null`, for a message the user also filed elsewhere.
+//! This file decides everything around that choice: which rows go on the work
+//! list, what happens to a row whose message is gone, and what the folder
+//! announces.
 //!
 //! ## The rows go now, not at the next listing
 //!
-//! The same judgement [`crate::transfer`] makes about a move, for the same
-//! reason: a refresh would reach the same answer, but "the next refresh" is a
-//! timer, and until it fires the message list would still be offering a message
-//! that is not there. So a row whose message left is removed and announced, and
-//! the announcement is what redraws a window that is already open.
+//! This follows the same rule [`crate::transfer`] applies to a move, for the
+//! same reason. A refresh would reach the same result, but "the next refresh"
+//! runs on a timer. Until it fires, the message list would keep offering a
+//! message that is gone. So a row whose message left is removed and announced
+//! at once, and the announcement redraws a window that is already open.
 //!
 //! ## Two ways in
 //!
-//! `camel_folder_expunge_sync` is one — Evolution's "Expunge" and "Empty
-//! Trash". The other is `camel_folder_synchronize_sync` with its `expunge`
-//! argument set, which is what Evolution calls when a folder is closed and the
-//! account is configured to expunge on exit. Both end in the same walk, and
-//! [`synchronising_with_expunge_gets_rid_of_the_deleted_rows_too`] is the
-//! second one: until this increment that argument was ignored, which was
-//! honest while nothing could act on it and would be a silent no-op now.
+//! `camel_folder_expunge_sync` is one way in: Evolution's "Expunge" and
+//! "Empty Trash" commands call it. The other is
+//! `camel_folder_synchronize_sync` with its `expunge` argument set, which
+//! Evolution calls when a folder closes and the account is configured to
+//! expunge on exit. Both end in the same walk.
+//! [`synchronising_with_expunge_gets_rid_of_the_deleted_rows_too`] tests the
+//! second path. Before this increment, that argument was ignored: honest while
+//! nothing could act on it, but a silent no-op now.
 
 mod common;
 
@@ -76,12 +77,12 @@ const MESSAGES: [(&str, &str, &str, &str, &str); 2] = [
     ),
 ];
 
-/// One connected account with a listed inbox and an archive that has never been
-/// opened — the state every expunge in this file starts from.
+/// One connected account with a listed inbox and an unopened archive. Every
+/// expunge test in this file starts from this state.
 struct Fixture {
     server: MockServer,
-    /// Held rather than read: the folder below borrows its store from this
-    /// account, and a dropped account is a folder pointing at nothing.
+    /// Held but not read. The folder below borrows its store from this
+    /// account. A dropped account leaves the folder pointing at nothing.
     _account: Account,
     inbox: *mut CamelFolder,
     archive_id: Id,
@@ -138,8 +139,8 @@ impl Fixture {
         }
     }
 
-    /// The same fixture, with the inbox listened to from here on. The setup's
-    /// own emission is pumped away first, for the reason `common::signals`
+    /// The same fixture, with the inbox watched from here on. This first
+    /// pumps away the setup's own emission, for the reason `common::signals`
     /// gives.
     fn watched(self, context: &Context) -> Self {
         emissions(context);
@@ -169,7 +170,8 @@ impl Fixture {
         }
     }
 
-    /// Through Camel's own wrapper, which is what Evolution's "Expunge" calls.
+    /// Calls the vfunc through Camel's own wrapper. Evolution's "Expunge"
+    /// command calls this wrapper.
     fn expunge(&self) -> Expunged {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live folder of ours and an out-parameter that is writable
@@ -178,7 +180,7 @@ impl Fixture {
         Expunged::new(ok, error)
     }
 
-    /// And the other way in: a synchronisation that was asked to expunge.
+    /// The other way in: a synchronisation asked to expunge.
     fn synchronize(&self, expunge: bool) -> Expunged {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: as above.
@@ -310,9 +312,9 @@ fn open(account: &Account, path: &str) -> *mut CamelFolder {
 
 #[test]
 fn a_message_this_mailbox_is_the_last_home_of_is_destroyed() {
-    // The ordinary delete-then-expunge, all the way through: the mark Camel
-    // put on the row becomes an `Email/set` destroy, because the inbox is the
-    // only mailbox naming the message.
+    // The ordinary delete-then-expunge path. The mark Camel puts on the row
+    // becomes an `Email/set` destroy, because the inbox is the only mailbox
+    // naming the message.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.uid());
 
@@ -330,9 +332,9 @@ fn a_message_this_mailbox_is_the_last_home_of_is_destroyed() {
 
 #[test]
 fn an_expunged_row_leaves_the_folder_at_once() {
-    // Not at the next listing: the message list the user is looking at was
-    // drawn from these rows, and one that keeps offering a message the user
-    // just destroyed is wrong for as long as the refresh timer takes.
+    // Not at the next listing. The message list the user is viewing was drawn
+    // from these rows. A list that keeps offering a message the user just
+    // destroyed is wrong until the refresh timer fires.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.uid());
 
@@ -347,9 +349,9 @@ fn an_expunged_row_leaves_the_folder_at_once() {
 
 #[test]
 fn an_expunge_announces_the_rows_it_took_away() {
-    // And announces them once, in one emission, which is what redraws a window
-    // that is already open — the rows above are only what the next listing
-    // would be drawn from.
+    // The expunge announces the removed rows once, in one emission. This is
+    // what redraws a window already open. The row count alone only affects
+    // what the next listing would draw from.
     let context = Context::push();
     let fixture = Fixture::start().watched(&context);
     fixture.mark_deleted(fixture.uid());
@@ -373,8 +375,8 @@ fn an_expunge_announces_the_rows_it_took_away() {
 
 #[test]
 fn an_expunge_with_nothing_marked_deleted_announces_nothing() {
-    // And makes no request. Evolution synchronises a folder every time it
-    // closes one, so the common case has to be free.
+    // Makes no request either. Evolution synchronises a folder every time it
+    // closes one, so the common case must be free.
     let context = Context::push();
     let fixture = Fixture::start().watched(&context);
 
@@ -387,9 +389,9 @@ fn an_expunge_with_nothing_marked_deleted_announces_nothing() {
 
 #[test]
 fn a_message_filed_elsewhere_too_only_leaves_this_mailbox() {
-    // The decision `jmap-mail-sync` makes, seen from the folder: the user's own
-    // copy in another folder survives an expunge of the inbox, and the row
-    // still goes, because the message has left *this* mailbox.
+    // The decision `jmap-mail-sync` makes, seen from the folder. The user's
+    // copy in another folder survives an expunge of the inbox. The row still
+    // goes, because the message has left *this* mailbox.
     let fixture = Fixture::start();
     fixture.also_file_into_archive(fixture.uid());
     fixture.mark_deleted(fixture.uid());
@@ -413,10 +415,9 @@ fn a_message_filed_elsewhere_too_only_leaves_this_mailbox() {
 
 #[test]
 fn a_message_another_client_destroyed_takes_its_row_with_it() {
-    // Not a failure: a uid in a summary is a claim about the last listing, and
-    // a message that is already gone is one the expunge wanted gone. Reported
-    // as an error it would put an alert in front of the user about a message
-    // that is not there.
+    // Not a failure. A uid in a summary is a claim about the last listing. A
+    // message that is already gone is a message the expunge wanted gone. An
+    // error here would alert the user about a message that does not exist.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.uid());
     {
@@ -440,8 +441,8 @@ fn a_message_another_client_destroyed_takes_its_row_with_it() {
 
 #[test]
 fn a_row_nobody_deleted_is_left_where_it_is() {
-    // The bit is the whole of the work list. A folder full of mail the user
-    // read and did not delete is one an expunge must leave alone.
+    // The deleted flag is the whole work list. An expunge must leave alone a
+    // folder full of mail the user read but did not delete.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.second());
 
@@ -455,8 +456,8 @@ fn a_row_nobody_deleted_is_left_where_it_is() {
 #[test]
 fn synchronising_with_expunge_gets_rid_of_the_deleted_rows_too() {
     // The second way in. Evolution calls `synchronize_sync` with this argument
-    // set when a folder closes and the account expunges on exit; until this
-    // increment it was ignored, which was honest while nothing could act on it.
+    // set when a folder closes and the account expunges on exit. Before this
+    // increment the argument was ignored, honest while nothing acted on it.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.uid());
 
@@ -468,9 +469,9 @@ fn synchronising_with_expunge_gets_rid_of_the_deleted_rows_too() {
 
 #[test]
 fn synchronising_without_expunge_leaves_the_deleted_rows_alone() {
-    // And the argument is read rather than assumed: a synchronisation that was
-    // not asked to expunge must leave the mark exactly where it was, because
-    // the user can still undelete the message.
+    // The argument is read, not assumed. A synchronisation not asked to
+    // expunge must leave the mark exactly where it was, because the user can
+    // still undelete the message.
     let fixture = Fixture::start();
     fixture.mark_deleted(fixture.uid());
 
@@ -485,9 +486,9 @@ fn synchronising_without_expunge_leaves_the_deleted_rows_alone() {
 
 #[test]
 fn expunging_a_folder_of_a_store_that_is_not_connected_fails() {
-    // The message is not one Camel can be left to guess at: an expunge that
-    // answered TRUE without a connection would be a folder reporting the user's
-    // deletions as carried out.
+    // Camel cannot be left to guess the result. An expunge that answers TRUE
+    // without a connection would report the user's deletions as carried out
+    // when they were not.
     let server = MockServer::builder().start();
     let account_id = server.account_id();
     let inbox_id = {

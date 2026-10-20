@@ -3,13 +3,13 @@
 //
 // Which mail accounts authenticate with a manually pasted API token.
 //
-// The Camel-side sibling of `jmap-backend-core/tests/api_token.rs`, exactly
-// the way `tests/oauth2.rs` is the sibling of `jmap-backend-core/tests/
-// oauth2.rs` — same field (`CamelNetworkSettings:auth-mechanism`), same
-// reason (that is where Camel keeps it). `method_is_api_token` itself (the
-// literal, the values that are not it) is not re-covered here; this file
-// only proves this crate reads the right field into that already-tested
-// function.
+// This is the Camel-side sibling of `jmap-backend-core/tests/api_token.rs`.
+// It matches `tests/oauth2.rs`, the sibling of
+// `jmap-backend-core/tests/oauth2.rs`: same field
+// (`CamelNetworkSettings:auth-mechanism`), same reason (Camel stores the
+// value there). This file does not retest `method_is_api_token` itself (the
+// literal value, and the values that are not it). It only proves that this
+// crate reads the correct field into that already-tested function.
 
 use std::ffi::CString;
 use std::ptr;
@@ -22,19 +22,19 @@ use gobject_sys::{g_object_new, g_object_unref};
 use jmap_mail::api_token::uses_api_token;
 use jmap_mail::settings::settings_type;
 
-/// A settings object as `settings_type` constructs it, with `auth-mechanism`
-/// set the way the account editor's combo box would leave it — or left
-/// unset, for the ordinary password account.
+/// A settings object as `settings_type` constructs it. `auth-mechanism` is
+/// set the way the account editor's combo box sets it, or left unset for
+/// an ordinary password account.
 fn settings(mechanism: Option<&str>) -> *mut CamelSettings {
-    // SAFETY: the type is registered by `settings_type` and has no construct
-    // properties of its own; the accessors below take an instance of it.
+    // SAFETY: `settings_type` registers the type and defines no construct
+    // properties. The accessors below take an instance of this type.
     unsafe {
         let object = g_object_new(settings_type(), ptr::null());
         assert!(!object.is_null(), "g_object_new returned NULL");
         let network = object.cast::<CamelNetworkSettings>();
-        // A host, so this could plausibly be a configured account rather
-        // than an obviously-unset one — not read by `uses_api_token`, but
-        // asserting nothing about the field it does not read is the point.
+        // A host is set here, so this looks like a configured account, not
+        // an obviously unset one. `uses_api_token` does not read this field.
+        // The test asserts nothing about a field the function does not read.
         camel_network_settings_set_host(network, c"jmap.example.com".as_ptr());
         if let Some(mechanism) = mechanism {
             let mechanism = CString::new(mechanism).expect("no NUL in a test mechanism");
@@ -71,8 +71,8 @@ fn an_oauth2_mechanism_is_not_api_token() {
     unsafe { free(settings) };
 }
 
-/// The literal spelling `jmap-config`'s own `Authentication` combo writes for
-/// this project's API-token choice.
+/// The literal string that `jmap-config`'s `Authentication` combo box writes
+/// for this project's API-token choice.
 #[test]
 fn the_api_token_method_is_read_off_the_auth_mechanism_field() {
     let settings = settings(Some("bearer"));
@@ -82,10 +82,9 @@ fn the_api_token_method_is_read_off_the_auth_mechanism_field() {
     unsafe { free(settings) };
 }
 
-/// A backend without settings cannot be configured either way; `uses_api_token`
-/// answering "no" for it is the same graceful non-crash `jmap-mail::server`'s
-/// `network` already gives every other accessor a NULL settings object could
-/// reach.
+/// A NULL settings pointer cannot be configured either way. `uses_api_token`
+/// returns `false` for it, the same graceful result that `jmap-mail::server`'s
+/// `network` already gives every other accessor for a NULL settings object.
 #[test]
 fn a_null_settings_object_is_not_api_token() {
     // SAFETY: a NULL settings pointer is documented as accepted.

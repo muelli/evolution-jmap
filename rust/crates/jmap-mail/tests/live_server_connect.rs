@@ -5,22 +5,22 @@
 //!
 //! `jmap-backend-core/tests/live_server_authenticate.rs` already proves
 //! `is_wrong_password`/`ConnectError::auth_result` against a real server's
-//! own wrong-password 401, but only by calling
-//! `Client::builder().connect(...)` directly. `jmap-mail::connect::open_mail`
-//! is the actual entry point Evolution reaches (via `MailSync`'s
-//! constructor path), and it wraps that same classification into the
-//! Camel-flavored `StoreError::authentication_result()`. Every existing test
-//! of that mapping (`tests/connect.rs`) builds a hand-fabricated
-//! `jmap_client::Error::Http { status: 401, .. }` against `jmap-mockd`.
-//! Every other live-server test in this crate builds its `Client`/
-//! `MailSync` directly (see `live_server_expunge.rs`'s `connect_for_write`),
-//! bypassing `open_mail` entirely, so `open_mail` itself, happy path or
-//! otherwise, has never run against a real server at all. This is that
-//! confirmation.
+//! wrong-password 401. It calls `Client::builder().connect(...)` directly.
+//!
+//! `jmap_mail::connect::open_mail` is the actual entry point that Evolution
+//! reaches, through `MailSync`'s constructor path. It wraps the same
+//! classification into the Camel-flavored `StoreError::authentication_result()`.
+//! Every existing test of that mapping (`tests/connect.rs`) builds a
+//! hand-fabricated `jmap_client::Error::Http { status: 401, .. }` against
+//! `jmap-mockd`. Every other live-server test in this crate builds its
+//! `Client`/`MailSync` directly (see `live_server_expunge.rs`'s
+//! `connect_for_write`), and bypasses `open_mail` entirely. So `open_mail`
+//! itself, on the happy path or otherwise, has never run against a real
+//! server. This test is that confirmation.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console

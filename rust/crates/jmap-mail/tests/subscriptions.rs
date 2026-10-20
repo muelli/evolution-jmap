@@ -1,27 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The subscription half of a store: what happens on either side of the
-//! `Mailbox/set` that carries it.
+//! The subscription half of a store: what happens around the `Mailbox/set`
+//! call that carries it.
 //!
-//! `jmap-mail-sync` already puts the write on the wire. What is tested here is
-//! the thing the store has to add and it cannot: the folder listing the store
-//! keeps between calls. `CamelSubscribable` declares `folder_is_subscribed` as
-//! one of its *non-blocking* methods — Evolution asks it while drawing the
-//! folder tree, once per folder — so it can only ever be answered out of that
-//! listing. A store that wrote the subscription to the server and left its own
-//! listing saying the opposite would draw the tick back on the moment the user
-//! took it off, and keep doing so until something refreshed the tree.
+//! `jmap-mail-sync` already covers the write on the wire. This file covers the
+//! thing the store must add: the folder listing it keeps between calls.
+//! `CamelSubscribable` declares `folder_is_subscribed` as a *non-blocking*
+//! method. Evolution calls it once per folder while it draws the folder tree,
+//! so the answer can only come from that listing. A store can write a
+//! subscription to the server but leave its own listing unchanged. Then the
+//! old tick shows again, until something refreshes the tree.
 //!
-//! Above the store's own two methods sits the interface itself, whose three
-//! slots the store's copy of `CamelSubscribableInterface` fills. Two of the
-//! three are reachable here: `folder_is_subscribed` takes no `CamelSubscribable`
-//! machinery beyond the instance pointer, so it is called through the vtable the
-//! way Camel calls it. The two sync vfuncs are not — they end in an emission
-//! queued on the store's `CamelSession`, which a detached store does not have —
-//! so what is tested of them here is everything up to that emission,
-//! [`jmap_mail::subscribe::set_subscribed`], which is the whole of what they
-//! decide. The emission is `tests/emissions.rs`.
+//! Above the store's two methods sits the interface itself. The store's copy
+//! of `CamelSubscribableInterface` fills all three of its slots, but only two
+//! are reachable here:
+//!
+//! - `folder_is_subscribed` needs no `CamelSubscribable` machinery beyond the
+//!   instance pointer, so the test calls it through the vtable, as Camel does.
+//! - The two sync vfuncs end in an emission queued on the store's
+//!   `CamelSession`, which a detached store does not have. This file tests
+//!   everything up to that emission: [`jmap_mail::subscribe::set_subscribed`],
+//!   the whole decision the vfuncs make. `tests/emissions.rs` covers the
+//!   emission itself.
 
 use std::ffi::CString;
 use std::sync::Arc;
@@ -41,8 +42,8 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
-/// No flags: the tree the store already has, with no request behind it — which
-/// is exactly the reach a non-blocking `folder_is_subscribed` has.
+/// No flags: the tree the store already has, with no new request.
+/// This matches the reach of the non-blocking `folder_is_subscribed` method.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 const REFRESH: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_REFRESH;
 
@@ -89,9 +90,8 @@ fn the_write_reaches_the_server() {
     );
 }
 
-/// The point of the increment: the listing the non-blocking read is answered
-/// from agrees with the write that just succeeded, without anything having gone
-/// back to the server.
+/// The point of the test: the write updates the listing that answers the
+/// non-blocking read. No new request to the server is needed.
 #[test]
 fn the_held_listing_agrees_with_the_write() {
     let (server, store, inbox) = connected();
@@ -103,7 +103,7 @@ fn the_held_listing_agrees_with_the_write() {
     assert_eq!(held(&store, "Inbox"), Some(false));
 }
 
-/// And it is the folder that was named that changes, not the tree around it.
+/// Only the named folder changes. The rest of the tree stays the same.
 #[test]
 fn the_folders_next_to_it_are_left_alone() {
     let (_server, store, inbox) = connected();
@@ -114,8 +114,8 @@ fn the_folders_next_to_it_are_left_alone() {
     assert_eq!(held(&store, "Sent"), Some(true));
 }
 
-/// Subscribing again puts it back. Two writes in a row over one listing is what
-/// a user changing their mind in the subscription editor does.
+/// Subscribing again restores the folder. A user who changes their mind in
+/// the subscription editor makes two writes over one listing.
 #[test]
 fn subscribing_again_puts_the_folder_back() {
     let (server, store, inbox) = connected();
@@ -128,11 +128,12 @@ fn subscribing_again_puts_the_folder_back() {
     assert_eq!(held(&store, "Inbox"), Some(true));
 }
 
-/// The edit is to the tree the store holds, so a caller that took the previous
-/// `Arc` out of `folders` still sees what it was handed. That is not a
-/// compromise: a `CamelFolderInfo` forest built from a tree is copied out of it
-/// while it is borrowed, and a tree that mutated underneath such a walk would
-/// be the bug this arrangement rules out.
+/// The edit changes the tree the store holds. A caller that took the previous
+/// `Arc` from `folders` still sees the old state it was handed.
+///
+/// This is not a flaw: building a `CamelFolderInfo` forest copies data out of
+/// the tree while it is borrowed. A tree that mutates during that walk would
+/// be the bug this design prevents.
 #[test]
 fn a_tree_already_handed_out_is_not_edited_underneath_its_reader() {
     let (_server, store, inbox) = connected();
@@ -148,12 +149,14 @@ fn a_tree_already_handed_out_is_not_edited_underneath_its_reader() {
     assert!(!Arc::ptr_eq(&handed_out, &store.folders(CACHED).unwrap()));
 }
 
-/// A store with nothing listed yet must not invent a listing to write into. A
-/// tree assembled out of the one folder a write happened to name would be an
-/// account with one folder in it — so the first `get_folder_info_sync` after
-/// this still has to reach the server. Which is shown by moving the account on
-/// afterwards: a mailbox created between the write and the listing is in the
-/// answer only if the answer came from the server.
+/// A store with no listing yet must not invent one to write into. A tree
+/// built from the single folder a write names would show an account with
+/// only one folder. So the first `get_folder_info_sync` call after the write
+/// must still reach the server.
+///
+/// The test proves this by changing the account afterward: a mailbox created
+/// between the write and the listing appears in the answer only if the answer
+/// came from the server.
 #[test]
 fn a_store_that_has_not_listed_yet_does_not_gain_a_listing() {
     let (server, store, inbox) = connected();
@@ -178,11 +181,11 @@ fn a_store_that_has_not_listed_yet_does_not_gain_a_listing() {
     );
 }
 
-/// The state the listing is current as of is *not* moved on by the edit. The
-/// write did move the account on, so the next refresh finds a change and
-/// rebuilds — one listing more than strictly needed, and the alternative is a
-/// store inventing a state string the server never gave it and then asking
-/// `Mailbox/changes` from it.
+/// The edit does not advance the state the listing is current as of. The
+/// write does advance the account state, so the next refresh finds a change
+/// and rebuilds the tree. This costs one extra listing, but the alternative is
+/// worse: the store would invent a state string the server never gave it, then
+/// ask `Mailbox/changes` using that invented string.
 #[test]
 fn a_refresh_after_the_write_still_rebuilds_from_the_server() {
     let (_server, store, inbox) = connected();
@@ -198,8 +201,8 @@ fn a_refresh_after_the_write_still_rebuilds_from_the_server() {
     );
 }
 
-/// Camel drives a store it believes is connected, and the belief goes stale.
-/// `NOT_CONNECTED` is what makes it connect and ask again.
+/// Camel may believe a store is connected after the belief goes stale.
+/// `NOT_CONNECTED` makes Camel reconnect and ask again.
 #[test]
 fn a_store_with_no_connection_cannot_change_a_subscription() {
     let store = JmapStore::detached();
@@ -213,8 +216,9 @@ fn a_store_with_no_connection_cannot_change_a_subscription() {
     );
 }
 
-/// A folder another client deleted since the listing. Reported in the store's
-/// own domain rather than the service's: nothing is wrong with the account.
+/// A folder that another client deleted since the listing. The store reports
+/// this in its own error domain, not the service's: nothing is wrong with the
+/// account.
 #[test]
 fn a_folder_the_account_no_longer_has_is_reported_as_missing() {
     let (_server, store, _inbox) = connected();
@@ -231,13 +235,12 @@ fn a_folder_the_account_no_longer_has_is_reported_as_missing() {
 // ---------------------------------------------------------------------------
 // the interface
 
-/// Claiming the interface is what makes `CAMEL_IS_SUBSCRIBABLE` true, which is
-/// the test every caller makes before it asks a store anything about
-/// subscriptions: Evolution's subscription editor offers the account at all
-/// only for a store that answers it.
+/// Claiming the interface makes `CAMEL_IS_SUBSCRIBABLE` true. Every caller
+/// checks this before it asks a store about subscriptions: Evolution's
+/// subscription editor offers the account only if the store answers true.
 #[test]
 fn the_store_implements_the_subscription_interface() {
-    // SAFETY: plain type-system reads on a type `store_type` registers.
+    // SAFETY: a plain type-system read on a type that `store_type` registers.
     unsafe {
         assert_ne!(
             g_type_is_a(store_type(), camel_subscribable_get_type()),
@@ -247,15 +250,15 @@ fn the_store_implements_the_subscription_interface() {
     }
 }
 
-/// And filling the vtable is what makes it more than a claim. Camel installs no
-/// default behind any of the three methods — `eds-sys`'s `tests/camel.rs` pins
-/// that — so a slot left NULL is a call through a NULL pointer from inside the
-/// wrapper, not a store that answers conservatively.
+/// Filling the vtable makes the claim real. Camel installs no default behind
+/// any of the three methods (`eds-sys`'s `tests/camel.rs` confirms this). So a
+/// NULL slot causes a call through a NULL pointer inside the wrapper, not a
+/// conservative answer from the store.
 #[test]
 fn the_stores_vtable_fills_all_three_slots() {
-    // SAFETY: referencing the class is what runs the `interface_init` that
-    // fills the vtable; the reference is released below, and the vtable is
-    // owned by the class and only read.
+    // SAFETY: referencing the class runs the `interface_init` call that fills
+    // the vtable. The reference is released below. The vtable belongs to the
+    // class and the code only reads it.
     unsafe {
         let class = g_type_class_ref(store_type());
         let vtable = g_type_interface_peek(class, camel_subscribable_get_type())
@@ -270,16 +273,16 @@ fn the_stores_vtable_fills_all_three_slots() {
     }
 }
 
-/// `folder_is_subscribed`, called through the slot in the vtable — which is the
-/// only way Camel ever reaches it. By name it would test a function that might
-/// be installed nowhere.
+/// Calls `folder_is_subscribed` through the vtable slot, the only way Camel
+/// reaches it. Calling it by name would test a function that might not be
+/// installed anywhere.
 fn asks_camel(store: &JmapStore, path: &str) -> bool {
     let path = CString::new(path).expect("a path with no NUL");
 
-    // SAFETY: referencing the class runs the `interface_init` that fills the
-    // vtable. The store is an instance of ours, which is what the vfunc's
-    // contract asks for, and `path` is NUL-terminated and alive for the call.
-    // The class reference is released after it, and the store outlives it.
+    // SAFETY: referencing the class runs `interface_init`, which fills the
+    // vtable. The store is an instance of our type, as the vfunc's contract
+    // requires. `path` is NUL-terminated and stays alive for the call. The
+    // class reference is released after the call, and the store outlives it.
     unsafe {
         let class = g_type_class_ref(store_type());
         let vtable = g_type_interface_peek(class, camel_subscribable_get_type())
@@ -302,8 +305,8 @@ fn asks_camel(store: &JmapStore, path: &str) -> bool {
     }
 }
 
-/// The listing is the answer, and the write that just changed it is visible
-/// through the vfunc immediately — the tick the user took off stays off.
+/// The listing is the answer. A write that changes it is visible through the
+/// vfunc at once: the tick the user removed stays off.
 #[test]
 fn camel_is_told_what_the_held_listing_says() {
     let (server, store, inbox) = connected();
@@ -317,9 +320,9 @@ fn camel_is_told_what_the_held_listing_says() {
     assert!(asks_camel(&store, "Sent"));
 }
 
-/// A folder no listing mentions is not subscribed. FALSE rather than TRUE
-/// because the question is whether the *user* asked to see it, and nothing
-/// here says they did.
+/// A folder absent from the listing is not subscribed. The answer is FALSE,
+/// not TRUE, because the question is whether the *user* asked to see it, and
+/// nothing here confirms that.
 #[test]
 fn a_folder_the_store_has_never_heard_of_is_not_subscribed() {
     let (_server, store, _inbox) = connected();
@@ -328,10 +331,10 @@ fn a_folder_the_store_has_never_heard_of_is_not_subscribed() {
     assert!(!asks_camel(&store, "Receipts"));
 }
 
-/// And the vfunc does not go and look. Camel declares it non-blocking and
-/// Evolution asks it once per folder while drawing the tree; a request from in
-/// there would be a folder tree that blocks the UI thread once per row. The
-/// store having no listing afterwards is what shows no listing was fetched.
+/// The vfunc never makes a request. Camel declares it non-blocking, and
+/// Evolution calls it once per folder while it draws the tree. A request from
+/// inside the vfunc would block the UI thread once per row. The store having
+/// no listing afterward proves no listing was fetched.
 #[test]
 fn the_non_blocking_answer_makes_no_request() {
     let (_server, store, _inbox) = connected();
@@ -346,9 +349,9 @@ fn the_non_blocking_answer_makes_no_request() {
 // ---------------------------------------------------------------------------
 // the write, by the name Camel calls the folder
 
-/// The two sync vfuncs are handed a Camel path and nothing else, so resolving
-/// it against the folder tree is theirs to do. What comes back is the folder as
-/// it now is, which is what the `folder-subscribed` signal carries.
+/// The two sync vfuncs receive only a Camel path, so resolving it against the
+/// folder tree is their job. The result is the folder's current state, the
+/// same data the `folder-subscribed` signal carries.
 #[test]
 fn the_path_camel_names_is_resolved_to_the_mailbox_written() {
     let (server, store, _inbox) = connected();
@@ -381,8 +384,9 @@ fn subscribing_by_path_puts_the_folder_back() {
     assert_eq!(held(&store, "Inbox"), Some(true));
 }
 
-/// A path no mailbox answers to is reported in the store's own domain, which is
-/// what keeps someone else's tidying from being shown as a broken account.
+/// A path with no matching mailbox is reported in the store's own error
+/// domain. This keeps another client's folder cleanup from looking like a
+/// broken account.
 #[test]
 fn a_path_no_folder_answers_to_is_reported_as_missing() {
     let (_server, store, _inbox) = connected();
@@ -395,10 +399,10 @@ fn a_path_no_folder_answers_to_is_reported_as_missing() {
     );
 }
 
-/// A mailbox another client created since the listing is subscribable without a
-/// restart: the write looks again before it gives up, exactly as opening a
-/// folder by path does. The cost is one `Mailbox/changes` on the path that was
-/// about to fail anyway.
+/// A mailbox that another client created since the listing is subscribable
+/// without a restart. The write retries before it gives up, the same as
+/// opening a folder by path does. The cost is one `Mailbox/changes` call on a
+/// path that was about to fail anyway.
 #[test]
 fn a_folder_created_since_the_listing_is_looked_for_again() {
     let (server, store, _inbox) = connected();
@@ -419,8 +423,8 @@ fn a_folder_created_since_the_listing_is_looked_for_again() {
     assert_eq!(held(&store, "Receipts"), Some(false));
 }
 
-/// And with no connection there is nothing to resolve the path against.
-/// `NOT_CONNECTED` is what makes Camel connect and ask again.
+/// With no connection, there is nothing to resolve the path against.
+/// `NOT_CONNECTED` makes Camel connect and ask again.
 #[test]
 fn a_store_with_no_connection_cannot_subscribe_by_path() {
     let store = JmapStore::detached();

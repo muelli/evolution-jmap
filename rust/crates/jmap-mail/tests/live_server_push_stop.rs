@@ -4,19 +4,19 @@
 //! `PushRefresh::stop` against a real Stalwart EventSource connection that is
 //! genuinely blocked mid-read, not a synthetic one.
 //!
-//! [`jmap_client::eventsource`]'s own module doc explains the mechanism: the
-//! background thread that reads a `StateChange` line by line only checks its
-//! [`CancelFlag`](jmap_client::transport::CancelFlag) between reads, so a
-//! cancellation while it is parked inside a blocking read on an idle stream
-//! would never be noticed on its own — `EventSourceSubscription::stop` also
+//! [`jmap_client::eventsource`]'s own module doc explains the mechanism. The
+//! background thread that reads a `StateChange` line by line checks its
+//! [`CancelFlag`](jmap_client::transport::CancelFlag) only between reads.
+//! A cancellation while it is parked inside a blocking read on an idle stream
+//! would never be noticed on its own. `EventSourceSubscription::stop` also
 //! shuts the raw socket down, which is what actually interrupts that read.
 //! `dropping_the_subscription_does_not_block_on_a_live_connection`
 //! (`jmap-client/src/eventsource.rs`) proves the shutdown call works against
-//! a hand-rolled local TCP/TLS server built for the test; `push.rs` in this
+//! a hand-rolled local TCP/TLS server built for the test. `push.rs` in this
 //! crate proves `PushRefresh::stop` tears down the bookkeeping against
 //! `jmap-mockd`, but never while a read was actually parked waiting on
-//! something. Neither has ever measured `stop()` against a real server's own
-//! socket, where buffering, proxies or TLS termination could behave
+//! something. Neither test has measured `stop()` against a real server's own
+//! socket, where buffering, proxies, or TLS termination could behave
 //! differently than either stand-in. This file does.
 //!
 //! ## Running it
@@ -56,8 +56,8 @@ fn connect_for_write() -> Option<Client> {
 }
 
 /// No ping requested (`pingSeconds` of `0` below): nothing at all should
-/// arrive on this stream for the length of the test, which is the point —
-/// the pump thread's background reader has to be genuinely parked inside a
+/// arrive on this stream for the length of the test. That is the point.
+/// The pump thread's background reader must be genuinely parked inside a
 /// blocking read on the real socket, with no event or ping due to wake it,
 /// when `stop` is asked to return.
 #[test]
@@ -84,8 +84,8 @@ fn stop_returns_promptly_while_blocked_reading_a_real_idle_stream() {
     let mut push = PushRefresh::start(url, headers, account_id, vec!["Email".to_owned()], |_| {});
 
     // Give the pump thread time to finish the real TCP/TLS handshake and
-    // reach its blocking read on Stalwart's own response, rather than racing
-    // `stop` against a connection attempt still in flight.
+    // reach its blocking read on Stalwart's own response. This avoids
+    // racing `stop` against a connection attempt still in flight.
     std::thread::sleep(Duration::from_millis(500));
 
     let start = Instant::now();

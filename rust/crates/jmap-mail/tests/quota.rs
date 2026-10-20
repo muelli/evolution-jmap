@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `get_quota_info_sync`, through Camel's own wrapper — what Evolution's
+//! `get_quota_info_sync`, through Camel's own wrapper: what Evolution's
 //! folder-properties dialog would see.
 //!
 //! Unlike `refresh_info_sync`, the wrapper this file drives
-//! (`camel_folder_get_quota_info_sync`) does not reconnect the store first —
-//! `camel-folder.c`'s own source has no such call, only the class dispatch —
-//! so the disconnected case below needs no bypass through the class pointer
-//! the way `refresh.rs`'s does.
+//! (`camel_folder_get_quota_info_sync`) does not reconnect the store first.
+//! `camel-folder.c`'s own source has no such call, only the class dispatch.
+//! So the disconnected case below needs no bypass through the class pointer,
+//! unlike `refresh.rs`.
 
 mod common;
 
@@ -36,16 +36,16 @@ fn sync_against(server: &MockServer) -> MailSync {
     MailSync::new(client, server.account_id())
 }
 
-/// A connected account with one mailbox, opened the way Camel opens it —
-/// every fresh mock account already carries the one Mail/octets/account
-/// quota `jmap-mock`'s `AccountState::new` seeds, so no quota seeding of its
-/// own is needed for the success case.
+/// A connected account with one mailbox, opened the way Camel opens it.
+/// Every fresh mock account already carries the one Mail/octets/account
+/// quota that `jmap-mock`'s `AccountState::new` seeds, so the success case
+/// needs no quota seeding of its own.
 fn with_inbox() -> (MockServer, Account, *mut CamelFolder) {
     with_inbox_on(MockServer::builder())
 }
 
 /// [`with_inbox`], parameterised on the builder, so a test can shape the
-/// server (e.g. leave a capability out) before the folder opens.
+/// server (for example, leave a capability out) before the folder opens.
 fn with_inbox_on(builder: MockServerBuilder) -> (MockServer, Account, *mut CamelFolder) {
     let server = builder.start();
     {
@@ -139,10 +139,10 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
 fn a_quota_that_says_nothing_about_mail_is_reported_as_unsupported() {
     let (server, _account, folder) = with_inbox();
     {
-        // Rewritten in place rather than removed: `Store<T>` has no removal
-        // method (nothing in the mock ever needed one), and overwriting the
-        // account's one seeded quota with a Contacts-only one is the same
-        // test either way — the point is that nothing left applies to Mail.
+        // Rewritten in place, not removed: `Store<T>` has no removal method
+        // (nothing in the mock ever needed one). Overwriting the account's
+        // one seeded quota with a Contacts-only quota gives the same test
+        // either way. The point is that nothing left applies to Mail.
         let state = server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&server.account_id()).unwrap();
@@ -177,10 +177,11 @@ fn a_quota_that_says_nothing_about_mail_is_reported_as_unsupported() {
 }
 
 /// A server that never advertises `urn:ietf:params:jmap:quota` (Fastmail, in
-/// practice) is reported exactly like one that advertises it with nothing
-/// scoped to Mail: `Client::quotas` answers an empty list without a request,
-/// which chains to the same `NoQuota`/`G_IO_ERROR_NOT_SUPPORTED` this vfunc
-/// already returns for [`a_quota_that_says_nothing_about_mail_is_reported_as_unsupported`].
+/// practice) is reported the same way as one that advertises it with nothing
+/// scoped to Mail. `Client::quotas` answers an empty list without a request.
+/// This chains to the same `NoQuota`/`G_IO_ERROR_NOT_SUPPORTED` result that
+/// this vfunc already returns for
+/// [`a_quota_that_says_nothing_about_mail_is_reported_as_unsupported`].
 #[test]
 fn an_account_with_no_quota_capability_is_reported_as_unsupported() {
     let (_server, _account, folder) =

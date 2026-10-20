@@ -1,26 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The one symbol Camel resolves out of `libcameljmap.so`, and the provider it
-//! registers.
+//! The one symbol that Camel resolves out of `libcameljmap.so`, and the
+//! provider it registers.
 //!
-//! Camel does not find a mail provider the way EDS finds a backend. There is no
-//! `EModule`, no `GTypeModule`, and no scan for subclasses of anything: on
-//! `camel_provider_init()` Camel reads the `.urls` file next to each `.so` in
-//! its provider directory, remembers which protocols that file claims, and only
-//! when one of those protocols is asked for does it dlopen the module and call
-//! `camel_provider_module_init`. The module's job in that call is to hand back
-//! a `CamelProvider` — a plain struct, not an object — through
-//! `camel_provider_register`.
+//! Camel does not find a mail provider the way EDS finds a backend. There is
+//! no `EModule`, no `GTypeModule`, and no scan for subclasses of anything. On
+//! `camel_provider_init()`, Camel reads the `.urls` file next to each `.so`
+//! in its provider directory and remembers which protocols that file claims.
+//! Only when one of those protocols is asked for does Camel dlopen the
+//! module and call `camel_provider_module_init`. In that call, the module's
+//! job is to hand back a `CamelProvider` (a plain struct, not an object)
+//! through `camel_provider_register`.
 //!
-//! So the test drives the second half of that path directly: call the entry
-//! point, then ask Camel for the protocol, which is exactly what
-//! `camel_provider_get` does for a module it loaded itself. The first half —
-//! that the `.urls` file next to the installed module names the same protocol —
-//! is not something Camel can be asked about without an install tree, so
-//! [`the_urls_file_claims_the_protocol_the_provider_registers`] reads the file
-//! in the source tree instead, and CTest's `install-camel-provider` checks the
-//! same file reaches the directory Camel scans.
+//! The tests here drive the second half of that path directly: call the
+//! entry point, then ask Camel for the protocol. This is exactly what
+//! `camel_provider_get` does for a module it loaded itself. The first half,
+//! that the `.urls` file next to the installed module names the same
+//! protocol, is not something a running Camel can be asked about without an
+//! install tree. So
+//! [`the_urls_file_claims_the_protocol_the_provider_registers`] reads the
+//! file in the source tree instead, and CTest's `install-camel-provider`
+//! check confirms the same file reaches the directory Camel scans.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -44,13 +45,14 @@ use jmap_mail::provider::PROTOCOL;
 use jmap_mail::store::JmapStore;
 use jmap_mail::transport::JmapTransport;
 
-/// The entry point, called the way Camel calls it, and the provider read back
-/// out of Camel's registry afterwards.
+/// Calls the entry point the way Camel calls it, then reads the provider
+/// back out of Camel's registry.
 ///
-/// `camel_provider_init()` first, because that is the state a dlopened
-/// `libcameljmap.so` finds itself in — Camel calls the entry point from inside
-/// its own provider loading. Registering works without it, so this is about
-/// standing where the module stands rather than about a dependency.
+/// Calls `camel_provider_init()` first, because that is the state a
+/// dlopened `libcameljmap.so` finds itself in: Camel calls the entry point
+/// from inside its own provider loading. Registering works without this
+/// call too. The call matches the module's real starting state; it is not
+/// a dependency the module needs.
 fn registered() -> &'static CamelProvider {
     // SAFETY: neither call takes arguments; `camel_provider_init` is
     // idempotent, and calling the entry point twice is what a second load of
@@ -62,8 +64,9 @@ fn registered() -> &'static CamelProvider {
 
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: PROTOCOL is a 'static NUL-terminated string, and `error` is a
-    // location we own. The returned pointer is Camel's, and lives as long as
-    // the process — the provider is never unregistered.
+    // location this code owns. The returned pointer belongs to Camel and
+    // lives as long as the process, because the provider is never
+    // unregistered.
     let provider = unsafe { camel_provider_get(PROTOCOL.as_ptr(), &mut error) };
     assert!(
         !provider.is_null(),
@@ -74,15 +77,14 @@ fn registered() -> &'static CamelProvider {
     unsafe { &*provider }
 }
 
-/// The protocol is the name in the `.urls` file, the name in a `.source`
-/// file's `[Mail Account] BackendName`, and the scheme Camel keys its provider
-/// table by. Three places that have to agree, and this is the one they agree
-/// on.
+/// The protocol name must agree in three places: the `.urls` file, a
+/// `.source` file's `[Mail Account] BackendName`, and the scheme Camel keys
+/// its provider table by. This test checks the value they agree on.
 #[test]
 fn the_entry_point_registers_a_provider_for_the_jmap_protocol() {
     let provider = registered();
-    // SAFETY: a registered provider's protocol is the 'static string we gave
-    // it.
+    // SAFETY: a registered provider's protocol is the 'static string this
+    // test gave it.
     assert_eq!(unsafe { CStr::from_ptr(provider.protocol) }, PROTOCOL);
     assert!(!provider.name.is_null(), "the provider installed no name");
     assert!(
@@ -92,8 +94,8 @@ fn the_entry_point_registers_a_provider_for_the_jmap_protocol() {
 }
 
 /// `evolution-mail` only offers a provider in its account dialogs when the
-/// domain is exactly `mail`. Any other string — or NULL — is a provider that
-/// is registered, loadable, and invisible.
+/// domain is exactly `mail`. Any other string, or NULL, still registers and
+/// loads the provider, but hides it from the account dialogs.
 #[test]
 fn the_provider_is_in_the_mail_domain_evolution_lists() {
     let provider = registered();
@@ -102,12 +104,12 @@ fn the_provider_is_in_the_mail_domain_evolution_lists() {
     assert_eq!(unsafe { CStr::from_ptr(provider.domain) }, c"mail");
 }
 
-/// The flags decide what Evolution will let a JMAP account be. Missing
-/// `IS_SOURCE` is an account that cannot receive mail; missing `IS_STORAGE` is
-/// one whose folders never appear in the tree; missing `IS_EXTERNAL` is a
-/// store that misrepresents itself as one the mail component's own New Mail
-/// Account wizard created, when every JMAP mail store in fact comes from a
-/// collection account's `ESource` extensions.
+/// These flags decide what Evolution lets a JMAP account do. Without
+/// `IS_SOURCE`, the account cannot receive mail. Without `IS_STORAGE`, its
+/// folders never appear in the tree. Without `IS_EXTERNAL`, the store wrongly
+/// claims to come from the mail component's own New Mail Account wizard.
+/// Every JMAP mail store in fact comes from a collection account's `ESource`
+/// extensions.
 #[test]
 fn the_provider_is_a_remote_mail_source_with_folders() {
     let provider = registered();
@@ -126,13 +128,13 @@ fn the_provider_is_a_remote_mail_source_with_folders() {
     }
 }
 
-/// JMAP has no local flavour: an account is a session URL on some host, and
-/// there is nothing to configure without one. `NEED_HOST` is what makes the
-/// account dialog refuse an empty server rather than build a service that
-/// fails on first use. The `ALLOW_*` flags are the URL parts a JMAP account
-/// can carry: a path (the session URL), and the credential parts, which this
-/// backend reads from `ESourceAuthentication` and libsecret rather than the
-/// URL, but which the flag still has to permit.
+/// JMAP has no local flavour: an account is a session URL on some host, with
+/// nothing to configure without one. `NEED_HOST` makes the account dialog
+/// refuse an empty server, instead of building a service that fails on first
+/// use. The `ALLOW_*` flags are the URL parts a JMAP account can carry: a
+/// path (the session URL), and the credential parts. This backend reads
+/// credentials from `ESourceAuthentication` and libsecret, not the URL, but
+/// the flag still must permit them.
 #[test]
 fn the_provider_allows_the_url_parts_jmap_uses() {
     let provider = registered();
@@ -152,13 +154,12 @@ fn the_provider_allows_the_url_parts_jmap_uses() {
     }
 }
 
-/// Both slots, which is what makes a JMAP account a whole account: the store is
-/// the mail it holds and the transport is the mail it sends, and Camel
-/// instantiates each from the type named here. An empty slot is
-/// `G_TYPE_INVALID`, which Camel reads as "this provider cannot do that" — a
-/// transport slot left invalid is an account Evolution offers no way to send
-/// from, and one naming a type whose `send_to_sync` is NULL is a GLib critical
-/// the first time the user presses Send.
+/// Both slots make a JMAP account a complete account. The store holds the
+/// mail, and the transport sends it. Camel instantiates each from the type
+/// named here. An empty slot is `G_TYPE_INVALID`, which Camel reads as
+/// "this provider cannot do that". A transport slot left invalid gives
+/// Evolution no way to send mail. A transport type whose `send_to_sync` is
+/// NULL causes a GLib critical the first time the user presses Send.
 #[test]
 fn the_provider_names_a_store_and_a_transport() {
     let provider = registered();
@@ -186,11 +187,12 @@ fn the_provider_names_a_store_and_a_transport() {
         "the provider names some other type than the transport this module registers"
     );
 
-    // The precondition the slot is only safe to fill because of: Camel
-    // dispatches sending through the class, and a transport type without the
-    // vfunc is worse than no transport type at all.
+    // Camel dispatches sending through the class. A transport type without
+    // the vfunc is worse than no transport type at all, so this precondition
+    // must hold before the slot is filled.
     //
-    // SAFETY: a live GType of a class that has one; the reference is given back.
+    // SAFETY: a live GType of a class that has one. The code returns the
+    // reference afterward.
     unsafe {
         let class = g_type_class_ref(transport).cast::<CamelTransportClass>();
         assert!(
@@ -212,9 +214,9 @@ fn store_type() -> GType {
 }
 
 /// `CamelOfflineStore` rather than plain `CamelStore`, because the summary
-/// cache has to keep working with the network down — that is the entire reason
-/// the offline subclass exists, and picking the wrong parent is not something
-/// a later increment can fix without moving every vfunc.
+/// cache must keep working while the network is down. That is the entire
+/// reason the offline subclass exists. Picking the wrong parent here is not
+/// something a later change can fix without moving every vfunc.
 #[test]
 fn the_store_is_an_offline_camel_store() {
     registered();
@@ -235,17 +237,17 @@ fn the_store_is_an_offline_camel_store() {
     }
 }
 
-/// Registering the type is not the same as its class surviving `class_init`.
-/// GObject allocates the class from the `class_size` this crate reported, then
-/// copies the parent class into its leading bytes — so a class struct that
-/// does not really lead with `CamelOfflineStoreClass` is a heap overflow here
-/// and nowhere earlier.
+/// Registering the type does not prove that its class survives `class_init`.
+/// GObject allocates the class from the `class_size` this crate reported,
+/// then copies the parent class into its leading bytes. If the class struct
+/// does not truly lead with `CamelOfflineStoreClass`, this copy causes a
+/// heap overflow here, not at an earlier point.
 #[test]
 fn the_stores_class_initialises() {
     registered();
     let gtype = store_type();
     assert_ne!(gtype, 0);
-    // SAFETY: a registered type; the reference is given back below.
+    // SAFETY: a registered type. The code returns the reference below.
     unsafe {
         let class = g_type_class_ref(gtype);
         assert!(!class.is_null(), "the store class would not initialise");
@@ -254,11 +256,11 @@ fn the_stores_class_initialises() {
 }
 
 /// Camel dlopens a provider module once per process, but nothing stops
-/// `camel_provider_module_init` from being reached twice — a second
-/// `camel_provider_init()` after a `camel_provider_load`, or a test suite.
-/// The provider is a pointer Camel keeps, so a second call that built a second
-/// struct would leave Camel's table pointing at one of them and every
-/// `camel_provider_get` caller holding the other.
+/// `camel_provider_module_init` from running twice: a second
+/// `camel_provider_init()` after a `camel_provider_load`, or a test suite,
+/// can both reach it again. Camel keeps a pointer to the provider. If a
+/// second call built a second struct, Camel's table would point at one of
+/// them, and some `camel_provider_get` callers would hold the other.
 #[test]
 fn loading_the_module_twice_registers_the_same_provider() {
     let first = ptr::from_ref(registered());
@@ -269,11 +271,11 @@ fn loading_the_module_twice_registers_the_same_provider() {
     );
 }
 
-/// Camel declares `camel_provider_module_init` and never defines it; the
-/// definition is the module's side of that contract. Coercing both to the same
-/// function pointer type is a compile-time check that the signature matches the
-/// header — the same trick that keeps `e_module_load` honest, and the reason
-/// the symbol is allowlisted in `eds-sys` at all.
+/// Camel declares `camel_provider_module_init` but never defines it; the
+/// definition here is the module's side of that contract. Coercing both to
+/// the same function pointer type checks at compile time that the signature
+/// matches the header. This is the same trick that keeps `e_module_load`
+/// honest, and the reason the symbol is allowlisted in `eds-sys` at all.
 #[test]
 fn the_entry_point_has_the_signature_camel_declares() {
     let declared: unsafe extern "C" fn() = eds_sys::camel_provider_module_init;
@@ -285,19 +287,20 @@ fn the_entry_point_has_the_signature_camel_declares() {
     );
 }
 
-/// The half of the load path a running Camel cannot be asked about.
+/// The half of the load path that a running Camel cannot be asked about.
 ///
-/// Camel decides *whether* to dlopen `libcameljmap.so` by reading
-/// `libcameljmap.urls` beside it and matching the protocol asked for against
-/// the lines in that file. A file that says something else is a provider that
-/// is never loaded, and the failure looks exactly like the module not being
-/// installed. So the file's content is checked against the protocol the code
-/// registers, rather than the two being written out twice and trusted.
+/// Camel decides whether to dlopen `libcameljmap.so` by reading
+/// `libcameljmap.urls` beside it, and matching the requested protocol
+/// against the lines in that file. A file naming a different protocol means
+/// the provider is never loaded. That failure looks exactly like the module
+/// not being installed. So this test checks the file's content against the
+/// protocol the code registers, instead of trusting both values written out
+/// twice.
 ///
-/// One protocol per line, no comments: Camel takes each line verbatim as a
-/// protocol name, so an SPDX header would register a provider called
-/// `# SPDX-FileCopyrightText: ...`. The file is covered by `REUSE.toml`
-/// instead.
+/// The file holds one protocol per line, with no comments: Camel takes each
+/// line verbatim as a protocol name. An SPDX header would register a
+/// provider named `# SPDX-FileCopyrightText: ...`. `REUSE.toml` covers the
+/// file's copyright notice instead.
 #[test]
 fn the_urls_file_claims_the_protocol_the_provider_registers() {
     let urls = include_str!("../libcameljmap.urls");
