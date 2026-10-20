@@ -22788,6 +22788,43 @@ fn jscomps_parameter_metadata_is_not_retained_in_eds_profile() {
 }
 
 #[test]
+fn jsptr_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:JSPTR Parameter Probe\r\n",
+        "EMAIL;TYPE=WORK:jsptr@example.test\r\n",
+        "JSPROP;JSPTR=\"/links/l1/uri\":https://example.test/jsptr\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse JSPTR parameter profile probe");
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "one mapped EMAIL line must remain");
+    assert_eq!(emails["e1"].address, "jsptr@example.test");
+    assert!(
+        parsed.extra.is_empty(),
+        "profile does not retain RFC 9555 JSPROP/JSPTR extension metadata"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK"));
+    assert!(email_line.ends_with(":jsptr@example.test"));
+    assert!(
+        !emitted.contains("JSPROP") && !emitted.contains("JSPTR="),
+        "non-projected JSPROP/JSPTR metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized JSPTR parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
 fn note_metadata_parameters_are_not_retained_in_eds_profile() {
     let source = concat!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\n",
