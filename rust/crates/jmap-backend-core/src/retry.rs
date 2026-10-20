@@ -3,32 +3,33 @@
 
 //! The one retry-on-stale-credentials control flow, written once.
 //!
-//! A long-lived connection (the calendar, address
-//! book and mail backends each keep one open across many operations) can
-//! outlive the OAuth 2.0 access token it was built with. Today a 401 on such
-//! a connection is escalated straight to a fresh consent window, even though
-//! the stored refresh token is still good — the fix is "on 401, fetch a new
-//! access token, install it, and retry the operation once; only a 401 on the
-//! freshly refreshed token may escalate."
+//! A long-lived connection (the calendar, address book and mail backends each
+//! keep one open across many operations) can live longer than the OAuth 2.0
+//! access token it uses. Without this module, a 401 on such a connection goes
+//! directly to a new consent window, although the stored refresh token is
+//! still good. The fix: "on 401, fetch a new access token, install it, and
+//! retry the operation once; only a 401 on the freshly refreshed token may
+//! escalate."
 //!
-//! That sentence is the same for `jmap-backend-cal`, `jmap-backend-book` and
-//! `jmap-mail`'s connection-retry wiring, so it is written here once rather
-//! than copied three times into three different `unsafe fn`s where a copy
-//! could quietly drift from the other two. What is deliberately *not* here is
-//! any of the FFI: fetching a fresh token
-//! ([`crate::oauth2::access_token`]), installing it
-//! (`jmap_client::Client::set_credentials`), and deciding "was that failure a
-//! 401" (each backend's own `SyncError`/`StoreError::is_unauthorized`) all
-//! stay the caller's job, passed in as plain closures — which is what makes
-//! this generic function testable with no `ESource`, no `GError`, and no
-//! GObject vfunc in sight.
+//! `jmap-backend-cal`, `jmap-backend-book` and the connection-retry code of
+//! `jmap-mail` all use this rule. It is here once, so that three copies in
+//! three different `unsafe fn`s cannot drift apart. This module deliberately
+//! contains no FFI. The caller supplies these steps as plain closures:
 //!
-//! [`retry_on_authentication_failure`] is the same sentence one layer down,
-//! for the callers whose "attempt" is an EDS vfunc body — `gboolean` plus a
-//! `GError **` rather than a `Result`. It is here rather than in either
-//! backend because the delicate part is not the control flow but the `GError`
-//! bookkeeping a second attempt implies, and written here it is testable with
-//! plain closures: no `ESource`, no registry, no GObject instance.
+//! - fetch a new token ([`crate::oauth2::access_token`]),
+//! - install it (`jmap_client::Client::set_credentials`),
+//! - decide if the failure was a 401 (each backend's own
+//!   `SyncError`/`StoreError::is_unauthorized`).
+//!
+//! Thus the tests of this generic function need no `ESource`, no `GError` and
+//! no GObject vfunc.
+//!
+//! [`retry_on_authentication_failure`] is the same rule one layer down, for
+//! callers whose "attempt" is an EDS vfunc body: `gboolean` plus a
+//! `GError **` rather than a `Result`. It is here rather than in a backend
+//! because the difficult part is the `GError` bookkeeping for a second
+//! attempt, not the control flow. Here, plain closures can test it: no
+//! `ESource`, no registry, no GObject instance.
 
 use std::ptr;
 
@@ -36,17 +37,17 @@ use glib_sys::{GError, GFALSE, g_error_free, gboolean};
 
 use crate::error::{is_authentication_failed, set_raw_gerror};
 
-/// Runs `attempt`. If it fails with an error `is_retryable` recognises, runs
-/// `refresh`; when `refresh` reports success, runs `attempt` exactly one more
-/// time and returns *that* outcome instead — even if it fails again. If
-/// `refresh` reports failure, or the first failure was not retryable, the
-/// original failure is returned untouched and `refresh` is not called.
+/// Runs `attempt`. If it fails with an error that `is_retryable` recognises,
+/// runs `refresh`. If `refresh` reports success, runs `attempt` exactly one
+/// more time and returns *that* outcome, also if it fails again.
+/// If the first failure is not retryable, returns it unchanged and does not
+/// call `refresh`. If `refresh` reports failure, returns the original failure
+/// unchanged.
 ///
-/// `refresh` reports success as `bool` rather than a `Result` because none of
-/// its own failure detail changes what a caller does with it — the original
-/// error is what gets reported either way (a caller wanting the refresh
-/// failure's own detail can still read it, e.g. via `tracing`, before
-/// returning `false`).
+/// `refresh` reports success as `bool`, not as a `Result`: its failure detail
+/// does not change what the caller does. The function returns the original
+/// error in both cases. A caller that wants the detail of the refresh failure
+/// can read it (for example, with `tracing`) before it returns `false`.
 pub fn retry_once_after<T, E>(
     mut attempt: impl FnMut() -> Result<T, E>,
     is_retryable: impl FnOnce(&E) -> bool,
@@ -67,43 +68,43 @@ pub fn retry_once_after<T, E>(
 /// The same control flow for a caller whose "attempt" is an EDS vfunc body:
 /// `TRUE`/`FALSE` plus a `GError **`, rather than a `Result`.
 ///
-/// Runs `attempt`. If it answers `FALSE` having reported an
-/// [authentication failure][is_authentication_failed], runs `refresh`; when
-/// that reports success, runs `attempt` exactly once more and answers *that*.
-/// Whatever error the final attempt left is moved into `error`.
+/// Runs `attempt`. If it returns `FALSE` with an
+/// [authentication failure][is_authentication_failed], runs `refresh`. If
+/// `refresh` reports success, runs `attempt` exactly once more and returns
+/// *that* result. The error of the last attempt (if any) moves into `error`.
 ///
 /// ## Why the attempts do not write to `error` directly
 ///
-/// Two reasons, both of which have teeth:
+/// There are two reasons, and both are important:
 ///
 /// - [`set_raw_gerror`] deliberately keeps the **first** `GError` written to a
-///   slot and frees any later one, mirroring `g_set_error`'s own
-///   `g_return_if_fail (err == NULL || *err == NULL)`. A retry writing into a
-///   slot that still held the first attempt's 401 would therefore report the
-///   spent 401 and silently discard whatever actually went wrong the second
-///   time — which is precisely the consent window this function exists to
-///   stop, now raised for an unrelated failure.
-/// - `error` is allowed to be NULL ("the caller does not want the error"),
-///   and a NULL slot carries no domain or code to read back, so the refresh
-///   would never happen for such a caller. A private slot is asked the
-///   question either way, and `set_raw_gerror` frees rather than leaks when
-///   it turns out nobody wanted the answer.
+///   slot and frees all later ones. This mirrors `g_set_error`'s own
+///   `g_return_if_fail (err == NULL || *err == NULL)`. If a retry wrote into a
+///   slot that still held the 401 of the first attempt, the function would
+///   report that old 401 and silently discard the real second failure. The
+///   result is the consent window that this function must prevent, now for an
+///   unrelated failure.
+/// - `error` can be NULL ("the caller does not want the error"). A NULL slot
+///   has no domain or code to read back, so the refresh would never occur for
+///   such a caller. A private slot always gives the answer, and
+///   `set_raw_gerror` frees it (no leak) if the caller does not want it.
 ///
-/// So the first attempt's `GError` is freed and the slot re-nulled before the
-/// retry, and exactly one error — the last attempt's — reaches `error`.
+/// Thus the function frees the `GError` of the first attempt and sets the slot
+/// to NULL again before the retry. Exactly one error (from the last attempt)
+/// gets to `error`.
 ///
-/// `attempt` is `FnMut` rather than `FnOnce` because it may run twice; every
-/// EDS vfunc body in this tree captures only `Copy` raw pointers and satisfies
-/// that as written. It must be safe to run twice, which is a real constraint
-/// on the caller: an attempt that half-filled its out-parameters before
-/// failing would have them filled again. The vfuncs here write theirs only in
-/// their success tail.
+/// `attempt` is `FnMut` rather than `FnOnce` because it can run two times.
+/// Each EDS vfunc body in this tree captures only `Copy` raw pointers, so it
+/// satisfies this as written. `attempt` must be safe to run two times. This is
+/// a real constraint on the caller: if an attempt partly fills its
+/// out-parameters before it fails, the retry fills them again. The vfuncs here
+/// write their out-parameters only in their success tail.
 ///
 /// # Safety
 ///
-/// `error` must be NULL or a valid, currently-NULL `GError **`, and `attempt`
-/// must treat the pointer it is handed the same way — that is, exactly the
-/// contract an EDS vfunc is already called under.
+/// `error` must be NULL or a valid, currently-NULL `GError **`. `attempt` must
+/// treat the pointer it receives the same way. This is the same contract under
+/// which EDS calls a vfunc.
 pub unsafe fn retry_on_authentication_failure(
     error: *mut *mut GError,
     mut attempt: impl FnMut(*mut *mut GError) -> gboolean,
@@ -112,20 +113,21 @@ pub unsafe fn retry_on_authentication_failure(
     let mut slot: *mut GError = ptr::null_mut();
     let mut outcome = attempt(&mut slot);
 
-    // SAFETY: `slot` is this frame's own, currently-NULL `GError **`, and
-    // after the attempt it is NULL or a `GError` this frame owns.
+    // SAFETY: `slot` is this frame's own `GError **`, NULL before the
+    // attempt. After the attempt, it is NULL or a `GError` this frame owns.
     if outcome == GFALSE && unsafe { is_authentication_failed(slot) } && refresh() {
-        // SAFETY: non-NULL, since `is_authentication_failed` said so, and
-        // owned here. Re-nulling is what makes the slot reusable.
+        // SAFETY: `slot` is not NULL (`is_authentication_failed` returned
+        // true), and this frame owns it. Setting it to NULL again makes the
+        // slot reusable.
         unsafe { g_error_free(slot) };
         slot = ptr::null_mut();
         outcome = attempt(&mut slot);
     }
 
     if !slot.is_null() {
-        // SAFETY: `error` satisfies the contract by this function's own, and
-        // `slot` is a `GError` whose ownership passes to the call — which
-        // frees it if `error` is NULL.
+        // SAFETY: `error` satisfies the contract of this function. Ownership
+        // of the `GError` in `slot` passes to the call, which frees it if
+        // `error` is NULL.
         unsafe { set_raw_gerror(error, slot) };
     }
     outcome
@@ -144,8 +146,8 @@ mod tests {
     use super::{retry_on_authentication_failure, retry_once_after};
     use crate::error::{cstring_lossy, set_raw_gerror, to_gerror};
 
-    /// What an `ops::*` call does on failure: fill the `GError **` it was
-    /// handed and answer FALSE.
+    /// What an `ops::*` call does on failure: fill the `GError **` it
+    /// receives and return FALSE.
     unsafe fn fail_with(dest: *mut *mut GError, err: &Error) -> glib_sys::gboolean {
         unsafe { set_raw_gerror(dest, to_gerror(err)) };
         GFALSE
@@ -161,8 +163,7 @@ mod tests {
     /// The message of a `GError` an out-parameter received, freeing it.
     unsafe fn take_message(error: *mut GError) -> String {
         assert!(!error.is_null(), "the caller was handed no error at all");
-        // SAFETY: the caller's contract: a GError ownership of which has
-        // passed to this test.
+        // SAFETY: the contract of the caller: this test owns the GError.
         unsafe {
             let message = CStr::from_ptr((*error).message)
                 .to_string_lossy()
@@ -223,8 +224,8 @@ mod tests {
         assert_eq!(result, GTRUE);
         assert_eq!(attempts.get(), 2);
         assert_eq!(refreshes.get(), 1);
-        // The point of the whole exercise: the caller — EDS — never sees the
-        // 401, so nothing prepares a consent window.
+        // The purpose of the function: the caller (EDS) never sees the 401,
+        // so nothing prepares a consent window.
         assert!(reported.is_null(), "the spent 401 leaked to the caller");
     }
 
@@ -247,7 +248,7 @@ mod tests {
 
         assert_eq!(result, GFALSE);
         assert_eq!(attempts.get(), 1);
-        // SAFETY: ownership of the reported GError is the caller's, i.e. ours.
+        // SAFETY: the caller (this test) owns the reported GError.
         assert!(unsafe { take_message(reported) }.contains("no route to host"));
     }
 
@@ -283,12 +284,12 @@ mod tests {
 
     #[test]
     fn the_retrys_own_failure_replaces_the_spent_401_rather_than_being_dropped() {
-        // The bookkeeping this whole function exists for. `set_raw_gerror`
-        // deliberately keeps the *first* `GError` written to a slot and frees
-        // the second, so a retry into a slot still holding the 401 would
-        // report the stale 401 and silently discard what actually went wrong
-        // the second time — i.e. re-consent for a failure that had nothing to
-        // do with credentials.
+        // This test checks the bookkeeping that is the purpose of the
+        // function. `set_raw_gerror` deliberately keeps the *first* `GError`
+        // written to a slot and frees the second. Thus a retry into a slot
+        // that still holds the 401 would report the stale 401 and silently
+        // discard the real second failure. The result is a new consent for a
+        // failure that is not related to credentials.
         let attempts = Cell::new(0);
         let mut reported: *mut GError = ptr::null_mut();
 
@@ -322,9 +323,9 @@ mod tests {
 
     #[test]
     fn a_repeated_401_after_a_successful_refresh_is_reported_rather_than_retried_again() {
-        // Only a 401 on the freshly refreshed token may escalate: the second
-        // 401 is the one EDS is allowed to turn into a consent window, so it
-        // must arrive, and exactly once.
+        // Only a 401 on the freshly refreshed token may escalate. EDS can
+        // change the second 401 into a consent window, so the second 401 must
+        // arrive, and exactly once.
         let attempts = Cell::new(0);
         let refreshes = Cell::new(0);
         let mut reported: *mut GError = ptr::null_mut();
@@ -360,9 +361,9 @@ mod tests {
     #[test]
     fn a_caller_that_asked_for_no_error_still_gets_the_retry() {
         // GLib lets a caller pass NULL for "I do not want the error", and EDS
-        // does in places. The refresh must not depend on the caller having
-        // asked for the failure detail — which is exactly why the attempts
-        // run against a private slot rather than the caller's pointer.
+        // does this in some places. The refresh must not need a request for
+        // the failure detail from the caller. For this reason, the attempts
+        // use a private slot, not the pointer of the caller.
         let attempts = Cell::new(0);
         let refreshes = Cell::new(0);
 
@@ -467,16 +468,17 @@ mod tests {
         );
 
         assert_eq!(result, Err("stale token"));
-        // The second `attempt` must never run: a failed refresh means there is
-        // no fresher credential to retry with, and retrying anyway would just
-        // reproduce the same 401.
+        // The second `attempt` must never run: after a failed refresh, there
+        // is no newer credential for a retry. A retry would only cause the
+        // same 401 again.
         assert_eq!(attempts.get(), 1);
     }
 
     #[test]
     fn a_401_on_the_freshly_refreshed_token_is_returned_as_is() {
-        // A failure on the retried attempt is returned unchanged, not
-        // retried again or swallowed.
+        // The function returns a failure of the retry unchanged. It does not
+        // retry again or discard the failure.
+
         let attempts = Cell::new(0);
 
         let result = retry_once_after(

@@ -2,29 +2,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Whether an account authenticates with a manually pasted API token, sent as
-//! `Authorization: Bearer` — a third choice beside [`crate::oauth2`]'s OAuth
-//! 2.0 and [`crate::connect::credentials`]'s Basic.
+//! `Authorization: Bearer`. This is a third choice beside
+//! [`crate::oauth2`]'s OAuth 2.0 and [`crate::connect::credentials`]'s Basic.
 //!
 //! ## Why this exists
 //!
-//! Fastmail is the concrete case: its JMAP API accepts a Bearer token minted
-//! on the account's "API tokens" settings page, and rejects the account
-//! login password outright — there is no OAuth 2.0-free way to reach it
-//! otherwise. A Bearer-token provider needs an entry point that is neither
-//! "type a password" nor "consent through a browser", so
-//! `jmap-config`'s `Authentication` combo gets a third choice that writes
-//! [`API_TOKEN_METHOD`] into `[Authentication] Method`, and this module is
-//! what the connect paths read that field with.
+//! Fastmail is the concrete case. Its JMAP API accepts a Bearer token from
+//! the account's "API tokens" settings page and rejects the account login
+//! password. Without this, OAuth 2.0 is the only way to reach it.
+//! A Bearer-token provider needs an entry point that is neither "type a
+//! password" nor "consent through a browser". Thus `jmap-config`'s
+//! `Authentication` combo has a third choice that writes
+//! [`API_TOKEN_METHOD`] into `[Authentication] Method`. The connect paths
+//! read that field with this module.
 //!
-//! ## Why the token rides the password prompt, not a new one
+//! ## Why the token uses the password prompt, not a new one
 //!
-//! A method EDS's credentials provider has never registered as an OAuth 2.0
-//! alias falls through to `e_soup_session_maybe_prepare_basic_auth`'s
-//! ordinary prompt — the ordinary "Enter Password" dialog, into
-//! `E_SOURCE_CREDENTIAL_PASSWORD`. So the token is whatever the user pasted
-//! into that dialog; nothing here prompts for it a second way or teaches EDS
-//! a new credential kind, which is the same libsecret entry Basic already
-//! uses and no new UI to build.
+//! EDS's credentials provider sends a method that it has not registered as
+//! an OAuth 2.0 alias to `e_soup_session_maybe_prepare_basic_auth`'s
+//! ordinary prompt. This is the ordinary "Enter Password" dialog, which
+//! writes into `E_SOURCE_CREDENTIAL_PASSWORD`. Thus the token is the text
+//! the user pasted into that dialog. Nothing here prompts for it a second
+//! time or adds a new credential kind to EDS. The token uses the same
+//! libsecret entry as Basic, and no new UI is necessary.
 
 use std::ffi::CStr;
 
@@ -37,14 +37,14 @@ use crate::marshal::{extension_if_present, read_string};
 
 /// The literal [`jmap-config`](../../jmap_config/index.html)'s "API Token"
 /// combo entry writes to `[Authentication] Method`. Unlike
-/// [`crate::oauth2::OAUTH2_METHOD`] this is not a spelling EDS itself
-/// recognises — it only has to be a string no OAuth 2.0 alias and no
-/// `ESourceAuthentication` default (`"none"`) can equal, so [`method_is_api_token`]
-/// never confuses the two.
+/// [`crate::oauth2::OAUTH2_METHOD`], EDS does not recognise this spelling.
+/// It must only be different from all OAuth 2.0 aliases and from the
+/// `ESourceAuthentication` default (`"none"`). Thus [`method_is_api_token`]
+/// never confuses them.
 pub const API_TOKEN_METHOD: &CStr = c"bearer";
 
-/// Whether `[Authentication] Method` names the API-token method — see the
-/// module docs for whose choice this reads.
+/// Whether `[Authentication] Method` names the API-token method. The module
+/// docs tell whose choice this reads.
 pub fn method_is_api_token(method: Option<&str>) -> bool {
     method
         == Some(
@@ -54,33 +54,33 @@ pub fn method_is_api_token(method: Option<&str>) -> bool {
         )
 }
 
-/// [`method_is_api_token`] asked of a source, which is how `connect_with`
-/// reaches it — the API-token sibling of
+/// [`method_is_api_token`] applied to a source. `connect_with` uses it
+/// through this function. This is the API-token sibling of
 /// [`crate::oauth2::source_uses_oauth2`].
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — the one EDS handed the backend. It is
-/// only read from, and nothing outlives the call.
+/// `source` must be a valid `ESource` (the one EDS gave the backend). The
+/// function only reads from it, and nothing outlives the call.
 pub unsafe fn source_uses_api_token(source: *mut ESource) -> bool {
-    // SAFETY: no arguments; registers the extension type the lookup below
-    // needs, the same call `source_uses_oauth2` makes before its own lookup.
+    // SAFETY: no arguments. It registers the extension type that the lookup
+    // below needs, as `source_uses_oauth2` does before its own lookup.
     unsafe { e_source_authentication_get_type() };
 
-    // Asked before `e_source_get_extension`, which *creates* the extension it
-    // cannot find: this is handed the user's own account source, and creating
-    // a group on it to read a default out of it is a side effect on someone
-    // else's object.
-    // SAFETY: a valid source by this function's contract, and a header
-    // constant for the name.
+    // Make sure that the extension exists before `e_source_get_extension`
+    // runs: it *creates* an extension that it cannot find. This source is the
+    // user's own account source. To create a group on it only to read a
+    // default is a side effect on another object's state.
+    // SAFETY: the source is valid by this function's contract, and the name
+    // is a header constant.
     let Some(auth) = (unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     }) else {
         return false;
     };
 
-    // SAFETY: the extension exists, is owned by the source, and the string
-    // the getter answers with is owned by the extension and outlives this
+    // SAFETY: the extension exists and the source owns it. The extension
+    // owns the string that the getter returns, and the string outlives this
     // call.
     let method = unsafe { read_string(e_source_authentication_get_method(auth)) };
 

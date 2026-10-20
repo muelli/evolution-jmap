@@ -1,41 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A catalogue this test compiled itself, found through the binding the
+//! This test compiles a catalogue and finds it through the binding that the
 //! modules make.
 //!
-//! The other i18n test says the domain is bound to the directory the build
-//! chose. That is the easy half; it would still hold if the directory layout
-//! underneath were wrong, because `bindtextdomain` records a string and reads
-//! no files. What is checked here is the half that only a real lookup can
-//! show: that a `.mo` filed at `<dir>/<language>/LC_MESSAGES/<domain>.mo` — the
-//! path an install rule has to produce — is the file gettext opens, and that
-//! [`translate`] returns what is in it.
+//! The other i18n test checks that the domain is bound to the directory that
+//! the build chose. That half is easy. It stays true with a wrong directory
+//! layout, because `bindtextdomain` records a string and reads no files. This
+//! test checks the half that only a real lookup can show. Gettext must open
+//! the `.mo` at `<dir>/<language>/LC_MESSAGES/<domain>.mo` (the path that an
+//! install rule must make). [`translate`] must return its contents.
 //!
 //! ## Why this is a test binary of its own
 //!
-//! Three of the things it touches are process-global and none of them are
-//! per-thread: the domain's binding, the `LANGUAGE` environment variable, and
-//! the locale. A sibling test that bound the domain to the *installed*
-//! directory would race this one to the same glibc state. Cargo gives each
-//! file in `tests/` its own process, so being alone in this file is the
-//! isolation.
+//! The test touches three process-global items, none of them per-thread: the
+//! binding of the domain, the `LANGUAGE` environment variable, and the locale.
+//! A sibling test that binds the domain to the *installed* directory would
+//! race this test for the same glibc state. Cargo gives each file in `tests/`
+//! its own process, so this file alone gives the isolation.
 //!
 //! ## Why there is no `msgfmt`
 //!
-//! `.mo` is a fixed binary layout — a header, two sorted tables of
-//! (length, offset), and a string blob — and writing it here costs about
-//! twenty lines. Shelling out to `msgfmt` would make the test depend on the
-//! gettext tools being installed, which is exactly the kind of thing that
-//! makes a test pass on a developer's machine and vanish in a container.
+//! `.mo` is a fixed binary layout: a header, two sorted tables of
+//! (length, offset), and a string blob. The code to write it here is
+//! approximately twenty lines. A call to `msgfmt` would make the test need the
+//! installed gettext tools. Such a test passes on a developer machine and
+//! disappears in a container.
 //!
 //! ## What it cannot always check
 //!
-//! glibc refuses to consult any catalogue while `LC_MESSAGES` is the `C` (or
-//! `POSIX`, or `C.UTF-8`) locale, and returns the message unchanged — so on a
-//! machine with no other locale installed there is nothing for the lookup to
-//! find and the test asserts *that* contract instead. Which of the two ran is
-//! printed, because the difference matters when reading a log.
+//! glibc reads no catalogue while `LC_MESSAGES` is the `C` (or `POSIX`, or
+//! `C.UTF-8`) locale, and returns the message unchanged. On a machine with no
+//! other locale, the lookup has nothing to find, so the test asserts *that*
+//! contract. The test prints which of the two ran, because the difference is
+//! important in a log.
 //!
 //! [`translate`]: jmap_backend_core::i18n::translate
 
@@ -48,40 +46,40 @@ use jmap_backend_core::i18n::{DOMAIN, bind_to, translate, translate_with};
 
 /// The message the catalogue translates, and what it translates it to.
 ///
-/// Non-ASCII on the translated side on purpose: gettext hands back the bytes
-/// of the `.mo` and the codeset conversion is part of what the binding sets
-/// up, so a translation that survives as UTF-8 says the conversion did not
-/// mangle it.
+/// The translation contains non-ASCII text intentionally. Gettext returns the
+/// bytes of the `.mo`, and the binding configures the codeset conversion. Thus
+/// valid UTF-8 in the result shows that the conversion did not corrupt it.
 const MSGID: &CStr = c"For reading and storing mail on JMAP servers.";
 const MSGSTR: &str = "Zum Lesen und Speichern von E-Mail auf JMAP-Servern.";
 
 /// A message whose arguments the translation puts in the other order.
 ///
-/// This is the whole reason the placeholders are numbered rather than being a
-/// bare `%s` each: word order is not a property a sentence keeps across
-/// languages, and a translator who cannot move the arguments has to choose
-/// between a natural sentence and a correct one. Sorts before [`MSGID`] — `%`
-/// is below `F` — which the `.mo` format needs, there being no hash table to
-/// find an entry by any other route.
+/// This is why the placeholders have numbers and are not each a bare `%s`.
+/// Word order changes between languages. A translator who cannot move the
+/// arguments must choose between a natural sentence and a correct one.
+///
+/// This entry sorts before [`MSGID`] (`%` is below `F`). The `.mo` format
+/// needs this order, because there is no hash table to find an entry.
 const ORDERED_MSGID: &CStr = c"%1$s could not be stated in %2$s";
 const ORDERED_MSGSTR: &str = "In %2$s ließ sich %1$s nicht ausdrücken";
 
 /// The language the catalogue is filed under.
 ///
-/// Deliberately not a language anyone speaks: it is selected through
-/// `LANGUAGE`, which glibc consults ahead of the locale, so no locale of this
-/// name needs to exist — and none must, or the test would depend on what the
-/// machine happens to have generated.
+/// This is intentionally not a real language. The test selects it through
+/// `LANGUAGE`, which glibc reads before the locale. Thus no locale of this
+/// name is necessary. None must exist, or the test would depend on the
+/// locales that the machine generated.
 const LANGUAGE: &str = "xx";
 
 fn main_test_dir() -> PathBuf {
     std::env::temp_dir().join(format!("jmap-catalogue-{}", std::process::id()))
 }
 
-/// A catalogue, filed where gettext looks for one.
+/// Writes a catalogue where gettext looks for one.
 ///
-/// Returns the directory to bind the domain to — the root of the tree, not the
-/// directory the file is in, which is the distinction `bindtextdomain` takes.
+/// Returns the directory for the domain binding. This is the root of the
+/// tree, not the directory of the file, because `bindtextdomain` takes the
+/// root.
 fn install_catalogue(root: &Path) -> PathBuf {
     let dir = root.join(LANGUAGE).join("LC_MESSAGES");
     fs::create_dir_all(&dir).expect("a directory for the catalogue");
@@ -92,12 +90,13 @@ fn install_catalogue(root: &Path) -> PathBuf {
 
 /// The entries of the catalogue, as a `.mo` file.
 ///
-/// The header entry — msgid `""` — is not decoration: its msgstr is where the
-/// charset is declared, and without it gettext has no idea what encoding the
-/// translations are in and will not convert them to the one the binding asked
-/// for. It also sorts first, which the format needs: with no hash table
-/// (`0` in both hash fields) gettext binary-searches the original table, so
-/// the entries have to be in ascending msgid order.
+/// The header entry (msgid `""`) is necessary. Its msgstr declares the
+/// charset. Without it, gettext does not know the encoding of the
+/// translations and does not convert them to the encoding of the binding.
+///
+/// The header also sorts first, as the format needs. With no hash table (`0`
+/// in both hash fields), gettext does a binary search of the original table.
+/// Thus the entries must be in ascending msgid order.
 fn compile_mo() -> Vec<u8> {
     let entries: [(&str, &str); 3] = [
         ("", "Content-Type: text/plain; charset=UTF-8\n"),
@@ -123,8 +122,8 @@ fn compile_mo() -> Vec<u8> {
     }
 
     let mut mo = Vec::new();
-    // Little-endian magic; the byte order of the magic is the byte order of
-    // every other field, and gettext reads either.
+    // Little-endian magic. All other fields use the byte order of the magic,
+    // and gettext reads both byte orders.
     mo.extend_from_slice(&0x9504_12deu32.to_le_bytes());
     mo.extend_from_slice(&0u32.to_le_bytes()); // revision 0
     mo.extend_from_slice(&count.to_le_bytes());
@@ -138,35 +137,34 @@ fn compile_mo() -> Vec<u8> {
     mo
 }
 
-/// One entry of a table: where its string is, and the string appended to the
-/// blob the offsets are into.
+/// Writes one table entry (length and offset of its string) and adds the
+/// string to the blob that the offsets point into.
 fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u32, s: &str) {
     table.extend_from_slice(&(s.len() as u32).to_le_bytes());
     table.extend_from_slice(&(strings_at + blob.len() as u32).to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // The recorded length excludes it, but gettext hands the pointer out as a
-    // C string all the same.
+    // The recorded length excludes the NUL, but gettext gives the pointer
+    // as a C string.
     blob.push(0);
 }
 
-/// Puts `LC_MESSAGES` somewhere translations are possible at all, if this
-/// machine has anywhere to put it.
+/// Sets `LC_MESSAGES` to a locale that can translate, if this machine has one.
 ///
-/// The environment's own locale first, so a machine that is already set up is
-/// tested as it stands; then a couple of the usual names. `C`, `POSIX` and
-/// `C.UTF-8` do not count however they were arrived at — glibc treats all
-/// three as "this program is not localised" and returns every msgid unchanged.
+/// The locale of the environment is first, so a configured machine is tested
+/// as it is. Then some usual names follow. `C`, `POSIX` and `C.UTF-8` never
+/// count. glibc treats all three as "this program is not localised" and
+/// returns each msgid unchanged.
 fn a_locale_that_can_translate() -> Option<String> {
     let candidates = [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"];
     for candidate in candidates {
-        // SAFETY: a C string, and this is the only thread that touches the
-        // locale — the module is alone in its test binary.
+        // SAFETY: a C string. This is the only thread that touches the
+        // locale, because the module is alone in its test binary.
         let set = unsafe { libc::setlocale(libc::LC_MESSAGES, candidate.as_ptr()) };
         if set.is_null() {
             continue;
         }
-        // SAFETY: a non-NULL return from setlocale is a C string glibc owns;
-        // it is copied out before anything can rebind it.
+        // SAFETY: a non-NULL return from setlocale is a C string that glibc
+        // owns. The code copies it before anything can rebind it.
         let name = unsafe { CStr::from_ptr(set) }
             .to_string_lossy()
             .into_owned();
@@ -185,7 +183,7 @@ fn a_catalogue_under_the_bound_directory_is_the_one_gettext_reads() {
 
     let translating = a_locale_that_can_translate();
 
-    // SAFETY: single-threaded — this is the only test in the binary, and it
+    // SAFETY: single-threaded. This is the only test in the binary, and it
     // runs before anything else can look up a message.
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
@@ -197,10 +195,10 @@ fn a_catalogue_under_the_bound_directory_is_the_one_gettext_reads() {
         Some(locale) => {
             println!("catalogue lookup exercised under locale {locale}");
             assert_eq!(translate(MSGID), MSGSTR);
-            // The translation moved the arguments, and the arguments went
-            // where it moved them to — the property numbered placeholders
-            // exist for, and one only a real catalogue can show: with no `.mo`
-            // to find, the template is the msgid and the order never changes.
+            // The translation moved the arguments, and the arguments went to
+            // their new positions. Numbered placeholders exist for this. Only
+            // a real catalogue can show it: with no `.mo`, the template is the
+            // msgid and the order never changes.
             assert_eq!(
                 translate_with(ORDERED_MSGID, &["an end date", "Europe/Berlin"]),
                 "In Europe/Berlin ließ sich an end date nicht ausdrücken"
@@ -219,6 +217,6 @@ fn a_catalogue_under_the_bound_directory_is_the_one_gettext_reads() {
         }
     }
 
-    // Best effort: a failed test is not improved by a panic in its teardown.
+    // Best effort: a panic in the teardown does not help a failed test.
     let _ = fs::remove_dir_all(&root);
 }

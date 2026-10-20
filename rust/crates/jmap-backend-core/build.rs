@@ -1,28 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Bakes the directory the translation catalogues were installed under into
-//! the crate.
+//! Compiles into the crate the directory that contains the installed
+//! translation catalogues.
 //!
-//! `EVOLUTION_JMAP_LOCALEDIR` comes from CMake, which knows the install prefix;
-//! a plain `cargo build` has no prefix to speak of and gets gettext's own
-//! compiled-in default, so an uninstalled build behaves exactly as it would if
-//! nothing bound the domain at all.
+//! `EVOLUTION_JMAP_LOCALEDIR` comes from CMake, which knows the install
+//! prefix. A plain `cargo build` has no prefix and gets gettext's own
+//! compiled-in default. Thus an uninstalled build behaves exactly as if
+//! nothing bound the domain.
 //!
-//! The value is re-exported under a second name so that `i18n.rs` can reach it
-//! with `env!` rather than `option_env!` — `env!` expands to a literal, which
-//! is what lets the directory be a `&CStr` constant instead of something
-//! allocated at every call.
+//! The value is re-exported under a second name, so `i18n.rs` can use
+//! `env!` and not `option_env!`. `env!` expands to a literal, so the
+//! directory can be a `&CStr` constant and not an allocation at each call.
 
-//! It also re-emits the one `eds-sys` feature cfg this crate's sources need.
-//! The detection itself lives in `eds-sys/build.rs` and is never repeated
-//! here; see `jmap-mail/build.rs`'s module comment for why only the
-//! re-emission is duplicated per dependent.
+//! It also re-emits the one `eds-sys` feature cfg that this crate's sources
+//! need. The detection itself is in `eds-sys/build.rs` and this file does not
+//! repeat it. `jmap-mail/build.rs`'s module comment tells why each dependent
+//! duplicates only the re-emission.
 
-/// The `eds-sys` feature `oauth2.rs` `#[cfg]`s on: whether the installed EDS
-/// ships upstream's own dynamically-registered-client OAuth 2.0 service
-/// (`EOAuth2ServiceDynamic`, method "OAuth2Dynamic"), which replaces this
-/// project's own `EOAuth2Service` where it exists.
+/// The `eds-sys` feature that `oauth2.rs` uses in `#[cfg]`: whether the
+/// installed EDS has upstream's own dynamically-registered-client OAuth 2.0
+/// service (`EOAuth2ServiceDynamic`, method "OAuth2Dynamic"). Where it
+/// exists, it replaces this project's own `EOAuth2Service`.
 const EDS_FEATURES: &[&str] = &["eds_oauth2_dynamic"];
 
 fn main() {
@@ -34,8 +33,8 @@ fn main() {
     println!("cargo::rustc-env=EVOLUTION_JMAP_LOCALE_DIR={dir}");
 
     for feature in EDS_FEATURES {
-        // Declared regardless of whether this EDS sets it, so `-D warnings`
-        // does not trip over the `#[cfg]`s it turns out not to satisfy.
+        // Declare it even if this EDS does not set it, so `-D warnings` does
+        // not fail on the `#[cfg]`s that it does not satisfy.
         println!("cargo::rustc-check-cfg=cfg({feature})");
         let key = format!("DEP_EVOLUTION_DATA_SERVER_{}", feature.to_uppercase());
         println!("cargo:rerun-if-env-changed={key}");

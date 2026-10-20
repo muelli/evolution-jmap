@@ -1,22 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Registering a Rust-declared type with the GObject type system.
+//! Registration of a Rust-declared type with the GObject type system.
 //!
-//! This is the hand-written equivalent of `G_DEFINE_TYPE`: describe the
-//! instance and class structs, point at a parent `GType`, and GObject
-//! allocates instances of that size with the parent's class already
-//! initialised in the leading bytes. The `glib` crate's `subclass` module
-//! does this too, but only for types whose parent it wraps — EDS types are
-//! not among them, and eds-sys deliberately stops at the raw ABI.
+//! This is the hand-written equivalent of `G_DEFINE_TYPE`. You describe the
+//! instance and class structs and give a parent `GType`. GObject then
+//! allocates instances of that size, with the parent's class initialised in
+//! the leading bytes. The `glib` crate's `subclass` module also does this,
+//! but only for types whose parent it wraps. It does not wrap EDS types, and
+//! eds-sys intentionally gives only the raw ABI.
 //!
-//! Both registration flavours exist because backends need both: an EDS module
-//! registers its types against the `GTypeModule` it is loaded as, so they can
-//! be unloaded again, while anything created outside a module (tests, and the
-//! Camel provider's own types) registers statically. A type may also declare
-//! the interfaces it implements — the `G_IMPLEMENT_INTERFACE` half of
-//! `G_DEFINE_TYPE_WITH_CODE` — which registration adds before it hands the
-//! `GType` back, because an interface added later is one the class never saw.
+//! Backends need both registration types. An EDS module registers its types
+//! against the `GTypeModule` that it is loaded as, so they can be unloaded.
+//! Types created outside a module (tests, and the Camel provider's own types)
+//! register statically. A type can also declare the interfaces it implements
+//! (the `G_IMPLEMENT_INTERFACE` part of `G_DEFINE_TYPE_WITH_CODE`).
+//! Registration adds them before it returns the `GType`, because the class
+//! never sees an interface that is added later.
 
 use std::cell::Cell;
 use std::ffi::CStr;
@@ -38,23 +38,23 @@ use crate::trampoline::{guard, log_critical};
 ///
 /// # Safety
 ///
-/// GObject reads and writes through these structs using the layout it derives
-/// from `size_of`, so implementations must guarantee:
+/// GObject reads and writes these structs with the layout that it gets from
+/// `size_of`. Thus implementations must guarantee:
 ///
 /// - `Instance` is `#[repr(C)]` and its first field is the parent type's
 ///   instance struct.
 /// - `Class` is `#[repr(C)]` and its first field is the parent type's class
 ///   struct.
-/// - [`parent_type`](ObjectSubclass::parent_type) returns the `GType` those
-///   two parent structs actually belong to, and that type derives from
-///   `GObject` — registration overrides `GObjectClass.finalize` through the
-///   leading bytes of `Class`.
+/// - [`parent_type`](ObjectSubclass::parent_type) returns the `GType` of
+///   those two parent structs, and that type derives from `GObject`.
+///   Registration overrides `GObjectClass.finalize` through the leading bytes
+///   of `Class`.
 ///
-/// Getting any of that wrong misplaces every field and vfunc slot, which the
-/// compiler cannot catch — it is the same hazard `eds-sys`'s `g_type_query`
-/// layout test guards against on the C side.
+/// An error in any of these moves every field and vfunc slot to an incorrect
+/// position. The compiler cannot find this. `eds-sys`'s `g_type_query` layout
+/// test prevents the same hazard on the C side.
 pub unsafe trait ObjectSubclass: Sized {
-    /// Must be unique process-wide; GObject aborts on a duplicate.
+    /// Must be unique in the process. GObject aborts on a duplicate.
     const NAME: &'static CStr;
 
     type Instance;
@@ -62,70 +62,72 @@ pub unsafe trait ObjectSubclass: Sized {
 
     fn parent_type() -> GType;
 
-    /// The interfaces this type implements, added to it before registration
-    /// hands the `GType` back.
+    /// The interfaces this type implements. Registration adds them to the
+    /// type before it returns the `GType`.
     ///
-    /// Timing is the reason this is declared rather than done by the caller.
-    /// An interface has to be on the type before its class is initialised:
-    /// `g_object_class_override_property`, which is how an implementer
-    /// satisfies an interface's properties, runs in
-    /// [`class_init`](ObjectSubclass::class_init) and only finds properties of
-    /// interfaces the type already implements. A caller adding the interface
-    /// after registration returned would be holding a `GType` that, for one
-    /// window, implements nothing — and anything that referenced its class in
-    /// that window would fix the omission permanently.
+    /// This is declared, and not done by the caller, because of timing. An
+    /// interface must be on the type before its class is initialised. An
+    /// implementer uses `g_object_class_override_property` to satisfy an
+    /// interface's properties. It runs in
+    /// [`class_init`](ObjectSubclass::class_init) and finds only properties of
+    /// interfaces that the type already implements. If a caller added the
+    /// interface after registration, its `GType` would implement nothing for
+    /// some time. A reference to its class in that time would make the
+    /// omission permanent.
     ///
-    /// Each entry says how the interface's vtable is filled:
+    /// Each entry tells how the interface's vtable is filled:
     /// [`InterfaceDecl::defaults`] for one this type only claims, and
     /// [`InterfaceDecl::filled_by`] for one whose vfunc slots it fills.
     fn interfaces() -> Vec<InterfaceDecl> {
         Vec::new()
     }
 
-    /// Every one of *our* types whose `GType` this type's
-    /// [`class_init`](ObjectSubclass::class_init) will ask for, registered
-    /// before this type is so that the ask cannot block.
+    /// All of *our* types whose `GType` this type's
+    /// [`class_init`](ObjectSubclass::class_init) asks for. They are
+    /// registered before this type, so that the request cannot block.
     ///
-    /// A class initialiser runs with GLib's class-initialisation lock held,
-    /// and registration here is serialised by a lock of our own. A
-    /// `class_init` that registers is therefore holding GLib's lock while it
-    /// wants ours, at the same moment as a registration holding ours wants
-    /// GLib's — inside `g_type_add_interface_static`, which is where every
-    /// registration of an interface-implementing type ends. That is a cycle,
-    /// and it is what wedged `jmap-mail`'s test binary for eleven minutes.
+    /// A class initialiser runs while it holds GLib's class-initialisation
+    /// lock. Registration here is serialised by a lock of our own. Thus a
+    /// `class_init` that registers holds GLib's lock and waits for ours. At
+    /// the same time, a registration can hold ours and wait for GLib's, in
+    /// `g_type_add_interface_static`. Every registration of a type that
+    /// implements an interface ends there. That is a cycle. It stopped
+    /// `jmap-mail`'s test binary for eleven minutes.
     ///
-    /// So [`register_static`] refuses the lock when it is called from inside a
-    /// class initialiser, and answers only out of the type system — which
-    /// works exactly when the type is already registered. Declaring it here is
-    /// what makes it already registered: the accessors named are called before
-    /// this type's own registration begins, on a thread holding neither lock.
+    /// Thus [`register_static`] does not take the lock when it is called in a
+    /// class initialiser. It answers only from the type system, which works
+    /// only when the type is already registered. A declaration here makes
+    /// sure that the type is registered. The named accessors are called
+    /// before this type's own registration starts, on a thread that holds
+    /// neither lock.
     ///
-    /// The list is the accessors' *effect*, not their values — nothing reads
-    /// the `GType`s back. `Vec<GType>` rather than `()` only so an
-    /// implementation reads as the list of types it is.
+    /// The list is for the *effect* of the accessors, not their values.
+    /// Nothing reads the `GType`s. The type is `Vec<GType>`, not `()`, only so
+    /// that an implementation looks like a list of types.
     ///
-    /// The same goes for a type that is not ours: an Evolution or EDS class
-    /// `class_init` names, say as an `extensible_type`, is declared here too.
-    /// Its accessor cannot be called from `class_init` at all, though, not
-    /// even when it is declared; see [`registered_type`] for why, and for
-    /// what `class_init` calls instead.
+    /// Also declare here a type that is not ours: an Evolution or EDS class
+    /// that `class_init` names, for example as an `extensible_type`. But
+    /// `class_init` must never call its accessor, even when it is declared.
+    /// See [`registered_type`] for the reason, and for what `class_init`
+    /// calls.
     fn class_init_types() -> Vec<GType> {
         Vec::new()
     }
 
-    /// The sizes GObject allocates this type's class and instance structs at.
+    /// The sizes at which GObject allocates this type's class and instance
+    /// structs.
     ///
-    /// The default is the declared structs' own sizes, which is right whenever
-    /// the parent's structs are generated and embedded as leading fields. A
-    /// subclass of a parent this workspace deliberately knows only as an
-    /// opaque handle — a GTK widget, whose class structs the sys crates
-    /// refuse to generate — has no struct to embed: it overrides this with
-    /// [`TypeSizes::of_parent`], adds no inline fields at all, and keeps its
-    /// state in qdata. `Instance` and `Class` are then only what the
-    /// trampolines cast through (the leading-bytes contract still holds:
-    /// both must *be* prefixes of the parent's structs, `GTypeInstance` and
-    /// `GObjectClass` being the honest choices), never something whose size
-    /// matters.
+    /// The default is the sizes of the declared structs. This is correct when
+    /// the parent's structs are generated and embedded as leading fields.
+    /// This workspace intentionally knows some parents only as an opaque
+    /// handle (a GTK widget, whose class structs the sys crates do not
+    /// generate). A subclass of such a parent has no struct to embed. It
+    /// overrides this with [`TypeSizes::of_parent`], adds no inline fields,
+    /// and keeps its state in qdata. Then `Instance` and `Class` are only the
+    /// types that the trampolines cast through, and their size does not
+    /// matter. The leading-bytes contract still applies: both must *be*
+    /// prefixes of the parent's structs. `GTypeInstance` and `GObjectClass`
+    /// are the correct choices.
     fn type_sizes() -> TypeSizes {
         TypeSizes {
             class: size_of::<Self::Class>(),
@@ -133,58 +135,57 @@ pub unsafe trait ObjectSubclass: Sized {
         }
     }
 
-    /// Runs once, before any instance exists. This is where vfunc slots in
-    /// `Class` (and in the parent class reachable through it) get overridden.
+    /// Runs once, before any instance exists. Override vfunc slots in `Class`
+    /// (and in the parent class through it) here.
     ///
     /// # Safety
     ///
-    /// `class` points at a freshly allocated class struct of this type, with
-    /// the parent class already initialised.
+    /// `class` points to a new class struct of this type, and the parent class
+    /// is already initialised.
     unsafe fn class_init(_class: *mut Self::Class) {}
 
     /// Runs for each instance, after the parent's `instance_init`.
     ///
     /// # Safety
     ///
-    /// `instance` points at a zeroed instance struct of this type.
+    /// `instance` points to a zeroed instance struct of this type.
     unsafe fn instance_init(_instance: *mut Self::Instance) {}
 
     /// Runs once per instance, when the last reference to it is dropped and
-    /// before the parent's `finalize`. This is where anything
-    /// [`instance_init`](ObjectSubclass::instance_init) created is destroyed —
-    /// GObject frees the instance struct itself without running a Rust
-    /// destructor over it, so a [`Slot`](crate::instance::Slot) that is not
-    /// cleared here leaks its contents.
+    /// before the parent's `finalize`. Destroy here all that
+    /// [`instance_init`](ObjectSubclass::instance_init) created. GObject frees
+    /// the instance struct without a Rust destructor. Thus a
+    /// [`Slot`](crate::instance::Slot) that is not cleared here leaks its
+    /// contents.
     ///
-    /// Chaining up is not this method's job: registration does it, whatever
-    /// happens here.
+    /// Do not chain up here. Registration always does it.
     ///
     /// # Safety
     ///
-    /// `instance` points at an instance struct of this type that is being
-    /// finalized; nothing else can still reach it.
+    /// `instance` points to an instance struct of this type that is being
+    /// finalized. No other code can get to it.
     unsafe fn finalize(_instance: *mut Self::Instance) {}
 }
 
-/// What [`ObjectSubclass::type_sizes`] answers: how many bytes GObject
-/// allocates for the class struct and for each instance.
+/// The return value of [`ObjectSubclass::type_sizes`]: the number of bytes
+/// that GObject allocates for the class struct and for each instance.
 pub struct TypeSizes {
     pub class: usize,
     pub instance: usize,
 }
 
 impl TypeSizes {
-    /// The parent's own sizes, from the running type system, for a subclass
-    /// that adds no inline fields — the shape a subclass of an opaque-handle
-    /// parent (a GTK widget) has to take, its state living in qdata.
+    /// The parent's own sizes, from the running type system. For a subclass
+    /// that adds no inline fields. A subclass of an opaque-handle parent (a
+    /// GTK widget) must have this shape, and keeps its state in qdata.
     ///
-    /// The class is referenced first because `g_type_query` fills nothing for
-    /// a classed type whose class was never initialised — the same dance the
-    /// sys crates' layout tests do.
+    /// The class is referenced first, because `g_type_query` fills nothing for
+    /// a classed type whose class was never initialised. The layout tests of
+    /// the sys crates do the same steps.
     pub fn of_parent(parent: GType) -> Self {
-        // SAFETY: `parent` is a registered classed type by the caller's use;
-        // the ref is released after the query and the class stays valid for
-        // the process (the child registered against it keeps it referenced).
+        // SAFETY: the caller uses `parent` as a registered classed type. The
+        // ref is released after the query, and the class stays valid for the
+        // process (the child registered against it keeps a reference).
         let query = unsafe {
             let class = g_type_class_ref(parent);
             assert!(!class.is_null(), "TypeSizes::of_parent: not a classed type");
@@ -201,36 +202,35 @@ impl TypeSizes {
     }
 }
 
-/// One interface a type declares, and how the copy of that interface's vtable
-/// GObject gives the type is filled in.
+/// One interface that a type declares, and how to fill the copy of that
+/// interface's vtable that GObject gives the type.
 ///
-/// Built by one of the two constructors rather than by naming its fields: the
-/// choice between them is the whole content of the type, and a caller that
-/// could write `init: None` beside an interface with vfuncs would be declaring
-/// an implementation that dispatches to whatever the interface's `default_init`
-/// left there — for Camel's interfaces, a NULL the wrapper function calls
-/// straight through.
+/// Use one of the two constructors, not the field names. The choice between
+/// them is all the content of the type. If a caller could write `init: None`
+/// for an interface with vfuncs, it would declare an implementation that calls
+/// the value from the interface's `default_init`. For Camel's interfaces, that
+/// value is a NULL, and the wrapper function calls it directly.
 pub struct InterfaceDecl {
     gtype: GType,
     init: GInterfaceInitFunc,
 }
 
 impl InterfaceDecl {
-    /// An interface this type claims without filling any slot of its own: the
-    /// implementation is whatever the interface's `default_init` put in the
-    /// vtable.
+    /// An interface that this type claims, but does not fill any slot of. The
+    /// implementation is the value that the interface's `default_init` put in
+    /// the vtable.
     ///
-    /// Right for an interface that is all properties, which the implementer
-    /// satisfies in [`class_init`](ObjectSubclass::class_init) with
-    /// `g_object_class_override_property` and not through the vtable at all —
-    /// `CamelNetworkSettings`, the one this hook was first written for, declares
-    /// no vfuncs.
+    /// Correct for an interface that has only properties. The implementer
+    /// satisfies them in [`class_init`](ObjectSubclass::class_init) with
+    /// `g_object_class_override_property`, not through the vtable.
+    /// `CamelNetworkSettings`, the first interface for this hook, declares no
+    /// vfuncs.
     pub fn defaults(gtype: GType) -> Self {
         Self { gtype, init: None }
     }
 
-    /// An interface whose vtable `I` fills in, once, when GObject initialises
-    /// this type's class.
+    /// An interface whose vtable `I` fills once, when GObject initialises this
+    /// type's class.
     pub fn filled_by<I: InterfaceImpl>() -> Self {
         Self {
             gtype: I::gtype(),
@@ -239,81 +239,79 @@ impl InterfaceDecl {
     }
 }
 
-/// Filling in one implementing type's copy of one interface's vtable — the
+/// Fills one implementing type's copy of one interface's vtable. This is the
 /// `G_IMPLEMENT_INTERFACE` init function, in Rust.
 ///
-/// This is a trait of its own, implemented by a type *beside* the class rather
-/// than by the class itself, because a class may implement several interfaces
-/// and would then need several of these. The Camel provider's store is already
-/// that shape: `CamelSubscribable` is one interface it fills, and it is not
-/// going to be the last.
+/// This is a separate trait. A type *next to* the class implements it, not
+/// the class itself, because a class can implement many interfaces and then
+/// needs many of these. The Camel provider's store already has that shape:
+/// `CamelSubscribable` is one interface it fills, and there will be more.
 ///
 /// # Why not from `class_init`
 ///
-/// Not because it cannot be done: `g_type_interface_peek` inside
-/// [`class_init`](ObjectSubclass::class_init) does hand back this type's own
-/// copy of the vtable, and a slot written through it does survive — checked,
-/// rather than assumed, before this hook was written.
+/// It is possible: `g_type_interface_peek` in
+/// [`class_init`](ObjectSubclass::class_init) returns this type's own copy of
+/// the vtable, and a slot written through it stays. This was tested, not
+/// assumed, before this hook was written.
 ///
-/// It works by an ordering GLib does not promise. `gtype.c` happens to
-/// base-initialise a type's interface vtables before it calls the class's
-/// initialiser and to run the `interface_init` functions after it; nothing in
-/// the documentation says so, and `g_type_interface_peek` is specified in terms
-/// of a type's interfaces, not of a class that is halfway through being built.
-/// `GInterfaceInfo.interface_init` is the documented contract for exactly this,
-/// so that is what we take — and taking it also means the implementer is handed
-/// a typed `*mut Vtable` under a panic guard instead of casting a `gpointer` at
-/// the call site, with the filling declared next to the interface rather than
-/// among the class's own overrides.
+/// But it works only because of an order that GLib does not promise.
+/// `gtype.c` base-initialises a type's interface vtables before it calls the
+/// class's initialiser, and runs the `interface_init` functions after it. The
+/// documentation does not say this. `g_type_interface_peek` is specified for a
+/// type's interfaces, not for a class that is only partly built.
+/// `GInterfaceInfo.interface_init` is the documented contract for this
+/// purpose, so this crate uses it. Also, the implementer then gets a typed
+/// `*mut Vtable` under a panic guard, and does not cast a `gpointer` at the
+/// call site. The filling is declared next to the interface, not among the
+/// class's own overrides.
 ///
 /// # Safety
 ///
-/// GObject writes through `Vtable` using the layout the C interface struct has,
-/// so implementations must guarantee:
+/// GObject writes through `Vtable` with the layout of the C interface struct.
+/// Thus implementations must guarantee:
 ///
 /// - `Vtable` is `#[repr(C)]`, is the binding of the interface struct
 ///   [`gtype`](InterfaceImpl::gtype) names, and leads with `GTypeInterface`.
 /// - [`gtype`](InterfaceImpl::gtype) really is that interface's `GType`.
 ///
-/// A mismatch puts a function pointer at some other slot's offset, which the
-/// compiler cannot catch and which surfaces as the wrong vfunc being called
-/// with the wrong arguments.
+/// A mismatch puts a function pointer at the offset of a different slot. The
+/// compiler cannot find this. The result is a call to the incorrect vfunc with
+/// incorrect arguments.
 pub unsafe trait InterfaceImpl {
-    /// The interface's vtable struct — `CamelSubscribableInterface` and the
-    /// like.
+    /// The interface's vtable struct (for example,
+    /// `CamelSubscribableInterface`).
     type Vtable;
 
-    /// The interface this fills. A type accessor rather than a constant,
-    /// because a `GType` is only a number once the interface has registered
-    /// itself.
+    /// The interface that this fills. A type accessor, not a constant, because
+    /// a `GType` has a number only after the interface registers itself.
     fn gtype() -> GType;
 
-    /// Writes this type's implementations into the slots it fills, leaving the
-    /// rest at the interface's own defaults.
+    /// Writes this type's implementations into the slots it fills. The other
+    /// slots keep the interface's own defaults.
     ///
     /// # Safety
     ///
-    /// `vtable` points at the implementing type's own copy of the interface's
-    /// vtable, freshly initialised from the interface's defaults and reachable
-    /// by nothing else yet.
+    /// `vtable` points to the implementing type's own copy of the interface's
+    /// vtable. It is newly initialised from the interface's defaults, and no
+    /// other code can get to it yet.
     unsafe fn interface_init(vtable: *mut Self::Vtable);
 }
 
-/// GObject calls this from inside `g_type_class_ref`, while it holds the type
-/// system's global lock, so it is guarded exactly like
-/// [`class_init_trampoline`]: a panic unwinding from here would abort the
-/// process rather than break one account.
+/// GObject calls this in `g_type_class_ref`, while it holds the type system's
+/// global lock. Thus it has the same guard as [`class_init_trampoline`]. A
+/// panic that unwinds from here would abort the process, not only stop one
+/// account.
 ///
-/// A caught panic leaves the vtable however far the init got — which for a slot
-/// never reached is the interface's own default. That is the honest outcome:
-/// the alternative, putting the defaults back, would mean copying a vtable this
-/// code does not know the size of.
+/// After a caught panic, the vtable stays as far as the init got. A slot that
+/// the init did not get to keeps the interface's own default. That is the
+/// correct result. To put the defaults back, this code would have to copy a
+/// vtable of unknown size.
 unsafe extern "C" fn interface_init_trampoline<I: InterfaceImpl>(
     vtable: gpointer,
     _data: gpointer,
 ) {
-    // SAFETY: the interface is registered — `filled_by` asked it for its GType
-    // — so `g_type_name` returns its name rather than NULL.
+    // SAFETY: the interface is registered (`filled_by` asked it for its
+    // GType), so `g_type_name` returns its name, not NULL.
     let name = unsafe { CStr::from_ptr(g_type_name(I::gtype())) };
     let context = format!("{}::interface_init", name.to_string_lossy());
 
@@ -324,29 +322,29 @@ unsafe extern "C" fn interface_init_trampoline<I: InterfaceImpl>(
     });
 }
 
-/// A type that is not ours, looked up by name for a class initialiser.
+/// A type that is not ours, found by name for a class initialiser.
 ///
 /// The rule: no [`class_init`](ObjectSubclass::class_init) calls a foreign
-/// `*_get_type()` accessor. It looks the type up with this, and the type is
-/// named in [`class_init_types`](ObjectSubclass::class_init_types) so that
-/// the lookup finds it.
+/// `*_get_type()` accessor. It uses this function to find the type. The type
+/// is named in [`class_init_types`](ObjectSubclass::class_init_types), so
+/// that the lookup finds it.
 ///
-/// The accessor is the same cycle [`REGISTRATION`] is kept out of, with
+/// The accessor causes the same cycle that [`REGISTRATION`] prevents, with
 /// GLib's lazy `get_type` once-init in place of our lock. A class initialiser
-/// holds GLib's class-init lock; an accessor whose type is not registered yet
-/// waits in `g_once_init_enter` for whichever thread is registering it; and
-/// that thread, registering a `GtkBox` or anything else that implements an
-/// interface, waits in `g_type_add_interface_static` for the class-init lock.
-/// `jmap-config`'s `source_config` tests hung on exactly that when one of its
-/// declarations went missing: one thread initialising `EBookConfigJmap`'s
-/// class and asking for `EBookSourceConfig`, another registering
-/// `ECalSourceConfig` and, under it, the `GtkBox` they both derive from.
+/// holds GLib's class-init lock. An accessor whose type is not registered yet
+/// waits in `g_once_init_enter` for the thread that registers it. That thread
+/// registers a `GtkBox` or a different type that implements an interface. It
+/// waits in `g_type_add_interface_static` for the class-init lock.
+/// `jmap-config`'s `source_config` tests stopped because of this when one of
+/// its declarations was missing. One thread initialised `EBookConfigJmap`'s
+/// class and asked for `EBookSourceConfig`. A different thread registered
+/// `ECalSourceConfig` and, under it, the `GtkBox` that both derive from.
 ///
-/// A lookup takes no once-init, so it cannot wait on anyone. When the type is
-/// not there it answers 0, `G_TYPE_INVALID`, and logs a critical that names
-/// the missing declaration: a class whose `extensible_type` is 0 is an
-/// extension `e_extensible_load_extensions` never loads, which fails a test
-/// in seconds where the accessor hung the whole run.
+/// A lookup takes no once-init, so it cannot wait on other threads. When the
+/// type is not there, it returns 0 (`G_TYPE_INVALID`) and logs a critical
+/// that names the missing declaration. `e_extensible_load_extensions` never
+/// loads an extension whose class has an `extensible_type` of 0. A test then
+/// fails in seconds. With the accessor, the full run stopped.
 pub fn registered_type(name: &CStr) -> GType {
     // SAFETY: `name` is a NUL-terminated string that outlives the call.
     let gtype = unsafe { g_type_from_name(name.as_ptr()) };
@@ -359,25 +357,25 @@ pub fn registered_type(name: &CStr) -> GType {
     gtype
 }
 
-/// Registers `T` as a static type, or returns the existing `GType` if it has
-/// already been registered.
+/// Registers `T` as a static type, or returns the existing `GType` if it is
+/// already registered.
 ///
-/// Idempotence is not a convenience: a second `g_type_register_static` under
-/// the same name is a fatal GLib error, and a process does reach the same
-/// registration twice — a test suite from two threads, a Camel provider from
-/// two `camel_provider_module_init`s.
+/// Idempotence is necessary. A second `g_type_register_static` with the same
+/// name is a fatal GLib error, and a process can do the same registration two
+/// times (a test suite from two threads, a Camel provider from two
+/// `camel_provider_module_init`s).
 pub fn register_static<T: ObjectSubclass>() -> GType {
     // SAFETY: a null GTypeModule selects the static path, which has no
-    // pointer requirements of its own.
+    // pointer requirements.
     unsafe { register::<T>(ptr::null_mut()) }
 }
 
-/// Registers `T` against the `GTypeModule` EDS loaded us as, so the type is
-/// unregistered if the module is unloaded.
+/// Registers `T` against the `GTypeModule` that EDS loaded us as. Thus the
+/// type is unregistered if the module is unloaded.
 ///
-/// Call this on *every* load of the module, not only the first: unusing a
-/// module marks the types it registered as unloaded, and GLib will not hand
-/// one back until a later load has registered it again.
+/// Call this on *every* load of the module, not only the first. When a module
+/// is unused, GLib marks its registered types as unloaded. GLib does not
+/// return such a type until a later load registers it again.
 ///
 /// # Safety
 ///
@@ -388,50 +386,50 @@ pub unsafe fn register_dynamic<T: ObjectSubclass>(module: *mut GTypeModule) -> G
     unsafe { register::<T>(module) }
 }
 
-/// `class_type`'s class, as the `C` it is known to lead with, for a vfunc
-/// that chains up to a class this crate does not own.
+/// `class_type`'s class, as the `C` that it starts with. For a vfunc that
+/// chains up to a class that this crate does not own.
 ///
-/// `g_type_class_peek` rather than `_ref`: an initialised class is what
-/// having registered `class_type` (or a subclass of it) already guarantees,
-/// and taking a reference here would mean giving one back on a path that has
-/// no natural place to do so.
+/// `g_type_class_peek`, not `_ref`. The registration of `class_type` (or a
+/// subclass of it) already guarantees an initialised class. A reference here
+/// would need a release on a path that has no natural place for it.
 ///
 /// # Safety
 ///
-/// `class_type`'s class struct must actually lead with a `C`, and an
-/// instance of `class_type` or one of its subclasses must already exist —
-/// which is what guarantees the class is initialised; it then stays alive
-/// for the life of the process.
+/// `class_type`'s class struct must start with a `C`. An instance of
+/// `class_type` or one of its subclasses must already exist. This guarantees
+/// that the class is initialised. Then it stays alive for the life of the
+/// process.
 pub unsafe fn parent_class<C>(class_type: GType) -> Option<&'static C> {
     // SAFETY: the contract above.
     unsafe { g_type_class_peek(class_type).cast::<C>().as_ref() }
 }
 
 /// Serialises the check-then-register pair. GObject's own registration is
-/// thread-safe, but "is it there yet?" followed by "register it" is not, and
-/// losing that race aborts the process.
+/// thread-safe, but "is it there yet?" then "register it" is not. If a thread
+/// loses that race, the process aborts.
 ///
-/// Taken *before* GLib's class-initialisation lock and never after it — see
-/// [`IN_CLASS_INIT`], which is how the "never after" half is kept.
+/// Taken *before* GLib's class-initialisation lock and never after it.
+/// [`IN_CLASS_INIT`] makes sure that it is never taken after it.
 static REGISTRATION: Mutex<()> = Mutex::new(());
 
 thread_local! {
-    /// How many class or interface initialisers this thread is inside.
+    /// The number of class or interface initialisers that this thread is in.
     ///
-    /// GLib holds its class-initialisation lock across both, so a
-    /// [`REGISTRATION`] taken from in there would invert the two locks against
-    /// any registration that is already the other way round. Non-zero here
-    /// means [`register`] must answer without the lock or not at all; see
-    /// [`ObjectSubclass::class_init_types`] for the cycle in full.
+    /// GLib holds its class-initialisation lock across both. If an
+    /// initialiser took [`REGISTRATION`], the lock order would be the opposite
+    /// of a registration that already holds the locks the other way. A
+    /// non-zero value means that [`register`] must answer without the lock, or
+    /// not at all. See [`ObjectSubclass::class_init_types`] for the full cycle.
     ///
-    /// A counter rather than a flag because the initialisers nest: referencing
-    /// a class from inside one runs that one's initialiser on the same thread.
+    /// A counter, not a flag, because the initialisers nest. A reference to a
+    /// class from in one runs that class's initialiser on the same thread.
     static IN_CLASS_INIT: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Runs `f` with [`IN_CLASS_INIT`] raised, whatever `f` does — a panic here
-/// unwinds only as far as the guard inside, but leaving the count raised would
-/// silently disable registration on this thread for the rest of the process.
+/// Runs `f` with [`IN_CLASS_INIT`] increased, and always decreases it after.
+/// A panic here unwinds only to the guard inside. But if the count stayed
+/// high, registration on this thread would silently stop for the rest of
+/// the process.
 fn inside_class_init<T>(f: impl FnOnce() -> T) -> T {
     struct Lower;
     impl Drop for Lower {
@@ -446,41 +444,41 @@ fn inside_class_init<T>(f: impl FnOnce() -> T) -> T {
 }
 
 unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
-    // A class initialiser asking for a type it declared, from under GLib's
-    // lock: answer out of the type system, and take nothing. Registering here
-    // is what `class_init_types` exists to have already done, so a miss is
-    // that declaration missing — reported rather than papered over, because
-    // the zero this returns is a GType nothing can be built from.
+    // A class initialiser asks for a type that it declared, under GLib's
+    // lock. Answer from the type system, and take no lock. `class_init_types`
+    // exists so that this registration is already done. Thus a miss means
+    // that the declaration is missing. Report it and do not hide it, because
+    // no code can build from the zero GType that this returns.
     if IN_CLASS_INIT.with(Cell::get) > 0 {
         return registered_type(T::NAME);
     }
 
-    // Resolved before the lock is taken, not inside the GTypeInfo below: a
-    // parent_type() that registers another of our types — which is how a
-    // hierarchy declared entirely in Rust bootstraps itself — would otherwise
-    // deadlock on this very much non-reentrant mutex. The same goes for the
-    // interfaces, which are resolved through type accessors of their own, and
-    // for the types class_init will want, which are resolved here for their
-    // effect and not for the GTypes they hand back.
+    // Resolved before the lock is taken, not in the GTypeInfo below. A
+    // parent_type() can register a different one of our types. (A hierarchy
+    // declared fully in Rust bootstraps itself this way.) Otherwise it would
+    // deadlock on this non-reentrant mutex. The same applies to the
+    // interfaces, which are resolved through their own type accessors. It
+    // also applies to the types that class_init needs. They are resolved here
+    // for their effect, not for the GTypes they return.
     let parent = T::parent_type();
     let interfaces = T::interfaces();
     let sizes = T::type_sizes();
     let _class_init_types = T::class_init_types();
 
-    // A poisoned lock means some other registration panicked; the type system
-    // itself is untouched by that, so carry on rather than panic in turn.
+    // A poisoned lock means that a different registration panicked. That
+    // does not change the type system, so continue and do not panic.
     let _guard = REGISTRATION
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-    // Only on the static path. A second `g_type_register_static` under the
-    // same name is a fatal GLib error, so an already-registered type has to be
-    // handed straight back; `g_type_module_register_type` is the opposite. It
-    // *has* to be called again on every load of the module, because unusing a
-    // module marks every type it registered as unloaded, and GLib refuses the
-    // module — and aborts the process, "Could not reload previously loaded
-    // plugin", as soon as one of those types is asked for — until a second
-    // registration has marked them loaded again.
+    // Only on the static path. A second `g_type_register_static` with the
+    // same name is a fatal GLib error. Thus return an already-registered type
+    // immediately. `g_type_module_register_type` is the opposite. You *must*
+    // call it again on every load of the module. When a module is unused,
+    // GLib marks every type it registered as unloaded. GLib then refuses the
+    // module until a second registration marks them as loaded again. When
+    // code asks for one of those types, GLib aborts the process ("Could not
+    // reload previously loaded plugin").
     if module.is_null() {
         // SAFETY: NAME is a 'static NUL-terminated string.
         let existing = unsafe { g_type_from_name(T::NAME.as_ptr()) };
@@ -508,7 +506,7 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     };
 
     // SAFETY: `info` describes structs whose layout the ObjectSubclass
-    // contract pins to the parent's, and it only has to outlive the call.
+    // contract fixes to the parent's. It must only outlive the call.
     let gtype = unsafe {
         if module.is_null() {
             g_type_register_static(parent, T::NAME.as_ptr(), &info, 0)
@@ -517,9 +515,9 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
         }
     };
 
-    // Before the type is handed back, and so before anything can reference its
-    // class: an interface added after class_init has run is an interface whose
-    // properties the class never overrode.
+    // Do this before the type is returned, thus before any code can reference
+    // its class. If an interface is added after class_init runs, the class
+    // never overrides its properties.
     for interface in interfaces {
         let interface_info = GInterfaceInfo {
             interface_init: interface.init,
@@ -527,11 +525,12 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
             interface_data: ptr::null_mut(),
         };
 
-        // SAFETY: `gtype` was just registered and `interface.gtype` came from a
-        // type accessor; `interface_info` outlives both calls. On the static
-        // path the type is new, so the interface cannot already be on it; on
-        // the dynamic path `g_type_module_add_interface` is documented to be
-        // called again on every load, like the registration above.
+        // SAFETY: `gtype` is newly registered, and `interface.gtype` came from
+        // a type accessor. `interface_info` outlives both calls. On the static
+        // path the type is new, so the interface cannot already be on it. On
+        // the dynamic path, the documentation says to call
+        // `g_type_module_add_interface` again on every load, as for the
+        // registration above.
         unsafe {
             if module.is_null() {
                 g_type_add_interface_static(gtype, interface.gtype, &interface_info);
@@ -544,16 +543,16 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     gtype
 }
 
-/// GObject calls these from C, so they are guarded: a panic in a user
-/// `class_init` would otherwise unwind through the type system's own frames
-/// while it holds its global lock.
+/// GObject calls these from C, so they have guards. Without a guard, a panic
+/// in a user `class_init` would unwind through the type system's own frames
+/// while the type system holds its global lock.
 unsafe extern "C" fn class_init_trampoline<T: ObjectSubclass>(class: gpointer, _data: gpointer) {
-    // Installed before `T::class_init` runs, so a subclass that wants the slot
-    // for itself can still take it — and installed unconditionally, because a
-    // type with nothing to destroy pays only an empty call.
+    // Installed before `T::class_init` runs, so a subclass can still take the
+    // slot for itself. Always installed, because for a type with nothing to
+    // destroy, the cost is only an empty call.
     //
-    // SAFETY: `class` leads with the parent's class struct, which the trait's
-    // contract requires to derive from GObjectClass.
+    // SAFETY: `class` starts with the parent's class struct. The trait's
+    // contract requires that it derives from GObjectClass.
     unsafe { (*class.cast::<GObjectClass>()).finalize = Some(finalize_trampoline::<T>) };
 
     inside_class_init(|| {
@@ -563,28 +562,28 @@ unsafe extern "C" fn class_init_trampoline<T: ObjectSubclass>(class: gpointer, _
     });
 }
 
-/// Drops what `instance_init` created, then hands the instance to the parent,
-/// which is what eventually frees it.
+/// Drops what `instance_init` created, then gives the instance to the
+/// parent. The parent frees it.
 ///
-/// The chain-up is outside the guard on purpose: a panic in `T::finalize` is
-/// already a bug, and skipping the parent's finalize would turn it into a leak
-/// of every instance from then on — including, for an `EBookMetaBackend`, the
+/// The chain-up is intentionally outside the guard. A panic in `T::finalize`
+/// is already a bug. If the parent's finalize did not run, every instance
+/// after that would leak. For an `EBookMetaBackend`, this includes the
 /// `ESource` and the offline cache.
 unsafe extern "C" fn finalize_trampoline<T: ObjectSubclass>(object: *mut GObject) {
     guard("finalize", (), || unsafe {
         T::finalize(object.cast::<T::Instance>())
     });
 
-    // The parent class rather than `g_type_class_peek_parent` of the
-    // instance's class: a further subclass of ours would make that one point
-    // back at this same trampoline and recurse until the stack ran out.
+    // Use the parent class, not `g_type_class_peek_parent` of the instance's
+    // class. For a further subclass of ours, that would point back to this
+    // trampoline and recurse until the stack overflows.
     //
-    // SAFETY: an instance of this type exists, so its class does, so the class
-    // it derives from is initialised and alive.
+    // SAFETY: an instance of this type exists, so its class exists. Thus the
+    // class it derives from is initialised and alive.
     let parent = unsafe { g_type_class_peek(T::parent_type()) }.cast::<GObjectClass>();
     match unsafe { parent.as_ref() }.and_then(|class| class.finalize) {
         // SAFETY: this is the parent's own finalize, called on an instance of
-        // a type derived from it, which is what chaining up means in C.
+        // a type derived from it. This is how C chains up.
         Some(finalize) => unsafe { finalize(object) },
         None => log_critical(&format!(
             "{:?}: the parent class has no finalize to chain up to; the instance is leaked",
@@ -614,12 +613,12 @@ mod tests {
 
     use super::*;
 
-    /// The shape a GTK-widget subclass takes: sizes from the running type
-    /// system rather than from declared structs, no inline fields of its own.
+    /// The shape of a GTK-widget subclass: sizes from the running type
+    /// system, not from declared structs, and no inline fields of its own.
     struct QueriedSizes;
 
     // SAFETY: GTypeInstance and GObjectClass are prefixes of G_TYPE_OBJECT's
-    // structs, and type_sizes() answers that parent's real sizes.
+    // structs, and type_sizes() returns that parent's real sizes.
     unsafe impl ObjectSubclass for QueriedSizes {
         const NAME: &'static CStr = c"JmapBackendCoreQueriedSizes";
         type Instance = GTypeInstance;
@@ -634,9 +633,9 @@ mod tests {
         }
     }
 
-    /// `of_parent` answers the parent's own sizes, and a type registered on
-    /// them is allocated at exactly those sizes — the contract the GtkBox
-    /// page in jmap-ui builds on.
+    /// `of_parent` returns the parent's own sizes, and a type registered with
+    /// them is allocated at those sizes. The GtkBox page in jmap-ui needs this
+    /// contract.
     #[test]
     fn queried_sizes_match_the_parent() {
         let sizes = TypeSizes::of_parent(G_TYPE_OBJECT);
@@ -644,7 +643,7 @@ mod tests {
         assert_eq!(sizes.instance, size_of::<GObject>());
 
         let gtype = register_static::<QueriedSizes>();
-        // SAFETY: `gtype` was just registered; the class ref is released.
+        // SAFETY: `gtype` is newly registered, and the class ref is released.
         let query = unsafe {
             let class = g_type_class_ref(gtype);
             let mut query = std::mem::zeroed::<GTypeQuery>();
@@ -656,12 +655,12 @@ mod tests {
         assert_eq!(query.class_size as usize, sizes.class);
     }
 
-    /// A type with nothing in it, registered so that something else's
+    /// An empty type. It is registered so that a different type's
     /// `class_init` can ask for its `GType`.
     struct Dependency;
 
     // SAFETY: GObject/GObjectClass are the parent structs of G_TYPE_OBJECT,
-    // used unextended, which satisfies the "leads with the parent" contract.
+    // not extended. This satisfies the "leads with the parent" contract.
     unsafe impl ObjectSubclass for Dependency {
         const NAME: &'static CStr = c"JmapBackendCoreLockOrderDependency";
         type Instance = GObject;
@@ -672,13 +671,13 @@ mod tests {
         }
     }
 
-    /// What [`Dependent::class_init`] saw when it asked for the dependency's
-    /// `GType`. Zero means it never got there.
+    /// What [`Dependent::class_init`] got when it asked for the dependency's
+    /// `GType`. Zero means that it did not ask.
     static SEEN_FROM_CLASS_INIT: AtomicUsize = AtomicUsize::new(0);
 
-    /// The shape `CamelJmapStore` and `CamelJmapTransport` have: a class
-    /// initialiser that needs another of our types' `GType` — they write it
-    /// into `CamelServiceClass.settings_type`.
+    /// The shape of `CamelJmapStore` and `CamelJmapTransport`: a class
+    /// initialiser that needs the `GType` of a different one of our types.
+    /// They write it into `CamelServiceClass.settings_type`.
     struct Dependent;
 
     // SAFETY: as `Dependency`.
@@ -696,18 +695,18 @@ mod tests {
         }
     }
 
-    /// The class-init/registration-lock deadlock originally caught in
-    /// `jmap-mail`'s `tests/transport.rs`, cut down to the half this crate owns.
+    /// The class-init/registration-lock deadlock first found in
+    /// `jmap-mail`'s `tests/transport.rs`, reduced to the part this crate owns.
     ///
-    /// GLib serialises class initialisation with a recursive lock of its own
-    /// and holds it across `class_init`. So a `class_init` that then waits for
-    /// [`REGISTRATION`] pins GLib's lock behind ours, while a registration
-    /// already holding ours waits for GLib's inside
-    /// `g_type_add_interface_static` — a two-thread cycle with no way out.
+    /// GLib serialises class initialisation with its own recursive lock, and
+    /// holds it across `class_init`. If that `class_init` then waits for
+    /// [`REGISTRATION`], GLib's lock waits for ours. At the same time, a
+    /// registration that holds ours waits for GLib's, in
+    /// `g_type_add_interface_static`. That is a two-thread cycle that never
+    /// ends.
     ///
-    /// Holding `REGISTRATION` here stands in for that other thread: whatever
-    /// else is registering, a `class_init` must be able to run to completion
-    /// without it.
+    /// Here, the test holds `REGISTRATION` in place of that other thread. A
+    /// `class_init` must complete without it, whatever else registers.
     #[test]
     fn a_class_init_does_not_wait_for_the_registration_lock() {
         let dependent = register_static::<Dependent>();
@@ -719,16 +718,16 @@ mod tests {
 
         let (done, ran) = mpsc::channel();
         let initialiser = thread::spawn(move || {
-            // SAFETY: `dependent` is the GType just registered; the class is
-            // released again below.
+            // SAFETY: `dependent` is the newly registered GType. The class is
+            // released below.
             let class = unsafe { g_type_class_ref(dependent) };
             let _ = done.send(());
             unsafe { g_type_class_unref(class) };
         });
 
         let outcome = ran.recv_timeout(Duration::from_secs(10));
-        // Released whatever happened, so a failing test still joins rather
-        // than wedging the run.
+        // Always released, so a failing test still joins and does not stop
+        // the run.
         drop(held);
         initialiser.join().expect("the class_init thread panicked");
 
@@ -743,8 +742,8 @@ mod tests {
         );
     }
 
-    /// A dependency that nothing registers ahead of time, so that the
-    /// declaration below is the only thing that can have registered it.
+    /// A dependency that nothing registers before, so only the declaration
+    /// below can register it.
     struct DeclaredDependency;
 
     // SAFETY: as `Dependency`.
@@ -782,15 +781,15 @@ mod tests {
         }
     }
 
-    /// The other half of the fix: `class_init` can only answer out of the type
-    /// system, so the type has to be in it. Declaring it is what puts it there,
-    /// on the thread that registers the declaring type and before that
-    /// registration begins.
+    /// The other part of the fix: `class_init` can answer only from the type
+    /// system, so the type must be in it. The declaration puts it there. This
+    /// occurs on the thread that registers the declaring type, before that
+    /// registration starts.
     #[test]
     fn a_declared_type_is_registered_before_the_type_that_declares_it() {
         let declaring = register_static::<Declaring>();
 
-        // SAFETY: `declaring` is the GType just registered.
+        // SAFETY: `declaring` is the newly registered GType.
         let class = unsafe { g_type_class_ref(declaring) };
         unsafe { g_type_class_unref(class) };
 
@@ -802,22 +801,22 @@ mod tests {
         });
     }
 
-    /// A foreign type is found by name once it is registered, with no
-    /// accessor called and so no once-init to wait on.
+    /// After a foreign type is registered, the lookup finds it by name. It
+    /// calls no accessor, so there is no once-init to wait on.
     #[test]
     fn a_registered_type_is_looked_up_by_name() {
         assert_eq!(registered_type(c"GObject"), G_TYPE_OBJECT);
     }
 
-    /// The miss is 0, `G_TYPE_INVALID`: an `extensible_type` that matches
-    /// nothing, rather than a wait that never ends.
+    /// A miss gives 0 (`G_TYPE_INVALID`): an `extensible_type` that matches
+    /// nothing, not a wait that never ends.
     #[test]
     fn an_unregistered_type_is_looked_up_as_invalid() {
         assert_eq!(registered_type(c"JmapBackendCoreNeverRegistered"), 0);
     }
 
-    /// A miss also logs a critical naming the type, so a developer sees why
-    /// an extension never loaded instead of only a silent `GType` of 0.
+    /// A miss also logs a critical that names the type. Thus a developer
+    /// sees why an extension did not load, not only a silent `GType` of 0.
     #[test]
     fn an_unregistered_type_logs_a_critical_naming_it() {
         let (_, captured) = capture(|| {
@@ -833,7 +832,7 @@ mod tests {
         );
     }
 
-    /// A hit logs nothing: the lookup succeeded, so there is no bug to report.
+    /// A hit logs nothing. The lookup succeeded, so there is no bug to report.
     #[test]
     fn a_registered_type_logs_nothing() {
         let (_, captured) = capture(|| {
@@ -879,16 +878,15 @@ mod tests {
         }
     }
 
-    /// What the refusal costs when the declaration is missing: zero and a
-    /// GLib critical, rather than a registration performed from under GLib's
-    /// lock. Zero is a bad `GType` and the caller will be told about it by
-    /// GLib in turn — which is a bug report, where the deadlock was a hang
-    /// with nothing in the log at all.
+    /// The result of the refusal when the declaration is missing: zero and a
+    /// GLib critical, not a registration under GLib's lock. Zero is a bad
+    /// `GType`, and GLib then tells the caller about it. That gives a bug
+    /// report. The deadlock gave a hang with nothing in the log.
     #[test]
     fn an_undeclared_type_is_refused_rather_than_registered_from_a_class_init() {
         let undeclaring = register_static::<Undeclaring>();
 
-        // SAFETY: `undeclaring` is the GType just registered.
+        // SAFETY: `undeclaring` is the newly registered GType.
         let class = unsafe { g_type_class_ref(undeclaring) };
         unsafe { g_type_class_unref(class) };
 

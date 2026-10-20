@@ -4,41 +4,40 @@
 //! [`jmap_backend_core::mime`]: the `CamelMimeMessage` as the octets a JMAP request
 //! uploads.
 //!
-//! Every message this account puts on the server goes through here. Two callers
-//! want it and they are not the same object: `jmap-mail`'s append is a folder
-//! taking a message from outside the account, and a `CamelTransport`'s
-//! `send_to_sync` is a service with no folder at all sending one. Both are
-//! handed an object and both need blob bytes, so the writing is one function
-//! rather than two — the second of which would be the place a difference could
-//! appear between the message the user filed and the message they sent.
+//! Each message that this account puts on the server goes through here. Two
+//! different callers use it. The append of `jmap-mail` is a folder that takes
+//! a message from outside the account. The `send_to_sync` of a
+//! `CamelTransport` is a service with no folder that sends a message. Both get
+//! an object and both need blob bytes, so one function does the writing. A
+//! second function could make the filed message differ from the sent message.
 //!
 //! ## Camel's own writer, and why that is the whole point
 //!
-//! The bytes are produced by `camel_data_wrapper_write_to_output_stream_sync`,
-//! Camel's RFC 5322 emitter, reached through the message's `CamelDataWrapper`
-//! face. That is the mirror of the decision `jmap-mail`'s message module makes about
-//! the parse on the way in: a provider that wrote headers itself would be a
-//! second MIME implementation inside the process, disagreeing with the first
-//! about what a message says — and here the disagreement would be *stored*,
-//! because what goes up is what the account holds from then on.
+//! `camel_data_wrapper_write_to_output_stream_sync`, the RFC 5322 emitter of
+//! Camel, makes the bytes through the `CamelDataWrapper` face of the message.
+//! The message module of `jmap-mail` makes the same decision for the parse of
+//! incoming data. A provider that wrote headers itself would be a second MIME
+//! implementation in the process, and it could disagree with the first about
+//! the message. Here the disagreement would be *stored*, because the uploaded
+//! bytes are what the account holds after the upload.
 //!
-//! So what these tests check is not the emitter, which is Camel's, but the
-//! plumbing around it: that the buffer that comes back is the whole of what was
-//! written ([`a_message_larger_than_one_buffer_is_written_out_whole`] — a
-//! truncation here is a corrupted message on the server, and the only sign of
-//! it is a length), that writing does not consume the object the caller still
-//! holds, and that the failure the caller reports is the failure that happened.
+//! Thus these tests do not check the emitter, which belongs to Camel. They
+//! check the code around it. The returned buffer must contain all that was
+//! written ([`a_message_larger_than_one_buffer_is_written_out_whole`]: a
+//! truncation is a corrupted message on the server, and only the length shows
+//! it). The write must not consume the object that the caller still holds.
+//! The failure that the caller reports must be the failure that occurred.
 //!
 //! ## The error is the caller's to name
 //!
-//! The one thing lifted out of `jmap-mail`'s append rather than moved: a
-//! writer that fails without saying why used to produce a `CAMEL_FOLDER_ERROR`,
-//! which is the right answer for a folder and the wrong one for a transport
-//! that has no folder in the call. [`Unwritable::into_gerror`] therefore takes
-//! the domain and code from the caller. The two cases it distinguishes —
-//! Camel explained the failure, Camel did not — are unit-tested beside the
-//! implementation, where a failure can be constructed; what cannot be
-//! constructed here is a real `CamelMimeMessage` its own writer refuses.
+//! This is the one part taken from the append of `jmap-mail` with a change.
+//! A writer that failed without a reason gave a `CAMEL_FOLDER_ERROR`. This is
+//! correct for a folder but wrong for a transport, which has no folder in the
+//! call. Thus [`Unwritable::into_gerror`] takes the domain and code from the
+//! caller. Its two cases (Camel explained the failure, Camel did not) have
+//! unit tests beside the implementation, where a failure can be constructed.
+//! This file cannot construct a real `CamelMimeMessage` that its own writer
+//! refuses.
 //!
 //! [`Unwritable::into_gerror`]: jmap_backend_core::mime::Unwritable::into_gerror
 
@@ -53,7 +52,7 @@ use glib_sys::{GError, GFALSE, gssize};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::mime::write_message;
 
-/// The RFC 5322 bytes of an ordinary message — CRLF line endings, a header
+/// The RFC 5322 bytes of an ordinary message: CRLF line endings, a header
 /// block, a blank line, a body.
 const MESSAGE: &[u8] = b"From: Bob <bob@example.com>\r\n\
 To: Alice <alice@example.com>\r\n\
@@ -63,9 +62,9 @@ Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
 \r\n\
 One o'clock at the usual place.\r\n";
 
-/// A `CamelMimeMessage` parsed out of bytes, which is how one reaches both
-/// callers: `get_message_sync` on another account's folder for an append, and
-/// the composer's own object for a send.
+/// A `CamelMimeMessage` parsed from bytes. Both callers get a message in this
+/// way: from `get_message_sync` on a folder of another account for an append,
+/// and as the object of the composer for a send.
 struct Message(*mut CamelMimeMessage);
 
 impl Message {
@@ -88,7 +87,7 @@ impl Message {
         }
     }
 
-    /// The bytes the account would upload for it.
+    /// The bytes that the account uploads for the message.
     fn written(&self) -> Vec<u8> {
         // SAFETY: a live message this value owns.
         match unsafe { write_message(self.0) } {
@@ -97,12 +96,11 @@ impl Message {
         }
     }
 
-    /// What Camel makes of the subject header now — asked of the object, so
-    /// that a message read back through the parser can be compared with the one
-    /// that went in.
+    /// The current subject header, as Camel reads it from the object. This
+    /// lets a test compare a message parsed again with the original message.
     fn subject(&self) -> String {
-        // SAFETY: a live message; the accessor returns a string the message
-        // owns and which outlives this call.
+        // SAFETY: a live message. The accessor returns a string that the
+        // message owns and that outlives this call.
         unsafe {
             let subject = camel_mime_message_get_subject(self.0);
             assert!(!subject.is_null(), "the message has no subject");
@@ -118,14 +116,13 @@ impl Drop for Message {
     }
 }
 
-/// The bytes are a message: headers, a blank line, the body — and Camel's own
-/// parser makes the same message of them again.
+/// The bytes are a message (headers, a blank line, the body), and the parser
+/// of Camel makes the same message from them again.
 ///
-/// The round trip rather than a byte comparison with the input, because Camel
-/// is entitled to re-emit a message it parsed with its headers canonicalised or
-/// reordered, and pinning the exact bytes would be a test of the emitter's
-/// current formatting rather than of this function. What must survive is the
-/// content.
+/// The test uses a round trip, not a byte comparison with the input. Camel
+/// can emit a parsed message with canonicalised or reordered headers. A check
+/// of the exact bytes would test the current format of the emitter, not this
+/// function. The content must stay the same.
 #[test]
 fn the_bytes_a_message_is_written_out_as_parse_back_to_the_same_message() {
     let message = Message::parsed(MESSAGE);
@@ -141,14 +138,14 @@ fn the_bytes_a_message_is_written_out_as_parse_back_to_the_same_message() {
     assert_eq!(again.subject(), message.subject());
 }
 
-/// A message bigger than any one buffer comes back whole.
+/// A message larger than one buffer returns complete.
 ///
-/// The flush-then-read in the implementation is what this is about, and a
-/// truncation is exactly what it would look like if the buffer were read while
-/// a filter still held part of the message: a valid, shorter message, uploaded
-/// and stored, with nothing to say a paragraph is missing. The body is checked
-/// at both ends and by length, because a message that lost its middle still
-/// starts and stops correctly.
+/// This tests the flush before the read in the implementation. If the code
+/// read the buffer while a filter still held part of the message, the result
+/// would be a truncation: a valid, shorter message, uploaded and stored, with
+/// no sign of a missing paragraph. The test checks the body at both ends and
+/// by length, because a message without its middle still starts and stops
+/// correctly.
 #[test]
 fn a_message_larger_than_one_buffer_is_written_out_whole() {
     let body = "0123456789abcdef".repeat(16 * 1024);
@@ -175,13 +172,13 @@ Subject: A long one\r\n\
     assert!(emitted.trim_end_matches("\r\n").ends_with("abcdef"));
 }
 
-/// Writing a message out leaves the message alone.
+/// A write of a message does not change the message.
 ///
-/// It matters for the caller neither test above is: a transport is handed the
-/// `CamelMimeMessage` the composer still owns and Evolution still shows, and a
-/// send that emptied it — or that could only be done once, because the first
-/// write consumed the content stream — would be a bug visible only after a
-/// failed submission was retried.
+/// This is important for the caller that the tests above do not cover. A
+/// transport gets the `CamelMimeMessage` that the composer still owns and
+/// Evolution still shows. A send could empty it, or work only once because the
+/// first write consumed the content stream. That bug would show only when a
+/// failed submission is tried again.
 #[test]
 fn writing_a_message_out_does_not_consume_it() {
     let message = Message::parsed(MESSAGE);
@@ -193,21 +190,21 @@ fn writing_a_message_out_does_not_consume_it() {
     assert_eq!(message.subject(), "Lunch?");
 }
 
-/// Every line ends CRLF, because that is what a message *is*.
+/// Each line ends with CRLF, because that is what a message *is*.
 ///
-/// Camel's emitter writes the message in Camel's own internal form, which ends
-/// lines with a bare LF; it is Camel's transports that put a
+/// The emitter of Camel writes the message in the internal form of Camel,
+/// which ends lines with a bare LF. The transports of Camel put a
 /// `CamelMimeFilterCrlf` between the message and the socket. This provider is
-/// one of those transports and also an importer, and both put the bytes
-/// somewhere that outlives the call — so the conversion has to happen here or
-/// not at all.
+/// one of those transports and also an importer. Both put the bytes in a
+/// location that outlives the call, so the conversion must occur here or not
+/// at all.
 ///
 /// It is not cosmetic. RFC 5322 §2.1 defines a line as CRLF-terminated, RFC
 /// 8621 §4.8 imports "an RFC 5322 message", and RFC 5321 §2.3.8 forbids a bare
-/// LF in what an SMTP server is handed — which is what an `EmailSubmission`
-/// eventually hands one. Between those, a message stored with bare LFs is one
-/// whose DKIM signature is computed over different bytes than the recipient
-/// verifies, and whose body a strict relay may truncate at the first bare LF.
+/// LF in the data that an SMTP server gets. An `EmailSubmission` eventually
+/// gives the message to an SMTP server. Thus, for a message stored with bare
+/// LFs, the DKIM signature covers different bytes than the recipient
+/// verifies. Also, a strict relay can truncate its body at the first bare LF.
 #[test]
 fn the_bytes_a_message_goes_up_as_end_their_lines_the_way_rfc_5322_says() {
     let message = Message::parsed(MESSAGE);
@@ -231,13 +228,13 @@ fn the_bytes_a_message_goes_up_as_end_their_lines_the_way_rfc_5322_says() {
     );
 }
 
-/// And a line that already ended CRLF still ends CRLF, rather than CR CRLF.
+/// A line that already ended with CRLF still ends with CRLF, not CR CRLF.
 ///
-/// The other half of the same rule, and the one a careless conversion breaks: a
-/// message whose parts Camel emitted with the endings already in them — one
-/// that came back out of a `text/plain` part with CRLF in its content — would
-/// grow a stray CR per line, which is a body the recipient sees blank lines
-/// through.
+/// This is the other half of the same rule, which a careless conversion
+/// breaks. Camel can emit parts that already contain the line endings, for
+/// example a `text/plain` part with CRLF in its content. Such a message would
+/// get a stray CR on each line, and the recipient would see blank lines in the
+/// body.
 #[test]
 fn a_line_that_already_ended_crlf_does_not_gain_a_second_cr() {
     let message = Message::parsed(MESSAGE);
@@ -249,14 +246,14 @@ fn a_line_that_already_ended_crlf_does_not_gain_a_second_cr() {
         "{:?}",
         String::from_utf8_lossy(&written)
     );
-    // And the message is still the message: nothing was inserted into the body
-    // beyond the line endings it was written with.
+    // The message is still the same message: the write added nothing to the
+    // body except the line endings.
     let again = Message::parsed(&written);
     assert_eq!(again.subject(), "Lunch?");
 }
 
-/// A multipart/mixed message containing text and an attachment serializes with CRLF
-/// across all boundaries and headers without introducing bare LFs, and roundtrips faithfully.
+/// A multipart/mixed message with text and an attachment serializes with CRLF
+/// at all boundaries and headers, with no bare LFs, and roundtrips correctly.
 #[test]
 fn multipart_mixed_message_with_pdf_attachment_serializes_with_crlf_and_parses_back_intact() {
     let multipart_source = b"From: Alice <alice@example.com>\r\n\
@@ -295,7 +292,7 @@ JVBERi0xLjUKJcfsj6IKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUGFyZW50IDMgMCBS\r\n\
     assert!(text.contains("report.pdf"), "{text}");
     assert!(text.contains("====_report_boundary_123_===="), "{text}");
 
-    // All line endings must strictly be CRLF
+    // All line endings must be CRLF.
     let bare = written
         .iter()
         .enumerate()
@@ -313,8 +310,8 @@ JVBERi0xLjUKJcfsj6IKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUGFyZW50IDMgMCBS\r\n\
     assert_eq!(roundtripped.subject(), "Monthly Report with Attachment");
 }
 
-/// A multipart/alternative message with HTML and plain text bodies preserves MIME parts
-/// and roundtrips without losing line formatting.
+/// A multipart/alternative message with HTML and plain text bodies keeps its
+/// MIME parts and roundtrips without loss of line format.
 #[test]
 fn multipart_alternative_message_with_html_and_plain_text_preserves_structure() {
     let alt_source = b"From: Team <team@example.com>\r\n\
@@ -359,7 +356,7 @@ Content-Type: text/html; charset=\"utf-8\"\r\n\
     assert_eq!(parsed_again.subject(), "Alternative format announcement");
 }
 
-/// A message with Quoted-Printable encoded body and custom X-headers serializes with
+/// A message with a Quoted-Printable body and custom X-headers serializes with
 /// canonical CRLF line endings and roundtrips without bare LFs.
 #[test]
 fn message_with_quoted_printable_body_and_custom_headers_serializes_with_crlf() {
@@ -400,8 +397,9 @@ This is a test with soft line breaks=\r\n\
     assert_eq!(roundtripped.subject(), "Quoted Printable Encoding Test");
 }
 
-/// A complex nested multipart message containing multipart/alternative and application/octet-stream
-/// attachments serializes with clean CRLF boundaries and preserves all boundary trees.
+/// A nested multipart message with a multipart/alternative part and an
+/// application/octet-stream attachment serializes with clean CRLF boundaries
+/// and keeps the full boundary tree.
 #[test]
 fn message_with_nested_multipart_and_mixed_encodings_preserves_tree_structure() {
     let nested_source = b"From: Reports <reports@example.com>\r\n\
@@ -463,8 +461,8 @@ AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=\r\n\
     assert_eq!(roundtripped.subject(), "Comprehensive Weekly Audit");
 }
 
-/// A message with UTF-8 encoded-word headers and plain/HTML bodies serializes with
-/// canonical CRLF and roundtrips without header corruption.
+/// A message with UTF-8 encoded-word headers and plain/HTML bodies serializes
+/// with canonical CRLF and roundtrips without header corruption.
 #[test]
 fn message_with_encoded_word_subject_and_html_alternative_serializes_cleanly() {
     let source = b"From: Sender <sender@example.com>\r\n\
@@ -511,8 +509,9 @@ Content-Transfer-Encoding: 8bit\r\n\
     assert_eq!(roundtripped.subject(), "JMAP Überprüfung 🙀");
 }
 
-/// A multipart/related message containing an HTML body and inline image attachment
-/// referenced via Content-ID serializes with clean CRLF endings and roundtrips intact.
+/// A multipart/related message with an HTML body and an inline image attachment
+/// (referenced through Content-ID) serializes with clean CRLF endings and
+/// roundtrips intact.
 #[test]
 fn multipart_related_message_with_html_and_inline_attachment_serializes_cleanly() {
     let related_source = b"From: Alice <alice@example.com>\r\n\
@@ -564,8 +563,8 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAA
     assert_eq!(roundtripped.subject(), "Rich Newsletter with Inline Image");
 }
 
-/// A message with 8bit Content-Transfer-Encoding and custom charset serializes with
-/// canonical CRLF endings and parses back without line corruption.
+/// A message with 8bit Content-Transfer-Encoding serializes with canonical
+/// CRLF endings and parses back without line corruption.
 #[test]
 fn message_with_8bit_body_and_iso_charset_serializes_with_crlf_and_parses_back_intact() {
     let source = b"From: Alice <alice@example.com>\r\n\

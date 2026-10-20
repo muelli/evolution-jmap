@@ -3,29 +3,27 @@
 //
 // The real `_jmap._tcp` SRV resolver, against the system's real DNS.
 //
-// `jmap-client` ships only the seam and a `NoSrvResolver` that never finds
-// anything, so until something implements `Resolver` for real, a plain
-// email+password account still fetches `https://<email domain>/.well-known/
-// jmap` and still 404s for a provider that publishes JMAP via SRV (Fastmail).
-// These tests cover the half of that which is deterministic without a
-// network: that a domain with no record answers "none" — the answer that
-// preserves the bare-domain fallback and therefore every self-hosted
-// deployment — and that neither the FFI call nor the input conversion can
-// panic or misbehave on repetition.
+// `jmap-client` supplies only the seam and a `NoSrvResolver` that never finds
+// a record. Without a real `Resolver`, a plain email+password account fetches
+// `https://<email domain>/.well-known/jmap`. That gives a 404 for a provider
+// that publishes JMAP through SRV (Fastmail). These tests cover the part that
+// is deterministic without a network. A domain with no record answers "none".
+// That answer keeps the bare-domain fallback, and thus every self-hosted
+// deployment. Also, the FFI call and the input conversion do not panic or
+// fail when repeated.
 //
-// The success path needs a domain that really publishes a `_jmap._tcp` record,
-// so its test is `#[ignore]`d rather than pretended to be hermetic; run it
-// with `cargo test -p jmap-backend-core --test resolver -- --ignored`.
+// The success path needs a domain that really publishes a `_jmap._tcp` record.
+// Thus its test is `#[ignore]`d, because it is not hermetic. To run it, use
+// `cargo test -p jmap-backend-core --test resolver -- --ignored`.
 
 use jmap_backend_core::resolver::SystemResolver;
 use jmap_client::resolver::Resolver;
 
-/// RFC 6761 reserves `.invalid` precisely so that a name under it never
-/// resolves, which is the deterministic half of this: whether this runner has
-/// DNS egress or not, the lookup fails and the answer must be "no record", not
-/// an error the caller has to handle — a failed SRV lookup means "try the bare
-/// domain", which is what every deployment that answers at its own domain
-/// (Stalwart, self-hosted, and the mock) relies on.
+/// RFC 6761 reserves `.invalid` so that a name under it never resolves. Thus
+/// the result is deterministic: with or without DNS egress, the lookup fails.
+/// The answer must be "no record", not an error that the caller must handle.
+/// A failed SRV lookup means "try the bare domain". Every deployment that
+/// answers at its own domain (Stalwart, self-hosted, and the mock) needs this.
 #[test]
 fn a_domain_with_no_srv_record_reports_none_so_the_bare_domain_is_tried() {
     assert_eq!(
@@ -34,22 +32,22 @@ fn a_domain_with_no_srv_record_reports_none_so_the_bare_domain_is_tried() {
     );
 }
 
-/// A domain string reaches C as a NUL-terminated string, so one containing an
-/// interior NUL cannot be passed on. It comes from an `ESource` keyfile a user
-/// can hand-write, so the conversion failing must read as "no record" like any
-/// other unresolvable name rather than panicking inside a vfunc.
+/// C gets a domain as a NUL-terminated string, so a domain with an interior
+/// NUL cannot go to C. The domain comes from an `ESource` keyfile that a user
+/// can write by hand. Thus a failed conversion must give "no record", as for
+/// any other unresolvable name. It must not panic inside a vfunc.
 #[test]
 fn a_domain_with_an_interior_nul_reports_none_rather_than_panicking() {
     assert_eq!(SystemResolver.lookup_srv("exa\0mple.com"), None);
     assert_eq!(SystemResolver.lookup_srv("\0"), None);
 }
 
-/// Every lookup takes a `GResolver` reference and a `GSrvTarget` list from
-/// GLib and has to hand both back. Getting that wrong is invisible in a single
-/// call — it shows up as a leak or a crash only under real use, where a backend
-/// reconnects for the lifetime of an Evolution session — so the failing path,
-/// the one that returns no list at all and an error instead, is walked enough
-/// times that an unbalanced reference or free has somewhere to show.
+/// Each lookup gets a `GResolver` reference and a `GSrvTarget` list from GLib
+/// and must release both. An error here is not visible in one call. It shows
+/// as a leak or a crash only in real use, where a backend reconnects for the
+/// lifetime of an Evolution session. Thus the test repeats the failing path
+/// (no list, but an error) until an unbalanced reference or free becomes
+/// visible.
 #[test]
 fn repeated_lookups_are_stable() {
     for _ in 0..64 {
@@ -60,12 +58,12 @@ fn repeated_lookups_are_stable() {
     }
 }
 
-/// The success path, against the provider whose 404 started this. Not
-/// hermetic — it needs DNS egress and it asserts a third party's live DNS
-/// record — so it is ignored by default and run by hand. What it proves is the
-/// part no fake can: that the `GSrvTarget` list GLib returns is walked and read
-/// correctly, and that the host is normalised into something
-/// `ClientBuilder::connect_domain` can build a URL from (no trailing dot).
+/// The success path, against the provider whose 404 caused this work. It is
+/// not hermetic: it needs DNS egress and asserts a third party's live DNS
+/// record. Thus it is ignored by default and you must run it manually. It
+/// proves what no fake can: the code walks and reads the `GSrvTarget` list
+/// from GLib correctly. It also normalises the host into a value from which
+/// `ClientBuilder::connect_domain` can build a URL (no trailing dot).
 #[test]
 #[ignore = "needs DNS egress and asserts a third party's live SRV record"]
 fn fastmail_publishes_its_jmap_host_via_srv() {
@@ -77,30 +75,32 @@ fn fastmail_publishes_its_jmap_host_via_srv() {
     assert_eq!(target.port, 443);
 }
 
-/// Bytes this process has allocated and not returned. `mallinfo2().uordblks`
-/// rather than RSS for jmap-backend-cal/tests/references.rs's reason: a leaked
-/// completion source is ~519 bytes, invisible at page granularity.
+/// Bytes that this process allocated and did not free. This uses
+/// `mallinfo2().uordblks`, not RSS, for the reason in
+/// jmap-backend-cal/tests/references.rs: a leaked completion source is ~519
+/// bytes, which is not visible at page granularity.
 fn allocated_bytes() -> u64 {
     // SAFETY: no preconditions; returns a plain struct of counters.
     unsafe { libc::mallinfo2() }.uordblks as u64
 }
 
-/// glib#4041, pinned: the sync `g_resolver_lookup_service` parks a `GTask`
-/// plus its completion-idle `GSource` (~519 bytes per call) on the calling
-/// thread's thread-default main context, reclaimed only once that context is
-/// iterated, which an EDS worker thread never does. GLib answered "works as
-/// designed; iterate the context", so the lookup now runs under a private,
-/// drained context, and this test is what fails if that regresses.
+/// Regression test for glib#4041. The sync `g_resolver_lookup_service` puts a
+/// `GTask` plus its completion-idle `GSource` (~519 bytes per call) on the
+/// calling thread's thread-default main context. GLib frees them only when
+/// that context iterates, and an EDS worker thread never iterates it. GLib
+/// answered "works as designed; iterate the context". Thus the lookup now runs
+/// under a private, drained context. This test fails if that regresses.
 ///
-/// Windowed retention as in `references.rs`: pass when any window's growth is
-/// noise. Unfixed, every window retains ~512 x 519 B, eight times the floor.
-/// The resolver's per-lookup 30 s timeout source (self-draining, on GLib's own
-/// worker context, outside our reach) is disabled up front with timeout 0 so
-/// pending-but-not-leaked timeouts cannot masquerade as retention here.
+/// Windowed retention as in `references.rs`: pass when the growth of any
+/// window is noise. Without the fix, each window retains ~512 x 519 B, eight
+/// times the floor. The resolver has a 30 s timeout source per lookup
+/// (self-draining, on GLib's own worker context, which this test cannot
+/// control). The test disables it first with timeout 0. Thus timeouts that are
+/// pending but not leaked cannot look like retention here.
 #[test]
 fn repeated_lookups_retain_nothing_on_the_callers_context() {
-    // A reference over-released by the fix's Drop would surface as a GLib
-    // critical; make those abort the run rather than scroll past.
+    // If the fix's Drop releases a reference too many times, GLib logs a
+    // critical. Make criticals abort the run so that they are not missed.
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // SAFETY: no preconditions; the previous mask is returned and ignored.
@@ -110,13 +110,14 @@ fn repeated_lookups_retain_nothing_on_the_callers_context() {
             )
         };
     });
-    // Declared locally: the workspace's gio-sys predates this GLib 2.78
-    // symbol, but every supported runtime (Ubuntu 24.04's 2.80 up) has it.
+    // Declared here because the workspace's gio-sys is older than this GLib
+    // 2.78 symbol. Every supported runtime (Ubuntu 24.04's 2.80 and later) has
+    // it.
     unsafe extern "C" {
         fn g_resolver_set_timeout(resolver: *mut gio_sys::GResolver, timeout_ms: std::ffi::c_uint);
     }
-    // SAFETY: get_default returns a strong reference, balanced by the unref;
-    // timeout 0 disables the per-lookup timeout source.
+    // SAFETY: get_default returns a strong reference, and the unref releases
+    // it. Timeout 0 disables the per-lookup timeout source.
     unsafe {
         let resolver = gio_sys::g_resolver_get_default();
         g_resolver_set_timeout(resolver, 0);
@@ -149,8 +150,8 @@ fn repeated_lookups_retain_nothing_on_the_callers_context() {
 }
 
 /// A lookup attaches nothing to the calling thread's default context.
-/// Pushing a fresh context on a test thread and running lookups leaves
-/// g_main_context_pending false.
+/// After lookups under a fresh context pushed on a test thread,
+/// g_main_context_pending is false.
 #[test]
 fn lookups_attach_nothing_to_the_callers_thread_default_context() {
     let handle = std::thread::spawn(|| {
@@ -182,7 +183,8 @@ fn lookups_attach_nothing_to_the_callers_thread_default_context() {
     handle.join().expect("thread join succeeded");
 }
 
-/// Concurrent lookups from several threads all answer correctly without deadlock.
+/// Concurrent lookups from several threads all answer correctly, with no
+/// deadlock.
 #[test]
 fn concurrent_lookups_from_several_threads_all_answer_correctly() {
     let handles: Vec<_> = (0..8)
@@ -208,7 +210,7 @@ fn concurrent_lookups_from_several_threads_all_answer_correctly() {
 }
 
 /// The number of open file descriptors does not grow across lookups.
-/// This prevents GWakeup fd exhaustion caused by creating uniterated contexts.
+/// This prevents GWakeup fd exhaustion from contexts that never iterate.
 #[test]
 fn open_file_descriptors_do_not_grow_across_repeated_lookups() {
     fn count_open_fds() -> usize {
@@ -217,7 +219,8 @@ fn open_file_descriptors_do_not_grow_across_repeated_lookups() {
             .count()
     }
 
-    // Warm up the resolver thread and one-time process allocations.
+    // Do one lookup first to start the resolver thread and do the one-time
+    // process allocations.
     assert_eq!(
         SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
         None

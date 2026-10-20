@@ -3,19 +3,19 @@
 
 //! A small pool of resolver worker threads, each owning its own GMainContext.
 //!
-//! GLib synchronous resolver lookups park completion sources on the
+//! GLib synchronous resolver lookups attach completion sources to the
 //! thread-default context. Philip Withnall (glib!5341): "The only reliable
 //! advice for making synchronous calls is to do them in a thread with its
-//! own GMainContext." This module maintains a process-lifetime pool of
-//! worker threads, each running a GMainLoop on its own private GMainContext.
+//! own GMainContext." This module keeps a process-lifetime pool of worker
+//! threads. Each runs a GMainLoop on its own private GMainContext.
 //!
-//! A pool rather than one dedicated thread: a single shared GMainContext
-//! made every account's SRV lookup queue behind whichever one is currently
-//! running, so one slow or hung domain delayed every other account's lookup
-//! too, for up to the resolver's own internal timeout. Round-robin dispatch
-//! across a handful of independent contexts bounds that to "this many
-//! accounts can be mid-setup at once before a new one queues", rather than
-//! "every account queues behind one".
+//! Why a pool and not one dedicated thread: with a single shared
+//! GMainContext, every account's SRV lookup queued behind the running one.
+//! Thus one slow or hung domain delayed the lookups of all other accounts,
+//! for up to the resolver's own internal timeout. Round-robin dispatch
+//! across some independent contexts changes the limit from "every account
+//! queues behind one" to "this many accounts can be mid-setup at once
+//! before a new one queues".
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -32,20 +32,20 @@ use gobject_sys::g_object_unref;
 use jmap_client::resolver::SrvTarget;
 
 /// Bounded timeout for SRV resolution on a resolver worker thread.
-/// Comfortably above GLib's internal resolver timeout (60 s).
+/// It is larger than GLib's internal resolver timeout (60 s).
 pub const RESOLVER_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// Worker count. Small and fixed: SRV lookup only runs during account
-/// setup/reconnect, not the steady-state sync path, so this only needs to
-/// cover how many accounts are plausibly mid-setup at the same moment, not
-/// one thread per core.
+/// setup/reconnect, not in the steady-state sync path. Thus it only must
+/// cover the number of accounts that are possibly mid-setup at the same
+/// time, not one thread per core.
 const POOL_SIZE: usize = 4;
 
 #[derive(Clone, Copy)]
 struct SendContext(*mut glib_sys::GMainContext);
 
-// SAFETY: GMainContext reference is valid for the life of the process and
-// g_main_context_invoke_full is documented as thread-safe across threads.
+// SAFETY: the GMainContext reference is valid for the life of the process.
+// The documentation of g_main_context_invoke_full says it is thread-safe.
 unsafe impl Send for SendContext {}
 unsafe impl Sync for SendContext {}
 
@@ -61,8 +61,8 @@ struct ResolverPool {
 
 impl ResolverPool {
     fn next_worker(&self) -> &ResolverWorker {
-        // Relaxed: this only needs to spread load round-robin, not establish
-        // any ordering with the work the chosen worker goes on to do.
+        // Relaxed: this only spreads load round-robin. It does not need an
+        // ordering with the work that the chosen worker does next.
         let index = self.next.fetch_add(1, Ordering::Relaxed) % self.workers.len();
         &self.workers[index]
     }
@@ -98,8 +98,8 @@ fn spawn_resolver_worker() -> std::io::Result<ResolverWorker> {
     let thread = std::thread::Builder::new()
         .name("jmap-resolver".to_owned())
         .spawn(move || {
-            // SAFETY: a fresh GMainContext, pushed as thread-default for this
-            // thread's entire lifetime, and a GMainLoop iterating it.
+            // SAFETY: a new GMainContext, pushed as thread-default for the
+            // full lifetime of this thread, and a GMainLoop that iterates it.
             let (context, main_loop) = unsafe {
                 let context = glib_sys::g_main_context_new();
                 glib_sys::g_main_context_push_thread_default(context);
@@ -108,7 +108,7 @@ fn spawn_resolver_worker() -> std::io::Result<ResolverWorker> {
             };
 
             if ready_tx.send(SendContext(context)).is_err() {
-                // SAFETY: releasing resources if caller disconnected early.
+                // SAFETY: releases resources if the caller disconnected early.
                 unsafe {
                     glib_sys::g_main_loop_unref(main_loop);
                     glib_sys::g_main_context_pop_thread_default(context);
@@ -117,10 +117,10 @@ fn spawn_resolver_worker() -> std::io::Result<ResolverWorker> {
                 return;
             }
 
-            // SAFETY: main_loop is running on context; iterates until quit.
+            // SAFETY: main_loop runs on context and iterates until quit.
             unsafe { glib_sys::g_main_loop_run(main_loop) };
 
-            // SAFETY: releasing resources if the loop ever exits.
+            // SAFETY: releases resources if the loop exits.
             unsafe {
                 glib_sys::g_main_loop_unref(main_loop);
                 glib_sys::g_main_context_pop_thread_default(context);
@@ -136,10 +136,10 @@ fn spawn_resolver_worker() -> std::io::Result<ResolverWorker> {
     })
 }
 
-/// A job dispatched to a worker's context: boxed once, run once, by
-/// [`invoke_cb`]. `None` after [`invoke_cb`] has taken it; also the state a
-/// cancelled invocation (one whose context is torn down before it runs)
-/// leaves it in, which [`drop_payload`] must handle without running it.
+/// A job dispatched to a worker's context. It is boxed once, and
+/// [`invoke_cb`] runs it once. It is `None` after [`invoke_cb`] takes it. A
+/// cancelled invocation (its context is destroyed before it runs) leaves it
+/// `Some`. [`drop_payload`] must then drop it without running it.
 type Job = Option<Box<dyn FnOnce() + Send>>;
 
 unsafe extern "C" fn invoke_cb(data: glib_sys::gpointer) -> glib_sys::gboolean {
@@ -152,13 +152,13 @@ unsafe extern "C" fn invoke_cb(data: glib_sys::gpointer) -> glib_sys::gboolean {
 }
 
 unsafe extern "C" fn drop_payload(data: glib_sys::gpointer) {
-    // SAFETY: reclaiming the leaked Job box after dispatch or cancellation.
+    // SAFETY: reclaims the leaked Job box after dispatch or cancellation.
     drop(unsafe { Box::from_raw(data.cast::<Job>()) });
 }
 
-/// Runs `f` on `worker`'s own GMainContext, by the same dispatch mechanism
-/// every lookup already used before the pool: a boxed job, taken and run
-/// once by [`invoke_cb`], freed by [`drop_payload`] either way.
+/// Runs `f` on the GMainContext of `worker`. This is the same dispatch
+/// mechanism that every lookup used before the pool: a boxed job that
+/// [`invoke_cb`] takes and runs once, and that [`drop_payload`] always frees.
 fn invoke_on_worker(worker: &ResolverWorker, f: impl FnOnce() + Send + 'static) {
     let job: Job = Some(Box::new(f));
     let payload: Box<Job> = Box::new(job);
@@ -229,8 +229,9 @@ fn lookup_first_service_target(
     }
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: resolver is a live GResolver; strings are valid NUL-terminated;
-    // error is initialized to NULL. Returned list is transfer-full.
+    // SAFETY: resolver is a live GResolver. The strings are valid and
+    // NUL-terminated. error is initialized to NULL. The returned list is
+    // transfer-full.
     let targets = unsafe {
         g_resolver_lookup_service(
             resolver,
@@ -250,14 +251,14 @@ fn lookup_first_service_target(
     };
 
     if !targets.is_null() {
-        // SAFETY: targets is transfer-full list from lookup_service.
+        // SAFETY: targets is the transfer-full list from lookup_service.
         unsafe { g_resolver_free_targets(targets) };
     }
     if !error.is_null() {
-        // SAFETY: error was written by the failing call above and is owned by us.
+        // SAFETY: the failed call above wrote error, and this code owns it.
         unsafe { g_error_free(error) };
     }
-    // SAFETY: balances g_resolver_get_default reference.
+    // SAFETY: balances the g_resolver_get_default reference.
     unsafe { g_object_unref(resolver.cast()) };
 
     first
@@ -272,7 +273,7 @@ unsafe fn read_target(target: *mut GSrvTarget) -> Option<SrvTarget> {
     if host.is_null() {
         return None;
     }
-    // SAFETY: valid NUL-terminated string owned by the target.
+    // SAFETY: a valid NUL-terminated string that the target owns.
     let host = crate::resolver::srv_host(&unsafe { CStr::from_ptr(host) }.to_string_lossy())?;
 
     // SAFETY: target is valid.
@@ -298,13 +299,13 @@ mod tests {
     }
 
     /// Regression test: before this module had a pool, every lookup shared
-    /// one GMainContext, so a slow one delayed every other one behind it.
-    /// Proven here with plain closures and no real DNS, and by order, not by
-    /// a wall-clock margin: the slow job blocks on a gate this test holds,
-    /// so the fast job on the other worker can only answer before the gate
-    /// opens if it truly ran independently. A generous timeout only guards
-    /// against a hang; it does not bound how long the fast job is allowed
-    /// to take, so CPU load cannot make this test flake.
+    /// one GMainContext. Thus a slow lookup delayed all lookups behind it.
+    /// This test uses plain closures and no real DNS. It proves by order,
+    /// not by a wall-clock margin. The slow job blocks on a gate that this
+    /// test holds. Thus the fast job on the other worker can only answer
+    /// before the gate opens if it ran independently. The large timeout only
+    /// prevents a hang. It does not limit the duration of the fast job, so
+    /// CPU load cannot make this test flake.
     #[test]
     fn a_slow_job_on_one_worker_does_not_delay_a_job_on_another() {
         let pool = get_resolver_pool().expect("resolver pool starts");
@@ -317,8 +318,8 @@ mod tests {
 
         const HANG_TIMEOUT: Duration = Duration::from_secs(10);
 
-        // The gate: the slow job parks here until the test releases it,
-        // which only happens after the fast job has already answered.
+        // The gate: the slow job waits here until the test releases it.
+        // The test releases it only after the fast job has answered.
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(0);
         let (slow_tx, slow_rx) = std::sync::mpsc::sync_channel::<()>(1);
         invoke_on_worker(slow_worker, move || {
@@ -335,9 +336,9 @@ mod tests {
             .recv_timeout(HANG_TIMEOUT)
             .expect("the fast job must answer without waiting for the slow one's worker");
 
-        // The fast job has answered, and the slow job is still parked on
-        // the gate (release_tx has not sent yet): open it now and confirm
-        // it finishes too, proving the fast answer was not just a fluke.
+        // The fast job has answered, and the slow job still waits on the
+        // gate (release_tx has not sent yet). Open the gate and make sure
+        // the slow job also completes. This proves the fast answer is valid.
         release_tx
             .send(())
             .expect("slow job still waiting on the gate");
@@ -346,13 +347,13 @@ mod tests {
             .expect("the slow job eventually completes on its own worker");
     }
 
-    /// Serializes tests that read `ResolverPool::next` directly: it is a
-    /// process-global counter, so two such tests running concurrently in the
-    /// same test binary could observe each other's increments.
+    /// Serializes tests that read `ResolverPool::next` directly. It is a
+    /// process-global counter. Thus two such tests that run concurrently in
+    /// the same test binary can see the increments of the other test.
     static POOL_NEXT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Round-robin dispatch actually spreads jobs across every worker,
-    /// rather than, say, always landing on worker 0.
+    /// Round-robin dispatch spreads jobs across all workers, and does not,
+    /// for example, always send them to worker 0.
     #[test]
     fn round_robin_dispatch_reaches_every_worker() {
         let _guard = POOL_NEXT_TEST_LOCK.lock().expect("lock not poisoned");
@@ -383,10 +384,10 @@ mod tests {
         );
     }
 
-    /// `resolve_srv` must actually dispatch to a worker, not just report "no
-    /// record" on its own: a failed lookup and a short-circuited one return
-    /// the same `None`, so this checks the round-robin counter instead of the
-    /// result, which only moves if `next_worker` really ran.
+    /// `resolve_srv` must dispatch to a worker, and not only report "no
+    /// record" itself. A failed lookup and a short-circuited one return the
+    /// same `None`. Thus this test checks the round-robin counter, not the
+    /// result. The counter only changes if `next_worker` ran.
     #[test]
     fn resolve_srv_dispatches_through_the_pool_even_when_the_lookup_fails() {
         let _guard = POOL_NEXT_TEST_LOCK.lock().expect("lock not poisoned");

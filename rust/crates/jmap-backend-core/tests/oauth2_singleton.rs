@@ -1,45 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// That asking "is this method OAuth 2.0?" from several threads at once does not
-// take the process down.
+// Tests that the question "is this method OAuth 2.0?" from several threads at
+// the same time does not crash the process.
 //
-// `EOAuth2Services` is a process-wide singleton whose *last* reference destroys
-// it (`e-oauth2-services.c`, EDS 3.52.3), and
-// `e_oauth2_services_is_oauth2_alias_static()` creates one, queries it and drops
-// that reference on every call. Two threads asking at once is then a race
-// against EDS's own machinery: one is inside `oauth2_services_dispose`, which
-// does `g_slist_free_full (priv->services, g_object_unref)` *without clearing
-// the field*, while the other is inside `oauth2_services_constructor`, which
-// still sees the not-yet-cleared `services_singleton` and takes a reference to
-// it — a legal GObject resurrection, of an object whose service list has just
-// been freed. The second thread then walks that freed list and dereferences a
-// dangling `EOAuth2Service`.
+// `EOAuth2Services` is a process-wide singleton. Its *last* reference destroys
+// it (`e-oauth2-services.c`, EDS 3.52.3).
+// `e_oauth2_services_is_oauth2_alias_static()` creates one, queries it and
+// drops that reference on each call. Thus two threads that ask at the same time
+// cause a race in EDS's own code. One thread is in `oauth2_services_dispose`,
+// which does `g_slist_free_full (priv->services, g_object_unref)` *without
+// clearing the field*. The other thread is in `oauth2_services_constructor`. It
+// still sees the `services_singleton` that is not yet cleared and takes a
+// reference to it. This is a legal GObject resurrection of an object whose
+// service list is already freed. The second thread then walks that freed list
+// and dereferences a dangling `EOAuth2Service`.
 //
-// EDS's own documentation for `e_oauth2_services_is_oauth2_alias_static()` names
-// the precondition that avoids this: the singleton "won't be much trouble, as
+// EDS's documentation for `e_oauth2_services_is_oauth2_alias_static()` names
+// the precondition that prevents this: the singleton "won't be much trouble, as
 // long as there is something else having created one instance." Every real
-// Evolution process satisfies it by accident — `e_source_registry_init()` holds
-// an `EOAuth2Services` for the registry's lifetime — so the crash only shows up
-// where nothing does, which is this project's own test binaries, and would show
-// up in any future tool that queries before opening a registry.
-// `jmap_backend_core::oauth2` therefore satisfies it on purpose; this test is
-// what pins that.
+// Evolution process satisfies it by accident: `e_source_registry_init()` holds
+// an `EOAuth2Services` for the registry's lifetime. Thus the crash occurs only
+// where nothing holds one. This project's test binaries are such a place. Any
+// future tool that queries before it opens a registry is another.
+// `jmap_backend_core::oauth2` therefore satisfies the precondition
+// intentionally, and this test makes sure that it stays so.
 //
-// Written as its own binary rather than a case in `tests/oauth2.rs` so that the
-// threads below are the only thing in the process touching the singleton, which
-// is what makes a red run red rather than occasionally red.
+// This test is a separate binary, not a case in `tests/oauth2.rs`. Thus the
+// threads below are the only code in the process that touch the singleton.
+// This makes a failing run fail every time, not only sometimes.
 
 use std::sync::{Arc, Barrier};
 use std::thread;
 
 use jmap_backend_core::oauth2::method_is_oauth2;
 
-/// A name no `EOAuth2Service` can answer to, so the lookup walks the whole
-/// service list every time instead of stopping at the first entry — the same
-/// reason `tests/oauth2.rs` uses a deliberately unregistrable name, here also
-/// because a full walk is the widest window onto a list being freed underneath
-/// it.
+/// A name that no `EOAuth2Service` matches. Thus the lookup walks the full
+/// service list each time and does not stop at the first entry.
+/// `tests/oauth2.rs` uses an unregistrable name for the same reason. Here a
+/// full walk also gives the widest window onto a list that another thread
+/// frees.
 const NO_SUCH_SERVICE: &str = "not-a-registered-oauth2-service";
 
 const THREADS: usize = 8;
@@ -70,10 +70,10 @@ fn the_alias_lookup_survives_being_asked_from_several_threads_at_once() {
 }
 
 /// The literal spelling, asked the same way. `"OAuth2"` returns before the
-/// service list is consulted at all, so this is not a second copy of the test
-/// above: it pins that the fix did not make the fast path pay for the slow
-/// one's safety, and it is the answer every account written by this project's
-/// own setup UI depends on.
+/// lookup reads the service list, so this is not a copy of the test above. It
+/// makes sure that the fix does not make the fast path slower for the safety
+/// of the slow path. Every account that this project's setup UI writes needs
+/// this answer.
 #[test]
 fn the_literal_method_is_still_recognised_under_the_same_contention() {
     let start = Arc::new(Barrier::new(THREADS));

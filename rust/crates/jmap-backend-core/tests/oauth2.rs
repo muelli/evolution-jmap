@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Which accounts authenticate with OAuth 2.0, and what happens when the token
-// cannot be had.
+// Tests which accounts authenticate with OAuth 2.0, and what occurs when no
+// token is available.
 //
-// The rule under test is not this project's invention: it is transcribed from
-// EDS's own `e_soup_session_setup_message_credentials` (3.52.3), the function
-// every WebDAV/CalDAV/CardDAV account in Evolution authenticates through. It
-// reads `[Authentication] Method` and sends a Bearer token when that string is
+// This project did not invent the rule under test. It is a copy of EDS's
+// `e_soup_session_setup_message_credentials` (3.52.3). Every WebDAV/CalDAV/
+// CardDAV account in Evolution authenticates through that function. It reads
+// `[Authentication] Method` and sends a Bearer token when that string is
 // `"OAuth2"` or the name of a registered `EOAuth2Service`, and Basic otherwise.
-// A JMAP account has to answer the same question the same way, or an account
-// the setup UI writes as OAuth2 would silently be asked for a password.
+// A JMAP account must give the same answer. If not, Evolution silently asks
+// for a password for an account that the setup UI writes as OAuth2.
 
 use std::ffi::{CString, c_char};
 use std::ptr;
@@ -25,31 +25,32 @@ use jmap_backend_core::connect::ConnectError;
 use jmap_backend_core::oauth2::{access_token, method_is_oauth2, source_uses_oauth2};
 use jmap_tracing_capture::capture;
 
-/// A live `ESource` with nothing but a uid, plus whatever a test writes on it.
-/// The same shape `jmap-config/tests/oauth2_service.rs` uses, and for the same
-/// reason: an `ESource` is constructible without a registry, so the extension
-/// readers can be driven for real rather than mocked.
+/// A live `ESource` with only a uid, plus the values that a test writes on it.
+/// `jmap-config/tests/oauth2_service.rs` uses the same shape for the same
+/// reason: you can construct an `ESource` without a registry, so the tests
+/// call the real extension readers, not mocks.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new(uid: &str) -> Self {
         let uid = CString::new(uid).expect("no NUL in a test uid");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, no D-Bus
+        // object and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
-    /// Sets `[Authentication] Method`, or removes nothing when passed NULL —
-    /// EDS has no unset state for this property, so "absent" is tested by
-    /// never creating the extension at all (see `new` above).
+    /// Sets `[Authentication] Method`. EDS has no unset state for this
+    /// property, so the tests make "absent" by never creating the extension
+    /// (see `new` above).
     fn with_method(self, method: &str) -> Self {
         let method = CString::new(method).expect("no NUL in a test method");
-        // SAFETY: a live source; the extension name is EDS's own constant and
-        // the type is registered just above, so the lookup creates and returns
-        // a real `ESourceAuthentication`. The setter copies the string.
+        // SAFETY: a live source. The extension name is EDS's own constant,
+        // and the `_get_type` call registers the type first. Thus the lookup
+        // creates and returns a real `ESourceAuthentication`. The setter
+        // copies the string.
         unsafe {
             e_source_authentication_get_type();
             let auth =
@@ -67,20 +68,20 @@ impl Drop for TestSource {
     }
 }
 
-/// EDS spells "this source authenticates with OAuth 2.0, by whichever service
-/// claims it" as the literal string `OAuth2`, and it is the one value that
-/// needs no registered service to be recognised.
+/// EDS writes "this source authenticates with OAuth 2.0, through any service
+/// that claims it" as the literal string `OAuth2`. It is the only value that
+/// the lookup recognises without a registered service.
 #[test]
 fn the_literal_oauth2_method_is_oauth2() {
     assert!(method_is_oauth2(Some("OAuth2")));
 }
 
-/// The three values `e_oauth2_services_can_check_auth_method` rejects outright,
-/// plus the absent method. `"none"` is the important one: it is what a *fresh*
-/// `ESourceAuthentication` reads back as — `jmap-config`'s `account` module
-/// documents that the property has no unset state — so an ordinary
-/// password account reaches this code as `Some("none")`, not as `None`, and
-/// answering "yes, OAuth2" to it would break every account that exists today.
+/// The three values that `e_oauth2_services_can_check_auth_method` always
+/// rejects, plus the absent method. `"none"` is the important value: a *fresh*
+/// `ESourceAuthentication` reads back as `"none"`. (`jmap-config`'s `account`
+/// module documents that the property has no unset state.) Thus an ordinary
+/// password account comes to this code as `Some("none")`, not as `None`. The
+/// answer "yes, OAuth2" for it would break every account that exists today.
 #[test]
 fn the_password_methods_are_not_oauth2() {
     assert!(!method_is_oauth2(None));
@@ -89,19 +90,18 @@ fn the_password_methods_are_not_oauth2() {
     assert!(!method_is_oauth2(Some("plain/password")));
 }
 
-/// A name no `EOAuth2Service` in this process can have. Deliberately not
-/// `"JMAP"` — this crate's own service really is registered by
-/// `module-jmap-backend.so`, which may be installed on the machine running the
-/// tests, so asserting `"JMAP"` is *not* an alias would pass or fail depending
-/// on what is in the EDS module directory.
+/// A name that no `EOAuth2Service` in this process can have. It is
+/// intentionally not `"JMAP"`. `module-jmap-backend.so` registers this crate's
+/// own service, and that module can be installed on the test machine. Thus an
+/// assertion that `"JMAP"` is *not* an alias passes or fails because of the
+/// contents of the EDS module directory.
 #[test]
 fn an_unregistered_service_name_is_not_oauth2() {
     assert!(!method_is_oauth2(Some("not-a-registered-oauth2-service")));
 }
 
-/// The same question asked the way `connect_with` asks it — off a real
-/// `ESource` rather than off a string — including the case the extension is
-/// absent entirely.
+/// The same question, asked as `connect_with` asks it: from a real `ESource`,
+/// not from a string. This includes the case where the extension is absent.
 #[test]
 fn the_method_is_read_off_the_source() {
     let absent = TestSource::new("jmap-oauth2-absent");
@@ -117,19 +117,19 @@ fn the_method_is_read_off_the_source() {
     assert!(unsafe { source_uses_oauth2(oauth2.0) });
 }
 
-/// A source that is not backed by the registry — which is every source a test
-/// builds, and also a real one whose account has never been consented to — has
-/// no token to give. What matters is that this is an ordinary `Err` rather
-/// than a crash, and that it asks Evolution to authenticate rather than
-/// telling it the stored credentials were wrong: for an OAuth 2.0 source,
-/// `REQUIRED` is what opens the consent window, and `REJECTED` would throw
-/// away a refresh token that a transient failure had not invalidated.
+/// A source without a registry has no token to give. Every source that a test
+/// makes is such a source. So is a real source whose account has no consent
+/// yet. The result must be an ordinary `Err`, not a crash. It must also ask
+/// Evolution to authenticate, and not tell it that the stored credentials are
+/// wrong. For an OAuth 2.0 source, `REQUIRED` opens the consent window.
+/// `REJECTED` discards a refresh token that a transient failure did not make
+/// invalid.
 #[test]
 fn a_source_with_no_token_is_a_required_not_a_rejected() {
     let source = TestSource::new("jmap-oauth2-no-token").with_method("OAuth2");
 
-    // SAFETY: a live source and a NULL cancellable, which is what an EDS vfunc
-    // may be handed.
+    // SAFETY: a live source and a NULL cancellable. An EDS vfunc can get a
+    // NULL cancellable.
     let (result, _) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
     let error = result.expect_err("no token exists");
 
@@ -148,9 +148,9 @@ fn a_source_with_no_token_is_a_required_not_a_rejected() {
     }
 }
 
-/// Contrasting with `a_source_with_no_token_is_a_required_not_a_rejected`:
-/// when a secret store failure occurs, the error must map to ERROR (never REQUIRED)
-/// and carry the DBUS_ERROR client code.
+/// Compare with `a_source_with_no_token_is_a_required_not_a_rejected`: a secret
+/// store failure must map to ERROR (never REQUIRED) and have the DBUS_ERROR
+/// client code.
 #[test]
 fn an_oauth2_secret_store_failure_surfaces_error_and_dbus_client_error() {
     let error = ConnectError::SecretStore("the login keyring is locked".to_owned());

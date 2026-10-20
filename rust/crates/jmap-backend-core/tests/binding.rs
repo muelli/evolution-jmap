@@ -1,22 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading the domain's binding back without disturbing it.
+//! Read the binding of the domain without a change to it.
 //!
-//! [`bind`] and [`bind_to`] both answer with the binding they made, which is
-//! enough for a caller that has just made one. It is not enough for a caller
-//! that wants to know what the binding *is* — a module's entry point has to be
-//! able to be asked "did you bind the domain?" by something that must not bind
-//! it itself, because binding it would make the answer yes either way. That is
-//! [`binding`], and it is what `jmap-mail`'s `tests/textdomain.rs` observes the
-//! provider module through.
+//! [`bind`] and [`bind_to`] both return the binding that they made. This is
+//! sufficient for a caller that made a binding. It is not sufficient for a
+//! caller that must know what the binding *is*. A test must ask a module entry
+//! point "did you bind the domain?" without a bind of its own, because that
+//! bind makes the answer yes in all cases. [`binding`] gives this answer.
+//! `tests/textdomain.rs` in `jmap-mail` uses it to observe the provider module.
 //!
 //! ## Why this is a test binary of its own
 //!
-//! It binds the domain somewhere deliberately wrong, which is process-global
-//! state a sibling test would race for. Cargo gives each file in `tests/` its
-//! own process, so being alone in this file is the isolation — the same reason
-//! `tests/catalogue.rs` is separate.
+//! The test binds the domain to an intentionally wrong directory. This is
+//! process-global state, and a sibling test would race for it. Cargo gives
+//! each file in `tests/` its own process, so this file alone gives the
+//! isolation. `tests/catalogue.rs` is separate for the same reason.
 //!
 //! [`bind`]: jmap_backend_core::i18n::bind
 //! [`bind_to`]: jmap_backend_core::i18n::bind_to
@@ -24,15 +23,14 @@
 
 use jmap_backend_core::i18n::{LOCALE_DIR, bind, bind_to, binding};
 
-/// The query reports the directory that was last bound, and does not become
-/// that directory by being asked.
+/// The query reports the directory of the last bind, and the query itself does
+/// not bind to that directory.
 ///
-/// The decoy is the whole point. Asserting `binding() == LOCALE_DIR` on a
-/// freshly started process would pass against a `binding` that ignored gettext
-/// and returned the constant, and would pass again against one that bound the
-/// domain as a side effect of reading it. Starting from a directory nothing
-/// would ever choose means both of those are visible: the first fails the
-/// decoy assertion, the second fails the one after it.
+/// The decoy is necessary. In a new process, `binding() == LOCALE_DIR` passes
+/// for a `binding` that ignores gettext and returns the constant. It also
+/// passes for a `binding` that binds the domain as a side effect of the read.
+/// The decoy is a directory that nothing would choose, so both defects show:
+/// the first fails the decoy assertion, the second fails the next assertion.
 #[test]
 fn the_binding_is_readable_without_being_written() {
     let decoy = c"/nonexistent/jmap-decoy-locale";
@@ -52,8 +50,8 @@ fn the_binding_is_readable_without_being_written() {
         "asking twice does not move the binding"
     );
 
-    // And it follows a later binding rather than caching the first answer,
-    // which is the direction the module entry points move it in.
+    // The query follows a later bind and does not cache the first answer.
+    // The module entry points change the binding in this direction.
     assert_eq!(bind().as_c_str(), LOCALE_DIR);
     assert_eq!(binding().as_c_str(), LOCALE_DIR);
 }

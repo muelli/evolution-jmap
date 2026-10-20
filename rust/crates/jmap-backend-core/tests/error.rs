@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The GError a backend returns is not just a log line: EDS routes on domain
-// and code. G_IO_ERROR_CANCELLED suppresses the error dialog,
-// E_CLIENT_ERROR_AUTHENTICATION_FAILED re-prompts for credentials, and
-// E_CLIENT_ERROR_REPOSITORY_OFFLINE makes a meta backend fall back to its
-// cache instead of reporting failure. Getting the mapping wrong is a UX bug
-// that no amount of correct JMAP will fix.
+// The GError of a backend is more than a log line: EDS routes on domain and
+// code. G_IO_ERROR_CANCELLED suppresses the error dialog,
+// E_CLIENT_ERROR_AUTHENTICATION_FAILED prompts again for credentials, and
+// E_CLIENT_ERROR_REPOSITORY_OFFLINE makes a meta backend use its cache and
+// not report a failure. A wrong mapping is a UX bug that correct JMAP cannot
+// repair.
 
 use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_OTHER_ERROR,
@@ -64,8 +64,8 @@ fn a_forbidden_response_maps_to_permission_denied() {
     assert_eq!(code, E_CLIENT_ERROR_PERMISSION_DENIED as i32);
 }
 
-/// A server we cannot reach is exactly the case the meta backend's offline
-/// cache exists for, so it must not surface as a generic failure.
+/// The offline cache of the meta backend exists for a server that the backend
+/// cannot reach. Thus this case must not show as a generic failure.
 #[test]
 fn a_transport_failure_maps_to_repository_offline() {
     let (domain, code, message) = mapped(&Error::Transport("dns lookup failed".into()));
@@ -87,8 +87,8 @@ fn protocol_level_failures_carry_their_description_into_the_message() {
     assert!(message.contains("missing response"), "{message}");
 }
 
-/// The problem details from the server are the only thing that explains a 500
-/// to the user; dropping them would leave "HTTP 500" and nothing else.
+/// Only the problem details from the server explain a 500 to the user.
+/// Without them, the user sees only "HTTP 500".
 #[test]
 fn http_problem_details_reach_the_message() {
     let (_, code, message) = mapped(&Error::Http {
@@ -110,10 +110,10 @@ fn a_null_out_parameter_is_a_no_op_rather_than_a_crash() {
     unsafe { set_gerror(ptr::null_mut(), &Error::Cancelled) };
 }
 
-/// A caller that writes into an already-set `GError**` violated the
-/// standard GLib out-parameter contract (`*dest` must start NULL). GLib's
-/// own `g_set_error()` refuses to overwrite in that case rather than leak
-/// the first error; this must do the same, not silently clobber it.
+/// A caller that writes into an already-set `GError**` violates the
+/// standard GLib out-parameter contract (`*dest` must start NULL). In that
+/// case, `g_set_error()` of GLib does not overwrite or leak the first error.
+/// `set_gerror` must do the same and not silently overwrite it.
 #[test]
 fn overwriting_an_already_set_gerror_keeps_the_first_and_frees_the_second() {
     let mut out: *mut GError = ptr::null_mut();

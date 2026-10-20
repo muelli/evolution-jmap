@@ -3,24 +3,24 @@
 
 //! `GCancellable` → [`CancelFlag`].
 //!
-//! EDS hands every vfunc a `GCancellable`; the JMAP client polls a
+//! EDS gives every vfunc a `GCancellable`. The JMAP client polls a
 //! [`CancelFlag`] between requests. [`CancelBridge`] connects the two for the
-//! duration of one operation: `g_cancellable_connect` fires the callback
-//! immediately if the cancellable has already been cancelled, so a request
-//! that was aborted before the backend was even entered never goes out.
+//! duration of one operation. `g_cancellable_connect` fires the callback
+//! immediately if the cancellable is already cancelled. Thus a request that
+//! was aborted before the backend started never goes out.
 //!
-//! The bridge deliberately owns the connection for a *scope* rather than for
-//! the lifetime of the backend: the same cancellable is not reused across
-//! operations, and a handler left connected would keep firing at a flag
-//! nobody reads.
+//! Intentionally, the bridge owns the connection for a *scope*, not for the
+//! lifetime of the backend. Operations do not share a cancellable, and a
+//! handler that stays connected would continue to fire at a flag that nobody
+//! reads.
 //!
-//! What a vfunc wants is one call — [`observe`] — because the flag on its own
-//! is only half of the path. A backend's [`Client`] is built once per account,
-//! at connect time, and the vfunc that wants to be cancellable runs long after
-//! that with no way to reach into it; [`observe`] closes the gap by installing
-//! the bridged flag as the cancellation of every request the *calling thread*
-//! makes until the operation returns. See [`CancelScope`] for why the thread is
-//! the right thing to hang it on.
+//! A vfunc needs one call, [`observe`], because the flag alone is only half
+//! of the path. The [`Client`] of a backend is built one time for each
+//! account, at connect time. The cancellable vfunc runs long after that, and
+//! has no access to the client. [`observe`] closes this gap: it installs the
+//! bridged flag as the cancellation of every request that the *calling
+//! thread* makes until the operation returns. [`CancelScope`] tells why the
+//! thread is the correct place for it.
 //!
 //! [`Client`]: jmap_client::Client
 
@@ -34,42 +34,42 @@ use jmap_client::transport::CancelScope;
 
 use crate::callback::gcallback;
 
-/// One operation's cancellable, bridged and installed for as long as the
+/// The cancellable of one operation, bridged and installed while the
 /// operation runs.
 ///
-/// Held in a local of the vfunc it belongs to and dropped when that returns,
-/// which is what makes it the operation's and not the account's.
+/// A local of its vfunc holds it, and drops it when the vfunc returns. Thus
+/// it belongs to the operation, not to the account.
 pub struct Cancellation {
-    /// Declared first so it is dropped first: the thread stops observing the
-    /// flag before the handler feeding it is disconnected.
+    /// Declared first, so that it drops first: the thread stops observing
+    /// the flag before the handler that sets it is disconnected.
     ///
-    /// `None` for a NULL cancellable — see [`observe`].
+    /// `None` for a NULL cancellable (see [`observe`]).
     _scope: Option<CancelScope>,
     _bridge: CancelBridge,
 }
 
-/// Makes `cancellable` the thing every request this thread issues is cancelled
-/// through, until the returned value is dropped.
+/// Makes `cancellable` the cancellation of every request that this thread
+/// sends, until the returned value drops.
 ///
-/// The one call a vfunc needs: `let _cancel = unsafe { observe(cancellable) };`
-/// at the top of it, and everything below — through a client built at connect
-/// time, through layers that know nothing of GIO — stops when the user presses
-/// Stop.
+/// A vfunc needs only one call at its start:
+/// `let _cancel = unsafe { observe(cancellable) };`. Then all code below it
+/// stops when the user pushes Stop. This includes a client built at connect
+/// time, and layers that know nothing about GIO.
 ///
-/// **NULL installs nothing.** GIO's NULL cancellable means "this call cannot be
-/// cancelled", and a flag that can never fire, installed over the scope of the
-/// operation this one is nested inside, would not merely fail to cancel — it
-/// would *hide* an outer cancellation that had already arrived. Leaving the
-/// thread observing what it was observing is the honest reading of "nothing to
-/// say".
+/// **NULL installs nothing.** The NULL cancellable of GIO means "this call
+/// cannot be cancelled". Suppose that a flag that can never fire is
+/// installed over the scope of the outer operation. It would not only fail
+/// to cancel. It would also *hide* an outer cancellation that already
+/// arrived. Thus the thread continues to observe its previous flag. That is
+/// the honest meaning of "nothing to say".
 ///
 /// # Safety
 ///
 /// `cancellable` must be NULL or a valid `GCancellable` that outlives the
-/// returned value — which the one EDS and Camel pass to a sync vfunc does, for
-/// the duration of that call.
+/// returned value. The cancellable that EDS and Camel pass to a sync vfunc
+/// obeys this for the duration of that call.
 pub unsafe fn observe(cancellable: *mut GCancellable) -> Cancellation {
-    // SAFETY: this function's contract is the bridge's.
+    // SAFETY: this function has the same contract as the bridge.
     let bridge = unsafe { CancelBridge::new(cancellable) };
     let scope = (!cancellable.is_null()).then(|| CancelScope::install(bridge.flag()));
     Cancellation {
@@ -86,15 +86,14 @@ pub struct CancelBridge {
 }
 
 impl CancelBridge {
-    /// Connects to `cancellable`, which may be NULL — GIO's spelling of
-    /// "this operation cannot be cancelled", in which case the flag simply
-    /// never fires.
+    /// Connects to `cancellable`. It can be NULL, which in GIO means "this
+    /// operation cannot be cancelled". Then the flag never fires.
     ///
     /// # Safety
     ///
     /// `cancellable` must be NULL or a valid `GCancellable` that outlives the
-    /// returned bridge. EDS owns the one it passes to a vfunc for at least
-    /// the duration of that call, which is the intended scope.
+    /// returned bridge. EDS owns the cancellable that it passes to a vfunc
+    /// for at least the duration of that call, which is the intended scope.
     pub unsafe fn new(cancellable: *mut GCancellable) -> Self {
         let flag = CancelFlag::new();
         if cancellable.is_null() {
@@ -105,14 +104,15 @@ impl CancelBridge {
             };
         }
 
-        // The callback needs its own handle on the shared state; the box is
-        // freed by `destroy_flag` when the handler goes away, including the
-        // already-cancelled case where GIO destroys it immediately.
+        // The callback needs its own handle on the shared state.
+        // `destroy_flag` frees the box when the handler is removed. This
+        // includes the already-cancelled case, where GIO removes the handler
+        // immediately.
         let data = Box::into_raw(Box::new(flag.clone())).cast::<std::ffi::c_void>();
 
-        // SAFETY: `cancellable` is a valid GCancellable per this function's
-        // contract, and `on_cancelled` has the signature the "cancelled"
-        // signal actually invokes.
+        // SAFETY: `cancellable` is a valid GCancellable by the contract of this
+        // function. `on_cancelled` has the signature that the "cancelled"
+        // signal invokes.
         let handler = unsafe {
             g_cancellable_connect(
                 cancellable,
@@ -129,7 +129,7 @@ impl CancelBridge {
         }
     }
 
-    /// The flag to hand to the client. Cloning it is fine and cheap; every
+    /// The flag for the client. A clone of it is permitted and cheap. Every
     /// clone observes the same cancellation.
     pub fn flag(&self) -> &CancelFlag {
         &self.flag
@@ -138,14 +138,14 @@ impl CancelBridge {
 
 impl Drop for CancelBridge {
     fn drop(&mut self) {
-        // A zero handler means either a NULL cancellable or a cancellable
-        // that was already cancelled at connect time — in both cases GIO has
-        // nothing left to disconnect and has already freed the boxed flag.
+        // A zero handler means a NULL cancellable, or a cancellable that was
+        // already cancelled at connect time. In both cases, GIO has nothing
+        // to disconnect and already freed the boxed flag.
         if self.handler == 0 || self.cancellable.is_null() {
             return;
         }
         // SAFETY: the handler id came from g_cancellable_connect on this same
-        // cancellable and has not been disconnected yet.
+        // cancellable, and is not disconnected yet.
         unsafe { g_cancellable_disconnect(self.cancellable, self.handler) };
         self.handler = 0;
         self.cancellable = ptr::null_mut();
@@ -153,9 +153,9 @@ impl Drop for CancelBridge {
 }
 
 unsafe extern "C" fn on_cancelled(_cancellable: *mut GCancellable, data: gpointer) {
-    // SAFETY: `data` is the CancelFlag boxed in `CancelBridge::new`, which is
-    // kept alive until `destroy_flag` runs. Setting the flag cannot panic, so
-    // no guard is needed here.
+    // SAFETY: `data` is the CancelFlag boxed in `CancelBridge::new`. It stays
+    // alive until `destroy_flag` runs. To set the flag cannot panic, so no
+    // guard is necessary here.
     unsafe {
         if let Some(flag) = data.cast::<CancelFlag>().as_ref() {
             flag.cancel();
@@ -168,6 +168,6 @@ unsafe extern "C" fn destroy_flag(data: gpointer) {
         return;
     }
     // SAFETY: `data` is the Box::into_raw pointer from `CancelBridge::new`,
-    // and GIO calls this exactly once per connection.
+    // and GIO calls this exactly one time for each connection.
     drop(unsafe { Box::from_raw(data.cast::<CancelFlag>()) });
 }
