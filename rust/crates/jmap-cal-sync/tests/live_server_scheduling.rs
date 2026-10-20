@@ -4,7 +4,8 @@
 //! `CalSync`'s scheduling switch against a real JMAP server: with it on, a
 //! meeting saved through the sync layer is delivered by the server to a guest
 //! on the same server, exactly once, and its deletion reaches the guest as a
-//! cancellation; with it off, the guest hears nothing. The mock-side
+//! cancellation; with it off, the guest hears nothing. A dismissed reminder
+//! sends the guest nothing. The mock-side
 //! counterpart is `tests/scheduling.rs`.
 //!
 //! ## Running it
@@ -22,11 +23,12 @@
 use std::env;
 use std::time::{Duration, Instant};
 
-use jmap_cal_sync::CalSync;
+use jmap_cal_sync::{CalSync, Itip};
 use jmap_client::{Client, Credentials};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
-use jmap_proto::session::CAPABILITY_CALENDARS;
+use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_MAIL};
 
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
@@ -60,7 +62,7 @@ fn default_calendar(client: &Client, account_id: &Id) -> Id {
         .expect("the server named the calendar")
 }
 
-/// The guest's copies of the meeting with this iCalendar `UID`.
+/// The copies of the event with this iCalendar `UID` in `account_id`.
 fn guest_copies(guest: &Client, account_id: &Id, uid: &str) -> Vec<CalendarEvent> {
     let filter = CalendarEventQueryFilter {
         uid: Some(uid.to_owned()),
@@ -398,4 +400,108 @@ fn a_guest_accepting_from_the_invitation_mail_updates_its_one_copy_and_tells_the
         "the accept was filed into the copy the server delivered"
     );
     assert_eq!(status.as_deref(), Some("accepted"));
+}
+
+/// [`meeting`] with one display reminder.
+fn meeting_with_reminder(uid: &str, organizer: &str, guest: &str) -> String {
+    meeting(uid, organizer, guest).replace(
+        "END:VEVENT\r\n",
+        &format!(
+            "BEGIN:VALARM\r\n\
+             UID:{uid}-alarm\r\n\
+             ACTION:DISPLAY\r\n\
+             DESCRIPTION:{uid}\r\n\
+             TRIGGER:-PT15M\r\n\
+             END:VALARM\r\n\
+             END:VEVENT\r\n"
+        ),
+    )
+}
+
+/// The subjects of the guest's mails that name `uid`.
+fn guest_mail(guest: &Client, uid: &str) -> Vec<String> {
+    let account_id = guest.primary_account(CAPABILITY_MAIL).unwrap();
+    let filter = EmailQueryFilter {
+        text: Some(uid.to_owned()),
+        ..EmailQueryFilter::default()
+    };
+    let ids = guest
+        .email_query(&account_id, filter, None, None, 0)
+        .unwrap()
+        .ids;
+    guest
+        .email_get(&account_id, &ids, Some(&["subject"][..]))
+        .unwrap()
+        .into_iter()
+        .filter_map(|email| email.subject)
+        .collect()
+}
+
+/// A dismissed reminder is saved with [`Itip::Suppress`], as the calendar
+/// backend's `discard_alarm_sync` does. The guest gets no second mail.
+#[test]
+#[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
+fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
+    let Some((organizer, organizer_user)) = connect(
+        "JMAP_LIVE_SERVER_WRITE_USER",
+        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
+    ) else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER not set; skipping");
+        return;
+    };
+    let Some((guest, guest_user)) = connect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER",
+        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
+    ) else {
+        eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER not set; skipping");
+        return;
+    };
+    let account_id = organizer.primary_account(CAPABILITY_CALENDARS).unwrap();
+    let calendar_id = default_calendar(&organizer, &account_id);
+    let sync = CalSync::new(organizer, account_id, calendar_id).with_server_scheduling(true);
+
+    let uid = format!("agent-dismiss-{}", unique_suffix());
+    let saved = sync
+        .save_component(
+            &meeting_with_reminder(&uid, &organizer_user, &guest_user),
+            None,
+        )
+        .expect("the real server stores and schedules the meeting");
+    let invited = Instant::now() + Duration::from_secs(60);
+    let mut mail = guest_mail(&guest, &uid);
+    while mail.is_empty() && Instant::now() < invited {
+        std::thread::sleep(Duration::from_secs(1));
+        mail = guest_mail(&guest, &uid);
+    }
+    assert_eq!(mail.len(), 1, "the guest is invited exactly once: {mail:?}");
+
+    // As EDS does: the server's rendering, with the VALARM acknowledged.
+    assert!(
+        saved.icalendar.contains("END:VALARM"),
+        "{}",
+        saved.icalendar
+    );
+    let dismissed = saved
+        .icalendar
+        .replace("END:VALARM", "ACKNOWLEDGED:20261021T120000Z\r\nEND:VALARM");
+    sync.save_component_with(&dismissed, Some(&saved.uid), Itip::Suppress)
+        .expect("the real server stores the dismissal");
+    let stored = sync
+        .client()
+        .event_get(sync.account_id(), &[Id::from(saved.uid.as_str())])
+        .unwrap()
+        .list;
+    let acknowledged = stored
+        .iter()
+        .flat_map(|event| event.alerts.iter().flatten())
+        .filter_map(|(_, alert)| alert.get("acknowledged"))
+        .count();
+    assert_eq!(
+        acknowledged, 1,
+        "the dismissal reached the server: {stored:?}"
+    );
+    std::thread::sleep(Duration::from_secs(30));
+    let after = guest_mail(&guest, &uid);
+    let _ = sync.remove_component_with(&saved.uid, Itip::Suppress);
+    assert_eq!(after, mail, "the dismissal mailed the guest");
 }

@@ -66,6 +66,13 @@ pub fn itip(server_schedules: bool, opflags: ECalOperationFlags) -> Itip {
     }
 }
 
+/// Returns the flags for a reminder dismissal, which never sends iTIP.
+///
+/// A dismissal changes only the user's own alert, so the guests must not hear of it.
+pub fn dismissal(opflags: ECalOperationFlags) -> ECalOperationFlags {
+    opflags | E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE
+}
+
 /// Checks whether the account source enables server scheduling.
 ///
 /// Returns false when `source` is null.

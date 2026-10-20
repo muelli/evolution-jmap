@@ -150,6 +150,8 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
    - The exception: the operation flags carry
      `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. This means that the user
      chose not to send.
+   - A dismissed reminder never sends the flag. The dismissal changes only
+     the alert of the user, so the guests must not get a message.
    - The flag goes out whether or not the event has participants. An event
      without participants is not a scheduled event. The server then has nobody
      to send to. A delete does not need to load the event first to find out.

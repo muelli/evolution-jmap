@@ -32,6 +32,9 @@ const START: &str = "2026-11-02T09:00:00";
 /// reminder watcher passes: the alarm instance's own recurrence id.
 const LATER_OCCURRENCE: &str = "20261116T090000Z";
 const ALERT_KEY: &str = "r1";
+const MEETING: &str = "Design review";
+const ORGANIZER: &str = "mailto:olga@example.com";
+const GUEST: &str = "mailto:gus@example.com";
 
 fn keyfile(port: u16) -> String {
     format!(
@@ -74,13 +77,44 @@ impl Run {
     }
 }
 
-/// Seeds one event with one reminder, `recurring` or not, and dismisses it
-/// at `rid`.
-fn run(name: &str, summary: &str, recurring: bool, rid: Option<&str>) -> Run {
+/// The seeded event's shape.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    OneOff,
+    Series,
+    /// A one-off event the user organizes, with one guest.
+    Meeting,
+}
+
+fn meeting_participants() -> BTreeMap<String, Value> {
+    [
+        (
+            "olga".to_owned(),
+            json!({"@type": "Participant", "calendarAddress": ORGANIZER,
+                   "roles": {"owner": true, "attendee": true}}),
+        ),
+        (
+            "gus".to_owned(),
+            json!({"@type": "Participant", "calendarAddress": GUEST,
+                   "roles": {"attendee": true}}),
+        ),
+    ]
+    .into()
+}
+
+/// Seeds one event with one reminder and dismisses it at `rid`.
+///
+/// With `refuse_scheduling`, the mock refuses every `CalendarEvent/set`
+/// that carries `sendSchedulingMessages`.
+fn run(name: &str, summary: &str, shape: Shape, refuse_scheduling: bool, rid: Option<&str>) -> Run {
     let client = required_path("JMAP_FUNCTIONAL_CAL_DISCARD_ALARM_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
 
-    let server = MockServer::builder().start();
+    let mut builder = MockServer::builder();
+    if refuse_scheduling {
+        builder = builder.without_scheduling();
+    }
+    let server = builder.start();
     let account_id: Id = server.account_id();
     let event_id = {
         let state = server.state();
@@ -91,8 +125,16 @@ fn run(name: &str, summary: &str, recurring: bool, rid: Option<&str>) -> Run {
         let calendar = account.seed_calendar("Personal", true);
         let id = account.calendar_events.alloc_id();
         let mut event = CalendarEvent::simple(calendar, summary, START, "PT30M");
-        if recurring {
-            event = event.with_recurrence_rule(RecurrenceRule::new("weekly"));
+        match shape {
+            Shape::OneOff => {}
+            Shape::Series => {
+                event = event.with_recurrence_rule(RecurrenceRule::new("weekly"));
+            }
+            Shape::Meeting => {
+                account.seed_participant_identity("Olga", ORGANIZER, true);
+                event.organizer_calendar_address = Some(ORGANIZER.to_owned());
+                event.participants = Some(meeting_participants());
+            }
         }
         event.id = Some(id.clone());
         event.uid = Some(format!("urn:example:event:{}", id.as_str()));
@@ -186,7 +228,7 @@ fn assert_dismissed(run: &Run) {
 
 #[test]
 fn dismissing_a_reminder_reaches_the_server() {
-    let run = run("one-off", ONE_OFF, false, None);
+    let run = run("one-off", ONE_OFF, Shape::OneOff, false, None);
     assert_dismissed(&run);
 }
 
@@ -195,6 +237,22 @@ fn dismissing_a_reminder_reaches_the_server() {
 /// the dismissal goes, as EDS's CalDAV backend does.
 #[test]
 fn dismissing_an_occurrences_reminder_acknowledges_the_series() {
-    let run = run("series", SERIES, true, Some(LATER_OCCURRENCE));
+    let run = run(
+        "series",
+        SERIES,
+        Shape::Series,
+        false,
+        Some(LATER_OCCURRENCE),
+    );
+    assert_dismissed(&run);
+}
+
+/// A dismissal is the user's own business. The reminder watcher passes no
+/// operation flags, so the backend must not ask the server to send
+/// scheduling messages for it (draft-ietf-jmap-calendars section 5.9.2).
+/// The mock refuses any `/set` that asks, so a request that asks fails.
+#[test]
+fn dismissing_a_meetings_reminder_never_asks_the_server_to_mail_the_guests() {
+    let run = run("meeting", MEETING, Shape::Meeting, true, None);
     assert_dismissed(&run);
 }
