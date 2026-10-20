@@ -22908,3 +22908,44 @@ fn pid_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn username_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:USERNAME Profile Probe\r\n",
+        "IMPP;TYPE=work;USERNAME=alice.example:xmpp:alice@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse USERNAME profile probe");
+    let services = parsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services.len(), 1, "IMPP line must remain mapped");
+
+    let service = services.get("s1").expect("first online service entry");
+    assert_eq!(service.service.as_deref(), Some("Jabber"));
+    assert_eq!(service.user.as_deref(), Some("alice@example.test"));
+    assert!(
+        service.extra.is_empty(),
+        "profile does not retain RFC 9555 USERNAME metadata on IMPP"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let service_line = line(&emitted, "X-JABBER;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE="));
+    assert!(service_line.ends_with(":alice@example.test"));
+    assert!(
+        !emitted.contains("USERNAME=") && !emitted.contains("IMPP:"),
+        "non-projected USERNAME metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized USERNAME profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}

@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:USERNAME Seed
+IMPP;TYPE=work;USERNAME=alice.example:xmpp:alice@example.test
+END:VCARD
