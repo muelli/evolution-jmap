@@ -148,6 +148,27 @@ fn a_folder_knows_the_mailbox_its_requests_filter_on() {
     }
 }
 
+/// The message cache every later read asks instead of the server first. The
+/// account this test opens has a real cache directory, so a folder built on
+/// it must come back with a working cache, not the `None` a folder's own
+/// construction could not find a directory for.
+#[test]
+fn a_folder_on_an_account_with_a_cache_directory_has_one() {
+    let account = Account::open();
+    let folder = folder_of(&account, &mailbox("Inbox", "Inbox", None));
+
+    // SAFETY: `folder` is a live folder of this type, and the borrow ends
+    // before the unref.
+    unsafe {
+        let jmap = JmapFolder::borrow(folder).expect("a folder of ours");
+        assert!(
+            jmap.cache().is_some(),
+            "the account has a cache directory to open one in"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
 /// What the inbox is, in Camel's vocabulary. `FILTER_RECENT` is what runs the
 /// user's incoming filters over new mail, and `FILTER_JUNK` what runs the junk
 /// test over it; Camel's own IMAPX sets exactly these two, on the folder it
