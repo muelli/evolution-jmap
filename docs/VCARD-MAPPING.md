@@ -364,6 +364,7 @@ code differs because the EDS vCard 3.0 profile requires it.
 | RFC 9555 | Rule | What `jmap-vcard` does | Verdict |
 | :--- | :--- | :--- | :--- |
 | 2.3.13 `LEVEL` | `LEVEL` qualifies `EXPERTISE`, `HOBBY` and `INTEREST`. | Input parses `LEVEL` values and keeps parse safety. The EDS profile keeps no `personalInfo` field and emits none of these properties (`level_parameter_metadata_is_not_retained_in_eds_profile`). | Deliberate divergence: EDS has no personal information fields for these properties. |
+| 2.3.24 `USERNAME` | `USERNAME` converts to `onlineServices[*].user`. | The reader sets `onlineServices[*].user` from `IMPP` URI handles and does not retain `USERNAME` parameter metadata. The writer emits EDS `X-` service lines and emits no `IMPP` or `USERNAME` parameter (`username_parameter_metadata_is_not_retained_in_eds_profile`). | Partial: user values map, but RFC 9555 `USERNAME` metadata is not retained. |
 | 2.5.2 `FN` | `FN` gives `name.full`. Derive a full name from the components if `FN` is absent. | The writer emits `name.full`, or builds it with `derive_full`. The reader takes the first `FN` (`read_name`). | Match |
 | 2.5.2 `FN` | Several or parameterized `FN`: choose by `LANGUAGE`. Mark derived names with `DERIVED`. | The reader keeps the first `FN` only. The writer emits no `DERIVED` parameter. | Deliberate divergence: EDS has one display name. |
 | 2.5.5 `N` | `N` gives `name.components`. | Both directions use the five classic slots. `restore_name_components` splits shared slots on save. | Partial: five slots only. |
