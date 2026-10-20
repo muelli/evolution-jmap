@@ -264,6 +264,14 @@ mod ureq_transport {
                     let next_url = crate::url::resolve_redirect(&current_url, location)
                         .map_err(TransportError::Failed)?;
 
+                    // RFC 8620 §8.1: a session on TLS never continues without it.
+                    if crate::url::downgrades(&current_url, &next_url) {
+                        return Err(TransportError::Failed(format!(
+                            "refused a redirect from TLS to {}",
+                            crate::url::origin_of(&next_url)
+                        )));
+                    }
+
                     let same_origin = crate::url::same_origin(&current_url, &next_url);
                     if !same_origin {
                         // Cross-origin redirect: strip Authorization per RFC 7235

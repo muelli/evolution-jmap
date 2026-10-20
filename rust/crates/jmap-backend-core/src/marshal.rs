@@ -29,7 +29,7 @@ use eds_sys::{
     E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, ESource, e_named_parameters_get,
     e_source_get_extension, e_source_has_extension,
 };
-use glib_sys::{GFALSE, GSList, GType, g_strdup, gchar};
+use glib_sys::{GFALSE, GSList, GType, g_free, g_strdup, gchar};
 use gobject_sys::g_type_check_instance_is_a;
 
 use crate::error::cstring_lossy;
@@ -53,6 +53,20 @@ pub unsafe fn read_string(s: *const gchar) -> Option<String> {
     // SAFETY: the caller guarantees a valid NUL-terminated string.
     let value = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
     (!value.is_empty()).then_some(value)
+}
+
+/// [`read_string`] for a string the caller owns (`transfer full`), which it
+/// then frees.
+///
+/// # Safety
+///
+/// `s` must be NULL or a valid NUL-terminated string allocated by GLib.
+pub unsafe fn take_string(s: *mut gchar) -> Option<String> {
+    // SAFETY: NULL or a valid string, by this function's contract.
+    let value = unsafe { read_string(s) };
+    // SAFETY: NULL or a GLib allocation the caller owns; `g_free` takes NULL.
+    unsafe { g_free(s.cast()) };
+    value
 }
 
 /// Writes a copy of `value` into a `gchar **` out-parameter, which the caller

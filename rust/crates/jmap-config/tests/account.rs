@@ -628,3 +628,53 @@ fn the_parts_of_a_disabled_account_are_still_the_ones_it_was_set_up_with() {
     assert_eq!(source.parts(), Parts::NONE);
     assert_eq!(source.account(), written);
 }
+
+#[test]
+fn a_read_on_another_thread_copies_strings_the_main_thread_is_replacing() {
+    // A config lookup worker reads the collection source on a pool thread
+    // while the assistant's widgets can set its host on the main thread.
+    struct Shared(*mut ESource);
+    // SAFETY: an `ESource` and its extensions guard their state with a lock.
+    unsafe impl Send for Shared {}
+    unsafe impl Sync for Shared {}
+
+    let source = TestSource::new().written(&account());
+    let shared = std::sync::Arc::new(Shared(source.0));
+    let hosts = ["a".repeat(4000) + ".example", "b".repeat(9000) + ".example"];
+    let names: Vec<CString> = hosts
+        .iter()
+        .map(|host| CString::new(host.as_str()).expect("no NUL"))
+        .collect();
+    let writer = {
+        let shared = std::sync::Arc::clone(&shared);
+        std::thread::spawn(move || {
+            // SAFETY: a live source with an `[Authentication]` extension, as
+            // `apply` wrote it.
+            let auth = unsafe {
+                eds_sys::e_source_get_extension(
+                    shared.0,
+                    eds_sys::E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr(),
+                )
+            };
+            for round in 0..20_000 {
+                // SAFETY: a live extension and a NUL-terminated host.
+                unsafe {
+                    eds_sys::e_source_authentication_set_host(
+                        auth.cast(),
+                        names[round % 2].as_ptr(),
+                    )
+                };
+            }
+        })
+    };
+    while !writer.is_finished() {
+        // SAFETY: a live source.
+        let host = unsafe { read(shared.0) }.connection.host;
+        assert!(
+            hosts.contains(&host) || host == account().connection.host,
+            "a torn host of {} bytes",
+            host.len()
+        );
+    }
+    writer.join().expect("writer");
+}

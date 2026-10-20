@@ -122,6 +122,15 @@ pub(crate) fn same_origin(a: &str, b: &str) -> bool {
     origin_of(a) == origin_of(b)
 }
 
+/// Whether a redirect from `current` to `next` leaves TLS behind.
+pub(crate) fn downgrades(current: &str, next: &str) -> bool {
+    let on_tls = |url: &str| {
+        url.get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    };
+    on_tls(current) && !on_tls(next)
+}
+
 /// Resolves a redirect location against the current URL.
 pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<String, String> {
     if location.starts_with("http://") || location.starts_with("https://") {
@@ -162,7 +171,9 @@ pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<Stri
 mod tests {
     use proptest::prelude::*;
 
-    use super::{encode_template_value, origin_of, rebase_origin, resolve_redirect, same_origin};
+    use super::{
+        downgrades, encode_template_value, origin_of, rebase_origin, resolve_redirect, same_origin,
+    };
 
     #[test]
     fn unreserved_characters_pass_through() {
@@ -396,6 +407,19 @@ mod tests {
     fn origin_of_preserves_single_dot_host() {
         assert_eq!(origin_of("http://./foo"), "http://.");
         assert_eq!(origin_of("http://../foo"), "http://..");
+    }
+
+    #[test]
+    fn a_redirect_from_https_to_plain_http_is_a_downgrade() {
+        // RFC 8620 §8.1: every request uses TLS, so a session that started on
+        // TLS must not continue without it.
+        assert!(downgrades("https://a/s", "http://a/s"));
+        assert!(downgrades("HTTPS://a/s", "Http://b/s"));
+        assert!(downgrades("https://a/s", "ftp://a/s"));
+        assert!(!downgrades("https://a/s", "https://b/s"));
+        assert!(!downgrades("https://a/s", "HTTPS://b/s"));
+        // A plain HTTP start (a local test server) has nothing to lose.
+        assert!(!downgrades("http://127.0.0.1/s", "http://127.0.0.1/t"));
     }
 
     #[test]
