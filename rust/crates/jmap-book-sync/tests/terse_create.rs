@@ -1,17 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s create path must not trust `ContactCard/set`'s
-//! `created` object to carry the properties the client itself just sent.
+//! The create path of `BookSync::save_contact` must not expect the `created`
+//! object of `ContactCard/set` to hold the properties that the client sent.
 //!
-//! RFC 8620 §5.3 only requires the server to report properties it set
-//! itself; a real deployment (Stalwart, found via `jmap-book-sync/tests/
-//! live_server.rs` against the live test server) takes this literally and
-//! answers a `ContactCard/set` create with `{"id": "..."}` alone. Before
-//! this fix, `save_contact`'s create branch rendered its return value
-//! straight from that terse object, so the vCard `save_contact_sync` hands
-//! back to EDS — the record EDS caches immediately, before any later sync —
-//! was missing the name and every other property the caller just wrote.
+//! RFC 8620 §5.3 requires only the properties that the server set.
+//! Stalwart (found with `jmap-book-sync/tests/live_server.rs`) answers a create
+//! with only `{"id": "..."}`. EDS caches the returned vCard immediately, so a
+//! vCard rendered from that object has no name and no other sent property.
 
 use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
@@ -53,8 +49,7 @@ fn saving_a_new_contact_against_a_terse_server_still_renders_what_was_sent() {
         saved.vcard
     );
 
-    // The revision must match a normal load of the same card — otherwise
-    // the very next `get_changes` looks like an external edit happened.
+    // The revision must match a normal load. If not, the next `get_changes` shows an external edit.
     let reloaded = sync.load_contact(&saved.uid).unwrap();
     assert_eq!(saved.revision, reloaded.revision);
 }

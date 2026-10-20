@@ -1,26 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A contact photo bigger than a real server takes.
+//! Tests a contact photo that is too large for a real server.
 //!
-//! Real Stalwart (0.16) refuses a card larger than 512 KiB, and does not
-//! advertise that limit anywhere: RFC 9610's contacts capability has no field
-//! for it, and Stalwart's refusal is `invalidProperties` with the reason only
-//! in its description, not RFC 8620's `tooLarge`. `tests/photo_too_large.rs`
-//! proves the mapping against `jmap-mockd`'s `tooLarge`; this proves that the
-//! real server's own wording is recognised too, so the user is told to choose
-//! a smaller picture rather than shown a protocol error.
+//! Real Stalwart (0.16) refuses a card larger than 512 KiB and does not
+//! advertise that limit. The contacts capability of RFC 9610 has no field for
+//! it. Stalwart refuses with `invalidProperties` and gives the reason only in
+//! the description, not with the `tooLarge` of RFC 8620.
+//! `tests/photo_too_large.rs` proves the mapping against the `tooLarge` of
+//! `jmap-mockd`. This test proves that the code also recognises the wording of
+//! the real server. Thus the user sees a request to choose a smaller picture,
+//! not a protocol error.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -45,8 +46,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a new contact with a 1 MB photo, twice Stalwart's limit and well
-/// under its 10 MB `maxSizeRequest`, so the refusal is the server's own.
+/// Saves a new contact with a 1 MB photo. This is twice the Stalwart limit and
+/// much less than its 10 MB `maxSizeRequest`, so the refusal comes from the
+/// card limit.
 #[test]
 #[ignore = "needs a real JMAP server; see live_server.rs"]
 fn a_photo_the_real_server_refuses_is_reported_as_too_large() {

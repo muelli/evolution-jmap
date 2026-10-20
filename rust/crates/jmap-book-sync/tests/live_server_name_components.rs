@@ -1,33 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s bare array-valued patch path, against a real
-//! JMAP server.
+//! Tests the bare array-valued patch path of `BookSync::save_contact` against a
+//! real JMAP server.
 //!
 //! `patch::diff_name` (`src/patch.rs`) writes `name/components` as a plain
-//! top-level PatchObject member whose value is a JSON array of component
-//! objects — a third shape, distinct from the entry-level `organizations/
-//! <key>: null` removal `live_server_organization.rs` confirmed and the
-//! nested-object `phones/<key>/features` merge `live_server_phone_reclassify.rs`
-//! confirmed: here the patched path has no keyed-map segment at all, and the
-//! value replaces a whole list in one move. `jmap-book-sync/tests/save.rs`'s
-//! `retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from`
-//! already proves the mapping produces that patch against `jmap-mockd`, which
-//! just applies whatever patch it is handed; nothing in this repository's
-//! live-server suite has ever confirmed a real server accepts a bare
-//! array-valued PatchObject member and actually replaces the list with it.
+//! top-level PatchObject member. Its value is a JSON array of component
+//! objects. This third shape differs from the entry-level `organizations/<key>:
+//! null` removal in `live_server_organization.rs` and the nested-object
+//! `phones/<key>/features` merge in `live_server_phone_reclassify.rs`. Here the
+//! patched path has no keyed-map segment, and the value replaces a whole list
+//! at once. `tests/save.rs` proves this patch against `jmap-mockd` in
+//! `retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from`,
+//! but `jmap-mockd` applies any patch it receives. This test confirms that a
+//! real server accepts a bare array-valued PatchObject member and replaces the
+//! list with it.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -37,8 +35,8 @@ use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use serde_json::json;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -62,18 +60,18 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates a contact, raw-patches its name into a double-barrelled given
-/// name split across two `given` components (each with a `phonetic` vCard
-/// has no field for — the same precondition `jmap-mockd`'s
+/// Creates a contact and raw-patches its name into a double-barrelled given
+/// name: two `given` components, each with a `phonetic` that vCard has no field
+/// for. The `jmap-mockd` tests
 /// `a_double_barrelled_given_name_survives_a_save_that_left_it_alone` and
 /// `retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from`
-/// start from), confirms it round-trips into a single `N` field
-/// (`N:Oldenburg;Jean Paul;;;`), then retypes the given name into one the
-/// vCard never split, and confirms via a raw `ContactCard/get` that the real
-/// server actually replaced the whole `components` list with the new one
-/// `diff_name` sent — not rejecting the array shape, not leaving the old
-/// entries sitting alongside the new one, and not inventing a merge the
-/// property has no key to perform.
+/// start from the same precondition. Confirms that the name round-trips into
+/// one `N` field (`N:Oldenburg;Jean Paul;;;`). Then changes the given name to
+/// one that the vCard never split. A raw `ContactCard/get` confirms that the
+/// real server replaced the whole `components` list with the list from
+/// `diff_name`. The server does not reject the array or keep the old entries
+/// beside the new entry. It also does not invent a merge: the property has no
+/// key to merge by.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn retyping_a_double_barrelled_given_name_replaces_it_on_the_real_server() {
@@ -81,12 +79,9 @@ fn retyping_a_double_barrelled_given_name_replaces_it_on_the_real_server() {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
     };
-    // A second connection to the same account, used only for the raw
-    // `ContactCard/set`/`get` calls `BookSync`'s vCard-only API cannot make:
-    // seeding the double-given-name precondition and reading back the
-    // `components` list directly. `Client` is not `Clone` (it owns a
-    // transport), so this mirrors `live_server_phone_reclassify.rs`'s own
-    // two-connection shape rather than sharing one.
+    // Use a second connection to the same account for the raw `ContactCard/set`
+    // and `/get` calls. The vCard-only API of `BookSync` cannot make them, and
+    // `Client` is not `Clone`.
     let verify = connect_for_write().expect("just checked JMAP_LIVE_SERVER_WRITE_USER is set");
 
     let account_id = client
@@ -116,9 +111,8 @@ fn retyping_a_double_barrelled_given_name_replaces_it_on_the_real_server() {
         .save_contact(&vcard, None)
         .expect("ContactCard/set create failed against the real server");
 
-    // Only a raw patch can put the card in this shape: a plain `N` line has
-    // one slot for the given name, so there is no vCard that states two
-    // `given` components directly.
+    // Only a raw patch can put the card in this shape. A plain `N` line has one
+    // slot for the given name, so no vCard states two `given` components.
     verify
         .contact_update(
             &account_id,
@@ -140,9 +134,9 @@ fn retyping_a_double_barrelled_given_name_replaces_it_on_the_real_server() {
         loaded.vcard
     );
 
-    // Nothing in `Hans` says which half of `Jean Paul` it replaced, so both
-    // must be gone, and so must their phonetic spellings — nothing on the
-    // card says those belong to `Hans`.
+    // Nothing in `Hans` tells which half of `Jean Paul` it replaced, so both
+    // halves must be gone. Their phonetic spellings must be gone too: nothing
+    // on the card links them to `Hans`.
     let edited_vcard = loaded.vcard.replace("Jean Paul", "Hans");
     assert_ne!(
         edited_vcard, loaded.vcard,

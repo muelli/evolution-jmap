@@ -7,45 +7,38 @@ use jmap_vcard::VCardError;
 
 /// A failure from one of [`crate::BookSync`]'s operations.
 ///
-/// The [`SyncError::Client`] case is kept intact rather than flattened into a
-/// string because the GObject layer maps it onto the `E_CLIENT_ERROR` codes
-/// Evolution branches on — an authentication failure has to stay
-/// distinguishable from a network outage all the way up.
+/// [`SyncError::Client`] keeps the client error, not a string. The GObject layer
+/// maps it to the `E_CLIENT_ERROR` codes that Evolution examines. Thus, an
+/// authentication failure stays different from a network outage.
 #[derive(Debug)]
 pub enum SyncError {
-    /// The server said no, or could not be reached.
+    /// The server refused the request, or the client could not reach the server.
     Client(jmap_client::Error),
-    /// A vCard handed to us by Evolution could not be parsed.
+    /// The vCard from Evolution did not parse.
     VCard(VCardError),
     /// No card on the server has this identifier.
     NotFound(String),
-    /// The server refused the card as too large, and its inline photo is
-    /// what makes it large.
+    /// The server refused the card as too large, and the inline photo causes the size.
     ///
-    /// Its own case rather than the server's error left in
-    /// [`SyncError::Client`] because a `PHOTO` is the one part of a vCard
-    /// that is big enough for this and that the user can change: the
-    /// sentence `jmap_backend_book::ops` translates tells them to choose a
-    /// smaller picture, which "set error: tooLarge" does not.
+    /// This is a separate variant, not [`SyncError::Client`]. A `PHOTO` is the
+    /// only vCard part that is this large and that the user can change.
+    /// `jmap_backend_book::ops` tells the user to choose a smaller picture.
+    /// "set error: tooLarge" does not.
     PhotoTooLarge {
-        /// The picture's own size, decoded, as the user's image file
-        /// measures it.
+        /// The decoded picture size, equal to the size of the user's image file.
         photo_octets: u64,
     },
 }
 
 impl SyncError {
-    /// Whether the server refused an incremental sync because the state it
-    /// was given is too old (RFC 8620 §5.2) — or, against real Stalwart,
-    /// unrecognized altogether, which it answers as `invalidArguments`
-    /// rather than the RFC's own `cannotCalculateChanges`
-    /// (`jmap_client::Error::is_unrecognized_changes_state`,
-    /// `STALWART-RFC-FINDINGS.md` finding 17).
+    /// Whether the server refused an incremental sync because the state is too
+    /// old (RFC 8620 §5.2).
+    /// Real Stalwart answers an unrecognized state with `invalidArguments`, not
+    /// `cannotCalculateChanges` (`jmap_client::Error::is_unrecognized_changes_state`).
     ///
-    /// This is not a real error: the caller's answer is to fall back to
-    /// [`crate::BookSync::list_existing`] and let the meta backend diff the
-    /// whole book, which is why it gets its own predicate rather than being
-    /// left for callers to string-match.
+    /// This is not a real error. The caller then uses
+    /// [`crate::BookSync::list_existing`], and the meta backend compares the full
+    /// book. This predicate prevents string matches in callers.
     pub fn is_cannot_calculate_changes(&self) -> bool {
         matches!(
             self,
@@ -54,15 +47,15 @@ impl SyncError {
         )
     }
 
-    /// Whether the server rejected the request with HTTP 401 — on a
-    /// long-lived connection, what a bearer token that expired while the
-    /// connection sat idle looks like. The caller's answer is to refresh the
-    /// token and retry once, not to reopen the consent window immediately.
+    /// Whether the server rejected the request with HTTP 401.
+    /// On a long-lived connection, this is usually a bearer token that expired
+    /// during idle time. Refresh the token and try again once before you open
+    /// the consent window.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Client(error) if error.is_unauthorized())
     }
 
-    /// A protocol violation, phrased as a client error so it maps like one.
+    /// A protocol violation, as a client error so that it maps as one.
     pub(crate) fn protocol(message: impl Into<String>) -> Self {
         Self::Client(jmap_client::Error::Protocol(message.into()))
     }

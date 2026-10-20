@@ -1,31 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s email-address scalar-field patch path against
-//! a real JMAP server.
+//! Tests the email-address patch path of `BookSync::save_contact` against a
+//! real JMAP server.
 //!
-//! `patch::diff_emails` (`src/patch.rs`) writes `emails/<key>/address` as a
-//! nested scalar PatchObject member when an entry's address changes —
-//! `diff_entries`'s per-entry callback, not the whole-entry add/remove shape
-//! `live_server_organization.rs` already confirmed. `jmap-book-sync/tests/
-//! save.rs`'s `editing_a_contact_leaves_unmapped_properties_alone` already
-//! proves the mapping produces that patch against `jmap-mockd`, which just
-//! applies whatever patch it is handed; nothing in this repository's
-//! live-server suite has ever confirmed a real server accepts an
-//! `emails/<key>/address` segment and actually replaces the address rather
-//! than rejecting it or adding a second entry.
+//! When the address of an entry changes, `patch::diff_emails` (`src/patch.rs`)
+//! writes `emails/<key>/address` as a nested scalar PatchObject member. This is
+//! the per-entry callback of `diff_entries`, not the whole-entry add/remove
+//! shape that `live_server_organization.rs` confirms. `tests/save.rs` proves
+//! this patch against `jmap-mockd` in
+//! `editing_a_contact_leaves_unmapped_properties_alone`, but `jmap-mockd`
+//! applies any patch it receives. This test confirms that a real server
+//! replaces the address and does not reject the segment or add a second entry.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -33,8 +30,8 @@ use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -58,10 +55,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a contact with one `EMAIL` line, confirms it round-trips, then
-/// saves an edited vCard with the address retyped and confirms the real
-/// server actually replaced the address in place rather than rejecting the
-/// patch or filing a second entry alongside the old one.
+/// Saves a contact with one `EMAIL` line, then saves it again with a different
+/// address. Confirms that the real server replaces the address and does not
+/// reject the patch or add a second entry.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn retyping_an_email_address_replaces_it_on_the_real_server() {
@@ -83,9 +79,8 @@ fn retyping_an_email_address_replaces_it_on_the_real_server() {
 
     let sync = BookSync::new(client, account_id, address_book_id);
 
-    // Short on purpose: the asserted addresses must fit on one unfolded vCard
-    // line (RFC 6350 folds at 75 octets), or a later `contains` check would
-    // miss an address split across a fold with a continuation-line prefix.
+    // Keep the addresses short. RFC 6350 folds a line at 75 octets, and a
+    // `contains` check cannot find an address split across a fold.
     let suffix = format!("{:x}", unique_suffix() & 0xffff_ffff);
     let name = format!("agent-bse-{suffix}");
     let old_address = format!("old-{suffix}@example.com");

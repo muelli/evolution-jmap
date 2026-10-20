@@ -1,35 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s nested-member patch path for `relatedTo`,
-//! against a real JMAP server.
+//! Tests the nested-member patch path of `BookSync::save_contact` for
+//! `relatedTo` against a real JMAP server.
 //!
+//! When the related entity already has a relation object,
 //! `patch::diff_related_to` (`src/patch.rs`) writes a scalar member three
-//! segments deep (`relatedTo/<key>/relation/<kind>: true`) when the related
-//! entity already has a relation object on it — a shape distinct from the
-//! entry-level `organizations/<key>: null` removal `live_server_organization.rs`
-//! confirmed, the nested-object `phones/<key>/features` full-object merge
-//! `live_server_phone_reclassify.rs` confirmed, and the bare array-valued
-//! `name/components` replace `live_server_name_components.rs` confirmed: here
-//! the value being written is a lone `true`, one level deeper than any of
-//! those. `jmap-book-sync/tests/save.rs`'s
-//! `a_spouse_the_card_already_relates_to_gains_the_marriage` already proves
-//! the mapping produces that patch against `jmap-mockd`; nothing in this
-//! repository's live-server suite has ever confirmed a real server merges
-//! this triply-nested scalar member into the existing relation object
-//! rather than rejecting the shape or replacing the whole entity.
+//! segments deep (`relatedTo/<key>/relation/<kind>: true`). Other tests confirm
+//! three different shapes: the `organizations/<key>: null` removal
+//! (`live_server_organization.rs`), the `phones/<key>/features` object merge
+//! (`live_server_phone_reclassify.rs`) and the `name/components` array replace
+//! (`live_server_name_components.rs`). Here the written value is a single
+//! `true`, one level deeper than all of those. `tests/save.rs` proves this
+//! patch against `jmap-mockd` in
+//! `a_spouse_the_card_already_relates_to_gains_the_marriage`. This test
+//! confirms that a real server merges this triply-nested scalar member into the
+//! relation object. The server does not reject the shape or replace the whole
+//! entity.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -39,8 +37,8 @@ use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use serde_json::json;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -64,13 +62,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Seeds a `kin` relation no vCard field can state (one of the nineteen
-/// relation types Evolution has no field for), then adds a `spouse` relation
-/// to the same entity the only way a vCard can: `X-EVOLUTION-SPOUSE`.
-/// Confirms the real server merges the new kind into the existing relation
-/// object rather than replacing it or rejecting the triply-nested scalar
-/// member `diff_related_to` sends for an addition to an entity it already
-/// knows.
+/// Seeds a `kin` relation that no vCard field can state (one of the nineteen
+/// relation types without an Evolution field). Then adds a `spouse` relation to
+/// the same entity through the only path that a vCard has:
+/// `X-EVOLUTION-SPOUSE`. Confirms that the real server merges the new kind into
+/// the relation object. The server does not replace the object or reject the
+/// triply-nested scalar member from `diff_related_to`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn adding_a_spouse_to_an_already_related_entity_merges_on_the_real_server() {
@@ -78,12 +75,9 @@ fn adding_a_spouse_to_an_already_related_entity_merges_on_the_real_server() {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
     };
-    // A second connection to the same account, used only for the raw
-    // `ContactCard/set`/`get` calls `BookSync`'s vCard-only API cannot make:
-    // seeding the vCard-unreachable `kin` relation and reading the merged
-    // relation object back directly. `Client` is not `Clone` (it owns a
-    // transport), so this mirrors `live_server_phone_reclassify.rs`'s own
-    // two-connection shape rather than sharing one.
+    // Use a second connection to the same account for the raw `ContactCard/set`
+    // and `/get` calls. The vCard-only API of `BookSync` cannot make them, and
+    // `Client` is not `Clone`.
     let verify = connect_for_write().expect("just checked JMAP_LIVE_SERVER_WRITE_USER is set");
 
     let account_id = client
@@ -114,7 +108,7 @@ fn adding_a_spouse_to_an_already_related_entity_merges_on_the_real_server() {
         .expect("ContactCard/set create failed against the real server");
 
     // Only a raw patch can put the card in this shape: `kin` has no
-    // X-EVOLUTION-* field of its own, so no vCard states it.
+    // X-EVOLUTION-* field, so no vCard states it.
     verify
         .contact_update(
             &account_id,

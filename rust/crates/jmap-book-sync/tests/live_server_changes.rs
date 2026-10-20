@@ -1,32 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::get_changes` against a real JMAP server — the
-//! `get_changes_sync` vfunc's state-token delta path, which is what EDS
-//! actually uses for incremental sync (a full `list_existing` re-download is
-//! the fallback, not the common case).
+//! Tests `BookSync::get_changes` against a real JMAP server. This is the
+//! state-token delta path of the `get_changes_sync` vfunc, which EDS uses for
+//! incremental sync. A full `list_existing` download is the fallback, not the
+//! usual case.
 //!
-//! `jmap-book-sync/tests/live_server.rs` already proves
-//! create/list/load/update/remove round-trip against real Stalwart, but
-//! nothing there drives `get_changes` itself — every assertion goes through
-//! `list_existing`/`load_contact` instead. `jmap-book-sync/tests/sync.rs`
-//! proves the classification logic (`ChangeSet` → `Changes`) against
-//! `jmap-mockd`; this file is its live-server counterpart, following the
-//! same recipe as `live_server.rs`.
+//! `live_server.rs` proves create, list, load, update and remove against real
+//! Stalwart, but it checks through `list_existing` and `load_contact`, never
+//! `get_changes`. `tests/sync.rs` proves the classification logic (`ChangeSet`
+//! → `Changes`) against `jmap-mockd`. This file is its live-server counterpart
+//! and follows the recipe of `live_server.rs`.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset. The cross-account test below also needs
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a second account in the
-//! same domain.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
+//! The cross-account test also needs `JMAP_LIVE_SERVER_RECIPIENT_USER` and
+//! `JMAP_LIVE_SERVER_RECIPIENT_PASSWORD` for a second account in the same
+//! domain. It skips when `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
 use std::env;
 
@@ -36,8 +34,8 @@ use jmap_proto::contacts::AddressBook;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use serde_json::json;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -61,7 +59,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Mirrors `live_server.rs::connect_recipient` exactly.
+/// Mirrors `jmap-client/tests/live_server.rs::connect_recipient` exactly.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -79,12 +77,11 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// Creates a contact, then confirms `get_changes` reports it as changed from
-/// the state captured just before the create; edits it and confirms the edit
-/// shows up from the post-create state; removes it and confirms the removal
-/// shows up from the post-edit state. Mirrors
-/// `tests/sync.rs::get_changes_reports_creations_updates_and_destructions`'s
-/// assertions, now against the real server rather than `jmap-mockd`.
+/// Creates, edits and removes a contact. After each step, confirms that
+/// `get_changes` from the state before that step reports it. Mirrors the
+/// assertions of
+/// `tests/sync.rs::get_changes_reports_creations_updates_and_destructions`
+/// against the real server.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() {
@@ -181,19 +178,15 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
     );
 }
 
-/// A state is opaque per RFC 8620, but not free-form: Stalwart's own state
-/// strings turned out (checked live) to fail syntax validation
-/// (`invalidArguments`) for almost any hand-written guess, unlike
-/// `jmap-mockd`'s simulation (`jmap-mock/src/setops.rs`), which accepts
-/// anything and only rejects a string it cannot parse back into its
-/// internal counter. A syntactically well-formed state from a *different*
-/// account is the reliable way to reach `cannotCalculateChanges` on the real
-/// server: `jmap-mail-sync`/`jmap-book-sync`/`jmap-cal-sync` all catch that
-/// error and answer with a full relist (`SyncError::is_cannot_calculate_changes`),
-/// but nothing here had ever driven a real server into actually returning
-/// it, so this confirms the account-scoping mismatch surfaces as that exact
-/// method error rather than some other error type the caller's check would
-/// not recognise.
+/// A state is opaque per RFC 8620, but not free-form. Real Stalwart rejects
+/// almost any hand-written state with `invalidArguments` (a live check showed
+/// this). `jmap-mockd` (`jmap-mock/src/setops.rs`) rejects only a string that
+/// it cannot parse back into its internal counter. A well-formed state from a
+/// *different* account reliably gets `cannotCalculateChanges` from the real
+/// server. `jmap-mail-sync`, `jmap-book-sync` and `jmap-cal-sync` catch that
+/// error and do a full relist (`SyncError::is_cannot_calculate_changes`). This
+/// test confirms that the account mismatch gives exactly that method error, not
+/// an error type that the caller's check does not recognise.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
@@ -246,20 +239,16 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
     );
 }
 
-/// `BookSync::classify`'s own doc comment reasons that since
-/// `ContactCard/changes` is account-wide, a card that shows up as
-/// **updated** but that this book no longer holds must have moved to a
-/// different address book, and reports it as `removed` rather than
-/// `changed` — protocol-semantics reasoning that had never been checked
-/// against a real server (every other test here only edits or destroys a
-/// card within a single book, so `holds()` always took its `Ok(true)`
-/// branch). `jmap-book-sync/tests/sync.rs`'s
-/// `a_card_moved_to_another_address_book_is_reported_as_removed` already
-/// pins this against `jmap-mockd`; this confirms the same real server
-/// behaviour the move relies on: a raw `ContactCard/set` update of
-/// `addressBookIds` away from the book being synced shows up in
-/// `ContactCard/changes` as an updated id, not a destroy, which is exactly
-/// what makes `classify`'s `removed` branch reachable at all.
+/// The doc comment of `BookSync::classify` reasons that `ContactCard/changes`
+/// is account-wide. Thus an **updated** card that this book no longer holds
+/// moved to a different address book, and `classify` reports it as `removed`,
+/// not `changed`. The other tests here edit or destroy a card only within one
+/// book, so `holds()` always returns `Ok(true)` there. `tests/sync.rs`
+/// (`a_card_moved_to_another_address_book_is_reported_as_removed`) checks this
+/// against `jmap-mockd`. This test confirms the real server behaviour that the
+/// move needs. A raw `ContactCard/set` update of `addressBookIds` away from the
+/// synced book shows in `ContactCard/changes` as an updated id, not a destroy.
+/// That makes the `removed` branch of `classify` reachable.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server() {
@@ -293,9 +282,9 @@ fn a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_
         .clone()
         .expect("the server named the new address book");
 
-    // A second, independent connection: `BookSync::new` takes ownership of a
-    // `Client`, but the raw `address_book_create`/`contact_update`/
-    // `contact_destroy`/`address_book_destroy` calls below need one too.
+    // A second, independent connection: `BookSync::new` takes ownership of its
+    // `Client`, and the raw `address_book_create`, `contact_update`,
+    // `contact_destroy` and `address_book_destroy` calls also need one.
     let sync_client =
         connect_for_write().expect("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD vanished mid-test");
     let sync = BookSync::new(sync_client, account_id.clone(), origin_book_id);

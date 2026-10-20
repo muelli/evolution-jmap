@@ -1,33 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s `PHOTO` scalar-field patch path against a real
-//! JMAP server.
+//! Tests the `PHOTO` patch path of `BookSync::save_contact` against a real JMAP
+//! server.
 //!
-//! `patch::diff_media` (`src/patch.rs`) writes `media/<key>/uri` and
-//! `media/<key>/mediaType` as nested PatchObject members when a `PHOTO`
-//! line's own stated shape changes -- gated by `same_photo`
-//! (`jmap-vcard/src/contact.rs`), which compares the line as stated rather
-//! than the entry's members, so a padding-only or type-spelling difference
-//! is not mistaken for an edit. `jmap-book-sync/tests/save.rs`'s
-//! `the_photo_the_user_chose_reaches_the_server` already proves the mapping
-//! produces that patch against `jmap-mockd`, which just applies whatever
-//! patch it is handed; nothing in this repository's live-server suite has
-//! ever confirmed a real server accepts a `media/<key>/uri` +
-//! `media/<key>/mediaType` segment and actually replaces the picture rather
-//! than rejecting it or adding a second entry.
+//! When the stated shape of a `PHOTO` line changes, `patch::diff_media`
+//! (`src/patch.rs`) writes `media/<key>/uri` and `media/<key>/mediaType` as
+//! nested PatchObject members. `same_photo` (`jmap-vcard/src/contact.rs`) gates
+//! this patch. It compares the line as stated, not the members of the entry, so
+//! a difference in padding or type spelling is not an edit. `tests/save.rs`
+//! proves this patch against `jmap-mockd` in
+//! `the_photo_the_user_chose_reaches_the_server`, but `jmap-mockd` applies any
+//! patch it receives. This test confirms that a real server replaces the
+//! picture through a `media/<key>/uri` + `media/<key>/mediaType` segment. The
+//! server does not reject the segment or add a second entry.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` -- see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -35,8 +32,8 @@ use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -60,12 +57,10 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a contact with one `PHOTO` line, confirms it round-trips, then
-/// saves an edited vCard with the whole line replaced by a different
-/// picture (same shape EDS writes when the user picks a new photo: no key,
-/// a different type and payload) and confirms the real server actually
-/// replaced the picture in place rather than rejecting the patch or filing
-/// a second entry alongside the old one.
+/// Saves a contact with one `PHOTO` line, then replaces the whole line with a
+/// different picture. EDS writes this shape when the user picks a new photo: no
+/// key, a different type and a different payload. Confirms that the real server
+/// replaces the picture and does not reject the patch or add a second entry.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn retyping_a_photo_replaces_it_on_the_real_server() {
@@ -89,8 +84,8 @@ fn retyping_a_photo_replaces_it_on_the_real_server() {
 
     let suffix = format!("{:x}", unique_suffix() & 0xffff_ffff);
     let name = format!("agent-bsmedia-{suffix}");
-    // "hello-photo" / "new-photo!!", standing in for the JPEG/PNG bytes a
-    // real card carries.
+    // The base64 of "hello-photo" and "new-photo!!", in place of the JPEG or
+    // PNG bytes of a real card.
     let old_photo = "aGVsbG8tcGhvdG8=";
     let new_photo = "bmV3LXBob3RvISE=";
     let vcard = format!(
@@ -111,10 +106,9 @@ fn retyping_a_photo_replaces_it_on_the_real_server() {
         saved.vcard
     );
 
-    // The key the server assigned is read back off whichever line now
-    // carries the payload we sent, exactly as a real editor would: the
-    // whole line is replaced with a new, keyless one stating a different
-    // picture, mirroring what EDS writes when the user picks a new photo.
+    // Find the line that carries the sent payload, as a real editor does.
+    // Replace the whole line with a keyless line for a different picture,
+    // as EDS does when the user picks a new photo.
     let old_line = saved
         .vcard
         .lines()

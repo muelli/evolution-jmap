@@ -1,45 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync` against an address book of a size nothing else here has ever
-//! reached.
+//! Tests `BookSync` against an address book larger than any other test here
+//! uses.
 //!
-//! Every other live-server test in `jmap-book-sync` uses a single contact;
-//! this one asks whether cold listing time and incremental `get_changes`
-//! cost stay reasonable once the book is no longer tiny, the question
-//! `jmap-mail-sync`'s own scale test already answered for mailboxes.
+//! The other live-server tests in `jmap-book-sync` use one or two contacts.
+//! This test asks whether the cold listing time and the incremental
+//! `get_changes` cost stay reasonable in a larger book. The scale test of
+//! `jmap-mail-sync` answers the same question for mailboxes.
 //!
-//! This file covers the smallest slice: 500 cards, a handful of edits
-//! afterward, bulk deletes from an already-large book, and a batch where a
+//! This file covers the smallest step: 500 cards and some edits after the
+//! import. It also covers bulk deletes from a large book, and a batch where a
 //! tenth of the cards carry a ~50 KB PHOTO. One `ContactCard/set` call per
-//! card, no batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000
-//! req/60s) well before 500 calls even at the default throwaway plan,
-//! confirmed empirically: a 429 on call #498, 2.2 seconds in, far faster
-//! than the window the limit is measured over. So [`retrying`] below
-//! absorbs a 429 with a short sleep instead of assuming it never happens.
+//! card, without batching, hits the `Http.rateLimitAuthenticated` limit of
+//! Stalwart (1000 req/60s) before 500 calls. A live run showed a 429 on call
+//! #498, 2.2 seconds after the start. Thus [`retrying`] below absorbs a 429
+//! with a sleep.
 //!
-//! Larger steps (1,000 and 5,000 cards) run through this same file with
-//! `JMAP_SCALE_TEST_CARDS` set higher; `jmap-cal-sync` has the calendar
-//! equivalent.
+//! Larger steps (1,000 and 5,000 cards) use this same file with a higher
+//! `JMAP_SCALE_TEST_CARDS`. `jmap-cal-sync` has the calendar equivalent.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server test — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`). Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then
+//! run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync --test live_server_scale -- --ignored --nocapture
 //! ```
 //!
-//! `JMAP_SCALE_TEST_CARDS` overrides the batch size (default 500); the
-//! write-test account should be a throwaway created for this alone (see
-//! `stw seed` in the manual-test doc) since this leaves that many cards in
-//! its address book for inspection rather than cleaning up after itself.
+//! `JMAP_SCALE_TEST_CARDS` sets the batch size (default 500). The tests leave
+//! their cards in the address book for inspection, so use a throwaway
+//! write-test account for this test only.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset, the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 use std::thread::sleep;
@@ -49,11 +45,10 @@ use jmap_book_sync::{BookSync, SyncError};
 use jmap_client::{Client, Credentials, Error as ClientError};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) with a short
-/// sleep, up to 10 times, so a scale run does not fail just because it moved
-/// faster than the server's own rate-limit window. Any other error, or
-/// exhausting the retries, is returned as-is for the caller to `unwrap`/panic
-/// on, same as before this helper existed.
+/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) up to 19 times,
+/// with a 5-second sleep before each retry. Thus a scale run does not fail when
+/// it is faster than the rate-limit window of the server. The caller gets any
+/// other error, or the last 429, unchanged.
 fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, SyncError> {
     for remaining in (0..20).rev() {
         match attempt() {
@@ -66,8 +61,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, S
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover cards can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -75,7 +70,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write`, but returns
+/// only the client.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -98,8 +94,8 @@ fn batch_size() -> usize {
         .unwrap_or(500)
 }
 
-/// The resident set size this process has peaked at, read from `/proc`. Linux
-/// only, which every runner this test actually runs on is.
+/// Returns the peak resident set size of this process, read from `/proc`. Linux
+/// only, which is the platform of every runner for this test.
 fn peak_rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status.lines().find_map(|line| {
@@ -121,21 +117,19 @@ fn vcard(run: u128, label: &str, i: usize) -> String {
     )
 }
 
-/// A ~50 KB PHOTO payload, base64-encoded, deterministic so repeat runs stay
-/// byte-identical. A JMAP PHOTO never goes through `Blob/upload` in this
-/// codebase: `jmap-vcard` inlines it straight into the JSContact `media` map
-/// (confirmed by reading `BookSync::save_contact` and `vcard_to_card`), so
-/// this is testing the `ContactCard/set` payload size, not a blob transfer.
+/// Returns a deterministic ~50 KB PHOTO payload in base64, so repeat runs are
+/// byte-identical. `jmap-vcard` puts a PHOTO inline into the JSContact `media`
+/// map and never uses `Blob/upload`. Thus this test measures the
+/// `ContactCard/set` payload size, not a blob transfer.
 fn photo_base64() -> String {
     use base64::Engine;
     let bytes: Vec<u8> = (0..50_000u32).map(|i| (i % 256) as u8).collect();
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Same shape as [`vcard`], plus an inline PHOTO. vCard 3.0's form
-/// (`jmap-vcard` only round-trips 3.0), matching the format
-/// `tests/live_server_media.rs` already confirmed works against a real
-/// server, just at realistic size instead of a few bytes.
+/// Same shape as [`vcard`], plus an inline PHOTO in vCard 3.0 form
+/// (`jmap-vcard` round-trips only 3.0). `tests/live_server_media.rs` confirms
+/// this form against a real server, but with only a few bytes.
 fn vcard_with_photo(run: u128, label: &str, i: usize, photo: &str) -> String {
     let name = format!("agent-scale-{run}-{label}-{i}");
     format!(
@@ -241,13 +235,12 @@ fn a_real_sized_address_book_round_trips_through_the_real_server() {
     }
 }
 
-/// Deleting from an already-large address book, the case the import/edit
-/// test above does not reach. Unlike `jmap-mail-sync`'s `messages_since`,
-/// `BookSync::get_changes` has no `catch_up_limit`/relist concept to trip —
-/// `classify` only calls `ContactCard/get` for the created/updated union, so
-/// a delete-only delta costs nothing beyond the `/changes` call itself -- but
-/// that is exactly the kind of assumption worth checking against a real
-/// server rather than just this crate's own mock.
+/// Deletes cards from an address book that is already large; the import and
+/// edit test does not do this. Unlike `messages_since` in `jmap-mail-sync`,
+/// `BookSync::get_changes` has no `catch_up_limit` or relist. `classify` calls
+/// `ContactCard/get` only for the created and updated ids, so a delta of
+/// deletes costs only the `/changes` call. This test checks that assumption
+/// against a real server, not only against the mock of this crate.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
@@ -290,8 +283,8 @@ fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
         .list_existing()
         .expect("listing the book failed after the bulk import");
 
-    // "A few hundred", per the item's own wording, capped at the batch size
-    // itself so a small manual run never tries to delete more than exists.
+    // Cap at the batch size, so a small manual run does not delete more cards than
+    // exist.
     let delete_count = n.min(300);
     let to_delete: Vec<String> = saved_uids.into_iter().take(delete_count).collect();
 
@@ -335,9 +328,9 @@ fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
     }
 }
 
-/// A tenth of the cards carry a ~50 KB PHOTO, the rest are plain. Checks that
-/// a batch with real binary payloads costs more but still works, and that
-/// every PHOTO round-trips byte-identical through the server and back.
+/// A tenth of the cards carry a ~50 KB PHOTO, and the rest are plain. Checks
+/// that a batch with binary payloads costs more but works, and that every PHOTO
+/// round-trips byte-identical.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_real_sized_address_book_with_photos_round_trips_through_the_real_server() {
@@ -410,10 +403,10 @@ fn a_real_sized_address_book_with_photos_round_trips_through_the_real_server() {
             .iter()
             .find(|contact| &contact.uid == uid)
             .unwrap_or_else(|| panic!("photo card {uid} missing from the cold listing"));
-        // RFC 2426 §2.6 folds any physical line over 75 octets onto a
-        // continuation line starting "\r\n " (`jmap-vcard`'s
-        // `fold_overlong_lines`), so a ~50 KB PHOTO comes back line-folded
-        // even though the octets are unchanged; unfold before comparing.
+        // RFC 2426 §2.6 folds a physical line longer than 75 octets onto
+        // continuation lines that start with "\r\n " (`fold_overlong_lines` in
+        // `jmap-vcard`). Thus a ~50 KB PHOTO comes back folded with the same
+        // octets. Unfold before the comparison.
         let unfolded = contact.vcard.replace("\r\n ", "");
         assert!(
             unfolded.contains(&photo),

@@ -1,124 +1,86 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Turning an edited vCard back into a `ContactCard/set` PatchObject.
+//! Converts an edited vCard into a `ContactCard/set` PatchObject.
 //!
-//! The whole point of patching rather than replacing is that a vCard is a
+//! The save patches the card and does not replace it, because a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
 //! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CALURI, FBURL, PHOTO,
-//! CATEGORIES, the
-//! instant-messaging `X-` lines, the spouse line and the two date lines, and
-//! drops everything
-//! else, so a save that sent the parsed card back whole would silently delete
-//! the properties it could not represent — preferred languages, what the
-//! contact is spoken to as, the crypto keys a card lists — none of which the
-//! user ever saw, let alone asked to remove.
+//! CATEGORIES, the instant-messaging `X-` lines, the spouse line and the two
+//! date lines. It drops all other properties (for example preferred languages,
+//! speak-to-as and crypto keys). A whole-card replace would delete them.
 //!
-//! The same lossiness recurs *inside* the properties that are mapped, and
-//! that is the subtler half of this module:
+//! The mapped properties are also lossy:
 //!
-//! - `emails`/`phones` are keyed maps, so an entry is patched by its key
-//!   (`emails/work/address`). The key survives the trip through vCard in
-//!   `X-JMAP-KEY`; without it every edit would be a remove-and-re-add, which
-//!   loses the entry's unmapped properties and its identity server-side.
-//! - `contexts` and `features` are boolean maps of which vCard 3.0 can spell
-//!   only some members. A context of `school` has no `TYPE`, so it is merged
-//!   back in rather than being replaced away. On an `ADR` and a `TEL` one of
-//!   the two contexts vCard *can* spell is left off the line as well, so which
-//!   members are merged back depends on the entry — see `slotted_context`.
-//! - `pref` is a rank from 1 to 100 and vCard 3.0 has only a flag. An
-//!   address that was already preferred keeps its rank; the flag can only
-//!   introduce or remove a preference, never renumber one.
-//! - `name.components` are a *list* with no keys to patch by, so they go back
-//!   whole and are merged the way an address's components are (`merge_named`):
-//!   a component the value never stated — of a kind `N` has no field for, or
-//!   saying nothing to put in the field it has — is carried across the
-//!   replacement, and a component that still says what it said keeps the
-//!   members that value had no field for either — its `phonetic` spelling
-//!   above all. Their order
-//!   is the server's, so that opening a contact and closing it again writes
-//!   nothing even when the `N` fields state them in another order. And as with
-//!   an address, matching by value first needs the components that shared one
-//!   field told apart again: both halves of a double-barrelled given name are
-//!   written into `N`'s second field and come back as one component holding
-//!   them both.
-//! - `organizations` entries hold a `sortAs` and `contexts` the `ORG` line
-//!   has nowhere to put, so the entry is patched member by member
-//!   (`organizations/work/name`) rather than replaced. Its `units` are a
-//!   *list*, which has no keys to patch by, so they are written whole — and
-//!   a unit that kept its name keeps the members it was carrying, matched by
-//!   that name rather than by position, so that dissolving one department
-//!   does not renumber the sorting hints of the others.
-//! - `addresses` entries cross on two lines rather than one — the `ADR` and
-//!   the `LABEL` that writes the same address out for an envelope — so a
-//!   save reads them back as one entry and patches `addresses/<key>/full`
-//!   beside the components.
-//! - `nicknames` entries carry a `contexts` and a `pref` a `NICKNAME` line has
-//!   no parameter for, so the entry is patched by its name alone. Its key does
-//!   survive Evolution, unlike a date's: EDS rewrites the value of that line in
-//!   place and leaves the parameters where they were.
-//! - `links` entries are patched by their URI alone, for the same reason a
-//!   nickname's is: what the resource is and how strongly it is preferred have
-//!   no parameter on a `URL` line. Their key survives Evolution — EDS rewrites
-//!   the value of that line in place and leaves the parameters where they were.
-//! - `calendars` entries are patched by their URI alone, as a link's are, and
-//!   their key survives Evolution the same way. Their `kind` is stated — it is
-//!   which of the two lines the URI is on — but cannot have been *edited*:
-//!   moving an address from the Calendar field to the Free/Busy one is a
-//!   deletion and an addition, and arrives here as exactly that.
-//! - `media` entries have no surviving key either, and are patched by what the
-//!   `PHOTO` line states rather than by their members — a picture read back off
-//!   a line is not the entry that produced it. Only the first of them is ever
-//!   the one the user edited. See `diff_media`.
-//! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
-//!   birthday in a structured field and rebuilds the line out of it, dropping
-//!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
-//!   kind of date it is. The date itself is patched member by member, which
-//!   is what keeps a `calendarScale` — or a point in time the user did not
-//!   touch — from being flattened into the day the line showed.
-//! - `onlineServices` entries are patched by their handle, which is the only
-//!   part of them an `X-JABBER` line states; where the handle is used and how
-//!   strongly it is preferred have no parameter on it, and the `TYPE` it does
-//!   carry is the slot EDS files the handle in rather than the entry's
-//!   `contexts`. The handle is the entry's `user`, or the one its `uri` states
-//!   for a service whose URI scheme says nothing else — and a rename goes back
-//!   on whichever of the two it was drawn from. Where it cannot, the `uri` that
-//!   named the replaced handle is *dropped*: see `diff_online_services`, the
-//!   one place here where a save removes a member the vCard never showed.
-//! - `relatedTo` is the one mapped property keyed by *who the entry is about*
-//!   rather than by an id of whoever wrote it, so it is the one whose key the
-//!   line shows the user: there is nothing on the entry to patch, and an edit is
-//!   a marriage withdrawn from one entity and claimed of another. Both halves
-//!   reach into the relation *set* rather than replacing the entry, so that a
-//!   relation the line never stated survives either way. See
-//!   `diff_related_to`.
-//! - `keywords` is the one mapped property that is a *set*, and the one that
-//!   goes back **replaced whole**: a tag is a bare string with no key and no
-//!   members, so there is nothing to reach into. A tag the `CATEGORIES` line
-//!   could not carry is therefore one a save would *delete* rather than merely
-//!   one the user cannot see — so the save carries it onto the set it writes,
-//!   which is how a set keeps the rule the keyed maps keep by leaving an entry
-//!   unnamed. See `diff_keywords`.
-//! - *Every* keyed map is one of which the vCard states only **some**
-//!   entries. A title of a `kind` outside `title` and `role` has no vCard
-//!   property; an address with neither an `ADR` field nor a written-out form
-//!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
-//!   email with no address, a phone with no number, a note that says nothing,
-//!   a date naming no single day, a link of a kind vCard 3.0 cannot state, a
-//!   calendaring resource naming neither of the two kinds that have a line, and
-//!   a handle at a service EDS has no field for all have no line to be written
-//!   on. Each is dropped on the way
-//!   out and must
-//!   therefore be invisible to the save in both directions — neither deleted
-//!   for being absent from the edited card, nor overwritten by an addition
-//!   whose key the reader invented by counting only the entries it could
-//!   see. That is what `diff_entries` and the `states_*` predicates it
-//!   takes are for; the predicates live next to the emitter, so what the
-//!   save calls invisible is what the emitter actually left out.
+//! - `emails`/`phones` are keyed maps. The key crosses in `X-JMAP-KEY`, so an
+//!   entry is patched by its key (`emails/work/address`). Without the key, an
+//!   edit becomes a remove and an add, and the entry loses its unmapped
+//!   properties and its server-side identity.
+//! - `contexts` and `features` are boolean maps, and vCard 3.0 can spell only
+//!   some members. A `school` context has no `TYPE`, so the save merges it
+//!   back. On an `ADR` and a `TEL`, the line also omits one of the two
+//!   contexts vCard can spell, so the merged members depend on the entry (see
+//!   `slotted_context`).
+//! - `pref` is a rank from 1 to 100, but vCard 3.0 has only a flag. A
+//!   preferred entry keeps its rank. The flag can add or remove a preference,
+//!   but it cannot change the rank.
+//! - `name.components` is a list with no keys, so it goes back whole and is
+//!   merged like an address's components (`merge_named`). A component that `N`
+//!   did not state stays. A component with an unchanged value keeps its
+//!   unmapped members, mainly its `phonetic` spelling. The server's order
+//!   stays, so that opening and closing a contact writes nothing. Before the
+//!   merge, components that shared one `N` field are split again (for
+//!   example, a double-barrelled given name).
+//! - `organizations` entries hold a `sortAs` and `contexts` that `ORG` cannot
+//!   carry, so the save patches each member (`organizations/work/name`).
+//!   `units` is a list, so it goes back whole. A unit keeps its members when
+//!   its name is unchanged, matched by name and not by position.
+//! - `addresses` entries cross on two lines: the `ADR` and the `LABEL` with
+//!   the written-out address. The save reads them back as one entry and
+//!   patches `addresses/<key>/full` with the components.
+//! - `nicknames` entries have a `contexts` and a `pref` that `NICKNAME` cannot
+//!   carry, so the save patches only the name. The key survives Evolution: EDS
+//!   rewrites the line value in place and keeps the parameters.
+//! - `links` entries are patched by their URI only, for the same reason. The
+//!   key survives Evolution in the same way.
+//! - `calendars` entries are patched by their URI only, and the key survives
+//!   Evolution. The line name states the `kind`, but the user cannot edit it:
+//!   a move to the other field arrives as a deletion and an addition.
+//! - `media` entries have no surviving key. The save compares what the `PHOTO`
+//!   line states, not the members. The user can edit only the first picture
+//!   (see `diff_media`).
+//! - `anniversaries` entries have no surviving key: EDS rebuilds a birthday
+//!   line from a structured field and drops `X-JMAP-KEY`. The save finds the
+//!   entry by the date kind and patches the date member by member. This keeps
+//!   a `calendarScale` or an untouched point in time.
+//! - `onlineServices` entries are patched by their handle, the only part an
+//!   `X-JABBER` line states. The `TYPE` on the line is the EDS slot, not the
+//!   entry's `contexts`. The handle is the entry's `user`, or the handle in
+//!   its `uri`. A rename goes back on the same member. If that is not
+//!   possible, the save drops the old `uri`: this is the only place where a
+//!   save removes a member the vCard did not show (see `diff_online_services`).
+//! - `relatedTo` is keyed by the related entity, so the line shows the key to
+//!   the user. An edit withdraws a relation from one entity and adds it to
+//!   another. Both changes patch the relation set, so an unstated relation
+//!   survives (see `diff_related_to`).
+//! - `keywords` is a set and goes back replaced whole, because a tag has no
+//!   key and no members. The save adds each tag that `CATEGORIES` could not
+//!   carry, so the save does not delete it (see `diff_keywords`).
+//! - The vCard states only some entries of each keyed map. These have no line:
+//!   a title of a `kind` other than `title` and `role`, an address with no
+//!   `ADR` field and no written-out form, an organisation with no name and no
+//!   unit, an email with no address, a phone with no number, an empty note, a
+//!   date with no single day, a link of a kind vCard 3.0 cannot state, a
+//!   calendar of neither line kind, and a handle at a service EDS has no field
+//!   for. The save must not delete these entries for their absence. It must
+//!   also not overwrite them with an addition whose key the reader made by
+//!   counting only the visible entries. `diff_entries` and the `states_*`
+//!   predicates prevent this. The predicates are next to the emitter, so they
+//!   match what the emitter omits.
 //!
 //! RFC 8620 §5.3 requires every path segment before the last to exist on the
-//! object already, which is why a property that is absent server-side is
-//! written whole instead of being reached into.
+//! object already. Thus the save writes a property whole when the server does
+//! not have it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -146,8 +108,8 @@ const MAPPED_RELATIONS: &[(&str, RelationPredicate)] = &[
     ("assistant", states_assistant),
 ];
 
-/// The patch that turns the card the server holds into the card Evolution
-/// just saved. Empty when the edit changed nothing this mapping can see.
+/// Returns the patch from the server's card to the card that Evolution saved.
+/// The patch is empty when the edit changed nothing that the mapping shows.
 pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     let mut patch = Map::new();
     diff_name(&mut patch, current.name.as_ref(), edited.name.as_ref());
@@ -196,24 +158,20 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     patch
 }
 
-/// Who else the contact is related to — the mapped properties (`spouse`, `manager`,
-/// `assistant`) whose *key* is what the line shows, and so where an edit is not
-/// a change to an entry but a withdrawal and a claim.
+/// Patches the mapped relations (`spouse`, `manager`, `assistant`). The line
+/// shows the key, so an edit withdraws a relation and adds a relation.
 ///
-/// RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself, and RFC 9555
-/// §2.9.5 is what allows that key to be a person's name rather than a `uid`. So
-/// there is nothing on the entry to patch: a name the user respells names another
-/// entity, and the line said exactly one thing about the old one — its relation
-/// type. That relation type is all the save may withdraw:
+/// RFC 9553 §2.1.8 keys `relatedTo` by the related entity. RFC 9555 §2.9.5
+/// lets that key be a person's name and not a `uid`. Thus a respelled name is
+/// a different entity, and the line stated only the relation type of the old
+/// entity. The save withdraws only that relation type:
 ///
-/// - a name gone from the field loses that relation, and the entry with it when
-///   that relation was all it said. Where the server also called that entity
-///   `kin` (or another unmapped relation), the entry stays and only the mapped
-///   relation is struck off.
-/// - a name arrived in the field *gains* the relation. If the card already relates
-///   to somebody of that name, that is the same entity — the key says so — so the
-///   type is added to the set rather than replacing it, and a relation the user
-///   cannot see survives being related.
+/// - A name removed from the field loses that relation. The entry goes too if
+///   that relation was all it held. If the entry also has an unmapped relation
+///   (for example `kin`), the entry stays and only the mapped relation goes.
+/// - A name added to the field gains the relation. If the card already has an
+///   entry with that name, it is the same entity, so the save adds the type to
+///   the set. A relation that the user cannot see stays.
 fn diff_related_to(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, Relation>>,
@@ -245,9 +203,8 @@ fn diff_related_to(
         return;
     }
 
-    // RFC 8620 §5.3 requires every path segment before the last to exist on the
-    // object already, and a card relating to nobody has no `relatedTo` to reach
-    // into, so the property is written whole.
+    // RFC 8620 §5.3: a card with no `relatedTo` has no path to patch into, so
+    // write the property whole.
     if current.is_empty() {
         let wanted_map: BTreeMap<&String, &Relation> = edited
             .iter()
@@ -263,7 +220,8 @@ fn diff_related_to(
         return;
     }
 
-    // Check if all relations in current were mapped and are now all removed
+    // The edit removed every mapped relation, and the server holds only mapped
+    // relations: remove the whole property.
     let any_wanted = edited.iter().any(|(key, rel)| {
         MAPPED_RELATIONS
             .iter()
@@ -297,7 +255,7 @@ fn diff_related_to(
             continue;
         }
 
-        // Withdrawn relations of this kind
+        // Relations of this kind that the edit withdrew.
         for (&key, relation) in shown.iter().filter(|(key, _)| !wanted.contains_key(*key)) {
             let path = format!("relatedTo/{}", escape(key));
             let is_only_this_kind = relation.extra.keys().all(|member| member == "@type")
@@ -318,7 +276,7 @@ fn diff_related_to(
             }
         }
 
-        // Added relations of this kind
+        // Relations of this kind that the edit added.
         for (&key, relation) in wanted.iter().filter(|(key, _)| !shown.contains_key(*key)) {
             let path = format!("relatedTo/{}", escape(key));
             match current.get(key) {
@@ -331,13 +289,10 @@ fn diff_related_to(
                     }
                 },
                 None => {
-                    // A prior mapped kind already wrote this entity whole, from
-                    // the same `edited` value this iteration would read — every
-                    // kind it states, including this one, is in there already.
-                    // Reaching into `path`'s own `relation/{kind}` here would be
-                    // a create and a reach into that create's own not-yet-
-                    // existing sub-path in the same patch, which RFC 8620 §5.3
-                    // forbids exactly as the whole-object write above does.
+                    // An earlier mapped kind can have written this entity whole
+                    // from the same `edited` value, with this kind included. A
+                    // patch into a sub-path of that create is forbidden by
+                    // RFC 8620 §5.3, so do not write again.
                     if !patch.contains_key(&path) {
                         patch.insert(path, json_of(relation));
                     }
@@ -347,38 +302,28 @@ fn diff_related_to(
     }
 }
 
-/// The tags the contact is filed under — the one mapped property that goes back
-/// **replaced whole** rather than patched entry by entry.
+/// Patches the tags. This is the only mapped property that goes back replaced
+/// whole and not entry by entry.
 ///
-/// A `CATEGORIES` line holds the whole set and a JSContact keyword is a bare
-/// string, so there is nothing inside an entry to preserve and no key to reach
-/// into: the line states what was shown, and the difference from it is the set
-/// the user now wants. Clearing the field is `"keywords": null`, which is how a
-/// PatchObject asks for RFC 9553 §2.8.2's default of no tags — an empty map
-/// would be a different thing to store, and is also what EDS does *not* leave
-/// behind: it removes the attribute outright.
+/// A `CATEGORIES` line holds the whole set, and a keyword is a bare string with
+/// no key and no members. A cleared field gives `"keywords": null`, which asks
+/// for the RFC 9553 §2.8.2 default of no tags. An empty map is a different
+/// value, and EDS also removes the attribute fully.
 ///
-/// [`states_keyword`] is asked of the server's own set, for the reason the other
-/// properties ask their `states_*` predicate: a tag the `CATEGORIES` line could
-/// not carry was never shown, so its absence from the edited card is not the
-/// user asking for it to go. Where a keyed map answers that by leaving the entry
-/// unnamed in the patch, a set has no key to leave alone — so the tag is carried
-/// onto the set the save writes instead. That is the same rule reached by the
-/// only means a set allows, and it is why an unstatable tag costs the sight of
-/// it and nothing more; the edit around it still lands.
+/// [`states_keyword`] checks the server's set. The user did not see a tag that
+/// `CATEGORIES` could not carry, so its absence is not a removal. A set has no
+/// key to omit from the patch, so the save adds that tag to the written set.
+/// The rest of the edit still applies.
 ///
-/// A tag is carried back exactly as the server stated it, value included — even
-/// the value RFC 9553 §1.4.3 does not admit, because the server is the one who
-/// said it and rewriting it here would be this mapping inventing a change. The
-/// user's own set wins where the two name the same tag: a tag they typed is a
-/// tag they mean to be set, whatever the server had against that name.
+/// A carried tag keeps the server's value, also a value that RFC 9553 §1.4.3
+/// does not admit: a change to it is not the user's edit. Where both sides name
+/// the same tag, the user's set wins.
 ///
-/// The *edited* side needs no such check: every tag on it was read off a content
-/// line, and any string is a keyword RFC 9553 admits.
+/// The edited side needs no check: each tag on it comes from a content line,
+/// and RFC 9553 admits any string as a keyword.
 fn diff_keywords(patch: &mut Map<String, Value>, current: &ContactCard, edited: &ContactCard) {
-    // An empty set server-side is compared as no tags, because that is what it
-    // was drawn as: without this a card holding one would be patched to a null
-    // by every save, an edit nobody made.
+    // Compare an empty server set as no tags, as the vCard shows it. Otherwise
+    // each save patches it to null.
     let tags = |card: &ContactCard| {
         card.keywords
             .clone()
@@ -400,8 +345,8 @@ fn diff_keywords(patch: &mut Map<String, Value>, current: &ContactCard, edited: 
         if wanted.is_empty() {
             Value::Null
         } else {
-            // Serialising a set this crate's own reader built cannot fail: it
-            // holds strings and values the server itself sent.
+            // Serialisation cannot fail: the set holds strings and values from
+            // the reader and the server.
             serde_json::to_value(wanted).unwrap_or(Value::Null)
         },
     );
@@ -434,8 +379,8 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
                     if current.full.is_some() {
                         patch.insert("name/full".to_owned(), Value::Null);
                     }
-                    // Only the components `N` showed were cleared; one of a
-                    // kind it has no field for stays, as it does in an edit.
+                    // Clear only the components that `N` showed. Keep the others,
+                    // as an edit does.
                     let components = current.components.as_deref().unwrap_or_default();
                     let kept: Vec<_> = components
                         .iter()
@@ -472,15 +417,10 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
         );
     }
 
-    // The component list is written back whole — a name has no keys to patch
-    // by — so it is merged the way an address's components are: a component
-    // that still says what it says keeps the members the `N` value had no
-    // field for, its `phonetic` spelling above all, and one of a kind that
-    // value cannot state at all is not the user's to have deleted. And as
-    // there, the matching by value only works once the components that shared
-    // one `N` field have been told apart again — a double-barrelled given name
-    // comes back as one component holding both halves, and would otherwise read
-    // as both halves deleted and replaced by their own concatenation.
+    // The component list has no keys, so it goes back whole and is merged like
+    // an address's components. First split the components that shared one `N`
+    // field (for example, a double-barrelled given name). Otherwise the merge
+    // reads both halves as deleted and replaced by their join.
     let current_components = current.components.as_deref().unwrap_or_default();
     let merged = merge_named(
         current_components,
@@ -512,9 +452,7 @@ fn diff_nicknames(
         edited,
         states_nickname,
         |patch, path, old, new| {
-            // Only the name can have been edited: the context the nickname is
-            // used in and how strongly it is preferred never reached the
-            // vCard, so they are patched around rather than through.
+            // Only the name crosses the vCard, so only the name can change.
             if old.name != new.name {
                 patch.insert(format!("{path}/name"), Value::String(new.name.clone()));
             }
@@ -657,9 +595,8 @@ fn diff_titles(
             if old.name != new.name {
                 patch.insert(format!("{path}/name"), Value::String(new.name.clone()));
             }
-            // Only a TITLE that became a ROLE or the reverse can be seen
-            // here, and the kinds are compared with the default filled in so
-            // that a card which never named one is not made to name it.
+            // A TITLE that became a ROLE, or the reverse. Compare with the
+            // default kind, so that a card with no kind does not get one.
             let kind = title_kind(new.kind.as_deref());
             if title_kind(old.kind.as_deref()) != kind {
                 patch.insert(format!("{path}/kind"), Value::String(kind.to_owned()));
@@ -687,9 +624,8 @@ fn diff_addresses(
                     components.map_or(Value::Null, |components| json_of(&components)),
                 );
             }
-            // The `LABEL` line, compared as the emitter sees it: an address
-            // written out as the empty string has no line either, so reading
-            // no label back is not the user having cleared one.
+            // Compare the `LABEL` line as the emitter writes it. An empty
+            // written-out address has no line, so no label is not a clear.
             let label = address_label(new);
             if address_label(old) != label {
                 patch.insert(
@@ -728,9 +664,7 @@ fn diff_notes(
         edited,
         states_note,
         |patch, path, old, new| {
-            // Only the text can have been edited: when the note was written
-            // and by whom never reached the vCard, so they are patched
-            // around rather than through.
+            // Only the text crosses the vCard, so only the text can change.
             if old.note != new.note {
                 patch.insert(format!("{path}/note"), Value::String(new.note.clone()));
             }
@@ -760,22 +694,19 @@ fn diff_links(
     );
 }
 
-/// The contact's calendaring resources, which cross on two lines of different
-/// names rather than on one.
+/// Patches the calendaring resources, which cross on two lines (`CALURI` and
+/// `FBURL`).
 ///
-/// Patched by their URI alone, for the reason a link's is: what the resource
-/// is, where it is used and how strongly it is preferred have no parameter on a
-/// `CALURI` or an `FBURL`. The `kind` cannot have been edited either, though it
-/// *is* stated — it is the line's own name, and moving a URI from one field to
-/// the other in Evolution is deleting it from one and typing it into the other,
-/// which arrives here as exactly that.
+/// The save patches only the URI, as for a link: the other members have no
+/// parameter on these lines. The line name states the `kind`, but the user
+/// cannot edit it. A move to the other field arrives as a deletion and an
+/// addition.
 ///
-/// Their key survives Evolution: measured against libebook-contacts 3.52, a set
-/// on `E_CONTACT_CALENDAR_URI` or `E_CONTACT_FREEBUSY_URL` rewrites the value of
-/// the first line of that name in place and leaves its parameters — the
-/// `X-JMAP-KEY` included — where they were, exactly as a set on the home page
-/// does. Only that first line is the one the user can edit; any further line of
-/// the same name passes through untouched and is matched by the key it kept.
+/// The key survives Evolution. In libebook-contacts 3.52, a set on
+/// `E_CONTACT_CALENDAR_URI` or `E_CONTACT_FREEBUSY_URL` rewrites the value of
+/// the first line of that name in place. It keeps the parameters, also
+/// `X-JMAP-KEY`, as a set on the home page does. The user can edit only that
+/// first line. Other lines of the same name pass through and keep their keys.
 fn diff_calendars(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, Calendar>>,
@@ -798,27 +729,21 @@ fn diff_calendars(
     );
 }
 
-/// The picture of the contact, which is the one media kind a vCard 3.0 `PHOTO`
-/// line states and therefore the one an Evolution user can change.
+/// Patches the contact's photo, the only media kind that a vCard 3.0 `PHOTO`
+/// line states and an Evolution user can change.
 ///
-/// Two things here are the `PHOTO` line's own. First, the entry a chosen picture
-/// belongs to cannot be found by its key: EDS rebuilds the line out of the photo
-/// it holds and drops the parameters, as it does for a date — so a keyless
-/// picture is paired with the one it replaced ([`rekey_keyless`]), which is
-/// enough because Evolution edits exactly one of them. Measured against
-/// libebook-contacts 3.52: `E_CONTACT_PHOTO` reports the *first* `PHOTO` line,
-/// a `set` rewrites that line in place and leaves the rest — keys and all —
-/// where they were, and clearing the field removes that one line only. So a card
-/// carrying several pictures has only its first edited, and the others come back
-/// wearing their keys and are matched by them.
+/// The key does not survive: EDS rebuilds the line from its photo and drops
+/// the parameters, as for a date. Thus [`rekey_keyless`] pairs a keyless
+/// picture with the picture it replaced. In libebook-contacts 3.52,
+/// `E_CONTACT_PHOTO` reports the first `PHOTO` line. A `set` rewrites that line
+/// in place and keeps the other lines and their keys. A clear removes only that
+/// line. Thus the other pictures come back with their keys.
 ///
-/// Second, what changed is asked of the *line* rather than of the members
-/// ([`same_photo`]): the entry read back off a line is not the entry that
-/// produced it — a `data:` URI may have been spelled without its base64 padding,
-/// and a media type it stated arrives as the entry's own `mediaType` — so
-/// comparing members would rewrite a picture nobody touched on every save.
-/// Once the line really has changed, both members go back, because between them
-/// they are what the new picture *is*.
+/// [`same_photo`] compares the lines, not the members. A read-back entry can
+/// differ from the original: a `data:` URI can lose its base64 padding, and a
+/// stated media type becomes `mediaType`. A member comparison would rewrite an
+/// untouched picture on each save. When the line changed, the save patches
+/// each of `uri` and `mediaType` that differs.
 fn diff_media(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, Media>>,
@@ -832,9 +757,7 @@ fn diff_media(
         edited.as_ref(),
         states_media,
         |patch, path, old, new| {
-            // The line the picture is stated on *is* its kind — a `PHOTO` is the
-            // photo — so a sound or a logo cannot arrive here, and `kind` has
-            // nothing to be patched to.
+            // A `PHOTO` line always states a photo, so `kind` cannot change.
             if same_photo(old, new) {
                 return;
             }
@@ -863,16 +786,12 @@ fn diff_online_services(
         edited,
         states_online_service,
         |patch, path, old, new| {
-            // What the line stated, on either side — not the `user`, because an
-            // entry the server stated as a URI is drawn from that URI and comes
-            // back as a `user` saying the same thing. Comparing the members
-            // would call that an edit and rewrite the entry on every save.
+            // Compare the stated handle, not `user`. A handle read from a `uri`
+            // comes back as `user`, and a member comparison sees an edit.
             let handle = online_service_handle(new);
             if online_service_handle(old) != handle {
-                // The rename goes back on the member it was drawn from. An entry
-                // that stated only a URI keeps that shape, rebuilt around the new
-                // handle — the scheme that let the handle be read is the one that
-                // writes it.
+                // Write the rename on its source member. An entry with only a
+                // URI gets a new URI with the same scheme.
                 let rebuilt = match (&old.user, handle) {
                     (None, Some(handle)) => new
                         .service
@@ -885,12 +804,9 @@ fn diff_online_services(
                     Some(uri) => {
                         patch.insert(format!("{path}/uri"), Value::String(uri));
                     }
-                    // Otherwise the handle goes on the `user`, and the URI that
-                    // named the old one goes with it: nothing here can rebuild
-                    // it — either the service has no scheme this mapping knows,
-                    // or no URI states what the user typed — and a URI for the
-                    // old handle is not one for the new. The same judgement
-                    // `merge_units` makes about a renamed unit's `sortAs`.
+                    // Otherwise write `user` and drop the old URI. The URI cannot
+                    // be rebuilt, and it names the old handle. `merge_units`
+                    // drops a renamed unit's `sortAs` for the same reason.
                     None => {
                         patch.insert(format!("{path}/user"), value_or_null(new.user.as_ref()));
                         if old.uri.is_some() {
@@ -899,11 +815,9 @@ fn diff_online_services(
                     }
                 }
             }
-            // Which the line does not state — it states the service by *being*
-            // the property EDS keeps that service's handles on — so this can
-            // only be a key that arrived on another service's line. Compared as
-            // RFC 9553 §2.3.2 asks, so the spelling the server chose is left
-            // alone rather than replaced by the one this side reads back.
+            // The property name states the service, so a change means the key
+            // arrived on a different service's line. Compare per RFC 9553 §2.3.2,
+            // so the server's spelling stays.
             if !same_service(old.service.as_deref(), new.service.as_deref()) {
                 patch.insert(
                     format!("{path}/service"),
@@ -919,9 +833,7 @@ fn diff_anniversaries(
     current: Option<&BTreeMap<String, Anniversary>>,
     edited: Option<&BTreeMap<String, Anniversary>>,
 ) {
-    // The entry a keyless date belongs to is found by what kind of date it is,
-    // which is enough because Evolution has exactly one field per kind: the
-    // birthday it hands back is the birthday the card already had.
+    // Pair a keyless date by its kind. Evolution has one field per kind.
     let edited = rekey_keyless(current, edited, states_anniversary, |old, new| {
         old.kind == new.kind
     });
@@ -932,8 +844,8 @@ fn diff_anniversaries(
         edited.as_ref(),
         states_anniversary,
         |patch, path, old, new| {
-            // The line the date is stated on *is* its kind, so this can only
-            // be a birthday that became a wedding day or the reverse.
+            // The line states the kind: a birthday became a wedding day, or the
+            // reverse.
             if old.kind != new.kind {
                 patch.insert(format!("{path}/kind"), Value::String(new.kind.clone()));
             }
@@ -943,11 +855,9 @@ fn diff_anniversaries(
             let Some(date) = new.date.as_ref() else {
                 return;
             };
-            // A day is patched member by member, so that whatever else the
-            // server hung off the date — a `calendarScale`, a member this
-            // version has never heard of — stays where it is. A point in time
-            // cannot be mended that way: the user typed a day, and a day is a
-            // different kind of object, so it replaces the old one whole.
+            // Patch a day member by member, so other members (for example
+            // `calendarScale`) stay. A day replaces a point in time whole,
+            // because they are different object types.
             if states_a_point_in_time(old) {
                 patch.insert(format!("{path}/date"), date.clone());
                 return;
@@ -964,29 +874,24 @@ fn diff_anniversaries(
     );
 }
 
-/// The edited entries of a keyed map whose key does not survive Evolution, under
-/// the keys the server holds them by.
+/// Returns the edited entries of a keyed map under the server's keys, for maps
+/// whose key does not survive Evolution.
 ///
-/// Most mapped maps cross with their key in `X-JMAP-KEY` and come back wearing
-/// it. Two do not — the dates and the pictures — because EDS keeps each in a
-/// structured field and rebuilds the line out of what it holds, dropping the
-/// parameters: verified against libebook-contacts 3.52, where an untouched line
-/// keeps them and a rewritten one does not. So a keyless entry is paired with an
-/// entry the server holds that `pairs_with` accepts — by what kind of date it is,
-/// or, for a picture, with whichever comes first, since Evolution edits the first
-/// `PHOTO` line and no other.
+/// Most maps cross with their key in `X-JMAP-KEY`. The dates and the pictures
+/// do not: EDS rebuilds those lines from structured fields and drops the
+/// parameters (libebook-contacts 3.52 keeps them only on untouched lines).
+/// Thus a keyless entry pairs with a server entry that `pairs_with` accepts:
+/// the same date kind, or for a picture the first one. Evolution edits only
+/// the first `PHOTO` line.
 ///
-/// Candidates are paired in order, and an entry whose key *did* survive keeps it
-/// and is not paired against — otherwise a card carrying two birthdays, of which
-/// Evolution shows the first and passes the second through untouched, would have
-/// them swapped by every save.
+/// Candidates pair in order. An entry with a surviving key keeps it and is not
+/// a candidate. Otherwise every save swaps two birthdays, of which Evolution
+/// shows only the first.
 ///
-/// Only *visible* entries are candidates, and a key an invisible entry holds is
-/// not treated as surviving: the reader invents keys by counting the entries it
-/// can see, so the key it gives a picture can be the key of a logo the user was
-/// never shown. Pairing past that collision keeps the edit on the entry it
-/// belongs to; [`diff_entries`] is what then keeps the invisible entry's key from
-/// being taken.
+/// Only visible entries are candidates, and an invisible entry's key does not
+/// count as surviving. The reader makes keys by counting visible entries, so a
+/// picture can get the key of a hidden logo. [`diff_entries`] then keeps the
+/// invisible entry's key free.
 fn rekey_keyless<T: Clone>(
     current: Option<&BTreeMap<String, T>>,
     edited: Option<&BTreeMap<String, T>>,
@@ -1016,20 +921,16 @@ fn rekey_keyless<T: Clone>(
     Some(rekeyed)
 }
 
-/// The component list a save writes: what the `ADR` line now states, with
-/// everything it had no field for left where it was.
+/// Returns the address components to write: the `ADR` values, plus the
+/// components that `ADR` has no field for.
 ///
-/// Like [`merge_units`], a list has no keys to patch by, so [`merge_named`]
-/// merges by kind and value, keeping a surviving component's unmapped
-/// members, its `phonetic` spelling above all. [`restore_address_components`]
-/// runs first, splitting back apart what a single `ADR` field concatenated
-/// (a street name and its house number), so the merge does not read both
-/// halves as deleted and replaced by their own join.
+/// A list has no keys, so [`merge_named`] merges by kind and value. A kept
+/// component keeps its unmapped members, mainly its `phonetic` spelling.
+/// [`restore_address_components`] first splits the values that one `ADR` field
+/// joined (a street name and its house number).
 ///
-/// An edited side with *no* components is still merged rather than read as
-/// the address being cleared: an `ADR` whose every field the user cleared,
-/// and an address shown on `LABEL` alone (all its components of kinds `ADR`
-/// has no field for), both arrive here empty without meaning that.
+/// An empty edited list is also merged and is not a clear. An `ADR` with all
+/// fields cleared, and an address shown only on `LABEL`, both arrive empty.
 fn merge_components(
     current: Option<&[AddressComponent]>,
     edited: Option<&[AddressComponent]>,
@@ -1045,22 +946,17 @@ fn merge_components(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Merging a list of named parts — an address's components or a name's — that
-/// the save has to write back whole because there are no keys to patch by.
+/// Merges a keyless list of named parts (address or name components), which
+/// the save writes whole.
 ///
-/// A part is recognised by what it says, `named` giving the pair that says it,
-/// and one that still says it comes back as the server's own copy so that
-/// whatever the vCard had no field for rides along. Walking the server's list
-/// rather than the edited one keeps an invisible part in its place instead of
-/// shuffling it to the end, so that opening a contact and closing it again
-/// writes nothing; parts the vCard added follow in the order it stated them.
+/// `named` gives the pair that identifies a part. A part with an unchanged
+/// pair stays as the server's copy, with its unmapped members. The merge walks
+/// the server's list, so an invisible part keeps its position. Thus opening
+/// and closing a contact writes nothing. New parts follow in vCard order.
 ///
-/// `was_stated` is [`diff_flags`]' predicate of the same name, and asked for the
-/// same reason: a part gone from the line was deleted by the user only if the
-/// line ever carried it. It is asked of the whole part rather than of its kind,
-/// because having a field is not the only way to reach the line — a part saying
-/// nothing is left off one it has a field for, and reading *that* absence as a
-/// removal deletes what the user was never shown.
+/// `was_stated` has the same function as in [`diff_flags`]: a missing part is
+/// a deletion only if the line stated it. It checks the whole part, not the
+/// kind, because the line omits an empty part even when it has a field.
 fn merge_named<T: Clone>(
     current: &[T],
     edited: &[T],
@@ -1072,13 +968,12 @@ fn merge_named<T: Clone>(
     for part in current {
         let same = |candidate: &&T| named(candidate) == named(part);
         match spare.iter().position(same) {
-            // Still on the line, so the server's copy is the one to keep.
+            // The part is still on the line: keep the server's copy.
             Some(index) => {
                 spare.remove(index);
                 merged.push(part.clone());
             }
-            // Gone from the line — which says the user deleted it only if
-            // the line stated it in the first place.
+            // The part is not on the line: keep it if the line never stated it.
             None if !was_stated(part) => merged.push(part.clone()),
             None => {}
         }
@@ -1087,38 +982,25 @@ fn merge_named<T: Clone>(
     merged
 }
 
-/// The unit list a save writes: the names the `ORG` line now states, each
-/// keeping whatever the server's unit of that name was carrying besides it.
+/// Returns the units to write: the names that `ORG` states, each with the
+/// other members of the server's unit of that name.
 ///
-/// A list has no keys to patch by, so this is the same merging `diff_flags`
-/// does for a boolean map, done by name: a unit's `sortAs` is a hint about
-/// how to file *that* unit, so it follows the name wherever it moved to and
-/// is left behind when the name is gone. Renaming a unit therefore drops its
-/// hint — which is right, because a hint for the old name is not one for the
-/// new.
+/// A list has no keys, so the merge matches by name. A unit's `sortAs` follows
+/// its name. A renamed unit loses its `sortAs`, because the hint is for the
+/// old name.
 ///
-/// A unit gone from the line was dissolved by the user only if the line ever
-/// carried it — [`merge_named`]'s `was_stated` rule, which this side needs for
-/// its own reason: a unit that names nothing has no `ORG` component, so the
-/// edited list cannot mention it and matching by name could never claim it.
-/// Only the units the line stated are the edited ones to have deleted; the
-/// rest are put back following whichever surviving visible unit they sat
-/// after originally (or at the front, if none did), so that opening a
-/// contact and closing it again writes nothing. Following a surviving
-/// neighbour rather than reinserting at a raw original index matters once a
-/// unit before it is dissolved: that index no longer names the same slot in
-/// the shorter merged list, and would push the unnamed unit past whatever
-/// used to come after it.
+/// A missing unit is a deletion only if the line stated it (the `was_stated`
+/// rule of [`merge_named`]). A unit with no name has no `ORG` component, so a
+/// name match cannot find it. Each such unit goes back after the surviving
+/// visible unit that it followed, or at the front. Thus opening and closing a
+/// contact writes nothing. The original index is not used, because it moves
+/// when an earlier unit is deleted.
 ///
-/// A renamed unit cannot be found by name, so it is paired instead with
-/// whichever visible unit neither side could otherwise place, in order —
-/// the same slot for the purpose of the unnamed units following it, even
-/// though (as above) its `sortAs` does not come along.
+/// A renamed unit pairs in order with a visible unit that has no other match.
+/// It takes that unit's position for the unnamed units, but not its `sortAs`.
 ///
-/// That is also why an edited list of *no* units is merged rather than read
-/// as the user having dissolved them all: an organisation whose every unit
-/// is unnamed states none of them, and the line is then the employer's name
-/// alone.
+/// Thus an empty edited list is also merged and is not a deletion of all
+/// units. An organisation with only unnamed units states none of them.
 fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Option<Vec<OrgUnit>> {
     let current = current.unwrap_or_default();
     let edited = edited.unwrap_or_default();
@@ -1185,21 +1067,18 @@ fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Optio
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Shared shape of the keyed maps: added entries are written whole, dropped
-/// entries are nulled, and surviving entries are handed to `diff_entry` to be
-/// compared field by field — over the entries the vCard actually stated.
+/// Patches a keyed map over the entries that the vCard stated. The save writes
+/// added entries whole and sets removed entries to null. `diff_entry` compares
+/// kept entries member by member.
 ///
-/// An entry the predicate calls invisible never reached the user, so the save
-/// must not read an edit into its absence. Three things follow, and each is
-/// a way the plain shape above would destroy it:
+/// The user did not see an invisible entry, so its absence is not an edit:
 ///
-/// - it is never nulled for being missing from the edited card;
-/// - a first visible entry is written *into* the property by path rather than
-///   replacing it, because the property does exist server-side however empty
-///   it looks from here;
-/// - an addition is moved off its key if an invisible entry already holds it.
-///   The reader invents keys by counting the entries it can see, so `t1` for
-///   a title the user just typed can be the key of one it never showed.
+/// - The save never sets it to null.
+/// - The save writes a first visible entry by path into the property, because
+///   the property exists on the server.
+/// - The save moves an addition to a free key if an invisible entry holds its
+///   key. The reader makes keys by counting visible entries, so a new title
+///   can get the key of a hidden title.
 fn diff_entries<T: serde::Serialize>(
     patch: &mut Map<String, Value>,
     property: &str,
@@ -1254,8 +1133,7 @@ fn diff_entries<T: serde::Serialize>(
     }
 }
 
-/// The key an added entry is written under: the one it came with, or the
-/// first free variant of it when that is somebody else's.
+/// Returns the key for an added entry: its own key, or the first free variant.
 fn free_key(wanted: &str, taken: &BTreeSet<String>) -> String {
     if !taken.contains(wanted) {
         return wanted.to_owned();
@@ -1266,50 +1144,40 @@ fn free_key(wanted: &str, taken: &BTreeSet<String>) -> String {
         .expect("an unbounded sequence has a free element")
 }
 
-/// Whether the line the user was handed said anything about this JSContact
-/// `contexts` key — the test [`diff_flags`] applies before reading a context's
-/// absence as a removal.
+/// Returns whether the line stated this `contexts` key. [`diff_flags`] uses it
+/// before it reads an absent context as a removal.
 ///
-/// Two reasons it might not have. vCard 3.0 has no `TYPE` for a context of
-/// `school` at all, which is [`maps_context`]; and of the two it *does* have,
-/// an `ADR` or a `TEL` states only one, because EDS reads a line wearing both
-/// into two of the contact editor's per-context fields at once and the next
-/// edit of either rewrites the single line behind them. Which one is left off
-/// depends on the entry, so the predicate does too. See
+/// vCard 3.0 has no `TYPE` for a `school` context (see [`maps_context`]). Of
+/// the two contexts it has, an `ADR` or a `TEL` states only one. EDS puts a
+/// line with both into two editor fields, and an edit of one rewrites the
+/// line. The omitted context depends on the entry. See
 /// [`jmap_vcard::states_context`].
 ///
-/// `EMAIL` is not narrowed this way and keeps the plain [`maps_context`]: EDS
-/// files an email line by its position (`E_CONTACT_EMAIL_1` to `_4`) rather
-/// than by its `TYPE`, so both contexts cross and both come back.
+/// `EMAIL` uses only [`maps_context`]. EDS files an email line by position
+/// (`E_CONTACT_EMAIL_1` to `_4`), not by `TYPE`, so both contexts cross.
 fn slotted_context(contexts: &Option<Value>) -> impl Fn(&str) -> bool + '_ {
     move |key| maps_context(key) && states_context(contexts.as_ref(), key)
 }
 
-/// [`slotted_context`] for a phone's `features`: whether the `TEL` the user
-/// was handed said this one.
+/// Returns whether the `TEL` line stated this `features` key, as
+/// [`slotted_context`] does for contexts.
 ///
-/// A `TEL` states one feature for the reason an `ADR` states one context — EDS
-/// picks the phone field by `TYPE` too, so a number that is both a voice line
-/// and a fax fills two fields the user edits separately, and with no context
-/// it fills none at all. See [`jmap_vcard::states_phone_feature`].
+/// EDS also picks the phone field by `TYPE`. A voice and fax number fills two
+/// separate fields, and with no context it fills no field. See
+/// [`jmap_vcard::states_phone_feature`].
 fn slotted_feature(features: &Option<Value>) -> impl Fn(&str) -> bool + '_ {
     move |key| maps_phone_feature(key) && states_phone_feature(features.as_ref(), key)
 }
 
-/// Replace the members of a boolean map this mapping can spell, keep the
-/// rest.
+/// Patches a boolean map: replaces the members that the mapping can spell and
+/// keeps the others.
 ///
-/// The two predicates are not the same question, and conflating them loses
-/// data. `was_stated` says whether the line the user was handed *said* this
-/// member, and so whether its absence from the edited line is a removal;
-/// `is_mapped` says whether the mapping can read the member back at all, and
-/// so whether its presence is an addition. They differ exactly where a line
-/// states only one of several members it holds — [`slotted_context`] and
-/// [`slotted_feature`] — and there the narrower one must not also gate the
-/// addition: a user moving a number from the Home field to the Business one
-/// types in a context the old line never stated, and gating on `was_stated`
-/// would drop the one they removed *and* ignore the one they typed, leaving
-/// the number with no context at all.
+/// The two predicates are different. `was_stated` tells if the line stated the
+/// member, so its absence is a removal. `is_mapped` tells if the mapping can
+/// read the member, so its presence is an addition. They differ where a line
+/// states one of several members ([`slotted_context`], [`slotted_feature`]).
+/// If a user moves a number from Home to Business, the old line did not state
+/// the new context. A `was_stated` gate on additions then leaves no context.
 fn diff_flags(
     patch: &mut Map<String, Value>,
     path: &str,
@@ -1343,8 +1211,7 @@ fn diff_flags(
     }
 }
 
-/// vCard 3.0 knows only that an entry is preferred, not how strongly, so a
-/// rank the server already has is left alone.
+/// Patches `pref`. vCard 3.0 has only a flag, so an existing server rank stays.
 fn diff_pref(
     patch: &mut Map<String, Value>,
     path: &str,
@@ -1360,7 +1227,7 @@ fn diff_pref(
     }
 }
 
-/// JSON Pointer escaping (RFC 6901 §3) for a map key we did not choose.
+/// Escapes a map key for a JSON Pointer (RFC 6901 §3).
 fn escape(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
@@ -1369,7 +1236,7 @@ fn value_or_null(value: Option<&String>) -> Value {
     value.map_or(Value::Null, |value| Value::String(value.clone()))
 }
 
-/// Serialising a type built from a vCard cannot fail: it holds strings,
+/// Serialisation cannot fail: a type built from a vCard holds only strings,
 /// numbers and maps of them.
 fn json_of<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
@@ -1391,13 +1258,9 @@ mod tests {
         assert_eq!(free_key("t2", &taken), "t2-3");
     }
 
-    /// A brand-new relation stating two mapped kinds at once (typing the same
-    /// name into both Evolution's Manager and Assistant fields is the ordinary
-    /// way this happens) must be written as one whole-object create, not a
-    /// create plus a reach into a sub-path of the object the same patch is
-    /// creating: RFC 8620 §5.3 requires every path segment before the last to
-    /// already exist server-side, which `relatedTo/<key>` does not before this
-    /// patch runs.
+    /// A new relation with two mapped kinds (one name in both the Manager and
+    /// Assistant fields) is one whole-object create. RFC 8620 §5.3 forbids a
+    /// patch into a sub-path that the same patch creates.
     #[test]
     fn a_new_relation_stating_two_mapped_kinds_at_once_is_written_once() {
         let current: BTreeMap<String, Relation> = [(
@@ -1457,11 +1320,9 @@ mod tests {
         patch.insert(path.to_owned(), json_of(edited));
     }
 
-    /// The reader that turns an edited vCard back into keyed entries counts
-    /// only what it can see, so a title the user just added can land on the
-    /// key an invisible title already holds server-side (see the module doc
-    /// on [`diff_entries`]). The addition must move off that key rather than
-    /// overwrite the hidden entry.
+    /// The reader counts only visible entries, so a new title can get the key
+    /// of a hidden title (see [`diff_entries`]). The addition moves to a free
+    /// key and does not overwrite the hidden entry.
     #[test]
     fn an_addition_that_lands_on_a_hidden_entrys_key_is_moved_off_it() {
         let current: BTreeMap<String, Entry> = [
@@ -1543,9 +1404,7 @@ mod tests {
             .collect()
     }
 
-    /// Every mapped relation changing at once is still a change: the scan
-    /// that decides whether there is anything to patch must not need one kind
-    /// to have stayed put.
+    /// A change to all mapped relations at the same time is still a change.
     #[test]
     fn respelling_every_mapped_relation_at_once_patches_all_three() {
         let current = relations(&[
@@ -1579,9 +1438,8 @@ mod tests {
         );
     }
 
-    /// Moving a name from the Spouse field to the Manager field keeps the
-    /// entity: the key is who it is, so only the relation type changes, and
-    /// the entry is not deleted in the same patch that reaches into it.
+    /// A name moved from Spouse to Manager keeps the entry. Only the relation
+    /// type changes.
     #[test]
     fn a_spouse_who_becomes_the_manager_keeps_the_entry() {
         let current = relations(&[("Kim", &["spouse"])]);
@@ -1609,8 +1467,7 @@ mod tests {
         Value::Object(patch)
     }
 
-    /// A name that held nothing but what `FN` and `N` show goes away whole
-    /// when the user clears it.
+    /// A cleared name that holds only `FN` and `N` data is removed whole.
     #[test]
     fn clearing_a_plain_name_removes_it_whole() {
         let plain = [
@@ -1628,9 +1485,7 @@ mod tests {
         }
     }
 
-    /// A name that also carries what no vCard line shows keeps it when the
-    /// user clears the name: only the members the vCard did show are
-    /// removed.
+    /// A cleared name keeps its unmapped members. Only the shown members go.
     #[test]
     fn clearing_a_name_keeps_the_members_vcard_never_showed() {
         let carrying = [
@@ -1647,7 +1502,7 @@ mod tests {
         }
     }
 
-    /// A name the server never had is written whole when the user types one.
+    /// A new name on a card with no name is written whole.
     #[test]
     fn typing_a_name_into_a_card_without_one_writes_it_whole() {
         let edited = name(json!({"full": "Hans Oldenburg"}));
@@ -1657,9 +1512,7 @@ mod tests {
         );
     }
 
-    /// A component of a kind `N` has no field for is what keeps a cleared
-    /// name from being removed whole, so it must also survive the clearing:
-    /// the user never saw it, so cannot have deleted it.
+    /// A cleared name keeps the components that `N` has no field for.
     #[test]
     fn clearing_a_name_keeps_the_components_n_cannot_show() {
         let current = name(json!({
@@ -1678,8 +1531,7 @@ mod tests {
         );
     }
 
-    /// A list holding only components `N` cannot show was never on the
-    /// line, so clearing the name leaves it exactly as it was.
+    /// A cleared name keeps a component list that `N` cannot show.
     #[test]
     fn clearing_a_name_leaves_a_wholly_unshown_component_list_alone() {
         let current = name(json!({
@@ -1689,9 +1541,8 @@ mod tests {
         assert_eq!(name_patch(Some(&current), None), json!({"name/full": null}));
     }
 
-    /// A keyless entry the vCard never showed cannot have been the one the
-    /// user edited, so an edited entry of the same kind is not paired with
-    /// it, and does not take (and overwrite) its key.
+    /// An edited entry does not pair with a hidden entry of the same kind, and
+    /// does not take its key.
     #[test]
     fn rekey_keyless_never_pairs_an_edit_with_a_hidden_entry() {
         let current: BTreeMap<String, (bool, &str)> = [("a1".to_owned(), (false, "birth"))].into();
@@ -1707,9 +1558,8 @@ mod tests {
         assert_eq!(rekeyed, Some(edited));
     }
 
-    /// Units with no name have nothing on the `ORG` line, so each goes back
-    /// where it was: right after the named unit it followed, in the order the
-    /// server had them, however many there are and wherever they sit.
+    /// Each unit with no name goes back after the named unit it followed, in
+    /// the server's order.
     #[test]
     fn merge_units_puts_every_nameless_unit_back_where_it_was() {
         let unit = |unit: Value| -> OrgUnit { serde_json::from_value(unit).expect("an OrgUnit") };

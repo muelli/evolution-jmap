@@ -3,18 +3,18 @@
 
 #![forbid(unsafe_code)]
 
-//! Address book synchronisation, in the shape `EBookMetaBackend` asks for.
+//! Address book synchronisation, in the shape that `EBookMetaBackend` requires.
 //!
-//! One EDS address book source is one JMAP address book, and this crate is
-//! the whole of what syncing it means: which cards exist, what a card looks
-//! like as a vCard, what changed since a state string, and how an edit made
-//! in Evolution turns into a `ContactCard/set`. Each entry point corresponds
-//! to one vfunc — [`BookSync::list_existing`] to `list_existing_sync`,
-//! [`BookSync::save_contact`] to `save_contact_sync`, and so on.
+//! One EDS address book source is one JMAP address book. This crate lists the
+//! cards, renders a card as a vCard, reads the changes since a state string,
+//! and turns an Evolution edit into a `ContactCard/set`.
+//! Each entry point matches one vfunc: [`BookSync::list_existing`] matches
+//! `list_existing_sync`, [`BookSync::save_contact`] matches `save_contact_sync`,
+//! and so on.
 //!
-//! It deliberately knows nothing about GObject or the Evolution headers, so
-//! the interesting half of the backend is testable against `jmap-mockd` on
-//! any machine. The subclass on top is left with lifecycle and marshalling.
+//! The crate has no GObject or Evolution header dependency, so tests can run
+//! it against `jmap-mockd` on any machine. The subclass keeps only lifecycle
+//! and marshalling.
 
 pub mod error;
 pub mod patch;
@@ -29,12 +29,10 @@ use serde_json::Value;
 
 pub use error::SyncError;
 
-/// One contact, as the meta backend wants it: an identifier, a change token
-/// and the object itself.
+/// One contact for the meta backend: an identifier, a change token and the vCard.
 ///
-/// This is the payload of an `EBookMetaBackendInfo`. `uid` is the JMAP id —
-/// see the crate docs of `jmap-vcard` for why it, and not the JSContact
-/// `uid`, is what EDS keys on.
+/// This is the payload of an `EBookMetaBackendInfo`. `uid` is the JMAP id, not
+/// the JSContact `uid`. `jmap_vcard::card_to_vcard` gives the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactInfo {
     pub uid: String,
@@ -49,8 +47,8 @@ pub struct Changes {
     pub new_state: State,
     /// Cards that were created or modified, already rendered.
     pub changed: Vec<ContactInfo>,
-    /// Identifiers that are gone from *this* address book, whether they were
-    /// destroyed or merely moved elsewhere.
+    /// Identifiers that are no longer in *this* address book, because the
+    /// server destroyed them or moved them to a different book.
     pub removed: Vec<String>,
 }
 
@@ -82,8 +80,8 @@ impl BookSync {
         &self.address_book_id
     }
 
-    /// Every card in this address book, with the state that listing is
-    /// current as of — `list_existing_sync`.
+    /// Every card in this address book, with the state of that listing
+    /// (`list_existing_sync`).
     pub fn list_existing(&self) -> Result<(State, Vec<ContactInfo>), SyncError> {
         let query = self.client.contact_query(
             &self.account_id,
@@ -98,22 +96,20 @@ impl BookSync {
         Ok((response.state, contacts))
     }
 
-    /// One card by identifier — `load_contact_sync`.
+    /// One card by identifier (`load_contact_sync`).
     ///
-    /// Membership of this address book is not checked: EDS asks by the
-    /// identity it was given, and a card that has moved out is reported gone
-    /// by [`BookSync::get_changes`] rather than by making loads fail.
+    /// This does not check membership of this address book. EDS asks by the
+    /// identifier it has, and [`BookSync::get_changes`] reports a moved card as removed.
     pub fn load_contact(&self, uid: &str) -> Result<ContactInfo, SyncError> {
         ContactInfo::render(&self.fetch(uid)?)
     }
 
-    /// Store a vCard — `save_contact_sync`.
+    /// Store a vCard (`save_contact_sync`).
     ///
-    /// With no `existing_uid` this is a create: the vCard's `UID` is a name
-    /// Evolution invented locally (`pas-id-…`), never a JMAP id, so it is
-    /// dropped and the server assigns the real one. Otherwise it is an
-    /// edit, sent as a PatchObject that names only the properties the vCard
-    /// mapping covers — see [`patch`].
+    /// With no `existing_uid`, this is a create. The vCard's `UID` is a local
+    /// Evolution name (`pas-id-…`), so this drops it and the server assigns the id.
+    /// Otherwise this is an edit: a PatchObject that names only the properties
+    /// the vCard mapping covers (see [`patch`]).
     pub fn save_contact(
         &self,
         vcard: &str,
@@ -138,12 +134,9 @@ impl BookSync {
                     return Err(refused(&card, error));
                 }
             };
-            // RFC 8620 §5.3 only requires the server to report properties
-            // it set itself, so `stored` may carry nothing but `id` (a real
-            // deployment does exactly this — see `tests/terse_create.rs`).
-            // Render from a fresh load rather than `stored` directly, so the
-            // vCard handed back to EDS always reflects what was actually
-            // filed, not merely what a chatty server happened to echo.
+            // RFC 8620 §5.3 requires only the properties the server set, so
+            // `stored` can hold only `id` (see `tests/terse_create.rs`).
+            // A fresh load gives EDS the card as the server stored it.
             let id = stored
                 .id
                 .as_ref()
@@ -176,7 +169,7 @@ impl BookSync {
         self.load_contact(uid)
     }
 
-    /// Destroy a card — `remove_contact_sync`.
+    /// Destroy a card (`remove_contact_sync`).
     pub fn remove_contact(&self, uid: &str) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let address_book_id = self.address_book_id().to_string();
@@ -197,11 +190,10 @@ impl BookSync {
         Ok(())
     }
 
-    /// What changed since `since` — `get_changes_sync`.
+    /// What changed since `since` (`get_changes_sync`).
     ///
-    /// Fails with a [`SyncError::is_cannot_calculate_changes`] error if the
-    /// state is too old for the server, which the caller answers by listing
-    /// the book in full.
+    /// If the state is too old for the server, this fails with a
+    /// [`SyncError::is_cannot_calculate_changes`] error. The caller then lists the full book.
     pub fn get_changes(&self, since: &State) -> Result<Changes, SyncError> {
         self.classify(
             self.client
@@ -209,20 +201,16 @@ impl BookSync {
         )
     }
 
-    /// Turn a raw `/changes` delta into the two lists the meta backend takes.
+    /// Turn a raw `/changes` delta into the two lists that the meta backend uses.
     ///
-    /// `ContactCard/changes` is account-wide, so most of the work is deciding
-    /// what a card that is *not* in this book means. The created/updated
-    /// distinction is what makes that decidable without consulting the local
-    /// cache: a card that shows up as **updated** and is not ours may have
-    /// just been moved out, and has to be reported gone or Evolution keeps
-    /// showing a contact the book no longer contains; a card that shows up as
-    /// **created** and is not ours was never in this book, so it is simply
-    /// not our business.
+    /// `ContactCard/changes` is account-wide, so a card can be outside this book.
+    /// The created/updated distinction decides such a card without the local cache.
+    /// An **updated** card that is not in this book can have moved out, so it is
+    /// reported as removed. Otherwise, Evolution continues to show it.
+    /// A **created** card that is not in this book was never in it, so it is ignored.
     ///
-    /// The delta arrives normalised — [`jmap_client::Client::all_changes`] has
-    /// already decided what an id named by several pages is — so no card is
-    /// both a candidate and a removal.
+    /// [`jmap_client::Client::all_changes`] normalises the delta across pages,
+    /// so no card is both a candidate and a removal.
     fn classify(&self, delta: ChangeSet) -> Result<Changes, SyncError> {
         let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
         let candidates: Vec<Id> = delta.created.union(&delta.updated).cloned().collect();
@@ -242,8 +230,7 @@ impl BookSync {
                     removed.push(id.to_string());
                 }
             }
-            // Gone between the /changes call and the /get: only interesting
-            // for a card that already existed.
+            // Destroyed between /changes and /get: report only a card that existed before.
             removed.extend(
                 response
                     .not_found
@@ -263,12 +250,9 @@ impl BookSync {
     /// Whether `card` is filed in the address book this instance syncs.
     ///
     /// RFC 9610's `addressBookIds` is a set (RFC 8620 §1.5), so a present
-    /// member is always `true`; a server that spells non-membership with a
-    /// `false` entry instead of omitting the key is violating that, the same
-    /// way `jmap-mail-sync`'s `messages_since` refuses the analogous
-    /// `mailboxIds` violation rather than guessing which way it means. There
-    /// is no safe reading to fall back to, so it is refused here too rather
-    /// than silently counted as absence.
+    /// member is always `true`. A `false` entry violates this.
+    /// This refuses that entry, as `jmap-mail-sync`'s `messages_since` refuses
+    /// the same `mailboxIds` violation. No reading of it is safe.
     fn holds(&self, card: &ContactCard) -> Result<bool, SyncError> {
         match card
             .address_book_ids
@@ -320,16 +304,13 @@ impl ContactInfo {
 
 /// The change token for a rendered card.
 ///
-/// JSContact's `updated` timestamp is the obvious candidate and the wrong
-/// one: RFC 9553 leaves it optional, so a server that omits it would make
-/// every card look unchanged forever. A digest of the vCard is always
-/// available, and it is a *better* token than a timestamp — it changes
-/// exactly when something EDS can see changes, so a server-side edit to a
-/// property this mapping drops does not churn every client's cache.
+/// JSContact's `updated` timestamp is optional (RFC 9553). Without it, every
+/// card looks unchanged forever. A digest of the vCard is always available.
+/// The digest changes only when content that EDS can see changes. Thus, an
+/// edit to a property that the mapping drops does not cause a cache reload.
 ///
-/// FNV-1a rather than `DefaultHasher`: revisions are persisted in the EDS
-/// cache and compared across restarts, and `DefaultHasher`'s output is
-/// explicitly not stable between Rust releases.
+/// The EDS cache persists revisions across restarts. `DefaultHasher` output can
+/// change between Rust releases, so this uses FNV-1a.
 fn revision_of(vcard: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in vcard.as_bytes() {
@@ -341,12 +322,10 @@ fn revision_of(vcard: &str) -> String {
 
 /// What to report for a save of `card` that the server refused with `error`.
 ///
-/// A refusal for size is reported as [`SyncError::PhotoTooLarge`] when the
-/// card's inline photo is most of the card, because then the photo is what
-/// the user has to change. RFC 9610 advertises no limit on a card's size, so
-/// this cannot be checked before sending; the refusal is the first the client
-/// hears of the limit. Any other refusal, or one for a card that is mostly
-/// something else, keeps the server's own error.
+/// A size refusal becomes [`SyncError::PhotoTooLarge`] when the inline photos
+/// are at least half of the card. Then the user must change the photo.
+/// RFC 9610 advertises no card size limit, so the client cannot check it before
+/// sending. All other refusals keep the server's error.
 fn refused(card: &ContactCard, error: jmap_client::Error) -> SyncError {
     let photos: Vec<&str> = card
         .media
@@ -371,9 +350,9 @@ fn is_refused_for_size(error: &jmap_client::Error) -> bool {
     match error {
         // RFC 8620 section 5.3: the object exceeds a server limit.
         jmap_client::Error::Set(error) if error.error_type == set::TOO_LARGE => true,
-        // Real Stalwart (0.16) refuses a card over its own limit (512 KiB) as
-        // `invalidProperties` with no `properties`, and says why only in the
-        // description: "Contact size 844872 exceeds the maximum allowed size
+        // Real Stalwart (0.16) refuses a card over its limit (512 KiB) as
+        // `invalidProperties` with no `properties`. Only the description gives
+        // the reason: "Contact size 844872 exceeds the maximum allowed size
         // of 524288 bytes."
         jmap_client::Error::Set(error) if error.error_type == set::INVALID_PROPERTIES => {
             error.properties.as_deref().is_none_or(<[String]>::is_empty)
@@ -383,7 +362,7 @@ fn is_refused_for_size(error: &jmap_client::Error) -> bool {
                     .is_some_and(|text| text.contains("exceeds the maximum allowed size"))
         }
         // RFC 8620 section 2: over `maxSizeRequest`. The client refuses this
-        // before sending; the server's own refusal is the same limit.
+        // before sending. The server refusal below is the same limit.
         jmap_client::Error::RequestTooLarge { .. } => true,
         jmap_client::Error::Http {
             status: 400,
@@ -396,9 +375,9 @@ fn is_refused_for_size(error: &jmap_client::Error) -> bool {
     }
 }
 
-/// The size of the content a `data:` URI carries (RFC 2397), decoded from
-/// base64 when it says so. Approximate for anything but base64, which is
-/// what every inline `PHOTO` is.
+/// The size of the content in a `data:` URI (RFC 2397), decoded from base64
+/// when the URI declares base64. Other encodings give an approximate size.
+/// Every inline `PHOTO` uses base64.
 fn decoded_octets(uri: &str) -> u64 {
     let Some((header, payload)) = uri.split_once(',') else {
         return 0;
@@ -416,9 +395,8 @@ mod tests {
     use jmap_proto::error::{RequestError, SetError, set};
     use serde_json::json;
 
-    /// Revisions outlive the process in the EDS cache, so the digest is
-    /// pinned to the published FNV-1a 64-bit test vectors: any drift would
-    /// make every cached card look changed after an upgrade.
+    /// The EDS cache keeps revisions across restarts, so the published FNV-1a
+    /// 64-bit test vectors pin the digest. A drift makes every cached card look changed.
     #[test]
     fn revision_of_is_fnv1a_64() {
         assert_eq!(revision_of(""), "cbf29ce484222325");
