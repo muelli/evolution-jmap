@@ -1,34 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! That the module binds this project's gettext domain when Evolution loads it.
+//! Tests that the module binds the gettext domain of this project when
+//! Evolution loads it.
 //!
-//! Evolution's shell has of course set gettext up for *itself*; what it has not
-//! done is tell gettext where the `evolution-jmap` catalogues are, because it
-//! has never heard of them. Until something does, every lookup in our domain
-//! goes to whatever directory gettext defaults to — which is not where CMake
-//! installed the `.mo` files unless the prefix happened to be `/usr` — and
-//! answers with the untranslated string. There is no diagnostic for that: a
-//! missing catalogue and a catalogue with no translation for the message look
-//! identical.
+//! The Evolution shell configures gettext for *itself*. But it does not tell
+//! gettext the location of the `evolution-jmap` catalogues, because it does not
+//! know them. Until some code does this, each lookup in the domain of this
+//! project uses the gettext default directory. CMake installs the `.mo` files
+//! there only if the prefix is `/usr`. Thus the lookup returns the
+//! untranslated string. There is no diagnostic for this: a missing catalogue
+//! and a catalogue with no translation for the message look the same.
 //!
-//! Of this repository's five modules, this is the one whose strings a user
-//! reads while *looking* at a dialog rather than while something goes wrong: the
-//! account-setup page's labels, which `insert_widgets` now builds. The binding
-//! has to go in before any of them, so that the first label added was already
-//! marked for translation and translated, instead of being marked and silently
-//! not.
+//! Of the five modules of this repository, this is the one whose strings a
+//! user reads in a dialog in normal operation, not only when an error occurs:
+//! the labels of the account setup page, which `insert_widgets` builds. The
+//! binding must occur before all of these labels. Then the first label is
+//! marked for translation and also translated, not marked and silently
+//! untranslated.
 //!
-//! ## Why this is a test binary of its own
+//! ## Why this is a separate test binary
 //!
-//! It starts from a deliberately wrong binding, so that "the domain is bound
-//! where the build put the catalogues" can only become true by the entry point
-//! making it true. That is process-global state, and
-//! [`bind`](jmap_backend_core::i18n::bind) is a `OnceLock` that a sibling test
-//! reaching the entry point first would spend — leaving the decoy in place and
-//! failing this one for the wrong reason. `tests/module.rs` and
-//! `tests/entry_points.rs` both reach it. Cargo gives each file in `tests/` its
-//! own process; being the only test in this file is the isolation.
+//! The test starts from a deliberately wrong binding. Thus "the domain is bound
+//! where the build put the catalogues" can become true only if the entry point
+//! makes it true. That is process-global state, and
+//! [`bind`](jmap_backend_core::i18n::bind) is a `OnceLock`. If a different test
+//! reaches the entry point first, it uses the `OnceLock`: the decoy stays, and
+//! this test fails for the wrong reason. `tests/module.rs` and
+//! `tests/entry_points.rs` both reach the entry point. Cargo gives each file in
+//! `tests/` its own process, so the only test in this file is isolated.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -41,7 +41,7 @@ use jmap_backend_core::i18n::{LOCALE_DIR, bind_to, binding};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::module::{load, unload};
 
-/// A `GTypeModule` standing in for the `EModule` Evolution would load us as.
+/// A `GTypeModule` in place of the `EModule` that Evolution loads this code as.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -65,8 +65,8 @@ unsafe impl ObjectSubclass for TestModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to a newly allocated class struct of this type,
+        // which starts with GTypeModuleClass, where both slots are.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -74,8 +74,8 @@ unsafe impl ObjectSubclass for TestModule {
 }
 
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
+    // SAFETY: GLib gives the module that loads, which is what the entry
+    // point needs.
     unsafe { load(module) };
     GTRUE
 }
@@ -85,19 +85,18 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// Loading the module moves the domain's binding to the installed catalogue
-/// directory.
+/// When the module loads, the binding of the domain changes to the installed
+/// catalogue directory.
 ///
-/// The decoy directory is what makes this an assertion about the entry point
-/// rather than about the machine. On an uninstalled build [`LOCALE_DIR`] is
-/// gettext's own compiled-in default, so a process that had never bound
-/// anything would report it too, and the test would pass against a module that
-/// did nothing at all.
+/// The decoy directory makes this an assertion about the entry point, not
+/// about the machine. On an uninstalled build, [`LOCALE_DIR`] is the
+/// compiled-in default of gettext. A process with no binding reports it too,
+/// and the test would pass with a module that did nothing.
 ///
-/// Driven through `g_type_module_use` rather than by calling [`load`] directly,
-/// because that is the path Evolution takes and it is no harder to write: the
-/// entry point is reached through the `GTypeModuleClass.load` vfunc, exactly as
-/// it would be from `EModule`.
+/// The test uses `g_type_module_use`, not a direct call to [`load`], because
+/// Evolution uses that path and it is equally easy to write. The entry point
+/// is reached through the `GTypeModuleClass.load` vfunc, exactly as from
+/// `EModule`.
 #[test]
 fn the_entry_point_binds_the_domain() {
     let decoy = c"/nonexistent/jmap-config-decoy-locale";
@@ -115,9 +114,9 @@ fn the_entry_point_binds_the_domain() {
     let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
     assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what Evolution's shell does — it loads every module
-    // in its directory at startup and keeps them.
+    // SAFETY: `module` is a GTypeModule. The reference that this takes is never
+    // released, as in the Evolution shell: it loads each module in its
+    // directory at startup and keeps them.
     assert_ne!(
         unsafe { g_type_module_use(module) },
         GFALSE,

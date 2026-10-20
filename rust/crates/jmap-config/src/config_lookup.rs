@@ -1,88 +1,89 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `JmapConfigLookup`: the `EConfigLookupWorker` behind Evolution's own
-//! "Look Up Account Details" step, which is what actually closes M7's OAuth
-//! 2.0 gap.
+//! `JmapConfigLookup`: the `EConfigLookupWorker` behind the "Look Up Account
+//! Details" step of Evolution. This worker closes the OAuth 2.0 gap of M7.
 //!
 //! [`oauth2_service`](crate::oauth2_service) and
-//! [`oauth2_setup::discover_and_register`] are both complete, but nothing yet
-//! calls the latter — the manual server-settings page
+//! [`oauth2_setup::discover_and_register`] are both complete. Before this
+//! module, nothing called the latter. The manual server-settings page that
 //! [`backend::insert_widgets`](crate::backend) builds has no trigger for a
-//! blocking network probe that would not risk blocking the GTK main thread
-//! or need a maintainer decision about what UI asks for it. This module does
-//! not add either: implementing `EConfigLookupWorker` is registering with a
-//! mechanism Evolution's account assistant already has, generic across every
-//! provider, the same one `evolution-ews`'s own
-//! `e-ews-config-lookup.c` uses for Exchange autodiscovery. The trigger is
-//! the assistant's own "Look Up Account Details" button; the thread is one
-//! `EConfigLookup` already runs this on (`e-config-lookup.c`'s
-//! `g_thread_pool_push`, confirmed by reading that file rather than assumed).
+//! blocking network probe. Such a trigger could block the GTK main thread, or
+//! need a maintainer decision about which UI asks for it. This module adds
+//! neither. It implements `EConfigLookupWorker`, a generic mechanism that the
+//! account assistant of Evolution already has for all providers.
+//! `e-ews-config-lookup.c` of `evolution-ews` uses the same mechanism for
+//! Exchange autodiscovery. The trigger is the "Look Up Account Details" button
+//! of the assistant. `EConfigLookup` already runs this worker on a pool thread
+//! (`g_thread_pool_push` in `e-config-lookup.c`, read in that file).
 //!
-//! ## Read against real upstream source, not assumed
+//! ## Read against real upstream source
 //!
-//! `/tmp/evo-src` (this VM's checkout of `evolution`, not EDS) has three real
-//! `EConfigLookupWorker` implementers under `src/modules/config-lookup/`.
-//! `e-webdav-config-lookup.c` is the shape this module follows almost line
-//! for line: `extensible_type = E_TYPE_CONFIG_LOOKUP` in `class_init`,
-//! `constructed` chaining up and then calling
-//! `e_config_lookup_register_worker`, and `run()` building an
-//! `EConfigLookupResultSimple` and handing it to `e_config_lookup_add_result`.
+//! `/tmp/evo-src` (the `evolution` checkout of this VM, not EDS) has three
+//! `EConfigLookupWorker` implementers under `src/modules/config-lookup/`. This
+//! module follows `e-webdav-config-lookup.c` almost line for line:
+//! `extensible_type = E_TYPE_CONFIG_LOOKUP` in `class_init`, `constructed`
+//! chains up and calls `e_config_lookup_register_worker`, and `run()` gives an
+//! `EConfigLookupResultSimple` to `e_config_lookup_add_result`.
+//!
 //! `e-config-lookup.c`/`.h` and `e-config-lookup-result-simple.c`/`.h` (same
-//! tree) pin the ownership this module relies on:
-//! `e_config_lookup_result_simple_new` is a plain `g_object_new` (transfer
-//! full to its caller), every `_add_*` copies the string/value it is given,
-//! and `e_config_lookup_add_result`'s own doc comment says outright that the
-//! `EConfigLookup` "assumes ownership of the result and frees it when no
-//! longer needed" — so a result here is built, populated, handed over, and
-//! never unref'd by this crate.
+//! tree) set the ownership rules. `e_config_lookup_result_simple_new` is a
+//! plain `g_object_new` (transfer full to its caller). Each `_add_*` copies the
+//! string or value it gets. The doc comment of `e_config_lookup_add_result`
+//! says that the `EConfigLookup` "assumes ownership of the result and frees it
+//! when no longer needed". Thus this crate builds a result, fills it, gives it
+//! away, and never unrefs it.
 //!
-//! ## The redirect URI, and a wrong guess corrected before it shipped
+//! ## The redirect URI, and a wrong guess corrected before release
 //!
-//! An earlier plan was to fix `redirect_uri` to the RFC 8252 out-of-band URN,
-//! `"urn:ietf:wg:oauth:2.0:oob"`. Checking that against EDS's actual
-//! `libedataserverui`/`libedataserver` source (fetched from
-//! `gitlab.gnome.org/GNOME/evolution-data-server`, `master` — this VM has no
-//! local EDS checkout, only `evolution`'s) shows it is the wrong guess for
-//! *this* prompter: `ECredentialsPrompterImplOAuth2` never compares the
-//! browser's navigation against the redirect URI at all.
-//! `get_authentication_policy`'s default (`e-oauth2-service.c`) is
-//! unconditionally `ALLOW`, and the authorization code is extracted from
-//! whatever URI the embedded `WebKitWebView` reaches `WEBKIT_LOAD_FINISHED`
-//! on — `e_oauth2_service_util_extract_from_uri` parses `code=`/`error=` out
-//! of any URI's query or fragment with no prefix check. What has to actually
-//! work is WebKit *finishing* (not failing) that navigation, and EDS's own
-//! shipped `e-oauth2-service-google.c` answers that with a private-use URI
-//! *scheme* (`«reversed client id»:/oauth2redirect`), not the OOB URN — real,
-//! load-bearing precedent, since Google account setup works today against
-//! this exact prompter. [`REDIRECT_URI`] follows that precedent instead.
+//! An earlier plan set `redirect_uri` to the RFC 8252 out-of-band URN,
+//! `"urn:ietf:wg:oauth:2.0:oob"`. The EDS `libedataserverui`/`libedataserver`
+//! source shows that this guess is wrong for *this* prompter. (The source came
+//! from `gitlab.gnome.org/GNOME/evolution-data-server`, `master`. This VM has
+//! no local EDS checkout, only one of `evolution`.)
 //!
-//! ## Where `run()`'s live dispatch is proven
+//! - `ECredentialsPrompterImplOAuth2` never compares the browser's navigation
+//!   with the redirect URI.
+//! - The default of `get_authentication_policy` (`e-oauth2-service.c`) is
+//!   always `ALLOW`.
+//! - The prompter extracts the authorization code from each URI on which the
+//!   embedded `WebKitWebView` gets to `WEBKIT_LOAD_FINISHED`.
+//!   `e_oauth2_service_util_extract_from_uri` parses `code=`/`error=` from the
+//!   query or fragment of any URI, with no prefix check.
 //!
-//! `run()`'s live dispatch — reached by a real `EConfigLookup`, which
-//! `e_config_lookup_new` refuses to construct without a live
-//! `ESourceRegistry` (checked against `e-config-lookup.c`'s own
-//! `g_return_val_if_fail`) — needs the `dbus-run-session` environment M9's
-//! functional harness already sets up (`cmake/Functional.cmake`), which
-//! `cargo test` alone does not have. [`probe_host`] is unit-tested directly
-//! since it needs none of that; the FFI shell below is built and registered
-//! the same way [`crate::oauth2_service::Service`] was, and its own dispatch
-//! through a real `EConfigLookup` is what
-//! `jmap-functional/tests/config-lookup.rs` now drives — the M9 layer-1
-//! coverage `evo-sys/tests/config_lookup.rs` names as the next increment when
-//! it was written, since landed.
+//! Thus WebKit must *finish* (not fail) that navigation. The
+//! `e-oauth2-service-google.c` that EDS ships does this with a private-use URI
+//! *scheme* (`«reversed client id»:/oauth2redirect`), not the OOB URN. This is
+//! a real precedent: Google account setup works today with this prompter.
+//! [`REDIRECT_URI`] follows that precedent.
 //!
-//! This dispatch was also hand-driven once, outside the test suite: a
-//! scratch C program linking `evolution-shell-3.0`
-//! (which is where `EConfigLookup` actually lives — `e-util`, not any EDS
-//! library), loading this module via `e_module_load_all_in_directory`,
-//! constructing a real `ESourceRegistry`/`EConfigLookup` under
-//! `dbus-run-session`, and running it against a `jmap-mockd --oauth2`
-//! instance produced exactly one positive, complete result. That is evidence
-//! the mechanism works end to end and that `LD_LIBRARY_PATH=/usr/lib/evolution`
-//! is the missing piece a headless client needs (the module's own transitive
-//! `libevolution-mail.so` dependency is not on the default loader path) — not
-//! a standing test, and not a substitute for the automated harness above.
+//! ## Where the live dispatch of `run()` is proven
+//!
+//! Only a real `EConfigLookup` calls `run()`. `e_config_lookup_new` does not
+//! construct one without a live `ESourceRegistry` (see the
+//! `g_return_val_if_fail` in `e-config-lookup.c`). Thus the live dispatch needs
+//! the `dbus-run-session` environment of the M9 functional harness
+//! (`cmake/Functional.cmake`). `cargo test` alone does not have it.
+//!
+//! - The unit tests call [`probe_host`] directly, because it needs none of that.
+//! - The FFI shell below is built and registered the same way as
+//!   [`crate::oauth2_service::Service`].
+//! - `jmap-functional/tests/config-lookup.rs` drives its dispatch through a
+//!   real `EConfigLookup`. This is the M9 layer-1 coverage that
+//!   `evo-sys/tests/config_lookup.rs` named as the next increment. It is now
+//!   done.
+//!
+//! This dispatch was also run once by hand, outside the test suite. A scratch
+//! C program linked `evolution-shell-3.0` (`EConfigLookup` is in `e-util`, not
+//! in an EDS library) and loaded this module with
+//! `e_module_load_all_in_directory`. Under `dbus-run-session`, it constructed a
+//! real `ESourceRegistry`/`EConfigLookup` and ran it against a
+//! `jmap-mockd --oauth2` instance. It produced exactly one positive, complete
+//! result. This shows that the mechanism works end to end. It also shows that a
+//! headless client needs `LD_LIBRARY_PATH=/usr/lib/evolution`: the transitive
+//! `libevolution-mail.so` dependency of the module is not on the default loader
+//! path. This run is not a standing test, and it does not replace the
+//! automated harness above.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -119,56 +120,59 @@ use crate::account::{self, Account, BACKEND_NAME};
 use crate::oauth2::{self, Config};
 use crate::oauth2_setup::discover_and_register;
 
-/// The private-use URI scheme registered with RFC 7591 and answered by
-/// [`crate::oauth2_service::Service::get_redirect_uri`] — see the module docs
-/// for why this, and not the RFC 8252 out-of-band URN, is what actually works
-/// against EDS's WebKit-based consent prompter.
+/// The private-use URI scheme that this crate registers with RFC 7591 and that
+/// [`crate::oauth2_service::Service::get_redirect_uri`] returns.
 ///
-/// Dotted reverse-DNS, not a bare word: some providers (Fastmail's OAuth
-/// doc) require a private-use
-/// redirect scheme to contain at least one dot and reject registration
-/// otherwise.
+/// The module docs tell why this works with the WebKit consent prompter of EDS,
+/// and the RFC 8252 out-of-band URN does not.
+///
+/// It is dotted reverse-DNS, not a bare word. Some providers (see the OAuth doc
+/// of Fastmail) refuse to register a private-use redirect scheme without a dot.
 pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
 
-/// The priority of the one result a successful lookup adds. Lower is higher
-/// priority, and this must be STRICTLY better than `e-config-lookup-result.h`'s
-/// PRIORITY_IMAP and PRIORITY_SMTP (both 1000): the page picks a backend only
-/// on `priority < selected`, so a tie loses to candidate order. Observed live
-/// (2026-08-23, Fastmail): at 1000 the receiving page stayed on ISPDB's imapx
-/// while the sending page flipped to jmap, a broken hybrid. A result built
-/// from the provider's own SRV record plus a completed RFC 7591 registration
-/// is the provider's answer, not a generic guess, so it outranks ISPDB's by
-/// the same margin evolution-ews's Exchange autodiscovery uses.
+/// The priority of the one result that a successful lookup adds.
+///
+/// A lower value is a higher priority. This value must be STRICTLY better than
+/// PRIORITY_IMAP and PRIORITY_SMTP of `e-config-lookup-result.h` (both 1000).
+/// The page selects a backend only on `priority < selected`, thus a tie loses
+/// to candidate order. Live observation (2026-08-23, Fastmail): at 1000 the
+/// receiving page stayed on the imapx of ISPDB, but the sending page changed
+/// to jmap. The result was a broken hybrid.
+///
+/// This result comes from the SRV record of the provider and a completed
+/// RFC 7591 registration. Thus it is the answer of the provider, not a generic
+/// guess. It is better than the ISPDB result by the same margin that the
+/// Exchange autodiscovery of evolution-ews uses.
 const PRIORITY: gint = E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP as gint - 100;
 
-/// The host RFC 8414 discovery is asked of, and later written as
-/// `[Authentication] host` in a positive result — a bare domain, not a
-/// guessed subdomain, for the same reason `defaults.rs` gives the manual
-/// setup page one: JMAP's own discovery (RFC 8620 §2.2) finds everything
-/// else `.well-known/jmap` names once the account connects.
+/// The host for RFC 8414 discovery. A positive result also writes it as
+/// `[Authentication] host`.
 ///
-/// `servers`, when given, names the host explicitly and wins — the one thing
-/// [`E_CONFIG_LOOKUP_PARAM_SERVERS`] exists for. Only its first entry is
-/// tried: unlike CalDAV/CardDAV autodiscovery (`e-webdav-config-lookup.c`,
-/// which tries every listed server because non-JMAP servers may sit at some
-/// and not others), a JMAP deployment names exactly one issuer, so a second
-/// entry would be trying a second server the first one failing. An explicit
-/// entry is not a bare domain and so is never run through `resolver` — SRV
-/// autodiscovery (RFC 8620 §2.2) is what the email-domain fallback below
-/// exists to correct, not something an already-explicit host needs.
+/// The fallback is a bare domain, not a guessed subdomain, for the same reason
+/// that `defaults.rs` gives one to the manual setup page. When the account
+/// connects, the JMAP discovery (RFC 8620 §2.2) finds all else that
+/// `.well-known/jmap` names.
 ///
-/// The email-domain fallback consults `resolver` for a `_jmap._tcp.<domain>`
-/// SRV record (see `jmap_client::resolver`) before returning the bare domain
-/// — the same seam and the same fallback order
-/// `jmap_client::ClientBuilder::connect_domain` uses, so a deployment
-/// published only via SRV (Fastmail) is discovered here too, not just once a
-/// `jmap_client` session is already being fetched.
+/// If `servers` is given, it names the host explicitly and has priority. This
+/// is the purpose of [`E_CONFIG_LOOKUP_PARAM_SERVERS`]. Only its first entry is
+/// tried. CalDAV/CardDAV autodiscovery (`e-webdav-config-lookup.c`) tries each
+/// listed server, because a server can be there on some hosts and not on
+/// others. A JMAP deployment names exactly one issuer, thus a second entry
+/// is a different server, not a fallback for the first. An explicit entry is
+/// not a bare domain, thus `resolver` never gets it. SRV autodiscovery
+/// (RFC 8620 §2.2) is for the email-domain fallback only.
 ///
-/// What this returns is not yet a host `discover_and_register` can use as-is
-/// — a `servers` entry or an SRV target may carry a scheme and a port, which
-/// [`parse_target`] reads back out; an SRV target is rendered `host:port`,
-/// which `parse_target` parses as a bare, secure host with that port, the
-/// right reading for a target a JMAP SRV record ever names.
+/// Before it returns the bare domain, the email-domain fallback asks `resolver`
+/// for a `_jmap._tcp.<domain>` SRV record (see `jmap_client::resolver`).
+/// `jmap_client::ClientBuilder::connect_domain` uses the same seam and the same
+/// fallback order. Thus this function also finds a deployment that only SRV
+/// publishes (Fastmail), not only a `jmap_client` session fetch.
+///
+/// `discover_and_register` cannot use the return value directly. A `servers`
+/// entry or an SRV target can contain a scheme and a port, which
+/// [`parse_target`] reads. An SRV target has the form `host:port`.
+/// `parse_target` reads that as a bare, secure host with that port, which is
+/// correct for each target of a JMAP SRV record.
 pub fn probe_host(
     email_address: &str,
     servers: Option<&str>,
@@ -200,31 +204,30 @@ pub fn probe_host(
     Some(domain.to_owned())
 }
 
-/// Where [`probe_host`]'s answer is actually reached: a bare host, an
-/// explicit port when one was named, and whether to speak TLS.
+/// The address for the answer of [`probe_host`]: a bare host, an explicit port
+/// (0 if none), and whether to use TLS.
 struct Target {
     host: String,
     port: u16,
     secure: bool,
 }
 
-/// Reads a `scheme://host:port` override out of [`probe_host`]'s answer, the
-/// same convention real upstream's own `e-webdav-config-lookup.c` uses for its
-/// `servers` values (read against `/tmp/evo-src`'s copy, not assumed): a bare
-/// host defaults to HTTPS and no explicit port — right for the email-domain
-/// fallback, which is always a bare domain — and an `http://`/`https://`
-/// prefix, with an optional `:port` suffix, overrides both. That override is
-/// what lets a `servers` entry name a locally-run, plaintext, non-default-port
-/// test deployment at all; the email-domain path never needs it.
+/// Reads a `scheme://host:port` override from the answer of [`probe_host`].
 ///
-/// A bare, unbracketed IPv6 literal (more than one colon, no `[...]`) is left
-/// whole rather than split on its last colon — [`jmap_backend_core::source`]
-/// accepts a host in that shape, and splitting one on `:` would cut it apart
-/// as though the last group were a port. A bracketed literal (RFC 3986,
-/// `[::1]:8443`) is unwrapped back to that same bare shape, with an optional
-/// trailing `:port` read separately, rather than falling through to the
-/// unbracketed case, where the host's own colons would defeat the
-/// `!bare_host.contains(':')` guard below.
+/// Upstream `e-webdav-config-lookup.c` uses the same convention for its
+/// `servers` values (read in the copy in `/tmp/evo-src`). A bare host gets
+/// HTTPS and no explicit port. This is correct for the email-domain fallback,
+/// which is always a bare domain. An `http://`/`https://` prefix, with an
+/// optional `:port` suffix, overrides both. Only with this override can a
+/// `servers` entry name a local, plaintext test deployment on a non-default
+/// port. The email-domain path never needs it.
+///
+/// A bare, unbracketed IPv6 literal (more than one colon, no `[...]`) stays
+/// whole. [`jmap_backend_core::source`] accepts a host in that shape. A split
+/// on the last `:` would read the last group as a port. A bracketed literal
+/// (RFC 3986, `[::1]:8443`) is unwrapped to the same bare shape, and an
+/// optional `:port` after it is read separately. In the unbracketed case, the
+/// colons of the host would defeat the `!bare_host.contains(':')` guard below.
 fn parse_target(host: &str) -> Option<Target> {
     let (secure, authority) = match host.strip_prefix("https://") {
         Some(rest) => (true, rest),
@@ -260,23 +263,24 @@ fn parse_target(host: &str) -> Option<Target> {
     })
 }
 
-/// The server a re-run lookup probes first, in the `servers` shape
-/// [`parse_target`] reads: the host, port and TLS choice of the JMAP account
-/// the lookup is for, as a previous lookup or the server settings page left
-/// it. evolution-ews seeds its own autodiscovery from the account's prior
-/// settings the same way.
+/// The server that a lookup probes first when it runs again, in the `servers`
+/// shape that [`parse_target`] reads.
 ///
-/// `None`, so the probe falls back to [`probe_host`]'s email-domain path,
-/// unless all of these hold:
+/// It is the host, port and TLS choice of the JMAP account, as a previous
+/// lookup or the server settings page wrote them. evolution-ews starts its
+/// autodiscovery from the prior settings of the account in the same way.
 ///
-/// - the account is a JMAP one (`backend_name`): the assistant hands every
-///   worker the same collection, and another backend's host is not one to
-///   ask for JMAP discovery;
-/// - its identity is the address being looked up: a user who changed the
-///   address wants the new domain discovered, not the old host reused;
-/// - its host is not the bare email domain: that is what the server page
-///   offers by default, and probing it directly would skip the `_jmap._tcp`
-///   SRV lookup a provider like Fastmail is only found through.
+/// The result is `None` (thus the probe uses the email-domain path of
+/// [`probe_host`]), unless all of these conditions are true:
+///
+/// - The account is a JMAP account (`backend_name`). The assistant gives the
+///   same collection to all workers, and the host of a different backend is
+///   not a host for JMAP discovery.
+/// - Its identity is the address of the lookup. A user who changed the address
+///   wants discovery for the new domain, not the old host.
+/// - Its host is not the bare email domain. The server page shows that domain
+///   by default. A direct probe of it would skip the `_jmap._tcp` SRV lookup,
+///   which is the only way to find a provider such as Fastmail.
 fn prior_server(email: &str, backend_name: Option<&str>, account: &Account) -> Option<String> {
     if backend_name != Some(BACKEND_NAME) || !account.identity.eq_ignore_ascii_case(email) {
         return None;
@@ -304,65 +308,64 @@ fn prior_server(email: &str, backend_name: Option<&str>, account: &Account) -> O
     })
 }
 
-/// [`prior_server`] for the collection source the assistant answers
-/// `e_config_lookup_get_source` with.
+/// [`prior_server`] for the collection source that
+/// `e_config_lookup_get_source` returns.
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource`. It is only read from.
+/// `source` must be NULL or a valid `ESource`. This function only reads it.
 unsafe fn prior_server_of(source: *mut ESource, email: &str) -> Option<String> {
     if source.is_null() {
         return None;
     }
-    // The source belongs to the main thread and this runs on a worker
-    // thread, so hold a reference while it is read.
-    // SAFETY: a valid source, just checked non-NULL.
+    // The main thread owns the source and this runs on a worker thread. Thus
+    // hold a reference during the read.
+    // SAFETY: a valid source, and the check above makes sure it is not NULL.
     unsafe { g_object_ref(source.cast()) };
-    // SAFETY: the source is valid and referenced until the unref below.
+    // SAFETY: the source is valid and has a reference until the unref below.
     let server = unsafe { prior_server_of_held(source, email) };
-    // SAFETY: drops the reference taken above.
+    // SAFETY: releases the reference that the code above took.
     unsafe { g_object_unref(source.cast()) };
     server
 }
 
-/// [`prior_server_of`] for a source the caller holds a reference to.
+/// [`prior_server_of`] for a source on which the caller holds a reference.
 ///
 /// # Safety
 ///
 /// `source` must be a valid `ESource`.
 unsafe fn prior_server_of_held(source: *mut ESource, email: &str) -> Option<String> {
-    // SAFETY: no arguments; registers the extension type the lookup below
-    // needs, as `account::read` does for its own.
+    // SAFETY: no arguments. This registers the extension type that the lookup
+    // below needs, as `account::read` does for its types.
     unsafe { e_source_collection_get_type() };
-    // SAFETY: a valid source, just checked non-NULL, and a header constant
-    // naming an extension of the type it is read as.
+    // SAFETY: a valid source by this function's contract, and a header constant
+    // that names an extension of the type that the code reads.
     let collection = unsafe {
         extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION)
     }?;
     // SAFETY: a live extension, and an `ESourceCollection` is an
-    // `ESourceBackend`; the string is NULL or a copy this call owns.
+    // `ESourceBackend`. The string is NULL or a copy that this call owns.
     let backend_name = unsafe { take_string(e_source_backend_dup_backend_name(collection.cast())) };
     // SAFETY: a valid source, as above.
     let account = unsafe { account::read(source) };
     prior_server(email, backend_name.as_deref(), &account)
 }
 
-/// The instance struct: nothing but [`EExtension`]'s own state — everything
-/// this worker needs is either `'static` or reached through `run()`'s own
-/// arguments.
+/// The instance struct: only the state of [`EExtension`]. All else that this
+/// worker needs is `'static` or comes through the arguments of `run()`.
 #[repr(C)]
 pub struct JmapConfigLookup {
     parent: EExtension,
 }
 
-/// The class struct: nothing but [`EExtensionClass`]'s own state.
+/// The class struct: only the state of [`EExtensionClass`].
 #[repr(C)]
 pub struct JmapConfigLookupClass {
     parent_class: EExtensionClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EExtension's own
-// instance/class structs; EExtension derives from GObject (eds-sys/tests/
+// SAFETY: both structs are #[repr(C)] and start with the instance/class
+// structs of EExtension. EExtension derives from GObject (eds-sys/tests/
 // oauth2.rs checks its size against `g_type_query`).
 unsafe impl ObjectSubclass for JmapConfigLookup {
     const NAME: &'static CStr = c"JmapConfigLookup";
@@ -370,7 +373,7 @@ unsafe impl ObjectSubclass for JmapConfigLookup {
     type Class = JmapConfigLookupClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { e_extension_get_type() }
     }
 
@@ -379,93 +382,96 @@ unsafe impl ObjectSubclass for JmapConfigLookup {
     }
 
     fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself. Called here,
-        // ahead of registration, because `class_init` may only look it up.
+        // SAFETY: no arguments, and the type initializes itself. The call is
+        // here, before registration, because `class_init` can only look it up.
         vec![unsafe { e_config_lookup_get_type() }]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `EExtensionClass`, whose `extensible_type`
-        // field is what `e_extensible_load_extensions` matches against —
-        // `e_webdav_config_lookup_class_init`'s own assignment, mirrored here.
+        // SAFETY: `class` starts with `EExtensionClass`.
+        // `e_extensible_load_extensions` matches against its `extensible_type`
+        // field. This is the same assignment as in
+        // `e_webdav_config_lookup_class_init`.
         unsafe {
             (*class).parent_class.extensible_type = subclass::registered_type(c"EConfigLookup")
         };
 
-        // SAFETY: `JmapConfigLookupClass` leads with `EExtensionClass`, which
-        // leads with `GObjectClass` — the same transitive leading-field cast
-        // `jmap_config::oauth2::Extension`'s `class_init` uses.
+        // SAFETY: `JmapConfigLookupClass` starts with `EExtensionClass`, which
+        // starts with `GObjectClass`. The `class_init` of
+        // `jmap_config::oauth2::Extension` uses the same transitive cast.
         let object_class = class.cast::<GObjectClass>();
         unsafe { (*object_class).constructed = Some(constructed) };
     }
 }
 
 /// Chains up (as `e_webdav_config_lookup_constructed` does), then registers
-/// this instance with the `EConfigLookup` it extends — the "putting the type
-/// in the type system is the registration" idiom, completed at the moment
-/// each `EConfigLookup` is actually constructed rather than at module load,
-/// since unlike [`crate::backend::JmapConfigServiceBackend`] this type needs
-/// a live instance of what it extends to register itself *against*.
+/// this instance with the `EConfigLookup` that it extends.
+///
+/// The registration occurs when each `EConfigLookup` is constructed, not at
+/// module load. Different from [`crate::backend::JmapConfigServiceBackend`],
+/// this type needs a live instance of the extended type to register *against*.
 unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapConfigLookup::constructed", (), || unsafe {
-        // SAFETY: the parent class from a live instance's own class is
-        // initialised and alive for as long as any instance is.
+        // SAFETY: the parent class of the class of a live instance is
+        // initialized and stays alive while an instance is alive.
         let parent = subclass::parent_class::<GObjectClass>(JmapConfigLookup::parent_type());
         if let Some(chained) = parent.and_then(|class| class.constructed) {
             chained(object);
         }
 
-        // SAFETY: GObject passes a live instance of this type; `EExtensible`
-        // interface pointers are the same address as the instance they were
-        // fetched from (GObject interfaces have no adjusted `this`), which is
-        // what makes this cast the Rust equivalent of the C `E_CONFIG_LOOKUP()`
-        // macro on `e_extension_get_extensible`'s answer.
+        // SAFETY: GObject passes a live instance of this type. An `EExtensible`
+        // interface pointer has the same address as its instance (GObject
+        // interfaces have no adjusted `this`). Thus this cast is the Rust
+        // equivalent of the C `E_CONFIG_LOOKUP()` macro on the return value
+        // of `e_extension_get_extensible`.
         let config_lookup = e_extension_get_extensible(object.cast::<EExtension>()).cast();
         e_config_lookup_register_worker(config_lookup, object.cast::<EConfigLookupWorker>());
     });
 }
 
-/// The filling of [`JmapConfigLookup`]'s copy of `EConfigLookupWorkerInterface`.
+/// Fills the copy of `EConfigLookupWorkerInterface` for [`JmapConfigLookup`].
 struct Vtable;
 
-// SAFETY: `EConfigLookupWorkerInterface` is bindgen's `#[repr(C)]` binding of
-// the interface struct `e_config_lookup_worker_get_type` names, and it leads
-// with `GTypeInterface` — `evo-sys/tests/config_lookup.rs` pins the
-// interface's shape and that both slots have no default to fall back to.
+// SAFETY: `EConfigLookupWorkerInterface` is the `#[repr(C)]` bindgen binding
+// of the interface struct that `e_config_lookup_worker_get_type` names, and it
+// starts with `GTypeInterface`. `evo-sys/tests/config_lookup.rs` pins the shape
+// of the interface, and that the two slots have no default.
 unsafe impl InterfaceImpl for Vtable {
     type Vtable = EConfigLookupWorkerInterface;
 
     fn gtype() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { e_config_lookup_worker_get_type() }
     }
 
     unsafe fn interface_init(vtable: *mut Self::Vtable) {
-        // SAFETY: the contract of `InterfaceImpl::interface_init` — this is
-        // our own copy of the vtable, and nothing else can reach it yet.
+        // SAFETY: the contract of `InterfaceImpl::interface_init`: this is the
+        // copy of the vtable for this type, and nothing else can get to it yet.
         let vtable = unsafe { &mut *vtable };
         vtable.get_display_name = Some(get_display_name);
         vtable.run = Some(run);
     }
 }
 
-/// The label the assistant's results list would show while this worker is
-/// still running — not [`EConfigLookupResult`]'s own `display_name`, which
-/// [`run`] sets per result and which is what the user actually picks from.
+/// The label that the results list of the assistant shows while this worker
+/// runs.
+///
+/// This is not the `display_name` of [`EConfigLookupResult`]. [`run`] sets that
+/// for each result, and the user selects from those.
 unsafe extern "C" fn get_display_name(_lookup_worker: *mut EConfigLookupWorker) -> *const gchar {
     guard("JmapConfigLookup::get_display_name", ptr::null(), || {
         i18n::translate_static(N_(c"Look up JMAP account details"))
     })
 }
 
-/// Reads a string parameter out of `params`, or `None` for one that is unset
-/// — [`e_named_parameters_get`]'s own NULL-means-absent contract.
+/// Reads a string parameter from `params`, or `None` if it is not set (NULL
+/// from [`e_named_parameters_get`]).
 ///
 /// # Safety
 ///
 /// `params` must be NULL or a valid `ENamedParameters`, valid for the call.
 unsafe fn param(params: *const ENamedParameters, name: &CStr) -> Option<String> {
-    // SAFETY: forwarded from this function's own contract.
+    // SAFETY: from this function's contract.
     let value = unsafe { e_named_parameters_get(params, name.as_ptr()) };
     (!value.is_null()).then(|| {
         unsafe { CStr::from_ptr(value) }
@@ -474,9 +480,10 @@ unsafe fn param(params: *const ENamedParameters, name: &CStr) -> Option<String> 
     })
 }
 
-/// Adds `value`, if present, as `extension_name`/`property_name` on `result`
-/// — [`e_config_lookup_result_simple_add_string`] copies the string, so
-/// nothing here needs to outlive the call beyond the `CString` that makes it.
+/// Adds `value`, if present, as `extension_name`/`property_name` on `result`.
+///
+/// [`e_config_lookup_result_simple_add_string`] copies the string. Thus only
+/// the `CString` must stay alive, and only during the call.
 unsafe fn add_optional_string(
     result: *mut EConfigLookupResult,
     extension_name: &CStr,
@@ -486,8 +493,8 @@ unsafe fn add_optional_string(
     if let Some(value) = value {
         let value = cstring_lossy(value);
         // SAFETY: `result` is a live `EConfigLookupResultSimple` by this
-        // function's contract; both names and the value are valid, NUL-
-        // terminated strings for the call.
+        // function's contract. The two names and the value are valid,
+        // NUL-terminated strings during the call.
         unsafe {
             e_config_lookup_result_simple_add_string(
                 result,
@@ -499,12 +506,14 @@ unsafe fn add_optional_string(
     }
 }
 
-/// Builds the one [`EConfigLookupResult`] a successful discovery produces —
-/// a complete JMAP account, `[Collection]`/`[Authentication]`/`[Security]`
-/// filled the same way [`crate::account::apply`] fills them and `[JMAP
-/// OAuth2]` filled the same way [`crate::oauth2::apply`] does — and hands it
-/// to `config_lookup`, which owns it from that call on (see the module docs
-/// on `e_config_lookup_add_result`'s transfer-full contract).
+/// Builds the one [`EConfigLookupResult`] of a successful discovery and gives
+/// it to `config_lookup`.
+///
+/// The result is a complete JMAP account. `[Collection]`/`[Authentication]`/
+/// `[Security]` get the same values as from [`crate::account::apply`], and
+/// `[JMAP OAuth2]` gets the same values as from [`crate::oauth2::apply`].
+/// After the call, `config_lookup` owns the result (see the module docs on the
+/// transfer-full contract of `e_config_lookup_add_result`).
 ///
 /// # Safety
 ///
@@ -526,10 +535,10 @@ unsafe fn add_result(
     let host_c = cstring_lossy(&target.host);
     let security_method = if target.secure { c"tls" } else { c"none" };
 
-    // SAFETY: every string argument is a live, NUL-terminated `CString`'s
-    // pointer, valid for this one call; `_new` copies each of them
-    // (confirmed against `e-config-lookup-result-simple.c`) and returns a
-    // new, owned `EConfigLookupResult` — see the module docs.
+    // SAFETY: each string argument is the pointer of a live, NUL-terminated
+    // `CString`, valid during this call. `_new` copies each of them (see
+    // `e-config-lookup-result-simple.c`) and returns a new, owned
+    // `EConfigLookupResult` (see the module docs).
     let result = unsafe {
         e_config_lookup_result_simple_new(
             E_CONFIG_LOOKUP_RESULT_COLLECTION,
@@ -542,9 +551,9 @@ unsafe fn add_result(
         )
     };
 
-    // SAFETY: `result` was just constructed above and is reachable by
-    // nothing else yet; every extension/property name is `'static`, and
-    // every value is a live `CString` for the duration of its own call.
+    // SAFETY: the code above constructs `result`, and nothing else has it yet.
+    // Each extension/property name is `'static`, and each value is a live
+    // `CString` during its call.
     unsafe {
         e_config_lookup_result_simple_add_string(
             result,
@@ -646,25 +655,24 @@ unsafe fn add_result(
     }
 }
 
-/// Probes `params`' email address (or `servers`) for OAuth 2.0 discovery and
-/// registration, adding one complete-account [`EConfigLookupResult`] on
-/// success. Silent when there is nothing to probe at all — no email address,
-/// or an empty domain — the same way `e-webdav-config-lookup.c` stays silent
-/// for a host that turns out not to speak CalDAV/CardDAV: several lookup
-/// workers run in parallel against whatever the user typed, and most of them
-/// will not match.
+/// Probes the email address in `params` (or `servers`) for OAuth 2.0
+/// discovery and registration. On success, adds one complete-account
+/// [`EConfigLookupResult`].
 ///
-/// Once a specific host actually gets probed, though, a failure there (a
-/// network error, a non-JMAP host, a deployment with no RFC 7591
-/// registration endpoint) is no longer "not a match" but "a JMAP-shaped host
-/// that is blocked", and is reported through `error` rather than swallowed —
-/// see [`crate::oauth2_setup::Error::to_gerror`].
+/// It is silent when there is nothing to probe: no email address, an empty
+/// domain, or a host that does not parse. `e-webdav-config-lookup.c` is silent
+/// in the same way for a host without CalDAV/CardDAV. Many lookup workers run
+/// in parallel on the user's input, and most of them do not match.
 ///
-/// Leaves `*out_restart_params` untouched: `to_gerror` never reports either
-/// of `EConfigLookupWorkerError`'s two variants (a missing password, a
-/// certificate to trust), so nothing this worker can hit needs a restart,
-/// and `e-config-lookup.c`'s own caller already initialises it to `NULL`
-/// before the call.
+/// When a specific host gets a probe, a failure there (a network error, a
+/// non-JMAP host, a deployment with no RFC 7591 registration endpoint) is not
+/// "no match". It is "a JMAP host that is blocked". Thus `error` reports it
+/// (see [`crate::oauth2_setup::Error::to_gerror`]).
+///
+/// Does not change `*out_restart_params`. `to_gerror` never reports one of the
+/// two `EConfigLookupWorkerError` variants (a missing password, a certificate
+/// to trust). Thus no failure of this worker needs a restart. Also, the caller
+/// in `e-config-lookup.c` sets it to `NULL` before the call.
 unsafe extern "C" fn run(
     _lookup_worker: *mut EConfigLookupWorker,
     config_lookup: *mut EConfigLookup,
@@ -677,23 +685,24 @@ unsafe extern "C" fn run(
         let Some(email) = param(params, E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS) else {
             return;
         };
-        // A server the user named wins; failing that, a re-run seeds from the
-        // host the account already names (see `prior_server`).
+        // A server that the user names has priority. If there is none, a lookup
+        // that runs again starts from the host of the account (see
+        // `prior_server`).
         let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS).or_else(|| {
-            // SAFETY: `config_lookup` is the live lookup this worker runs
-            // for. The source it answers is NULL or one the main thread owns
-            // (`transfer none`); `prior_server_of` takes its own reference at
-            // once, which narrows the window but cannot close it.
+            // SAFETY: `config_lookup` is the live lookup of this worker. The
+            // source it returns is NULL or one that the main thread owns
+            // (`transfer none`). `prior_server_of` takes a reference
+            // immediately. This makes the window smaller, but cannot close it.
             let source =
                 e_config_lookup_get_source(config_lookup, E_CONFIG_LOOKUP_SOURCE_COLLECTION);
             prior_server_of(source, &email)
         });
-        // RFC 8620 §2.2: the provider may publish its JMAP host as a
-        // `_jmap._tcp` record rather than answer at the bare email domain, and
-        // this worker is where that matters most — it is what decides whether
-        // Evolution offers a JMAP account at all, so a provider missed here
-        // loses to the generic ISPDB autoconfig (which is how the operator's
-        // Fastmail setup ended up being offered imapx).
+        // RFC 8620 §2.2: the provider can publish its JMAP host as a
+        // `_jmap._tcp` record, and not answer at the bare email domain. This is
+        // most important here: this worker decides if Evolution offers a JMAP
+        // account. If it does not find a provider, the generic ISPDB
+        // autoconfig wins (this caused imapx for the Fastmail account of the
+        // operator).
         let resolver = jmap_backend_core::resolver::SystemResolver;
         let Some(host) = probe_host(&email, servers.as_deref(), &resolver) else {
             return;
@@ -710,8 +719,8 @@ unsafe extern "C" fn run(
         );
 
         // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
-        // keeps alive for the duration of this call, per `run`'s own
-        // contract (mirroring `e_config_lookup_worker_run`'s C signature).
+        // keeps alive during this call, by the contract of `run` (the same as
+        // the C signature of `e_config_lookup_worker_run`).
         let bridge = CancelBridge::new(cancellable);
         let cancel_flag = bridge.flag().clone();
         let transport = UreqTransport::default();
@@ -764,11 +773,11 @@ mod tests {
 
     #[test]
     fn redirect_uri_scheme_is_dotted_reverse_dns() {
-        // Fastmail's OAuth 2.0 doc requires a private-use redirect scheme in
-        // reverse-DNS notation with at least one dot (or a loopback/https
-        // URI, neither of which fits EDS's WebKit-based consent prompter —
-        // see the module docs) — a dot-less scheme is rejected at dynamic
-        // client registration.
+        // The OAuth 2.0 doc of Fastmail requires a private-use redirect scheme
+        // in reverse-DNS notation with at least one dot, or a loopback/https
+        // URI. These URIs do not fit the WebKit consent prompter of EDS (see
+        // the module docs). Dynamic client registration refuses a scheme
+        // without a dot.
         let scheme = REDIRECT_URI.split(':').next().expect("a URI has a scheme");
         assert!(
             scheme.contains('.'),
@@ -777,8 +786,8 @@ mod tests {
         );
     }
 
-    /// Returns one fixed answer for every domain asked, or none — the same
-    /// fake `jmap-client/tests/srv_discovery.rs` uses.
+    /// Returns one fixed answer (or none) for each domain. This is the same
+    /// fake that `jmap-client/tests/srv_discovery.rs` uses.
     struct FakeResolver(Option<SrvTarget>);
 
     impl Resolver for FakeResolver {
@@ -856,9 +865,9 @@ mod tests {
 
     #[test]
     fn an_explicit_servers_entry_is_never_resolved_for_srv() {
-        // A resolver that would answer for *any* domain must not be asked at
-        // all when `servers` names an explicit host — that host is not a
-        // bare email domain to autodiscover, it is already the answer.
+        // This resolver answers for *any* domain. When `servers` names an
+        // explicit host, the probe must not ask it: that host is the answer,
+        // not a bare email domain for autodiscovery.
         let resolver = FakeResolver(Some(SrvTarget {
             host: "wrong.example.com".to_owned(),
             port: 443,
@@ -958,7 +967,7 @@ mod tests {
     }
 
     /// A JMAP account for `alice@example.com`, as a previous lookup or the
-    /// server settings page left it.
+    /// server settings page wrote it.
     fn prior(host: &str, port: Option<u16>, secure: bool) -> Account {
         Account {
             identity: "alice@example.com".to_owned(),
@@ -1012,8 +1021,9 @@ mod tests {
 
     #[test]
     fn the_bare_email_domain_is_left_to_srv_discovery() {
-        // The server page offers the email domain by default; seeding from it
-        // would skip the `_jmap._tcp` lookup a provider like Fastmail needs.
+        // The server page shows the email domain by default. A probe of it
+        // would skip the `_jmap._tcp` lookup that a provider such as Fastmail
+        // needs.
         let account = prior("Example.COM", None, true);
         assert_eq!(
             prior_server("alice@example.com", Some("jmap"), &account),
@@ -1062,20 +1072,20 @@ mod tests {
     fn a_rerun_reads_the_seed_from_the_collection_source() {
         let uid = CString::new("jmap-config-lookup-prior").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, no D-Bus
+        // object and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
 
-        // SAFETY: `source` is live until the unref below; `apply` writes
-        // `[Collection] backend-name = jmap` along with the account.
+        // SAFETY: `source` is live until the unref below. `apply` writes
+        // `[Collection] backend-name = jmap` with the account.
         let server = unsafe {
             account::apply(source, &prior("jmap.example.net", Some(443), true));
             prior_server_of(source, "alice@example.com")
         };
-        // SAFETY: NULL is "no source", which the assistant may answer.
+        // SAFETY: NULL is "no source", which the assistant can return.
         let none = unsafe { prior_server_of(ptr::null_mut(), "alice@example.com") };
-        // SAFETY: the one reference `e_source_new_with_uid` handed over.
+        // SAFETY: the one reference that `e_source_new_with_uid` gave.
         unsafe { g_object_unref(source.cast()) };
 
         assert_eq!(server.as_deref(), Some("https://jmap.example.net:443"));

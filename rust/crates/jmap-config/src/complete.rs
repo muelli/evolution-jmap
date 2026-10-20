@@ -3,77 +3,75 @@
 
 //! What a setup refuses to commit.
 //!
-//! `EMailConfigServiceBackend` has a `check_complete` vfunc, and Evolution
-//! greys out the assistant's *Next* until every backend on the page answers
-//! yes. [`check`] is what this project's answer will be made of — the deciding
-//! part of that vfunc, which is ordinary Rust over an [`Account`] and so can be
-//! tested here, unlike the widget that will ask it.
+//! `EMailConfigServiceBackend` has a `check_complete` vfunc. Evolution disables
+//! *Next* in the assistant until each backend on the page answers yes.
+//! [`check`] is the deciding part of the answer of this project to that vfunc.
+//! It is ordinary Rust on an [`Account`], thus the tests here can examine it
+//! without the widget that calls it.
 //!
-//! ## Why a setup checks at all, when the backends check anyway
+//! ## Why a setup checks, although the backends also check
 //!
-//! Every JMAP backend already refuses a bad server: `origin()` is called at
-//! connect time and turns a missing host, a host that is not a host, and
-//! plaintext to somewhere that is not this machine into an `E_CLIENT_ERROR`.
-//! So nothing here prevents a wrong account from being *wrong* — it prevents it
-//! from being *committed*, which is a different and better failure:
+//! Each JMAP backend already refuses a bad server. `origin()` runs at connect
+//! time and changes these into an `E_CLIENT_ERROR`: a missing host, a host that
+//! is not a host, and plaintext to a different machine. Thus this module does
+//! not stop a wrong account from being *wrong*. It stops a commit of it, which
+//! is a different and better failure:
 //!
-//! - The refusal happens in the entry the mistake was typed into, while the
-//!   user is still looking at it, rather than minutes later in a dialog raised
-//!   by `evolution-source-registry` about an account they thought they had
-//!   finished setting up.
-//! - It happens once, rather than once per child: an account with an unusable
-//!   server fans out to an address book and a calendar that each fail on their
-//!   own schedule, in their own error dialogs.
-//! - And for the TLS rule specifically it is the difference between a warning
-//!   and a wall. The rule is a security decision this project made (M3:
-//!   "TLS required for non-localhost"), and a setup that happily writes an
-//!   account it knows will be refused has told the user their password is
-//!   safe to type into it.
+//! - The refusal occurs in the entry that has the mistake, while the user
+//!   looks at it. It does not occur minutes later, in a dialog from
+//!   `evolution-source-registry`, about an account that the user thinks is
+//!   complete.
+//! - It occurs once, not once for each child. An account with an unusable
+//!   server makes an address book and a calendar, and each fails at its own
+//!   time, in its own error dialog.
+//! - For the TLS rule, it is the difference between a warning and a block. The
+//!   rule is a security decision of this project (M3: "TLS required for
+//!   non-localhost"). A setup that writes an account that it knows the backend
+//!   refuses tells the user that it is safe to type a password into it.
 //!
-//! ## The check and the reader are one decision, held in two places
+//! ## The check and the reader are one decision, in two places
 //!
-//! The server half of [`check`] is not a second opinion about hosts: it calls
-//! [`origin`] — the same function
-//! [the collection backend's reader](../../jmap_backend_collection/collection_source/fn.server_of.html)
-//! calls, and the address book, calendar and mail backends with it — and keeps
-//! its error. A rule spelled out again here would be a rule to fix twice.
+//! The server half of [`check`] does not make a second decision about hosts.
+//! It calls [`origin`] and keeps its error.
+//! [The reader of the collection backend](../../jmap_backend_collection/collection_source/fn.server_of.html)
+//! and the address book, calendar and mail backends call the same function. A
+//! rule written again here would be a rule to fix two times.
 //!
-//! What is not shared is the *absence* of a host, because the two sides come by
-//! it differently: the reader gets `NULL` out of a keyfile through
-//! [`read_string`](jmap_backend_core::marshal::read_string), which is the
-//! absent-or-non-empty form `origin` documents it takes, while a setup gets the
-//! empty string out of an entry the user has not filled in. Mapping the one to
-//! the other is this module's single line of translation, and
-//! `tests/complete.rs` pins it by committing each case and reading it back with
-//! the registry's own reader, so "the setup accepted what the registry will
-//! reject" is a red test rather than an unusable account.
+//! The *absence* of a host is not shared, because the two sides get it in
+//! different ways. The reader gets `NULL` from a keyfile through
+//! [`read_string`](jmap_backend_core::marshal::read_string). That is the
+//! absent-or-non-empty form that `origin` documents as its input. A setup gets
+//! the empty string from an entry that the user did not fill in. The mapping
+//! from one to the other is the single line of translation in this module.
+//! `tests/complete.rs` pins it: it commits each case and reads it back with the
+//! reader of the registry. Thus "the setup accepted what the registry refuses"
+//! is a failed test, not an unusable account.
 //!
 //! ## What is deliberately not checked
 //!
 //! - **The user name.** [`credentials`](jmap_backend_core::connect::credentials)
-//!   turns an absent user into an anonymous connection, which is exactly how
-//!   `jmap-mockd` and a local development server are reached. Insisting on a
-//!   user name would refuse the account this project is developed against.
-//! - **Which parts are switched on.** An account with mail, contacts and
-//!   calendars all off is not a mistake at commit time: the three mail sources
-//!   are written either way ([`crate::mail`] says why), the children are the
-//!   collection backend's to add and remove as the switches move, and the
-//!   switches are on the account editor the user can open again.
+//!   changes an absent user into an anonymous connection. This is how
+//!   `jmap-mockd` and a local development server are reached. A required user
+//!   name would refuse the account that this project uses for development.
+//! - **Which parts are enabled.** An account with mail, contacts and calendars
+//!   all disabled is not a mistake at commit time. The three mail sources are
+//!   written in all cases ([`crate::mail`] tells why). The collection backend
+//!   adds and removes the children when the switches change. The switches are
+//!   in the account editor, which the user can open again.
 //! - **Whether the server is *there*.** That is a network round trip, not a
-//!   completeness check — `check_complete` runs on every keystroke.
-//!   Reaching the server belongs in the assistant's own "look up account
-//!   details" step, which is a later increment and a different vfunc.
+//!   completeness check: `check_complete` runs on each keystroke. The
+//!   "Look Up Account Details" step of the assistant contacts the server. It is
+//!   a different vfunc, which `config_lookup.rs` implements.
 //!
 //! ## What *is* checked about OAuth 2.0, and why it is the exception
 //!
-//! [`Incomplete::OAuth2NotRegistered`] looks like the network check the list
-//! above just ruled out, but it is not one: it asks whether
-//! [`crate::oauth2`]'s extension already holds a client id, which is local,
-//! stored state — no different in kind from asking whether the host entry is
-//! empty. The reason it earns its own variant rather than folding into "the
-//! server is there" is that a *missing* client is not a server being
-//! unreachable; it is an account that would never even try, because
-//! `EOAuth2Service::get_client_id` has nothing to answer with.
+//! [`Incomplete::OAuth2NotRegistered`] looks like the network check that the
+//! list above excludes, but it is not a network check. It asks whether the
+//! extension of [`crate::oauth2`] already holds a client id. That is local,
+//! stored state, as is an empty host entry. It has its own variant, and is not
+//! part of "the server is there", for this reason: a *missing* client is not
+//! an unreachable server. It is an account that never tries, because
+//! `EOAuth2Service::get_client_id` has no value to return.
 //!
 //! [`origin`]: jmap_backend_core::source::origin
 
@@ -87,42 +85,40 @@ use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 
 /// Why an account cannot be committed yet.
 ///
-/// The [`Display`](fmt::Display) text names the field, not the function, but is
-/// deliberately *not* what the status label shows — it is developer-facing
-/// (English, and not marked for translation), the same text a log line gets
-/// when a commit is refused from somewhere without a display. [`status_message`]
-/// is the translated, user-facing form of the same decision.
+/// The [`Display`](fmt::Display) text names the field, not the function. It is
+/// deliberately *not* the text of the status label. It is for developers
+/// (English, not marked for translation): a log line gets the same text when a
+/// commit is refused from a place without a display. [`status_message`] is the
+/// translated form of the same decision, for users.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Incomplete {
     /// The account names no address for its identity.
     ///
-    /// Whitespace counts as nothing here, so an entry holding only spaces is
-    /// reported as the unanswered question it looks like rather than as an
-    /// address that happens not to parse.
+    /// Whitespace counts as nothing here. Thus an entry with only spaces is
+    /// reported as an unanswered question, not as an address that does not
+    /// parse.
     MissingIdentity,
     /// The identity is not an address.
     ///
-    /// Held verbatim, including any surrounding whitespace: [`check`] reports
-    /// what the user typed and does not repair it, because
-    /// [`apply`](crate::account::apply) writes the same string unchanged and an
-    /// accepted `" vera@example.com"` is a `From:` header with a space in it.
+    /// Held verbatim, with any whitespace around it. [`check`] reports what
+    /// the user typed and does not repair it. [`apply`](crate::account::apply)
+    /// writes the same string without change, and an accepted
+    /// `" vera@example.com"` is a `From:` header with a space in it.
     InvalidIdentity(String),
-    /// The server the account names is not one any backend would connect to —
-    /// [`origin`]'s own verdict, kept rather than restated.
+    /// No backend connects to the server that the account names. This is the
+    /// decision of [`origin`], kept without change.
     ///
     /// [`origin`]: jmap_backend_core::source::origin
     Server(SourceError),
-    /// The account picks OAuth 2.0 (`[Authentication] Method` names
-    /// [`crate::oauth2_service::NAME`]) but has no `[JMAP OAuth2]` client
-    /// registered yet.
+    /// The account selects OAuth 2.0 (`[Authentication] Method` is
+    /// [`OAUTH2_AUTH_METHOD`]) but has no registered `[JMAP OAuth2]` client yet.
     ///
-    /// `insert_widgets`'s Authentication combo lets OAuth 2.0 be picked
-    /// directly, with nothing wiring registration to it — only "Look Up
-    /// Account Details" (`config_lookup.rs`) does that. Picking it by hand
-    /// without running that first would leave `EOAuth2Service::get_client_id`
-    /// answering NULL and the account unable to ever fetch a token — a fact
-    /// this checks for, not a guess at whatever a future manual client-id
-    /// entry should look like.
+    /// The Authentication combo of `insert_widgets` lets the user select OAuth
+    /// 2.0 directly, but it does not start registration. Only "Look Up Account
+    /// Details" (`config_lookup.rs`) does that. A manual selection without that
+    /// step makes `EOAuth2Service::get_client_id` return NULL, and the account
+    /// can never fetch a token. This variant checks that fact. It is not a
+    /// guess about a possible manual client-id entry in the future.
     OAuth2NotRegistered,
 }
 
@@ -150,21 +146,19 @@ impl std::error::Error for Incomplete {
     }
 }
 
-/// The status label's text for `account`: empty when it may be committed, a
-/// translated account of [`Incomplete`]'s reason if not.
+/// The text of the status label for `account`: empty when it can be committed,
+/// else a translated description of the [`Incomplete`] reason.
 ///
-/// The one caller with anywhere to put a message — `check_complete` itself
-/// answers a boolean and has nowhere to show one; `insert_widgets`'s status
-/// label does, and this is the whole of what it displays. Translated rather
-/// than [`Incomplete`]'s own `Display`, since account-setup text is
-/// user-facing from the moment it is shown: the two identity messages are
-/// this crate's own wording and are marked here;
-/// [`SourceError`]'s own [`Display`](fmt::Display) is relied on unwrapped
-/// for the `Server` case, and is translated too: `SourceError` carries its
-/// own `translate`/`translate_with` calls (`jmap-backend-core/src/source.rs`),
-/// shared with every other backend's connection failures, so calling
-/// `to_string()` on it here already returns the user-facing text without a
-/// second wrapper, which would double-translate it.
+/// `check_complete` returns a boolean and cannot show a message. The status
+/// label of `insert_widgets` can, and this is all of the text that it shows.
+/// This text is translated, not the `Display` of [`Incomplete`], because
+/// account-setup text is for users. The two identity messages use the wording
+/// of this crate and are marked here. For the `Server` case, this uses the
+/// [`Display`](fmt::Display) of [`SourceError`] directly, which is also
+/// translated. `SourceError` has its own `translate`/`translate_with` calls
+/// (`jmap-backend-core/src/source.rs`), shared with the connection failures of
+/// all other backends. Thus `to_string()` already returns the text for users.
+/// A second wrapper would translate it two times.
 pub fn status_message(account: &Account) -> String {
     match check(account) {
         Ok(()) => String::new(),
@@ -185,13 +179,12 @@ pub fn status_message(account: &Account) -> String {
     }
 }
 
-/// Whether `account` is one a setup may commit, and if not, the first reason it
-/// may not.
+/// Whether a setup can commit `account`, and if not, the first reason.
 ///
-/// The identity before the server, which is the order the assistant asks in:
-/// Evolution's identity page comes before its server settings page, and a check
-/// that reported the second question's problem while the first was still blank
-/// would be pointing at a page the user has not reached.
+/// The identity comes before the server, in the order of the assistant. The
+/// identity page of Evolution comes before its server settings page. A check
+/// that reported a server problem while the identity was still blank would
+/// point to a page that the user has not seen yet.
 pub fn check(account: &Account) -> Result<(), Incomplete> {
     if account.identity.trim().is_empty() {
         return Err(Incomplete::MissingIdentity);
@@ -202,7 +195,7 @@ pub fn check(account: &Account) -> Result<(), Incomplete> {
 
     let connection = &account.connection;
     // The one translation: an unfilled entry is the empty string here and NULL
-    // in the keyfile the registry will read, and `origin` takes the latter.
+    // in the keyfile that the registry reads. `origin` takes NULL.
     let host = (!connection.host.is_empty()).then_some(&*connection.host);
     origin(host, connection.port.unwrap_or(0), connection.secure).map_err(Incomplete::Server)?;
 
@@ -216,19 +209,17 @@ pub fn check(account: &Account) -> Result<(), Incomplete> {
     Ok(())
 }
 
-/// Whether `identity` is an address rather than a name, a domain or a sentence.
+/// Whether `identity` is an address, not a name, a domain or a sentence.
 ///
-/// Deliberately not an RFC 5322 parser, and not a way in to writing one: what
-/// this catches is the handful of things a person types into an email-address
-/// entry that are not an email address, and the cost of a wrong answer is
-/// asymmetric — a rule that rejected a real address would be a user who cannot
-/// create their account at all, so anything this is unsure about it accepts and
-/// leaves to the server to reject at login.
+/// This is deliberately not an RFC 5322 parser, and not a start of one. It
+/// finds the few usual inputs in an email-address entry that are not an email
+/// address. The cost of a wrong answer is asymmetric: if a rule refused a real
+/// address, the user could not create the account. Thus this function accepts
+/// all that it is not sure about, and the server can refuse it at login.
 ///
-/// The quoted local part RFC 5322 allows (`"ve ra"@example.com`) is one of the
-/// things this rejects; it is also one no JMAP server this project has met
-/// issues, and the whitespace rule that rejects it is what catches the paste
-/// that brought a newline with it.
+/// This function refuses the quoted local part that RFC 5322 allows
+/// (`"ve ra"@example.com`). No JMAP server that this project knows issues one.
+/// The whitespace rule that refuses it also finds a paste with a newline in it.
 fn is_address(identity: &str) -> bool {
     let Some((local, domain)) = identity.split_once('@') else {
         return false;
@@ -239,10 +230,9 @@ fn is_address(identity: &str) -> bool {
         && !identity.contains(char::is_whitespace)
 }
 
-/// [`status_message`], driven with plain [`Account`] fixtures — no `ESource`
-/// needed, unlike `tests/complete.rs`'s own suite: the account this crate
-/// commits from is a Rust struct, and `status_message` never reaches EDS
-/// either.
+/// Tests [`status_message`] with plain [`Account`] fixtures. Different from the
+/// suite in `tests/complete.rs`, these need no `ESource`: the account is a Rust
+/// struct, and `status_message` never calls EDS.
 #[cfg(test)]
 mod tests {
     use jmap_collection_sync::Parts;
@@ -250,8 +240,8 @@ mod tests {
 
     use super::*;
 
-    /// The account every case starts from: complete, per the module doc's own
-    /// order of checks.
+    /// The start account for each case: complete, in the order of checks of
+    /// the module docs.
     fn complete_account() -> Account {
         Account {
             identity: "vera@example.com".to_owned(),

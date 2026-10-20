@@ -1,110 +1,111 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The account itself: the collection `ESource` a setup commits.
+//! The account: the collection `ESource` that a setup commits.
 //!
-//! The inverse of [the collection backend's reader][collection_source], which reads
-//! the same three groups back — `[Collection]` for which parts the account
-//! offers, `[Authentication]` for where its server is and whom it logs in as,
-//! `[Security]` for whether that is over TLS. Everything M6 does with an
-//! account, it does with what this wrote.
+//! This is the inverse of [the reader of the collection backend][collection_source],
+//! which reads the same three groups:
 //!
-//! ## Here `e_source_get_extension` is wanted for what it does
+//! - `[Collection]`: which parts the account offers,
+//! - `[Authentication]`: where its server is and which user logs in,
+//! - `[Security]`: whether the connection uses TLS.
 //!
-//! The reader goes out of its way never to call it: it *creates* the extension
-//! it cannot find, and the reader is handed the user's own account file. This
-//! module is the one place where creating the groups is the entire point —
-//! `[Collection]` is what makes the file an account rather than a lone address
-//! book, and its absence is not a broken account but a file
-//! `e_source_registry_server_ref_backend_factory` never offers to a collection
-//! factory at all.
+//! All that M6 does with an account, it does with what this module writes.
 //!
-//! ## Every field is written, including the absent ones
+//! ## Here `e_source_get_extension` is necessary for what it does
 //!
-//! [`apply`] writes each of the eight properties every time, using NULL for a
-//! string the account does not have and 0 for a port it does not name. That is
-//! the difference between this and
-//! [the child writer][child_source], which is handed a *fresh* child and may
-//! leave a property it has nothing to say about alone.
+//! The reader never calls it: it *creates* an extension that it cannot find,
+//! and the reader gets the user's own account file. This module is the one
+//! place where the purpose is to create the groups. `[Collection]` makes the
+//! file an account and not a lone address book. Without it, the file is not a
+//! broken account: `e_source_registry_server_ref_backend_factory` never gives
+//! it to a collection factory.
 //!
-//! A setup commits onto a source that already says something — an account
-//! being edited says the old server, and `EMailConfigServiceBackend` commits
-//! into a scratch source that was copied from it. So "the user cleared the user
-//! name" has to reach the file as an empty `User=`, and skipping the write
-//! because there is nothing to write would leave the old one there: an account
-//! the user made anonymous that still asks libsecret for a password under a
-//! name they deleted. [`apply`] is therefore idempotent in the strong sense —
-//! after it, the source says this [`Account`] and nothing of whatever it said
-//! before.
+//! ## Each field is written, also the absent ones
 //!
-//! The one field that cannot be cleared is `[Authentication] Method`, and not
-//! for want of trying: `ESourceAuthentication:method` has no unset state. A
-//! fresh extension already reads `"none"`, and both NULL and `""` set it back
-//! to that string rather than to nothing — checked against the installed EDS
-//! rather than assumed. So an [`Account`] whose
+//! [`apply`] writes all eleven properties each time. It writes NULL for a string
+//! that the account does not have, and 0 for a port that it does not name.
+//! [The child writer][child_source] is different: it gets a *fresh* child, and
+//! can leave a property unchanged if it has no value for it.
+//!
+//! A setup commits onto a source that already has values. An account in edit
+//! has the old server, and `EMailConfigServiceBackend` commits into a scratch
+//! copy of it. Thus "the user cleared the user name" must get to the file as
+//! an empty `User=`. If the write was skipped, the old name would stay. The
+//! account that the user made anonymous would then ask libsecret for a
+//! password under a deleted name. Thus [`apply`] is idempotent in the strong
+//! sense: after it, the source contains this [`Account`] and nothing of its
+//! previous values.
+//!
+//! The one field that cannot be cleared is `[Authentication] Method`:
+//! `ESourceAuthentication:method` has no unset state. A fresh extension
+//! already reads `"none"`, and both NULL and `""` set it to that string (as
+//! tested with the installed EDS). Thus an [`Account`] whose
 //! [`auth_method`](Connection::auth_method) is `None` reads back as
-//! `Some("none")`, which is the right *meaning* — it is what EDS's credentials
-//! provider looks the account's password impl up by, and "none" is its answer
-//! for "ask for a password the ordinary way" — but it is not the identity, and
-//! `tests/account.rs` pins it so rather than pretending otherwise.
+//! `Some("none")`. The *meaning* is correct: the credentials provider of EDS
+//! uses this value to find the password impl of the account, and "none" means
+//! "ask for a password the usual way". But the value is not identical, and
+//! `tests/account.rs` pins this.
 //!
 //! ## `credential-name`/`credential-store-id` is derived, not a field of `Account`
 //!
-//! `ESourceAuthentication:credential-name` gives an OAuth 2.0 account's stored
-//! token a key that is the account's own uid — stable across a server move,
-//! and never shared between two accounts of the same host, which is what the
-//! previous host-derived key could do (eds#663). It is written here rather
-//! than carried as a field of [`Account`] because it names nothing a dialog
-//! could usefully show or a user could usefully edit: it is exactly the
-//! account's own [`auth_method`](Connection::auth_method) turned into a
-//! yes/no, so [`apply`] derives it every time rather than trusting a copy.
-//! Written only for OAuth 2.0 and cleared (NULL) on every other method: EDS's
-//! credentials engine reads a non-empty `credential-name` as the parameter
-//! name it passes to `authenticate`, so a password account carrying one would
-//! have its password looked up under the wrong key. `jmap-backend-collection`'s
-//! `child_added` and `mail_child` bind it from the account onto every child the
-//! same way they bind `host`/`user`/`method`, so every service the account has
-//! shares one token cache entry.
+//! `ESourceAuthentication:credential-name` gives the stored token of an OAuth
+//! 2.0 account a key: the uid of the account. This key is stable when the
+//! server moves. Two accounts on the same host never share it, which the
+//! previous host-derived key could do (eds#663).
 //!
-//! eds#663 (MR 247) later moved the credentials engine itself onto a
-//! differently-named property, `credential-store-id` (`Since: 3.64`, not yet
-//! released as of this writing) — same value, same derivation, but the
-//! setter the installed EDS actually has determines which one this writes;
-//! `#[cfg(eds_credential_store_id)]` picks it, `eds-sys`'s `build.rs`
-//! decides it from the headers, and pre-3.64 builds keep writing
-//! `credential-name` exactly as before.
+//! It is not a field of [`Account`], because a dialog cannot usefully show it
+//! and a user cannot usefully edit it. It is exactly the
+//! [`auth_method`](Connection::auth_method) of the account as a yes/no. Thus
+//! [`apply`] derives it each time and does not trust a copy.
+//!
+//! It is written only for OAuth 2.0, and cleared (NULL) for all other methods.
+//! The credentials engine of EDS uses a non-empty `credential-name` as the
+//! parameter name that it gives to `authenticate`. A password account with
+//! one would thus look up its password under the wrong key. `child_added` and
+//! `mail_child` of `jmap-backend-collection` bind it from the account onto each
+//! child, as they bind `host`/`user`/`method`. Thus all services of the account
+//! share one token cache entry.
+//!
+//! eds#663 (MR 247) later moved the credentials engine to a property with a
+//! different name, `credential-store-id` (`Since: 3.64`, not released at the
+//! time of writing). The value and the derivation are the same. The setter
+//! that the installed EDS has decides which property this module writes.
+//! `#[cfg(eds_credential_store_id)]` selects it, and the `build.rs` of
+//! `eds-sys` sets that cfg from the headers. Builds before 3.64 continue to
+//! write `credential-name`.
 //!
 //! ## `[Security]` is written as the method, and read as the boolean
 //!
-//! `ESourceSecurity` holds a string — "tls" or "none" — and derives
-//! `ESourceSecurity:secure` from it; every JMAP backend reads the boolean. The
-//! write goes through `e_source_security_set_method()` for the same reason
-//! [`child_source`] does it that way: the keyfile has
-//! the string in it, so the string is the spelling that has to be right, and a
-//! test that reads the boolean back is what catches it when it is not.
+//! `ESourceSecurity` holds a string ("tls" or "none") and derives
+//! `ESourceSecurity:secure` from it. Each JMAP backend reads the boolean. The
+//! write uses `e_source_security_set_method()` for the same reason as in
+//! [`child_source`]: the keyfile contains the string, thus the string must
+//! have the correct spelling. A test that reads the boolean back finds an
+//! incorrect spelling.
 //!
-//! ## What this does not write
+//! ## What this module does not write
 //!
-//! - **`[Data Source] DisplayName`** — the name the user gives the account, and
-//!   Evolution's own assistant page's to set. Writing it from here would rename
-//!   the account on every commit, back to whatever the server settings page had
-//!   composed.
-//! - **`Enabled`** — a new `ESource` is enabled, and an existing one's flag is
-//!   the user's answer to "show this account", not the setup's.
-//! - **the mail sources** — see [`crate`]. A JMAP account's `[Mail Account]`,
-//!   `[Mail Identity]` and `[Mail Transport]` are three further sources, not
-//!   three more groups in this one.
-//! - **[`Account::oauth2_registered`]** — [`crate::oauth2`]'s own extension is
-//!   [`crate::oauth2_setup::discover_and_register`]'s to write, not this
-//!   function's; [`read`] reads it back because [`crate::complete::check`]
-//!   needs to, but [`apply`] leaves it alone the same way it leaves the mail
-//!   sources alone.
+//! - **`[Data Source] DisplayName`**: the name that the user gives the account.
+//!   The assistant page of Evolution sets it. A write from here would rename
+//!   the account on each commit, back to the name from the server settings
+//!   page.
+//! - **`Enabled`**: a new `ESource` is enabled. The flag of an existing source
+//!   is the user's answer to "show this account", not the answer of the setup.
+//! - **the mail sources**: see [`crate`]. The `[Mail Account]`,
+//!   `[Mail Identity]` and `[Mail Transport]` of a JMAP account are three more
+//!   sources, not three more groups in this source.
+//! - **[`Account::oauth2_registered`]**:
+//!   [`crate::oauth2_setup::discover_and_register`] writes the extension of
+//!   [`crate::oauth2`], not this function. [`read`] reads it because
+//!   [`crate::complete::check`] needs it, but [`apply`] does not change it, as
+//!   it does not change the mail sources.
 //!
-//! The three links above go to `jmap-backend-collection`, which is a
-//! dev-dependency here — the tests link it, the library must not — so they are
-//! written as paths into the generated documentation rather than as intra-doc
-//! links, the same way `jmap-backend-collection` links to `jmap-backend-core`'s
-//! `SourceConfig`.
+//! The three links above go to `jmap-backend-collection`. That crate is a
+//! dev-dependency here: the tests link it, the library must not. Thus they are
+//! paths into the generated documentation, not intra-doc links.
+//! `jmap-backend-collection` links to `SourceConfig` of `jmap-backend-core` in
+//! the same way.
 //!
 //! [collection_source]: ../../jmap_backend_collection/collection_source/index.html
 //! [child_source]: ../../jmap_backend_collection/child_source/index.html
@@ -128,8 +129,8 @@ use eds_sys::{
     e_source_collection_set_mail_enabled, e_source_get_extension, e_source_get_uid,
     e_source_security_get_secure, e_source_security_get_type, e_source_security_set_method,
 };
-// The token-cache-key setter: whichever one the installed EDS actually has —
-// see the module comment on `credential-name`/`credential-store-id`.
+// The token-cache-key setter that the installed EDS has. See the module
+// comment on `credential-name`/`credential-store-id`.
 #[cfg(not(eds_credential_store_id))]
 use eds_sys::e_source_authentication_set_credential_name as set_credential_id;
 #[cfg(eds_credential_store_id)]
@@ -141,78 +142,77 @@ use jmap_backend_core::oauth2::{OAUTH2_AUTH_METHOD, OAUTH2_METHOD};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
-/// The name the registry looks this account's collection factory up by.
+/// The name with which the registry finds the collection factory of this
+/// account.
 ///
-/// `[Collection] BackendName` is not a description: the registry files each
+/// `[Collection] BackendName` is not a description. The registry keeps each
 /// collection factory under `"<factory_name>:Collection"` and looks up the key
-/// built from this string, so a value that does not match the factory's name is
-/// not an error anywhere — it is an account that sits in the sidebar with no
-/// children and nothing in any log. `tests/account.rs` holds it against
-/// [the collection factory's `FACTORY_NAME`](../../jmap_backend_collection/factory/constant.FACTORY_NAME.html),
-/// which is the name the module actually registers.
+/// made from this string. A value that does not match the factory name causes
+/// no error: the account shows in the sidebar with no children and no log
+/// entry. `tests/account.rs` compares it with
+/// [the `FACTORY_NAME` of the collection factory](../../jmap_backend_collection/factory/constant.FACTORY_NAME.html),
+/// which is the name that the module registers.
 pub const BACKEND_NAME: &str = "jmap";
 
-/// An account, in the shape the setup has it before it is a source.
+/// An account, in the shape that the setup has before it is a source.
 ///
-/// The fields are the reader's types rather than new ones: [`Connection`] is
-/// what [the collection backend's `server_of`](../../jmap_backend_collection/collection_source/fn.server_of.html)
-/// answers with
-/// and what each child of the account is given, and [`Parts`] is what gates
-/// every listing and every removal. One description of an account, written
-/// here and read there.
+/// The fields use the types of the reader, not new types. [`Connection`] is
+/// what [`server_of` of the collection backend](../../jmap_backend_collection/collection_source/fn.server_of.html)
+/// returns and what each child of the account gets. [`Parts`] controls each
+/// listing and each removal. Thus there is one description of an account:
+/// this module writes it, and the reader reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
-    /// `[Collection] Identity` — who the account is, which for JMAP is the
-    /// email address the user typed on the identity page.
+    /// `[Collection] Identity`: who the account is. For JMAP, this is the
+    /// email address that the user typed on the identity page.
     ///
-    /// Not the same field as `[Authentication] User`, and deliberately not
-    /// derived from it: the address a user's mail comes from and the name they
-    /// log in with are the same string often enough to be assumed equal and
-    /// different often enough for the assumption to be wrong.
+    /// This is not the same field as `[Authentication] User`, and it is
+    /// deliberately not derived from it. The mail address of a user and the
+    /// login name are frequently the same string, but not always.
     pub identity: String,
-    /// Where the server is, and whom the account authenticates as.
+    /// Where the server is, and as which user the account authenticates.
     pub connection: Connection,
-    /// Which of mail, contacts and calendars the account offers — the three
-    /// check boxes, and what the collection backend fans out to.
+    /// Which of mail, contacts and calendars the account offers: the three
+    /// check boxes, and the children that the collection backend makes.
     pub parts: Parts,
     /// Whether `[JMAP OAuth2]` already names a registered client id.
     ///
-    /// Read-only from a setup's point of view: [`apply`] never writes it —
-    /// [`crate::oauth2_setup::discover_and_register`] is the one thing that
-    /// does, onto its own extension, independently of the entries this
-    /// crate's widgets bind. This field exists so [`crate::complete::check`]
-    /// can tell "OAuth 2.0 picked, client registered" from "OAuth 2.0
-    /// picked, nothing behind it yet" without reaching past a plain
-    /// [`Account`] for an `ESource` it was not handed.
+    /// For a setup, this field is read-only: [`apply`] never writes it. Only
+    /// [`crate::oauth2_setup::discover_and_register`] writes it, onto its own
+    /// extension, independently of the entries that the widgets of this crate
+    /// bind. With this field, [`crate::complete::check`] can tell "OAuth 2.0
+    /// selected, client registered" from "OAuth 2.0 selected, no client yet".
+    /// It needs only a plain [`Account`], not an `ESource`.
     pub oauth2_registered: bool,
 }
 
-/// Writes `account` onto `source`, which afterwards says exactly that account.
+/// Writes `account` onto `source`. After the call, `source` contains exactly
+/// that account.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — the collection source the setup is
-/// committing into. This call takes no reference to it and nothing here
-/// outlives the call.
+/// `source` must be a valid `ESource`: the collection source that the setup
+/// commits into. This call takes no reference to it, and nothing here stays
+/// alive after the call.
 pub unsafe fn apply(source: *mut ESource, account: &Account) {
-    // As everywhere an extension is looked up by name: `e_source_get_extension`
-    // walks the registered children of `E_TYPE_SOURCE_EXTENSION`, so a type
-    // nothing has referenced yet is one it cannot find — and here it would
-    // create nothing and return NULL. Referencing the GType registers it.
-    // SAFETY: no arguments, and the type system initialises itself.
+    // As at each lookup of an extension by name: `e_source_get_extension`
+    // searches the registered children of `E_TYPE_SOURCE_EXTENSION`. It cannot
+    // find a type that nothing referenced yet, and here it would then create
+    // nothing and return NULL. A reference to the GType registers it.
+    // SAFETY: no arguments, and the type system initializes itself.
     unsafe {
         e_source_collection_get_type();
         e_source_authentication_get_type();
         e_source_security_get_type();
     }
 
-    // The strings outlive every call that borrows them, which is what keeps the
-    // pointers below valid: a `cstring_lossy(…).as_ptr()` written inline would
-    // be a pointer into a temporary dropped at the end of the statement.
-    // Truncating at an interior NUL rather than refusing, as everywhere a typed
-    // string crosses into C — what is kept is what the string would have meant
-    // to every C caller downstream anyway, and refusing the write would mean an
-    // account with no host, which fails every operation rather than one field.
+    // The strings stay alive longer than each call that borrows them. This
+    // keeps the pointers below valid. An inline `cstring_lossy(…).as_ptr()`
+    // would point into a temporary that is dropped at the end of the statement.
+    // As at each place where a typed string goes into C, an interior NUL
+    // truncates the string, and the write is not refused. The kept part is what
+    // the string means to each C caller downstream. A refused write would give
+    // an account with no host, which makes all operations fail, not one field.
     let identity = cstring_lossy(&account.identity);
     let host = cstring_lossy(&account.connection.host);
     let user = account.connection.user.as_deref().map(cstring_lossy);
@@ -225,14 +225,14 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
     let backend_name = cstring_lossy(BACKEND_NAME);
 
     // SAFETY: a valid source by this function's contract, and header constants
-    // naming extensions whose types are registered above; each extension is
-    // created on demand and owned by the source, and every setter copies the
-    // string it is given.
+    // that name extensions whose types the code above registers. The source
+    // creates each extension on demand and owns it. Each setter copies the
+    // string that it gets.
     unsafe {
         let collection: *mut ESourceCollection =
             e_source_get_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
-        // `ESourceCollection` derives from `ESourceBackend`, which is where the
-        // name the registry keys the factory off lives.
+        // `ESourceCollection` derives from `ESourceBackend`, which holds the
+        // name that the registry uses as the key for the factory.
         e_source_backend_set_backend_name(
             collection.cast::<ESourceBackend>(),
             backend_name.as_ptr(),
@@ -245,35 +245,32 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         let auth: *mut ESourceAuthentication =
             e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
         e_source_authentication_set_host(auth, host.as_ptr());
-        // NULL rather than a skipped write, for both of these: see the module
-        // comment on committing onto an account that already says something.
-        // EDS's string setters take NULL and mean it — the getter answers NULL
-        // afterwards, which is the same "no user" the reader gets from an
-        // account that never had one.
+        // For these two, write NULL, do not skip the write. See the module
+        // comment on a commit onto an account that already has values. The
+        // string setters of EDS accept NULL: the getter then returns NULL. The
+        // reader gets the same "no user" from an account that never had one.
         e_source_authentication_set_user(auth, as_ptr(&user));
         e_source_authentication_set_method(auth, as_ptr(&auth_method));
-        // Zero is how `[Authentication] Port` spells "not set", and it is what
-        // the reader turns back into `None`.
+        // Zero means "not set" for `[Authentication] Port`. The reader changes
+        // it back into `None`.
         e_source_authentication_set_port(auth, account.connection.port.unwrap_or(0));
 
-        // `credential-name`/`credential-store-id` (eds#663): only ever the
-        // account's own uid, and only for OAuth 2.0 — see the module comment.
-        // NULL on every other method rather than a skipped write, for the
-        // same idempotency reason the fields above are: an account switched
-        // back to a password must not go on carrying the key a previous
-        // OAuth 2.0 commit left behind, which would change the parameter
-        // name the credentials engine passes to `authenticate` for what is
-        // now a plain password.
+        // `credential-name`/`credential-store-id` (eds#663): only the uid of
+        // the account, and only for OAuth 2.0 (see the module comment). For
+        // all other methods, write NULL, do not skip the write. The reason is
+        // the same idempotency as for the fields above. An account that
+        // changes back to a password must not keep the key of a previous
+        // OAuth 2.0 commit. That key would change the parameter name that the
+        // credentials engine gives to `authenticate` for a plain password.
         //
-        // `OAUTH2_METHOD` ("OAuth2") is the generic alias; `OAUTH2_AUTH_METHOD`
-        // is the particular one real accounts actually carry, since it is what
-        // `backend.rs`'s setup combo and `config_lookup.rs`'s discovery both
-        // write. Checking only the former left every real OAuth 2.0 account
-        // without this key, silently defeating eds#663. Asking for the
-        // literal "JMAP" instead of the constant would bring that bug straight
-        // back on an EDS where the method is "OAuth2Dynamic", which is why
-        // this and the three other sites that compare a method name all read
-        // the same constant.
+        // `OAUTH2_METHOD` ("OAuth2") is the generic alias. `OAUTH2_AUTH_METHOD`
+        // is the method that real accounts have, because the setup combo of
+        // `backend.rs` and the discovery of `config_lookup.rs` write it. A
+        // check for only the alias gave no key to all real OAuth 2.0 accounts,
+        // and eds#663 silently stayed unfixed. A check for the literal "JMAP"
+        // would cause that bug again on an EDS where the method is
+        // "OAuth2Dynamic". Thus this check, the check in `complete.rs`, and the
+        // writers in `backend.rs` and `config_lookup.rs` all use the constant.
         let oauth2_auth_method = OAUTH2_AUTH_METHOD
             .to_str()
             .expect("OAUTH2_AUTH_METHOD is a fixed ASCII string");
@@ -293,61 +290,59 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
     }
 }
 
-/// The account `source` currently says — the inverse of [`apply`].
+/// The account that `source` contains now: the inverse of [`apply`].
 ///
-/// What the widgets are filled from and what
-/// [`check`](crate::complete::check) is asked about: `EMailConfigServiceBackend`
-/// hands its vfuncs a collection source, and every question after
-/// `new_collection` is a question about the account that source holds.
+/// The widgets get their values from it, and [`check`](crate::complete::check)
+/// examines it. `EMailConfigServiceBackend` gives its vfuncs a collection
+/// source, and each question after `new_collection` is about the account in
+/// that source.
 ///
-/// Total, and deliberately so. [`server_of`] answers a `Result` because a
-/// backend about to open a connection has no use for an account without a host;
-/// this is asked on every keystroke of a dialog the user is still filling in,
-/// where "no host yet" is the ordinary state and not a failure. So the account
-/// comes back as it stands and [`check`](crate::complete::check) — which exists
-/// for exactly this — says whether it may be committed.
+/// This function is deliberately total. [`server_of`] returns a `Result`,
+/// because a backend that opens a connection cannot use an account without a
+/// host. This function runs on each keystroke of a dialog that the user still
+/// fills in, where "no host yet" is the usual state and not a failure. Thus it
+/// returns the account as it is, and [`check`](crate::complete::check) (which
+/// exists for this purpose) says whether it can be committed.
 ///
 /// # What an absent group means
 ///
-/// Nothing here creates an extension: this is handed the user's own account
-/// file, and `e_source_get_extension` would add the group. Each is tested for,
-/// and the answer for an absent one is the one
-/// [the collection backend's reader][collection_source] gives, not a second
-/// opinion:
+/// Nothing here creates an extension: this function gets the user's own
+/// account file, and `e_source_get_extension` would add the group. It tests for
+/// each group. For an absent group, it gives the same answer as
+/// [the reader of the collection backend][collection_source]:
 ///
-/// - no `[Collection]` is [`Parts::ALL`], via [`Parts::from_collection`];
-/// - no `[Security]` is TLS, because `ESourceSecurity:secure` reads FALSE when
-///   there is no group to read and a dialog that offered to commit *that* back
-///   would switch TLS off on a hand-written account;
-/// - no `[Authentication]` is the empty host and no user, which is what an empty
-///   group would have said.
+/// - no `[Collection]` is [`Parts::ALL`], through [`Parts::from_collection`];
+/// - no `[Security]` is TLS. `ESourceSecurity:secure` reads FALSE when there is
+///   no group, and a dialog that committed *that* value would disable TLS on a
+///   hand-written account;
+/// - no `[Authentication]` is the empty host and no user, which is what an
+///   empty group gives.
 ///
-/// The one field where a string is turned into something else is the host: the
-/// keyfile's absent-or-non-empty `NULL` becomes the empty string an unfilled
-/// entry holds, which is [`check`](crate::complete::check)'s translation read
-/// backwards.
+/// The host and the identity change form: the absent-or-non-empty `NULL` of the
+/// keyfile becomes the empty string of an unfilled entry. For the host, this is
+/// the translation of [`check`](crate::complete::check) in reverse.
 ///
-/// # Where this differs from the registry's reader, on purpose
+/// # Where this is deliberately different from the reader of the registry
 ///
-/// [`parts_of`] folds the source's own `Enabled` flag in, because a disabled
-/// account has no parts to populate. This does not: `enabled` is not a field of
-/// [`Account`], [`apply`] writes all three switches every time, and an account
-/// the user has hidden would otherwise come back with three cleared check boxes
-/// and be committed that way — "hide this for now" turned into losing which
-/// parts the account offered. `tests/account.rs` pins both answers side by side.
+/// [`parts_of`] includes the `Enabled` flag of the source, because a disabled
+/// account has no parts to populate. This function does not. `enabled` is not
+/// a field of [`Account`], and [`apply`] writes all three switches each time.
+/// Otherwise an account that the user hid would come back with three cleared
+/// check boxes, and a commit would write them. Thus "hide this for now" would
+/// lose which parts the account offered. `tests/account.rs` pins both answers.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — the collection source the setup is
-/// editing. It is only read from, and nothing outlives the call.
+/// `source` must be a valid `ESource`: the collection source that the setup
+/// edits. This function only reads it, and nothing stays alive after the call.
 ///
 /// [collection_source]: ../../jmap_backend_collection/collection_source/index.html
 /// [`parts_of`]: ../../jmap_backend_collection/collection_source/fn.parts_of.html
 /// [`server_of`]: ../../jmap_backend_collection/collection_source/fn.server_of.html
 pub unsafe fn read(source: *mut ESource) -> Account {
-    // As in `apply`, and for the same reason: an extension GType nothing has
-    // referenced yet is one `e_source_has_extension` cannot find either.
-    // SAFETY: no arguments, and the type system initialises itself.
+    // As in `apply`, and for the same reason: `e_source_has_extension` also
+    // cannot find an extension GType that nothing referenced yet.
+    // SAFETY: no arguments, and the type system initializes itself.
     unsafe {
         e_source_collection_get_type();
         e_source_authentication_get_type();
@@ -355,7 +350,7 @@ pub unsafe fn read(source: *mut ESource) -> Account {
     }
 
     // SAFETY: a valid source by this function's contract, and each header
-    // constant names an extension of the type it is read as.
+    // constant names an extension of the type that the code reads.
     let collection =
         unsafe { extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION) };
     // SAFETY: as above.
@@ -366,10 +361,10 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     };
 
-    // SAFETY: a live extension, by `extension_if_present`'s contract. Every
-    // `dup` getter returns NULL or a copy the caller owns. A config lookup
-    // reads on a worker thread, so a borrowed string can be freed during the
-    // copy.
+    // SAFETY: a live extension, by the contract of `extension_if_present`.
+    // Each `dup` getter returns NULL or a copy that the caller owns. A config
+    // lookup reads on a worker thread, thus a borrowed string can be freed
+    // during the copy.
     let (identity, parts) = collection.map_or((None, None), |collection| unsafe {
         (
             take_string(e_source_collection_dup_identity(collection)),
@@ -395,35 +390,34 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         )
     });
 
-    // SAFETY: a valid source by this function's contract; `oauth2::read`
-    // creates nothing and answers `Config::default()` (client id absent) for
-    // a source with no `[JMAP OAuth2]` extension yet.
+    // SAFETY: a valid source by this function's contract. `oauth2::read`
+    // creates nothing, and returns `Config::default()` (no client id) for a
+    // source with no `[JMAP OAuth2]` extension yet.
     let oauth2_registered = unsafe { crate::oauth2::read(source) }.client_id.is_some();
 
     Account {
         identity: identity.unwrap_or_default(),
         connection: Connection {
             host: host.unwrap_or_default(),
-            // Zero is how the keyfile spells "not set", the same way `apply`
-            // writes it.
+            // Zero means "not set" in the keyfile, as `apply` writes it.
             port: (port != 0).then_some(port),
             user,
             auth_method,
             secure,
         },
-        // `true` rather than the source's own flag: see the note above on the
-        // one place this and the registry's reader disagree by design.
+        // `true`, not the flag of the source. See the note above on the one
+        // deliberate difference from the reader of the registry.
         parts: Parts::from_collection(true, parts),
         oauth2_registered,
     }
 }
 
-/// The string a `CString` holds, or NULL for the absence of one.
+/// The string in a `CString`, or NULL if there is no `CString`.
 pub(crate) fn as_ptr(value: &Option<std::ffi::CString>) -> *const std::ffi::c_char {
     value.as_ref().map_or(ptr::null(), |value| value.as_ptr())
 }
 
-/// A Rust `bool` as the tri-state C one EDS's setters take.
+/// A Rust `bool` as the C `gboolean` that the setters of EDS take.
 fn gboolean(value: bool) -> gboolean {
     if value { GTRUE } else { GFALSE }
 }

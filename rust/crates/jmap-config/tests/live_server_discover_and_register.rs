@@ -5,36 +5,35 @@
 //! dynamic client registration) against a real JMAP server, not
 //! `jmap-mockd`.
 //!
-//! Every existing test of this function (`tests/oauth2_setup.rs`) drives it
-//! against `jmap-mock`'s own fixtures; it has never run against a real
-//! deployment's actual metadata document or registration endpoint. Needs no
-//! throwaway account: both RFC 8414 discovery and RFC 7591 registration are
-//! unauthenticated by design (RFC 8414 §3 — a client that had to
-//! authenticate for the document could never get started), so this only
-//! needs `JMAP_LIVE_SERVER_URL`, not the write-test credentials.
+//! The other tests of this function (`tests/oauth2_setup.rs`) use the fixtures
+//! of `jmap-mock`. They never use the metadata document or registration
+//! endpoint of a real deployment. This test needs no temporary account: RFC
+//! 8414 discovery and RFC 7591 registration need no authentication by design
+//! (RFC 8414 §3: a client that must authenticate for the document can never
+//! start). Thus this test needs only `JMAP_LIVE_SERVER_URL`, not the
+//! write-test credentials.
 //!
 //! ## The issuer mismatch, and why this needs its own transport
 //!
-//! A real deployment's issuer is normally its own configured public
-//! hostname, which is often not the address a test runner actually reaches
-//! it on — `docs/manual-test-live-server.md`'s `JMAP_LIVE_SERVER_REBASE_URLS`
-//! exists for exactly this on the JMAP session side. RFC 8414 §3.3 requires
-//! the fetched document's `issuer` to equal, byte for byte, the one
-//! discovery was asked for, so there is no equivalent "rebase after the
-//! fact" for OAuth discovery: the issuer string handed to
-//! `discover_and_register` has to be the one the deployment actually
-//! states, or its own validation rejects the document outright.
+//! The issuer of a real deployment is usually its configured public host name.
+//! Frequently, this is not the address that a test runner uses to reach it.
+//! On the JMAP session side, `JMAP_LIVE_SERVER_REBASE_URLS` in
+//! `docs/manual-test-live-server.md` is for this problem. RFC 8414 §3.3 requires
+//! that the `issuer` of the fetched document is byte for byte equal to the
+//! issuer that discovery asked for. Thus OAuth discovery has no equivalent
+//! "rebase after the fetch". The issuer string given to `discover_and_register`
+//! must be the issuer that the deployment states, or its validation rejects
+//! the document.
 //!
-//! So this test first asks `JMAP_LIVE_SERVER_URL` directly what issuer it
-//! states, then calls `discover_and_register` with that issuer's own host
-//! while routing every request through a wrapping [`Transport`] that
-//! rewrites just the origin (that issuer's host back to
-//! `JMAP_LIVE_SERVER_URL`) before forwarding to a real `UreqTransport` — the
-//! issuer string `discover_and_register` builds and checks against is
-//! untouched, only where the bytes are actually sent changes. Same shape as
-//! `jmap-mail`'s `live_server_disconnect_window.rs`'s
-//! `DelayedDeliveryTransport`: a thin wrapper around a real transport for
-//! one specific rewrite.
+//! Thus this test first asks `JMAP_LIVE_SERVER_URL` directly for its issuer.
+//! Then it calls `discover_and_register` with the host of that issuer, and
+//! sends each request through a wrapper [`Transport`]. The wrapper changes
+//! only the origin (from the issuer host to `JMAP_LIVE_SERVER_URL`) and then
+//! forwards to a real `UreqTransport`. The issuer string that
+//! `discover_and_register` builds and checks does not change. Only the
+//! destination of the bytes changes. This has the same shape as
+//! `DelayedDeliveryTransport` in `live_server_disconnect_window.rs` of
+//! `jmap-mail`: a thin wrapper around a real transport for one rewrite.
 //!
 //! ## Running it
 //!
@@ -54,12 +53,12 @@ use jmap_config::oauth2_setup::discover_and_register;
 
 const REDIRECT_URI: &str = "https://client.example.org/callback";
 
-/// Forwards every request to a real transport, rewriting only the origin of
-/// requests that name `from_origin` to `to_origin` — the reachable address
-/// this runner actually has to send them to. Every other part of the
-/// request (path, headers, body) is untouched, and a request that does not
-/// name `from_origin` at all (the reachable origin already matches the
-/// issuer, or a redirect landed somewhere else) passes through unchanged.
+/// Forwards each request to a real transport. In a request that names
+/// `from_origin`, it changes only the origin to `to_origin` (the address that
+/// this runner can reach). The other parts of the request (path, headers,
+/// body) do not change. A request that does not name `from_origin` (because
+/// the reachable origin is the issuer, or a redirect went to a different
+/// location) passes through unchanged.
 struct RewriteOriginTransport {
     inner: UreqTransport,
     from_origin: String,
@@ -80,16 +79,16 @@ impl Transport for RewriteOriginTransport {
     }
 }
 
-/// The issuer identifier a real deployment's own OAuth 2.0 metadata states,
-/// and the bare host/port/secure triple that reproduces it through
-/// `source::origin` the same way `discover_and_register` builds it — or
-/// `None` if `JMAP_LIVE_SERVER_URL` is not set here.
+/// The issuer identifier that the OAuth 2.0 metadata of a real deployment
+/// states, and the bare host/port/secure triple that gives it again through
+/// `source::origin`, as `discover_and_register` builds it. `None` if
+/// `JMAP_LIVE_SERVER_URL` is not set.
 ///
-/// A raw, unvalidated fetch rather than `jmap_client::oauth::discover`:
-/// that function itself enforces RFC 8414 §3.3 (the document's issuer must
-/// equal the one it was asked for), which is exactly the check the real
-/// issuer/reachable-origin mismatch would fail here. This only needs to
-/// learn what issuer the deployment states, not validate it yet.
+/// A raw fetch with no validation, not `jmap_client::oauth::discover`. That
+/// function enforces RFC 8414 §3.3 (the issuer of the document must be equal
+/// to the issuer that it asked for), and the mismatch of the real issuer and
+/// the reachable origin fails that check. This function must only learn the
+/// issuer that the deployment states, not validate it.
 fn real_issuer() -> Option<(String, String, u16, bool)> {
     let reachable_origin = env::var("JMAP_LIVE_SERVER_URL").ok()?;
 
@@ -173,9 +172,9 @@ fn discover_and_register_resolves_a_full_config_against_the_real_server() {
     );
     assert_eq!(config.redirect_uri.as_deref(), Some(REDIRECT_URI));
 
-    // The deployment's own `scopes_supported` (checked live, not assumed)
-    // includes the JMAP data scopes and `offline_access`, so all four of
-    // `discover_and_register`'s requested scopes should have been picked.
+    // The `scopes_supported` of the deployment (checked live, not assumed)
+    // includes the JMAP data scopes and `offline_access`. Thus all four
+    // scopes that `discover_and_register` requests must be in the result.
     let scope = config
         .scope
         .as_deref()
@@ -186,9 +185,9 @@ fn discover_and_register_resolves_a_full_config_against_the_real_server() {
     );
     assert!(scope.contains("offline_access"), "{scope}");
 
-    // RFC 8707 resource indicator: `probe_resource` follows the same
-    // rewritten transport to the real server's own `.well-known/jmap`
-    // redirect, landing on its session document.
+    // RFC 8707 resource indicator: through the same rewrite transport,
+    // `probe_resource` follows the `.well-known/jmap` redirect of the real
+    // server to its session document.
     let resource = config
         .resource
         .as_deref()

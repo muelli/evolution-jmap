@@ -2,26 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The two `ESourceConfigBackend` subclasses, and the class fields that are the
-// entire reason they exist.
+// only reason for them.
 //
-// The operator drove real Evolution against a real JMAP account and could not
-// create a JMAP address book or calendar at all — the New Address Book and New
-// Calendar dialogs offered only On This Computer, CardDAV, Google, LDAP and
-// Weather — while an existing JMAP calendar's properties dialog showed empty
-// `Type:` and `Name:` labels, a colour picker reading black, and an OK button
-// that did nothing. All four are one thing: `ESourceConfig` builds one
-// candidate per registered `ESourceConfigBackend`, and this project registered
-// none, so `source_config_get_active_candidate` had nothing to return and every
-// later call asserted on the NULL.
+// The operator used real Evolution with a real JMAP account and could not
+// create a JMAP address book or calendar. The New Address Book and New Calendar
+// dialogs offered only On This Computer, CardDAV, Google, LDAP and Weather. The
+// properties dialog of an existing JMAP calendar showed empty `Type:` and
+// `Name:` labels, a black colour picker, and an OK button that did nothing. All
+// four have one cause. `ESourceConfig` builds one candidate for each registered
+// `ESourceConfigBackend`, and this project registered none. Thus
+// `source_config_get_active_candidate` had nothing to return, and each later
+// call asserted on the NULL.
 //
-// What a headless test can hold is the class, which is where the whole of a
-// candidate's identity lives — `g_type_class_ref` runs `class_init` and needs
-// no instance. What it cannot hold is anything past that: an
-// `ESourceConfigBackend` is an `EExtension` of an `ESourceConfig`, which is a
-// `GtkBox`, so no instance can exist without a display this VM does not have.
-// That is why `allow_creation`'s decision is a plain Rust function over the
-// source type and the vfunc is a three-line wrapper around it: the part with a
-// wrong answer available is the part a test can reach.
+// A headless test can examine the class, which holds all of the identity of a
+// candidate. `g_type_class_ref` runs `class_init` and needs no instance. A test
+// can examine nothing more. An `ESourceConfigBackend` is an `EExtension` of an
+// `ESourceConfig`, which is a `GtkBox`. Thus no instance can exist without a
+// display, and this VM has none. For this reason, the `allow_creation` decision
+// is a plain Rust function over the source type, and the vfunc is a short
+// wrapper around it. A test can thus reach the part that can be wrong.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -40,61 +39,60 @@ use jmap_config::source_config::{
     BACKEND_NAME, JmapBookConfig, JmapCalConfig, config_backend_type, offers_creation_for,
 };
 
-/// A registered class, kept referenced for the test's duration — the same
-/// shape `tests/backend.rs` uses, and for the same reason: `class_init` runs on
-/// the first `g_type_class_ref` and the struct is only readable while a
-/// reference is held.
+/// A registered class. The test keeps a reference, as in `tests/backend.rs`,
+/// for the same reason: `class_init` runs on the first `g_type_class_ref`, and
+/// the struct is readable only while a reference is held.
 struct Class(*mut ESourceConfigBackendClass);
 
 impl Class {
     fn of<T: ObjectSubclass>() -> Self {
         let gtype = register_static::<T>();
         assert_ne!(gtype, 0, "{:?} did not register", T::NAME);
-        // SAFETY: the type is registered, so referencing its class runs
-        // class_init; our class struct leads with ESourceConfigBackendClass.
+        // SAFETY: the type is registered, so a reference to its class runs
+        // class_init. The class struct of this crate starts with
+        // ESourceConfigBackendClass.
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
     fn vfuncs(&self) -> &ESourceConfigBackendClass {
-        // SAFETY: the class is referenced for as long as `self` lives.
+        // SAFETY: the class stays referenced while `self` is alive.
         unsafe { &*self.0 }
     }
 
-    /// The half of the same struct that Evolution's `EExtension` owns, where
-    /// `extensible_type` lives.
+    /// The part of the same struct that Evolution's `EExtension` owns. It holds
+    /// `extensible_type`.
     fn extension(&self) -> &EExtensionClass {
-        // SAFETY: ESourceConfigBackendClass leads with EExtensionClass, which
-        // `evo-sys/tests/source_config.rs` pins against `g_type_query`.
+        // SAFETY: ESourceConfigBackendClass starts with EExtensionClass.
+        // `evo-sys/tests/source_config.rs` pins this against `g_type_query`.
         unsafe { &*ptr::from_ref(self.vfuncs()).cast::<EExtensionClass>() }
     }
 }
 
 impl Drop for Class {
     fn drop(&mut self) {
-        // SAFETY: the reference taken in `of` is given back exactly once.
+        // SAFETY: this releases the reference from `of` exactly one time.
         unsafe { g_type_class_unref(self.0.cast()) };
     }
 }
 
-/// Evolution's own class, for the "did `class_init` displace this slot or
-/// inherit it?" comparisons below.
+/// Evolution's own class, for the comparisons below ("did `class_init` replace
+/// this slot or inherit it?").
 fn parent_class() -> &'static ESourceConfigBackendClass {
-    // SAFETY: referencing the class of a registered type and never giving the
-    // reference back, which is what `'static` claims. `config_backend_type`
-    // rather than the bare accessor, because this reference may be the one
-    // that runs Evolution's class initialiser, and that has to find
-    // `ESourceConfig` already registered.
+    // SAFETY: this references the class of a registered type and never
+    // releases the reference, as `'static` requires. It uses
+    // `config_backend_type`, not the bare accessor. This reference can be the
+    // one that runs Evolution's class initialiser, and that initialiser must
+    // find `ESourceConfig` already registered.
     let class = unsafe { g_type_class_ref(config_backend_type()) };
     assert!(!class.is_null(), "g_type_class_ref returned NULL");
     // SAFETY: the reference above is never released.
     unsafe { &*class.cast::<ESourceConfigBackendClass>() }
 }
 
-/// Both types have to be children of the class `ESourceConfig` walks. It does
-/// not look a backend up by name: `e_extensible_load_extensions` instantiates
-/// every child of `EExtension` whose `extensible_type` matches, and
-/// `source_config_init_backends` then keeps the ones that are
-/// `ESourceConfigBackend`s.
+/// Both types must be children of the class that `ESourceConfig` examines. It
+/// does not find a backend by name. `e_extensible_load_extensions` makes an
+/// instance of each child of `EExtension` with a matching `extensible_type`.
+/// `source_config_init_backends` then keeps the `ESourceConfigBackend`s.
 #[test]
 fn both_types_extend_the_class_the_dialogs_build_candidates_from() {
     for (name, gtype) in [
@@ -111,16 +109,16 @@ fn both_types_extend_the_class_the_dialogs_build_candidates_from() {
     }
 }
 
-/// The field that decides *which dialog* a candidate turns up in, and the one
-/// place the two subclasses differ other than `allow_creation`.
+/// The field that selects *the dialog* that shows a candidate. Apart from
+/// `allow_creation`, this is the one difference between the two subclasses.
 ///
-/// `extensible_type` is inherited from `ESourceConfigBackendClass`, where
-/// Evolution's own `class_init` sets it to `E_TYPE_SOURCE_CONFIG` — the base
-/// class. Leaving it at that value is the quiet failure: the backend would be
-/// instantiated for *every* `ESourceConfig`, so the address book subclass would
-/// be handed a calendar's scratch source and vice versa, and both would offer a
-/// "JMAP" entry in the other's dialog. Evolution's own modules always name the
-/// derived class, and the assertion is that ours do too.
+/// `extensible_type` comes from `ESourceConfigBackendClass`, where Evolution's
+/// own `class_init` sets it to `E_TYPE_SOURCE_CONFIG`, the base class. That
+/// value is the silent failure. The backend then gets an instance for *each*
+/// `ESourceConfig`. The address book subclass gets the scratch source of a
+/// calendar, and the opposite. Both offer a "JMAP" entry in the dialog of the
+/// other. Evolution's own modules always name the derived class, and this test
+/// makes sure that the modules of this crate do too.
 #[test]
 fn each_backend_extends_exactly_the_dialog_it_is_for() {
     let book = Class::of::<JmapBookConfig>();
@@ -156,15 +154,14 @@ fn each_backend_extends_exactly_the_dialog_it_is_for() {
     }
 }
 
-/// `backend_name` is what a candidate is matched against, on both of the two
-/// routes into `source_config_init_candidates`: for *creating*, the
-/// `[Collection] BackendName` of each eligible collection source is looked up
-/// in the dialog's backend table; for *editing*, the existing source's own
-/// `[Address Book]`/`[Calendar] BackendName` is. Those are two different
-/// strings in the registry and they are both `"jmap"`, so one value serves —
-/// and it has to be exactly the one `jmap-collection-sync` writes onto every
-/// child it discovers, or an existing JMAP address book still edits to a NULL
-/// backend.
+/// A candidate must match `backend_name` on both paths into
+/// `source_config_init_candidates`. To *create*, the dialog looks up the
+/// `[Collection] BackendName` of each eligible collection source in its backend
+/// table. To *edit*, it looks up the `[Address Book]`/`[Calendar] BackendName`
+/// of the existing source. These are two different strings in the registry, and
+/// both are `"jmap"`. Thus one value serves both. It must be the value that
+/// `jmap-collection-sync` writes onto each child it discovers. If not, an
+/// existing JMAP address book still opens for edit with a NULL backend.
 #[test]
 fn both_backends_answer_to_the_name_a_jmap_child_source_carries() {
     assert_eq!(
@@ -178,8 +175,8 @@ fn both_backends_answer_to_the_name_a_jmap_child_source_carries() {
         ("address book", Class::of::<JmapBookConfig>()),
         ("calendar", Class::of::<JmapCalConfig>()),
     ] {
-        // SAFETY: a 'static NUL-terminated string the class was initialised
-        // from, or NULL, which `read_string` answers `None` for.
+        // SAFETY: the 'static NUL-terminated string from class initialisation,
+        // or NULL, for which `read_string` answers `None`.
         let carried = unsafe { read_string(class.vfuncs().backend_name) };
         assert_eq!(
             carried.as_deref(),
@@ -189,17 +186,17 @@ fn both_backends_answer_to_the_name_a_jmap_child_source_carries() {
     }
 }
 
-/// `parent_uid` names a *fixed* parent source — Evolution's "local-stub" and
-/// friends, the placeholders under which On This Computer's address books hang.
-/// A non-NULL value here sends the backend down `init_candidates`' first loop,
-/// which builds one scratch source parented to that fixed uid and never looks
-/// at a collection at all.
+/// `parent_uid` names a *fixed* parent source: Evolution's "local-stub" and
+/// similar placeholders, below which the On This Computer address books are.
+/// A non-NULL value sends the backend through the first loop of
+/// `init_candidates`. That loop builds one scratch source with that fixed uid as
+/// parent, and never examines a collection.
 ///
-/// A JMAP address book or calendar hangs off the account that discovered it, so
-/// NULL is what puts this backend in the *second* loop, where the parent is one
-/// of `list_eligible_collections`' collection sources. Getting it wrong is not
-/// a crash: it is a `g_warning` about an invalid parent_uid and a `continue`,
-/// i.e. the original symptom back again with a line in the journal.
+/// A JMAP address book or calendar is below the account that discovered it.
+/// Thus NULL puts this backend in the *second* loop, where the parent is a
+/// collection source from `list_eligible_collections`. A wrong value does not
+/// cause a crash. It causes a `g_warning` about an invalid parent_uid and a
+/// `continue`: the original symptom, with a line in the journal.
 #[test]
 fn neither_backend_claims_a_fixed_parent_source() {
     for (name, class) in [
@@ -214,12 +211,12 @@ fn neither_backend_claims_a_fixed_parent_source() {
     }
 }
 
-/// Every one of the four slots dispatches through a `g_return_if_fail (class->
-/// <vfunc> != NULL)`, so a NULL is a CRITICAL and a dialog that does nothing.
-/// They are non-NULL here because Evolution's own `class_init` fills all four
-/// with defaults and GObject copies the parent class into ours before
-/// `class_init` runs — the assertion is that ours did not clear one, which is
-/// the only way this can go wrong from here.
+/// Each of the four slots dispatches through a `g_return_if_fail (class->
+/// <vfunc> != NULL)`. Thus a NULL gives a CRITICAL and a dialog that does
+/// nothing. The slots are non-NULL because Evolution's own `class_init` fills
+/// all four with defaults, and GObject copies the parent class into the
+/// subclass before `class_init` runs. This test makes sure that the `class_init`
+/// of this crate did not clear one. That is the only possible failure here.
 #[test]
 fn all_four_slots_are_filled_after_class_init() {
     for (name, class) in [
@@ -247,19 +244,17 @@ fn all_four_slots_are_filled_after_class_init() {
     }
 }
 
-/// Three of the four slots are deliberately *not* overridden, and that is a
-/// decision rather than an omission, so it is asserted rather than left to be
-/// read off the source.
+/// Three of the four slots are deliberately *not* overridden. That is a
+/// decision, not an omission, so a test makes sure of it.
 ///
-/// Evolution's defaults are, in order: insert no widgets, answer complete, and
-/// commit nothing. Each is right here. There is nothing to ask the user beyond
-/// the name and colour `ESourceConfig` puts on screen itself — a JMAP address
-/// book needs no URL, because the account it hangs off already knows the
-/// server. Completeness is `ESourceConfig`'s own `check_complete`, which
-/// already refuses an empty Name and an unselected Type. And there is nothing
-/// to commit: writing the scratch source into the registry is what makes
-/// `evolution-source-registry` call this account's `create_resource_sync`, so
-/// a `commit_changes` of our own would be a second, competing writer.
+/// Evolution's defaults are, in sequence: insert no widgets, answer complete,
+/// and commit nothing. Each is correct here. The user must give only the name
+/// and colour, which `ESourceConfig` shows itself. A JMAP address book needs no
+/// URL, because its account already knows the server. `ESourceConfig`'s own
+/// `check_complete` already refuses an empty Name and an unselected Type. There
+/// is nothing to commit: when the scratch source is written into the registry,
+/// `evolution-source-registry` calls the `create_resource_sync` of this account.
+/// A `commit_changes` of this crate would be a second writer that competes.
 #[test]
 fn the_three_slots_with_nothing_to_add_stay_evolutions_own() {
     let inherited = parent_class();
@@ -297,10 +292,10 @@ fn the_three_slots_with_nothing_to_add_stay_evolutions_own() {
 /// The one slot that *is* overridden, and only on the calendar side.
 ///
 /// One `ECalSourceConfig` class serves New Calendar, New Task List and New Memo
-/// List; they differ by `e_cal_source_config_get_source_type` alone. So a
-/// calendar config backend that inherits `allow_creation` — which answers TRUE
-/// unconditionally — offers itself in all three. Evolution's own
-/// `cal-config-google` overrides it for exactly this reason.
+/// List. Only `e_cal_source_config_get_source_type` makes them different. Thus
+/// a calendar config backend that inherits `allow_creation` (which always
+/// answers TRUE) is in all three. Evolution's own `cal-config-google` overrides
+/// it for this reason.
 #[test]
 fn only_the_calendar_backend_narrows_what_it_will_be_offered_for() {
     let inherited = parent_class().allow_creation.map(|f| f as usize);
@@ -325,15 +320,15 @@ fn only_the_calendar_backend_narrows_what_it_will_be_offered_for() {
     );
 }
 
-/// `allow_creation`'s whole content, as a function of the value the vfunc
-/// fetches — the part with a wrong answer available, split out because the
-/// fetch itself needs an `ECalSourceConfig` and so a display.
+/// All of `allow_creation`, as a function of the value that the vfunc gets.
+/// This is the part that can be wrong. It is a separate function because the
+/// fetch needs an `ECalSourceConfig`, and thus a display.
 ///
 /// A JMAP account has calendars. RFC 8984 JSCalendar models tasks, but this
-/// project registers no task-list or memo-list backend factory, so a source
-/// committed from New Task List would name a `[Task List] BackendName=jmap`
-/// nothing can open — and `create_resource_sync` would refuse it first, since
-/// `requested_of` answers `None` for a source carrying neither the
+/// project registers no task-list or memo-list backend factory. Thus a source
+/// committed from New Task List names a `[Task List] BackendName=jmap` that
+/// nothing can open. Before that, `create_resource_sync` refuses it, because
+/// `requested_of` answers `None` for a source with neither the
 /// `[Address Book]` nor the `[Calendar]` extension.
 #[test]
 fn only_an_events_calendar_can_be_created_over_jmap() {
@@ -351,10 +346,10 @@ fn only_an_events_calendar_can_be_created_over_jmap() {
     );
 }
 
-/// The names GLib knows the two types by, which are the strings a `g_warning`
-/// from `init_candidates` prints and the ones a second registration would
-/// collide on. Evolution's own spelling for a module of this shape is
-/// `E<Book|Cal>Config<Provider>`; ours follow it.
+/// The GLib names of the two types. A `g_warning` from `init_candidates`
+/// prints these strings, and a second registration collides on them. Evolution
+/// names a module of this shape `E<Book|Cal>Config<Provider>`, and the names of
+/// this crate do the same.
 #[test]
 fn the_registered_names_follow_evolutions_own() {
     assert_eq!(
@@ -367,20 +362,20 @@ fn the_registered_names_follow_evolutions_own() {
     );
 }
 
-/// The registration-order hazard `ObjectSubclass::class_init_types` exists for,
-/// one library over: both `class_init`s ask Evolution for a `GType` that is
-/// registered on first ask, and `e_book_source_config_get_type` /
-/// `e_cal_source_config_get_type` each register a `GtkBox` subclass. Doing that
-/// from inside a class initialiser is what deadlocked `evo-sys`'s own
-/// `tests/source_config.rs` before its `warm_up()` was written.
+/// The registration-sequence hazard that `ObjectSubclass::class_init_types`
+/// prevents, in a different library. Both `class_init`s ask Evolution for a
+/// `GType` that is registered on the first request. `e_book_source_config_get_type`
+/// and `e_cal_source_config_get_type` each register a `GtkBox` subclass. That
+/// call from inside a class initialiser caused a deadlock in `evo-sys`'s own
+/// `tests/source_config.rs` before it had `warm_up()`.
 ///
-/// Declaring them is the fix, and this is what says each declaration names the
-/// type its own `class_init` actually asks for: `register` calls
+/// The fix is to declare the types. This test makes sure that each declaration
+/// names the type that its `class_init` requests. `register` calls
 /// `class_init_types()` before it registers the declaring type, on a thread
-/// holding neither lock, so the accessor's `g_once` completes there and the ask
-/// inside `class_init` takes its fast path. A declaration of the *other*
-/// dialog class would satisfy `len() == 1` and leave the hazard exactly where
-/// it was, so the identity is what is asserted.
+/// that holds neither lock. Thus the `g_once` of the accessor completes there,
+/// and the request in `class_init` uses its fast path. A declaration of the
+/// *other* dialog class also gives `len() == 1`, but the hazard stays. Thus the
+/// test compares the type identity.
 #[test]
 fn each_type_declares_the_dialog_class_its_class_init_asks_for() {
     for (name, declared, wanted) in [

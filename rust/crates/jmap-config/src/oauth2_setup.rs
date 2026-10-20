@@ -1,29 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Turning a host name into a stored [`crate::oauth2::Config`] — RFC 8414
-//! discovery and RFC 7591 dynamic client registration, the network half of
-//! setting an account up for OAuth 2.0.
+//! Changes a host name into a stored [`crate::oauth2::Config`]: RFC 8414
+//! discovery and RFC 7591 dynamic client registration. This is the network
+//! part of the OAuth 2.0 configuration of an account.
 //!
 //! [`crate::oauth2_service`]'s vfuncs and [`crate::oauth2`]'s storage both
-//! need a deployment's endpoints and a client id before an account can
-//! authenticate this way, and neither can go get them: `EOAuth2Service`'s
-//! vfuncs are synchronous, so there is no vfunc that could make the network
-//! calls the first time EDS asks one. [`discover_and_register`] is that
-//! network call, made once by whatever sets an account up; its answer is
-//! exactly the [`crate::oauth2::Config`] [`crate::oauth2::apply`] already
-//! knows how to store, unchanged.
+//! need the endpoints and a client id of a deployment before an account can
+//! use OAuth 2.0. Neither can get them: `EOAuth2Service`'s vfuncs are
+//! synchronous, so no vfunc can make the network calls when EDS first asks.
+//! [`discover_and_register`] makes these calls one time, when an account is
+//! configured. Its result is exactly the [`crate::oauth2::Config`] that
+//! [`crate::oauth2::apply`] stores, unchanged.
 //!
-//! ## What this deliberately does not do
+//! ## What this module deliberately does not do
 //!
-//! Choose the redirect URI, or drive the user to
-//! `AuthorizationServer::authorization_endpoint` and capture what comes back.
-//! That is the consent exchange itself, which needs a browser and a display
-//! this crate's tests do not have; that gap is still open.
-//! [`discover_and_register`] takes `redirect_uri` as a plain argument
-//! for exactly that reason: this module's job stops at discovering a
-//! deployment's endpoints and registering a `client_id` against whichever
-//! redirect URI the consent-flow increment settles on, not at picking one.
+//! It does not choose the redirect URI. It does not send the user to
+//! `AuthorizationServer::authorization_endpoint` or capture the reply. That is
+//! the consent exchange, which needs a browser and a display that this crate's
+//! tests do not have. This gap is still open.
+//! Thus [`discover_and_register`] takes `redirect_uri` as a plain argument.
+//! This module discovers the endpoints of a deployment and registers a
+//! `client_id` for the redirect URI that the consent-flow increment chooses.
+//! It does not choose that URI.
 
 use jmap_backend_core::i18n::translate;
 use jmap_backend_core::source::{self, SourceError};
@@ -33,25 +32,23 @@ use jmap_client::transport::{HttpMethod, HttpRequest, Transport};
 
 use crate::oauth2::Config;
 
-/// Everything that can keep [`discover_and_register`] from producing a usable
+/// The failures that stop [`discover_and_register`] before it makes a usable
 /// [`Config`].
 #[derive(Debug)]
 pub enum Error {
-    /// `host` is not one [`source::origin`] will build an issuer from — the
-    /// same rule (and the same TLS-for-non-loopback requirement) every other
-    /// JMAP connection in this project is held to.
+    /// [`source::origin`] cannot make an issuer from `host`. This is the same
+    /// rule (and the same TLS-for-non-loopback requirement) that applies to all
+    /// other JMAP connections in this project.
     Host(SourceError),
-    /// RFC 8414 discovery or RFC 7591 registration itself failed: a transport
-    /// error, a malformed document, or a deployment that refused the
-    /// request.
+    /// RFC 8414 discovery or RFC 7591 registration failed: a transport error, a
+    /// malformed document, or a deployment that refused the request.
     Client(jmap_client::Error),
-    /// The deployment's metadata does not offer the authorization-code grant
-    /// — the one flow `EOAuth2Service`'s vfuncs can drive.
+    /// The deployment's metadata does not offer the authorization-code grant.
+    /// That grant is the only flow that `EOAuth2Service`'s vfuncs can operate.
     UnsupportedGrant,
-    /// The deployment offers no RFC 7591 registration endpoint, so this
-    /// client has no way to obtain a `client_id` on its own. Unlike EDS's
-    /// compiled-in Google/Outlook/Yahoo services, JMAP names no registry of
-    /// pre-issued ids to fall back to.
+    /// The deployment offers no RFC 7591 registration endpoint, so this client
+    /// cannot get a `client_id` itself. EDS's compiled-in Google/Outlook/Yahoo
+    /// services have pre-issued ids, but JMAP has no registry of such ids.
     NoRegistration,
 }
 
@@ -77,19 +74,20 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl Error {
-    /// Allocates a `GError` describing this failure, for
-    /// [`crate::config_lookup`]'s `run()` to hand back through its `error`
-    /// out-parameter instead of staying silent. Ownership passes to the
-    /// caller, who must `g_error_free` it or hand it to a C caller that will.
+    /// Allocates a `GError` that describes this failure. [`crate::config_lookup`]'s
+    /// `run()` returns it through its `error` out-parameter, so the failure is
+    /// not silent. The caller owns the `GError`. It must `g_error_free` it or
+    /// give it to a C caller that frees it.
     ///
-    /// Neither of `EConfigLookupWorkerError`'s two variants (a missing
-    /// password, a certificate to trust) fits any of these failures, so this
-    /// reports through `G_IO_ERROR` instead: `G_IO_ERROR_CANCELLED` for
-    /// [`Error::Client`] wrapping [`jmap_client::Error::Cancelled`], the one
-    /// code every EDS layer already agrees on for "the user pressed Stop"
-    /// (`jmap_mail::connect::ConnectError::to_gerror` reports cancellation
-    /// the same way), and `G_IO_ERROR_FAILED` with this error's own message
-    /// otherwise.
+    /// Neither of `EConfigLookupWorkerError`'s two variants (a missing password,
+    /// a certificate to trust) fits these failures, so this uses `G_IO_ERROR`:
+    ///
+    /// - `G_IO_ERROR_CANCELLED` for [`Error::Client`] that wraps
+    ///   [`jmap_client::Error::Cancelled`]. All EDS layers use this code for
+    ///   "the user pressed Stop" (`jmap_mail::connect::ConnectError::to_gerror`
+    ///   reports cancellation the same way).
+    /// - `G_IO_ERROR_FAILED` with the message of this error for all other
+    ///   failures.
     pub fn to_gerror(&self) -> *mut glib_sys::GError {
         let message = jmap_backend_core::error::cstring_lossy(&self.to_string());
         let code = if matches!(self, Self::Client(jmap_client::Error::Cancelled)) {
@@ -97,24 +95,24 @@ impl Error {
         } else {
             gio_sys::G_IO_ERROR_FAILED
         };
-        // SAFETY: the quark function takes no arguments, and `message` is a
-        // live, NUL-terminated `CString` for the call, which copies it.
+        // SAFETY: the quark function takes no arguments. `message` is a live,
+        // NUL-terminated `CString` during the call, and the call copies it.
         unsafe {
             glib_sys::g_error_new_literal(gio_sys::g_io_error_quark(), code, message.as_ptr())
         }
     }
 }
 
-/// Discover `host`'s OAuth 2.0 endpoints (RFC 8414) and register this client
-/// with it (RFC 7591), producing the [`Config`] [`crate::oauth2::apply`]
-/// stores.
+/// Discovers the OAuth 2.0 endpoints of `host` (RFC 8414) and registers this
+/// client with it (RFC 7591). The result is the [`Config`] that
+/// [`crate::oauth2::apply`] stores.
 ///
-/// `host`, `port` and `secure` are read the same way every JMAP connection in
-/// this project is (see [`source::origin`]): the authorization server for a
-/// JMAP deployment's own account is, in every deployment this project
-/// targets, the deployment itself, so discovery is asked of the same origin
-/// `Session/get` is. `redirect_uri` is registered exactly as given — see the
-/// module docs for why choosing it is not this function's job.
+/// `host`, `port` and `secure` have the same meaning as for all JMAP
+/// connections in this project (see [`source::origin`]). In all deployments
+/// that this project targets, the deployment is its own authorization server.
+/// Thus discovery uses the same origin as `Session/get`. `redirect_uri` is
+/// registered exactly as given. The module docs tell why this function does
+/// not choose it.
 pub fn discover_and_register(
     transport: &dyn Transport,
     host: &str,
@@ -151,18 +149,18 @@ pub fn discover_and_register(
         }
     };
 
-    // Register — and later request — exactly the scopes this client uses,
-    // chosen from those the deployment advertises: the JMAP data scopes
-    // (spelled as Fastmail advertises them, below) plus `offline_access`
-    // for a refresh token. Naming none is wrong (a registration naming no
-    // `scope` can be issued an *empty* default — a token with no JMAP access
-    // at all), and naming everything advertised is wrong too: the registered
-    // set becomes the RFC 6749 §3.3 default, and a default containing
-    // provider extras (Fastmail's MCP scope, OpenID Connect identity scopes)
-    // has been seen rejected outright — `error=invalid_scope` at the
-    // authorization endpoint, observed live 2026-08-23. A deployment naming
-    // none (the pure RFC 8620 case, `scopes_supported` absent) keeps today's
-    // behaviour: no `scope` sent, everything granted implicitly.
+    // Register (and later request) only the scopes that this client uses, from
+    // the scopes that the deployment advertises. These are the JMAP data scopes
+    // (spelled as Fastmail advertises them, below) and `offline_access` for a
+    // refresh token.
+    // A registration without `scope` is wrong: it can get an *empty* default,
+    // which is a token with no JMAP access.
+    // A registration with all advertised scopes is also wrong: the registered
+    // set becomes the RFC 6749 §3.3 default. A server rejected a default with provider extras
+    // (Fastmail's MCP scope, OpenID Connect identity scopes) with
+    // `error=invalid_scope` at the authorization endpoint (seen live 2026-08-23).
+    // If a deployment advertises no scopes (the pure RFC 8620 case,
+    // `scopes_supported` absent), no `scope` is sent and all access is implicit.
     const REQUESTED_SCOPES: [&str; 4] = [
         "urn:ietf:params:oauth:scope:mail",
         "urn:ietf:params:oauth:scope:contacts",
@@ -224,20 +222,18 @@ pub fn discover_and_register(
     })
 }
 
-/// The RFC 8707 `resource` indicator for this deployment: the URL its JMAP
-/// session resource actually lives at, found by asking `.well-known/jmap`
-/// unauthenticated and taking the URL that answers (redirects followed) —
-/// a 401/403 answers the question as well as a 200 does, since only the
-/// location matters here, not the content.
+/// Returns the RFC 8707 `resource` indicator for this deployment: the URL of
+/// its JMAP session resource. The probe sends an unauthenticated request to
+/// `.well-known/jmap` and takes the URL that answers (after redirects). Only
+/// the location is important, not the content, so a 401/403 is as good as a 200.
 ///
-/// That definition is not guessed: a deployment that publishes RFC 9728
-/// protected-resource metadata names the same URL as its canonical
-/// `resource` — verified live against Fastmail 2026-08-23, whose session's
-/// 401 carries `WWW-Authenticate: Bearer resource_metadata="…"` naming
-/// metadata with `"resource": "https://api.fastmail.com/jmap/session"`,
-/// exactly the URL this probe lands on. `None` (network failure) omits the
-/// parameter, which is the pre-RFC 8707 behaviour a deployment that never
-/// heard of resource indicators expects.
+/// This definition is not a guess. A deployment that publishes RFC 9728
+/// protected-resource metadata gives the same URL as its canonical `resource`.
+/// A live test against Fastmail (2026-08-23) showed this: the session's 401
+/// has `WWW-Authenticate: Bearer resource_metadata="…"`, and that metadata has
+/// `"resource": "https://api.fastmail.com/jmap/session"`, which is the probe URL.
+/// `None` (network failure, or a status other than 200/401/403) omits the
+/// parameter. That is the pre-RFC 8707 behaviour that older deployments expect.
 fn probe_resource(
     transport: &dyn Transport,
     issuer: &str,
@@ -282,9 +278,9 @@ mod tests {
 
     use super::{Error, probe_resource};
 
-    /// A [`Transport`] that always answers the same way, for driving
-    /// `probe_resource` into branches `jmap-mock` cannot: a transport failure,
-    /// or a status outside the 200/401/403 set it treats as a match.
+    /// A [`Transport`] that always gives the same answer. It tests branches of
+    /// `probe_resource` that `jmap-mock` cannot reach: a transport failure, or a
+    /// status outside the 200/401/403 set that counts as a match.
     enum Fixed {
         Fails,
         Answers {
@@ -331,7 +327,7 @@ mod tests {
     fn cancellation_reads_back_as_g_io_error_cancelled() {
         let error = Error::Client(jmap_client::Error::Cancelled).to_gerror();
         assert!(!error.is_null());
-        // SAFETY: a freshly allocated GError this test owns.
+        // SAFETY: this test owns this newly allocated GError.
         unsafe {
             assert_eq!((*error).domain, gio_sys::g_io_error_quark());
             assert_eq!((*error).code, gio_sys::G_IO_ERROR_CANCELLED);
@@ -374,7 +370,7 @@ mod tests {
             let message = err.to_string();
             let error = err.to_gerror();
             assert!(!error.is_null());
-            // SAFETY: a freshly allocated GError this test owns.
+            // SAFETY: this test owns this newly allocated GError.
             unsafe {
                 assert_eq!((*error).domain, gio_sys::g_io_error_quark());
                 assert_eq!((*error).code, gio_sys::G_IO_ERROR_FAILED);

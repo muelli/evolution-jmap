@@ -15,16 +15,16 @@ workspace = true
 
 [lib]
 name = "jmap_config_module"
-# cdylib and nothing else, which is the point of the crate. See src/lib.rs.
+# Only a cdylib, which is the purpose of the crate. See src/lib.rs.
 crate-type = ["cdylib"]
 
 [dependencies]
 jmap-config = { workspace = true }
-# The UI features (vacation page, scheduled send, snooze) ride in the same
-# module: e_module_load below calls both crates' load. See jmap_ui::module.
+# The UI features (vacation page, scheduled send, snooze) are in the same
+# module: e_module_load calls the load of both crates. See jmap_ui::module.
 jmap-ui = { workspace = true }
 gobject-sys = { workspace = true }
-# Metadata-only, for this crate's own build.rs. Not called from any Rust
-# code here. It must be a direct, non-build dependency so Cargo sets
+# Only for its metadata, for the build.rs of this crate. No Rust code here
+# calls it. It must be a direct, non-build dependency, so that Cargo sets
 # `DEP_EVOLUTION_SHELL_LIBDIRS` from its `links` key. See build.rs.
 evo-sys = { workspace = true }

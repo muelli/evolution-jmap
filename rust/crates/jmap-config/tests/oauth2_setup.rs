@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `oauth2_setup::discover_and_register` against `jmap-mock` — the same
-//! fixtures `jmap-client`'s own `oauth_discovery.rs` drives, one layer up:
-//! this crate's job is turning what those calls answer into a
-//! `jmap_config::oauth2::Config`, and refusing to when a deployment cannot
-//! back one.
+//! Tests `oauth2_setup::discover_and_register` against `jmap-mock`. The
+//! fixtures are the same as in `oauth_discovery.rs` of `jmap-client`, one layer
+//! up. This crate changes the responses of those calls into a
+//! `jmap_config::oauth2::Config`. It refuses when a deployment cannot supply
+//! one.
 
 use jmap_client::transport::UreqTransport;
 use jmap_config::oauth2_setup::{Error, discover_and_register};
@@ -26,9 +26,9 @@ fn metadata(origin: &str) -> serde_json::Value {
     })
 }
 
-/// `MockServer::origin()` is `http://127.0.0.1:<port>`; discovery needs a
-/// bare host and port, since [`discover_and_register`] builds the issuer
-/// itself the same way every other JMAP connection in this project does.
+/// `MockServer::origin()` is `http://127.0.0.1:<port>`. Discovery needs a bare
+/// host and port, because [`discover_and_register`] builds the issuer itself,
+/// as all other JMAP connections in this project do.
 fn host_and_port(server: &MockServer) -> (&str, u16) {
     let (host, port) = server
         .origin()
@@ -120,18 +120,20 @@ fn a_server_issuing_a_secret_anyway_has_it_carried_into_the_config() {
 
 #[test]
 fn registration_asks_for_the_scopes_this_client_uses_and_no_others() {
-    // Two real-deployment lessons (Fastmail):
-    // a registration naming no `scope` is issued an *empty* default, which
-    // RFC 6749 §3.3 lets a scope-less authorization request fall back to — a
-    // token with no JMAP access at all. And a registration naming *every*
-    // advertised scope inherits a default the user cannot be asked to
-    // consent to: Fastmail's authorization endpoint answered
-    // `error=invalid_scope` for a registered set including its MCP and
-    // OpenID Connect scopes (observed live 2026-08-23). So: exactly the
-    // scopes this client uses — the JMAP data scopes plus `offline_access`
-    // for a refresh token — from those the deployment advertises, and the
-    // same string is carried into `Config::scope` for the authorization
-    // request to name explicitly.
+    // Two lessons from a real deployment (Fastmail):
+    //
+    // - A registration with no `scope` gets an *empty* default. RFC 6749 §3.3
+    //   lets an authorization request with no scope use that default. The
+    //   result is a token with no JMAP access.
+    // - A registration with *all* advertised scopes gets a default that the
+    //   user cannot consent to. The authorization endpoint of Fastmail sent
+    //   `error=invalid_scope` for a registered set with its MCP and OpenID
+    //   Connect scopes (observed live 2026-08-23).
+    //
+    // Thus the registration asks for only the advertised scopes that this
+    // client uses: the JMAP data scopes, plus `offline_access` for a refresh
+    // token. `Config::scope` gets the same string, and the authorization
+    // request names it explicitly.
     let server = MockServer::builder()
         .oauth_authorization_server(|origin| {
             let mut document = metadata(origin);
@@ -185,9 +187,9 @@ fn registration_asks_for_the_scopes_this_client_uses_and_no_others() {
 
 #[test]
 fn registration_names_no_scope_when_the_deployment_advertises_none() {
-    // `metadata()` publishes no `scopes_supported` — the pure RFC 8620
-    // deployment this crate has always supported — and that must keep
-    // sending no `scope` at all, not an empty string.
+    // `metadata()` publishes no `scopes_supported` (the pure RFC 8620
+    // deployment that this crate always supports). For it, the registration
+    // must send no `scope` field, not an empty string.
     let server = MockServer::builder()
         .oauth_authorization_server(metadata)
         .oauth_client_registration(|request| {
@@ -288,10 +290,10 @@ fn a_deployment_with_no_registration_endpoint_is_refused() {
 
 #[test]
 fn an_insecure_non_loopback_host_is_refused_before_any_network_call() {
-    // The same TLS rule every other JMAP connection in this project is held
-    // to (`jmap_backend_core::source::origin`); a JMAP mock always runs
-    // plaintext, so the host is deliberately not the mock's own loopback
-    // address here.
+    // The same TLS rule as for all other JMAP connections in this project
+    // (`jmap_backend_core::source::origin`). A JMAP mock always uses
+    // plaintext, thus this host is deliberately not the loopback address of
+    // the mock.
     let error = discover_and_register(
         &UreqTransport::default(),
         "jmap.example.com",

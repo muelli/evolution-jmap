@@ -1,85 +1,80 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `EMailConfigServiceBackend` subclass — the object Evolution's account
-//! editor talks to.
+//! The `EMailConfigServiceBackend` subclass: the object that the account editor
+//! of Evolution uses.
 //!
-//! Evolution's *Receiving Email* page is an `EExtensible`, and every mail
-//! provider that wants a say in account setup registers an `EExtension` of
-//! this class against it. The page instantiates one per registered backend,
-//! matches each one's [`backend_name`][name] against the Camel providers it
-//! knows, and puts the ones that match in the provider combo. From then on
-//! everything the setup does — what an account starts as, which widgets the
-//! server page shows, whether *Next* is sensitive, what a commit writes — is a
-//! vfunc on this class.
+//! The *Receiving Email* page of Evolution is an `EExtensible`. Each mail
+//! provider that has a part in account setup registers an `EExtension` of this
+//! class against it. The page makes one instance per registered backend. It
+//! compares the [`backend_name`][name] of each with the Camel providers it
+//! knows, and puts the matches in the provider combo. After that, each step of
+//! the setup is a vfunc on this class: the initial account, the widgets of the
+//! server page, the sensitivity of *Next*, and the data that a commit writes.
 //!
 //! [name]: crate::mail::MAIL_BACKEND_NAME
 //!
-//! The rest of this crate exists so that this file can stay thin. Each vfunc
-//! body is a decision that was made, and tested, over a plain `ESource` in
-//! [`account`](crate::account), [`mail`](crate::mail),
-//! [`defaults`](crate::defaults) or [`complete`](crate::complete); what is
-//! here is the GObject the decisions are reached through.
+//! The other modules of this crate keep this file thin. Each vfunc body uses a
+//! decision that [`account`](crate::account), [`mail`](crate::mail),
+//! [`defaults`](crate::defaults) or [`complete`](crate::complete) makes, and
+//! tests, over a plain `ESource`. This file is the GObject that calls them.
 //!
 //! ## What is installed, and what is deliberately left inherited
 //!
-//! - **`backend_name`** — not a vfunc but the field the page *finds* this
-//!   backend by. Left NULL it is not an error: it is a JMAP entry that never
-//!   appears in the account type list.
-//! - **`new_collection`** — see `new_collection` below. Evolution's own answers
-//!   NULL, which is right for POP3 and wrong for anything that fans out.
-//! - **`setup_defaults`** — see `setup_defaults` below. Evolution's own is an
-//!   empty function (read off the installed library, not assumed), which is a
-//!   server settings page that opens blank over an address the assistant
-//!   already knows.
-//! - **`check_complete`** — see `check_complete` below. Evolution's own is
-//!   `return TRUE` (read off the installed library, not assumed), which is an
-//!   assistant whose *Next* is sensitive over an account with no address and no
-//!   server.
-//! - **`commit_changes`** — see `commit_changes` below. Evolution's own does
-//!   nothing, which is right for every provider whose server was typed on this
-//!   page and wrong for one whose server is on the account: it leaves the mail
-//!   source naming a protocol and no host.
-//! - **`insert_widgets`** — see `insert_widgets` below. Evolution's own is an
-//!   empty function, which is a server settings page with nothing on it to
-//!   correct a wrong offer with.
-//! - **`get_selectable`** is left alone on purpose. Its default answers "yes,
-//!   unless this provider is both a store and a transport, in which case only
-//!   on the receiving page" — and the JMAP provider *is* both
-//!   ([`jmap_mail`'s `PROTOCOL`][protocol] registers a store and a transport
-//!   type), so the inherited answer is already the correct one. Overriding it
-//!   with an unconditional `TRUE` would offer JMAP a second time in the
-//!   *Sending Email* combo, as an account type the user can pick and then not
-//!   configure.
+//! - **`backend_name`**: not a vfunc, but the field that the page *finds* this
+//!   backend by. If it is NULL, there is no error, but JMAP never appears in
+//!   the account type list.
+//! - **`new_collection`**: see `new_collection` below. The Evolution default
+//!   returns NULL. That is correct for POP3 and wrong for a provider with
+//!   child sources.
+//! - **`setup_defaults`**: see `setup_defaults` below. The Evolution default is
+//!   an empty function (read from the installed library, not assumed). With it,
+//!   the server settings page opens empty, although the assistant knows the
+//!   address.
+//! - **`check_complete`**: see `check_complete` below. The Evolution default is
+//!   `return TRUE` (read from the installed library, not assumed). With it,
+//!   *Next* is sensitive for an account with no address and no server.
+//! - **`commit_changes`**: see `commit_changes` below. The Evolution default
+//!   does nothing. That is correct for a provider whose server the user types
+//!   on this page. It is wrong for a provider whose server is on the account:
+//!   the mail source then has a protocol and no host.
+//! - **`insert_widgets`**: see `insert_widgets` below. The Evolution default is
+//!   an empty function. With it, the server settings page has no widgets to
+//!   correct a wrong offer.
+//! - **`get_selectable`** is deliberately not overridden. The default returns
+//!   "yes, but only on the receiving page if this provider is both a store and
+//!   a transport". The JMAP provider *is* both
+//!   ([`jmap_mail`'s `PROTOCOL`][protocol] registers a store type and a
+//!   transport type), thus the inherited answer is correct. An unconditional
+//!   `TRUE` would show JMAP again in the *Sending Email* combo, as an account
+//!   type that the user can select but not configure.
 //!
 //! [protocol]: ../../jmap_mail/provider/constant.PROTOCOL.html
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets` now builds every field
-//! [`Connection`](jmap_collection_sync::child_source::Connection) carries —
-//! the server, the port, the login name, the authentication method and
-//! whether the connection is encrypted — bound to the collection the same way
-//! `check_complete` and `commit_changes` already read and write it, plus a
-//! status label showing [`Incomplete`](crate::complete::Incomplete)'s refusal
-//! reason (empty, and hidden, once the account is one a commit would accept).
-//! What is still missing is only **the consent browser round trip.** The
-//! authentication combo lets a user *say* an account is OAuth 2.0; it does not
-//! by itself prove EDS's `ECredentialsPrompterImplOAuth2` reaches a real
-//! provider and back for this project's registered client. That needs a
-//! human and a real deployment, the same gap
-//! [`config_lookup`](crate::config_lookup)'s own docs name for its half of
-//! OAuth 2.0 setup.
+//! `insert_widgets` builds each field that
+//! [`Connection`](jmap_collection_sync::child_source::Connection) contains: the
+//! server, the port, the login name, the authentication method and the
+//! encryption setting. Each widget is bound to the collection that
+//! `check_complete` and `commit_changes` read and write. A status label shows
+//! the refusal reason of [`Incomplete`](crate::complete::Incomplete) (empty and
+//! hidden when a commit accepts the account).
+//! Only **the consent browser round trip** is missing. The authentication combo
+//! lets a user *select* OAuth 2.0 for an account. It does not prove that the
+//! `ECredentialsPrompterImplOAuth2` of EDS reaches a real provider and returns
+//! for the registered client of this project. That test needs a human and a
+//! real deployment. The docs of [`config_lookup`](crate::config_lookup) identify
+//! the same gap for their part of the OAuth 2.0 setup.
 //!
-//! ## The state this leaves the dialog in, said plainly
+//! ## The resulting state of the dialog
 //!
-//! An account whose address the assistant already knows arrives on the server
-//! settings page filled in — the address, the server its domain implies and
-//! the login name it offers — and now carries three entries, an
-//! authentication-method combo and a check button to correct any of those
-//! from, bound live to the account `check_complete` and `commit_changes` both
-//! read, and a label underneath that says why *Next* refuses to light up when
-//! it does.
+//! For an account whose address the assistant knows, the server settings page
+//! opens with data: the address, the server that its domain implies, and the
+//! offered login name. The page has three entries, an authentication-method
+//! combo and a check button to correct these values. They are bound live to
+//! the account that `check_complete` and `commit_changes` read. A label below
+//! them tells why *Next* is not sensitive, when it is not.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -128,45 +123,44 @@ use crate::mail::{MAIL_BACKEND_NAME, apply_server};
 /// The JMAP account setup backend.
 #[repr(C)]
 pub struct JmapConfigServiceBackend {
-    /// Evolution's; never read by this code, only handed back as the instance
-    /// pointer it gave us.
+    /// Owned by Evolution. This code never reads it; it only returns it as the
+    /// instance pointer.
     parent: EMailConfigServiceBackend,
 }
 
-/// The class struct. Nothing of ours lives in it; it exists because GObject
-/// needs a size to allocate and a place to put the name and the vfunc slots.
+/// The class struct. It has no fields of this crate. GObject needs it for the
+/// allocation size, the name and the vfunc slots.
 #[repr(C)]
 pub struct JmapConfigServiceBackendClass {
     pub parent_class: EMailConfigServiceBackendClass,
 }
 
 impl JmapConfigServiceBackend {
-    /// An instance outside the GObject type system: zeroed parent bytes, which
-    /// is what `instance_init` leaves behind minus the GObject.
+    /// An instance outside the GObject type system: zeroed parent bytes, as
+    /// `instance_init` leaves them, but with no GObject.
     ///
-    /// As in [`jmap-backend-collection`][detached], this exists because a real
-    /// instance cannot be built here. Evolution's `constructed` extends an
-    /// `EMailConfigServicePage`, which is a `GtkWidget` and so needs a display
-    /// this VM does not have. Nothing may be touched through the result: the
-    /// parent bytes are a valid bit pattern but they are not a GObject, so
-    /// passing one to any Evolution function is undefined behaviour.
+    /// As in [`jmap-backend-collection`][detached], a real instance is not
+    /// possible here. The `constructed` of Evolution extends an
+    /// `EMailConfigServicePage`, which is a `GtkWidget` and needs a display.
+    /// This VM has no display. Do not use the result for anything: the parent
+    /// bytes are a valid bit pattern but not a GObject. Thus, to give it to an
+    /// Evolution function is undefined behaviour.
     ///
-    /// It is sound for exactly one of this class's vfuncs — `new_collection`,
-    /// whose answer is a function of nothing at all — and that is the one
-    /// `tests/backend.rs` drives with it.
+    /// It is sound for only one vfunc of this class: `new_collection`, whose
+    /// answer depends on no input. `tests/backend.rs` uses it for that vfunc.
     ///
     /// [detached]: ../../jmap_backend_collection/backend/struct.JmapCollectionBackend.html#method.detached
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, for
-        // which all-zero is a valid value.
+        // SAFETY: each field of the parent is a pointer or an integer, and
+        // all-zero is a valid value for these.
         unsafe { zeroed_box() }
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the
-// EMailConfigServiceBackend instance and class structs respectively, and
-// EMailConfigServiceBackend derives from GObject (via EExtension).
+// SAFETY: both structs are #[repr(C)] and start with the
+// EMailConfigServiceBackend instance struct and class struct respectively, and
+// EMailConfigServiceBackend derives from GObject (through EExtension).
 unsafe impl ObjectSubclass for JmapConfigServiceBackend {
     const NAME: &'static CStr = c"EMailConfigServiceBackendJmap";
     type Instance = JmapConfigServiceBackend;
@@ -178,15 +172,15 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; both fields below are in that half.
+        // SAFETY: `class` points to a newly allocated class struct of this
+        // crate, which starts with the parent's; both fields below are in it.
         let class = unsafe { &mut (*class).parent_class };
-        // The one field that is not a function, and the one the page reads
-        // before it calls anything: it is `strcmp`ed against each Camel
-        // provider's protocol, so it has to be *the provider's* spelling and
-        // not a description. A `'static` pointer, which is what the field
-        // means — Evolution keeps the class for the life of the process and
-        // never frees this.
+        // The only field that is not a function, and the page reads it before
+        // it calls a vfunc. The page compares it (`strcmp`) with the protocol of
+        // each Camel provider, thus it must be *the provider's* spelling, not a
+        // description. It is a `'static` pointer, as the field requires:
+        // Evolution keeps the class for the life of the process and never
+        // frees this.
         class.backend_name = MAIL_BACKEND_NAME.as_ptr();
         class.new_collection = Some(new_collection);
         class.insert_widgets = Some(insert_widgets);
@@ -197,28 +191,28 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
     }
 }
 
-/// What the assistant's "Look Up Account Details" dispatches to on every
-/// registered backend after the `EConfigLookup` workers finish:
-/// `e_mail_config_service_page_auto_configure` polls each backend's answer and
-/// selects the lowest-priority TRUE as the page's active provider.
+/// The vfunc that "Look Up Account Details" of the assistant calls on each
+/// registered backend after the `EConfigLookup` workers finish.
+/// `e_mail_config_service_page_auto_configure` gets the answer of each backend
+/// and selects the lowest-priority TRUE as the active provider of the page.
 ///
-/// The parent's implementation answers FALSE unconditionally, so without this
-/// override the wizard can never offer JMAP no matter what
-/// [`config_lookup`](crate::config_lookup)'s worker discovered — observed live
-/// against Fastmail (2026-08-23): SRV, RFC 8414 discovery, and RFC 7591
-/// registration all succeeded, the COLLECTION result was added and complete,
-/// and the combo still showed only imapx/smtp.
+/// The parent implementation always returns FALSE. Without this override, the
+/// wizard never offers JMAP, whatever the worker of
+/// [`config_lookup`](crate::config_lookup) found. Live test against Fastmail
+/// (2026-08-23): SRV, RFC 8414 discovery and RFC 7591 registration were all
+/// successful, the COLLECTION result was added and complete, but the combo
+/// showed only imapx/smtp.
 ///
-/// The body is the same one-liner `evolution-ews` uses
-/// (`mail_config_ews_backend_auto_configure`): hand Evolution's own
-/// `auto_configure_for_kind` helper the COLLECTION kind, a NULL protocol (the
-/// helper then matches results against `class.backend_name` — "jmap", exactly
-/// what the worker's results carry), and the backend's collection source for
-/// the winning result to be written onto.
+/// The body is the same one-line call as in `evolution-ews`
+/// (`mail_config_ews_backend_auto_configure`). It gives the
+/// `auto_configure_for_kind` helper of Evolution the COLLECTION kind, a NULL
+/// protocol and the collection source of the backend. With a NULL protocol,
+/// the helper compares the results with `class.backend_name` ("jmap", the value
+/// in the worker's results). The helper writes the winning result onto the
+/// collection source.
 ///
-/// FALSE on a panic — the safe direction: the assistant falls back to
-/// whatever another backend offered rather than trusting a half-applied
-/// configuration.
+/// FALSE on a panic, which is the safe direction: the assistant uses the offer
+/// of a different backend and not a partly applied configuration.
 unsafe extern "C" fn auto_configure(
     backend: *mut EMailConfigServiceBackend,
     config_lookup: *mut EConfigLookup,
@@ -242,66 +236,62 @@ unsafe extern "C" fn auto_configure(
     )
 }
 
-/// What Evolution calls once, from `constructed`, to find out what an account
-/// of this type *is* — and, for a groupware provider, the source everything
-/// else about the account hangs off.
+/// Evolution calls this once, from `constructed`, to learn what an account of
+/// this type *is*. For a groupware provider, the answer is also the source
+/// that all other parts of the account attach to.
 ///
-/// The answer is `(transfer full)`: Evolution stores it as the backend's
-/// `collection` property and drops the reference with the backend. For an
-/// account being *edited* rather than created it is thrown away again
-/// immediately, because the page overrides the property with the existing
-/// account's own source; this is only ever the new-account case.
+/// The answer is `(transfer full)`. Evolution keeps it as the `collection`
+/// property of the backend and releases the reference with the backend. When
+/// the user *edits* an account, Evolution discards it immediately: the page
+/// replaces the property with the source of the existing account. Thus this
+/// applies only to a new account.
 ///
-/// ## Why the whole default account and not just the backend name
+/// ## Why the full default account and not only the backend name
 ///
-/// evolution-ews writes one property here — the collection backend name — and
-/// leaves the rest to `setup_defaults`. This writes the whole of
+/// evolution-ews writes one property here (the collection backend name) and
+/// lets `setup_defaults` write the rest. This function writes all of
 /// [`from_identity("")`](crate::defaults::from_identity): the same account,
-/// with the one field that needs an address left empty.
+/// but with an empty value in the one field that needs an address.
 ///
-/// The reason is that `setup_defaults` is not guaranteed to have run by the
-/// time anything reads this source, and the fields it would fill are not
-/// neutral when absent. `[Collection] MailEnabled` and its two siblings are
-/// *false* when unwritten, so a collection carrying only a backend name reads
-/// back — through the registry's own reader, which is what
-/// `tests/backend.rs` checks it with — as a JMAP account with mail, contacts
-/// and calendars all switched off. That is not the account the user asked for
-/// and it is not what the dialog shows; it is a difference that would only
-/// surface as an account with no children.
+/// The reason: `setup_defaults` possibly has not run when something reads this
+/// source, and a missing field is not neutral. `[Collection] MailEnabled` and
+/// its two related keys are *false* when not written. A collection with only a
+/// backend name thus reads back as a JMAP account with mail, contacts and
+/// calendars all off. `tests/backend.rs` checks this through the reader of the
+/// registry. The user did not ask for that account and the dialog does not
+/// show it. The only symptom is an account with no children.
 ///
-/// So the source is, from the moment it exists, the account the dialog starts
-/// from: all three parts on, TLS on, and nobody and nowhere named yet.
-/// `setup_defaults` will narrow it to the address the user typed, and until it
-/// exists, [`complete::check`](crate::complete::check) refuses this account for
-/// exactly the field that is missing.
+/// Thus, from its creation, the source is the initial account of the dialog:
+/// all three parts on, TLS on, and no user or server yet.
+/// `setup_defaults` narrows it to the address that the user typed. Until then,
+/// [`complete::check`](crate::complete::check) refuses this account for
+/// the missing field.
 ///
 /// ## Failure
 ///
-/// NULL, which is what Evolution's own implementation returns and what it
-/// therefore handles — the backend simply has no collection. It is a bad
-/// outcome (an account committed as a lone mail source), but the vfunc has no
-/// `GError` and no other way to say so, so both paths that can reach it leave a
-/// critical behind: a panic, caught by the guard, and an `e_source_new` that
-/// failed.
+/// NULL. The Evolution default returns NULL and thus Evolution handles it: the
+/// backend has no collection. The result is bad (an account committed as a
+/// mail source only), but the vfunc has no `GError` and no other way to tell
+/// this. Thus both paths to NULL log a critical: a panic, which the guard
+/// catches, and a failed `e_source_new`.
 unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> *mut ESource {
-    // Not read: unlike EWS's, this implementation takes the backend name from
-    // the constant the class was initialised from rather than from
-    // `GET_CLASS (backend)->backend_name`, which is what lets it be driven
-    // without an instance. The two are the same string, asserted in
-    // `tests/backend.rs`.
+    // Not read. Unlike EWS, this implementation takes the backend name from the
+    // constant that initialised the class, not from
+    // `GET_CLASS (backend)->backend_name`. Thus a test can call it without an
+    // instance. `tests/backend.rs` asserts that the two strings are equal.
     let _ = backend;
 
     guard("new_collection", ptr::null_mut(), || {
         let mut error = ptr::null_mut();
-        // A scratch source: no D-Bus object, so it is a local `ESource` with a
-        // generated uid, which is what Evolution's account editor works on
-        // until the registry is asked to create the real one.
-        // SAFETY: the documented arguments — a NULL `GDBusObject`, the default
+        // A scratch source with no D-Bus object: a local `ESource` with a
+        // generated uid. The account editor of Evolution uses it until the
+        // registry creates the real source.
+        // SAFETY: the documented arguments: a NULL `GDBusObject`, the default
         // main context, and a `GError` out-parameter.
         let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
         if source.is_null() {
-            // SAFETY: the out-parameter of a call that just failed, so it is
-            // NULL or a `GError` this caller owns; consumed exactly once.
+            // SAFETY: the out-parameter of a call that failed, thus it is NULL
+            // or a `GError` that this caller owns; it is consumed only once.
             let reason = unsafe { take_message(error) };
             log_critical(&format!(
                 "new_collection: could not create the account source: {reason}"
@@ -309,75 +299,77 @@ unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> 
             return ptr::null_mut();
         }
 
-        // SAFETY: the source was just created and nothing else holds it.
+        // SAFETY: the source is new and nothing else holds it.
         unsafe { apply(source, &from_identity("")) };
         source
     })
 }
 
-/// Whether an [`ENTRY_ROWS`] row is bound straight through or needs a
-/// transform first.
+/// Tells if an [`ENTRY_ROWS`] row is bound directly or through a transform.
 ///
-/// [`Text`](RowKind::Text) covers `host` and `user`: both the entry's `text`
-/// and the `ESourceAuthentication` property are strings, so
-/// [`e_binding_bind_property`] joins them with no transform function at all.
-/// `port` is the one row that is not — a `GtkEntry` has no integer property to
-/// bind a `guint16` to — so it is its own case, bound with
-/// [`e_binding_bind_property_full`] and [`port_to_text`]/[`text_to_port`].
+/// [`Text`](RowKind::Text) is for `host` and `user`: the `text` of the entry
+/// and the `ESourceAuthentication` property are both strings, thus
+/// [`e_binding_bind_property`] binds them with no transform function.
+/// `port` is different: a `GtkEntry` has no integer property for a `guint16`.
+/// Thus it uses [`e_binding_bind_property_full`] with
+/// [`port_to_text`]/[`text_to_port`].
 enum RowKind {
     Text,
     Port,
 }
 
-/// The `[Authentication]` fields this dialog lets the user correct, in the
-/// order they appear on the page: the mnemonic label's translatable text
-/// (marked with [`N_`], looked up with [`translate`] since a `GtkLabel`
-/// copies the string GTK's own way and there is no per-call pointer to keep
-/// alive as [`i18n::translate_static`](jmap_backend_core::i18n::translate_static)
-/// exists for), the `ESourceAuthentication` property the entry is bound to,
-/// and how that binding is made.
+/// The `[Authentication]` fields that the user can correct in this dialog, in
+/// page order. Each row has:
+///
+/// - the translatable text of the mnemonic label (marked with [`N_`] and
+///   looked up with [`translate`]: a `GtkLabel` copies the string, thus no
+///   per-call pointer must stay alive, which is the purpose of
+///   [`i18n::translate_static`](jmap_backend_core::i18n::translate_static)),
+/// - the `ESourceAuthentication` property that the entry is bound to,
+/// - the type of binding.
 const ENTRY_ROWS: [(&CStr, &CStr, RowKind); 3] = [
     (N_(c"_Server:"), c"host", RowKind::Text),
     (N_(c"_Port:"), c"port", RowKind::Port),
     (N_(c"_Username:"), c"user", RowKind::Text),
 ];
 
-/// The mnemonic label of the security check button — its own constant rather
-/// than a fourth [`ENTRY_ROWS`] entry, since it is a single check button and
-/// not a label-and-entry pair, and binds to `[Security]`, not
-/// `[Authentication]`.
+/// The mnemonic label of the security check button. It is not a fourth
+/// [`ENTRY_ROWS`] row: it is one check button, not a label and an entry, and
+/// it binds to `[Security]`, not `[Authentication]`.
 const SECURE_LABEL: &CStr = N_(c"Use a _secure connection (TLS)");
 
-/// The mnemonic label of the authentication-method combo — its own constant
-/// for the same reason [`SECURE_LABEL`] is one: a single combo, not a
-/// label-and-entry pair.
+/// The mnemonic label of the authentication-method combo. It is a separate
+/// constant for the same reason as [`SECURE_LABEL`]: one combo, not a label
+/// and an entry.
 const AUTH_LABEL: &CStr = N_(c"A_uthentication:");
 
-/// The combo's entries: the id [`insert_entries`] writes to
-/// `ESourceAuthentication:method` paired with the translatable text the combo
+/// The combo entries: each id that [`insert_entries`] writes to
+/// `ESourceAuthentication:method`, with the translatable text that the combo
 /// shows for it.
 ///
-/// All three ids are load-bearing elsewhere, not chosen for this dialog:
-/// `"none"` is `ESourceAuthentication:method`'s own default and the one
-/// `crate::account`'s own doc pins as "ask for a password the ordinary way";
-/// [`OAUTH2_AUTH_METHOD`] is the exact string
-/// `EOAuth2Service::can_process`'s default implementation compares `method`
-/// against (see that constant's own doc): the only spelling of "use OAuth 2.0"
-/// `e_source_get_oauth2_access_token_sync` will actually honour for this
-/// account, as opposed to the generic `"OAuth2"` alias
-/// [`jmap_backend_core::oauth2::method_is_oauth2`] also accepts but
-/// `can_process` does not; and
-/// [`jmap_backend_core::api_token::API_TOKEN_METHOD`] is what
-/// `connect_with`'s third branch checks for, a spelling that matters only to
-/// this project's own connect paths since nothing outside it registers a
-/// service by that name. `"OAuth 2.0"` is the manual counterpart to
-/// [`config_lookup`](crate::config_lookup)'s automatic discovery: a user who
-/// skips or fails "Look Up Account Details" still has a way to say a server
-/// is OAuth 2.0, and one who used it sees here what it chose. **"API Token"**
-/// is for a provider that authenticates over Bearer but has no OAuth 2.0
-/// consent flow to discover — Fastmail's JMAP API is the concrete case, and
-/// the token is typed into the same password prompt Basic uses (see
-/// [`jmap_backend_core::api_token`]'s module docs for why).
+/// Other code needs each of the three ids; this dialog did not select them:
+///
+/// - `"none"` is the default of `ESourceAuthentication:method`. The doc of
+///   `crate::account` defines it as "ask for a password the ordinary way".
+/// - [`OAUTH2_AUTH_METHOD`] is the exact string that the default
+///   implementation of `EOAuth2Service::can_process` compares `method` with
+///   (see the doc of that constant). It is the only spelling of "use OAuth 2.0"
+///   that `e_source_get_oauth2_access_token_sync` accepts for this account.
+///   [`jmap_backend_core::oauth2::method_is_oauth2`] also accepts the generic
+///   `"OAuth2"` alias, but `can_process` does not.
+/// - [`jmap_backend_core::api_token::API_TOKEN_METHOD`] is the value that the
+///   third branch of `connect_with` looks for. Only the connect paths of this
+///   project use this spelling: no other code registers a service with that
+///   name.
+///
+/// `"OAuth 2.0"` is the manual alternative to the automatic discovery of
+/// [`config_lookup`](crate::config_lookup). A user who skips "Look Up Account
+/// Details", or for whom it fails, can still select OAuth 2.0 for a server. A
+/// user who used it sees its result here. **"API Token"** is for a provider
+/// that uses Bearer authentication but has no OAuth 2.0 consent flow to
+/// discover. The JMAP API of Fastmail is an example. The user types the token
+/// into the same password prompt that Basic uses (the module docs of
+/// [`jmap_backend_core::api_token`] tell why).
 const AUTH_CHOICES: [(&CStr, &CStr); 3] = [
     (c"none", N_(c"Password")),
     (OAUTH2_AUTH_METHOD, N_(c"OAuth 2.0")),
@@ -387,85 +379,82 @@ const AUTH_CHOICES: [(&CStr, &CStr); 3] = [
     ),
 ];
 
-/// The keys [`insert_entries`] stashes the status label and the collection it
-/// is computed from under, as `page`'s own qdata — see
-/// [`insert_widgets`]'s docs on why [`on_extension_changed`] needs a way to
-/// reach them that does not depend on a signal argument it is not handed.
+/// The qdata keys on `page` under which [`insert_entries`] keeps the status
+/// label and its collection. The docs of [`insert_widgets`] tell why
+/// [`on_extension_changed`] needs them: the signal does not give it these
+/// objects.
 const STATUS_LABEL_KEY: &CStr = c"jmap-config-status-label";
 const STATUS_COLLECTION_KEY: &CStr = c"jmap-config-status-collection";
 
-/// What Evolution calls when the *Receiving Email* page is built for this
-/// provider: put the entries the user corrects an account's server and login
-/// name with into `parent`.
+/// Evolution calls this when it builds the *Receiving Email* page for this
+/// provider. It puts into `parent` the entries that the user can use to
+/// correct the server and login name of an account.
 ///
 /// ## Why this binds to the collection, not to `get_settings()`
 ///
-/// Evolution's own service backends (`e-mail-config-remote-accounts.c`,
-/// upstream 3.52.3, read rather than assumed) bind their entries to
-/// `e_mail_config_service_backend_get_settings(backend)` — a `CamelSettings`
-/// of the *scratch mail source* the page is building. That is right for a
-/// provider whose server lives on that source. JMAP's does not:
+/// The service backends of Evolution (`e-mail-config-remote-accounts.c`,
+/// upstream 3.52.3, read and not assumed) bind their entries to
+/// `e_mail_config_service_backend_get_settings(backend)`: a `CamelSettings` of
+/// the *scratch mail source* that the page builds. That is correct for a
+/// provider whose server is on that source. For JMAP, it is not:
 /// [`check_complete`] and [`commit_changes`] both read and write the
-/// *collection* (see their docs for why), so an entry bound to the mail
-/// source's settings would show and edit a value neither vfunc looks at. The
-/// widgets have to be bound to the same source the rest of this class
-/// already agreed the account is.
+/// *collection* (their docs tell why). An entry bound to the settings of the
+/// mail source would show and change a value that neither vfunc reads. Thus
+/// the widgets must bind to the source that the rest of this class uses as the
+/// account.
 ///
-/// ## Why the page is told about a change by hand
+/// ## Why this function tells the page about a change
 ///
-/// The same upstream file's `mail_config_service_page_new_candidate` connects
-/// a `notify` handler on `get_settings()` that calls
-/// `e_mail_config_page_changed`, which is how the assistant's *Next* button
-/// (and the account editor's *Apply*) learns to ask [`check_complete`] again
-/// after a keystroke. That handler watches `get_settings()`, which is exactly
-/// the object this class deliberately does not bind to, so this connects its
-/// own `notify` handler on the collection's `[Authentication]` extension
-/// instead and calls `e_mail_config_page_changed` from it — the same effect,
-/// aimed at the object this dialog actually edits.
+/// In the same upstream file, `mail_config_service_page_new_candidate`
+/// connects a `notify` handler on `get_settings()` that calls
+/// `e_mail_config_page_changed`. Thus *Next* in the assistant (and *Apply* in
+/// the account editor) asks [`check_complete`] again after a keystroke. That
+/// handler monitors `get_settings()`, which is the object that this class
+/// deliberately does not bind to. Thus this function connects its own `notify`
+/// handler on the `[Authentication]` and `[Security]` extensions of the
+/// collection, and that handler calls `e_mail_config_page_changed`. The effect
+/// is the same, but on the object that this dialog changes.
 ///
-/// `g_signal_connect_object`, not a plain `g_signal_connect`: it disconnects
-/// itself the instant either the extension or `page` is finalized, which is
-/// what lets this skip a stored handler id and a `dispose` override — neither
-/// object's lifetime relative to the other has to be reasoned about for the
-/// connection to stay safe.
+/// It uses `g_signal_connect_object`, not `g_signal_connect`: the connection
+/// disconnects itself immediately when the extension or `page` is finalized.
+/// Thus no stored handler id and no `dispose` override are necessary, and the
+/// connection stays safe whatever the lifetimes of the two objects are.
 ///
-/// ## Where the status label's own refresh keeps its state
+/// ## Where the status label refresh keeps its state
 ///
-/// The same `notify` handler ([`on_extension_changed`]) is also what keeps
-/// the status label in step after the first fill: it needs the label and the
-/// collection, and it is invoked by GLib with neither — only the extension
-/// that changed and the `page` this was connected against. So both are
-/// stashed as `page`'s own qdata (`g_object_set_data`, already available from
-/// `gobject-sys` — no new FFI for it) the moment the label is built, and
-/// [`on_extension_changed`] reads them back with `g_object_get_data`. `page`
-/// is the right place to hang them: it already outlives every `notify` this
+/// The same `notify` handler ([`on_extension_changed`]) also updates the status
+/// label after the first fill. It needs the label and the collection, but GLib
+/// gives it neither: only the changed extension and the connected `page`. Thus,
+/// when this function builds the label, it keeps both pointers as qdata of
+/// `page` (`g_object_set_data`, which `gobject-sys` already has, thus no new
+/// FFI). [`on_extension_changed`] reads them back with `g_object_get_data`.
+/// `page` is the correct owner: it lives longer than each `notify` that this
 /// class connects, for the reason above.
 ///
-/// ## Untestable here, like the rest of this vfunc
+/// ## Not tested here, as the rest of this vfunc
 ///
-/// GTK 3 will not construct a widget without a display connection this
-/// machine does not have (see [`evo_sys`]'s module docs). Every call below is
-/// one `evo-sys`'s `tests/gtk.rs` and `tests/page.rs` already hold against the
-/// linked library and the types it takes; what no test here can do is run
-/// this function and see the result. It needs a real Evolution session to
-/// confirm the page actually shows three entries, an authentication combo and
-/// a check button filled with what `setup_defaults` offered, and that editing
-/// any of them toggles *Next* — M9's Xvfb tier launches Evolution but seeds a
-/// pre-built `.source` file rather than driving this page, so only a human
-/// running the account assistant exercises it. Two operator rounds in real
-/// Evolution have now confirmed exactly that.
+/// GTK 3 does not construct a widget without a display connection, and this
+/// machine has none (see the module docs of [`evo_sys`]). The `tests/gtk.rs`
+/// and `tests/page.rs` of `evo-sys` already check each call below against the
+/// linked library and its types. No test here can run this function and
+/// examine the result. A real Evolution session must confirm that the page
+/// shows three entries, an authentication combo and a check button with the
+/// values from `setup_defaults`, and that a change to each toggles *Next*. The
+/// Xvfb tier of M9 starts Evolution, but with a pre-built `.source` file and
+/// not through this page. Thus only a human who uses the account assistant
+/// tests it. Two operator rounds in real Evolution confirmed this behaviour.
 ///
 /// ## Failure
 ///
-/// Nothing: the vfunc returns void. A NULL collection ([`new_collection`]
-/// having failed, which already logged why) leaves the page with no entries
-/// at all rather than entries bound to nothing; a panic is caught by the
-/// guard and leaves the page in whatever state it reached first.
+/// None: the vfunc returns void. With a NULL collection (a failed
+/// [`new_collection`], which logged the cause), the page has no entries, not
+/// entries bound to nothing. The guard catches a panic, and the page stays in
+/// the state that it had at that time.
 unsafe extern "C" fn insert_widgets(backend: *mut EMailConfigServiceBackend, parent: *mut GtkBox) {
     guard("insert_widgets", (), || {
         // SAFETY: a live backend of this class, which is what Evolution
-        // dispatches through this slot. Both come back `(transfer none)` —
-        // the backend's own references, which outlive this call.
+        // dispatches through this slot. Both are `(transfer none)`: the
+        // backend's own references, which live longer than this call.
         let (collection, page) = unsafe {
             (
                 e_mail_config_service_backend_get_collection(backend),
@@ -476,38 +465,38 @@ unsafe extern "C" fn insert_widgets(backend: *mut EMailConfigServiceBackend, par
             return;
         }
 
-        // SAFETY: `collection` is non-NULL and a valid source, just checked;
+        // SAFETY: `collection` is non-NULL (checked above) and a valid source;
         // `page` is NULL or the backend's own live page; `parent` is the
-        // `GtkBox` Evolution handed this vfunc, which is exactly what
-        // `insert_entries` documents it takes.
+        // `GtkBox` that Evolution gave this vfunc, which is the type that
+        // `insert_entries` documents.
         unsafe { insert_entries(collection, page, parent) };
     });
 }
 
-/// The half of [`insert_widgets`] that touches real objects rather than
-/// deciding whether to — see that vfunc's docs for the design this follows.
+/// The part of [`insert_widgets`] that changes real objects. The docs of that
+/// vfunc give the design.
 ///
 /// # Safety
 ///
-/// `collection` must be a valid `ESource` — the backend's collection, kept
-/// alive by the backend for at least the life of the page. `page` must be
+/// `collection` must be a valid `ESource`: the backend's collection, which the
+/// backend keeps alive for at least the life of the page. `page` must be
 /// NULL or a valid `EMailConfigServicePage`. `parent` must be a valid
-/// `GtkBox`, the container Evolution handed `insert_widgets`.
+/// `GtkBox`: the container that Evolution gave `insert_widgets`.
 unsafe fn insert_entries(
     collection: *mut ESource,
     page: *mut EMailConfigServicePage,
     parent: *mut GtkBox,
 ) {
-    // SAFETY: no arguments; registers the extension types the lookups below
-    // need, the same calls `crate::account::apply`/`read` make before every
-    // lookup of their own.
+    // SAFETY: no arguments; registers the extension types for the lookups
+    // below. `crate::account::apply`/`read` make the same calls before each
+    // of their lookups.
     unsafe {
         e_source_authentication_get_type();
         e_source_security_get_type();
     }
-    // SAFETY: `collection` is valid by this function's contract, and header
-    // constants naming extensions whose types are registered above; each
-    // extension is created on demand and owned by the source.
+    // SAFETY: `collection` is valid by the contract of this function, and the
+    // header constants name extensions whose types are registered above; the
+    // source creates each extension on demand and owns it.
     let (authentication, security) = unsafe {
         (
             e_source_get_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()),
@@ -515,11 +504,11 @@ unsafe fn insert_entries(
         )
     };
 
-    // SAFETY: no arguments; every GTK call in this function is one
-    // `evo-sys`'s `tests/gtk.rs` already resolves against the linked
-    // library and holds the types of against the running GTK.
+    // SAFETY: no arguments; `tests/gtk.rs` of `evo-sys` already resolves each
+    // GTK call in this function against the linked library and checks its
+    // types against the running GTK.
     let grid = unsafe { gtk_grid_new() };
-    // SAFETY: `grid` was just constructed above and is a `GtkGrid`.
+    // SAFETY: `grid` is newly constructed above and is a `GtkGrid`.
     unsafe {
         gtk_grid_set_row_spacing(grid.cast(), 6);
         gtk_grid_set_column_spacing(grid.cast(), 6);
@@ -527,16 +516,16 @@ unsafe fn insert_entries(
 
     for (row, (label_text, property, kind)) in ENTRY_ROWS.into_iter().enumerate() {
         let label_text = cstring_lossy(&translate(label_text));
-        // SAFETY: `label_text` outlives this call, which is all
-        // `gtk_label_new_with_mnemonic` needs — it copies the string into
-        // the label it returns.
+        // SAFETY: `label_text` lives longer than this call, which is all that
+        // `gtk_label_new_with_mnemonic` needs: it copies the string into the
+        // label that it returns.
         let label = unsafe { gtk_label_new_with_mnemonic(label_text.as_ptr()) };
-        // SAFETY: `label` was just constructed above and is a `GtkLabel`.
+        // SAFETY: `label` is newly constructed above and is a `GtkLabel`.
         unsafe { gtk_label_set_xalign(label.cast(), 1.0) };
 
         // SAFETY: no arguments.
         let entry = unsafe { gtk_entry_new() };
-        // SAFETY: `label` and `entry` were both just constructed above and
+        // SAFETY: `label` and `entry` are both newly constructed above and
         // are, respectively, a `GtkLabel` and a `GtkWidget`.
         unsafe {
             gtk_label_set_mnemonic_widget(label.cast(), entry);
@@ -545,20 +534,20 @@ unsafe fn insert_entries(
             gtk_grid_attach(grid.cast(), entry, 1, row as i32, 1, 1);
         }
 
-        // A NULL extension would make GLib refuse the binding with a
-        // critical: leave the entry unbound, as the `notify` loop below
-        // leaves it unwatched.
+        // With a NULL extension, GLib refuses the binding with a critical.
+        // Thus the entry stays unbound, as the `notify` loop below leaves it
+        // unmonitored.
         if authentication.is_null() {
             continue;
         }
-        // SAFETY: `authentication` is the collection's own extension, just
-        // checked non-NULL (created above, and owned by `collection`), and
+        // SAFETY: `authentication` is the collection's own extension, checked
+        // non-NULL above (created above, and owned by `collection`), and
         // `entry` is a live `GtkEntry` with a string `text` property; the
-        // binding this creates is `(transfer none)`, owned by the two objects
-        // it joins, and outlives this call on its own. For `RowKind::Port`
-        // the target property is `guint16`, not a string, which is exactly
-        // what `port_to_text`/`text_to_port` bridge; their own docs give the
-        // `GBindingTransformFunc` contract this satisfies.
+        // binding is `(transfer none)`, owned by the two objects that it
+        // connects, and it lives longer than this call. For `RowKind::Port`
+        // the target property is `guint16`, not a string, and
+        // `port_to_text`/`text_to_port` convert between the two; their docs
+        // give the `GBindingTransformFunc` contract that they satisfy.
         match kind {
             RowKind::Text => unsafe {
                 e_binding_bind_property(
@@ -585,28 +574,27 @@ unsafe fn insert_entries(
         }
     }
 
-    // The authentication-method combo: a label-and-widget row like the three
-    // entries above, on the row right after them, but bound by `active-id`
-    // rather than `text` — see `AUTH_CHOICES`'s own doc for what the two ids
-    // mean and why they are the whole list.
+    // The authentication-method combo: a label-and-widget row after the three
+    // entries, but bound by `active-id`, not `text`. The doc of `AUTH_CHOICES`
+    // tells what the three ids mean and why the list is complete.
     let auth_row = ENTRY_ROWS.len() as i32;
     let label_text = cstring_lossy(&translate(AUTH_LABEL));
-    // SAFETY: `label_text` outlives the call, which is all
-    // `gtk_label_new_with_mnemonic` needs — it copies the string.
+    // SAFETY: `label_text` lives longer than the call, which is all that
+    // `gtk_label_new_with_mnemonic` needs: it copies the string.
     let auth_label = unsafe { gtk_label_new_with_mnemonic(label_text.as_ptr()) };
-    // SAFETY: `auth_label` was just constructed above and is a `GtkLabel`.
+    // SAFETY: `auth_label` is newly constructed above and is a `GtkLabel`.
     unsafe { gtk_label_set_xalign(auth_label.cast(), 1.0) };
 
     // SAFETY: no arguments.
     let auth_combo = unsafe { gtk_combo_box_text_new() };
     for (id, text) in AUTH_CHOICES {
         let text = cstring_lossy(&translate(text));
-        // SAFETY: `auth_combo` was just constructed above and is a
-        // `GtkComboBoxText`; `id` is a `'static` C string and `text` outlives
-        // the call — `_append` copies both.
+        // SAFETY: `auth_combo` is newly constructed above and is a
+        // `GtkComboBoxText`; `id` is a `'static` C string and `text` lives
+        // longer than the call; `_append` copies both.
         unsafe { gtk_combo_box_text_append(auth_combo.cast(), id.as_ptr(), text.as_ptr()) };
     }
-    // SAFETY: `auth_label` and `auth_combo` were both just constructed above.
+    // SAFETY: `auth_label` and `auth_combo` are both newly constructed above.
     unsafe {
         gtk_label_set_mnemonic_widget(auth_label.cast(), auth_combo.cast());
         gtk_widget_set_hexpand(auth_combo.cast(), GTRUE);
@@ -614,11 +602,11 @@ unsafe fn insert_entries(
         gtk_grid_attach(grid.cast(), auth_combo.cast(), 1, auth_row, 1, 1);
     }
     if !authentication.is_null() {
-        // SAFETY: `authentication` is the collection's own extension, just
-        // checked non-NULL (created above, and owned by `collection`);
+        // SAFETY: `authentication` is the collection's own extension, checked
+        // non-NULL above (created above, and owned by `collection`);
         // `auth_combo` is a live `GtkComboBox` (a `GtkComboBoxText` is one) with
         // a string `active-id` property, and `AUTH_CHOICES` gave it exactly the
-        // three ids `method` can hold, so no transform is needed here either.
+        // three ids that `method` can hold, thus no transform is necessary.
         unsafe {
             e_binding_bind_property(
                 authentication,
@@ -630,20 +618,20 @@ unsafe fn insert_entries(
         }
     }
 
-    // The security toggle: one check button spanning both columns, on the row
+    // The security toggle: one check button across both columns, on the row
     // after the authentication combo.
-    // SAFETY: `label_text` outlives the call, which is all
-    // `gtk_check_button_new_with_mnemonic` needs — it copies the string.
+    // SAFETY: `label_text` lives longer than the call, which is all that
+    // `gtk_check_button_new_with_mnemonic` needs: it copies the string.
     let label_text = cstring_lossy(&translate(SECURE_LABEL));
     let check = unsafe { gtk_check_button_new_with_mnemonic(label_text.as_ptr()) };
-    // SAFETY: `check` was just constructed above and is a `GtkWidget`; `grid`
-    // is the live grid every other row was attached to.
+    // SAFETY: `check` is newly constructed above and is a `GtkWidget`; `grid`
+    // is the live grid that holds all other rows.
     unsafe { gtk_grid_attach(grid.cast(), check, 0, auth_row + 1, 2, 1) };
     if !security.is_null() {
-        // SAFETY: `security` is the collection's own extension, just checked
-        // non-NULL (created above, and owned by `collection`), and `check` is a
-        // live `GtkToggleButton` with a boolean `active` property, the same shape
-        // as `ESourceSecurity:secure`, so no transform is needed here either.
+        // SAFETY: `security` is the collection's own extension, checked
+        // non-NULL above (created above, and owned by `collection`), and `check`
+        // is a live `GtkToggleButton` with a boolean `active` property, the same
+        // type as `ESourceSecurity:secure`, thus no transform is necessary.
         unsafe {
             e_binding_bind_property(
                 security,
@@ -655,40 +643,40 @@ unsafe fn insert_entries(
         }
     }
 
-    // The status label: a single label spanning both columns, on the row
-    // after the check button. `gtk_label_new`, not `_with_mnemonic` — this
-    // text is `Incomplete`'s own and not this module's to add a keyboard
-    // shortcut to.
+    // The status label: one label across both columns, on the row after the
+    // check button. It uses `gtk_label_new`, not `_with_mnemonic`: the text
+    // comes from `Incomplete`, and this module must not add a keyboard
+    // shortcut to it.
     // SAFETY: no arguments.
     let status_label = unsafe { gtk_label_new(ptr::null()) };
-    // SAFETY: `status_label` was just constructed above and is a `GtkWidget`;
-    // `grid` is the live grid every other row was attached to.
+    // SAFETY: `status_label` is newly constructed above and is a `GtkWidget`;
+    // `grid` is the live grid that holds all other rows.
     unsafe {
         gtk_grid_attach(grid.cast(), status_label, 0, auth_row + 2, 2, 1);
     }
-    // SAFETY: `status_label` is a live `GtkLabel`, just constructed, and
-    // `collection` is a valid source by this function's contract.
+    // SAFETY: `status_label` is a live `GtkLabel`, newly constructed, and
+    // `collection` is a valid source by the contract of this function.
     unsafe { set_status_text(status_label, collection) };
 
     // SAFETY: `grid` is the live `GtkWidget` constructed above, and `parent`
-    // is a valid `GtkBox` by this function's contract.
+    // is a valid `GtkBox` by the contract of this function.
     unsafe {
         gtk_box_pack_start(parent, grid, GFALSE, GFALSE, 0);
         gtk_widget_show_all(grid);
     }
 
     if !page.is_null() {
-        // The status label's own refresh needs to reach it and the
-        // collection from `on_extension_changed`, which is handed neither —
-        // see `insert_widgets`'s docs on why they are cached as `page`'s own
-        // qdata rather than threaded through the signal.
-        // SAFETY: `page` is a valid, live GObject by this function's
-        // contract, just checked non-NULL; `status_label` and `collection`
-        // both outlive it — the label is owned by `grid`, itself now owned by
-        // `parent`, and `collection` is the backend's own reference, which
-        // outlives the page it built. Neither call transfers ownership (no
-        // `GDestroyNotify` is given): this is a cache of pointers already
-        // kept alive elsewhere, not a new reference either has to be dropped.
+        // `on_extension_changed` must refresh the status label, but it does
+        // not get the label or the collection. The docs of `insert_widgets`
+        // tell why they are kept as qdata of `page` and not passed through
+        // the signal.
+        // SAFETY: `page` is a valid, live GObject by the contract of this
+        // function, checked non-NULL above; `status_label` and `collection`
+        // both live longer than it: `grid` owns the label, `parent` now owns
+        // `grid`, and `collection` is the backend's own reference, which lives
+        // longer than the page that it built. Neither call transfers ownership
+        // (no `GDestroyNotify`): this is a cache of pointers that other owners
+        // keep alive, not a new reference that must be released.
         unsafe {
             g_object_set_data(page.cast(), STATUS_LABEL_KEY.as_ptr(), status_label.cast());
             g_object_set_data(
@@ -698,25 +686,24 @@ unsafe fn insert_entries(
             );
         }
 
-        // Both extensions get their own connection: `secure` lives on
-        // `[Security]`, not `[Authentication]`, and it changes
-        // `check_complete`'s answer exactly as much as `host` does — `origin`
+        // Each extension gets its own connection. `secure` is on `[Security]`,
+        // not `[Authentication]`, and it changes the answer of
+        // `check_complete` as much as `host` does: `origin`
         // (`jmap_backend_core::source`) refuses plaintext to a non-loopback
-        // host, so turning the toggle off can turn a complete account
-        // incomplete. One handler covers both; see its own docs.
+        // host. Thus, to clear the toggle can make a complete account
+        // incomplete. One handler is for both; see its docs.
         for extension in [authentication, security] {
             if extension.is_null() {
                 continue;
             }
             // SAFETY: `extension` is the collection's own live extension,
-            // just checked non-NULL, and `page` is a valid page by this
-            // function's contract, also just checked non-NULL. The
-            // callback's signature matches what a `notify` handler is
-            // actually invoked with (the emitting `GObject`, the changed
-            // property's `GParamSpec`, and the connection's own data
-            // pointer).
-            // `g_signal_connect_object` rather than `g_signal_connect_data`:
-            // see `insert_widgets`'s docs on why nothing here tracks the
+            // checked non-NULL above, and `page` is a valid page by the
+            // contract of this function, also checked non-NULL above. The
+            // signature of the callback matches the arguments of a `notify`
+            // handler (the emitting `GObject`, the `GParamSpec` of the
+            // changed property, and the data pointer of the connection).
+            // `g_signal_connect_object`, not `g_signal_connect_data`: the
+            // docs of `insert_widgets` tell why no code here keeps the
             // handler id.
             unsafe {
                 g_signal_connect_object(
@@ -734,62 +721,60 @@ unsafe fn insert_entries(
     }
 }
 
-/// The `notify` handler [`insert_entries`] connects on the collection's
-/// `[Authentication]` and `[Security]` extensions: tell the page an entry or
-/// the security toggle changed, so `check_complete` is asked again, and
-/// refresh the status label to match.
+/// The `notify` handler that [`insert_entries`] connects on the
+/// `[Authentication]` and `[Security]` extensions of the collection. It tells
+/// the page that an entry or the security toggle changed, thus
+/// `check_complete` runs again. It also refreshes the status label.
 ///
 /// # Safety
 ///
-/// Called by GLib's signal-emission machinery with the arguments a `notify`
-/// handler is always invoked with: the object whose property changed
-/// (unused — this handler answers for the connection as a whole, the same
-/// way upstream's own `mail_config_service_page_settings_notify_cb` does),
-/// the `GParamSpec` of the property that changed (also unused, for the same
-/// reason), and — because this was connected with `g_signal_connect_object`
-/// against `page` — `page` itself, still alive for the duration of this call
-/// (that object's own guarantee, not this function's), and the object
-/// [`insert_entries`] stashed the status label and collection pointers on
-/// with `g_object_set_data`.
+/// GLib signal emission calls this with the usual `notify` handler arguments:
+///
+/// - the object whose property changed (not used: this handler answers for
+///   the full connection, as the upstream
+///   `mail_config_service_page_settings_notify_cb` does),
+/// - the `GParamSpec` of the changed property (not used, for the same reason),
+/// - `page`, because the connection uses `g_signal_connect_object` against
+///   `page`. `page` stays alive during this call (a guarantee of that
+///   function, not of this one). It is the object on which [`insert_entries`]
+///   kept the status label and collection pointers with `g_object_set_data`.
 unsafe extern "C" fn on_extension_changed(
     _extension: *mut GObject,
     _pspec: *mut GParamSpec,
     page: gpointer,
 ) {
     guard("on_extension_changed", (), || {
-        // SAFETY: `page` is the `EMailConfigServicePage` this was connected
-        // against, by this function's contract, and every `EMailConfigPage`
-        // implementor answers to `e_mail_config_page_changed` — see
-        // `evo-sys`'s `build.rs` for the upstream reading that makes the
-        // cast sound.
+        // SAFETY: `page` is the `EMailConfigServicePage` of the connection, by
+        // the contract of this function, and each `EMailConfigPage`
+        // implementor accepts `e_mail_config_page_changed`; the `build.rs` of
+        // `evo-sys` gives the upstream reading that makes the cast sound.
         unsafe { e_mail_config_page_changed(page.cast::<EMailConfigPage>()) };
 
-        // SAFETY: `page` is the same object `insert_entries` stashed both
-        // keys on, by this function's contract. `g_object_get_data` answers
-        // NULL for a key nothing set, which this treats the same as "no
-        // label to update" rather than a fault — the only way to reach this
-        // handler at all is through the connection `insert_entries` makes
-        // right after stashing them, but nothing here has to assume that
-        // held.
+        // SAFETY: `page` is the object on which `insert_entries` set both
+        // keys, by the contract of this function. `g_object_get_data` returns
+        // NULL for a key that is not set, and this code treats that as "no
+        // label to update", not as a fault. Only the connection that
+        // `insert_entries` makes after it sets the keys can call this
+        // handler, but this code does not assume it.
         let label = unsafe { g_object_get_data(page.cast(), STATUS_LABEL_KEY.as_ptr()) };
         if !label.is_null() {
-            // SAFETY: set alongside `label` above, by the same code, so
-            // either both are present or neither is.
+            // SAFETY: the same code sets this key together with `label`, thus
+            // both are present or neither is.
             let collection =
                 unsafe { g_object_get_data(page.cast(), STATUS_COLLECTION_KEY.as_ptr()) };
-            // SAFETY: `label` is non-NULL, just checked, and was a live
-            // `GtkLabel` when stashed; `collection` is NULL or a valid
-            // `ESource`, [`set_status_text`]'s own contract.
+            // SAFETY: `label` is non-NULL (checked above), and was a live
+            // `GtkLabel` when kept; `collection` is NULL or a valid
+            // `ESource`, as the contract of [`set_status_text`] requires.
             unsafe { set_status_text(label.cast(), collection.cast()) };
         }
     });
 }
 
-/// Refreshes `label`'s text from the account `collection` currently says —
-/// called once by [`insert_entries`] to fill the label in, and again by
-/// [`on_extension_changed`] after every keystroke that can change the answer.
-/// Empty, and hidden, once the account is one a commit would accept;
-/// [`Incomplete`](crate::complete::Incomplete)'s own text otherwise.
+/// Refreshes the text of `label` from the account that `collection` contains.
+/// [`insert_entries`] calls it once for the first fill, and
+/// [`on_extension_changed`] calls it after each keystroke that can change the
+/// answer. Empty and hidden when a commit accepts the account; otherwise the
+/// text of [`Incomplete`](crate::complete::Incomplete).
 ///
 /// # Safety
 ///
@@ -797,41 +782,41 @@ unsafe extern "C" fn on_extension_changed(
 /// `ESource`.
 unsafe fn set_status_text(label: *mut GtkWidget, collection: *mut ESource) {
     let text = if collection.is_null() {
-        // The same silence `is_complete`'s own doc gives for a NULL
-        // collection: `new_collection` having failed already logged a
-        // critical, and this is not a second place to explain it.
+        // The same silence as the doc of `is_complete` gives for a NULL
+        // collection: the failed `new_collection` already logged a critical,
+        // and this is not a second location to explain it.
         String::new()
     } else {
-        // SAFETY: non-NULL and a valid source by this function's contract.
+        // SAFETY: non-NULL and a valid source by the contract of this function.
         status_message(&unsafe { read(collection) })
     };
     let visible = !text.is_empty();
     let text = cstring_lossy(&text);
-    // SAFETY: `label` is a live `GtkLabel` by this function's contract;
-    // `gtk_label_set_text` copies the string it is given, so `text` need not
-    // outlive this call.
+    // SAFETY: `label` is a live `GtkLabel` by the contract of this function;
+    // `gtk_label_set_text` copies the string, thus `text` need not live
+    // longer than this call.
     unsafe {
         gtk_label_set_text(label.cast(), text.as_ptr());
         gtk_widget_set_visible(label, if visible { GTRUE } else { GFALSE });
     }
 }
 
-/// The `port` row's `GBindingTransformFunc` from the `ESourceAuthentication`
-/// side: a `guint16` becomes the text a `GtkEntry` shows, with 0 — the
-/// keyfile's spelling of "not set", per `crate::account`'s own doc — shown as
-/// an empty entry rather than a literal `0` nobody chose.
+/// The `GBindingTransformFunc` of the `port` row from the
+/// `ESourceAuthentication` side: it converts a `guint16` to the text of a
+/// `GtkEntry`. 0 (the keyfile spelling of "not set", as the doc of
+/// `crate::account` tells) shows as an empty entry, not as a literal `0`.
 ///
-/// A panic becomes `FALSE`, which is how a `GBindingTransformFunc` says "no
-/// value": the binding leaves the entry's text alone rather than writing a
-/// half-computed one, and a panic must not cross from here into GLib's
-/// binding machinery.
+/// A panic becomes `FALSE`, which is the "no value" answer of a
+/// `GBindingTransformFunc`: the binding does not change the text of the entry
+/// and does not write a partly computed value. A panic must not go from here
+/// into the binding code of GLib.
 ///
 /// # Safety
 ///
-/// The arguments are `GBindingTransformFunc`'s: `from_value` holds the source
-/// property's value — a `guint`, since this is only ever installed on
-/// `ESourceAuthentication:port` — and `to_value` is initialised to the target
-/// property's type, a string.
+/// The arguments are those of `GBindingTransformFunc`: `from_value` holds the
+/// value of the source property (a `guint`, because only
+/// `ESourceAuthentication:port` uses this function), and `to_value` is
+/// initialised to the type of the target property, a string.
 unsafe extern "C" fn port_to_text(
     binding: *mut GBinding,
     from_value: *const GValue,
@@ -841,8 +826,8 @@ unsafe extern "C" fn port_to_text(
     let _ = (binding, user_data);
 
     guard("port_to_text", GFALSE, || {
-        // SAFETY: a `GValue` holding the guint this binding's source
-        // property is, by the contract above.
+        // SAFETY: a `GValue` that holds the guint of the source property of
+        // this binding, by the contract above.
         let port = unsafe { g_value_get_uint(from_value) };
         let text = if port == 0 {
             String::new()
@@ -850,30 +835,30 @@ unsafe extern "C" fn port_to_text(
             port.to_string()
         };
         let text = cstring_lossy(&text);
-        // SAFETY: a `GValue` initialised to the string type the target
-        // property is; `g_value_set_string` copies the string it is given,
-        // so `text` need not outlive this call.
+        // SAFETY: a `GValue` initialised to the string type of the target
+        // property; `g_value_set_string` copies the string, thus `text` need
+        // not live longer than this call.
         unsafe { g_value_set_string(to_value, text.as_ptr()) };
         GTRUE
     })
 }
 
-/// The `port` row's `GBindingTransformFunc` from the `GtkEntry` side: the
-/// text back to a `guint16`, the inverse of [`port_to_text`].
+/// The `GBindingTransformFunc` of the `port` row from the `GtkEntry` side: it
+/// converts the text back to a `guint16`, the inverse of [`port_to_text`].
 ///
-/// An empty entry is `0` — "not set", the same as [`port_to_text`] shows it —
-/// and anything that is not a bare number in `guint16`'s range is refused by
-/// returning `FALSE`, which is how a `GBindingTransformFunc` says "no value":
-/// the binding leaves `ESourceAuthentication:port` at whatever it already was
-/// rather than writing a port nobody typed. A panic becomes the same `FALSE`,
-/// for the reason [`port_to_text`] gives.
+/// An empty entry is `0` ("not set", as [`port_to_text`] shows it). Text that
+/// is not a bare number in the `guint16` range gets `FALSE`, the "no value"
+/// answer of a `GBindingTransformFunc`. The binding then does not change
+/// `ESourceAuthentication:port` and does not write a port that the user did
+/// not type. A panic also becomes `FALSE`, for the reason that
+/// [`port_to_text`] gives.
 ///
 /// # Safety
 ///
-/// The arguments are `GBindingTransformFunc`'s: `from_value` holds the
-/// target property's value — a string, since this is only ever installed
-/// with `text` as the target of the binding [`port_to_text`] is the other
-/// half of — and `to_value` is initialised to the source property's type, a
+/// The arguments are those of `GBindingTransformFunc`: `from_value` holds the
+/// value of the target property (a string, because only the `text` target of
+/// the binding that [`port_to_text`] is the other half of uses this function),
+/// and `to_value` is initialised to the type of the source property, a
 /// `guint`.
 unsafe extern "C" fn text_to_port(
     binding: *mut GBinding,
@@ -884,10 +869,10 @@ unsafe extern "C" fn text_to_port(
     let _ = (binding, user_data);
 
     guard("text_to_port", GFALSE, || {
-        // SAFETY: a `GValue` holding a NUL-terminated string this binding's
-        // target property is, by the contract above; the string is the
-        // entry's own and outlives only this call, so it is copied rather
-        // than held.
+        // SAFETY: a `GValue` that holds the NUL-terminated string of the
+        // target property of this binding, by the contract above; the entry
+        // owns the string and it is valid only during this call, thus it is
+        // copied, not held.
         let text = unsafe { read_string(g_value_get_string(from_value)) }.unwrap_or_default();
         let text = text.trim();
         let port: u16 = if text.is_empty() {
@@ -898,46 +883,45 @@ unsafe extern "C" fn text_to_port(
                 Err(_) => return GFALSE,
             }
         };
-        // SAFETY: a `GValue` initialised to the guint type the source
-        // property is.
+        // SAFETY: a `GValue` initialised to the guint type of the source
+        // property.
         unsafe { g_value_set_uint(to_value, u32::from(port)) };
         GTRUE
     })
 }
 
-/// What Evolution calls when the user reaches the server settings page: fill in
-/// what can be said about the account from the address alone.
+/// Evolution calls this when the user opens the server settings page. It
+/// writes the account data that the address alone gives.
 ///
-/// How many times it is called is Evolution's business, and not something that
-/// can be checked here — the assistant's page-preparation order is in a source
-/// this machine does not have and a dialog it cannot run. So [`setup`] is
-/// written to be right either way: called once it fills the page in, and called
-/// again after the user has stepped back to the identity page and forward it
-/// keeps whatever they have since typed, unless the address itself has changed.
+/// Evolution decides how many times it calls this, and it is not possible to
+/// examine that here: the page-preparation order of the assistant is in a
+/// source that this machine does not have, and in a dialog that it cannot run.
+/// Thus [`setup`] is correct for both cases. On the first call, it fills the
+/// page. When the user returns to the identity page and then to this page, it
+/// keeps the values that the user typed, unless the address changed.
 ///
-/// ## Where the address comes from
+/// ## The source of the address
 ///
-/// The `EMailConfigServicePage` this extension extends, which is the one thing
-/// any vfunc here asks of Evolution rather than of an `ESource`: the assistant's
-/// identity page writes the address onto the page, and
-/// `e_mail_config_service_page_get_email_address` is where every provider's
-/// `setup_defaults` reads it. A backend with no page — which is not a state
-/// Evolution produces, since `constructed` is what sets it — is the empty
-/// address, and [`from_identity`] answers that with the account
+/// The `EMailConfigServicePage` that this extension extends. This is the only
+/// data that a vfunc here gets from Evolution and not from an `ESource`: the
+/// identity page of the assistant writes the address onto the page, and the
+/// `setup_defaults` of each provider reads it with
+/// `e_mail_config_service_page_get_email_address`. A backend with no page
+/// (Evolution does not make this state, because `constructed` sets the page)
+/// gives the empty address. For that, [`from_identity`] gives the account that
 /// [`new_collection`] already wrote.
 ///
 /// ## Failure
 ///
-/// Nothing: the vfunc returns void and there is nothing to report to. A panic
-/// is caught by the guard and leaves a critical; the page then opens on
-/// whatever the collection already said, which is [`new_collection`]'s account,
-/// and `check_complete` refuses it until the user fills the address in
-/// themselves.
+/// None: the vfunc returns void and cannot report an error. The guard catches
+/// a panic and logs a critical. The page then shows the existing data of the
+/// collection, which is the account of [`new_collection`], and
+/// `check_complete` refuses it until the user fills in the address.
 unsafe extern "C" fn setup_defaults(backend: *mut EMailConfigServiceBackend) {
     guard("setup_defaults", (), || {
         // SAFETY: a live backend of this class, which is what Evolution
-        // dispatches through this slot. Both come back `(transfer none)` — the
-        // backend's own references, which outlive this call.
+        // dispatches through this slot. Both are `(transfer none)`: the
+        // backend's own references, which live longer than this call.
         let (page, collection) = unsafe {
             (
                 e_mail_config_service_backend_get_page(backend),
@@ -948,64 +932,64 @@ unsafe extern "C" fn setup_defaults(backend: *mut EMailConfigServiceBackend) {
         let address = if page.is_null() {
             None
         } else {
-            // SAFETY: a live page, and the address comes back `(transfer none)`
-            // as a NUL-terminated string the page owns — copied here rather
-            // than held.
+            // SAFETY: a live page, and the address is `(transfer none)`: a
+            // NUL-terminated string that the page owns, copied here and not
+            // held.
             unsafe { read_string(e_mail_config_service_page_get_email_address(page)) }
         };
 
         // SAFETY: NULL or the backend's live collection source, which is what
-        // `setup` documents it takes.
+        // `setup` documents.
         unsafe { setup(collection, address.as_deref().unwrap_or_default()) };
     });
 }
 
-/// Writes onto `collection` what the address implies about the account — the
-/// deciding half of the `setup_defaults` vfunc, and the half that can be tested.
+/// Writes onto `collection` the account data that the address implies. This is
+/// the deciding part of the `setup_defaults` vfunc, and the part that tests can
+/// call.
 ///
-/// Answers whether it wrote, which is what the tests ask it; the vfunc has
-/// nowhere to put the answer and drops it.
+/// Returns true if it wrote; the tests use this answer. The vfunc cannot use
+/// the answer and discards it.
 ///
-/// ## Why this is not simply [`from_identity`] applied
+/// ## Why this does not only apply [`from_identity`]
 ///
-/// Because it may run more than once. `from_identity` describes a whole account —
-/// the address, the server it implies, the login name it offers, *and* the three
-/// parts and the TLS switch — and only the first three of those are things the
-/// address says. The other two were written by `new_collection` before the
-/// user saw the page, and by the time this runs a second time they may be
-/// answers the user gave: a *Calendars* box they unticked, on a page they
-/// stepped away from to fix a typo in their address. Applying the whole default
-/// account again would tick it back.
+/// Because it can run more than once. `from_identity` gives a full account: the
+/// address, the server that it implies, the login name that it offers, *and*
+/// the three parts and the TLS switch. Only the first three come from the
+/// address. `new_collection` wrote the other two before the user saw the page.
+/// On a second run, they can be values that the user selected, for example a
+/// cleared *Calendars* box on a page that the user left to correct the
+/// address. A second application of the full default account would set the
+/// box again.
 ///
-/// So the fields the address determines are taken from the offer and the rest of
-/// the account is left as it stands. The join is asserted rather than assumed:
-/// on a collection fresh from `new_collection` the result is exactly
-/// `from_identity(address)`, which is what `tests/backend.rs` reads back through
-/// the registry's own reader.
+/// Thus this function takes from the offer only the fields that the address
+/// gives, and does not change the rest of the account. A test asserts the
+/// result: on a collection from `new_collection`, the result is exactly
+/// `from_identity(address)`. `tests/backend.rs` reads it back through the
+/// reader of the registry.
 ///
-/// ## And why an address that has not changed writes nothing at all
+/// ## Why an unchanged address writes nothing
 ///
-/// The same reasoning one step further. If the collection already names this
-/// address then the defaults for it have already been offered, and anything the
-/// account now says about the server is either that offer or the user's
-/// correction of it — a JMAP server may perfectly well not live at the domain of
-/// the address, RFC 8620 §2.2 only says that is where to *ask*. Re-deriving
-/// would overwrite a correction the user typed, and the trigger for it would be
-/// nothing more than having looked at the previous page again.
+/// The same reason, one step further. If the collection already has this
+/// address, the defaults for it are already offered. The server data in the
+/// account is then that offer, or a correction that the user made. A JMAP
+/// server is not necessarily at the domain of the address: RFC 8620 §2.2 only
+/// says to *ask* there. A new derivation would overwrite the correction of the
+/// user, only because the user looked at the previous page again.
 ///
-/// A *changed* address is the opposite case and is re-derived: the server the
-/// user typed was for the address they have just stopped naming.
+/// A *changed* address is the opposite case, and gets a new derivation: the
+/// server that the user typed was for the old address.
 ///
 /// # Safety
 ///
-/// `collection` must be NULL or a valid `ESource` — the backend's collection.
-/// It is read and written, and nothing here outlives the call.
+/// `collection` must be NULL or a valid `ESource`: the backend's collection.
+/// This function reads and writes it, and keeps nothing after the call.
 pub unsafe fn setup(collection: *mut ESource, address: &str) -> bool {
     if collection.is_null() {
         return false;
     }
 
-    // SAFETY: non-NULL and a valid source by this function's contract.
+    // SAFETY: non-NULL and a valid source by the contract of this function.
     let mut account = unsafe { read(collection) };
     if account.identity == address {
         return false;
@@ -1016,45 +1000,46 @@ pub unsafe fn setup(collection: *mut ESource, address: &str) -> bool {
     account.connection.host = offered.connection.host;
     account.connection.user = offered.connection.user;
 
-    // SAFETY: as above; `apply` borrows the account for the call only.
+    // SAFETY: as above; `apply` borrows the account only for the call.
     unsafe { apply(collection, &account) };
     true
 }
 
-/// What Evolution asks before it lets the assistant move on, and again on every
-/// keystroke: is this account finished?
+/// Evolution asks this before the assistant goes to the next page, and again
+/// after each keystroke: is this account complete?
 ///
-/// The answer decides whether *Next* (or *Apply*, on the account editor) is
-/// sensitive. It is asked often and it is asked while the user is still typing,
-/// so it must be cheap and it must never reach the network —
-/// [`complete`](crate::complete) says the same of the decision it makes.
+/// The answer sets the sensitivity of *Next* (or *Apply*, in the account
+/// editor). Evolution asks it frequently and while the user types. Thus it
+/// must be fast and must never use the network.
+/// [`complete`](crate::complete) has the same rule for its decision.
 ///
-/// ## Which source it is a question about
+/// Before the check, this function narrows the collection to the address on
+/// the page (see the comment in the body).
 ///
-/// The *collection*, not the mail source: for a groupware provider the account
-/// is the collection [`new_collection`] answered, and the three mail sources are
-/// written from it at commit time ([`crate::mail`]). So this reads the account
-/// the collection currently says, which is the account a commit would write.
+/// ## The source that it examines
 ///
-/// evolution-ews asks its `CamelEwsSettings` instead, because that is what its
-/// entries are bound to. Both are defensible and this crate has picked the
-/// collection throughout: it is what [`apply`](crate::account::apply) writes,
-/// what [`read`](crate::account::read) reads, and the one description of an
-/// account that the collection backend then reads back in another process.
-/// `insert_widgets` will have to bind the entries to that same source, and the
-/// note is here because a widget bound to anything else would leave this vfunc
-/// answering questions about a source nobody was editing.
+/// The *collection*, not the mail source. For a groupware provider, the account
+/// is the collection from [`new_collection`]. The three mail sources get their
+/// data from it at commit time ([`crate::mail`]). Thus this function reads the
+/// account in the collection, which is the account that a commit writes.
+///
+/// evolution-ews examines its `CamelEwsSettings`, because its entries are bound
+/// to it. Both are correct, and this crate uses the collection everywhere:
+/// [`apply`](crate::account::apply) writes it, [`read`](crate::account::read)
+/// reads it, and the collection backend reads it back in a different process
+/// as the only description of the account. `insert_widgets` binds its entries
+/// to the same source. With widgets bound to a different object, this vfunc
+/// would examine a source that the user does not change.
 ///
 /// ## Failure
 ///
-/// FALSE — the assistant stays where it is, which is the safe direction: a
-/// `check_complete` that answered TRUE on a panic would let a half-read account
-/// be committed.
+/// FALSE. The assistant stays on the page, which is the safe direction. TRUE
+/// on a panic would let the user commit a partly read account.
 unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> gboolean {
     guard("check_complete", GFALSE, || {
         // SAFETY: a live backend of this class, which is what Evolution
-        // dispatches through this slot. Both come back `(transfer none)` — the
-        // backend's own references, which outlive this call.
+        // dispatches through this slot. Both are `(transfer none)`: the
+        // backend's own references, which live longer than this call.
         let (collection, page) = unsafe {
             (
                 e_mail_config_service_backend_get_collection(backend),
@@ -1062,31 +1047,32 @@ unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> 
             )
         };
 
-        // Narrow the collection to the address the user typed, if the page knows
-        // it. `setup_defaults` is Evolution's intended hook for this, but it does
-        // not fire when the user reaches this page by revising an autoconfig
-        // result and switching the server type to JMAP, and at `insert_widgets`
-        // construction time the page's address is not set yet. `check_complete`
-        // is asked again every time the page changes — i.e. after the address has
-        // propagated — so it is where the narrow reliably lands on that path.
-        // `setup` writes only when the address differs from the one the collection
-        // already names: a no-op once narrowed, and it never overwrites a host the
-        // user corrected by hand unless they also changed the address it was for.
+        // Narrow the collection to the address that the user typed, if the page
+        // has it. `setup_defaults` is the Evolution hook for this, but it does
+        // not run when the user edits an autoconfig result and changes the
+        // server type to JMAP. Also, when `insert_widgets` constructs the
+        // widgets, the page has no address yet. Evolution calls
+        // `check_complete` after each change to the page, thus after the
+        // address is available. On that path, this is the reliable location
+        // for the narrow. `setup` writes only when the address is different
+        // from the address in the collection. Thus it does nothing after the
+        // first narrow. It does not overwrite a host that the user corrected,
+        // unless the user also changed the related address.
         if !page.is_null() {
-            // SAFETY: `page` is the backend's own live page, just checked
-            // non-NULL; the address returns `(transfer none)` as a NUL-terminated
-            // string the page owns, copied out by `read_string`.
+            // SAFETY: `page` is the backend's own live page, checked non-NULL
+            // above; the address is `(transfer none)`: a NUL-terminated string
+            // that the page owns, which `read_string` copies.
             let address =
                 unsafe { read_string(e_mail_config_service_page_get_email_address(page)) };
             if let Some(address) = address.filter(|a| !a.trim().is_empty()) {
                 // SAFETY: `collection` is NULL or the backend's live collection
-                // source; `setup` handles NULL and nothing here outlives the call.
+                // source; `setup` accepts NULL and keeps nothing after the call.
                 unsafe { setup(collection, &address) };
             }
         }
 
         // SAFETY: NULL or the backend's live collection source, which is
-        // exactly what `is_complete` documents it takes.
+        // exactly what `is_complete` documents.
         if unsafe { is_complete(collection) } {
             GTRUE
         } else {
@@ -1095,114 +1081,115 @@ unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> 
     })
 }
 
-/// Whether the account `collection` says is one the setup may commit — the
-/// deciding half of the `check_complete` vfunc, and the half that can be tested.
+/// Tells if a commit can accept the account in `collection`. This is the
+/// deciding part of the `check_complete` vfunc, and the part that tests can
+/// call.
 ///
-/// [`read`] and then [`check`], which is the whole of it. The two exist
-/// separately because the account in a dialog being typed into is usually not an
-/// account yet: the reader is total and says what the source holds, and the
-/// check is what has an opinion about it.
+/// It calls [`read`] and then [`check`], nothing more. They are separate
+/// because, while the user types, the dialog does not usually contain a full
+/// account. The reader accepts all input and returns the contents of the
+/// source. The check decides if those contents are acceptable.
 ///
-/// ## A NULL collection is FALSE, and says nothing about it
+/// ## A NULL collection gives FALSE, with no message
 ///
-/// There is one way to get here without a collection: `new_collection`
-/// failed. It logs a critical when it does, which is where the failure happened
-/// and the only place it can be explained; repeating it here would be the same
-/// message once per keystroke, burying the original in copies of itself. So this
-/// is silent, and answers the refusal that keeps an unreadable account from
-/// being committed.
+/// There is one cause of a NULL collection: `new_collection` failed. It logs a
+/// critical when it fails. That is the location of the failure and the only
+/// location that can explain it. A message here would repeat after each
+/// keystroke and hide the first message. Thus this function is silent, and it
+/// refuses, so that the user cannot commit an account that cannot be read.
 ///
-/// The refusal of a *legitimately* unfinished account is silent for a different
-/// reason: [`Incomplete`](crate::complete::Incomplete) is written to be read by
-/// the person who typed the answer, in the entry they typed it into, and this
-/// vfunc has no entry to put it in — it answers a boolean. `insert_widgets`'s
-/// status label is where the same reason lands instead, computed separately
-/// there ([`crate::complete::status_message`]) rather than threaded through
-/// this boolean.
+/// The refusal of an account that is *only* incomplete is silent for a
+/// different reason. [`Incomplete`](crate::complete::Incomplete) is text for
+/// the user, in the entry that the user typed into. This vfunc returns a
+/// boolean and has no entry for the text. The status label of
+/// `insert_widgets` shows the same reason. That label computes it separately
+/// ([`crate::complete::status_message`]); this boolean does not carry it.
 ///
 /// # Safety
 ///
-/// `collection` must be NULL or a valid `ESource`. It is only read from and
-/// nothing here outlives the call.
+/// `collection` must be NULL or a valid `ESource`. This function only reads it
+/// and keeps nothing after the call.
 pub unsafe fn is_complete(collection: *mut ESource) -> bool {
     if collection.is_null() {
         return false;
     }
 
-    // SAFETY: non-NULL and a valid source by this function's contract.
+    // SAFETY: non-NULL and a valid source by the contract of this function.
     check(&unsafe { read(collection) }).is_ok()
 }
 
-/// What Evolution calls once *Next* has been pressed for the last time: write
-/// the account on screen into the scratch sources, which the assistant then
-/// hands to `e_source_registry_create_sources` as one batch.
+/// Evolution calls this after the last push of *Next*. It writes the account
+/// on the screen into the scratch sources. The assistant then gives these to
+/// `e_source_registry_create_sources` as one batch.
 ///
-/// The vfunc creates nothing and saves nothing. Everything it touches is a
-/// scratch `ESource` that is already queued for creation, so what it is for is
-/// the fields nobody else fills in.
+/// The vfunc does not create or save anything. Each `ESource` that it changes
+/// is a scratch source already in the creation queue. Its only purpose is to
+/// write the fields that no other code fills in.
 ///
-/// ## Which those are, for JMAP, and why they are so few
+/// ## The fields for JMAP, and why there are few
 ///
-/// For every provider whose server the user typed on *this* page — IMAP, SMTP,
-/// POP3 — there is nothing to do at all, and Evolution's own implementation
-/// accordingly does nothing: the entries were bound through `CamelSettings` onto
-/// the mail source's own `[Authentication]` and `[Security]` as they were typed
-/// into. JMAP asks for a server once, on the account, because one JMAP session
-/// carries the mail, the contacts and the calendars; so the mail source is a
-/// second file that nothing has told, and telling it is this vfunc's whole job.
+/// For each provider whose server the user typed on *this* page (IMAP, SMTP,
+/// POP3), there is nothing to do, and the Evolution default does nothing. The
+/// entries were bound through `CamelSettings` to the `[Authentication]` and
+/// `[Security]` of the mail source, and changed it during typing. JMAP asks
+/// for a server only once, on the account, because one JMAP session carries
+/// the mail, the contacts and the calendars. Thus the mail source is a second
+/// file that has not received the server, and to write it is the only task of
+/// this vfunc.
 ///
-/// What is *not* here, because it is already written by the time this runs:
+/// These fields are *not* written here, because other code writes them before
+/// this runs:
 ///
-/// - **The service name.** `e_mail_config_assistant` mints one scratch source
-///   per provider and writes the protocol into it before any backend sees it —
-///   that is how [`new_collection`]'s candidate was picked in the first place.
-/// - **The parent and the two uid links.** `EMailConfigSummaryPage`'s own
-///   `commit_changes` sets all three sources' `Parent` to the collection's uid,
-///   the account's `identity-uid` and the identity's `transport-uid`. It runs
-///   after this one, from the assistant's page loop, and it is the same wiring
-///   [`crate::mail::apply`] does — which is why that one is the *account's*
-///   writer and this is not a call to it.
-/// - **The identity's address**, which is `EMailConfigIdentityPage`'s.
+/// - **The service name.** `e_mail_config_assistant` makes one scratch source
+///   per provider and writes the protocol into it before a backend sees it.
+///   That is how Evolution selected the candidate of [`new_collection`].
+/// - **The parent and the two uid links.** The `commit_changes` of
+///   `EMailConfigSummaryPage` sets the `Parent` of all three sources to the uid
+///   of the collection, the `identity-uid` of the account and the
+///   `transport-uid` of the identity. It runs after this one, from the page
+///   loop of the assistant, and does the same as [`crate::mail::apply`]. Thus
+///   that function writes the *account*, and this vfunc does not call it.
+/// - **The address of the identity**, which `EMailConfigIdentityPage` writes.
 ///
-/// ## One backend per page, and the emptiness that has to be refused
+/// ## One backend per page, and the empty account to refuse
 ///
-/// Evolution instantiates this class once for the *Receiving Email* page and
-/// once for *Sending Email*, and `constructed` calls [`new_collection`] on each
-/// — so the sending instance holds a scratch collection of its own that no
-/// widget will ever fill in and that the assistant will never queue. Reached
-/// with that one, a commit that simply copied would write an empty host onto the
-/// transport source, and an empty host is not the same as an unwritten one: it
-/// reads back as an account that names a server.
+/// Evolution makes one instance of this class for the *Receiving Email* page
+/// and one for *Sending Email*, and `constructed` calls [`new_collection`] on
+/// each. Thus the sending instance has its own scratch collection, which no
+/// widget fills in and the assistant never queues. A simple copy from that
+/// collection would write an empty host onto the transport source. An empty
+/// host is not the same as a host that is not written: it reads back as an
+/// account with a server.
 ///
-/// So the copy happens only for a collection that is an account the setup would
-/// commit — [`is_complete`], the same question [`check_complete`] answers, which
-/// is true of the receiving instance's collection (that is what let *Next* be
-/// pressed) and false of the sending instance's. Silent either way: a refusal
-/// here is either that second instance, which is not a fault, or an account
-/// `check_complete` already refused to let the user leave the page with.
+/// Thus the copy occurs only for a collection that the setup can commit:
+/// [`is_complete`], the same question that [`check_complete`] answers. It is
+/// true for the collection of the receiving instance (that is why *Next* was
+/// sensitive), and false for the collection of the sending instance. Silent in
+/// both cases: a refusal here is that second instance, which is not a fault,
+/// or an account that `check_complete` already kept on the page.
 ///
-/// ## The gap this leaves, and where it is closed
+/// ## The resulting gap, and where it is closed
 ///
-/// On the assistant's path the transport source therefore ends up with the
-/// service name `jmap` and no server, and JMAP submission needs one. Nothing
-/// else in *this* dialog is in a position to write it: the sending page is
-/// hidden for a store-and-transport provider, and the backend that is its
-/// candidate cannot see the account. The place that can is the collection
-/// backend, in `evolution-source-registry`, which is handed the account and
-/// `child_added`'s own callback for every source parented to it — **and that
-/// increment has since landed**: `jmap_backend_collection::mail_child::
-/// follow_server` binds the transport's (and mail account's) `[Authentication]`/
-/// `[Security]` to the collection's exactly for this reason, the one exception
-/// to `child_added`'s normal "both sides already have it" rule. See that
-/// module's own docs for why the transport needs an exception at all and how
-/// `[Security]`/`[Authentication] Method` are translated across the boundary
-/// (a `CamelNetworkSecurityMethod` nick and a Bearer/OAuth2 credential
-/// selector, respectively, not just a plain copy).
+/// Thus, on the assistant path, the transport source gets the service name
+/// `jmap` and no server, but JMAP submission needs a server. No other part of
+/// *this* dialog can write it: the sending page is hidden for a
+/// store-and-transport provider, and its candidate backend cannot see the
+/// account. The collection backend in `evolution-source-registry` can write
+/// it: it gets the account and the `child_added` callback for each source with
+/// the account as parent. **That increment is now available**:
+/// `jmap_backend_collection::mail_child::follow_server` binds the
+/// `[Authentication]`/`[Security]` of the transport (and of the mail account)
+/// to those of the collection, for this reason. It is the only exception to
+/// the usual `child_added` rule "both sides already have it". The module docs
+/// tell why the transport needs an exception, and how
+/// `[Security]`/`[Authentication] Method` are translated between the two sides
+/// (to a `CamelNetworkSecurityMethod` nick and a Bearer/OAuth2 credential
+/// selector, respectively, not a plain copy).
 unsafe extern "C" fn commit_changes(backend: *mut EMailConfigServiceBackend) {
     guard("commit_changes", (), || {
         // SAFETY: a live backend of this class, which is what Evolution
-        // dispatches through this slot. Both come back `(transfer none)` — the
-        // backend's own references, which outlive this call.
+        // dispatches through this slot. Both are `(transfer none)`: the
+        // backend's own references, which live longer than this call.
         let (collection, source) = unsafe {
             (
                 e_mail_config_service_backend_get_collection(backend),
@@ -1210,66 +1197,67 @@ unsafe extern "C" fn commit_changes(backend: *mut EMailConfigServiceBackend) {
             )
         };
         // SAFETY: each is NULL or one of the backend's live sources, which is
-        // exactly what `commit` documents it takes.
+        // exactly what `commit` documents.
         unsafe { commit(collection, source) };
     });
 }
 
-/// Copies the server the account names onto the one mail source a backend
-/// holds — the writing half of the `commit_changes` vfunc, and the half that can
-/// be tested.
+/// Copies the server of the account onto the mail source of a backend. This is
+/// the writing part of the `commit_changes` vfunc, and the part that tests can
+/// call.
 ///
-/// Answers whether it wrote, which is what the tests ask it; the vfunc has
-/// nowhere to put the answer and drops it.
+/// Returns true if it wrote; the tests use this answer. The vfunc cannot use
+/// the answer and discards it.
 ///
-/// Nothing happens without both sources, and nothing happens for an account that
-/// is not finished — see the `commit_changes` vfunc above for why the second is
-/// a normal outcome rather than a failure, and why neither is logged.
+/// It does nothing if a source is missing or the account is not complete. The
+/// `commit_changes` vfunc above tells why the second case is normal and not a
+/// failure, and why neither case is logged.
 ///
 /// # Safety
 ///
-/// `collection` and `source` must each be NULL or a valid `ESource`. The first
-/// is only read from, the second is written to, and nothing here outlives the
-/// call.
+/// `collection` and `source` must each be NULL or a valid `ESource`. This
+/// function only reads the first and writes the second, and keeps nothing
+/// after the call.
 pub unsafe fn commit(collection: *mut ESource, source: *mut ESource) -> bool {
     if collection.is_null() || source.is_null() {
         return false;
     }
 
-    // SAFETY: non-NULL and a valid source by this function's contract.
+    // SAFETY: non-NULL and a valid source by the contract of this function.
     let account = unsafe { read(collection) };
     if check(&account).is_err() {
         return false;
     }
 
-    // SAFETY: non-NULL and a valid source by this function's contract; the
-    // connection outlives the call, which is all `apply_server` borrows.
+    // SAFETY: non-NULL and a valid source by the contract of this function;
+    // the connection lives longer than the call, which is all that
+    // `apply_server` borrows.
     unsafe { apply_server(source, &account.connection) };
     true
 }
 
-/// The message a failed EDS call left behind, consuming the `GError`.
+/// The message of a failed EDS call. Consumes the `GError`.
 ///
 /// # Safety
 ///
-/// `error` must be NULL or a `GError` this call may consume.
+/// `error` must be NULL or a `GError` that this call can consume.
 unsafe fn take_message(error: *mut GError) -> String {
     if error.is_null() {
         return "EDS set no error".to_owned();
     }
 
-    // SAFETY: a live GError; its message is a NUL-terminated string it owns.
+    // SAFETY: a live GError; its message is a NUL-terminated string that it owns.
     let message = unsafe { read_string((*error).message) };
-    // SAFETY: ownership passed to us with the out-parameter.
+    // SAFETY: the out-parameter transferred ownership to this caller.
     unsafe { g_error_free(error) };
 
     message.unwrap_or_else(|| "EDS gave no message".to_owned())
 }
 
-/// [`port_to_text`] and [`text_to_port`], driven directly with hand-built
-/// `GValue`s rather than through a real `GBinding` — which is what lets these
-/// run here at all: they are the one piece of `insert_widgets` that touches no
-/// widget, so unlike the rest of this module they need no display connection.
+/// Tests for [`port_to_text`] and [`text_to_port`], with manually built
+/// `GValue`s and no real `GBinding`. Thus they can run here: they are the only
+/// part of `insert_widgets` with no widget, and they need no display
+/// connection.
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
@@ -1279,17 +1267,17 @@ mod tests {
 
     use super::*;
 
-    /// A zeroed, initialised `GValue` of the given type — the C
-    /// `GValue value = G_VALUE_INIT; g_value_init(&value, type);` idiom,
-    /// as `tests/oauth2_service.rs` also spells it.
+    /// A zeroed, initialised `GValue` of the given type. This is the C pattern
+    /// `GValue value = G_VALUE_INIT; g_value_init(&value, type);`, as in
+    /// `tests/oauth2_service.rs`.
     ///
     /// # Safety
     ///
-    /// `gtype` must be a `GType` `g_value_init` accepts; the caller must
-    /// `g_value_unset` the result when done with it.
+    /// `gtype` must be a `GType` that `g_value_init` accepts; the caller must
+    /// `g_value_unset` the result after use.
     unsafe fn value_of(gtype: glib_sys::GType) -> GValue {
-        // SAFETY: a fresh `GValue` has no prior contents to unset, so
-        // zero-initialising it before `g_value_init` is exactly the C idiom.
+        // SAFETY: a new `GValue` has no prior contents to unset, thus to
+        // zero-initialise it before `g_value_init` is exactly the C pattern.
         unsafe {
             let mut value: GValue = zeroed();
             g_value_init(&mut value, gtype);
@@ -1297,22 +1285,21 @@ mod tests {
         }
     }
 
-    /// A string `GValue`'s contents, exactly — unlike [`read_string`], which
-    /// this module otherwise uses throughout, an empty string here is not the
-    /// same absence a keyfile's unwritten key is; `port_to_text` writes a real
-    /// empty string for "no port", which is exactly what these tests need to
-    /// tell apart from a NULL one.
+    /// The exact contents of a string `GValue`. [`read_string`], which this
+    /// module uses elsewhere, does not keep an empty string separate from NULL.
+    /// `port_to_text` writes a real empty string for "no port", and these
+    /// tests must tell it apart from NULL.
     ///
     /// # Safety
     ///
     /// `value` must hold a string, as `g_value_get_string` requires.
     unsafe fn string_of(value: &GValue) -> Option<String> {
-        // SAFETY: by this function's contract.
+        // SAFETY: by the contract of this function.
         let ptr = unsafe { g_value_get_string(value) };
         if ptr.is_null() {
             return None;
         }
-        // SAFETY: a NUL-terminated string owned by `value`, copied out here.
+        // SAFETY: a NUL-terminated string owned by `value`, copied here.
         Some(
             unsafe { CStr::from_ptr(ptr) }
                 .to_string_lossy()
@@ -1323,8 +1310,8 @@ mod tests {
     #[test]
     fn port_to_text_shows_zero_as_an_empty_entry() {
         // SAFETY: `from` is a `guint` GValue, as `port_to_text` requires; `to`
-        // is a string GValue, as it fills in; both are unset before the test
-        // ends.
+        // is a string GValue, which it fills in; the test unsets both before
+        // it ends.
         unsafe {
             let mut from = value_of(G_TYPE_UINT);
             g_value_set_uint(&mut from, 0);
@@ -1358,8 +1345,8 @@ mod tests {
         }
     }
 
-    /// The round trip [`port_to_text`]/[`text_to_port`] is meant to be: what
-    /// one shows is what the other reads back to the same port.
+    /// The round trip of [`port_to_text`]/[`text_to_port`]: the text that one
+    /// shows, the other reads back to the same port.
     #[test]
     fn text_to_port_reverses_port_to_text() {
         for port in [0u16, 1, 443, 8080, u16::MAX] {
@@ -1393,7 +1380,7 @@ mod tests {
     fn text_to_port_treats_blank_or_whitespace_only_text_as_unset() {
         for text in ["", "   ", "\t"] {
             // SAFETY: as above; `text` is NUL-terminated for the C string
-            // `g_value_set_string` copies.
+            // that `g_value_set_string` copies.
             unsafe {
                 let text_c = CString::new(text).unwrap();
                 let mut from = value_of(G_TYPE_STRING);
@@ -1420,11 +1407,11 @@ mod tests {
                 let mut from = value_of(G_TYPE_STRING);
                 g_value_set_string(&mut from, text_c.as_ptr());
                 let mut to = value_of(G_TYPE_UINT);
-                // A sentinel the binding must leave alone on refusal — this
+                // A sentinel that the binding must not change on refusal. This
                 // test only checks the return value, but a real bidirectional
-                // `GBinding` relies on exactly this: `text_to_port` returning
-                // `FALSE` is what keeps a bad keystroke from ever reaching
-                // `g_object_set_property`.
+                // `GBinding` needs this behaviour:
+                // `FALSE` from `text_to_port` prevents a bad keystroke from
+                // reaching `g_object_set_property`.
                 g_value_set_uint(&mut to, 12345);
 
                 let ok = text_to_port(ptr::null_mut(), &from, &mut to, ptr::null_mut());

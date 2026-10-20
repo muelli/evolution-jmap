@@ -1,30 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The three mail sources a setup commits beside the account, against real
-// `ESource`s — and held against the collection backend's `prepare_mail`, which
-// is the registry-side writer of the same three sources.
+// Tests the three mail sources that a setup commits with the account, on real
+// `ESource`s. They also compare them with the collection backend's
+// `prepare_mail`, which writes the same three sources in the registry.
 //
-// The join is again the point, as in `tests/account.rs`, but it runs the other
-// way round. There the reader was somebody else's and this crate's writer had
-// to agree with it; here there are two *writers* — this one, which runs in
-// Evolution's process where the user's answers are, and the vfunc, which runs
-// in `evolution-source-registry` where the factory is. Two writers of one file
-// that are only checked separately are two writers that drift, and the drift is
-// silent: an account whose mail sources name a protocol Camel has no provider
-// for is an inbox that never opens, with nothing in any log to say which of the
-// two wrote the name.
+// As in `tests/account.rs`, the connection between two parts is the subject,
+// but in the opposite direction. There, a different reader had to agree with
+// this crate's writer. Here, there are two *writers*. This one runs in
+// Evolution's process, which has the user's answers. The vfunc runs in
+// `evolution-source-registry`, which has the factory. If tests check two writers
+// of one file only separately, the writers drift apart silently. If the mail
+// sources name a protocol with no Camel provider, the inbox never opens. No log
+// tells which of the two writers wrote the name.
 //
-// And then there is a reader after all, one source further down than the account
-// tests could reach: the `CamelSettings` object an `ESourceCamel` extension hands
-// a `CamelJmapStore`. It is not this crate's, it is `jmap-mail`'s, and it is the
-// only place to ask an account the question the provider will ask it — because
-// none of the four fields that answer it is stored where it appears to be. Host,
-// port, user and encryption are bound out of `[Authentication]` and `[Security]`
-// into a settings object by machinery neither writer mentions, over a conversion
-// that turns one of them into a different vocabulary and silently keeps its own
-// default when it cannot. So these tests generate the subtype, ask the extension
-// for its settings, and read them with the provider's own `ServerConfig`.
+// There is also a reader, one source further than the account tests go: the
+// `CamelSettings` object that an `ESourceCamel` extension gives a
+// `CamelJmapStore`. It is `jmap-mail`'s, not this crate's. Only it answers the
+// question that the provider asks an account, because none of the four fields
+// that answer it is stored where it seems to be. Hidden machinery binds host,
+// port, user and encryption from `[Authentication]` and `[Security]` into a
+// settings object. Neither writer mentions it. The binding converts one field
+// into a different vocabulary, and silently keeps its own default when the
+// conversion fails. Thus these tests generate the subtype, get the settings of
+// the extension, and read them with the provider's own `ServerConfig`.
 
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
@@ -63,35 +62,32 @@ use jmap_config::mail::{
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
-/// The uid the account source is created with, so that the parent the three
-/// mail sources carry is a string this file can name rather than one it read
-/// off the very source it is checking.
+/// The uid of the account source. Thus the test compares the parent of the
+/// three mail sources with a known string, not one read from the checked source.
 const ACCOUNT_UID: &str = "jmap-account";
 
-/// The name `[JMAP Backend]` — the extension a `jmap` service's Camel settings
-/// live under — having first generated the `ESourceCamel` subtype that carries
-/// it.
+/// Generates the `ESourceCamel` subtype for `jmap`, then returns its extension
+/// name `[JMAP Backend]`, which contains the Camel settings of a `jmap` service.
 ///
-/// `e_source_camel_register_types()` is what normally does this, by loading
-/// every installed Camel provider module and generating one subtype per service
-/// class it finds. Here the provider is linked in rather than installed, so the
-/// one subtype these tests need is generated directly, which is the case
-/// `e_source_camel_generate_subtype` documents as its own reason to be public
-/// API. It is also what M7's module will have to do, for the same reason
-/// Evolution's own account editor does not have to: nothing has loaded
-/// `libcameljmap.so` at the point the setup writes an account.
+/// Usually `e_source_camel_register_types()` does this. It loads each installed
+/// Camel provider module and generates one subtype for each service class in it.
+/// Here the provider is linked, not installed, so this generates the one subtype
+/// directly. `e_source_camel_generate_subtype` documents this case as the reason
+/// that it is public API. M7's module must also do this, and Evolution's own
+/// account editor need not, for the same reason: nothing has loaded
+/// `libcameljmap.so` when the setup writes an account.
 ///
-/// The `OnceLock` is not decoration. `generate_subtype` reads the type name and
-/// then registers it, which is two steps, and Rust runs the tests in this file
-/// as threads of one process; losing that race is an abort inside GObject. The
-/// name is kept as a `usize` because a raw pointer is not `Sync` — the string
-/// itself is `g_intern_string`'d and so lives as long as the process.
+/// The `OnceLock` is necessary. `generate_subtype` reads the type name and then
+/// registers it in two steps, and Rust runs the tests of this file as threads of
+/// one process. If a thread loses that race, GObject aborts. The name is a
+/// `usize` because a raw pointer is not `Sync`. The string itself is
+/// `g_intern_string`'d, so it lives as long as the process.
 fn camel_extension_name() -> *const c_char {
     static NAME: OnceLock<usize> = OnceLock::new();
     let name = *NAME.get_or_init(|| {
         // SAFETY: a NUL-terminated protocol name and a GType derived from
-        // CamelSettings, which is what `settings_type` registers; the name it
-        // hands back is interned and never freed.
+        // CamelSettings, which `settings_type` registers. The returned name is
+        // interned and never freed.
         unsafe {
             let gtype =
                 e_source_camel_generate_subtype(MAIL_BACKEND_NAME.as_ptr(), settings_type());
@@ -109,9 +105,9 @@ fn camel_extension_name() -> *const c_char {
 struct Source(*mut ESource);
 
 impl Source {
-    /// A blank source with a minted uid — the state the setup's scratch mail
-    /// sources are in. `e_source_new (NULL, NULL, &error)` is what EDS itself
-    /// uses for a source with no keyfile behind it yet.
+    /// A blank source with a new uid, as the setup's scratch mail sources are.
+    /// EDS itself uses `e_source_new (NULL, NULL, &error)` for a source with no
+    /// keyfile yet.
     fn blank() -> Self {
         let mut error = ptr::null_mut();
         // SAFETY: no related object, no file, and a GError out-parameter are
@@ -141,12 +137,11 @@ impl Source {
         unsafe { read_string(e_source_get_parent(self.0)) }
     }
 
-    /// `[Authentication] Method` — the credential-type selector jmap-mail and
-    /// the backends read (via `CamelNetworkSettings:auth-mechanism`) to choose
-    /// Basic vs Bearer vs OAuth 2.0.
+    /// `[Authentication] Method`: jmap-mail and the backends read it (through
+    /// `CamelNetworkSettings:auth-mechanism`) to select Basic, Bearer or OAuth 2.0.
     fn authentication_method(&self) -> Option<String> {
-        // SAFETY: a live source; the extension is created on demand and owned
-        // by the source, and the getter's string outlives this read.
+        // SAFETY: a live source. The extension is created on demand and the
+        // source owns it. The getter's string lives longer than this read.
         unsafe {
             let auth: *mut ESourceAuthentication =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
@@ -159,33 +154,33 @@ impl Source {
         unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
     }
 
-    /// The `ESourceBackend:backend-name` under `name`, asked for only once the
-    /// extension is known to be there: `e_source_get_extension` creates what it
-    /// cannot find, so a test that read through it without checking first would
-    /// turn "the writer wrote nothing" into "the writer wrote NULL".
+    /// The `ESourceBackend:backend-name` under `name`, read only if the extension
+    /// is present. `e_source_get_extension` creates an extension that it cannot
+    /// find. Without the check, "the writer wrote nothing" would become "the
+    /// writer wrote NULL".
     fn backend_name(&self, name: &CStr) -> Option<String> {
         assert!(
             self.has_extension(name),
             "the source has no {name:?} to read a backend name from"
         );
-        // SAFETY: the extension is present, so this returns the source's own,
-        // owned by it; the name it holds is NULL or a NUL-terminated string
-        // with the same lifetime.
+        // SAFETY: the extension is present, so this returns the source's own
+        // extension, which the source owns. Its name is NULL or a NUL-terminated
+        // string with the same lifetime.
         unsafe {
             let backend: *mut ESourceBackend = e_source_get_extension(self.0, name.as_ptr()).cast();
             read_string(e_source_backend_get_backend_name(backend))
         }
     }
 
-    /// `[Mail Account] IdentityUid` — which identity this receiving account
+    /// `[Mail Account] IdentityUid`: the identity that this receiving account
     /// sends as.
     fn identity_uid(&self) -> Option<String> {
         assert!(
             self.has_extension(E_SOURCE_EXTENSION_MAIL_ACCOUNT),
             "the source is not a mail account"
         );
-        // SAFETY: the extension is present; the uid it holds is NULL or a
-        // NUL-terminated string owned by it.
+        // SAFETY: the extension is present. Its uid is NULL or a NUL-terminated
+        // string that it owns.
         unsafe {
             let account: *mut ESourceMailAccount =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr()).cast();
@@ -193,8 +188,8 @@ impl Source {
         }
     }
 
-    /// `[Mail Submission] TransportUid` — which service this identity's mail
-    /// leaves through.
+    /// `[Mail Submission] TransportUid`: the service that sends this identity's
+    /// mail.
     fn transport_uid(&self) -> Option<String> {
         assert!(
             self.has_extension(E_SOURCE_EXTENSION_MAIL_SUBMISSION),
@@ -208,7 +203,7 @@ impl Source {
         }
     }
 
-    /// `[Mail Identity] Address` — the address sent mail says it is from.
+    /// `[Mail Identity] Address`: the sender address of sent mail.
     fn address(&self) -> Option<String> {
         assert!(
             self.has_extension(E_SOURCE_EXTENSION_MAIL_IDENTITY),
@@ -222,21 +217,20 @@ impl Source {
         }
     }
 
-    /// The `CamelSettings` object a Camel service configured from this source
-    /// would be given.
+    /// The `CamelSettings` object that a Camel service configured from this
+    /// source gets.
     ///
-    /// These are `e_source_camel_configure_service`'s own two steps with the
-    /// service left out — ask the source for the provider's extension, ask the
-    /// extension for its settings — so what comes back is the very object a
-    /// `CamelJmapStore` is handed, host, port, user and all. None of those four
-    /// is stored *in* the extension: `ESourceCamel` binds them bidirectionally
-    /// to `[Authentication]` and `[Security]` on this same source, which is why
-    /// the setup writes those groups and why this is the only reader that proves
-    /// it did.
+    /// These are the two steps of `e_source_camel_configure_service`, without
+    /// the service: get the provider's extension from the source, then get the
+    /// settings from the extension. The result is the same object that a
+    /// `CamelJmapStore` gets, with host, port, user and security. None of those
+    /// four is stored *in* the extension. `ESourceCamel` binds them in two
+    /// directions to `[Authentication]` and `[Security]` on this source. Thus the
+    /// setup writes those groups, and only this reader proves that it did.
     fn camel_settings(&self) -> *mut CamelSettings {
         // SAFETY: a live source and the interned extension name of a
-        // registered `ESourceCamel` subtype; the extension is created on demand
-        // and owned by the source, and so is the settings object it holds.
+        // registered `ESourceCamel` subtype. The extension is created on demand,
+        // and the source owns it and its settings object.
         unsafe {
             let extension: *mut ESourceCamel =
                 e_source_get_extension(self.0, camel_extension_name()).cast();
@@ -251,34 +245,34 @@ impl Source {
         }
     }
 
-    /// The `CamelNetworkSecurityMethod` those settings arrived at — the value
-    /// the string in `[Security] Method` was converted into, rather than the
-    /// string itself, because the conversion is where a wrong spelling goes
-    /// quiet.
+    /// The `CamelNetworkSecurityMethod` of those settings: the converted value of
+    /// `[Security] Method`, not the string. A wrong spelling fails silently in
+    /// the conversion.
     fn security_method(&self) -> CamelNetworkSecurityMethod {
         // SAFETY: the settings object of a live source. It implements
-        // `CamelNetworkSettings` — `CamelJmapSettings` claims the interface, and
-        // an `ESourceCamel` subtype generated from a settings class that did not
-        // would have nothing to bind.
+        // `CamelNetworkSettings`: `CamelJmapSettings` claims the interface. An
+        // `ESourceCamel` subtype from a settings class without it would have
+        // nothing to bind.
         unsafe { camel_network_settings_get_security_method(self.camel_settings().cast()) }
     }
 
-    /// The server `jmap-mail` reads off those settings — the last thing its
-    /// `connect_sync` needs before it builds a client, and therefore the whole
-    /// question this source is written to answer.
+    /// The server that `jmap-mail` reads from those settings. Its `connect_sync`
+    /// needs this last, before it builds a client. This is the data that the
+    /// source must supply.
     fn server(&self) -> Result<ServerConfig, SourceError> {
         // SAFETY: the settings object of a live source, only read from.
         unsafe { ServerConfig::from_settings(self.camel_settings()) }
     }
 
-    /// `[Security] Secure` — the boolean EDS derives from the method string,
-    /// and what every non-mail reader of this account asks.
+    /// `[Security] Secure`: the boolean that EDS derives from the method string.
+    /// All non-mail readers of this account read it.
     fn secure(&self) -> bool {
         assert!(
             self.has_extension(E_SOURCE_EXTENSION_SECURITY),
             "the source says nothing about transport security"
         );
-        // SAFETY: the extension is present, so this returns the source's own.
+        // SAFETY: the extension is present, so this returns the source's own
+        // extension.
         unsafe {
             let security: *mut ESourceSecurity =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
@@ -286,11 +280,11 @@ impl Source {
         }
     }
 
-    /// `[Collection] Identity`, off the account source — the other place one
-    /// account writes an address, and the one the two have to agree on.
+    /// `[Collection] Identity` of the account source: the other location of the
+    /// account's address. The two addresses must agree.
     fn collection_identity(&self) -> Option<String> {
         // SAFETY: `apply_account` created the extension, so this returns the
-        // source's own.
+        // source's own extension.
         unsafe {
             read_string(e_source_collection_get_identity(
                 e_source_get_extension(self.0, eds_sys::E_SOURCE_EXTENSION_COLLECTION.as_ptr())
@@ -307,8 +301,7 @@ impl Drop for Source {
     }
 }
 
-/// An account and the four sources it is made of, after the setup has written
-/// all of them.
+/// An account and its four sources, after the setup wrote all of them.
 struct Committed {
     collection: Source,
     account: Source,
@@ -327,10 +320,10 @@ impl Committed {
         committed.written(account)
     }
 
-    /// What a commit does, in the order it does it: the account source first,
-    /// then the three that hang off it.
+    /// The steps of a commit, in sequence: the account source first, then the
+    /// three below it.
     fn written(self, account: &Account) -> Self {
-        // SAFETY: four live sources, none of which this call keeps.
+        // SAFETY: four live sources. This call keeps none of them.
         unsafe {
             apply_account(self.collection.0, account);
             apply(self.collection.0, &self.sources(), account);
@@ -347,9 +340,8 @@ impl Committed {
     }
 }
 
-/// The same three sources as the registry would leave them: blank ones run
-/// through the collection factory's `prepare_mail` vfunc, reached the way EDS
-/// reaches it.
+/// The same three sources as the registry writes them: blank sources given to
+/// the collection factory's `prepare_mail` vfunc, called as EDS calls it.
 struct Prepared {
     account: Source,
     identity: Source,
@@ -358,15 +350,14 @@ struct Prepared {
 
 impl Prepared {
     fn new() -> Self {
-        // Registered statically rather than through the module entry point, as
-        // in `jmap-backend-collection`'s own tests: there is no module here for
-        // the type to belong to, and `register_static` hands an
-        // already-registered type straight back.
+        // Registered statically, not through the module entry point, as in the
+        // tests of `jmap-backend-collection`. There is no module here for the
+        // type, and `register_static` returns an already-registered type.
         let gtype = register_static::<JmapCollectionFactory>();
         assert_ne!(gtype, 0, "the factory type is not registered");
-        // `g_type_create_instance` rather than `g_object_new`, because
-        // `EExtension:extensible` is CONSTRUCT_ONLY and a property-less
-        // `g_object_new` earns a critical that has nothing to do with this test.
+        // `g_type_create_instance`, not `g_object_new`: `EExtension:extensible`
+        // is CONSTRUCT_ONLY, and `g_object_new` with no properties logs an
+        // unrelated critical.
         // SAFETY: a registered, instantiatable type.
         let factory = unsafe { g_type_create_instance(gtype) };
         assert!(!factory.is_null(), "g_type_create_instance returned NULL");
@@ -377,7 +368,7 @@ impl Prepared {
             transport: Source::blank(),
         };
         // SAFETY: a live factory of a type derived from
-        // ECollectionBackendFactory and three live sources; the call keeps
+        // ECollectionBackendFactory, and three live sources. The call keeps
         // none of them.
         unsafe {
             e_collection_backend_factory_prepare_mail(
@@ -387,15 +378,15 @@ impl Prepared {
                 prepared.transport.0,
             );
         }
-        // SAFETY: the reference instance creation left behind, given back once.
+        // SAFETY: the reference from instance creation, released one time.
         unsafe { g_object_unref(factory.cast()) };
 
         prepared
     }
 }
 
-/// An account with every field filled in, so that a string written onto the
-/// wrong source has somewhere wrong to land.
+/// An account with all fields set, so that a string written on the wrong
+/// source is visible.
 fn account() -> Account {
     Account {
         identity: "vera@example.com".to_owned(),
@@ -411,15 +402,15 @@ fn account() -> Account {
     }
 }
 
-/// What makes the three sources *this account's* mail rather than three loose
-/// sources in the registry's directory.
+/// The parent makes the three sources *this account's* mail, not three
+/// unattached sources in the registry's directory.
 ///
-/// `e_collection_backend_list_mail_sources()` finds them by walking the
-/// account's children, and `collection_backend_bind_child_enabled()` binds each
-/// one's `enabled` to the account's `mail-enabled` on the same walk. An
-/// unparented mail source is not a broken account: it is a second, top-level
-/// account in the sidebar that the collection knows nothing about, and that no
-/// "receive mail for this account" switch reaches.
+/// `e_collection_backend_list_mail_sources()` finds them through the account's
+/// children, and `collection_backend_bind_child_enabled()` binds the `enabled`
+/// of each to the account's `mail-enabled` in the same pass. A mail source
+/// with no parent is not a broken account. It is a second, top-level account in
+/// the sidebar that the collection does not know. No "receive mail for this
+/// account" switch controls it.
 #[test]
 fn the_three_mail_sources_hang_off_the_account() {
     let committed = Committed::new(&account());
@@ -438,11 +429,11 @@ fn the_three_mail_sources_hang_off_the_account() {
     assert_eq!(committed.collection.uid().as_deref(), Some(ACCOUNT_UID));
 }
 
-/// The mail services inherit the account's authentication method, so a Bearer
-/// (or OAuth 2.0) account does not silently fall back to Basic on its mail
-/// child. Regression: `apply_server` used to blank `[Authentication] Method`,
-/// which left an API-token Fastmail account connecting its collection over
-/// Bearer while its mail child re-prompted for a password forever.
+/// The mail services inherit the account's authentication method. Thus a
+/// Bearer (or OAuth 2.0) account does not silently use Basic on its mail child.
+/// Regression: `apply_server` wrote a blank `[Authentication] Method`. An
+/// API-token Fastmail account then connected its collection over Bearer, but
+/// its mail child asked for a password again and again.
 #[test]
 fn the_mail_services_inherit_the_authentication_method() {
     let mut account = account();
@@ -461,12 +452,12 @@ fn the_mail_services_inherit_the_authentication_method() {
     }
 }
 
-/// The mail account is what Evolution receives through, and its backend name is
-/// the Camel protocol it receives through — `libcameljmap.so`'s.
+/// Evolution receives through the mail account. Its backend name is the Camel
+/// protocol of `libcameljmap.so`.
 ///
-/// A mail account source without one is not an error anywhere: it is an account
-/// Evolution shows and cannot open, because `camel_provider_get` is asked for
-/// the empty protocol.
+/// A mail account source without it causes no error. Evolution shows the
+/// account but cannot open it, because it calls `camel_provider_get` for the
+/// empty protocol.
 #[test]
 fn the_mail_account_is_served_by_the_jmap_camel_provider() {
     let committed = Committed::new(&account());
@@ -480,10 +471,11 @@ fn the_mail_account_is_served_by_the_jmap_camel_provider() {
     );
 }
 
-/// And so is the transport, under the *same* name: JMAP submits over the
-/// session it reads through, so `jmap-mail`'s provider registers one protocol
-/// with both a store and a transport type in it, and there is no second service
-/// beside it the way `smtp` sits beside `imapx`.
+/// The transport uses the same provider, with the *same* name.
+///
+/// JMAP submits over the session that it reads through. Thus `jmap-mail`'s
+/// provider registers one protocol with a store type and a transport type. There
+/// is no second service, as `smtp` is beside `imapx`.
 #[test]
 fn the_transport_is_the_same_provider_rather_than_a_second_one() {
     let committed = Committed::new(&account());
@@ -497,14 +489,14 @@ fn the_transport_is_the_same_provider_rather_than_a_second_one() {
     );
 }
 
-/// The two links that make three sources one account: the account names the
-/// identity it sends as, the identity names the transport its mail leaves
-/// through.
+/// The two links that make three sources one account. The account names the
+/// identity that it sends as. The identity names the transport that sends its
+/// mail.
 ///
-/// Both are uids, and both are read back off the very sources they should name
-/// — a link written to the wrong uid is not a failure at commit time but a
-/// `From:` header from some other account, or a send that picks some other
-/// account's server.
+/// Both are uids, and the test compares them with the uids of the named sources.
+/// A link to the wrong uid does not fail at commit time. It causes a `From:`
+/// header from a different account, or a send through a different account's
+/// server.
 #[test]
 fn the_account_names_the_identity_and_the_identity_names_the_transport() {
     let committed = Committed::new(&account());
@@ -521,15 +513,13 @@ fn the_account_names_the_identity_and_the_identity_names_the_transport() {
     );
 }
 
-/// The address the identity sends from is the address the account says it is,
-/// because they are the same answer to the same question and the user typed it
-/// once.
+/// The sender address of the identity is the address of the account. The user
+/// typed it one time.
 ///
-/// `[Collection] Identity` and `[Mail Identity] Address` living in two
-/// different sources is EDS's arrangement, not a choice available here; what is
-/// a choice is whether both are written from the one string, and a setup that
-/// let them disagree would send mail from an address the account does not
-/// claim.
+/// EDS puts `[Collection] Identity` and `[Mail Identity] Address` in two
+/// different sources, and this crate cannot change that. But this crate writes
+/// both from one string. If the two disagree, the setup sends mail from an
+/// address that the account does not claim.
 #[test]
 fn the_address_mail_is_sent_from_is_the_identity_the_account_claims() {
     let committed = Committed::new(&account());
@@ -544,13 +534,13 @@ fn the_address_mail_is_sent_from_is_the_identity_the_account_claims() {
     );
 }
 
-/// The identity is a person, not a service, and giving it a service extension
-/// would make it one.
+/// The identity is a person, not a service. A service extension would make it
+/// a service.
 ///
-/// `collection_backend_child_is_mail()` treats a source carrying any of the
-/// three mail extensions as mail, so an identity that also carried
-/// `[Mail Account]` would be a second, empty receiving account of this user's —
-/// visible in Evolution, pointed at nothing.
+/// `collection_backend_child_is_mail()` treats a source with one of the three
+/// mail extensions as mail. Thus an identity that also had `[Mail Account]`
+/// would be a second, empty receiving account of this user. Evolution would
+/// show it, but it would connect to nothing.
 #[test]
 fn the_identity_is_not_turned_into_a_service_of_its_own() {
     let committed = Committed::new(&account());
@@ -567,8 +557,8 @@ fn the_identity_is_not_turned_into_a_service_of_its_own() {
     }
 }
 
-/// And the account and the transport are services, not people: an address on
-/// either is a second identity Evolution offers in the composer's From: menu.
+/// The account and the transport are services, not people. An address on one
+/// of them adds a second identity to the composer's From: menu.
 #[test]
 fn neither_service_is_turned_into_an_identity() {
     let committed = Committed::new(&account());
@@ -584,16 +574,14 @@ fn neither_service_is_turned_into_an_identity() {
     }
 }
 
-/// None of the three is ever claimed as a child of the collection *backend*,
-/// which is the rule that keeps this writer and `dup_resource_id` from
-/// contradicting each other.
+/// None of the three is a child of the collection *backend*. This rule keeps
+/// this writer and `dup_resource_id` in agreement.
 ///
-/// They are children of the account — that is what the parent uid above says —
-/// without being cached resources of the backend. The distinction is not
-/// cosmetic: `collection_backend_load_resources()` deletes the cache file of
-/// any child whose `dup_resource_id` answers NULL, so a mail source this writer
-/// had made look like one of ours would be deleted on the next start of the
-/// registry.
+/// They are children of the account (the parent uid above), but not cached
+/// resources of the backend. The difference is important:
+/// `collection_backend_load_resources()` deletes the cache file of each child
+/// whose `dup_resource_id` returns NULL. If this writer made a mail source look
+/// like a backend resource, the next registry start would delete it.
 #[test]
 fn no_committed_mail_source_is_read_as_a_child_of_the_collection() {
     let committed = Committed::new(&account());
@@ -612,13 +600,13 @@ fn no_committed_mail_source_is_read_as_a_child_of_the_collection() {
     }
 }
 
-/// Committing an account whose identity changed writes the new address, rather
-/// than leaving the old one where it was.
+/// A commit of an account with a changed identity writes the new address, and
+/// does not keep the old one.
 ///
-/// The same decision as the account source's, and for the same reason: a setup
-/// commits onto sources that already say something. An identity left at the old
-/// address is not a stale display string — it is the `From:` of every message
-/// the user sends afterwards.
+/// The account source does the same, for the same reason: a setup commits to
+/// sources that already contain values. An old address on the identity is not
+/// only a stale display string. It is the `From:` of each message that the user
+/// sends after it.
 #[test]
 fn committing_an_account_whose_address_changed_replaces_the_old_one() {
     let committed = Committed::new(&account());
@@ -637,7 +625,7 @@ fn committing_an_account_whose_address_changed_replaces_the_old_one() {
         committed.identity.address(),
         committed.collection.collection_identity(),
     );
-    // And the wiring is written once more rather than doubled or dropped.
+    // The links are written again, not duplicated or removed.
     assert_eq!(committed.account.identity_uid(), committed.identity.uid());
     assert_eq!(
         committed.identity.transport_uid(),
@@ -646,13 +634,12 @@ fn committing_an_account_whose_address_changed_replaces_the_old_one() {
     assert_eq!(committed.account.parent().as_deref(), Some(ACCOUNT_UID));
 }
 
-/// An account with mail switched off still gets its three sources, because
-/// which parts are on is the account's answer and not these sources'.
+/// An account with mail off still gets its three sources. The account, not
+/// these sources, records which parts are on.
 ///
-/// `MailEnabled=false` reaches the mail sources as `enabled`, bound to the
-/// account's by the collection backend on every load; sources that were never
-/// written at all would instead make "receive mail" a switch the user cannot
-/// turn back on without recreating the account.
+/// `MailEnabled=false` gets to the mail sources as `enabled`, which the
+/// collection backend binds to the account's value on each load. Without the
+/// sources, the user cannot enable "receive mail" again without a new account.
 #[test]
 fn the_sources_are_written_whether_or_not_the_account_offers_mail() {
     let mut account = account();
@@ -669,16 +656,16 @@ fn the_sources_are_written_whether_or_not_the_account_offers_mail() {
     assert_eq!(committed.account.parent().as_deref(), Some(ACCOUNT_UID));
 }
 
-/// What this writer writes is what the registry-side vfunc writes, on all three
-/// sources, or one of them is wrong.
+/// This writer writes the same data as the registry-side vfunc, on all three
+/// sources. If not, one of them is wrong.
 ///
-/// The two exist because they run in different processes with different things
-/// in reach — `prepare_mail` has the factory and not the user's answers, this
-/// has the answers and no factory — and `e_collection_backend_factory_prepare_mail`
-/// has no caller in Evolution 3.52 at all, so in practice this writer is the
-/// one that runs. That is exactly why the vfunc has to be held against it:
-/// nothing else would notice it going stale, and it is the implementation a
-/// later Evolution calling that hook would use.
+/// There are two writers because they run in different processes with access to
+/// different data. `prepare_mail` has the factory but not the user's answers.
+/// This writer has the answers but no factory.
+/// `e_collection_backend_factory_prepare_mail` has no caller in Evolution 3.52,
+/// so only this writer runs. Thus the test compares the vfunc with it. Nothing
+/// else detects when the vfunc becomes stale, and a later Evolution that calls
+/// that hook uses it.
 #[test]
 fn the_setup_writes_the_services_the_registry_side_vfunc_would_write() {
     let committed = Committed::new(&account());
@@ -706,7 +693,7 @@ fn the_setup_writes_the_services_the_registry_side_vfunc_would_write() {
         );
     }
 
-    // And the same two links, whichever writer made them.
+    // The same two links, from each writer.
     assert_eq!(
         prepared.account.identity_uid(),
         prepared.identity.uid(),
@@ -719,17 +706,17 @@ fn the_setup_writes_the_services_the_registry_side_vfunc_would_write() {
     );
 }
 
-/// One account, two writers of `[Security] Method`, and one spelling — or the
-/// account changes shape depending on which of them ran last.
+/// One account has two writers of `[Security] Method`, which must use one
+/// spelling. If not, the account changes when the other writer runs.
 ///
-/// This setup writes the method when the account is committed; the collection
-/// backend binds it onto the same two sources from the account, in
-/// `evolution-source-registry`, every time `child_added` fires for one of them.
-/// Neither can be dropped — the first runs before any registry has seen the
-/// account, the second is what keeps a mail source following an account the user
-/// edits later — so the constants have to agree. A disagreement would not fail
-/// anything visibly: both spellings are strings EDS stores, and only Camel's
-/// nick lookup at the far end can tell them apart.
+/// This setup writes the method when it commits the account. In
+/// `evolution-source-registry`, the collection backend binds it from the account
+/// to the same two sources each time `child_added` runs for one of them. Both
+/// are necessary. The first runs before a registry knows the account. The second
+/// updates a mail source when the user edits the account later. Thus the
+/// constants must agree. A difference causes no visible failure: EDS stores both
+/// spellings as strings, and only Camel's nick lookup at the end sees the
+/// difference.
 #[test]
 fn the_setup_and_the_collection_backend_spell_the_security_method_alike() {
     assert_eq!(
@@ -742,17 +729,16 @@ fn the_setup_and_the_collection_backend_spell_the_security_method_alike() {
     );
 }
 
-/// The mail account names the server the store would connect to, read back
-/// through the provider that will do the connecting.
+/// The mail account names the server for the store. The provider that
+/// connects reads it.
 ///
-/// This is the assertion the whole module exists for, and it is deliberately
-/// made at the far end: `ServerConfig::from_settings` is `jmap-mail`'s own
-/// reader, called on the very `CamelSettings` object
-/// `e_source_camel_configure_service` would hand a `CamelJmapStore`. Everything
-/// in between — that `[Authentication] Host` and `[Security] Method` are where
-/// an `ESourceCamel` binds host and encryption from, that the two spellings of
-/// "encrypted" are not the same string on the two sides — is machinery this test
-/// does not have to name, and would fail on if any of it were wrong.
+/// This is the main assertion of the module, and it is deliberately made at the
+/// end of the chain. `ServerConfig::from_settings` is `jmap-mail`'s own reader,
+/// called on the same `CamelSettings` object that
+/// `e_source_camel_configure_service` gives a `CamelJmapStore`. This test does
+/// not name the machinery between them. `ESourceCamel` binds host and
+/// encryption from `[Authentication] Host` and `[Security] Method`. The two
+/// sides spell "encrypted" differently. If one of these is wrong, the test fails.
 #[test]
 fn the_mail_account_names_the_server_the_store_would_connect_to() {
     let committed = Committed::new(&account());
@@ -766,15 +752,13 @@ fn the_mail_account_names_the_server_the_store_would_connect_to() {
     );
 }
 
-/// And the transport sends through the same server, because there is one
-/// server.
+/// The transport sends through the same server, because there is one server.
 ///
-/// Camel splits an account into a store and a transport with no pointer between
-/// them, and configures each from its own `ESource`; JMAP submits over the
-/// session it reads through, so the two sources have to say the same thing. A
-/// transport left unwritten is not a broken account either — it is an account
-/// that receives mail and cannot send it, discovered the first time the user
-/// presses Send.
+/// Camel divides an account into a store and a transport with no pointer
+/// between them, and configures each from its own `ESource`. JMAP submits over
+/// the session it reads through, so the two sources must agree. An unwritten
+/// transport is also not a broken account. The account receives mail but cannot
+/// send it, and the user sees this the first time they push Send.
 #[test]
 fn the_transport_sends_through_the_same_server_the_account_receives_from() {
     let committed = Committed::new(&account());
@@ -786,17 +770,17 @@ fn the_transport_sends_through_the_same_server_the_account_receives_from() {
     );
 }
 
-/// One account, one password: the mail sources are written so that EDS reads
-/// their credentials off the collection rather than asking for their own.
+/// One account has one password. EDS reads the credentials of the mail sources
+/// from the collection and does not ask for separate ones.
 ///
-/// `e_source_credentials_provider_ref_credentials_source` walks a source's
-/// parents to the collection and then applies exactly the rule this asserts —
-/// `e_util_can_use_collection_as_credential_source`, which compares the two
-/// sources' `[Authentication] Host` so that an account may put its outgoing
-/// service on a different server with a password of its own. That is a feature
-/// for SMTP-beside-IMAP and a trap here: a mail source whose host disagreed with
-/// the account's would be a second password prompt for the same server, and a
-/// second libsecret entry to get out of sync.
+/// `e_source_credentials_provider_ref_credentials_source` follows a source's
+/// parents to the collection. It then applies the rule that this test asserts:
+/// `e_util_can_use_collection_as_credential_source`. That function compares the
+/// `[Authentication] Host` of the two sources, so that an account can put its
+/// outgoing service on a different server with its own password. This helps
+/// SMTP beside IMAP, but here it is a risk. A mail source with a different host
+/// causes a second password prompt for the same server. It also causes a second
+/// libsecret entry that can become out of sync.
 #[test]
 fn the_two_mail_services_share_the_password_stored_on_the_account() {
     let committed = Committed::new(&account());
@@ -805,16 +789,16 @@ fn the_two_mail_services_share_the_password_stored_on_the_account() {
         ("the mail account", &committed.account),
         ("the transport", &committed.transport),
     ] {
-        // The rule has a trivial branch — a child with no `[Authentication]` at
-        // all shares by definition — and a mail source cannot take it: host,
-        // port and user have nowhere else to live. So this is checked first,
-        // or the assertion below would hold for a source that says nothing.
+        // The rule has a trivial branch: a child with no `[Authentication]`
+        // always shares. A mail source must not use it, because host, port and
+        // user have no other location. Thus check this first. If not, the
+        // assertion below is also true for an empty source.
         assert!(
             source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
             "{what} names no server, so sharing a password is not yet the \
              question"
         );
-        // SAFETY: two live sources, the first of which carries `[Collection]`.
+        // SAFETY: two live sources. The first has `[Collection]`.
         let shared = unsafe {
             e_util_can_use_collection_as_credential_source(committed.collection.0, source.0)
         };
@@ -826,24 +810,24 @@ fn the_two_mail_services_share_the_password_stored_on_the_account() {
     }
 }
 
-/// Both readers of a mail source's `[Security] Method` have to agree about what
-/// it means, and they read it in different ways.
+/// The two readers of a mail source's `[Security] Method` must agree on its
+/// meaning, and they read it differently.
 ///
-/// The field is a string, and on a mail source it is read twice: EDS derives
-/// `ESourceSecurity:secure` from it by comparing against `"none"`, while
-/// `ESourceCamel` looks it up as a `CamelNetworkSecurityMethod` **enum nick**.
-/// Only the first accepts EDS's own `"tls"`, the spelling `jmap_config::account`
-/// writes on the collection — and the way the second one fails is why this test
-/// asserts the enum value rather than the connection that comes out of it.
-/// `e_binding_transform_enum_nick_to_value` returns `FALSE` on a string that is
-/// not a nick and the binding then sets *nothing*, so the settings object keeps
-/// the property's default; in EDS 3.52 that default is
-/// `STARTTLS_ON_STANDARD_PORT`, which `jmap-mail` — which only distinguishes
-/// `NONE` from not — reads as encrypted. An account written as `"tls"` therefore
-/// connects perfectly well over TLS while telling Evolution's account editor a
-/// setting the user did not choose, and would become a refusal to connect the
-/// day Camel's default changed. Asserting the origin alone does not see any of
-/// that; asserting the value does.
+/// The field is a string, and two readers read it on a mail source. EDS derives
+/// `ESourceSecurity:secure` from it by comparison with `"none"`. `ESourceCamel`
+/// reads it as a `CamelNetworkSecurityMethod` **enum nick**. Only the first
+/// accepts EDS's own `"tls"`, which `jmap_config::account` writes on the
+/// collection. Because of how the second fails, this test asserts the enum
+/// value, not only the resulting connection.
+/// `e_binding_transform_enum_nick_to_value` returns `FALSE` for a string that is
+/// not a nick, and the binding then sets *nothing*. Thus the settings object
+/// keeps the property's default. In EDS 3.52 that default is
+/// `STARTTLS_ON_STANDARD_PORT`. `jmap-mail` only compares with `NONE`, so it
+/// reads that as encrypted. An account written as `"tls"` thus connects
+/// correctly over TLS. But Evolution's account editor shows a setting that the
+/// user did not select, and the account refuses to connect if Camel's default
+/// changes. An assertion on the origin only does not see this. An assertion on
+/// the value does.
 #[test]
 fn both_readers_of_the_security_method_agree_that_the_account_is_encrypted() {
     let committed = Committed::new(&account());
@@ -868,15 +852,15 @@ fn both_readers_of_the_security_method_agree_that_the_account_is_encrypted() {
     }
 }
 
-/// An account the user did not secure reaches its server in plaintext, which is
-/// the other half of the same field and only allowed to loopback.
+/// An account that the user did not secure connects to its server in
+/// plaintext. This is the other half of the same field, and only loopback
+/// permits it.
 ///
-/// Written because the interesting spelling is the one that is *not* an enum
-/// nick of its own: `"none"` is the string EDS and Camel happen to share, so a
-/// writer that got the secure case right by mapping to Camel's vocabulary could
-/// still get this one wrong by mapping too eagerly. The host is `localhost`
-/// because `jmap_backend_core::source::origin` refuses plaintext anywhere else,
-/// and because that is the account the mock server is reached by.
+/// This case is important because `"none"` is the spelling that EDS and Camel
+/// share. A writer that maps the secure case correctly to Camel's vocabulary
+/// can still map this case incorrectly if it maps all values. The host is
+/// `localhost` because `jmap_backend_core::source::origin` refuses plaintext to
+/// all other hosts, and because the mock server uses that account.
 #[test]
 fn an_account_the_user_did_not_secure_reaches_its_server_in_plaintext() {
     let account = Account {
@@ -906,17 +890,16 @@ fn an_account_the_user_did_not_secure_reaches_its_server_in_plaintext() {
     );
 }
 
-/// Editing an account's server reaches the settings object Camel is already
-/// holding, rather than only the keyfile.
+/// A change to an account's server updates the settings object that Camel
+/// already has, not only the keyfile.
 ///
-/// The order matters and is the reverse of every other test here: the
-/// `ESourceCamel` extension — and with it the `CamelSettings` instance and the
-/// bindings onto `[Authentication]` — is created *before* the commit, which is
-/// the real case. A running Evolution has a store with settings on it long
-/// before the user opens the account editor, and `G_BINDING_SYNC_CREATE` only
-/// explains the first read; what carries an edit afterwards is
-/// `G_BINDING_BIDIRECTIONAL`, in that direction, on properties this writer
-/// never touches by name.
+/// The sequence is important, and it is the opposite of all other tests here.
+/// The `ESourceCamel` extension (with the `CamelSettings` instance and the
+/// bindings to `[Authentication]`) exists *before* the commit, as in real use.
+/// A running Evolution has a store with settings long before the user opens the
+/// account editor. `G_BINDING_SYNC_CREATE` only explains the first read. After
+/// that, `G_BINDING_BIDIRECTIONAL` transfers an edit, in that direction, on
+/// properties that this writer never names.
 #[test]
 fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
     let committed = Committed::new(&account());
@@ -948,21 +931,20 @@ fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
     assert_eq!(
         committed.account.server(),
         Ok(ServerConfig {
-            // No port: the account stopped naming one, which is RFC 8620
-            // §2.2's own shape — SRV-autodiscovery-eligible, not merely a
-            // scheme default.
+            // No port: the account no longer names one. This is the RFC 8620
+            // §2.2 form, which SRV autodiscovery can use, not only a scheme
+            // default.
             target: ConnectTarget::Domain("jmap.example.org".to_owned()),
             user: Some("vera.new".to_owned()),
         })
     );
 }
 
-/// An interior NUL in the address is truncated rather than dropping the write.
+/// An interior NUL truncates the address, and the address is still written.
 ///
-/// Nothing stops a user pasting one and a C string cannot carry it; what must
-/// not happen is the field being left unwritten, which for an identity being
-/// edited means the *previous* address stays behind — the one case where
-/// refusing to write is worse than writing less.
+/// A user can paste one, and a C string cannot contain it. The field must not
+/// stay unwritten: on an edited identity, the *previous* address would stay.
+/// Here, a refusal to write is worse than a shorter write.
 #[test]
 fn an_interior_nul_in_the_address_is_truncated_rather_than_lost() {
     let mut account = account();

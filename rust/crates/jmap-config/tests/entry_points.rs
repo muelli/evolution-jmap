@@ -1,36 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Two modules, two entry points, one process — and each call has to reach the
-// module it was made on.
+// Two modules, two entry points, one process: each call must reach the module
+// that it was made on.
 //
-// Every EDS/Evolution module this repository installs exports the same two C
-// symbols, `e_module_load` and `e_module_unload`, because that is the pair
-// `EModule` resolves out of a shared object. In the field that is harmless:
-// each `.so` is dlopened separately and the symbols never meet. In a test
-// binary they do. `jmap-config` dev-depends on `jmap-backend-collection` — the
-// account this crate writes is only right if the collection backend reads it
-// back as the account that was written — so both rlibs land in one link, and
-// two definitions of `e_module_load` land with them.
+// Each EDS/Evolution module that this repository installs exports the same two
+// C symbols, `e_module_load` and `e_module_unload`, because `EModule` resolves
+// that pair from a shared object. In production this is safe: each `.so` is
+// dlopened separately and the symbols do not meet. In a test binary, they
+// meet. `jmap-config` dev-depends on `jmap-backend-collection` (the account
+// that this crate writes is correct only if the collection backend reads it
+// back as the same account). Thus both rlibs are in one link, with two
+// definitions of `e_module_load`.
 //
-// A `#[unsafe(no_mangle)]` function *is* its C symbol, so while the two rlibs
-// still carried those definitions there was no longer a
-// `jmap_config::module::` entry point and a `jmap_backend_collection::module::`
-// one to call: the two Rust paths compiled to a call to the same symbol, and
-// whichever definition the linker kept answered both. Under `CARGO_INCREMENTAL=0`
-// — CMake's setting for the `rust-test-eds` ctest — that is a hard `duplicate
-// symbol` link error; under the incremental default it linked, and the failure
-// was silent, with `jmap_config::module::e_module_load` registering the
-// *collection* backend's types and nothing anywhere saying so.
+// A `#[unsafe(no_mangle)]` function *is* its C symbol. Thus, while the two
+// rlibs had those definitions, there were no separate
+// `jmap_config::module::` and `jmap_backend_collection::module::` entry points.
+// The two Rust paths compiled to a call to the same symbol, and the definition
+// that the linker kept answered both. With `CARGO_INCREMENTAL=0` (the CMake
+// setting for the `rust-test-eds` ctest), this is a `duplicate symbol` link
+// error. With the incremental default, it linked and the failure was silent:
+// `jmap_config::module::e_module_load` registered the types of the
+// *collection* backend, and nothing reported it.
 //
-// The rlibs no longer define them: each `.so` is now built from a `*-module`
-// cdylib crate that holds the two `no_mangle` functions and nothing else, and
-// the bodies below it are ordinary Rust functions with ordinary mangled names.
-// This test is what keeps it that way. It calls each crate's entry point
-// through a `GTypeModule` of its own and asks the type system which types
-// appeared; the answer distinguishes the two definitions, which a link that has
-// collapsed them cannot do — so re-adding a `no_mangle` to either rlib turns
-// this red, either as a wrong answer here or as a link error under CMake.
+// The rlibs do not define these symbols now. Each `.so` is built from a
+// `*-module` cdylib crate that holds only the two `no_mangle` functions. The
+// bodies are ordinary Rust functions with ordinary mangled names. This test
+// keeps it so. It calls the entry point of each crate through a separate
+// `GTypeModule` and asks the type system which types appeared. The answer
+// identifies the two definitions, and a link that merged them cannot give that
+// answer. Thus, if a `no_mangle` is added again to an rlib, this test fails:
+// with a wrong answer here, or with a link error under CMake.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -42,18 +42,18 @@ use gobject_sys::{
 };
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// The names the two crates register, spelled out rather than imported.
+/// The names that the two crates register, written here and not imported.
 ///
-/// Imported constants would be equal to whatever the types under test call
-/// themselves, which is exactly the question — a test that asked the code for
-/// the answer would agree with a module that registered the wrong types under
-/// the wrong names.
+/// Imported constants are equal to the names that the types under test use,
+/// and those names are the subject of the test. A test that gets the answer
+/// from the code agrees with a module that registers wrong types with wrong
+/// names.
 const CONFIG_BACKEND: &CStr = c"EMailConfigServiceBackendJmap";
 const COLLECTION_BACKEND: &CStr = c"ECollectionBackendJmap";
 const COLLECTION_FACTORY: &CStr = c"ECollectionBackendJmapFactory";
 
-/// A `GTypeModule` standing in for the `EModule` a host would load us as, with
-/// the entry point to call left to the concrete type below.
+/// A `GTypeModule` in place of the `EModule` that a host loads this code as.
+/// The concrete types below select the entry point.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -64,7 +64,8 @@ struct TestModuleClass {
     parent_class: GTypeModuleClass,
 }
 
-/// The setup module's stand-in: its `load` calls `jmap-config`'s entry point.
+/// The substitute for the setup module: its `load` calls the `jmap-config`
+/// entry point.
 #[repr(C)]
 struct ConfigModule(TestModule);
 
@@ -84,21 +85,21 @@ unsafe impl ObjectSubclass for ConfigModule {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where the slot lives.
+        // SAFETY: `class` points to a newly allocated class struct of this type,
+        // which starts with GTypeModuleClass, where the slot is.
         unsafe { (*class).0.parent_class.load = Some(load_config) }
     }
 }
 
 unsafe extern "C" fn load_config(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
+    // SAFETY: GLib gives the module that loads, which is what the entry
+    // point needs.
     unsafe { jmap_config::module::load(module) };
     GTRUE
 }
 
-/// The collection module's stand-in: its `load` calls the *other* crate's entry
-/// point, which is the one that used to be the same C symbol.
+/// The substitute for the collection module: its `load` calls the entry point
+/// of the *other* crate, which was the same C symbol before.
 #[repr(C)]
 struct CollectionModule(TestModule);
 
@@ -128,10 +129,10 @@ unsafe extern "C" fn load_collection(module: *mut GTypeModule) -> gboolean {
     GTRUE
 }
 
-/// Builds a stand-in module of type `T` and uses it, which runs its `load`.
+/// Builds a substitute module of type `T` and uses it, which runs its `load`.
 ///
-/// The reference the use takes is never given back: the types have to stay
-/// registered for the assertions that follow.
+/// The reference from the use is never released: the types must stay
+/// registered for the subsequent assertions.
 fn use_module<T: ObjectSubclass>() -> *mut GTypeModule {
     let gtype = register_static::<T>();
     assert_ne!(gtype, 0, "the stand-in module type did not register");
@@ -150,16 +151,17 @@ fn use_module<T: ObjectSubclass>() -> *mut GTypeModule {
     module
 }
 
-/// What the type system says a type was registered against, or null.
+/// The module that the type system has for a type, or null.
 fn plugin_of(name: &CStr) -> *mut GTypeModule {
-    // SAFETY: `name` is NUL-terminated; g_type_get_plugin takes any GType,
-    // including 0 for a name nothing registered.
+    // SAFETY: `name` is NUL-terminated. g_type_get_plugin accepts all GTypes,
+    // also 0 for a name that is not registered.
     unsafe { g_type_get_plugin(g_type_from_name(name.as_ptr())) }.cast()
 }
 
-/// One test, not three: the steps are ordered — what the first `load` must
-/// *not* have registered is only a question before the second one runs — and
-/// GLib's type system is process-global, so separate `#[test]`s would race.
+/// One test, not three, for two reasons. The sequence of the steps is
+/// important: only before the second `load` runs can the test check what the
+/// first `load` did *not* register. Also, the GLib type system is
+/// process-global, so separate `#[test]`s would race.
 #[test]
 fn each_module_registers_its_own_types_and_only_its_own() {
     let config = use_module::<ConfigModule>();

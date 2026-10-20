@@ -1,54 +1,50 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where an account's discovered OAuth 2.0 endpoints and client id live on
-//! disk: a custom `ESourceExtension`, `[JMAP OAuth2]` in the account's own
-//! keyfile.
+//! The on-disk storage of the discovered OAuth 2.0 endpoints and client id of
+//! an account: a custom `ESourceExtension`, `[JMAP OAuth2]` in the keyfile of
+//! the account.
 //!
-//! `jmap_client::oauth` can discover a deployment's endpoints (RFC 8414) and
-//! register a client id with it (RFC 7591), but both are network calls, and
-//! the `EOAuth2Service` interface EDS asks an account's endpoints and client
-//! id through — `get_client_id`, `get_authentication_uri`, `get_refresh_uri`
-//! — is a set of *synchronous* vfuncs with no way to make one. So discovery
-//! and registration have to happen once, ahead of time (most plausibly from
-//! M7's setup UI), and the answer has to survive an Evolution restart. This
-//! module is where it is kept, so that implementation can be what
-//! `eds-sys/tests/oauth2.rs` already expects it to be: ordinary Rust reading
-//! a stored value, with none of the per-call ownership questions a `const
-//! gchar *` an interface vfunc *computed* would raise.
+//! `jmap_client::oauth` can discover the endpoints of a deployment (RFC 8414)
+//! and register a client id with it (RFC 7591), but both are network calls.
+//! EDS gets the endpoints and client id of an account through the
+//! `EOAuth2Service` interface (`get_client_id`, `get_authentication_uri`,
+//! `get_refresh_uri`). These are *synchronous* vfuncs, so they cannot make a
+//! network call. Thus discovery and registration occur one time, before
+//! authentication ([`crate::oauth2_setup::discover_and_register`]), and the
+//! result must stay after an Evolution restart. This module keeps the result.
+//! Thus the implementation agrees with `eds-sys/tests/oauth2.rs`: ordinary
+//! Rust reads a stored value. A `const gchar *` that an interface vfunc
+//! *computes* would cause per-call ownership questions; a stored value does not.
 //!
 //! ## A custom extension, not a new field on an existing one
 //!
-//! `ESource` extensions are found by name: `e_source_get_extension` walks
-//! every registered subclass of `ESourceExtension` and matches
-//! `ESourceExtensionClass::name` against the string it was asked for — the
-//! same mechanism `[Collection]`, `[Authentication]` and `[Security]` are
-//! found by in [`crate::account`], and open to third-party types the same
-//! way (checked against upstream's `e-source.c`, not assumed: the lookup
-//! walks `g_type_children` of `ESourceExtension` and hashes each concrete
-//! subclass's `name` field, with no distinction between EDS's own subclasses
-//! and anyone else's). Registering [`Extension`] is therefore the whole of
-//! "storage this project defines", with none of EDS's own extensions
-//! touched — and, as with them, the type has to be registered (referenced)
-//! before the first lookup for its name, which [`read`] and [`apply`] do the
-//! same way [`crate::account::apply`] does for EDS's own extension types.
+//! `ESource` extensions are found by name. `e_source_get_extension` examines
+//! all registered subclasses of `ESourceExtension` and compares
+//! `ESourceExtensionClass::name` with the requested string. [`crate::account`]
+//! finds `[Collection]`, `[Authentication]` and `[Security]` with the same
+//! mechanism, and third-party types can use it too. (This is from upstream's
+//! `e-source.c`, not an assumption: the lookup walks `g_type_children` of
+//! `ESourceExtension` and hashes the `name` field of each concrete subclass. It
+//! does not make a distinction between EDS's own subclasses and other
+//! subclasses.) Thus the registration of [`Extension`] is all of the "storage
+//! this project defines", and no EDS extension changes. As with EDS's
+//! extensions, the type must be registered (referenced) before the first
+//! lookup for its name. [`read`] and [`apply`] do this the same way as
+//! [`crate::account::apply`] does for EDS's own extension types.
 //!
-//! ## Properties, because that is what persists
+//! ## Properties, because properties persist
 //!
-//! A GObject property flagged `E_SOURCE_PARAM_SETTING` is what `ESource`'s
-//! own (de)serialisation reads and writes — not a convenience, the only path
-//! a value here has to the `.source` file on disk. So [`Extension`] installs
-//! five string properties under that flag rather than keeping the five
-//! fields as plain Rust state nothing outside this process would ever see
-//! again after a restart.
+//! `ESource`'s own (de)serialisation reads and writes only GObject properties
+//! with the flag `E_SOURCE_PARAM_SETTING`. That is the only path from a value
+//! here to the `.source` file on disk. Thus [`Extension`] installs seven string
+//! properties with that flag. Plain Rust state would be lost at a restart.
 //!
-//! [`apply`] and [`read`] are this module's own door onto them, and read and
-//! write the storage directly rather than going through `g_object_get`/
-//! `_set`: unlike [`crate::account`]'s fields, which read and write
-//! extensions EDS itself defines and already exposes typed setters for,
-//! there is no existing accessor to reuse here, so this module writes both
-//! doors onto one storage — its own callers, and `get_property`/
-//! `set_property`, which is what EDS's serialisation calls.
+//! [`apply`] and [`read`] are this module's own interface to the properties.
+//! [`crate::account`]'s fields use extensions that EDS defines, which have
+//! typed setters. No such accessor exists here, so this module supplies two
+//! interfaces to one storage: one for its own callers, and `get_property`/
+//! `set_property` for EDS's serialisation.
 
 use std::ffi::{CStr, CString, c_char};
 use std::sync::{Mutex, PoisonError};
@@ -71,100 +67,93 @@ use jmap_backend_core::marshal::extension_if_present;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
-/// The keyfile group EDS finds this storage by: `e_source_get_extension`'s
-/// `extension_name` argument, and what an account's `.source` file shows as
-/// a group header.
+/// The keyfile group name of this storage. It is the `extension_name` argument
+/// of `e_source_get_extension`, and the group header in the `.source` file of
+/// an account.
 ///
-/// On an EDS that has no `ESourceOAuth2Client` of its own, that group is
-/// `[JMAP OAuth2]` and the type behind it is [`Extension`] below. On EDS
-/// 3.63.1 and newer it is upstream's own `[OAuth2 Client]`
-/// (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`), whose eight string properties are
-/// this module's seven plus an `issuer` nothing here writes, and which
-/// upstream's `EOAuth2ServiceDynamic` reads directly. Nothing of this
-/// module's own is registered there: two `ESourceExtension` classes
-/// answering to one name would make `e_source_get_extension` return
-/// whichever `source_find_extension_classes_rec` hashed last.
+/// On an EDS without its own `ESourceOAuth2Client`, the group is
+/// `[JMAP OAuth2]` and its type is [`Extension`] below. On EDS 3.63.1 and
+/// newer, it is upstream's own `[OAuth2 Client]`
+/// (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`). Its eight string properties are the
+/// seven of this module plus an `issuer` that this module does not write.
+/// Upstream's `EOAuth2ServiceDynamic` reads it directly. This module registers
+/// no type for that name: with two `ESourceExtension` classes for one name,
+/// `e_source_get_extension` returns the one that
+/// `source_find_extension_classes_rec` hashed last.
 ///
-/// Accounts set up against an older EDS are not carried over; see
-/// [`crate::oauth2_service::register`], which is where that decision is
-/// written down.
+/// Accounts configured with an older EDS are not migrated.
+/// [`crate::oauth2_service::register`] records that decision.
 #[cfg(not(eds_oauth2_dynamic))]
 pub const EXTENSION_NAME: &CStr = c"JMAP OAuth2";
 
-/// See the `#[cfg(not(eds_oauth2_dynamic))]` arm above, which carries this
-/// constant's documentation. The literal is upstream's
-/// `E_SOURCE_EXTENSION_OAUTH2_CLIENT`, a `#define` of a string rather than a
-/// symbol, so there is nothing for bindgen to hand back and it is spelled
-/// again here.
+/// The `#[cfg(not(eds_oauth2_dynamic))]` arm above has the documentation of
+/// this constant. The literal is upstream's `E_SOURCE_EXTENSION_OAUTH2_CLIENT`.
+/// That is a `#define` of a string, not a symbol, so bindgen cannot supply it
+/// and it is written again here.
 #[cfg(eds_oauth2_dynamic)]
 pub const EXTENSION_NAME: &CStr = c"OAuth2 Client";
 
-/// `E_SOURCE_PARAM_SETTING`, computed rather than bound: `e-source.h` defines
-/// it as a plain `#define (1 << G_PARAM_USER_SHIFT)`, not a symbol, so there
-/// is nothing for bindgen to hand back.
+/// `E_SOURCE_PARAM_SETTING`, calculated here. `e-source.h` defines it as a plain
+/// `#define (1 << G_PARAM_USER_SHIFT)`, not a symbol, so bindgen cannot supply it.
 const E_SOURCE_PARAM_SETTING: GParamFlags = 1 << (G_PARAM_USER_SHIFT as u32);
 
-/// What a JMAP account's `EOAuth2Service` implementation will need per
-/// account, once it exists: RFC 8414 discovery's endpoints and RFC 7591
-/// registration's client id, plus the redirect URI this client registered
-/// with. All five are set together, by whatever performed discovery and
-/// registration — there is no partial state for a reader to make sense of,
-/// only "not done yet", which is every field absent.
+/// The per-account data that the `EOAuth2Service` implementation
+/// ([`crate::oauth2_service`]) needs: the RFC 8414 endpoints, the RFC 7591
+/// client id and secret, the registered redirect URI, the scope and the
+/// resource. Discovery and registration write all seven together. Thus a
+/// reader sees no partial state, only "not done yet", where all fields are absent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
-    /// RFC 7591 §3.2.1's `client_id` — absent until registration succeeds.
+    /// RFC 7591 §3.2.1's `client_id`. Absent until registration succeeds.
     pub client_id: Option<String>,
-    /// RFC 7591 §3.2.1's `client_secret`, present only if the server issued
-    /// one despite this client registering as public
+    /// RFC 7591 §3.2.1's `client_secret`. Present only if the server issued one,
+    /// although this client registers as public
     /// (`jmap_client::oauth::CLIENT_AUTH_METHOD`).
     pub client_secret: Option<String>,
-    /// RFC 8414 §2's `authorization_endpoint` —
-    /// `EOAuth2Service::get_authentication_uri`'s eventual answer.
+    /// RFC 8414 §2's `authorization_endpoint`. This is the value of
+    /// `EOAuth2Service::get_authentication_uri`.
     pub authorization_endpoint: Option<String>,
-    /// RFC 8414 §2's `token_endpoint` — both where a code is redeemed and
-    /// `EOAuth2Service::get_refresh_uri`'s eventual answer, RFC 6749 having
-    /// one endpoint serve what EDS asks about as two.
+    /// RFC 8414 §2's `token_endpoint`. The code is redeemed here, and it is also
+    /// the value of `EOAuth2Service::get_refresh_uri`: RFC 6749 uses one endpoint
+    /// for the two URIs that EDS asks for.
     pub token_endpoint: Option<String>,
-    /// RFC 6749 §3.1.2's `redirect_uri`, fixed at registration time and asked
-    /// for again on every authentication — `get_redirect_uri`.
+    /// RFC 6749 §3.1.2's `redirect_uri`. Registration fixes it, and each
+    /// authentication asks for it again (`get_redirect_uri`).
     pub redirect_uri: Option<String>,
-    /// The space-joined RFC 6749 §3.3 scope this client registered for and
-    /// must therefore name explicitly on every authorization request —
-    /// relying on the registered default instead is server-discretionary and
-    /// has been seen rejected live (`error=invalid_scope`, Fastmail
-    /// 2026-08-23). Absent for a deployment advertising no scopes.
+    /// The space-joined RFC 6749 §3.3 scope of the registration. Each
+    /// authorization request must name it explicitly. The server decides if it
+    /// uses the registered default, and a live server rejected that
+    /// (`error=invalid_scope`, Fastmail 2026-08-23). Absent for a deployment
+    /// that advertises no scopes.
     pub scope: Option<String>,
-    /// The RFC 8707 `resource` indicator — the JMAP session resource the
-    /// token is for, named on the authorization request and both token
-    /// grants. Deployments differ on whether it is required; one that
-    /// requires it rejects its absence outright (`error=invalid_target`,
-    /// Fastmail 2026-08-23), and RFC 8707 makes sending it always-valid.
-    /// Absent when the discovery-time probe could not determine it.
+    /// The RFC 8707 `resource` indicator: the JMAP session resource of the
+    /// token. The authorization request and both token grants name it. Some
+    /// deployments require it and reject a request without it
+    /// (`error=invalid_target`, Fastmail 2026-08-23). RFC 8707 makes it always
+    /// valid to send. Absent when the probe at discovery could not find it.
     pub resource: Option<String>,
 }
 
-/// The instance struct: nothing but [`ESourceExtension`]'s own state plus one
-/// [`Slot`] for the five values, following the layout contract
-/// [`ObjectSubclass`] requires.
+/// The instance struct: [`ESourceExtension`]'s own state plus one [`Slot`] for
+/// the seven values, in the layout that [`ObjectSubclass`] requires.
 #[repr(C)]
 pub struct Extension {
     parent: ESourceExtension,
     fields: Slot<Mutex<Fields>>,
 }
 
-/// The class struct: nothing but [`ESourceExtensionClass`]'s own state.
-/// `class_init` reaches into the leading `name` field through it, and into
-/// `GObjectClass`'s `get_property`/`set_property` through *that*.
+/// The class struct: only [`ESourceExtensionClass`]'s own state. `class_init`
+/// writes its leading `name` field, and through *that*, `GObjectClass`'s
+/// `get_property`/`set_property`.
 #[repr(C)]
 pub struct ExtensionClass {
     parent_class: ESourceExtensionClass,
 }
 
-/// The five values, owned as `CString`s so `get_property` can hand a borrowed
-/// pointer straight to `g_value_set_string` (which copies it) without an
-/// allocation on every read — and so [`borrowed`] can hand one to an
-/// `EOAuth2Service` vfunc's caller, which is what [`retired`](Self::retired)
-/// exists for.
+/// The seven values, owned as `CString`s. Thus `get_property` gives a borrowed
+/// pointer directly to `g_value_set_string` (which copies it), with no
+/// allocation on each read. Also [`borrowed`] can give a pointer to the caller
+/// of an `EOAuth2Service` vfunc. [`retired`](Self::retired) exists for that case.
 #[derive(Default)]
 struct Fields {
     client_id: Option<CString>,
@@ -174,44 +163,41 @@ struct Fields {
     redirect_uri: Option<CString>,
     scope: Option<CString>,
     resource: Option<CString>,
-    /// Values a later write replaced, kept alive rather than freed.
+    /// Values that a later write replaced. They stay allocated and are not freed.
     ///
-    /// [`borrowed`] hands an `EOAuth2Service` vfunc's caller a `const gchar
-    /// *` into one of the five fields above, and that caller has no way to
-    /// tell us when it is done with it — EDS's own users of those vfuncs
-    /// (`e-oauth2-service.c`) copy the string a few instructions later, with
-    /// no lock held and no callback we could hang a free on. So the only
-    /// lifetime this storage can promise is the one [`borrowed`]'s doc
-    /// states: valid for as long as the extension is. Freeing a replaced
-    /// value would break that promise for any pointer already in flight, so
-    /// replaced values move here instead and are dropped together with the
-    /// extension, in [`ObjectSubclass::finalize`].
+    /// [`borrowed`] gives the caller of an `EOAuth2Service` vfunc a
+    /// `const gchar *` into one of the seven fields above. That caller cannot
+    /// tell this module when it no longer uses the pointer. EDS's own users of
+    /// those vfuncs (`e-oauth2-service.c`) copy the string a few instructions
+    /// later, with no lock held and no callback that could free it. Thus this
+    /// storage can only promise the lifetime in [`borrowed`]'s doc: valid while
+    /// the extension is alive. If a replaced value were freed, a pointer already
+    /// in use would become invalid. Thus replaced values move here and are
+    /// dropped with the extension, in [`ObjectSubclass::finalize`].
     ///
-    /// The growth this trades for is bounded by the number of writes that
-    /// actually *change* a field ([`Self::set`] leaves an unchanged one
-    /// alone), each of which corresponds to a real change of an account's
-    /// discovered OAuth 2.0 configuration — a human-paced event, and one
-    /// EDS's own `source_set_property_from_key_file` already declines to
-    /// perform when the value did not differ.
+    /// The growth is limited to the number of writes that *change* a field
+    /// ([`Self::set`] does not write an unchanged value). Each such write is a
+    /// real change of the discovered OAuth 2.0 configuration of an account. That
+    /// occurs at human speed, and EDS's own `source_set_property_from_key_file`
+    /// does not write a value that did not change.
     ///
     /// A retired `client_secret` is deliberately not wiped, unlike a PKCE
-    /// verifier (`oauth2_service::Verifiers`). The current secret is an
-    /// ordinary extension property, so it already sits in plain text in the
-    /// account's `.source` key file and in every `GValue` EDS copies it into;
-    /// wiping an old copy here would protect nothing those do not expose. It is
-    /// also absent for the public clients this project registers in practice.
+    /// verifier (`oauth2_service::Verifiers`). The current secret is an ordinary
+    /// extension property, so it is already in plain text in the `.source` key
+    /// file of the account and in each `GValue` that EDS copies it into. Thus a
+    /// wipe of an old copy here gives no protection. Also, the public clients
+    /// that this project registers usually have no secret.
     retired: Vec<CString>,
 }
 
 impl Fields {
-    /// Writes one field by property id, answering `false` for an id this
-    /// class never installed.
+    /// Writes one field by property id. Returns `false` for an id that this
+    /// class did not install.
     ///
-    /// Never frees the value it displaces: an unchanged write is not
-    /// performed at all, keeping the existing allocation — and so any
-    /// pointer [`borrowed`] handed out of it — exactly where it was, and a
-    /// changed write moves the old value to [`Self::retired`]. Both halves
-    /// are what make [`borrowed`]'s documented lifetime true.
+    /// Never frees the value that it replaces. An unchanged write does nothing,
+    /// so the existing allocation (and all pointers from [`borrowed`] into it)
+    /// stays. A changed write moves the old value to [`Self::retired`]. These
+    /// two rules make [`borrowed`]'s documented lifetime true.
     fn set(&mut self, id: u32, value: Option<CString>) -> bool {
         let replaced = {
             let slot = match id {
@@ -229,15 +215,15 @@ impl Fields {
             }
             mem::replace(slot, value)
         };
-        // Moving a `CString` moves the pointer, not the bytes it points at,
-        // so a pointer into `replaced` stays valid across this push and
-        // across any later reallocation of the vector itself.
+        // A move of a `CString` moves the pointer, not the bytes. Thus a pointer
+        // into `replaced` stays valid after this push and after all later
+        // reallocations of the vector.
         self.retired.extend(replaced);
         true
     }
 
-    /// One field, by property id — `None` for an id this class never
-    /// installed, which is distinct from a field that is installed and unset.
+    /// Returns one field by property id. `None` for an id that this class did
+    /// not install, which is different from an installed field without a value.
     fn get(&self, id: u32) -> Option<&Option<CString>> {
         match id {
             PROP_CLIENT_ID => Some(&self.client_id),
@@ -252,10 +238,10 @@ impl Fields {
     }
 }
 
-/// The GObject property names `class_init` installs, in declaration order —
-/// the full set a caller binding or copying this extension between sources
-/// must carry. `jmap_backend_collection::child_added` binds exactly these
-/// from an account onto its children.
+/// The GObject property names that `class_init` installs, in declaration order.
+/// A caller that binds or copies this extension between sources must use all
+/// of them. `jmap_backend_collection::child_added` binds exactly these from an
+/// account to its children.
 pub const PROPERTY_NAMES: [&CStr; 7] = [
     c"client-id",
     c"client-secret",
@@ -266,8 +252,8 @@ pub const PROPERTY_NAMES: [&CStr; 7] = [
     c"resource",
 ];
 
-// Paired with the ids `class_init` installs them under — dense from 1, since
-// GObject treats 0 as "no property", and local to this class alone.
+// The ids that `class_init` installs the names with. They are dense from 1,
+// because GObject uses 0 for "no property". They apply to this class only.
 const PROPERTIES: [(u32, &CStr); 7] = [
     (1, PROPERTY_NAMES[0]),
     (2, PROPERTY_NAMES[1]),
@@ -286,9 +272,9 @@ const PROP_REDIRECT_URI: u32 = PROPERTIES[4].0;
 const PROP_SCOPE: u32 = PROPERTIES[5].0;
 const PROP_RESOURCE: u32 = PROPERTIES[6].0;
 
-// SAFETY: both structs are #[repr(C)] and lead with ESourceExtension's own
-// instance/class structs, whose layout eds-sys's tests/layout.rs checks
-// against `g_type_query`; ESourceExtension derives from GObject.
+// SAFETY: both structs are #[repr(C)] and start with ESourceExtension's own
+// instance/class structs. eds-sys's tests/layout.rs checks their layout with
+// `g_type_query`. ESourceExtension derives from GObject.
 unsafe impl ObjectSubclass for Extension {
     const NAME: &'static CStr = c"JmapOAuth2Extension";
     type Instance = Extension;
@@ -300,15 +286,14 @@ unsafe impl ObjectSubclass for Extension {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `ESourceExtensionClass`, which the
-        // contract above pins — this is the same field
-        // `source_find_extension_classes_rec` reads to match an extension
-        // name to a `GType`.
+        // SAFETY: `class` starts with `ESourceExtensionClass`, as the contract
+        // above makes sure. `source_find_extension_classes_rec` reads this same
+        // field to match an extension name to a `GType`.
         unsafe { (*class).parent_class.name = EXTENSION_NAME.as_ptr() };
 
-        // SAFETY: `ExtensionClass` leads with `ESourceExtensionClass`, which
-        // leads with `GObjectClass` — the same transitive leading-field cast
-        // `jmap_mail::settings` uses for `CamelJmapSettingsClass`.
+        // SAFETY: `ExtensionClass` starts with `ESourceExtensionClass`, which
+        // starts with `GObjectClass`. `jmap_mail::settings` uses the same
+        // transitive leading-field cast for `CamelJmapSettingsClass`.
         let object_class = class.cast::<GObjectClass>();
         unsafe {
             (*object_class).set_property = Some(set_property);
@@ -331,22 +316,22 @@ unsafe impl ObjectSubclass for Extension {
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: a freshly zeroed instance — the slot's own empty state.
+        // SAFETY: the instance is newly zeroed, which is the empty state of the slot.
         unsafe { (*instance).fields.init(Mutex::new(Fields::default())) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // SAFETY: the last reference is gone; nothing else can reach `fields`.
+        // SAFETY: the last reference is released, so nothing else can reach `fields`.
         unsafe { (*instance).fields.clear() };
     }
 }
 
-/// Routes a property write into the instance's own storage.
+/// Writes a property into the storage of the instance.
 ///
-/// Guarded like every other function C calls into this crate: this runs
-/// inside `g_object_set`, which EDS's own `.source` parser reaches when it
-/// restores an account, and a panic unwinding out of it is undefined
-/// behaviour in a process full of other people's mail.
+/// Guarded like all other functions that C calls in this crate. This runs in
+/// `g_object_set`, which EDS's own `.source` parser calls when it restores an
+/// account. A panic that unwinds out of it is undefined behaviour in a process
+/// that holds the mail of other persons.
 unsafe extern "C" fn set_property(
     object: *mut GObject,
     id: u32,
@@ -354,14 +339,14 @@ unsafe extern "C" fn set_property(
     _pspec: *mut GParamSpec,
 ) {
     guard("JmapOAuth2Extension::set_property", (), || {
-        // SAFETY: GObject passes an instance of this type; `instance_init`
-        // has already run by the time any vfunc can be dispatched on it.
+        // SAFETY: GObject passes an instance of this type. `instance_init` runs
+        // before a vfunc can be dispatched on it.
         let fields = unsafe { &*object.cast::<Extension>() }
             .fields
             .get()
             .expect("set_property dispatched before instance_init ran");
         let mut fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
-        // SAFETY: `value` holds the string type every pspec above declares.
+        // SAFETY: `value` holds the string type that all pspecs above declare.
         let text = unsafe { read_cstring(value) };
         if !fields.set(id, text) {
             log_critical(&format!(
@@ -371,7 +356,7 @@ unsafe extern "C" fn set_property(
     });
 }
 
-/// The reading half, symmetric with [`set_property`].
+/// Reads a property. This is the opposite of [`set_property`].
 unsafe extern "C" fn get_property(
     object: *mut GObject,
     id: u32,
@@ -391,98 +376,94 @@ unsafe extern "C" fn get_property(
             ));
             return;
         };
-        // SAFETY: `value` is the `GValue` GObject is filling for this get;
-        // `g_value_set_string` copies whatever `text` points at before this
-        // call returns, so the borrow on `fields` does not need to outlive it.
+        // SAFETY: `value` is the `GValue` that GObject fills for this get.
+        // `g_value_set_string` copies the data at `text` before this call
+        // returns, so the borrow on `fields` does not need to live longer.
         unsafe { g_value_set_string(value, text.map_or(ptr::null(), CStr::as_ptr)) };
     });
 }
 
-/// Copies a `GValue`'s string, or `None` for a NULL one — a cleared property
-/// is exactly how a caller un-sets a field, the same as every string setter
-/// in [`crate::account`].
+/// Copies the string of a `GValue`, or returns `None` for NULL. A caller clears a
+/// field with a NULL property value, as with all string setters in
+/// [`crate::account`].
 ///
 /// # Safety
 ///
 /// `value` holds a `G_TYPE_STRING` `GValue`, valid for the call.
 unsafe fn read_cstring(value: *const GValue) -> Option<CString> {
-    // SAFETY: forwarded from the caller's contract; the returned pointer is
-    // borrowed for this call only, which is why it is copied below rather
-    // than kept.
+    // SAFETY: the caller's contract applies. The returned pointer is borrowed
+    // for this call only, so the code below copies it and does not keep it.
     let text = unsafe { g_value_get_string(value) };
     if text.is_null() {
         return None;
     }
-    // SAFETY: a non-NULL result is a NUL-terminated string valid for this
-    // call.
+    // SAFETY: a non-NULL result is a NUL-terminated string, valid for this call.
     Some(unsafe { CStr::from_ptr(text) }.to_owned())
 }
 
-/// Registers [`Extension`] (or finds it already registered), which is what
-/// makes it one `e_source_get_extension`/`e_source_has_extension` can match
-/// `EXTENSION_NAME` against — an unregistered type is invisible to the
-/// lookup the same way an unregistered EDS extension type would be, per
-/// `e-source.c`'s `source_find_extension_classes_rec`.
+/// Registers [`Extension`] (or finds the existing registration). Only then can
+/// `e_source_get_extension`/`e_source_has_extension` match `EXTENSION_NAME` to
+/// it. The lookup cannot see an unregistered type, the same as an unregistered
+/// EDS extension type (see `e-source.c`'s `source_find_extension_classes_rec`).
 ///
-/// [`apply`] and [`read`] call this before touching a source, so any caller
-/// that only goes through them never has to think about it — the same way a
-/// caller of `account::apply` never registers `ESourceCollection`'s `GType`
-/// by hand. The one caller that *does* have to think about it is whatever
-/// eventually loads this project's EDS module: EDS's own `.source` parser
-/// restores every group's extension by the same name lookup, so this has to
-/// have run — once, at module load, alongside registering the module's other
-/// types — before EDS is asked to parse a keyfile that carries `[JMAP
-/// OAuth2]`, or that group is silently unrecognised rather than restored.
+/// [`apply`] and [`read`] call this before they use a source. Thus their
+/// callers do not need to call it, in the same way that a caller of
+/// `account::apply` does not register `ESourceCollection`'s `GType` manually.
+/// The code that loads this project's EDS module *must* call it. EDS's own
+/// `.source` parser restores the extension of each group by the same name
+/// lookup. Thus this function must run one time, at module load with the
+/// registration of the other types of the module. It must run before EDS
+/// parses a keyfile with `[JMAP OAuth2]`. If not, EDS silently ignores that
+/// group and does not restore it.
 #[cfg(not(eds_oauth2_dynamic))]
 pub fn ensure_registered() {
     jmap_backend_core::subclass::register_static::<Extension>();
 }
 
-/// Where EDS brings its own `ESourceOAuth2Client`, "registering" is referencing
-/// upstream's type rather than defining one: `e_source_get_extension`'s name
-/// lookup walks `g_type_children` of `ESourceExtension`, and a type whose
-/// `get_type` nothing has called yet is not among them. See the
-/// `#[cfg(not(eds_oauth2_dynamic))]` arm above for the rest of the contract,
-/// which is unchanged.
+/// If EDS has its own `ESourceOAuth2Client`, "registration" references
+/// upstream's type and does not define a type. The name lookup of
+/// `e_source_get_extension` walks `g_type_children` of `ESourceExtension`, and a
+/// type is not in that list until its `get_type` is called. The
+/// `#[cfg(not(eds_oauth2_dynamic))]` arm above has the rest of the contract,
+/// which is the same.
 #[cfg(eds_oauth2_dynamic)]
 pub fn ensure_registered() {
-    // SAFETY: no arguments, and the type registers itself on first call.
+    // SAFETY: no arguments, and the type registers itself on the first call.
     unsafe { eds_sys::e_source_oauth2_client_get_type() };
 }
 
-/// `source`'s `[JMAP OAuth2]` extension, registering the type and creating
-/// the group if neither exists yet — `e_source_get_extension`'s own "absent
-/// means create it" rule, the same one [`crate::account::apply`] relies on
-/// for EDS's extensions.
+/// Returns the `[JMAP OAuth2]` extension of `source`. It registers the type and
+/// creates the group if necessary. This is `e_source_get_extension`'s own
+/// "create if absent" rule, which [`crate::account::apply`] also uses for EDS's
+/// extensions.
 ///
 /// # Safety
 ///
 /// `source` must be a valid `ESource`.
 unsafe fn extension_of(source: *mut ESource) -> *mut Extension {
     ensure_registered();
-    // SAFETY: `source` is valid by this function's contract, and the type is
-    // registered by the line above.
+    // SAFETY: `source` is valid by this function's contract, and the line above
+    // registers the type.
     unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) }.cast()
 }
 
-/// Writes `config` onto `source`'s `[JMAP OAuth2]` extension, creating it if
-/// this is the first thing to touch it. Every field is written, `None`
-/// clearing whatever was there before — the same idempotent-rewrite rule
-/// [`crate::account::apply`] follows, and for the same reason: this runs
-/// again whenever discovery or registration is redone, not only once.
+/// Writes `config` to the `[JMAP OAuth2]` extension of `source`, and creates
+/// the extension if necessary. All fields are written: `None` clears the old
+/// value. [`crate::account::apply`] uses the same idempotent-rewrite rule for
+/// the same reason: this runs again each time discovery or registration runs
+/// again.
 ///
-/// Because of that rule, a field this rewrite does not actually change keeps
-/// the allocation it already had, rather than being re-seated under any
-/// pointer [`borrowed`] has handed out of it — see [`Fields::set`], which is
-/// the one path every write lands in.
+/// Because of that rule, a field that this rewrite does not change keeps its
+/// allocation, so pointers from [`borrowed`] into it stay valid. All writes go
+/// through [`Fields::set`].
 ///
-/// The writes go through `g_object_set_property` rather than into the fields
-/// directly, so each one raises `notify` — which is what carries a re-run
-/// discovery or re-registration across the `GBinding`s
-/// `jmap_backend_collection::child_added` puts between an account's extension
-/// and its children's. A write that bypassed the property system would update
-/// this source and silently strand every child on the registration it had
-/// before.
+/// The writes go through `g_object_set_property`, not directly into the
+/// fields, so each write emits `notify`. `notify` sends a new discovery or
+/// registration through the `GBinding`s that
+/// `jmap_backend_collection::child_added` puts between the extension of an
+/// account and the extensions of its children. A write outside the property
+/// system would update this source, but all children would silently keep
+/// the old registration.
 ///
 /// # Safety
 ///
@@ -500,10 +481,10 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
         (PROPERTY_NAMES[6], &config.resource),
     ] {
         let value_c = value.as_deref().map(cstring_lossy);
-        // SAFETY: a live extension instance of this class, which installs
-        // every property in `PROPERTY_NAMES` as a string; the GValue is
-        // initialised, filled (NULL clearing the field, as `set_property`
-        // documents), and unset before the CString it borrows can drop.
+        // SAFETY: a live extension instance of this class, which installs all
+        // properties in `PROPERTY_NAMES` as strings. The GValue is initialised,
+        // filled (NULL clears the field, as `set_property` documents), and
+        // unset before the CString that it borrows can drop.
         unsafe {
             let mut gvalue: GValue = std::mem::zeroed();
             g_value_init(&mut gvalue, G_TYPE_STRING);
@@ -517,9 +498,9 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
     }
 }
 
-/// The config `source`'s `[JMAP OAuth2]` extension currently says — every
-/// field absent for a source nothing has written to yet, since reading must
-/// not create what [`apply`] did not.
+/// Returns the current config in the `[JMAP OAuth2]` extension of `source`.
+/// All fields are absent if nothing wrote to the source yet, because a read
+/// must not create the extension that [`apply`] did not create.
 ///
 /// # Safety
 ///
@@ -527,15 +508,15 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
 pub unsafe fn read(source: *mut ESource) -> Config {
     ensure_registered();
 
-    // SAFETY: `source` is valid by this function's contract, and whichever
-    // class answers to `EXTENSION_NAME` is a `GObject`.
+    // SAFETY: `source` is valid by this function's contract, and the class for
+    // `EXTENSION_NAME` is a `GObject`.
     let Some(extension) = (unsafe { extension_if_present::<GObject>(source, EXTENSION_NAME) })
     else {
         return Config::default();
     };
-    // SAFETY: a live extension of whichever class answers to `EXTENSION_NAME`
-    // on this build; both install every name in `PROPERTY_NAMES` as a
-    // readable string property.
+    // SAFETY: a live extension of the class for `EXTENSION_NAME` on this build.
+    // Both possible classes install all names in `PROPERTY_NAMES` as readable
+    // string properties.
     let read_one = |name: &CStr| unsafe { get_string_property(extension.cast(), name) };
 
     Config {
@@ -549,30 +530,29 @@ pub unsafe fn read(source: *mut ESource) -> Config {
     }
 }
 
-/// One string property of `object`, copied out, `None` for an unset one.
+/// Returns a copy of one string property of `object`, or `None` if it has no value.
 ///
-/// Asking the property system rather than this module's own storage is what
-/// lets [`read`] be one function on every EDS: where upstream owns the class
-/// behind [`EXTENSION_NAME`] there are no Rust fields to reach into, and
-/// `g_object_get_property` is the door both classes have. It is also what
-/// makes the EDS-3.52 test suite exercise the very code the 3.63.1+ build
-/// runs, rather than a parallel implementation nothing here can run.
+/// This function uses the property system, not this module's storage, so
+/// [`read`] is one function on all EDS versions. If upstream owns the class
+/// of [`EXTENSION_NAME`], there are no Rust fields. Both classes have
+/// `g_object_get_property`. Also, the EDS-3.52 test suite thus tests the same
+/// code that the 3.63.1+ build runs, not a parallel implementation.
 ///
-/// One asymmetry worth naming, since it is upstream's and not reversible
-/// here: `ESourceOAuth2Client`'s setters pass values through
-/// `e_util_strdup_strip`, so a value that is empty or all whitespace reads
-/// back as unset there while [`Extension`] keeps it verbatim. No field of a
-/// [`Config`] has a meaningful blank value (an empty client id or token
-/// endpoint is not a registration), so the two agree everywhere it matters.
+/// One difference comes from upstream and this module cannot change it:
+/// `ESourceOAuth2Client`'s setters pass values through `e_util_strdup_strip`.
+/// Thus an empty or all-whitespace value reads back as unset there, but
+/// [`Extension`] keeps it unchanged. No field of a [`Config`] has a useful
+/// blank value (an empty client id or token endpoint is not a registration),
+/// so the two classes agree where it is important.
 ///
 /// # Safety
 ///
 /// `object` must be a valid `GObject` carrying a readable `G_TYPE_STRING`
 /// property called `name`.
 unsafe fn get_string_property(object: *mut GObject, name: &CStr) -> Option<String> {
-    // SAFETY: the contract above; the GValue is initialised before it is
-    // filled and unset before it goes out of scope, and `read_cstring` copies
-    // whatever it points at rather than keeping the borrow.
+    // SAFETY: the contract above applies. The GValue is initialised before it
+    // is filled and unset before it goes out of scope. `read_cstring` copies
+    // the data that it points to and does not keep the borrow.
     unsafe {
         let mut gvalue: GValue = std::mem::zeroed();
         g_value_init(&mut gvalue, G_TYPE_STRING);
@@ -584,46 +564,43 @@ unsafe fn get_string_property(object: *mut GObject, name: &CStr) -> Option<Strin
 }
 
 // ---------------------------------------------------------------------------
-// Borrowed access, for `EOAuth2Service`'s vfuncs.
+// Borrowed access for `EOAuth2Service`'s vfuncs.
 
-/// One field of `source`'s `[JMAP OAuth2]` extension, borrowed rather than
-/// copied — a `const gchar *` into the extension's own storage, or NULL for a
-/// source nothing has written to (or that field of) yet.
+/// Returns one field of the `[JMAP OAuth2]` extension of `source`, borrowed and
+/// not copied: a `const gchar *` into the storage of the extension. NULL if
+/// nothing wrote to the source (or to that field) yet.
 ///
-/// This is not [`read`]'s shape on purpose. `EOAuth2Service`'s vfuncs —
-/// `get_client_id` and its four siblings this module exists for — return
-/// `const gchar *`, and [`read`]'s owned `String`s are dropped the moment the
-/// vfunc returns, which would leave the caller holding a dangling pointer the
-/// instant it looked at it. What is returned here instead is a pointer into
-/// the `CString` [`Fields`] already owns: stable for as long as the
-/// extension is, i.e. for as long as the account's `ESource` is, which is far
-/// longer than any single vfunc dispatch needs.
+/// This shape is different from [`read`] on purpose. `EOAuth2Service`'s
+/// vfuncs (`get_client_id` and the four related vfuncs) return
+/// `const gchar *`. [`read`]'s owned `String`s are dropped when the vfunc
+/// returns, so the caller would get a dangling pointer. This function returns
+/// a pointer into the `CString` that [`Fields`] owns. It stays valid while the
+/// extension is alive, thus while the `ESource` of the account is alive. That
+/// is much longer than one vfunc dispatch.
 ///
-/// ## Why the lock is not what upholds that
+/// ## Why the lock does not keep the pointer valid
 ///
-/// The mutex below is released before this function returns, so it orders
-/// this module's own readers and writers against each other but cannot cover
-/// the caller's *use* of the pointer — and there is nowhere to hold it until
-/// then, because a `const gchar *`-returning vfunc has no "done with it"
-/// callback. EDS's own callers (`e-oauth2-service.c`) copy the string a few
-/// instructions later, into a form table or a `SoupMessage`'s URI, taking no
-/// lock of ours on the way. So what makes the pointer safe is that nothing
-/// ever frees a value this has handed out: [`Fields::set`] leaves an
-/// unchanged write alone and retires a changed one into
-/// [`Fields::retired`](Fields#structfield.retired), which is dropped only
-/// when the extension itself is finalized.
+/// This function releases the mutex below before it returns. Thus the mutex
+/// orders the readers and writers of this module, but it cannot protect the
+/// caller's *use* of the pointer. The lock cannot be held until then, because a
+/// vfunc that returns `const gchar *` has no "done with it" callback. EDS's own
+/// callers (`e-oauth2-service.c`) copy the string a few instructions later,
+/// into a form table or the URI of a `SoupMessage`, and take no lock of this
+/// module. The pointer is safe because nothing frees a value that this
+/// function returned: [`Fields::set`] does not write an unchanged value, and
+/// moves a changed value into [`Fields::retired`](Fields#structfield.retired).
+/// That is dropped only when the extension is finalized.
 ///
-/// That is the discipline EDS's own `EOAuth2Service` implementations keep for
-/// these same five vfuncs, read from `e-oauth2-service-google.c` rather than
-/// assumed: `eos_google_get_client_id` answers either a `static gchar
-/// glob_buff[128]` or a value `eos_google_read_settings` caches with
-/// `g_object_set_data_full` behind an `if (!value)` guard — written once and
-/// never replaced or freed while the service lives. It is *not* the same as
-/// the contract EDS's plain extension accessors keep
-/// (`e_source_authentication_get_host` and the rest): those are lock-free
-/// too, but each is paired with a `dup_` variant that takes
-/// `e_source_extension_property_lock`, an escape hatch a vfunc with a fixed
-/// `const gchar *` signature does not have.
+/// EDS's own `EOAuth2Service` implementations use the same rule for these
+/// five vfuncs (from `e-oauth2-service-google.c`, not an assumption).
+/// `eos_google_get_client_id` returns a `static gchar glob_buff[128]` or a
+/// value that `eos_google_read_settings` caches with `g_object_set_data_full`
+/// behind an `if (!value)` guard. That value is written one time and is not
+/// replaced or freed while the service is alive. EDS's plain extension
+/// accessors (`e_source_authentication_get_host` and the others) use a
+/// *different* contract. They also have no lock, but each has a `dup_` variant
+/// that takes `e_source_extension_property_lock`. A vfunc with a fixed
+/// `const gchar *` signature cannot have such an alternative.
 ///
 /// # Safety
 ///
@@ -632,25 +609,23 @@ unsafe fn borrowed(
     source: *mut ESource,
     field: impl FnOnce(&Fields) -> &Option<CString>,
 ) -> *const c_char {
-    // Where EDS brings its own class for this group, the object behind
-    // `EXTENSION_NAME` is an `ESourceOAuth2Client` and not an [`Extension`],
-    // so there is no `Fields` here to borrow out of and the cast below would
-    // be reading one type's memory as another's. Nothing asks: the
-    // `EOAuth2Service` whose five vfuncs these serve is not registered on
-    // such a build (`crate::oauth2_service::register`), upstream's
-    // `EOAuth2ServiceDynamic` having taken the account over, and it reads
-    // the group through its own extension anyway. Answering NULL makes that
-    // true by construction rather than by inspection.
+    // If EDS has its own class for this group, the object for `EXTENSION_NAME`
+    // is an `ESourceOAuth2Client`, not an [`Extension`]. Then there are no
+    // `Fields` to borrow, and the cast below would read the memory of one type
+    // as a different type. No caller asks on such a build: the
+    // `EOAuth2Service` that uses these vfuncs is not registered
+    // (`crate::oauth2_service::register`). Upstream's `EOAuth2ServiceDynamic`
+    // controls the account and reads the group through its own extension.
+    // A NULL return makes this true by construction, not by inspection.
     if jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2 {
         return ptr::null();
     }
 
     ensure_registered();
 
-    // SAFETY: `source` is valid by this function's contract, and on a build
-    // without the dynamic service `EXTENSION_NAME` is this module's `Extension`.
-    // A present extension is the source's own, whose `instance_init` has
-    // already run.
+    // SAFETY: `source` is valid by this function's contract. On a build without
+    // the dynamic service, `EXTENSION_NAME` is this module's `Extension`. A
+    // present extension belongs to the source, and its `instance_init` ran.
     let Some(extension) = (unsafe { extension_if_present::<Extension>(source, EXTENSION_NAME) })
     else {
         return ptr::null();
@@ -663,8 +638,8 @@ unsafe fn borrowed(
     field(&fields).as_deref().map_or(ptr::null(), CStr::as_ptr)
 }
 
-/// `source`'s stored RFC 7591 `client_id`, or NULL before registration has
-/// run. See [`borrowed`] for the pointer's lifetime.
+/// Returns the stored RFC 7591 `client_id` of `source`, or NULL before
+/// registration. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -673,9 +648,9 @@ pub unsafe fn client_id(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.client_id) }
 }
 
-/// `source`'s stored RFC 7591 `client_secret`, or NULL — absent for the
-/// ordinary case of a public client, and before registration has run. See
-/// [`borrowed`] for the pointer's lifetime.
+/// Returns the stored RFC 7591 `client_secret` of `source`, or NULL. NULL for
+/// the usual public client, and before registration. See [`borrowed`] for the
+/// lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -684,8 +659,8 @@ pub unsafe fn client_secret(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.client_secret) }
 }
 
-/// `source`'s stored RFC 8414 `authorization_endpoint`, or NULL before
-/// discovery has run. See [`borrowed`] for the pointer's lifetime.
+/// Returns the stored RFC 8414 `authorization_endpoint` of `source`, or NULL
+/// before discovery. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -694,8 +669,8 @@ pub unsafe fn authorization_endpoint(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.authorization_endpoint) }
 }
 
-/// `source`'s stored RFC 8414 `token_endpoint`, or NULL before discovery has
-/// run. See [`borrowed`] for the pointer's lifetime.
+/// Returns the stored RFC 8414 `token_endpoint` of `source`, or NULL before
+/// discovery. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -704,8 +679,8 @@ pub unsafe fn token_endpoint(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.token_endpoint) }
 }
 
-/// `source`'s registered `redirect_uri`, or NULL before registration has run.
-/// See [`borrowed`] for the pointer's lifetime.
+/// Returns the registered `redirect_uri` of `source`, or NULL before
+/// registration. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -714,8 +689,8 @@ pub unsafe fn redirect_uri(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.redirect_uri) }
 }
 
-/// `source`'s registered `scope`, or NULL — absent for a deployment that
-/// advertises no scopes. See [`borrowed`] for the pointer's lifetime.
+/// Returns the registered `scope` of `source`, or NULL for a deployment that
+/// advertises no scopes. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -724,8 +699,8 @@ pub unsafe fn scope(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.scope) }
 }
 
-/// `source`'s stored RFC 8707 `resource` indicator, or NULL when discovery
-/// could not determine one. See [`borrowed`] for the pointer's lifetime.
+/// Returns the stored RFC 8707 `resource` indicator of `source`, or NULL if
+/// discovery could not find one. See [`borrowed`] for the lifetime of the pointer.
 ///
 /// # Safety
 ///
