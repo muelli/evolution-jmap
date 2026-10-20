@@ -1,22 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Mail synchronisation, in the shape Camel asks for.
+//! Mail synchronisation, in the shape that Camel asks for.
 //!
-//! One JMAP account is one `CamelJmapStore`, and this crate is what syncing it
-//! means: which folders exist, what is in them, and what a message looks like.
-//! Each entry point corresponds to one Camel vfunc — [`MailSync::folder_tree`]
-//! to `get_folder_info_sync`, [`MailSync::messages`] to what a folder's
-//! `CamelFolderSummary` is filled from, [`MailSync::message_source`] to what
-//! `get_message_sync` parses — and more as the store grows.
+//! One JMAP account is one `CamelJmapStore`. This crate syncs that account:
+//! the folders, their messages, and the source of each message. Each entry
+//! point maps to one Camel vfunc:
 //!
-//! Like `jmap-book-sync` and `jmap-cal-sync`, it knows nothing about GObject
-//! or the Camel headers, so the interesting half of the provider is testable
-//! against `jmap-mockd` on any machine. The two mappings that have no
-//! counterpart on the addressbook and calendar side, and are therefore where
-//! the work is, are the path encoding — a mailbox name is a display string, a
-//! Camel path is an identifier — and the tree itself, which JMAP models with parent
-//! pointers and Camel with a linked forest.
+//! - [`MailSync::folder_tree`] maps to `get_folder_info_sync`.
+//! - [`MailSync::messages`] fills the `CamelFolderSummary` of a folder.
+//! - [`MailSync::message_source`] supplies the bytes that `get_message_sync`
+//!   parses.
+//!
+//! Like `jmap-book-sync` and `jmap-cal-sync`, this crate does not use GObject
+//! or the Camel headers. Thus you can test it against `jmap-mockd` on any
+//! machine. Two mappings have no equivalent on the address book and calendar
+//! side. The first is the path encoding: a mailbox name is a display string,
+//! and a Camel path is an identifier. The second is the tree: JMAP uses parent
+//! pointers, and Camel uses a linked forest.
 
 pub(crate) mod date;
 pub mod error;
@@ -45,67 +46,61 @@ pub use message::{
 };
 pub use send::{Outgoing, OutgoingMailboxes};
 
-/// What a folder-list refresh found.
+/// The result of a folder-list refresh.
 ///
-/// A delta is not applied folder by folder, so this is not one: a Camel path
-/// is built from a mailbox's ancestors, and `Mailbox/changes` reporting a
-/// renamed parent says nothing about the descendants whose paths just moved
-/// with it. The account's mailbox list is one `Mailbox/get`, so the honest
-/// answer to any change at all is the tree again — and the delta's real worth
-/// is the case where it reports nothing, which is nearly every time it is
-/// asked.
+/// This type does not apply a delta folder by folder. A Camel path comes from
+/// the ancestors of a mailbox. When `Mailbox/changes` reports a renamed parent,
+/// it does not report the descendants whose paths also changed. One
+/// `Mailbox/get` returns all mailboxes of the account, so any change causes a
+/// full rebuild. The delta is useful when it reports no change, which is
+/// almost always.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FolderUpdate {
-    /// Nothing changed. The state carried is the one to ask from next time,
-    /// which may be later than the one asked with.
+    /// No change. Use the state for the next request. This state can be
+    /// later than the state in the request.
     Unchanged(State),
-    /// The tree as it is now, and the state that listing is current as of.
+    /// The current tree, and the state of that listing.
     Rebuilt { state: State, tree: FolderTree },
 }
 
-/// What a mailbox refresh found, when it was able to ask what *changed* rather
-/// than what is there.
+/// The result of a mailbox refresh that asked the server for the changes.
 ///
-/// The three answers are three different questions the server was able to
-/// settle, not three degrees of confidence:
+/// Each variant is a different answer, not a different level of confidence:
 ///
-/// - [`MessageUpdate::Unchanged`] is one round trip saying the folder is
-///   already right, which is what nearly every poll gets.
-/// - [`MessageUpdate::Changed`] is a delta, and it is deliberately not phrased
-///   as created/updated/destroyed. `Email/changes` reports on the *account's*
-///   messages and a folder is asking about one mailbox; JMAP files a message by
-///   changing its `mailboxIds`, which is an ordinary update to it. So a delta
-///   naming a message says only that something about it changed, never whether
-///   that something moved it in or out of the mailbox being refreshed — and the
-///   only honest answer is to look each named message up and report which
-///   mailbox it is in now. `present` is the rows this mailbox holds for the
-///   messages that moved, whole rather than as bare uids; `absent` is the uids
-///   that are not in it any more, whether they were destroyed, filed elsewhere,
-///   or never in it at all.
-/// - [`MessageUpdate::Relisted`] is the whole mailbox, for a state the server
-///   cannot calculate from — or for a delta so large that listing is the
-///   cheaper way to answer the same question, per `catch_up_limit`.
+/// - [`MessageUpdate::Unchanged`]: one round trip shows that the folder is
+///   current. Almost every poll gets this answer.
+/// - [`MessageUpdate::Changed`]: a delta. It does not use the
+///   created/updated/destroyed categories. `Email/changes` reports on all
+///   messages of the account, but a folder asks about one mailbox. JMAP files
+///   a message with an ordinary update to its `mailboxIds`. Thus a delta that
+///   names a message does not tell if the message moved in or out of this
+///   mailbox. This function gets each named message again and reads its
+///   mailbox. `present` contains the full rows that this mailbox holds for the
+///   changed messages. `absent` contains the uids that are not in this mailbox
+///   now: destroyed, filed in a different mailbox, or never in it.
+/// - [`MessageUpdate::Relisted`]: the full mailbox. The server returns it when
+///   it cannot calculate changes from the state. This function also returns it
+///   when a full listing costs less than the delta (see `catch_up_limit`).
 ///
-/// The caller diffs `present` and `absent` against the rows it already has,
-/// because it is the only side that knows them: a message that moved into this
-/// mailbox and one whose flags changed while it sat here are the same delta on
-/// the wire, and which of the two it is depends on whether there is a row for
-/// it.
+/// The caller compares `present` and `absent` with its rows, because only the
+/// caller has these rows. On the wire, a message that moved into this mailbox
+/// and a message with changed flags are the same delta. The existing row tells
+/// which of the two it is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MessageUpdate {
-    /// Nothing in the account's mail changed. The state carried is the one to
-    /// ask from next time, which may be later than the one asked with.
+    /// No mail in the account changed. Use the state for the next request.
+    /// This state can be later than the state in the request.
     Unchanged(State),
-    /// What the mailbox holds for the messages that moved, and what it does not
-    /// hold any more — with the state that answer is current as of.
+    /// The rows this mailbox holds for the changed messages, the uids it does
+    /// not hold, and the state of this answer.
     Changed {
         state: State,
-        /// Rows of this mailbox, oldest first, like a listing's.
+        /// Rows of this mailbox, oldest first, in the same order as a listing.
         present: Vec<MessageSummary>,
-        /// Uids that are not in this mailbox, in the order a set puts them.
+        /// Uids that are not in this mailbox, in sorted order.
         absent: Vec<Id>,
     },
-    /// The mailbox listed again, and the state that listing is current as of.
+    /// The full mailbox listing, and the state of that listing.
     Relisted {
         state: State,
         messages: Vec<MessageSummary>,
@@ -131,36 +126,34 @@ impl MailSync {
         &self.account_id
     }
 
-    /// Every folder of the account, and the state the listing is current as
-    /// of — `get_folder_info_sync`.
+    /// All folders of the account, and the state of the listing
+    /// (`get_folder_info_sync`).
     ///
-    /// The whole tree in one `Mailbox/get`, not a subtree per call: JMAP has no
-    /// way to ask for one level, mailbox lists are small, and Camel's
-    /// `CAMEL_STORE_FOLDER_INFO_RECURSIVE` asks for all of it anyway.
+    /// One `Mailbox/get` returns the full tree. JMAP cannot get one level only,
+    /// mailbox lists are small, and `CAMEL_STORE_FOLDER_INFO_RECURSIVE` asks
+    /// for the full tree.
     ///
-    /// The state comes back with it because a folder list without one can only
-    /// ever be re-fetched in full; it is what [`MailSync::folder_tree_since`]
-    /// takes.
+    /// The state is necessary for [`MailSync::folder_tree_since`]. Without a
+    /// state, the only possible refresh is a full listing.
     pub fn folder_tree(&self) -> Result<(State, FolderTree), SyncError> {
         let response = self.client.mailbox_get(&self.account_id)?;
         Ok((response.state, FolderTree::from_mailboxes(&response.list)?))
     }
 
-    /// The folder tree again, but only if the account's mailboxes moved since
-    /// `since` — the refresh half of `get_folder_info_sync`.
+    /// The folder tree again, but only if the mailboxes of the account changed
+    /// after `since` (the refresh part of `get_folder_info_sync`).
     ///
-    /// One `Mailbox/changes` for the common case, which is a store asking
-    /// whether anything happened and being told no. Anything else costs the
-    /// full listing, for the reason [`FolderUpdate`] gives.
+    /// Usually this is one `Mailbox/changes` that reports no change. Any change
+    /// causes a full listing, for the reason that [`FolderUpdate`] gives.
     ///
-    /// A state the server cannot calculate from — too old, or from some other
-    /// server entirely — is answered with the listing rather than reported.
-    /// The EDS meta backends pass that condition up because EDS knows how to
-    /// diff a collection against its cache; Camel has nothing of the kind, so
-    /// a store that reported it would be a folder tree that never recovers.
-    /// The same answer is given for a state real Stalwart does not recognize
-    /// at all, which it reports as `invalidArguments` rather than the RFC's
-    /// own `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17).
+    /// If the server cannot calculate changes from the state, this function
+    /// returns the listing and not an error. The state can be too old or from a
+    /// different server. EDS backends report this condition, because EDS can
+    /// compare a collection with its cache. Camel cannot do this, so an error
+    /// would block the folder tree permanently. Stalwart reports an
+    /// unrecognized state as `invalidArguments`, not as the RFC
+    /// `cannotCalculateChanges`. This function also returns the listing for
+    /// that error.
     pub fn folder_tree_since(&self, since: &State) -> Result<FolderUpdate, SyncError> {
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
             Ok(changes) if changes.is_empty() => Ok(FolderUpdate::Unchanged(changes.new_state)),
@@ -174,97 +167,84 @@ impl MailSync {
         }
     }
 
-    /// The listing, labelled with its own state rather than the delta's: the
-    /// tree is what was walked, and the account may have moved again between
-    /// the two calls.
+    /// The listing, with its own state and not the state of the delta. The
+    /// account can change again between the two calls.
     fn rebuild(&self) -> Result<FolderUpdate, SyncError> {
         let (state, tree) = self.folder_tree()?;
         Ok(FolderUpdate::Rebuilt { state, tree })
     }
 
-    /// Every message in one mailbox, oldest first, and the state that listing
-    /// can be brought forward from — what a folder's summary is filled from.
+    /// All messages in one mailbox, oldest first, and the state for the next
+    /// refresh. This fills the summary of a folder.
     ///
-    /// Two steps, not the one round-trip `Email/query`+`Email/get`
-    /// back-reference the client also offers: chaining them sends every
-    /// matching id straight into the `/get`, and a mailbox may hold more ids
-    /// than one `/get` is allowed to name. Asking first and fetching second is
-    /// what makes the fetch divisible.
+    /// This function uses two steps, not one `Email/query` with an `Email/get`
+    /// back-reference. A back-reference sends all matching ids to one `/get`,
+    /// and a mailbox can hold more ids than one `/get` can name. Separate steps
+    /// let the fetch occur in chunks.
     ///
-    /// Oldest first because that is the order a summary is built in and the
-    /// order Camel numbers messages in, and `receivedAt` rather than the `Date`
-    /// header because the header is the sender's clock — a message with a wrong
-    /// one would sort into the wrong place forever.
+    /// The order is oldest first, because Camel builds a summary and numbers
+    /// messages in that order. The sort key is `receivedAt`, not the `Date`
+    /// header. The `Date` header comes from the clock of the sender, and an
+    /// incorrect clock puts the message in the incorrect position permanently.
     ///
-    /// ## The state is read first, and that is not an accident
+    /// ## Why the state is read first
     ///
-    /// It costs an extra round trip — an `Email/get` naming no ids — and the
-    /// alternative would be free: the `/get`s below carry a state of their own.
-    /// But that state is the one *after* the listing was taken, and a message
-    /// that arrived between the query and the fetch is then a message the query
-    /// never named and no later delta will ever mention, because it changed
-    /// before the state a delta would be asked from. It would be missing from
-    /// the folder until something forced a full listing again.
+    /// This costs one more round trip: an `Email/get` with no ids. The `/get`
+    /// calls below also return a state, but that state is from after the
+    /// query. A message that arrives between the query and the fetch is then
+    /// not in the listing. No later delta reports it, because it changed before
+    /// that state. The folder does not show it until the next full listing.
     ///
-    /// Reading the state first has the opposite failure, which is not one: the
-    /// next delta re-reports changes this listing already has. Every one of them
-    /// is a message looked up again and a row written again with what it already
-    /// said.
+    /// When the state is read first, the next delta can report changes again
+    /// that this listing already has. That is safe: the result is only a
+    /// repeated lookup and an identical row write.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), SyncError> {
         let state = self.client.email_state(&self.account_id)?;
         let ids = self.message_ids(mailbox)?;
 
-        // `/get` may answer in any order (RFC 8620 §5.1), so the query's order
-        // is restored below rather than assumed here.
+        // `/get` can answer in any order (RFC 8620 §5.1). The code below puts
+        // the rows back in the query order.
         let mut by_uid: BTreeMap<Id, MessageSummary> = BTreeMap::new();
         for email in self.fetch(&ids, SUMMARY_PROPERTIES)? {
             let summary = MessageSummary::from_email(&email)?;
             by_uid.insert(summary.uid.clone(), summary);
         }
 
-        // An id the query named and the `/get` did not answer for is a message
-        // deleted between the two calls: it is gone, which is not a failure and
-        // not something to keep a row for. `remove` also settles the other side
-        // of the same race — a message that shifted position and came back on
-        // two pages is listed once.
+        // If the `/get` does not return an id from the query, the message was
+        // deleted between the two calls. This is not a failure, and it gets no
+        // row. `remove` also lists only once a message that two pages return.
         Ok((
             state,
             ids.iter().filter_map(|id| by_uid.remove(id)).collect(),
         ))
     }
 
-    /// What one mailbox looks like now, given what it looked like at `since` —
-    /// the refresh half of what fills a folder's summary.
+    /// The current contents of one mailbox, compared with the contents at
+    /// `since`. This is the refresh part of the folder summary fill.
     ///
-    /// One `Email/changes` for the common case, which is a folder asking
-    /// whether anything happened and being told no. Anything the account did
-    /// change costs one `Email/get` per chunk of messages it names, which is
-    /// still the whole answer for a mailbox that gained one message where a
-    /// listing would have fetched every row it already had.
+    /// Usually this is one `Email/changes` that reports no change. If the
+    /// account changed, the cost is one `Email/get` for each chunk of named
+    /// messages. For a mailbox that got one new message, this is much less than
+    /// a listing, which gets all rows again.
     ///
-    /// What comes back is [`MessageUpdate`], and the reason it is phrased as
-    /// present/absent rather than as the delta's own created/updated/destroyed
-    /// is documented there: `Email/changes` is an account-wide answer to a
-    /// question about one mailbox, and membership has to be re-read rather than
-    /// inferred. `destroyed` is the one part taken at its word — a message that
-    /// is gone is gone from every mailbox, and there is nothing left to look up.
+    /// [`MessageUpdate`] explains why the result is present/absent and not
+    /// created/updated/destroyed. `Email/changes` is about the full account,
+    /// so this function reads the mailbox membership again. It accepts
+    /// `destroyed` as given: a destroyed message is not in any mailbox.
     ///
-    /// A state the server cannot calculate from — too old, or from some other
-    /// server entirely, or (against real Stalwart) not recognized at all,
-    /// which it reports as `invalidArguments` rather than the RFC's own
-    /// `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17) — is
-    /// answered with the mailbox rather than reported, the judgement
-    /// [`MailSync::folder_tree_since`] makes about the same condition and for
-    /// the same reason: Camel has nowhere to report it to, so a folder that
-    /// failed here would be one that never recovers.
+    /// If the server cannot calculate changes from the state, this function
+    /// returns the full mailbox and not an error.
+    /// [`MailSync::folder_tree_since`] does the same, for the same reason:
+    /// Camel cannot report the error, so the folder would not recover. The
+    /// state can be too old, from a different server, or unrecognized.
+    /// Stalwart reports an unrecognized state as `invalidArguments`, not as the
+    /// RFC `cannotCalculateChanges`.
     ///
-    /// `held` is how many rows the caller already has for this mailbox, and it
-    /// is used for one thing: deciding when catching up has stopped being the
-    /// cheap answer, per `catch_up_limit`. It is asked of the caller rather
-    /// than of the server because the caller has it for free and the server
-    /// would charge a round trip for it, and it is only ever a *cost* estimate —
-    /// a caller that passes a wrong one gets the same rows by a more expensive
-    /// route, never different rows.
+    /// `held` is the number of rows that the caller has for this mailbox. It
+    /// only decides when a full listing costs less than the delta (see
+    /// `catch_up_limit`). The caller supplies it because the server would need
+    /// one more round trip. It is only a cost estimate: an incorrect value
+    /// gives the same rows at a higher cost.
     pub fn messages_since(
         &self,
         mailbox: &Id,
@@ -284,9 +264,8 @@ impl MailSync {
             Err(error) => return Err(error.into()),
         };
 
-        // Created and updated are one list here, for the reason `MessageUpdate`
-        // gives: which of the two a message is says nothing about whether it is
-        // in this mailbox, and that is the only question being asked.
+        // Created and updated go into one list. Neither category tells if the
+        // message is in this mailbox (see `MessageUpdate`).
         let touched: Vec<Id> = changes
             .created
             .iter()
@@ -294,14 +273,12 @@ impl MailSync {
             .cloned()
             .collect();
 
-        // How far this is worth following. Every id above is one the fetch
-        // below has to look up before it can say whether the mailbox holds it,
-        // so a delta from a state a fortnight old is every message the account
-        // touched in a fortnight — and listing the one mailbox answers the same
-        // question for the price of the rows it actually has.
+        // The fetch below must look up each id to find its mailbox. A delta
+        // from an old state names all messages the account changed since then.
+        // A listing of this mailbox can cost less (see `catch_up_limit`).
         //
-        // `destroyed` is not counted, because it costs nothing: those ids are
-        // taken at the delta's word and never fetched.
+        // `destroyed` does not count, because this function does not fetch
+        // those ids.
         if touched.len() > catch_up_limit(held, self.objects_in_get()) {
             return self.relist(mailbox);
         }
@@ -309,10 +286,9 @@ impl MailSync {
         let mut absent = changes.destroyed;
         let mut present = Vec::new();
         for email in self.fetch(&touched, &filing_properties())? {
-            // RFC 8621 §4.6 gives every present `mailboxIds` value as `true`;
-            // a `false` entry for the very mailbox being asked about is the
-            // same violation `message_mailboxes` refuses rather than guess
-            // at, so it is refused here too instead of being read as absence.
+            // RFC 8621 §4.1.1 sets each `mailboxIds` value to `true`. A `false`
+            // entry for this mailbox is a protocol violation. Refuse it, as
+            // `message_mailboxes` does; do not read it as absence.
             let filed = match email
                 .mailbox_ids
                 .as_ref()
@@ -340,10 +316,9 @@ impl MailSync {
             }
         }
 
-        // A message the delta named and the `/get` did not answer for was
-        // destroyed between the two calls — the same race a listing settles by
-        // dropping the id, settled here by reporting it gone, because a folder
-        // may well be holding a row for it.
+        // If the `/get` does not return an id from the delta, the message was
+        // destroyed between the two calls. A listing drops the id. Here, report
+        // it as absent, because the folder can have a row for it.
         let answered: BTreeSet<&Id> = present.iter().map(|message| &message.uid).collect();
         let unanswered: Vec<Id> = touched
             .into_iter()
@@ -351,10 +326,9 @@ impl MailSync {
             .collect();
         absent.extend(unanswered);
 
-        // The order a listing produces, for rows that are appended to the same
-        // summary: oldest first by the server's clock, and by uid where a server
-        // gave two messages the same time or none at all — so that a refresh is
-        // not a different answer each time it is asked.
+        // Use the listing order, because these rows go into the same summary:
+        // oldest first by server time, then by uid for equal or missing times.
+        // Thus each refresh gives the same order.
         present.sort_by(|one, other| {
             one.received_at
                 .cmp(&other.received_at)
@@ -368,19 +342,18 @@ impl MailSync {
         })
     }
 
-    /// The mailbox listed again, labelled with its own state rather than the
-    /// delta's — as [`MailSync::rebuild`] does for the folder tree, and for the
-    /// same reason: the listing is what was walked.
+    /// The full mailbox listing, with its own state and not the state of the
+    /// delta. [`MailSync::rebuild`] does the same for the folder tree.
     fn relist(&self, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
         let (state, messages) = self.messages(mailbox)?;
         Ok(MessageUpdate::Relisted { state, messages })
     }
 
-    /// The `Email` objects for `ids`, in however many `Email/get` calls the
-    /// account's limit takes, in whatever order the server answered.
+    /// The `Email` objects for `ids`, in the server order. This function uses
+    /// as many `Email/get` calls as the account limit makes necessary.
     ///
-    /// No calls at all for an empty list, which is what a delta of nothing but
-    /// destroyed messages amounts to.
+    /// An empty list causes no calls. A delta with only destroyed messages
+    /// gives an empty list.
     fn fetch(&self, ids: &[Id], properties: &[&str]) -> Result<Vec<Email>, SyncError> {
         let mut emails = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(self.objects_in_get()) {
@@ -392,32 +365,29 @@ impl MailSync {
         Ok(emails)
     }
 
-    /// The RFC 5322 bytes of one message — what `get_message_sync` parses into
+    /// The RFC 5322 bytes of one message. `get_message_sync` parses them into
     /// a `CamelMimeMessage`.
     ///
-    /// ## Why the blob id is fetched rather than remembered
+    /// ## Why this function gets the blob id again
     ///
-    /// [`MessageSummary`] carries one, and it is thrown away: a
-    /// `CamelFolderSummary` row has no field to keep it in, the same problem
-    /// the folder's own mailbox id has and without the folder's solution — a
-    /// summary row is Camel's struct, not ours, and there are as many of them
-    /// as there are messages in the account. So a uid is all this call can be
-    /// given, and the blob id is one `Email/get` away.
+    /// [`MessageSummary`] has a blob id, but the caller cannot keep it. A
+    /// `CamelFolderSummary` row has no field for it. The row is a Camel struct,
+    /// and there is one row for each message. Thus the caller can only supply
+    /// a uid, and the blob id costs one `Email/get`.
     ///
-    /// That is a round trip per message opened, and it is also the only version
-    /// of this that stays correct: RFC 8621 §4.1 makes an `Email` immutable but
-    /// says nothing that stops a server reissuing blob ids, and RFC 8620 §6.2
-    /// lets it forget one at any time. A cached blob id would turn every such
-    /// server into a mailbox that reads fine until it suddenly does not.
+    /// That is one round trip for each opened message, but it is always
+    /// correct. RFC 8621 §4.1 makes an `Email` immutable, but it does not
+    /// prevent a server from issuing a new blob id. RFC 8620 §6.2 lets a server
+    /// forget a blob id at any time. A cached blob id would then fail without
+    /// warning.
     ///
     /// ## Failures
     ///
-    /// A uid the account does not hold is [`SyncError::NoSuchMessage`] rather
-    /// than a client error — a summary row outliving its message is ordinary,
-    /// not a broken account. A message the server returns *without* a `blobId`
-    /// is the protocol violation it is; there is no fallback, because
-    /// reassembling a message out of its body parts would produce different
-    /// bytes than the ones it was signed as.
+    /// A uid that the account does not hold gives [`SyncError::NoSuchMessage`],
+    /// not a client error. A summary row that is older than its message is
+    /// normal. A message without a `blobId` is a protocol violation. There is
+    /// no fallback: a message built again from its body parts has different
+    /// bytes, and its signature fails.
     pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, SyncError> {
         let email = self
             .client
@@ -427,52 +397,47 @@ impl MailSync {
                 Some(SOURCE_PROPERTIES),
             )?
             .into_iter()
-            // An answer naming some *other* message is not this message's
-            // bytes, and a server that sends one has answered a question
-            // nobody asked; treated as the message being absent, which it is.
+            // An answer for a different message does not contain the bytes of
+            // this message. Treat it as a missing message.
             .find(|email| email.id.as_ref() == Some(uid))
             .ok_or_else(|| SyncError::NoSuchMessage(uid.clone()))?;
 
         let blob_id = email.blob_id.ok_or_else(|| {
             SyncError::protocol(format!("Email/get returned {uid} without a blobId"))
         })?;
-        // How many octets to take is the account's answer, not a constant of
-        // ours: the row just fetched says how long the message is. See
+        // The size in the row sets the download limit, not a constant. See
         // [`download_ceiling`] for the margin, and `jmap_client::limits` for
-        // why any ceiling has to be stated at all.
+        // why a limit is necessary.
         let ceiling = download_ceiling(email.size);
 
-        // The `{name}` of the download template is a filename suggestion for a
-        // browser saving the response; nothing reads it back, and the uid is
-        // the one name that is certainly safe in a URL — RFC 8620 §1.2 limits
-        // an id to URL-safe characters.
+        // `{name}` in the download template is a filename hint for a browser.
+        // Nothing reads it. The uid is safe in a URL: RFC 8620 §1.2 limits an
+        // id to URL-safe characters.
         Ok(self
             .client
             .download_blob(&self.account_id, &blob_id, uid.as_str(), ceiling)?)
     }
 
-    /// Puts one message's keyword change on the server — the write half of
-    /// what a folder synchronises.
+    /// Writes the keyword change of one message to the server. This is the
+    /// write part of folder synchronisation.
     ///
-    /// A row Camel marked read, important, or labelled is this: an `Email/set`
-    /// update carrying only the keywords that differ, for the reasons
-    /// [`crate::keywords`] gives. A change with nothing in it costs no request
-    /// at all, because Camel marks a row as needing a write for reasons that
-    /// are not keywords and a provider that asked the server about each of them
-    /// would spend a round trip per row on every synchronisation.
+    /// When Camel marks a row as read, important, or labelled, this function
+    /// sends one `Email/set` update. The update contains only the changed
+    /// keywords, for the reasons that [`crate::keywords`] gives. An empty
+    /// change sends no request. Camel also marks rows for writes that are not
+    /// keyword changes, and a request for each of them would cost one round
+    /// trip per row.
     ///
-    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
-    /// same judgement [`MailSync::message_source`] makes about the same
-    /// situation: another client destroying the message is ordinary, and the
-    /// flag change is simply moot. Every other refusal stays the server's own
-    /// [`SyncError::Client`] — a keyword the server will not accept and a
-    /// mailbox gone read-only are things the user has to be told about.
+    /// A uid that the account does not hold gives [`SyncError::NoSuchMessage`],
+    /// as in [`MailSync::message_source`]. A different client can destroy the
+    /// message, and then the flag change is not necessary. All other refusals
+    /// stay [`SyncError::Client`]. The user must know about an unaccepted
+    /// keyword or a read-only mailbox.
     ///
-    /// Not `ifInState`: the state a folder holds is its listing's, and a
-    /// conditional write would fail for any change to any *other* message in
-    /// the account. Keyword changes commute — this is a patch of named members,
-    /// not a replacement — so the concurrency that matters is per keyword, and
-    /// sending only what changed is what handles it.
+    /// This function does not use `ifInState`. The folder holds the state of its
+    /// listing, so a conditional write fails for any change to any other
+    /// message in the account. The patch changes only the named keywords, so
+    /// concurrent changes to different keywords do not conflict.
     pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), SyncError> {
         if change.is_empty() {
             return Ok(());
@@ -486,31 +451,27 @@ impl MailSync {
         })
     }
 
-    /// Files one message into another mailbox — `transfer_messages_to_sync`.
+    /// Files one message into a different mailbox
+    /// (`transfer_messages_to_sync`).
     ///
-    /// A copy and a move are one `Email/set` update over `mailboxIds`, for the
-    /// reasons [`crate::mailboxes`] gives; a [`Filing`] that would leave the
-    /// message where it is costs no request at all, like a keyword change that
-    /// changes nothing.
+    /// A copy and a move are both one `Email/set` update of `mailboxIds`, for
+    /// the reasons that [`crate::mailboxes`] gives. A [`Filing`] that does not
+    /// move the message sends no request.
     ///
-    /// One message per call, as with [`MailSync::set_keywords`], although Camel
-    /// hands its vfunc a whole list of uids: one `Email/set` may carry many
-    /// updates, but it applies them as one state change, and a transfer that
-    /// half-succeeded would then be a single failure with no way to say which
-    /// messages moved. A request per message is more round trips and an answer
-    /// per message, which is what the caller has to report anyway.
+    /// This function files one message for each call, as
+    /// [`MailSync::set_keywords`] does. Camel gives the vfunc a list of uids.
+    /// One `Email/set` can contain many updates, but a partial failure then
+    /// does not tell which messages moved. One request per message gives one
+    /// answer per message, and the caller must report each result.
     ///
-    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
-    /// judgement every other write here makes about the same situation. A
-    /// destination the account does not have is *not* that: the message is
-    /// fine, and a folder Camel still shows after the server deleted it is
-    /// something the user has to be told about, so it stays the server's own
-    /// [`SyncError::Client`].
+    /// A uid that the account does not hold gives [`SyncError::NoSuchMessage`],
+    /// as in all other writes here. A missing destination mailbox is different:
+    /// the message is not affected, and the user must know that the folder is
+    /// gone. That refusal stays [`SyncError::Client`].
     ///
-    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives: the
-    /// state a folder holds is its listing's, and a conditional write would
-    /// fail for any change to any other message in the account. A patch of
-    /// named members commutes with changes to the members it does not name.
+    /// This function does not use `ifInState`, for the reason that
+    /// [`MailSync::set_keywords`] gives. The patch changes only the named
+    /// members, so it does not conflict with changes to other members.
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), SyncError> {
         if filing.is_empty() {
             return Ok(());
@@ -524,50 +485,45 @@ impl MailSync {
         })
     }
 
-    /// Makes one message leave a mailbox for good — `expunge_sync`.
+    /// Removes one message from a mailbox permanently (`expunge_sync`).
     ///
-    /// The one write here that reads before it writes, and the reason is a
-    /// mismatch between the two models rather than caution. Camel's vfunc asks
-    /// a *folder* to get rid of the messages marked deleted in it; in IMAP that
-    /// is one thing, because a message is in one mailbox and removing it from
-    /// the mailbox is removing it. RFC 8621 §4.6 makes `mailboxIds` a set, so
-    /// the same message may be in the inbox and in a folder the user filed it
-    /// in, and the two writes that could be sent mean different things:
+    /// This is the only write here that reads before it writes. The cause is a
+    /// difference between the two models. Camel asks a folder to remove its
+    /// deleted messages. In IMAP, a message is in one mailbox, so this removes
+    /// the message. RFC 8621 §4.1.1 makes `mailboxIds` a set, so one message can
+    /// be in more than one mailbox. The two possible writes have different
+    /// results:
     ///
-    /// - **destroy** takes the message out of the account. Right when this
-    ///   mailbox is its last home, and data loss otherwise — emptying the trash
-    ///   would take the user's own copy of the message with it.
-    /// - **`mailboxIds/<this>: null`** takes it out of this mailbox only.
-    ///   Right when there is another mailbox left, and a request a server that
-    ///   keeps §4.6's invariant refuses when there is not, because it would
-    ///   leave the message filed nowhere.
+    /// - **destroy** removes the message from the account. This is correct when
+    ///   this mailbox is the last mailbox of the message. Otherwise, it causes
+    ///   data loss: to empty the trash would also remove the copy of the user.
+    /// - **`mailboxIds/<this>: null`** removes the message from this mailbox
+    ///   only. This is correct when the message has a different mailbox. If
+    ///   not, a server refuses it, because a message must be in a mailbox.
     ///
-    /// Nothing on the Camel side can tell the two apart: a summary row records
-    /// the mailbox it was listed from and was never told about any other. So
-    /// the message's `mailboxIds` is read first — one `Email/get` of one
-    /// property — and the write chosen from it. It is a round trip per message
-    /// on top of the write, which is the price of not guessing; the alternative
-    /// is a provider that either loses mail or fails to empty a trash.
+    /// Camel cannot tell the two cases apart. A summary row knows only the
+    /// mailbox of its listing. Thus this function first reads `mailboxIds` (one
+    /// `Email/get` of one property) and then selects the write. This costs one
+    /// more round trip per message. Without it, the provider either loses mail
+    /// or cannot empty a trash.
     ///
-    /// A message that is not in `mailbox` at all is no work rather than either
-    /// write. A uid is a claim about the last listing, so another client can
-    /// have moved the message out while Evolution held the folder open, and
-    /// destroying it on the strength of where it *was* would be deleting mail
-    /// from a stale row. Removing a member that is already absent would be
-    /// harmless (RFC 8620 §5.3), but it would also be a request that says
-    /// nothing.
+    /// If the message is not in `mailbox`, this function does nothing. A uid
+    /// comes from the last listing, and a different client can move the message
+    /// while the folder is open. A destroy based on an old row would delete
+    /// mail. To remove an absent member is safe (RFC 8620 §5.3), but the
+    /// request would have no effect.
     ///
-    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
-    /// judgement every other write here makes about the same situation.
+    /// A uid that the account does not hold gives [`SyncError::NoSuchMessage`],
+    /// as in all other writes here.
     ///
-    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives, with
-    /// one extra: the state that would matter is the message's own membership,
-    /// and there is no conditional in JMAP that expresses it. What the read
-    /// narrows is the window, not the race — a client that files this message
-    /// into a second mailbox between the read and the destroy loses it. That
-    /// window is the same one `Email/set` has for every unconditional write,
-    /// and closing it would need a server-side "destroy if in no other mailbox"
-    /// the protocol does not have.
+    /// This function does not use `ifInState`, for the reason that
+    /// [`MailSync::set_keywords`] gives. Also, the relevant state is the
+    /// membership of the message, and no JMAP condition can express it. The
+    /// read makes the race window smaller, but does not remove it. If a
+    /// different client files this message into a second mailbox between the
+    /// read and the destroy, the message is lost. All unconditional `Email/set`
+    /// writes have this window. To close it, the server must supply a "destroy
+    /// if in no other mailbox" operation, and JMAP has none.
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let message_uid = uid.to_string();
@@ -609,22 +565,18 @@ impl MailSync {
             })
     }
 
-    /// The mailboxes the account has one message filed in.
+    /// The mailboxes that hold one message.
     ///
-    /// One property of one message, named explicitly: the default property set
-    /// of `Email/get` is everything (RFC 8621 §4.2), and asking for it to learn
-    /// where a message is filed would download the message.
+    /// The request names one property. The default property set of `Email/get`
+    /// is large and includes body parts (RFC 8621 §4.2).
     ///
-    /// An id the answer does not name is [`SyncError::NoSuchMessage`] — RFC
-    /// 8620 §5.1 reports it in `notFound` and leaves it out of the list, which
-    /// is the shape this reads it in.
+    /// An id that is not in the answer gives [`SyncError::NoSuchMessage`]. RFC
+    /// 8620 §5.1 puts a missing id in `notFound` and not in the list.
     ///
-    /// RFC 8621 §4.6 gives every present `mailboxIds` value as `true`; a
-    /// server that spells absence out with `false` instead of omitting the
-    /// key is violating that, and there is no safe guess to make about which
-    /// write the caller should choose in response, so it is refused the same
-    /// way `identity_for` refuses an identity without an id, rather than
-    /// silently counted as membership either way.
+    /// RFC 8621 §4.1.1 sets each `mailboxIds` value to `true`. A `false` value
+    /// is a protocol violation, and no write is safe to select from it. Thus
+    /// this function refuses it, as `identity_for` refuses an identity without
+    /// an id. It does not count the value as membership or as absence.
     fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
         let found = self.client.email_get(
             &self.account_id,
@@ -651,63 +603,53 @@ impl MailSync {
             .collect()
     }
 
-    /// Puts a message the caller already holds into a mailbox —
-    /// `append_message_sync`.
+    /// Puts a message that the caller holds into a mailbox
+    /// (`append_message_sync`).
     ///
-    /// The one write here that *adds* a message rather than changing one the
-    /// account has, and the one that sends a message as bytes. Everything a
-    /// mailbox gains otherwise arrived at the server on its own; this is a
-    /// message Evolution is holding — a draft it composed, a message being
-    /// filtered in, a message dragged out of another account — being handed
-    /// over intact.
+    /// This is the only write here that adds a message, and the only one that
+    /// sends a message as bytes. Examples are a draft, a filtered message, or a
+    /// message from a different account. The bytes go to the server unchanged.
     ///
     /// ## Two round trips, because the protocol has two
     ///
-    /// A blob upload (RFC 8620 §6.1) and then an `Email/import` (RFC 8621 §4.8)
-    /// naming it. There is no way to put a message's bytes inside a method call,
-    /// and the alternative method — an `Email/set` create out of `from`,
-    /// `subject` and body values — is a different operation with a different
-    /// result: it has the *server* build a message out of parts, which is right
-    /// for composing a draft and wrong for a message that already exists. A
-    /// message reassembled that way is not the bytes that went in, so anything
-    /// signed over them stops verifying.
+    /// First a blob upload (RFC 8620 §6.1), then an `Email/import` (RFC 8621
+    /// §4.8) that names the blob. A method call cannot contain the bytes of a
+    /// message. An `Email/set` create from `from`, `subject` and body values is
+    /// a different operation: the server builds a new message from parts. That
+    /// is correct for a new draft, but not for an existing message. The new
+    /// bytes are different, so signatures over the original bytes fail.
     ///
-    /// The upload is announced as `message/rfc822`, which is what the bytes are.
-    /// RFC 8620 §6.1 lets the server answer with a type of its own and nothing
-    /// here reads it back: an import names a blob, and what the blob is *called*
-    /// is not part of the question.
+    /// The upload has the type `message/rfc822`. RFC 8620 §6.1 lets the server
+    /// return a different type. This function does not read it, because the
+    /// import names the blob by id only.
     ///
-    /// ## The date, and the one that cannot be sent
+    /// ## The date, and dates that cannot be sent
     ///
-    /// `received_at` is Camel's `date_received`, seconds since the epoch, and it
-    /// is sent rather than left out because the server's own default — RFC 8621
-    /// §4.8 makes it the most recent `Received` header's date, or the time of the
-    /// import — would date a message being copied between accounts to the moment
-    /// it was copied, and sort it to the wrong end of the folder.
+    /// `received_at` is the Camel `date_received`, in seconds since the epoch.
+    /// The server default (RFC 8621 §4.8) is the date of the most recent
+    /// `Received` header, or the import time. For a message copied from a
+    /// different account, that gives the copy time. The message then sorts
+    /// into the incorrect position.
     ///
-    /// An instant no `UTCDate` can spell is sent as no date at all, the judgement
-    /// `date::utc_date` documents: what the caller asked for is that the
-    /// message be appended, and refusing the whole append over an unwritable
-    /// date would lose the message to save its timestamp.
+    /// If a `UTCDate` cannot express the time, this function sends no date (see
+    /// `date::utc_date`). The caller asked for the message, so a bad date must
+    /// not stop the append.
     ///
-    /// ## What comes back
+    /// ## Return value
     ///
-    /// The id the server minted, which is the Camel uid — the caller has nothing
-    /// else to name the message by, and `append_message_sync` is asked for
-    /// exactly that. Nothing else of the created `Email` is answered: RFC 8620
-    /// §5.3 has a server return only the properties it set itself, so the rest of
-    /// what a summary row needs is not there to read, and the row is what the
-    /// next refresh of the mailbox builds.
+    /// The id from the server, which is the Camel uid. `append_message_sync`
+    /// must return it, and the caller has no other name for the message. RFC
+    /// 8620 §5.3 lets a server return only the properties that it set. Thus the
+    /// other row data is not available. The next mailbox refresh builds the
+    /// row.
     ///
-    /// A refusal stays the server's own [`SyncError::Client`], including a
-    /// mailbox the account does not have. That is *not* the
-    /// [`SyncError::NoSuchFolder`] the folder writes answer with, and the
-    /// difference is not a judgement about which is nicer: those writes name a
-    /// mailbox as the record being changed, and get a `notFound` back saying so,
-    /// while an import names it inside `mailboxIds` — where a server reports it
-    /// as an `invalidProperties` refusal of the *message*, indistinguishable
-    /// from the same refusal about the blob. Guessing which property a
-    /// description meant would be this crate reading the server's prose.
+    /// A refusal stays [`SyncError::Client`], also for a missing mailbox. This
+    /// is not [`SyncError::NoSuchFolder`], as the folder writes give. Those
+    /// writes name the mailbox as the changed record, and get `notFound`. An
+    /// import names the mailbox in `mailboxIds`. The server then refuses the
+    /// message with `invalidProperties`, the same error as for a bad blob. Only
+    /// the description text tells which property failed, and this crate does
+    /// not parse it.
     pub fn import_message(
         &self,
         mailbox: &Id,
@@ -746,67 +688,59 @@ impl MailSync {
             .ok_or_else(|| SyncError::protocol("Email/import created a message without an id"))
     }
 
-    /// Sends one message — what a `CamelTransport`'s `send_to_sync` amounts to.
+    /// Sends one message (the `send_to_sync` of a `CamelTransport`).
     ///
-    /// Two requests plus an upload, in this order and for the reasons
-    /// [`Outgoing`] gives: the message is imported into the staging mailbox as
-    /// a draft, and then submitted by the id the import minted, with the patch
-    /// that files it where sent mail is kept once the server has accepted it.
+    /// One upload and two requests, in this order, for the reasons that
+    /// [`Outgoing`] gives. The import puts the message into the staging mailbox
+    /// as a draft. The submission then names the imported id. Its patch files
+    /// the message in the sent-mail mailbox when the server accepts it.
     ///
-    /// It is *not* chained into one request, although RFC 8620 §5.3 would let
-    /// an `EmailSubmission/set` name the import's creation id. The upload has
-    /// to happen first either way — a blob id is what `Email/import` takes —
-    /// so the chain would save one round trip of three, and it would buy that
-    /// by making a message the server refused to *import* indistinguishable
-    /// from one it refused to submit. What the user needs told apart is exactly
-    /// those two: one is a message the account would not take, the other is a
-    /// message that is safe in Drafts and did not go out. A later increment can
-    /// chain them when there is a reason to; the round trip is not one.
+    /// The two requests are separate. RFC 8620 §5.3 lets an
+    /// `EmailSubmission/set` name the creation id of the import, but the upload
+    /// must occur first in all cases. One combined request saves one round trip
+    /// of three. But then an import refusal and a submission refusal look the
+    /// same. The user must know which one occurred: the account did not accept
+    /// the message, or the message is in Drafts and was not sent.
     ///
-    /// What comes back is the id the message has in the account, which is the
-    /// uid the staging or destination mailbox will list it under. Nothing about
-    /// the submission itself: its id names a record of a send that has already
-    /// been accepted, and there is no undo in this provider for it to be the
-    /// handle of.
+    /// The return value is the id of the message in the account. The staging
+    /// or destination mailbox lists it with this uid. The submission id is not
+    /// returned, because this provider cannot undo a send.
     ///
-    /// A refusal is the server's own [`SyncError::Client`], from whichever of
-    /// the two calls refused — an identity the account does not have, a message
-    /// whose `From` does not agree with it, a message over the upload limit.
-    /// See [`Outgoing`] for what a refused submission leaves behind.
+    /// A refusal is [`SyncError::Client`], from the call that refused it.
+    /// Examples: an unknown identity, a `From` that does not agree with the
+    /// identity, a message larger than the upload limit. See [`Outgoing`] for
+    /// what a refused submission leaves.
     ///
-    /// A convenience over [`MailSync::stage_outgoing_message`] and
-    /// [`MailSync::submit_staged_message`] run in sequence; a caller that
-    /// retries a mid-send failure by credential should call those two
-    /// separately instead, so that only the request that actually failed is
-    /// repeated. See `stage_outgoing_message`'s doc for why that matters.
+    /// This function calls [`MailSync::stage_outgoing_message`] and then
+    /// [`MailSync::submit_staged_message`]. To retry after a credential
+    /// failure, call those two separately, so that only the failed request
+    /// occurs again. See `stage_outgoing_message` for the reason.
     pub fn send_message(&self, outgoing: Outgoing) -> Result<Id, SyncError> {
         let uid = self.stage_outgoing_message(&outgoing)?;
         self.submit_staged_message(&uid, &outgoing)?;
         Ok(uid)
     }
 
-    /// The first of [`MailSync::send_message`]'s two requests: imports
-    /// `outgoing`'s bytes into its staging mailbox, marked a draft.
+    /// The first request of [`MailSync::send_message`]: imports the bytes of
+    /// `outgoing` into its staging mailbox as a draft.
     ///
-    /// Split out as its own call so a caller retrying after a mid-send
-    /// credential refresh (`jmap-mail`'s transport, [`crate::MailSync::send_message`]'s
-    /// only caller today, does exactly this) can retry
-    /// *only* the request that actually failed. A retry that reran the whole
-    /// of `send_message` after [`MailSync::submit_staged_message`] failed
-    /// with a 401 would import the message a second time: the first import
-    /// already succeeded and is not undone by the second request's failure,
-    /// so nothing tells this crate the account already holds it.
+    /// This is a separate call so that a caller can retry only the failed
+    /// request after a credential refresh. The transport in `jmap-mail` does
+    /// this. Assume that [`MailSync::submit_staged_message`] fails with a 401
+    /// and the caller runs all of `send_message` again. The second run then
+    /// imports the message again: the first import stays, and nothing tells
+    /// this crate that the account has the message.
     pub fn stage_outgoing_message(&self, outgoing: &Outgoing) -> Result<Id, SyncError> {
         let keywords = Outgoing::staged_keywords();
-        // No `receivedAt`: the message is arriving now, and the server's clock
-        // is the one every other client of the account will read it by.
-        // `import_message`'s own trace already covers this half of the send.
+        // No `receivedAt`: the message arrives now, and all clients of the
+        // account read the time from the server clock. `import_message` traces
+        // this part of the send.
         self.import_message(&outgoing.staging, outgoing.source.clone(), &keywords, None)
     }
 
-    /// The second of [`MailSync::send_message`]'s two requests: hands `uid`,
-    /// already imported by [`MailSync::stage_outgoing_message`], to the
-    /// server's submission machinery.
+    /// The second request of [`MailSync::send_message`]: gives `uid` to the
+    /// submission function of the server. [`MailSync::stage_outgoing_message`]
+    /// must import `uid` first.
     pub fn submit_staged_message(&self, uid: &Id, outgoing: &Outgoing) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let identity_id = outgoing.identity.to_string();
@@ -828,42 +762,35 @@ impl MailSync {
         Ok(())
     }
 
-    /// The identity a message sent from `address` goes out through — the
-    /// lookup a `CamelTransport` makes before it can fill in
-    /// [`Outgoing::identity`].
+    /// The identity for a message sent from `address`. A `CamelTransport`
+    /// needs it to fill in [`Outgoing::identity`].
     ///
-    /// `address` is an addr-spec, as `Envelope::mail_from` carries it and as
-    /// a transport reads it out of Camel's `from` argument: no display name, no
-    /// angle brackets. Which of the account's identities covers it — including
-    /// the domain wildcard RFC 8621 §6 allows — is `crate::identity`'s
-    /// judgement, documented there.
+    /// `address` is an addr-spec, as in `Envelope::mail_from` and in the Camel
+    /// `from` argument: no display name and no angle brackets. `crate::identity`
+    /// selects the identity that covers it, including the domain wildcard of
+    /// RFC 8621 §6.
     ///
-    /// **The envelope sender, not the message's `From`.** The two may differ on
-    /// purpose, and the one the account is sending *as* is the envelope's — it
-    /// is what Evolution filled in from the account the user chose in the
-    /// composer, whereas a `From` header can be a list address or a second
-    /// author. RFC 8621 §7 has the server check the header against the identity
-    /// this names, which is a check this side cannot make and should not
-    /// pre-empt: what comes back from a disagreement is the server's own
-    /// refusal, with its reason, and not a guess made here.
+    /// **Use the envelope sender, not the `From` header.** The two can be
+    /// different. The envelope sender is the account that the user selected in
+    /// the composer. A `From` header can be a list address or a second author.
+    /// RFC 8621 §7 makes the server compare the header with the identity. This
+    /// side cannot do that check. A disagreement gives the server refusal and
+    /// its reason.
     ///
-    /// One `Identity/get` per call, and nothing caches it. The account's
-    /// identities change when the user changes them elsewhere, a send is not a
-    /// hot path, and an identity list held across a session is exactly the kind
-    /// of cache that goes wrong quietly — by submitting through an identity the
-    /// account no longer has, or by failing to find one it has just gained.
+    /// This function sends one `Identity/get` for each call, with no cache.
+    /// The user can change identities from a different client, and a send is
+    /// not frequent. A cache can then submit through a removed identity, or
+    /// not find a new identity.
     ///
-    /// An address no identity covers is [`SyncError::NoIdentity`] rather than a
-    /// send that goes out through whatever the account happens to have first: an
-    /// identity is who the mail is *from*, and picking one on the user's behalf
-    /// would send their message as somebody else.
+    /// If no identity covers the address, this function gives
+    /// [`SyncError::NoIdentity`]. It does not use the first identity of the
+    /// account, because the message would then go out under a different name.
     pub fn identity_for(&self, address: &str) -> Result<Id, SyncError> {
         let identities = self.client.identities(&self.account_id)?;
         let found = identity::best_match(&identities, address)
             .ok_or_else(|| SyncError::NoIdentity(address.to_owned()))?;
-        // RFC 8620 §5.1 answers a `/get` with records that have ids; an
-        // identity without one cannot be named in a submission, so there is
-        // nothing to fall back to and nothing to be gained by hiding it.
+        // RFC 8620 §5.1 gives each `/get` record an id. A submission cannot
+        // name an identity without an id, so report the violation.
         found.id.clone().ok_or_else(|| {
             SyncError::protocol(format!(
                 "Identity/get returned an identity for {address} without an id"
@@ -871,71 +798,66 @@ impl MailSync {
         })
     }
 
-    /// The two mailboxes a message goes out through — the lookup a
-    /// `CamelTransport` makes before it can fill in [`Outgoing::staging`] and
-    /// [`Outgoing::destination`].
+    /// The two mailboxes for an outgoing message. A `CamelTransport` needs them
+    /// to fill in [`Outgoing::staging`] and [`Outgoing::destination`].
     ///
-    /// Which mailboxes those are, and what their absence means, is
-    /// [`OutgoingMailboxes::of`]'s judgement, documented there. What this adds
-    /// is the round trip: one `Mailbox/get`, per send, caching nothing.
+    /// [`OutgoingMailboxes::of`] selects the mailboxes and handles a missing
+    /// mailbox. This function adds the round trip: one `Mailbox/get` for each
+    /// send, with no cache.
     ///
-    /// That is [`MailSync::identity_for`]'s decision made again, and the same
-    /// reasoning holds — a folder tree held across a session is a cache that
-    /// goes wrong quietly, by staging a message in a mailbox another client has
-    /// since deleted, or by not finding the Sent folder the user has just made.
-    /// A send is not a hot path, and it already costs an upload.
+    /// The reason is the same as for [`MailSync::identity_for`]. A cached
+    /// folder tree can stage a message in a mailbox that a different client
+    /// deleted, or not find a new Sent folder. A send is not frequent, and it
+    /// already includes an upload.
     ///
-    /// It is deliberately not the [`FolderTree`] the *store* keeps from its own
-    /// listing, although that would save the request: the transport is a
-    /// separate `CamelService` with no pointer to the store — see
-    /// `crate::transport` in `jmap-mail` — and reaching for one would be this
-    /// crate inventing a relationship Camel does not have.
+    /// This function does not use the [`FolderTree`] of the store, although
+    /// that saves one request. The transport is a separate `CamelService` with
+    /// no pointer to the store (see `crate::transport` in `jmap-mail`). A link
+    /// here would add a relation that Camel does not have.
     ///
-    /// An account with nowhere to put an outgoing message is
-    /// [`SyncError::NoOutgoingFolder`], before anything is uploaded.
+    /// If the account has no mailbox for an outgoing message, this function
+    /// gives [`SyncError::NoOutgoingFolder`]. The caller gets this error before
+    /// it uploads anything.
     pub fn outgoing_mailboxes(&self) -> Result<OutgoingMailboxes, SyncError> {
         let (_, tree) = self.folder_tree()?;
         OutgoingMailboxes::of(&tree).ok_or(SyncError::NoOutgoingFolder)
     }
 
-    /// Every `Quota` object of the account (RFC 9425 §3) — what
-    /// `get_quota_info_sync` reads to answer a folder's quota, in `jmap-mail`.
+    /// All `Quota` objects of the account (RFC 9425 §3). `get_quota_info_sync`
+    /// in `jmap-mail` reads them to give the quota of a folder.
     ///
-    /// One `Quota/get` with `ids: null`, RFC 9425's own way of asking for all
-    /// of them, since a store has no reason to ask about one quota by id
-    /// before it knows which ids the account has. Account-wide rather than
-    /// per-folder, because JMAP quotas are not scoped to a mailbox — the
-    /// caller decides which of them describe the folder Camel asked about.
+    /// One `Quota/get` with `ids: null`, which is how RFC 9425 asks for all
+    /// quotas. The store does not know the quota ids before this call. JMAP
+    /// quotas apply to the account, not to a mailbox. The caller selects the
+    /// quotas that apply to the folder.
     pub fn quotas(&self) -> Result<Vec<jmap_proto::quota::Quota>, SyncError> {
         Ok(self.client.quotas(&self.account_id)?)
     }
 
-    /// Says whether the user wants to see a folder — the write behind
-    /// `CamelSubscribable`'s two vfuncs.
+    /// Sets whether the user wants to see a folder. Both vfuncs of
+    /// `CamelSubscribable` use this write.
     ///
-    /// One method rather than two, because on the wire it is one `Mailbox/set`
-    /// update with two possible values: RFC 8621 §2 gives a mailbox an
-    /// `isSubscribed`, and `subscribe_folder_sync` and
-    /// `unsubscribe_folder_sync` differ only in what they set it to.
+    /// One method for both vfuncs, because on the wire this is one
+    /// `Mailbox/set` update. RFC 8621 §2 gives a mailbox the `isSubscribed`
+    /// property. `subscribe_folder_sync` and `unsubscribe_folder_sync` only set
+    /// different values.
     ///
-    /// It goes to the *server* rather than into a list Evolution keeps, which
-    /// is the whole reason the property is in the protocol: a subscription is a
-    /// decision about an account, and a user who hides a folder on their laptop
-    /// means it hidden on their phone too.
+    /// The value goes to the server, not to a local list in Evolution. That is
+    /// the purpose of the property: a subscription applies to the account, so
+    /// a folder hidden on one device is hidden on all devices.
     ///
-    /// Written unconditionally, with no "it is already that" shortcut of the
-    /// kind [`MailSync::set_keywords`] has. The two are not the same case: a
-    /// keyword change arrives already knowing what changed, whereas the only
-    /// thing that could answer "already subscribed?" here is a folder listing,
-    /// which is a *cache* — one that another client's change makes wrong, in
-    /// precisely the direction that would swallow the user's write. A round
-    /// trip per tick in the subscription editor is the cheaper mistake.
+    /// This function always writes, with no "no change" check as in
+    /// [`MailSync::set_keywords`]. A keyword change already contains the
+    /// difference. Here, only a folder listing can tell the current value, and
+    /// a listing is a cache. A change from a different client makes it
+    /// incorrect, and the check would then drop the write of the user. One
+    /// more round trip is the safer cost.
     ///
-    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
-    /// the same judgement [`MailSync::set_keywords`] makes about a message that
-    /// went away: another client deleting the folder is ordinary, and the
-    /// user's decision about it is simply moot. Every other refusal stays the
-    /// server's own [`SyncError::Client`].
+    /// A mailbox that the account does not hold gives
+    /// [`SyncError::NoSuchFolder`]. This is equivalent to
+    /// [`MailSync::set_keywords`] for a missing message. A different client can
+    /// delete the folder, and the subscription is then not necessary. All
+    /// other refusals stay [`SyncError::Client`].
     pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let mailbox_id = mailbox.to_string();
@@ -958,52 +880,44 @@ impl MailSync {
             })
     }
 
-    /// Makes a folder — `create_folder_sync`.
+    /// Makes a folder (`create_folder_sync`).
     ///
-    /// The answer is the folder rather than its id, because that is what Camel
-    /// asks for: `camel_store_create_folder_sync` hands the `CamelFolderInfo`
-    /// it gets straight to Evolution's folder tree, and a caller given an id
-    /// would have to list the account again to learn the one thing the id does
-    /// not carry — the Camel *path*, which is this crate's invention and is
-    /// built here out of the parent's path and the encoded name.
+    /// The return value is the full folder, not only its id. Camel needs it:
+    /// `camel_store_create_folder_sync` gives the `CamelFolderInfo` directly to
+    /// the folder tree of Evolution. With only the id, the caller must list the
+    /// account again to get the Camel path. This crate makes the path from the
+    /// parent path and the encoded name.
     ///
-    /// `parent` is the folder the new one hangs under, and it is a
-    /// [`FolderInfo`] rather than an [`Id`] for exactly that reason: the id is
-    /// what the request needs and the path is what the answer needs, and only
-    /// the caller's tree has both.
+    /// `parent` is the folder above the new folder. It is a [`FolderInfo`],
+    /// not an [`Id`]: the request needs the id, and the answer needs the path.
+    /// Only the tree of the caller has both.
     ///
-    /// **The name is the server's when it stated one, the requested name
-    /// otherwise.** RFC 8620 §5.3 lets a server return, for a created record,
-    /// only the properties it set itself, so an unchanged `name` may
-    /// legitimately be absent (blank, since [`Mailbox::name`] has no `Option`
-    /// to be absent in) from the response — and reading that blank as "the
-    /// server named it nothing" would build an empty path against a perfectly
-    /// correct server. But a *non-blank* answer is the server stating a real
-    /// normalisation (whitespace trimmed, Unicode-normalized, and so on, the
-    /// same shape `jmap-collection-sync`'s `created_resource` already handles
-    /// for address books and calendars), and ignoring that would cache a path
-    /// the server does not recognise until the next full listing corrects it.
-    /// [`created_folder_name`] makes the choice; the id is the one property
-    /// the RFC guarantees regardless.
+    /// **The name comes from the server if it is not blank, and from the
+    /// request if it is blank.** RFC 8620 §5.3 lets a server return only the
+    /// properties that it set for a created record. Thus an unchanged `name`
+    /// can be absent from the response. [`Mailbox::name`] is not an `Option`,
+    /// so an absent name is blank. A blank name must not give an empty path.
+    /// A non-blank name shows a server normalisation (for example, trimmed
+    /// whitespace or Unicode normalisation). `created_resource` in
+    /// `jmap-collection-sync` does the same for address books and calendars.
+    /// If this function ignores the server name, the cached path stays
+    /// incorrect until the next full listing. [`created_folder_name`] makes the
+    /// selection. The RFC always guarantees the id.
     ///
-    /// The counts are zero and there are no children, which is not optimism: a
-    /// mailbox that did not exist a moment ago has had nowhere for mail to
-    /// arrive in, and nothing can hang under it yet. The role is `None` for a
-    /// different kind of reason — none is requested, and a role read back from
-    /// the response would be this function assigning one outside
-    /// [`FolderTree`]'s arbitration, which is what keeps an account from
-    /// showing two inboxes.
+    /// The counts are zero and there are no children. A new mailbox has no
+    /// mail and no child mailboxes yet. The role is `None`, because the request
+    /// sets no role. A role read from the response would bypass the role
+    /// selection of [`FolderTree`], which prevents two inboxes in one account.
     ///
-    /// `isSubscribed`, in contrast, *is* read from the response when the server
-    /// sent it: RFC 8621 §2 leaves the default to the server, and it is the one
-    /// property here whose value the client cannot work out. `true` when the
-    /// server said nothing, because a folder the user has just asked for is one
-    /// they want to see — the other guess hides the folder Evolution was told
-    /// to make until the next listing.
+    /// This function reads `isSubscribed` from the response if the server sent
+    /// it. RFC 8621 §2 lets the server select the default, and the client
+    /// cannot calculate it. If the server sent no value, the default is `true`.
+    /// The user asked for this folder, so the user wants to see it. `false`
+    /// would hide the new folder until the next listing.
     ///
-    /// A refusal — a name a sibling already has, a parent that is gone — stays
-    /// the server's own [`SyncError::Client`], because the reason is a sentence
-    /// for the user and this crate has nothing to add to it.
+    /// A refusal (for example, a duplicate sibling name or a missing parent)
+    /// stays [`SyncError::Client`]. The server reason is a message for the
+    /// user, and this crate cannot add to it.
     pub fn create_folder(
         &self,
         parent: Option<&FolderInfo>,
@@ -1043,32 +957,27 @@ impl MailSync {
         })
     }
 
-    /// Removes a folder — `delete_folder_sync`.
+    /// Removes a folder (`delete_folder_sync`).
     ///
-    /// By mailbox id rather than by path, like every other write here: the
-    /// caller named a folder out of a listing, and the path that folder had is
-    /// the part of the listing another client's rename can already have
-    /// invalidated.
+    /// This function uses the mailbox id, not the path, as all other writes
+    /// here do. The caller got the folder from a listing, and a rename from a
+    /// different client can already make that path incorrect.
     ///
-    /// No `onDestroyRemoveEmails`. RFC 8621 §2.5 makes that argument the
-    /// difference between "remove this folder" and "remove this folder and
-    /// everything in it", and the second is not what Camel asked for: a store
-    /// that quietly sent it would delete the user's mail on a click that says
-    /// nothing about mail. What comes back instead is the server's refusal —
-    /// `mailboxHasChild` or `mailboxHasEmail` — and those are kept whole, as
-    /// [`SyncError::Client`], for the caller to put in front of the user.
+    /// This function does not send `onDestroyRemoveEmails`. In RFC 8621 §2.5,
+    /// this argument also removes all messages in the folder. Camel did not ask
+    /// for that, and it would delete the mail of the user. Instead, the server
+    /// refuses with `mailboxHasChild` or `mailboxHasEmail`. These refusals stay
+    /// unchanged as [`SyncError::Client`], for the caller to show to the user.
     ///
-    /// They deliberately get no variant of their own, unlike the missing folder
-    /// below. The test for a variant here is whether Camel has a *code* the
-    /// caller could map it onto, and for these two it does not — the reason is
-    /// prose either way, and re-encoding the server's own vocabulary into ours
-    /// would only lose the description that came with it.
+    /// These refusals have no variant of their own, but a missing folder has.
+    /// A variant is necessary only when Camel has an error code for it. Camel
+    /// has no code for these two. A conversion would lose the server
+    /// description.
     ///
-    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
-    /// the judgement [`MailSync::set_subscribed`] makes about the same
-    /// situation: another client having removed the folder first is the outcome
-    /// the user asked for, and reporting it as a failure would turn someone
-    /// else's tidying into a broken account.
+    /// A mailbox that the account does not hold gives
+    /// [`SyncError::NoSuchFolder`], as in [`MailSync::set_subscribed`]. If a
+    /// different client removed the folder first, the result is what the user
+    /// asked for. It is not a failure.
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let mailbox_id = mailbox.to_string();
@@ -1080,42 +989,41 @@ impl MailSync {
         Ok(())
     }
 
-    /// Renames a folder, and moves it — `rename_folder_sync`.
+    /// Renames a folder, and moves it (`rename_folder_sync`).
     ///
-    /// One method for both, because Camel asks for both with one vfunc: it
-    /// names a folder by path, and a path carries the folder's name *and* where
-    /// it hangs, so "Work/Notes" becoming "Archive/Notes" and becoming
-    /// "Work/Minutes" arrive here identically. On the wire they are the two
-    /// properties of one `Mailbox/set` update, `name` and `parentId`.
+    /// One method for both, because Camel uses one vfunc for both. A Camel path
+    /// contains the folder name and its position. Thus "Work/Notes" to
+    /// "Archive/Notes" and "Work/Notes" to "Work/Minutes" are the same call. On
+    /// the wire, they are the `name` and `parentId` properties of one
+    /// `Mailbox/set` update.
     ///
-    /// **Both are always sent**, including a `parentId` of `null` for a folder
-    /// moving up to the top level. Sending only what looks changed would need a
-    /// before-picture, and the only one available is the caller's listing —
-    /// a cache, which another client's move has already made wrong in exactly
-    /// the direction that would swallow this write. What the user asked for is
-    /// where the folder should *be*, and that is a statement about both
-    /// properties; a patch that left `parentId` out would answer with a path
-    /// the folder is not at.
+    /// **This function always sends both properties**, also `parentId: null`
+    /// for a move to the top level. To send only changed values, this function
+    /// needs the earlier values. Only the listing of the caller has them, and
+    /// that is a cache. A move from a different client can make it incorrect,
+    /// and the write would then be lost. The user asked for a position, and
+    /// that position includes both properties. Without `parentId`, the returned
+    /// path could be incorrect.
     ///
-    /// The answer is the folder's new Camel path, for the reason
-    /// [`MailSync::create_folder`] answers with a whole folder: the caller keys
-    /// the folder by that string and cannot build it, because the mapping from
-    /// a mailbox name to a path component is this crate's. Everything else
-    /// about the folder — its counts, its role, its subscription, what hangs
-    /// under it — a rename does not touch, so there is nothing else to report.
+    /// The return value is the new Camel path of the folder, for the reason
+    /// that [`MailSync::create_folder`] returns a full folder. The caller uses
+    /// that path as the folder key, and only this crate can make it from a
+    /// mailbox name. A rename does not change the counts, role, subscription,
+    /// or children of the folder.
     ///
-    /// `name` is a mailbox name, not a path component, the reading
-    /// [`MailSync::create_folder`] documents: a `/` in it is a character of the
-    /// name, and this is where it becomes `%2F`.
+    /// `name` is a mailbox name, not a path component, as in
+    /// [`MailSync::create_folder`]. A `/` in it is part of the name, and this
+    /// function encodes it as `%2F`.
     ///
-    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives.
+    /// This function does not use `ifInState`, for the reason that
+    /// [`MailSync::set_keywords`] gives.
     ///
-    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
-    /// the judgement every other write naming a mailbox makes. Every other
-    /// refusal — a name a sibling already has, a parent that is gone, a move
-    /// into the folder's own subtree — stays the server's own
-    /// [`SyncError::Client`]: each is a sentence for the user, and Camel has no
-    /// code to map them onto.
+    /// A mailbox that the account does not hold gives
+    /// [`SyncError::NoSuchFolder`], as in all other writes that name a
+    /// mailbox. All other refusals stay [`SyncError::Client`]. Examples are a
+    /// duplicate sibling name, a missing parent, or a move into the subtree of
+    /// the folder. Each is a message for the user, and Camel has no code for
+    /// them.
     pub fn rename_folder(
         &self,
         folder: &Id,
@@ -1146,8 +1054,8 @@ impl MailSync {
         ))
     }
 
-    /// One `Email/set` update, with the one refusal that is not a failure
-    /// named: a message the account no longer holds.
+    /// One `Email/set` update. A `notFound` refusal gives
+    /// [`SyncError::NoSuchMessage`], because the message is gone.
     fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
         self.client
             .email_update(&self.account_id, uid, patch)
@@ -1161,20 +1069,19 @@ impl MailSync {
             })
     }
 
-    /// The ids of a mailbox's messages, oldest first, however many pages the
-    /// server answers in.
+    /// The message ids of a mailbox, oldest first, from all pages of the
+    /// server answer.
     fn message_ids(&self, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
         self.paged_query(Filter::condition(EmailQueryFilter::in_mailbox(
             mailbox.clone(),
         )))
     }
 
-    /// The ids of a mailbox's messages matching `filter`, for server-side
-    /// search (`jmap-mail`'s `folder.rs`, translating a Camel search
-    /// expression). `Email/query` has no notion of "within this listing" on
-    /// its own, so the mailbox scope is folded in with an AND rather than left
-    /// to the caller, the same reason [`Self::message_ids`] builds one
-    /// directly.
+    /// The message ids of a mailbox that agree with `filter`, for a search on
+    /// the server (`folder.rs` in `jmap-mail` translates a Camel search
+    /// expression). `Email/query` has no mailbox limit of its own. Thus this
+    /// function adds the mailbox condition with an AND, as
+    /// [`Self::message_ids`] does.
     pub fn search(
         &self,
         mailbox: &Id,
@@ -1186,8 +1093,8 @@ impl MailSync {
         ]))
     }
 
-    /// Pages through `Email/query` for `filter`, oldest first, until the
-    /// server stops reporting a capped answer.
+    /// Gets all pages of `Email/query` for `filter`, oldest first. It stops
+    /// when the server does not report a limit, or returns an empty page.
     fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
 
@@ -1202,8 +1109,8 @@ impl MailSync {
             let capped = response.limit.is_some();
             let answered = !response.ids.is_empty();
             ids.extend(response.ids);
-            // No cap means the whole rest of the result set is in hand; a cap
-            // that came back empty means the rest of it is nothing.
+            // No limit: all remaining ids are in this page. A limited empty
+            // page: no ids remain.
             if !capped || !answered {
                 return Ok(ids);
             }
@@ -1213,19 +1120,17 @@ impl MailSync {
         ))
     }
 
-    /// How many ids one `Email/get` of this account may name.
+    /// The maximum number of ids in one `Email/get` for this account.
     ///
-    /// The server's `maxObjectsInGet` if it published one — asking for more is
-    /// a `requestTooLarge` that fails the whole call rather than a short
-    /// answer — and otherwise a conservative guess, because RFC 8620 §2
-    /// requires the limit to be there and a server that omits it has told us
-    /// nothing about what it will take.
+    /// This is the `maxObjectsInGet` of the server, if it has one. A request
+    /// for more ids fails fully with `requestTooLarge`. RFC 8620 §2 requires
+    /// the limit. If the server does not supply it, this function uses a small
+    /// fallback value.
     ///
-    /// Capped from above as well as below: a server may advertise a limit far
-    /// larger than a mailbox, and one `/get` for fifty thousand messages is a
-    /// response Evolution waits on with the folder half-open. Chunking bounds
-    /// what is in flight at the cost of round-trips it would otherwise make
-    /// anyway.
+    /// The value also has a maximum. A server can advertise a limit larger than
+    /// a mailbox. One `/get` for fifty thousand messages makes Evolution wait
+    /// with the folder half open. Chunks keep each response small, at the
+    /// cost of more round trips.
     fn objects_in_get(&self) -> usize {
         let advertised = self
             .client
@@ -1238,28 +1143,25 @@ impl MailSync {
     }
 }
 
-/// What a delta has to ask for: a summary row's properties and the one thing a
-/// listing never needs, `mailboxIds`.
+/// The properties that a delta requests: the summary row properties, plus
+/// `mailboxIds`.
 ///
-/// Kept out of [`SUMMARY_PROPERTIES`] rather than added to it, because a
-/// listing already knows the answer — it asked `Email/query` for one mailbox's
-/// messages — and neither [`MessageSummary`] nor a `CamelFolderSummary` row has
-/// anywhere to keep it. It is a question only a delta has, and only for as long
-/// as it takes to decide which of its two lists a message belongs in.
+/// `mailboxIds` is not in [`SUMMARY_PROPERTIES`]. A listing already knows the
+/// mailbox, because its `Email/query` names one mailbox. [`MessageSummary`]
+/// and `CamelFolderSummary` rows have no field for it. Only a delta needs it,
+/// to put each message in `present` or `absent`.
 fn filing_properties() -> Vec<&'static str> {
     let mut properties = SUMMARY_PROPERTIES.to_vec();
     properties.push("mailboxIds");
     properties
 }
 
-/// The name a just-created folder's answer is built from: `server_name` when
-/// it is not blank (the server stated a real normalisation), `requested_name`
-/// otherwise (the server said nothing, RFC 8620 §5.3's "accepted as asked").
+/// The name for a new folder: `server_name` if it is not blank (a server
+/// normalisation), otherwise `requested_name` (RFC 8620 §5.3: no change).
 ///
-/// Mirrors `jmap-collection-sync`'s `created_resource`, which makes the same
-/// blank-vs-non-blank call for address books and calendars after a real
-/// Fastmail server was found leaving `name` out of a create response entirely
-/// rather than echoing back the name it was given.
+/// `created_resource` in `jmap-collection-sync` makes the same blank or
+/// non-blank selection for address books and calendars. A Fastmail server
+/// sent no `name` in a create response, and did not echo the requested name.
 fn created_folder_name<'a>(server_name: &'a str, requested_name: &'a str) -> &'a str {
     if server_name.trim().is_empty() {
         requested_name
@@ -1268,14 +1170,11 @@ fn created_folder_name<'a>(server_name: &'a str, requested_name: &'a str) -> &'a
     }
 }
 
-/// The one refusal a write to a mailbox has to be told apart from the rest:
-/// the mailbox is not there any more.
+/// Converts a mailbox write error. A `notFound` refusal gives
+/// [`SyncError::NoSuchFolder`], because the mailbox is gone.
 ///
-/// Shared by the two writes that name a mailbox rather than a message, because
-/// the judgement is the same in both and it is the kind that goes wrong by
-/// drifting apart: a `notFound` read as an ordinary failure in one place and as
-/// a vanished folder in another is the same account reported two ways depending
-/// on which vfunc the user happened to trigger.
+/// The three writes that name a mailbox (subscribe, delete, rename) use this
+/// function. Thus they cannot give different errors for the same `notFound`.
 fn folder_error(mailbox: &Id, error: jmap_client::Error) -> SyncError {
     match &error {
         jmap_client::Error::Set(set_error)
@@ -1287,54 +1186,49 @@ fn folder_error(mailbox: &Id, error: jmap_client::Error) -> SyncError {
     }
 }
 
-/// The most messages a delta may name before listing the mailbox is the cheaper
-/// way to find out what it holds.
+/// The maximum number of messages in a delta before a full listing of the
+/// mailbox costs less.
 ///
-/// Both sides of the comparison are round trips of `Email/get`, which is what a
-/// refresh spends nearly all of its time in. Catching up fetches the messages
-/// the delta names — `held` is not a bound on that, because `Email/changes`
-/// reports on the whole *account* and most of what it names may be in mailboxes
-/// this folder is not. Listing fetches the mailbox, whose size the caller's row
-/// count is the one free estimate of: it is what the folder last saw there, and
-/// it is exactly the set a listing would fetch again. So a delta that names more
-/// messages than the mailbox has rows is a delta that costs more than the
-/// listing it saves.
+/// Both options cost `Email/get` round trips, and these take almost all of the
+/// refresh time. The delta fetches each message that it names. `held` does not
+/// limit that number, because `Email/changes` reports on the full account.
+/// The listing fetches the mailbox. The row count of the caller is the only
+/// free estimate of the mailbox size. Thus a delta that names more messages
+/// than the mailbox has rows costs more than a listing.
 ///
-/// The floor is one `Email/get`, because a listing is never a single round trip
-/// — it is the state, then a query, then a `/get` per page — so a delta that
-/// fits in one is cheaper than any listing whatsoever. Without it, an empty or
-/// nearly empty mailbox would list itself again every time the account was
-/// touched anywhere, which is the opposite of what this bound is for.
+/// The minimum is one `Email/get`. A listing always needs more than one round
+/// trip: the state, a query, and one `/get` for each page. Thus a delta that
+/// fits in one `/get` always costs less. Without this minimum, an empty mailbox
+/// would list again after each change anywhere in the account.
 fn catch_up_limit(held: usize, objects_in_get: usize) -> usize {
     held.max(objects_in_get)
 }
 
-/// What an uploaded message is announced as: RFC 2046 §5.2.1's type for an
-/// encapsulated RFC 5322 message, which is what the bytes of an import are.
+/// The media type of an uploaded message. RFC 2046 §5.2.1 defines it for an
+/// encapsulated RFC 5322 message.
 const MESSAGE_MEDIA_TYPE: &str = "message/rfc822";
 
-/// A server that answers every `Email/query` with a limited page, without ever
-/// running out of ids, would otherwise hang the calling thread. Far above any
-/// real mailbox at any real page size; reaching it means the server is broken.
+/// The maximum number of `Email/query` pages. Without it, a server that always
+/// returns a limited page would block the thread. No real mailbox gets near
+/// this number, so a server that reaches it is broken.
 const MAX_QUERY_PAGES: usize = 1024;
 
-/// What to assume when the server does not publish `maxObjectsInGet`. Small
-/// enough that no plausible server rejects it, at the price of more round-trips
-/// for a server that broke the rules.
+/// The value to use when the server does not publish `maxObjectsInGet`. It is
+/// small, so all servers accept it. The cost is more round trips for a server
+/// that does not obey the RFC.
 const FALLBACK_OBJECTS_IN_GET: usize = 50;
 
-/// The most this client asks for in one `Email/get`, however much the server
-/// allows.
+/// The maximum number of ids in one `Email/get` from this client, for all
+/// server limits.
 const MAX_OBJECTS_PER_GET: usize = 500;
 
 #[cfg(test)]
 mod tests {
     use super::created_folder_name;
 
-    /// The mock server this crate tests against always echoes a create's
-    /// requested name back unchanged, so no live round trip can produce the
-    /// blank-vs-normalised distinction a real server does; the choice is
-    /// tested directly instead.
+    /// The mock server always returns the requested name unchanged. Thus a live
+    /// test cannot show the blank or normalised cases, so this test calls the
+    /// function directly.
     #[test]
     fn a_blank_server_name_falls_back_to_the_requested_one() {
         assert_eq!(created_folder_name("", "Projects"), "Projects");

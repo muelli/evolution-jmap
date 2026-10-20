@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::create_folder`/`delete_folder`, `set_subscribed`/
-//! `rename_folder`, `set_keywords`/`file_message`, `expunge_message`, and
-//! `import_message`/`send_message` trace their writes with `account_id` and
-//! the folder's/message's name/id.
+//! The `MailSync` writes trace `account_id` and the folder or message name or
+//! id. The writes are `create_folder`, `delete_folder`, `set_subscribed`,
+//! `rename_folder`, `set_keywords`, `file_message`, `expunge_message`,
+//! `import_message` and `send_message`.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync, Outgoing};
@@ -53,7 +53,7 @@ impl Fixture {
             .seed_identity(name, email)
     }
 
-    /// One message, filed in `mailbox`, with no keywords.
+    /// Seed one message in `mailbox`, with no keywords.
     fn seed_message(&self, mailbox: &Id) -> Id {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -487,10 +487,10 @@ fn expunging_a_message_filed_elsewhere_too_traces_the_account_uid_and_mailbox() 
 
 #[test]
 fn expunging_a_message_that_is_not_in_this_mailbox_traces_no_write() {
-    // The read that decides this (`Email/get`) still happens and leaves its own
-    // transport-level trace noise, unlike `set_keywords`/`file_message`'s
-    // short-circuit, which sends no request at all — so this asserts the
-    // absence of this crate's own write trace rather than an empty capture.
+    // The `Email/get` read still occurs and makes transport traces. (An empty
+    // `set_keywords` or `file_message` sends no request.) Thus the test checks
+    // that the write trace of this crate is absent, not that the capture is
+    // empty.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let archive = fixture.seed_mailbox("Archive");

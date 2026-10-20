@@ -3,37 +3,32 @@
 
 //! Mailbox names as Camel folder paths.
 //!
-//! Camel identifies a folder by a `/`-separated path — it is the key
-//! `camel_store_get_folder` takes, it appears in the `folder://` URIs
-//! Evolution stores in filters and account settings, and it names the folder's
-//! directory in the on-disk summary cache. A JMAP mailbox name is none of
-//! those things: it is a display string that may contain any character except
-//! NUL, and uniqueness is only promised among siblings (RFC 8621 §2).
+//! Camel identifies a folder by a `/`-separated path. The path is the key of
+//! `camel_store_get_folder`, it occurs in the `folder://` URIs of Evolution
+//! filters and account settings, and it names the folder directory in the
+//! on-disk summary cache. A JMAP mailbox name is a display string that can
+//! contain all characters except NUL, and it is unique only among its
+//! siblings (RFC 8621 §2). Thus the mapping cannot be the identity, and it
+//! must have these two properties:
 //!
-//! So the mapping cannot be the identity, and it has two jobs beyond looking
-//! reasonable:
-//!
-//! * **Injective.** Two mailboxes that map onto one path mean a store that
-//!   hands back the wrong folder's mail. Every character that would make a
-//!   name ambiguous — `/`, which would invent a hierarchy level, and `%`,
-//!   which is the escape itself — is percent-encoded, so decoding is
-//!   unambiguous and distinct names stay distinct.
+//! * **Injective.** If two mailboxes map to one path, the store returns the
+//!   mail of the wrong folder. The encoding percent-encodes each character
+//!   that makes a name ambiguous: `/` (which adds a hierarchy level) and `%`
+//!   (the escape character). Thus distinct names give distinct paths.
 //! * **Safe as a filename.** A component of `.` or `..` is a legal mailbox
-//!   name and a directory traversal in the summary cache, and a NUL would
-//!   truncate the path on the way to C. Those are encoded too.
+//!   name, but a directory traversal in the summary cache. A NUL truncates
+//!   the path in C. The encoding also encodes these.
 //!
-//! The overwhelmingly common case — a name of ordinary text — comes through
-//! verbatim, which keeps the paths in a user's saved filters readable.
+//! A name of ordinary text does not change, so the paths in the saved
+//! filters of a user stay readable.
 
 /// The separator Camel joins path components with.
 pub(crate) const SEPARATOR: char = '/';
 
 /// Render one mailbox name as one path component.
 pub(crate) fn encode_component(name: &str) -> String {
-    // `.` and `..` have to be encoded as whole components rather than
-    // per-character: a name of `.hidden` is a perfectly good filename, and
-    // encoding its dot would make paths noisy for no gain. Nothing else can
-    // produce these strings, because a name containing `%` has it escaped.
+    // Encode `.` and `..` only as whole components: `.hidden` is a good
+    // filename. No other name gives these encodings, because `%` is escaped.
     match name {
         "." => return "%2E".to_owned(),
         ".." => return "%2E%2E".to_owned(),
@@ -52,18 +47,16 @@ pub(crate) fn encode_component(name: &str) -> String {
     encoded
 }
 
-/// Split a path into the path of its parent, if it has one, and its own last
+/// Split a path into the path of its parent (if it has one) and its last
 /// component.
 ///
-/// The one part of this mapping a caller outside the crate needs, because Camel
-/// names a folder's new home by path: what the store has to read out of the
-/// string `rename_folder_sync` hands it is where the folder now hangs and what
-/// its component now is, and neither is anything it may split out for itself —
-/// the separator is this module's choice.
+/// Callers outside the crate need this because Camel names the new location
+/// of a folder by path. The store must get the new parent and the new
+/// component from the string of `rename_folder_sync`, and only this module
+/// knows the separator.
 ///
-/// A component can never contain the separator, since `encode_component`
-/// escapes it, so the last one splits the path unambiguously. It is the same
-/// reading `FolderTree::insert` makes of a path.
+/// `encode_component` escapes the separator, so the last separator always
+/// starts the last component. `FolderTree::insert` reads a path the same way.
 pub fn split(path: &str) -> (Option<&str>, &str) {
     match path.rsplit_once(SEPARATOR) {
         Some((parent, component)) => (Some(parent), component),

@@ -1,32 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Making a message leave one mailbox for good — the write behind Camel's
-//! `expunge_sync`.
+//! The permanent removal of a message from one mailbox: the write behind
+//! `expunge_sync` in Camel.
 //!
-//! Every other write in this crate has one request in it. This one has two, and
-//! the reason is the gap between what Camel's vfunc means and what JMAP has to
-//! say it with. `camel_folder_expunge_sync` asks a *folder* to get rid of the
-//! messages the user marked deleted *in it*; in IMAP that is unambiguous,
-//! because a message is in exactly one mailbox and removing it from the mailbox
-//! is removing it. In JMAP RFC 8621 §4.6 makes `mailboxIds` a set, so the same
-//! message may be filed in the inbox and in a folder the user put it in
-//! themselves, and the two possible writes say very different things:
+//! This write has two requests. `camel_folder_expunge_sync` tells a *folder*
+//! to remove the messages that the user marked as deleted *in that folder*. In
+//! IMAP, a message is in exactly one mailbox, so this is clear. In JMAP, RFC
+//! 8621 §4.6 makes `mailboxIds` a set, so one message can be in the inbox and
+//! in a folder of the user. The two possible writes have different results:
 //!
-//! - `Email/set` **destroy** removes the message from the account. Right for a
-//!   message this mailbox is the last home of, and data loss for one the user
-//!   also filed somewhere else — emptying the trash would take the copy in
-//!   "Work" with it.
-//! - `Email/set` **update** with `mailboxIds/<this>: null` removes it from
-//!   this mailbox only. Right for the second case, and refused by any server
-//!   that keeps RFC 8621 §4.6's invariant for the first, because it would leave
-//!   the message in no mailbox at all.
+//! - `Email/set` **destroy** removes the message from the account. This is
+//!   correct when this mailbox is the last one. Otherwise, it deletes data: an
+//!   empty trash also removes the copy in "Work".
+//! - `Email/set` **update** with `mailboxIds/<this>: null` removes the message
+//!   from this mailbox only. This is correct for the second case. For the
+//!   first case, a server that keeps the RFC 8621 §4.6 invariant refuses it,
+//!   because the message then has no mailbox.
 //!
-//! Neither is right on its own, and nothing on the Camel side knows which case
-//! a message is in: a folder summary row records the mailbox it was listed
-//! from and has never been told about any other. So the mailboxes are read
-//! first and the write chosen from the answer, which is what these tests are
-//! about — one read, then whichever of the two writes the read implies.
+//! Camel cannot know which case applies: a summary row records only the
+//! mailbox of its listing. Thus the code reads the mailboxes first, then
+//! selects the write from the answer. These tests examine that sequence.
 
 use std::collections::BTreeMap;
 
@@ -74,7 +68,7 @@ impl Fixture {
         ))
     }
 
-    /// Whether the account still holds the message at all.
+    /// Whether the account still has the message.
     fn holds(&self, uid: &Id) -> bool {
         let state = self.server.state();
         let state = state.lock().unwrap();
@@ -86,7 +80,7 @@ impl Fixture {
             .is_some()
     }
 
-    /// Which mailboxes the server has the message in now.
+    /// The mailboxes of the message on the server now.
     fn mailboxes_on_server(&self, uid: &Id) -> BTreeMap<Id, bool> {
         let state = self.server.state();
         let state = state.lock().unwrap();
@@ -100,9 +94,9 @@ impl Fixture {
             .unwrap_or_default()
     }
 
-    /// Overwrites a seeded message's `mailboxIds` directly in the store, to
-    /// reach states a conforming server never sends (RFC 8621 §4.6 gives
-    /// every present value as `true`).
+    /// Overwrite the `mailboxIds` of a seeded message in the store. This makes
+    /// states that a conforming server never sends (RFC 8621 §4.6 makes each
+    /// present value `true`).
     fn set_mailbox_ids(&self, uid: &Id, mailbox_ids: BTreeMap<Id, bool>) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -117,10 +111,9 @@ impl Fixture {
 
 #[test]
 fn a_message_this_mailbox_is_the_last_home_of_is_destroyed() {
-    // The ordinary case, and the one that makes "empty the trash" mean
-    // something: the mailbox being expunged is the only one naming the
-    // message, so taking it out of that mailbox and destroying it are the same
-    // act — and only the second is a request RFC 8621 §4.6 allows.
+    // The usual case, as in "empty the trash": the message is only in this
+    // mailbox. Removal from the mailbox and destruction then have the same
+    // result, but RFC 8621 §4.6 permits only destruction.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let uid = fixture.seed_message(&inbox);
@@ -138,9 +131,8 @@ fn a_message_this_mailbox_is_the_last_home_of_is_destroyed() {
 
 #[test]
 fn a_message_filed_elsewhere_too_only_leaves_this_mailbox() {
-    // The case that makes the read worth its round trip. The user copied the
-    // message into a folder of their own and then deleted it out of the inbox;
-    // destroying it would take their copy with it.
+    // This case is the reason for the read. The user copied the message to a
+    // folder, then deleted it from the inbox. Destruction also removes the copy.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let archive = fixture.seed_mailbox("Archive");
@@ -165,13 +157,10 @@ fn a_message_filed_elsewhere_too_only_leaves_this_mailbox() {
 
 #[test]
 fn a_message_that_is_not_in_this_mailbox_is_left_exactly_as_it_is() {
-    // A summary row is a claim about the last listing, so the mailbox the row
-    // was listed from may not be one the message is in any more — another
-    // client can have moved it while Evolution held the folder open. Expunging
-    // it here is then a statement about a mailbox the message left, and the
-    // safe reading of that is that there is nothing to do: the message is
-    // already gone from here, and destroying it because of where it *was*
-    // would delete mail on the strength of a stale row.
+    // A summary row records the last listing. A different client can move the
+    // message while Evolution has the folder open. Then the message is already
+    // out of this mailbox, so the expunge does nothing. A destruction based on
+    // an old row deletes mail.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let archive = fixture.seed_mailbox("Archive");
@@ -192,9 +181,9 @@ fn a_message_that_is_not_in_this_mailbox_is_left_exactly_as_it_is() {
 
 #[test]
 fn a_message_another_client_destroyed_is_reported_as_gone_rather_than_failed() {
-    // The judgement every write in this crate makes about the same situation:
-    // a uid is a claim about the last listing, and another client having
-    // destroyed the message means the expunge is moot rather than broken.
+    // All writes in this crate apply the same rule: a uid comes from the last
+    // listing. If a different client destroyed the message, the expunge has
+    // no work, and it is not an error.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
 
@@ -211,9 +200,8 @@ fn a_message_another_client_destroyed_is_reported_as_gone_rather_than_failed() {
 
 #[test]
 fn expunging_the_same_message_twice_reports_the_second_as_gone() {
-    // What the first test leaves behind, asked again — the shape a retry after
-    // a half-failed expunge takes, and the reason the caller may treat
-    // NoSuchMessage as a row that leaves rather than as an error to show.
+    // The same expunge again, as in a retry after a partial failure. Thus the
+    // caller can remove the row on NoSuchMessage and show no error.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let uid = fixture.seed_message(&inbox);
@@ -232,16 +220,13 @@ fn expunging_the_same_message_twice_reports_the_second_as_gone() {
 
 #[test]
 fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
-    // RFC 8621 §4.6 gives every present `mailboxIds` value as `true`; a
-    // server that spells absence out with `false` instead of omitting the
-    // key is violating that. There is no safe guess between the two writes
-    // this crate could make in response: counting the entry as membership
-    // can turn a message truly filed in one mailbox into a request that
-    // fails outright (removing the last `true` entry via `mailboxIds/<id>:
-    // null` leaves a message in no mailbox at all, which a conforming
-    // server refuses), and ignoring it risks destroying a copy the entry
-    // was — however badly — trying to name. So this is refused up front,
-    // the same way `identity_for` refuses an identity without an id.
+    // RFC 8621 §4.6 makes each present `mailboxIds` value `true`. A `false`
+    // value violates the RFC, and neither write is safe:
+    // - As membership, the entry turns a message in one mailbox into an update
+    //   that leaves it in no mailbox, which a conforming server refuses.
+    // - Ignored, the entry can cause destruction of a copy.
+    // Thus the code refuses it at the start, as `identity_for` refuses an
+    // identity without an id.
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
     let archive = fixture.seed_mailbox("Archive");

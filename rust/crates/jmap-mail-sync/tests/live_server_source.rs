@@ -1,37 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::message_source` against a real JMAP server — the function
-//! `jmap-mail`'s Camel folder calls to fetch a message's raw RFC 5322 bytes
-//! for the reading pane, exercised end to end for the first time.
+//! Tests `MailSync::message_source` against a real JMAP server. The Camel
+//! folder of `jmap-mail` calls this function to get the raw RFC 5322 bytes
+//! of a message for the reading pane.
 //!
-//! This is the exact sync-layer function behind a past Fastmail
-//! blob-download investigation (redirect-auth, the `Accept` header, the
-//! `REBASE_URLS` cross-account-poisoning root cause), which was diagnosed
-//! with raw `jmap-client`-level probes and a real Evolution session rather
-//! than an automated regression test driving `MailSync::message_source`
-//! itself against a real server. Only `jmap-mockd` has ever exercised it
-//! (`jmap-mail-sync/tests/source.rs`); this file is its live-server
-//! counterpart, following the same recipe as `live_server.rs`'s
-//! `import_message`/`expunge_message` test.
+//! `jmap-mail-sync/tests/source.rs` tests this function against `jmap-mock`
+//! only. This file is its live-server counterpart.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_source -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like this crate's
-//! other live-server files, `#[ignore]` alone already keeps it out of a
-//! plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -40,8 +31,8 @@ use jmap_mail_sync::{Keywords, MailSync};
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,7 +40,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -65,11 +56,11 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports a message into the Inbox via `MailSync::import_message`, fetches
-/// its raw bytes back via `MailSync::message_source`, confirms the RFC 5322
-/// headers and body round-trip byte-for-byte (the same shape `tests/
-/// source.rs::the_source_of_a_message_is_the_rfc_5322_bytes_the_server_holds`
-/// checks against the mock), then expunges it.
+/// Imports a message into the Inbox and gets its raw bytes with
+/// `MailSync::message_source`. The source must contain the subject header,
+/// and the body must be after the first blank line. The test does not
+/// compare all bytes. `tests/source.rs` does the same check against the mock.
+/// The cleanup at the end runs only when all assertions pass.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn message_source_returns_the_exact_bytes_imported_against_the_real_server() {

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Noticing that the folder list moved: what `Mailbox/changes` is good for,
-//! and what it is not good enough for.
+//! Detection of changes to the folder list: what `Mailbox/changes` can tell,
+//! and what it cannot tell.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
@@ -31,8 +31,8 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// Mutate the account the way another client would — as a state
-    /// transition, which is what `Mailbox/changes` reports.
+    /// Change the account as a different client does: as a state transition,
+    /// which `Mailbox/changes` reports.
     fn edit<R>(&self, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -127,8 +127,8 @@ fn renaming_a_parent_moves_children_the_delta_never_names() {
 
     fixture.edit(|account| assert!(account.rename_mailbox(&parent, "Archive of Projects")));
 
-    // The reason a delta is not applied folder by folder: `Mailbox/changes`
-    // names the parent alone, and every path below it moved with it.
+    // This is why a delta is not applied folder by folder. `Mailbox/changes`
+    // names only the parent, but all paths below it changed too.
     let (_, tree) = rebuilt(sync.folder_tree_since(&state).unwrap());
     assert!(tree.find("Projects/Alpha").is_none());
     assert!(tree.find("Archive of Projects/Alpha").is_some());
@@ -140,18 +140,16 @@ fn a_state_the_server_cannot_calculate_from_is_not_a_failure() {
     fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     let sync = fixture.sync();
 
-    // A state from another server, or one this one has forgotten. Camel has
-    // no machinery for reporting that upwards — the store's only answer is to
-    // list the account again, so that is the answer given here.
+    // A state from a different server, or a state that this server forgot.
+    // Camel cannot report this to its caller, so the store lists the account
+    // again.
     let (_, tree) = rebuilt(sync.folder_tree_since(&State::new("nonsense")).unwrap());
     assert_eq!(tree.len(), 1);
 }
 
-/// Same unrecognized state, but answered the way real Stalwart answers it —
-/// `invalidArguments` rather than RFC 8620 §5.2's own `cannotCalculateChanges`
-/// (`STALWART-RFC-FINDINGS.md` finding 17). Camel still has nowhere to report
-/// it to, so the answer has to be the same relist, not a failure that never
-/// recovers.
+/// The same unknown state, with the Stalwart answer: `invalidArguments`, not
+/// the `cannotCalculateChanges` of RFC 8620 §5.2. Camel cannot report it, so
+/// the result must also be a new listing, not a permanent failure.
 #[test]
 fn a_real_stalwart_shaped_unrecognized_state_is_not_a_failure_either() {
     let fixture =

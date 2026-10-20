@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Sending a message the composer just built, against a live mock server: the
-//! `Email/import` that puts it in the account, the `EmailSubmission/set` that
-//! hands it to the server's own submission machinery, and what the message
-//! looks like in the account once it has gone.
+//! The send of a message from the composer, against a mock server: the
+//! `Email/import` into the account, the `EmailSubmission/set` to the server
+//! submission system, and the message in the account after the send.
 //!
-//! Every other write in this crate changes mail the account already holds.
-//! Sending is the one that leaves the account: what the tests below are about
-//! is that the bytes the composer produced are the bytes submitted, that the
-//! envelope the caller names is the envelope the server is told to use — the
-//! addresses the mail actually goes to are not the ones in the headers — and
-//! that a sent message stops being a draft and ends up where the user expects
-//! to find it.
+//! Sending is the only write that goes out of the account. The tests check
+//! these rules:
+//!
+//! - The server submits the same bytes that the composer made.
+//! - The server uses the envelope from the caller. The real recipients are not
+//!   always the header addresses.
+//! - A sent message is no longer a draft, and it goes to the expected mailbox.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{MailSync, MessageSummary, Outgoing, SyncError};
@@ -20,7 +19,7 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
-/// The RFC 5322 bytes Evolution's composer would hand a transport.
+/// The RFC 5322 bytes that the Evolution composer gives to a transport.
 const MESSAGE: &[u8] = b"From: Alice <alice@example.com>\r\n\
 To: Bob <bob@example.com>\r\n\
 Subject: Lunch?\r\n\
@@ -34,8 +33,7 @@ struct Fixture {
     account_id: Id,
 }
 
-/// What the mock recorded about an accepted submission, copied out from under
-/// the server's lock.
+/// The mock record of an accepted submission, copied out of the server lock.
 struct Submission {
     email_id: Id,
     identity_id: Id,
@@ -72,13 +70,13 @@ impl Fixture {
         account.seed_identity(name, email)
     }
 
-    /// What the mailbox holds now, as a folder refresh would find it.
+    /// The current contents of the mailbox, as a folder refresh finds them.
     fn listing(&self, mailbox: &Id) -> Vec<MessageSummary> {
         let (_, messages) = self.sync().messages(mailbox).expect("the mailbox lists");
         messages
     }
 
-    /// The one submission the server accepted, as it recorded it.
+    /// The single submission that the server accepted, as recorded.
     fn only_submission(&self) -> Submission {
         let state = self.server.state();
         let state = state.lock().unwrap();
@@ -99,13 +97,13 @@ impl Fixture {
     }
 }
 
-/// The one row a mailbox holds, or a failure naming how many it holds instead.
+/// The single row of a mailbox. Fails with the count if it is not one row.
 fn only(messages: Vec<MessageSummary>) -> MessageSummary {
     assert_eq!(messages.len(), 1, "one message");
     messages.into_iter().next().expect("the row just counted")
 }
 
-/// The envelope a transport builds out of Camel's `from` and `recipients`.
+/// The envelope that a transport makes from the Camel `from` and `recipients`.
 fn envelope(from: &str, rcpt_to: &[&str]) -> Envelope {
     Envelope {
         mail_from: EnvelopeAddress::new(from),
@@ -134,9 +132,9 @@ fn a_sent_message_is_submitted_through_the_identity_it_names() {
         })
         .expect("the message is sent");
 
-    // The submission the server would have handed to its MTA: this message,
-    // through this identity. A send that reached the account and never reached
-    // the submission machinery is a message the user believes went out.
+    // The submission for the server MTA: this message, through this identity.
+    // If the message gets to the account but not to submission, the user
+    // thinks that it went out.
     let submission = fixture.only_submission();
     assert_eq!(submission.email_id, uid);
     assert_eq!(submission.identity_id, identity);
@@ -160,10 +158,9 @@ fn the_bytes_the_composer_produced_are_the_bytes_the_account_holds() {
         })
         .expect("the message is sent");
 
-    // The reason sending imports bytes rather than composing an `Email` out of
-    // properties: a message taken apart and written out again would not be
-    // these bytes, and a signature over them would no longer verify — for the
-    // recipient *and* for the copy the sender keeps.
+    // This is why a send imports bytes and does not compose an `Email` from
+    // properties. A rebuilt message has different bytes, and its signature
+    // fails for the recipient *and* for the copy of the sender.
     let source = sync.message_source(&uid).expect("the message is readable");
     assert_eq!(source, MESSAGE);
 }
@@ -175,12 +172,10 @@ fn the_envelope_the_caller_names_is_the_envelope_that_goes_out() {
     let sent = fixture.seed_mailbox("Sent", Some("sent"));
     let identity = fixture.seed_identity("Alice", "alice@example.com");
 
-    // Neither address is in the message's headers. That is the ordinary case
-    // rather than a contrived one: a `Bcc` recipient is a recipient with no
-    // header, a redirected message keeps the headers it arrived with, and a
-    // sender's envelope address is often not the one they sign their mail as.
-    // A transport that let the server derive the envelope from the headers
-    // would silently drop the blind recipient and deliver to nobody else.
+    // The headers do not contain these addresses. This is a usual case: a `Bcc`
+    // recipient has no header, a redirected message keeps its old headers, and
+    // the envelope sender is often not the `From` address. An envelope from
+    // the headers sends to Bob, not to the real recipients.
     fixture
         .sync()
         .send_message(Outgoing {
@@ -227,15 +222,13 @@ fn a_sent_message_leaves_the_mailbox_it_was_staged_in_for_the_one_it_is_filed_in
         })
         .expect("the message is sent");
 
-    // The staging mailbox is where the message lived while it was being sent,
-    // and a message left behind in it is one the user finds in Drafts after
-    // sending it — offered back to them to send again.
+    // The message is in the staging mailbox during the send. If it stays there,
+    // the user finds it in Drafts after the send, as if not yet sent.
     assert!(fixture.listing(&drafts).is_empty(), "left behind in Drafts");
 
     let row = only(fixture.listing(&sent));
     assert_eq!(row.uid, uid);
-    // And it is no longer a draft, and no longer unread: the user wrote it and
-    // has read every word of it.
+    // It is not a draft and not unread, because the user wrote it.
     assert!(!row.flags.draft, "still a draft after being sent");
     assert!(row.flags.seen, "the sender's own message came back unread");
 }
@@ -257,11 +250,10 @@ fn a_message_with_nowhere_to_be_filed_stays_where_it_was_staged_and_is_no_longer
         })
         .expect("the message is sent");
 
-    // An account whose caller named no mailbox to file the sent copy in — one
-    // with no Sent role, or one where Evolution saves the copy itself. The
-    // message stays where it was staged, because RFC 8621 §4.6 leaves no
-    // message in no mailbox at all, but it stops claiming to be a draft: it has
-    // been sent.
+    // The caller gave no mailbox for the sent copy: the account has no Sent
+    // role, or Evolution saves the copy itself. The message stays in the
+    // staging mailbox, because RFC 8621 §4.6 requires at least one mailbox.
+    // But it is no longer a draft, because it was sent.
     let row = only(fixture.listing(&drafts));
     assert_eq!(row.uid, uid);
     assert!(!row.flags.draft, "still a draft after being sent");
@@ -285,24 +277,22 @@ fn an_identity_the_account_does_not_have_sends_nothing() {
         })
         .expect_err("a message submitted through no identity is not sent");
 
-    // The server's own refusal, kept whole — the caller above turns it into a
-    // sentence for the user, and an account whose identity has gone is not a
-    // broken account.
+    // Keep the server refusal unchanged. The caller makes a message for the
+    // user from it. A missing identity does not mean a broken account.
     match error {
         SyncError::Client(jmap_client::Error::Set(_)) => {}
         other => panic!("expected the server's refusal, got {other:?}"),
     }
     assert!(fixture.outbox_is_empty(), "a refused submission went out");
 
-    // And the draft is left behind, in the staging mailbox and still a draft.
-    // That is the honest outcome of a refusal after the import: the message
-    // exists in the account, the user's work is not lost, and it is where they
-    // would look for an unsent message.
+    // The draft stays in the staging mailbox, and it is still a draft. This is
+    // correct for a refusal after the import: the work of the user is not
+    // lost, and it is where the user looks for an unsent message.
     let row = only(fixture.listing(&drafts));
     assert!(row.flags.draft, "the unsent message is not marked a draft");
-    // Read, though: the user wrote it, and an unread one would put a bold line
-    // and a count on their own Drafts folder. Only the import sets `$seen` on
-    // this path, because the patch that would otherwise is never applied.
+    // But it is read: the user wrote it, and an unread draft adds a bold line
+    // and a count to Drafts. Here only the import sets `$seen`, because the
+    // client does not apply the later patch.
     assert!(row.flags.seen, "the refused message came back unread");
     assert!(fixture.listing(&sent).is_empty(), "filed as though it went");
 }
@@ -324,9 +314,9 @@ fn a_message_over_the_accounts_upload_limit_is_not_sent() {
         })
         .expect_err("a message over the account's limit was sent");
 
-    // Refused before the upload, with both numbers, exactly as an append is:
-    // sending is the same import underneath, and the limit is knowable from the
-    // session document without spending the user's uplink on finding out.
+    // Refused before the upload, with both numbers, as for an append. A send
+    // uses the same import, and the session document gives the limit, so no
+    // upload is necessary to find it.
     match error {
         SyncError::Client(jmap_client::Error::TooLarge { size, limit }) => {
             assert_eq!(size, 4096);

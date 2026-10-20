@@ -1,37 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::create_folder`/`delete_folder` against a real JMAP server —
-//! the functions `create_folder_sync`/`delete_folder_sync` actually call,
-//! exercised end to end for the first time.
+//! Tests `MailSync::create_folder` and `MailSync::delete_folder` against a
+//! real JMAP server. `create_folder_sync` and `delete_folder_sync` call these
+//! functions.
 //!
-//! `tests/live_server.rs` already proves `import_message`/`expunge_message`
-//! against real Stalwart; this file covers the folder-management half of
-//! this crate's writes, a materially different code path (`Mailbox/set`
-//! create/destroy rather than `Email/import`/`Email/set`). Only
-//! `jmap-mockd` has ever exercised `create_folder`/`delete_folder`
-//! (`jmap-mail-sync/tests/{create,delete}_folder.rs`); this is their
-//! live-server counterpart, following the same recipe as the other sync
-//! crates' live-server tests.
+//! These functions use `Mailbox/set` create and destroy, a different code
+//! path from `Email/import` and `Email/set` in `tests/live_server.rs`.
+//! `tests/manage.rs` tests them against `jmap-mock` only. This file is their
+//! live-server counterpart.
 //!
 //! ## Running it
 //!
-//! Same environment as the other sync crates' live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up for
-//! `jmap-client`'s write-path tests:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_folder -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other sync
-//! crates, this crate has no such feature, and `#[ignore]` alone already
-//! keeps it out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -39,8 +32,8 @@ use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover folder can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a folder from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -48,7 +41,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -64,9 +57,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates a top-level folder via `MailSync::create_folder`, confirms it via
-/// `folder_tree`, then deletes it via `MailSync::delete_folder` and confirms
-/// it is gone.
+/// Creates a top-level folder, finds it with `folder_tree`, then deletes it
+/// and makes sure that it is gone.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_then_deleting_a_folder_round_trips_through_the_real_server() {
@@ -109,14 +101,12 @@ fn creating_then_deleting_a_folder_round_trips_through_the_real_server() {
     );
 }
 
-/// `created_folder_name` falls back to the requested name whenever
-/// `Mailbox/set` reports none, reading that as "the server accepted the name
-/// as asked" per RFC 8620 section 5.3. Real Stalwart's `created` response
-/// does leave `name` out for a padded name like this one, but it does not
-/// mean "accepted as asked": `Mailbox/get` right after shows the stored name
-/// is trimmed. So the two disagree right after create, until the next
-/// listing catches up. This pins that real, currently uncorrected gap rather
-/// than leaving it as an untested assumption.
+/// When `Mailbox/set` returns no name, `created_folder_name` uses the
+/// requested name: RFC 8620 section 5.3 reads this as "accepted as asked".
+///
+/// For a padded name, the Stalwart `created` response has no `name`, but
+/// `Mailbox/get` shows a trimmed name. Thus the create result and the next
+/// listing disagree. This test holds that known, uncorrected gap.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_server_trimmed_name_the_create_response_omits_is_not_reflected_until_the_next_listing() {

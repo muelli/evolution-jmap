@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The folder listing against a live mock server: the request `Mailbox/get`
-//! actually is, and the counts a server actually reports.
+//! The folder listing against a mock server: the `Mailbox/get` request and
+//! the counts that the server reports.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{FolderRole, MailSync};

@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Putting a message the client already holds into a mailbox, against a live
-//! mock server: the upload and the `Email/import` behind it, what the imported
-//! message is listed as afterwards, and the two ways the server refuses.
+//! The import of a message from the client into a mailbox, against a mock
+//! server: the upload and the `Email/import`, the listing of the imported
+//! message, and the two server refusals.
 //!
-//! Everything else this crate writes changes a message the account already has.
-//! This is the one call that adds one, and it adds it as *bytes* — so what the
-//! tests are mostly about is that those bytes survive the trip: the message a
-//! folder lists after an import, and the source it hands back when the message
-//! is opened, both have to be the message that went up.
+//! The other message writes change a message that the account has. This call
+//! (also used to stage a send) adds a message as *bytes*. Thus the tests
+//! mostly check that the bytes stay the same: the listed row and the source
+//! must both agree with the uploaded message.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Keywords, MailSync, MessageFlags, MessageSummary, SyncError};
@@ -17,8 +16,8 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::email_import_error;
 
-/// The RFC 5322 bytes of a message Evolution would hand over — CRLF line
-/// endings, a header block, a blank line, a body.
+/// The RFC 5322 bytes of a message from Evolution: CRLF line endings, a header
+/// block, a blank line, and a body.
 const MESSAGE: &[u8] = b"From: Bob <bob@example.com>\r\n\
 To: Alice <alice@example.com>\r\n\
 Subject: Lunch?\r\n\
@@ -56,14 +55,14 @@ impl Fixture {
         account.seed_mailbox(name, None)
     }
 
-    /// What the mailbox holds now, as a folder refresh would find it.
+    /// The current contents of the mailbox, as a folder refresh finds them.
     fn listing(&self, mailbox: &Id) -> Vec<MessageSummary> {
         let (_, messages) = self.sync().messages(mailbox).expect("the mailbox lists");
         messages
     }
 }
 
-/// The one row a mailbox holds, or a failure naming how many it holds instead.
+/// The single row of a mailbox. Fails with the count if it is not one row.
 fn only(messages: Vec<MessageSummary>) -> MessageSummary {
     assert_eq!(messages.len(), 1, "one imported message");
     messages.into_iter().next().expect("the row just counted")
@@ -80,9 +79,8 @@ fn an_imported_message_is_a_message_of_the_mailbox_it_was_filed_into() {
         .expect("the message is imported");
 
     let row = only(fixture.listing(&inbox));
-    // The uid the import answered with is the uid the mailbox lists it under:
-    // what the caller records for the message has to be what it will next find
-    // the message by.
+    // The uid from the import must be the uid in the listing, because the
+    // caller finds the message again by that uid.
     assert_eq!(row.uid, uid);
     assert_eq!(row.subject.as_deref(), Some("Lunch?"));
     assert_eq!(row.size as usize, MESSAGE.len());
@@ -103,9 +101,8 @@ fn the_bytes_that_went_up_are_the_bytes_that_come_back_down() {
         .import_message(&inbox, MESSAGE.to_vec(), &Keywords::default(), None)
         .expect("the message is imported");
 
-    // The whole point of importing rather than composing: a message that was
-    // taken apart into properties and written out again would not be these
-    // bytes, and a signature over them would no longer verify.
+    // This is the reason to import, not compose. A message rebuilt from its
+    // properties has different bytes, and a signature on it fails.
     let source = sync.message_source(&uid).expect("the message is readable");
     assert_eq!(source, MESSAGE);
 }
@@ -130,8 +127,8 @@ fn the_keywords_a_row_carries_go_up_with_the_message() {
         )
         .expect("the message is imported");
 
-    // Read back the way a folder reads any other row, so this is the whole
-    // round trip through the keyword mapping rather than a look at the request.
+    // Read the row as a folder does. This tests the full round trip through the
+    // keyword mapping, not only the request.
     let row = only(fixture.listing(&inbox));
     assert_eq!(row.flags, flags);
     assert_eq!(row.tags, vec!["Work".to_owned()]);
@@ -147,8 +144,8 @@ fn a_message_imported_with_no_keywords_arrives_carrying_none() {
         .import_message(&inbox, MESSAGE.to_vec(), &Keywords::default(), None)
         .expect("the message is imported");
 
-    // Unread in particular: an append that quietly marked the message read
-    // would hide it from the user in the folder it was appended to.
+    // The message must be unread. If the append marks it as read, the user
+    // does not see it in the folder.
     let row = only(fixture.listing(&inbox));
     assert_eq!(row.flags, MessageFlags::default());
     assert!(row.tags.is_empty(), "{:?}", row.tags);
@@ -158,7 +155,7 @@ fn a_message_imported_with_no_keywords_arrives_carrying_none() {
 fn the_moment_the_message_was_received_is_the_moment_it_keeps() {
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
-    // What Camel hands over: seconds since the epoch, here 2026-01-15T09:30:00Z.
+    // Camel gives seconds since the epoch, here 2026-01-15T09:30:00Z.
     let received_at = 1_768_469_400;
 
     fixture
@@ -171,9 +168,8 @@ fn the_moment_the_message_was_received_is_the_moment_it_keeps() {
         )
         .expect("the message is imported");
 
-    // Out through the date written into the request and back in through the one
-    // read out of the listing: a message that sorted to the wrong end of the
-    // folder would be the visible half of an error in either direction.
+    // The date goes out in the request and comes back in the listing. An error
+    // in either direction puts the message at the wrong end of the folder.
     let row = only(fixture.listing(&inbox));
     assert_eq!(row.received_at, Some(received_at));
 }
@@ -188,9 +184,8 @@ fn a_message_imported_without_a_moment_is_dated_by_the_server() {
         .import_message(&inbox, MESSAGE.to_vec(), &Keywords::default(), None)
         .expect("the message is imported");
 
-    // RFC 8621 §4.8 leaves `receivedAt` to the server when it is not given, and
-    // a row with no date at all is one Evolution sorts to the epoch — so the
-    // absence has to reach the server as an absence rather than as a zero.
+    // RFC 8621 §4.8 lets the server set a missing `receivedAt`. Evolution sorts
+    // a row with no date to the epoch. Thus send no date, not a zero.
     let row = only(fixture.listing(&inbox));
     let received_at = row.received_at.expect("the server dated the message");
     assert!(received_at > 0, "{received_at}");
@@ -201,10 +196,9 @@ fn a_date_no_utc_date_can_name_is_left_to_the_server() {
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox("Inbox");
 
-    // Camel keeps a date as a signed 64-bit count of seconds and this one names
-    // no year a `UTCDate` can spell. It is not a reason to refuse the message:
-    // what the user asked for is that the message be appended, and the date is
-    // the part of it nothing can honestly carry.
+    // Camel keeps a date as a signed 64-bit count of seconds. This value has
+    // no year that a `UTCDate` can show. The import must not fail for this:
+    // the user wants the message, and only the date is lost.
     let uid = fixture
         .sync()
         .import_message(
@@ -235,8 +229,8 @@ fn bytes_that_are_not_a_message_are_refused_as_such() {
         )
         .expect_err("bytes that are not a message are not imported");
 
-    // The server's own refusal, kept whole: `invalidEmail` is a sentence for the
-    // user about the message, not a broken account and not a missing folder.
+    // Keep the server refusal unchanged. `invalidEmail` tells the user about
+    // the message, not about a broken account or a missing folder.
     match error {
         SyncError::Client(jmap_client::Error::Set(set_error)) => {
             assert_eq!(set_error.error_type, email_import_error::INVALID_EMAIL);
@@ -265,20 +259,17 @@ fn a_mailbox_the_account_does_not_have_takes_no_message() {
         SyncError::Client(jmap_client::Error::Set(_)) => {}
         other => panic!("expected the server's refusal, got {other:?}"),
     }
-    // And the message is nowhere else either: a refused import must not leave
-    // the account holding a message no mailbox shows.
+    // A refused import must not leave a message that no mailbox shows.
     assert!(fixture.listing(&inbox).is_empty());
 }
 
-/// A message larger than the account's `maxSizeUpload` is refused without the
-/// upload being attempted, and the refusal names both numbers.
+/// A message larger than the `maxSizeUpload` of the account is refused before
+/// the upload, and the refusal gives both numbers.
 ///
-/// The import is where this matters most: the bytes are a whole message, and
-/// the account may be one an administrator gave a small allowance. What the
-/// Camel layer above needs is a sentence for the user — "this account takes at
-/// most N bytes" — which it can only write if the numbers survive the crate
-/// boundary, so the client's [`jmap_client::Error::TooLarge`] is kept whole
-/// here exactly as the server's refusals are.
+/// An import sends a full message, and an administrator can set a small limit.
+/// The Camel layer must tell the user "this account takes at most N bytes".
+/// Thus the crate keeps [`jmap_client::Error::TooLarge`] unchanged, as it
+/// keeps the server refusals.
 #[test]
 fn a_message_over_the_accounts_upload_limit_is_not_imported() {
     let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));

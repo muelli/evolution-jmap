@@ -1,53 +1,42 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A JMAP date as the number Camel stores.
+//! A JMAP date as the number that Camel stores.
 //!
-//! Camel keeps both of a message's dates as a `gint64` count of seconds since
-//! the epoch, and JMAP sends both as text: `UTCDate` for `receivedAt`, which
-//! RFC 8620 §1.4 fixes to `Z`, and `Date` for `sentAt`, which carries whatever
-//! offset the sender's clock was at. Something has to do the arithmetic, and
-//! doing it here rather than in the Camel layer is what makes it testable
-//! without the Evolution headers — the same reason the rest of this crate
-//! exists.
+//! Camel stores the two dates of a message as a `gint64` count of seconds
+//! since the epoch. JMAP sends them as text: `receivedAt` is a `UTCDate`
+//! (always `Z`, RFC 8620 §1.4), and `sentAt` is a `Date` with the offset of
+//! the sender. This crate does the conversion, so the tests do not need the
+//! Evolution headers.
 //!
-//! Hand-rolled rather than taken from a crate, unlike the iCalendar and vCard
-//! parsing this project deliberately outsources: the whole of it is the two
-//! grammars above and the proleptic Gregorian calendar, both of which are
-//! fixed, small, and fully covered by the tests below. `jmap-proto` keeps
-//! `UtcDate` a string for its own good reason — it is a wire type, and a
-//! protocol crate that reinterpreted values would be able to lose them — so
-//! this is the layer that gets to interpret one.
+//! The code does not use an external crate, because it is small: two fixed
+//! grammars and the proleptic Gregorian calendar, all covered by the tests.
+//! `jmap-proto` keeps `UtcDate` as a string because it is a wire type, so
+//! this layer interprets it.
 
-/// The years a JMAP date can name, in either direction.
+/// The years that this module accepts and writes.
 ///
-/// RFC 8620 §1.4 makes a `UTCDate` an RFC 3339 `date-time`, whose `date-fullyear`
-/// is four digits, and the `Date` a `sentAt` carries is the same production at an
-/// offset. So this is the grammar's own range — and, because it bounds the year
-/// before any arithmetic is done with it, it is also what keeps
-/// [`days_from_civil`] inside `i64`. There is no year zero: `0000` is four digits
-/// and not a year of the proleptic Gregorian calendar as RFC 3339 counts them.
+/// RFC 8620 §1.4 makes a `UTCDate` an RFC 3339 `date-time`, with a four-digit
+/// `date-fullyear`. A `Date` has the same grammar with an offset. The range
+/// limits the year before [`days_from_civil`] uses it, so the arithmetic stays
+/// inside `i64`. The range excludes `0000`, although the grammar allows it.
 const YEARS: std::ops::RangeInclusive<i64> = 1..=9_999;
 
 /// Seconds since 1970-01-01T00:00:00Z, or `None` if `text` is not a date.
 ///
-/// `None` rather than an error on purpose. A message with an unreadable date is
-/// still a message, and the alternative — failing the folder listing it arrived
-/// in — would let one malformed `Date` header hide a mailbox. Camel's own
-/// summary does the same thing by storing 0 for a date it could not parse; the
-/// difference here is that a caller can tell "the server said nothing" from
-/// "the server said midnight on the epoch".
+/// `None`, not an error: a message with a bad date is still a message. An
+/// error would fail the folder listing, so one bad `Date` header would hide a
+/// mailbox. The Camel summary stores 0 for a bad date, but `None` lets a
+/// caller see the difference between no date and the epoch.
 pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
     let (date, rest) = text.split_once('T')?;
     let (year, month, day) = split3(date, '-')?;
     let (year, month, day): (i64, u32, u32) =
         (year.parse().ok()?, month.parse().ok()?, day.parse().ok()?);
-    // The year is checked before it is used, not only for being a year: the
-    // server picks this text, `i64` parses nineteen digits of it, and
-    // `days_from_civil` multiplies the era by 146 097 and the result by 86 400 —
-    // so a year the grammar does not allow is also one the arithmetic below
-    // overflows on. [`YEARS`] is exactly the range [`civil_from_days`] will
-    // write back, which is RFC 3339 §5.6's four-digit year.
+    // The server supplies this text, and `i64` parses 19 digits. Check the
+    // year before the arithmetic: `days_from_civil` multiplies the era by
+    // 146 097, and the caller multiplies the days by 86 400, so a large year
+    // overflows. [`YEARS`] is also the range that [`civil_from_days`] writes.
     if !YEARS.contains(&year)
         || !(1..=12).contains(&month)
         || day < 1
@@ -56,23 +45,21 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
         return None;
     }
 
-    // The offset is what ends the time, so the time is what is left of it. A
-    // `sentAt` without one is not a date this can read: RFC 3339 requires the
-    // zone, and guessing UTC would silently move the message by hours.
+    // The offset ends the time. A `sentAt` without an offset is not valid:
+    // RFC 3339 requires the zone, and UTC as a guess can move the message by
+    // hours.
     let (time, offset) = split_offset(rest)?;
     let (hour, minute, second) = split3(time, ':')?;
-    // Fractional seconds carry no information Camel has room for.
+    // Camel has no space for fractional seconds.
     let second = second.split_once('.').map_or(second, |(whole, _)| whole);
-    // `u32` rather than `i64` throughout: a field that parses as negative is a
-    // sign this text is not a time, and reading `-9` as an hour would move the
-    // message rather than reject it.
+    // `u32`, not `i64`: a negative field such as `-9` is not a time, and must
+    // not move the message.
     let (hour, minute, second): (u32, u32, u32) = (
         hour.parse().ok()?,
         minute.parse().ok()?,
         second.parse().ok()?,
     );
-    // A leap second is 60, and clamping it to 59 is a second's worth of lie in
-    // exchange for not dropping the date.
+    // A leap second is 60. The calculation uses 59, so the date stays.
     if hour > 23 || minute > 59 || second > 60 {
         return None;
     }
@@ -82,26 +69,22 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86_400 + seconds_of_day - offset)
 }
 
-/// The `UTCDate` naming the same instant as `seconds`, or `None` if no
-/// `UTCDate` names it.
+/// The `UTCDate` for the instant `seconds`, or `None` if no `UTCDate` can
+/// write it.
 ///
-/// [`epoch_seconds`] run backwards, and it exists for the one thing this crate
-/// sends a date *to* the server in: an import carries the moment Camel says the
-/// message was received, and Camel says it as a count of seconds.
+/// The inverse of [`epoch_seconds`]. An import is the only place where this
+/// crate sends a date to the server, and Camel gives that date as seconds.
 ///
-/// `None` is the answer for an instant outside the grammar rather than a
-/// clamped date at the end of it. RFC 8620 §1.4 makes a `UTCDate` an RFC 3339
-/// `date-time` at `Z`, whose year is four digits — so a `gint64` of seconds can
-/// hold instants that simply cannot be written, and writing the nearest one that
-/// can would be this layer inventing a date the caller never gave it. What the
-/// caller does with `None` is its own decision; for an import it is to send no
-/// date and let the server choose, which is what RFC 8621 §4.8 has it do.
+/// Out of range gives `None`, not the nearest valid date. A `UTCDate` has a
+/// four-digit year (RFC 8620 §1.4), so a `gint64` can hold instants that no
+/// `UTCDate` can write. The nearest valid date is a date that the caller did
+/// not give. For an import, the caller then sends no date and the server
+/// selects one (RFC 8621 §4.8).
 ///
-/// Whole seconds, no fraction: Camel has nowhere to keep one, so there is never
-/// one to write.
+/// Whole seconds only: Camel stores no fraction.
 pub(crate) fn utc_date(seconds: i64) -> Option<String> {
-    // Euclidean, not truncating: an instant before the epoch is a negative
-    // count, and `-1 / 86_400` is the day *after* the one -1 seconds falls in.
+    // Euclidean, not truncating: before the epoch the count is negative, and
+    // `-1 / 86_400` gives the day after the day of second -1.
     let (days, seconds_of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     let (year, month, day) = civil_from_days(days)?;
 
@@ -115,12 +98,12 @@ pub(crate) fn utc_date(seconds: i64) -> Option<String> {
     ))
 }
 
-/// The civil date `days` after 1970-01-01, or `None` for a year no four-digit
-/// year can name.
+/// The civil date `days` after 1970-01-01, or `None` for a year outside
+/// [`YEARS`].
 ///
-/// Howard Hinnant's `civil_from_days`, the inverse of [`days_from_civil`] and
-/// shifted the same way — the year starts in March so that the leap day is the
-/// last day of it — and exact for every date it answers.
+/// The `civil_from_days` algorithm of Howard Hinnant, the inverse of
+/// [`days_from_civil`]. It starts the year in March, so the leap day is the
+/// last day of the year. The result is exact.
 fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
     let shifted = days.checked_add(719_468)?;
     let era = if shifted >= 0 {
@@ -141,9 +124,8 @@ fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
 
-    // The grammar's whole range — [`YEARS`], which is also the range
-    // [`epoch_seconds`] admits, so that what this writes is exactly what that
-    // reads back.
+    // [`epoch_seconds`] accepts the same range, so it reads back each value
+    // that this function writes.
     YEARS
         .contains(&year)
         .then_some((year, u32::try_from(month).ok()?, u32::try_from(day).ok()?))
@@ -161,15 +143,14 @@ fn split_offset(text: &str) -> Option<(&str, i64)> {
     if let Some(time) = text.strip_suffix(['Z', 'z']) {
         return Some((time, 0));
     }
-    // Not `rfind`: the sign is the only `+` or `-` in a time, and looking from
-    // the right would find the same one anyway — but only after the fractional
-    // seconds, which may be any length.
+    // The sign is the only `+` or `-` in the time, so `find` and `rfind`
+    // give the same index.
     let sign_at = text.find(['+', '-'])?;
     let (time, offset) = text.split_at(sign_at);
     let sign = if offset.starts_with('-') { -1 } else { 1 };
     let offset = &offset[1..];
-    // `+HH:MM` and `+HHMM` are both current practice; RFC 3339 writes the
-    // colon, RFC 5322's `Date` header does not, and JMAP servers relay both.
+    // Accept `+HH:MM` and `+HHMM`. RFC 3339 has the colon and the RFC 5322
+    // `Date` header does not. JMAP servers send both.
     let (hours, minutes) = match offset.split_once(':') {
         Some((hours, minutes)) => (hours, minutes),
         None if offset.len() == 4 => offset.split_at(2),
@@ -202,10 +183,10 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 
 /// Days from 1970-01-01 to `year-month-day`, negative before it.
 ///
-/// Howard Hinnant's `days_from_civil`, which shifts the year to start in March
-/// so that the leap day is the last day of it and the month lengths become a
-/// repeating pattern — that is what the `(153 * m + 2) / 5` is. Valid for every
-/// year JMAP can express; the arithmetic is exact, not an approximation.
+/// The `days_from_civil` algorithm of Howard Hinnant. It starts the year in
+/// March, so the leap day is the last day of the year and the month lengths
+/// repeat: `(153 * m + 2) / 5` gives that pattern. The result is exact for
+/// each year in [`YEARS`].
 fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let month = i64::from(month);
     let day = i64::from(day);
@@ -233,8 +214,8 @@ mod tests {
             utc_date(1_768_469_400).as_deref(),
             Some("2026-01-15T09:30:00Z")
         );
-        // The leap day, and a moment before the epoch: the two places the
-        // arithmetic is easiest to get wrong.
+        // The leap day and an instant before the epoch: the arithmetic fails
+        // most easily at these two points.
         assert_eq!(
             utc_date(951_825_600).as_deref(),
             Some("2000-02-29T12:00:00Z")
@@ -257,7 +238,7 @@ mod tests {
             1_768_469_400,
             951_825_600,
             -14_182_940,
-            // The ends of what a four-digit year can say.
+            // The first and last instants with a four-digit year.
             -62_135_596_800,
             253_402_300_799,
         ] {
@@ -268,16 +249,15 @@ mod tests {
 
     #[test]
     fn an_instant_no_utc_date_can_name_is_not_written_as_one() {
-        // A `UTCDate` is `date-time` with a four-digit year (RFC 8620 §1.4,
-        // RFC 3339 §5.6), so an instant outside the first of year 1 and the last
-        // second of year 9999 has no spelling — including the two ends of the
-        // range Camel keeps a date in.
+        // A `UTCDate` has a four-digit year (RFC 8620 §1.4, RFC 3339 §5.6), so
+        // no `UTCDate` can write an instant before year 1 or after year 9999.
+        // This includes the two ends of the `gint64` range of Camel.
         for seconds in [
             i64::MIN,
             i64::MAX,
             -62_135_596_801,
             253_402_300_800,
-            // Year zero: four digits, and not a year.
+            // Year zero, which [`super::YEARS`] excludes.
             -62_167_219_200,
         ] {
             assert_eq!(utc_date(seconds), None, "{seconds}");
@@ -286,11 +266,10 @@ mod tests {
 
     #[test]
     fn every_day_of_a_whole_era_reads_back_as_the_day_it_was_written_for() {
-        // Four hundred years is one whole cycle of the calendar, so this visits
-        // every place in it `civil_from_days` can be: the century years that
-        // are not leap years, the one that is, and the 1st of March after each,
-        // where its year begins. A handful of instants cannot reach the ones
-        // late in the cycle, and each is only wrong for a few days of it.
+        // 400 years is one full cycle of the calendar. This range covers each
+        // century year (leap or not) and each 1 March after it, where the
+        // year of `civil_from_days` starts. Some sample instants cannot find
+        // an error that occurs only on a few days late in the cycle.
         let first = epoch_seconds("1600-01-01T00:00:00Z").unwrap() / 86_400;
         let last = epoch_seconds("2400-12-31T00:00:00Z").unwrap() / 86_400;
         for day in first..=last {
@@ -301,10 +280,9 @@ mod tests {
 
     #[test]
     fn no_day_of_year_zero_is_written_as_a_date() {
-        // Every day before the first one a four-digit year can name, not only
-        // its first: the calendar is computed in March-to-February years, and
-        // the days of year zero's January and February are the ones a wrong
-        // era would carry into year one.
+        // Test each day of year zero, not only the first. The calculation uses
+        // March-to-February years, so a wrong era can move the January and
+        // February of year zero into year one.
         let year_one = epoch_seconds("0001-01-01T00:00:00Z").unwrap() / 86_400;
         for day in year_one - 366..year_one {
             assert_eq!(utc_date(day * 86_400), None, "day {day}");
@@ -325,7 +303,7 @@ mod tests {
 
     #[test]
     fn an_offset_moves_the_instant_the_other_way() {
-        // 10:30 an hour east of UTC is 09:30 UTC, not 11:30.
+        // 10:30 at one hour east of UTC is 09:30 UTC, not 11:30.
         assert_eq!(
             epoch_seconds("2026-01-15T10:30:00+01:00"),
             Some(1_768_469_400)
@@ -334,8 +312,8 @@ mod tests {
             epoch_seconds("2026-01-15T08:30:00-01:00"),
             Some(1_768_469_400)
         );
-        // The colon is optional in practice, and the offset need not be whole
-        // hours — India is at +05:30.
+        // The colon is optional in practice, and an offset can include
+        // minutes: India is at +05:30.
         assert_eq!(
             epoch_seconds("2026-01-15T10:30:00+0100"),
             Some(1_768_469_400)
@@ -352,8 +330,8 @@ mod tests {
 
     #[test]
     fn the_largest_offset_is_still_an_offset() {
-        // RFC 3339 §5.6's `time-numoffset` is any `HH:MM` up to 23:59, either
-        // way; the bound refuses what comes after it, not the last of it.
+        // RFC 3339 §5.6 `time-numoffset` goes to 23:59 in each direction. The
+        // limit refuses larger values and accepts 23:59.
         assert_eq!(
             epoch_seconds("2026-01-16T09:29:00+23:59"),
             Some(1_768_469_400)
@@ -386,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_lower_case_zone_is_still_a_zone() {
-        // RFC 3339 §5.6 allows it, and a server that sends it is not wrong.
+        // RFC 3339 §5.6 allows a lower-case `z`.
         assert_eq!(epoch_seconds("1970-01-01T00:00:00z"), Some(0));
     }
 
@@ -396,17 +374,17 @@ mod tests {
             "",
             "T",
             "yesterday",
-            // No time at all, and no zone: both are required.
+            // No time, and no zone: both are necessary.
             "2026-01-15",
             "2026-01-15T09:30:00",
-            // Fields that are not numbers, or not the right number of them.
+            // Fields that are not numbers, or the wrong number of fields.
             "2026-01T09:30:00Z",
             "2026-01-15T09:30Z",
             "2026-1x-15T09:30:00Z",
             "2026-01-15T09:3x:00Z",
             "2026-01-15T09:30:00+0X:00",
             "2026-01-15T09:30:00+1",
-            // Fields that are numbers but not dates.
+            // Fields that are numbers, but not valid dates or times.
             "2026-00-15T09:30:00Z",
             "2026-13-15T09:30:00Z",
             "2026-01-00T09:30:00Z",
@@ -423,14 +401,13 @@ mod tests {
         }
     }
 
-    /// The year is a four-digit field, so the range this reads is the range
-    /// [`utc_date`] writes — and nothing outside it reaches the arithmetic.
+    /// The year has four digits, so this reads the range that [`utc_date`]
+    /// writes, and no other year gets to the arithmetic.
     ///
-    /// Which is the point: the server picks the text, `i64::from_str` accepts
-    /// nineteen digits of it, and `days_from_civil` multiplies what comes out by
-    /// 146 097 and then by 86 400. Both overflow long before the parse does, so
-    /// the bound is what keeps a date the grammar never allowed from being an
-    /// arithmetic overflow instead of a refusal.
+    /// The server supplies the text, and `i64::from_str` accepts 19 digits.
+    /// `days_from_civil` multiplies the era by 146 097, and `epoch_seconds`
+    /// multiplies the days by 86 400. Both overflow before the parse fails,
+    /// so the limit makes a bad year a refusal, not an overflow.
     #[test]
     fn a_year_outside_the_four_digit_grammar_is_not_a_date() {
         for text in [
@@ -442,7 +419,7 @@ mod tests {
         ] {
             assert_eq!(epoch_seconds(text), None, "{text:?} is not a date");
         }
-        // And the two ends that are.
+        // The two limits are dates.
         assert!(epoch_seconds("0001-01-01T00:00:00Z").is_some());
         assert!(epoch_seconds("9999-12-31T23:59:59Z").is_some());
     }

@@ -1,39 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::folder_tree_since` against a real JMAP server — the
-//! `Mailbox/changes` state-token delta path that `get_folder_info_sync`'s
-//! refresh half actually uses for incremental sync (a full `Mailbox/get`
-//! listing is the fallback, not the common case).
+//! Tests `MailSync::folder_tree_since` against a real JMAP server. This is
+//! the `Mailbox/changes` delta path that `get_folder_info_sync` uses for a
+//! refresh. A full `Mailbox/get` listing is the fallback.
 //!
-//! `jmap-mail-sync/tests/live_server_folder.rs` already proves
-//! `create_folder`/`delete_folder` round-trip against real Stalwart, but
-//! every assertion there goes through `folder_tree` (a full listing) rather
-//! than `folder_tree_since`. `jmap-mail-sync/tests/refresh.rs` proves the
-//! Unchanged/Rebuilt logic against `jmap-mockd`; this file is its
-//! live-server counterpart, following the same recipe as this crate's own
-//! `live_server_changes.rs` (`messages_since`) and
-//! `jmap-book-sync`/`jmap-cal-sync`'s `live_server_changes.rs`.
+//! `live_server_folder.rs` checks the result with `folder_tree` only.
+//! `jmap-mail-sync/tests/refresh.rs` tests the `Unchanged` and `Rebuilt`
+//! results against `jmap-mock`. This file is its live-server counterpart,
+//! with the same structure as `live_server_changes.rs` in this crate,
+//! `jmap-book-sync` and `jmap-cal-sync`.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_folder_changes -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment. The cross-account test below also
-//! needs `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a second account
-//! in the same domain.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. They panic when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset. The cross-account test also skips when
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` (a second account in the same domain) is
+//! unset, and panics when only `JMAP_LIVE_SERVER_RECIPIENT_PASSWORD` is unset.
 
 use std::env;
 
@@ -42,8 +36,8 @@ use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
 use jmap_proto::State;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover folder can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a folder from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,7 +45,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,8 +61,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`
-/// exactly.
+/// Same as `connect_recipient` in `jmap-book-sync/tests/live_server_changes.rs`.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -86,7 +79,7 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// Mirrors `jmap-mail-sync/tests/refresh.rs::rebuilt` exactly.
+/// Same as `rebuilt` in `tests/refresh.rs`.
 fn rebuilt(update: FolderUpdate) -> (State, FolderTree) {
     match update {
         FolderUpdate::Rebuilt { state, tree } => (state, tree),
@@ -96,12 +89,10 @@ fn rebuilt(update: FolderUpdate) -> (State, FolderTree) {
     }
 }
 
-/// Creates a top-level folder, then confirms `folder_tree_since` from the
-/// state captured just before the create reports the rebuilt tree with it
-/// present; renames it and confirms the rebuilt tree from the post-create
-/// state carries the new name; deletes it and confirms the rebuilt tree from
-/// the post-rename state no longer lists it. Mirrors `tests/refresh.rs`'s
-/// assertions, now against the real server rather than `jmap-mockd`.
+/// Creates, renames and deletes a top-level folder. After each step,
+/// `folder_tree_since` from the previous state must return a rebuilt tree
+/// that shows the change. `tests/refresh.rs` makes the same assertions
+/// against `jmap-mock`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn folder_tree_since_reports_a_create_a_rename_and_a_removal_against_the_real_server() {
@@ -164,16 +155,17 @@ fn folder_tree_since_reports_a_create_a_rename_and_a_removal_against_the_real_se
     );
 }
 
-/// A state is opaque per RFC 8620, but not free-form: Stalwart's own state
-/// strings fail syntax validation (`invalidArguments`) for almost any
-/// hand-written guess, confirmed live in
-/// `jmap-book-sync/tests/live_server_changes.rs`. A syntactically well-formed
-/// state from a *different* account is the reliable way to reach
-/// `cannotCalculateChanges` on the real server. `MailSync::folder_tree_since`
-/// catches that error internally (`SyncError::is_cannot_calculate_changes`)
-/// and rebuilds the tree instead of propagating it, so this confirms the
-/// fallback actually fires on the real error rather than assuming the mock's
-/// shape of it (`jmap-mock/src/setops.rs`) matches.
+/// Gives `folder_tree_since` a state from a different account. The tree must
+/// be rebuilt (`FolderUpdate::Rebuilt`).
+///
+/// RFC 8620 makes a state opaque. Stalwart rejects most hand-written states
+/// with `invalidArguments` (see `jmap-book-sync/tests/live_server_changes.rs`).
+/// A valid state from a different account causes `cannotCalculateChanges`.
+/// `MailSync::folder_tree_since` catches that error and rebuilds the tree.
+/// This test makes sure that the fallback occurs on the real error, not only
+/// on the mock error of `jmap-mock/src/setops.rs`.
+///
+/// The test does not delete the folder that it creates.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn folder_tree_since_rebuilds_the_tree_for_another_accounts_state() {
@@ -193,13 +185,10 @@ fn folder_tree_since_rebuilds_the_tree_for_another_accounts_state() {
         .expect("the write-test account needs the mail capability");
     let owner_sync = MailSync::new(owner, owner_account_id);
 
-    // A brand-new account's mailbox tree has an empty changelog, and the
-    // state naming "no changes yet" turned out (checked live) to be accepted
-    // as trivially valid for any other brand-new account too, since there is
-    // nothing to diff against either way. Creating a folder first gives the
-    // owner a state that is a specific position in its own changelog, which
-    // is what actually reaches cannotCalculateChanges when asked of an
-    // account that never had that position.
+    // A live check showed that the "no changes yet" state of a new account
+    // is valid for each other new account too. A new folder moves the owner
+    // to a position in its own changelog. The other account does not have
+    // that position, thus the server returns cannotCalculateChanges.
     let name = format!("agent-mailsync-cannotcalc-{}", unique_suffix());
     owner_sync
         .create_folder(None, &name)

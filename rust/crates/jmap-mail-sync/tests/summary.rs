@@ -1,19 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! One `Email` as the row Camel keeps about a message.
+//! One `Email` as the Camel summary row of a message.
 //!
-//! From `Email` literals rather than from a server: what a mock can produce is
-//! a well-formed message, and most of this mapping is about the fields a
-//! well-formed message leaves out. `messages.rs` is the same mapping over the
-//! wire.
+//! The tests use `Email` literals, not a server. A mock makes only well-formed
+//! messages, but this mapping is mostly about missing fields. `messages.rs`
+//! tests the same mapping through the network.
 
 use jmap_mail_sync::{MessageFlags, MessageSummary};
 use jmap_proto::Id;
 use jmap_proto::mail::{Email, EmailAddress, keyword};
 
-/// The least a server may answer `Email/get` with: RFC 8620 §5.1 guarantees
-/// only the id.
+/// The minimum `Email/get` answer: RFC 8620 §5.1 guarantees only the id.
 fn bare_email() -> Email {
     Email {
         id: Some(Id::new("M1")),
@@ -49,9 +47,9 @@ fn what_camel_keeps_about_a_message_comes_off_the_email() {
     assert_eq!(summary.to, email.to.unwrap());
     assert_eq!(summary.cc, email.cc.unwrap());
     assert_eq!(summary.preview.as_deref(), Some("Are you free at one?"));
-    // Both dates as seconds since the epoch, the zone read rather than
-    // assumed: the sender wrote 10:30, an hour east of UTC, and the message
-    // arrived a minute after it was sent rather than an hour before.
+    // Both dates in seconds since the epoch, with the time zone applied. The
+    // sender wrote 10:30 at UTC+1, so the message arrived one minute after the
+    // send, not one hour before.
     assert_eq!(summary.received_at, Some(1_768_469_460));
     assert_eq!(summary.sent_at, Some(1_768_469_400));
 }
@@ -149,8 +147,8 @@ fn a_keyword_camel_has_no_flag_for_becomes_a_tag() {
     let summary = MessageSummary::from_email(&email).expect("a summary");
 
     assert!(summary.flags.seen);
-    // Verbatim, including the `$`: what goes back to the server on a flag
-    // change is the keyword the server sent.
+    // Unchanged, with the `$`: a flag change sends back the keyword that the
+    // server sent.
     assert_eq!(
         summary.tags,
         vec!["$phishing".to_owned(), "todo".to_owned()]
@@ -214,7 +212,7 @@ fn the_threading_headers_come_over_as_the_server_wrote_them() {
     let summary = MessageSummary::from_email(&email).expect("a summary");
 
     assert_eq!(summary.message_id.as_deref(), Some("c@example.com"));
-    // In-Reply-To adds nothing here: References already ends in it.
+    // In-Reply-To adds nothing here, because it is the last References entry.
     assert_eq!(
         summary.references,
         vec!["a@example.com".to_owned(), "b@example.com".to_owned()]
@@ -335,7 +333,7 @@ fn a_date_the_client_cannot_read_leaves_the_message_dateless() {
 
 #[test]
 fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order() {
-    // 1. In-Reply-To already matching the last element of References is not duplicated
+    // 1. An In-Reply-To equal to the last References entry is not added again.
     let email_matched = Email {
         references: Some(vec![
             "root@example.com".to_owned(),
@@ -354,7 +352,7 @@ fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order()
         ]
     );
 
-    // 2. In-Reply-To differing from References is appended to form complete lineage
+    // 2. A different In-Reply-To goes at the end, to complete the ancestry.
     let email_diff = Email {
         references: Some(vec!["root@example.com".to_owned()]),
         in_reply_to: Some(vec!["parent@example.com".to_owned()]),
@@ -480,7 +478,7 @@ fn summary_extracts_structured_addresses_and_message_id_cleanly() {
     assert_eq!(summary.cc[0].email, "devs@example.com");
 
     assert_eq!(summary.preview.as_deref(), Some("Brief summary snippet"));
-    // Both timestamps point to the same instant 1768469400
+    // Both timestamps give the same instant, 1768469400.
     assert_eq!(summary.sent_at, Some(1_768_469_400));
     assert_eq!(summary.received_at, Some(1_768_469_400));
 }
@@ -725,15 +723,14 @@ fn summary_date_ordering_and_comparison_properties() {
     assert!(s1.sent_at.unwrap() < s2.sent_at.unwrap());
 }
 
-/// `$junk` and `$notjunk` are distinct: both can be present simultaneously (a
-/// server that sets `$junk` on a message and a local junk-filter that disagrees
-/// by setting `$notjunk`).  The `MessageFlags` preserves both independently.
+/// `$junk` and `$notjunk` are different keywords, and a message can have both
+/// (the server sets `$junk`, and a local junk filter sets `$notjunk`).
+/// `MessageFlags` keeps both separately.
 ///
-/// The `CAMEL_JUNK_STATUS` ordering (`MESSAGE_IS_JUNK = 2`,
-/// `MESSAGE_IS_NOT_JUNK = 3`) is verified separately in
-/// `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`;
-/// this test confirms the `MessageSummary` layer correctly distinguishes the
-/// two keywords and that neither implies the other.
+/// `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`
+/// checks the `CAMEL_JUNK_STATUS` values (`MESSAGE_IS_JUNK = 2`,
+/// `MESSAGE_IS_NOT_JUNK = 3`). This test checks that `MessageSummary` keeps
+/// the two keywords apart, and that neither one sets the other.
 #[test]
 fn junk_and_not_junk_keywords_are_independently_tracked() {
     // Only $junk.
@@ -768,7 +765,7 @@ fn junk_and_not_junk_keywords_are_independently_tracked() {
         "$notjunk keyword must set the not_junk flag"
     );
 
-    // Both simultaneously: a server verdict ($junk) the user overrode ($notjunk).
+    // Both: the user ($notjunk) overrides the server decision ($junk).
     let both_email = Email {
         id: Some(Id::new("M-JUNK-03")),
         keywords: Some(
@@ -789,11 +786,11 @@ fn junk_and_not_junk_keywords_are_independently_tracked() {
     );
 }
 
-/// The `subject` and `preview` fields of a `MessageSummary` are the strings a
-/// full-text indexer (e.g. `camel_index_name_add_buffer`, verified in
-/// `eds-sys/tests/camel.rs::camel_text_index_creation_and_words_in_eds`) would
-/// receive to index a message's searchable text content.  Verifies they round-
-/// trip cleanly, including Unicode, and are non-empty when the server sends them.
+/// A full-text indexer gets the `subject` and `preview` of a `MessageSummary`
+/// to index the message text. An example is `camel_index_name_add_buffer`,
+/// checked in `eds-sys/tests/camel.rs::camel_text_index_creation_and_words_in_eds`.
+/// The test checks that both fields keep their text, also Unicode, and are not
+/// empty when the server sends them.
 #[test]
 fn subject_and_preview_provide_indexable_text() {
     let email = Email {
@@ -810,11 +807,11 @@ fn subject_and_preview_provide_indexable_text() {
     let subject = summary.subject.as_deref().expect("subject must be present");
     let preview = summary.preview.as_deref().expect("preview must be present");
 
-    // Both fields are non-empty — something a CamelTextIndex would tokenise.
+    // Both fields are not empty, so a CamelTextIndex can tokenise them.
     assert!(!subject.is_empty());
     assert!(!preview.is_empty());
 
-    // Content is preserved exactly, including non-ASCII characters.
+    // The content stays the same, also non-ASCII characters.
     assert!(
         subject.contains("JMAP"),
         "subject must contain 'JMAP'; got {subject:?}"
@@ -828,8 +825,8 @@ fn subject_and_preview_provide_indexable_text() {
         "preview must preserve its content; got {preview:?}"
     );
 
-    // A message with no subject or preview produces `None` in those fields —
-    // the indexer must not be handed an empty string as a document key.
+    // Without a subject or preview, the fields are `None`. The indexer must not
+    // get an empty string as a document key.
     let bare = MessageSummary::from_email(&bare_email()).expect("bare summary");
     assert!(bare.subject.is_none());
     assert!(bare.preview.is_none());

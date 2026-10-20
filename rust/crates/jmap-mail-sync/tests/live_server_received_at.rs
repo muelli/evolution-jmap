@@ -1,35 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::import_message`'s `received_at` parameter against a real JMAP
-//! server.
+//! Tests the `received_at` parameter of `MailSync::import_message` against a
+//! real JMAP server.
 //!
-//! `tests/live_server.rs` already proves `import_message` round-trips
-//! through real Stalwart, but every call site there passes `received_at:
-//! None`. The one test that exercises a real value, `tests/import.rs`, only
-//! runs against `jmap_mock::MockServer`, which just echoes back whatever
-//! `receivedAt` it is handed rather than a real server independently
-//! parsing and storing it. RFC 8621 section 4.8 lets a server default
-//! `receivedAt` to the moment of import when the caller omits it, which is
-//! exactly the wrong date for a message being copied between accounts
-//! (`import_message`'s own doc comment explains why the date is sent at
-//! all) — so whether real Stalwart actually keeps the client-supplied date
-//! rather than silently defaulting had never been confirmed. This is that
-//! confirmation.
+//! `tests/live_server.rs` gives `received_at: None` only. `tests/import.rs`
+//! gives a real value, but `jmap_mock::MockServer` only returns the
+//! `receivedAt` that it gets. RFC 8621 section 4.8 lets a server set
+//! `receivedAt` to the import time when the caller omits it. That date is
+//! wrong for a message that moves between accounts (see the doc comment of
+//! `import_message`). This test makes sure that Stalwart keeps the date that
+//! the client sends.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_received_at -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -38,8 +32,8 @@ use jmap_mail_sync::{Keywords, MailSync};
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,7 +41,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -63,9 +57,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports a message into the Inbox with a distinctive `received_at`, far
-/// from the moment the test runs, and confirms the server hands that exact
-/// value back rather than the time of import.
+/// Imports a message with a `received_at` far from the current time, and
+/// makes sure that the server returns that value, not the import time.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_imported_message_keeps_the_received_at_the_caller_gave_it() {
@@ -88,8 +81,8 @@ fn an_imported_message_keeps_the_received_at_the_caller_gave_it() {
 
     let sync = MailSync::new(client, account_id);
 
-    // 2019-03-14T01:59:26Z, seconds since the epoch — nowhere near "now", so
-    // a server silently defaulting to import time cannot pass by accident.
+    // 2019-03-14T01:59:26Z in seconds since the epoch. A server that uses the
+    // import time cannot pass by accident.
     let received_at: i64 = 1_552_528_766;
     let subject = format!("agent-mailrecvat-{}", unique_suffix());
     let message = format!(

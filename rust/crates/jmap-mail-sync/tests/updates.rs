@@ -1,24 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Noticing that a mailbox moved: what `Email/changes` is good for, and the
-//! question it does not answer.
+//! Detection of changes in a mailbox: what `Email/changes` can tell, and what
+//! it cannot tell.
 //!
-//! `Mailbox/changes` reports on the account's folders and
-//! [`MailSync::folder_tree_since`] can act on it directly. `Email/changes`
-//! reports on the account's *messages*, and a folder is not asking about those:
-//! it is asking about one mailbox. JMAP files a message by changing its
-//! `mailboxIds`, which is an ordinary update to the message — so a delta naming
-//! it says only that *something* about it changed, never whether that something
-//! moved it in or out of the mailbox being refreshed.
+//! `Mailbox/changes` reports on the folders of the account, and
+//! [`MailSync::folder_tree_since`] can use it directly. `Email/changes`
+//! reports on the *messages* of the account, but a folder needs data about one
+//! mailbox. JMAP files a message with a change to its `mailboxIds`, which is a
+//! usual update. Thus a delta tells only that *something* changed, not whether
+//! the message moved into or out of the refreshed mailbox.
 //!
-//! So the tests here are about a delta that re-checks membership rather than
-//! inferring it: every message the account reports as touched is looked up, and
-//! what comes back is either a row for this mailbox or a uid that is not in it
-//! any more. Which of the two a message is has to hold for a message another
-//! client moved *in*, moved *out*, destroyed, or merely re-flagged — those four
-//! are the whole surface, and they are one query apart from each other on the
-//! wire.
+//! Thus the delta checks membership again and does not infer it. The code
+//! looks up each changed message. The result is a row for this mailbox, or a
+//! uid that is no longer in it. This must be correct when a different client
+//! moves a message *in*, moves it *out*, destroys it, or changes only its
+//! flags.
 
 use std::collections::BTreeMap;
 
@@ -52,17 +49,16 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// Mutate the account the way another client would — as a state
-    /// transition, which is what `Email/changes` reports.
+    /// Change the account as a different client does: as a state transition,
+    /// which `Email/changes` reports.
     fn edit<R>(&self, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
         edit(state.account_mut(&self.account_id).unwrap())
     }
 
-    /// A message in `mailbox`, seeded rather than delivered: it predates every
-    /// state the tests here ask from, which is what makes it the *old* mail a
-    /// delta must not mention.
+    /// Seed (not deliver) a message in `mailbox`. It is older than each state
+    /// that the tests use, so it is *old* mail that a delta must not name.
     fn seed(&self, mailbox: &Id, subject: &str, hour: u32) -> Id {
         self.edit(|account| account.seed_email(Self::message(mailbox, subject, hour)))
     }
@@ -84,10 +80,10 @@ impl Fixture {
             .collect()
     }
 
-    /// Overwrites a message's `mailboxIds` directly in the store, as an
-    /// update another client made — to reach a state a conforming server
-    /// never sends (RFC 8621 §4.6 gives every present value as `true`), while
-    /// still logging the change `Email/changes` is asked to report on.
+    /// Overwrite the `mailboxIds` of a message in the store, as an update by a
+    /// different client. This makes a state that a conforming server never
+    /// sends (RFC 8621 §4.6 makes each present value `true`). The store still
+    /// records the change for `Email/changes`.
     fn set_mailbox_ids(&self, uid: &Id, mailbox_ids: BTreeMap<Id, bool>) {
         self.edit(|account| {
             account.emails.transaction(|txn| {
@@ -99,7 +95,7 @@ impl Fixture {
     }
 }
 
-/// The delta, for a test that expects the account to have moved.
+/// The delta, for a test that expects a change in the account.
 fn changed(update: MessageUpdate) -> (State, Vec<MessageSummary>, Vec<Id>) {
     match update {
         MessageUpdate::Changed {
@@ -120,8 +116,8 @@ fn uids(messages: &[MessageSummary]) -> Vec<&Id> {
     messages.iter().map(|message| &message.uid).collect()
 }
 
-/// A listing has to come with the state it can be brought forward from, or it
-/// is a listing that can only ever be taken again in full.
+/// A listing must include its state. Without a state, the client can only
+/// list again in full.
 #[test]
 fn a_listing_carries_a_state_to_ask_from() {
     let fixture = Fixture::start();
@@ -139,8 +135,8 @@ fn a_listing_carries_a_state_to_ask_from() {
     );
 }
 
-/// The answer nearly every refresh gets, and the reason a delta is worth asking
-/// for at all: one round trip that says the folder is already right.
+/// The usual refresh result, and the reason for a delta: one round trip tells
+/// that the folder is already correct.
 #[test]
 fn a_mailbox_nobody_touched_reports_nothing() {
     let fixture = Fixture::start();
@@ -155,7 +151,7 @@ fn a_mailbox_nobody_touched_reports_nothing() {
     }
 }
 
-/// New mail, which is the case the whole mechanism exists for.
+/// New mail, the main purpose of the delta.
 #[test]
 fn a_message_that_arrived_comes_back_as_a_row() {
     let fixture = Fixture::start();
@@ -173,9 +169,9 @@ fn a_message_that_arrived_comes_back_as_a_row() {
     assert!(absent.is_empty(), "nothing left the mailbox: {absent:?}");
 }
 
-/// The delta is the account's; the answer is one mailbox's. A message delivered
-/// somewhere else is named by `Email/changes` all the same, and a folder that
-/// took the delta at its word would show mail that is not in it.
+/// The delta is for the account, but the result is for one mailbox.
+/// `Email/changes` also names a message delivered to a different mailbox. If
+/// the folder trusts the delta, it shows mail that is not in it.
 #[test]
 fn a_message_that_arrived_elsewhere_is_not_a_row_of_this_mailbox() {
     let fixture = Fixture::start();
@@ -199,8 +195,7 @@ fn a_message_that_arrived_elsewhere_is_not_a_row_of_this_mailbox() {
     );
 }
 
-/// The move the previous increment learned to *write*, seen from the other
-/// side: another client filed a message elsewhere, and the row has to go.
+/// A move by a different client to a different mailbox. The row must go.
 #[test]
 fn a_message_moved_out_of_the_mailbox_is_reported_absent() {
     let fixture = Fixture::start();
@@ -229,11 +224,9 @@ fn a_message_moved_out_of_the_mailbox_is_reported_absent() {
     );
 }
 
-/// A server that spells non-membership with a `false` entry instead of
-/// omitting the key is violating RFC 8621 §4.6, the same way the malformed
-/// input `message_mailboxes` refuses covers. Counting the entry as absence
-/// would be a guess this crate has no basis for, so it must be refused
-/// rather than silently reported as the message having left the mailbox.
+/// A `false` entry in place of a missing key violates RFC 8621 §4.6, as for
+/// the input that `message_mailboxes` refuses. As absence, the entry is only a
+/// guess, so the code refuses it. It does not report that the message left.
 #[test]
 fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
     let fixture = Fixture::start();
@@ -258,9 +251,8 @@ fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
     }
 }
 
-/// And the same event from the destination's point of view. The message is not
-/// new — nothing about it was created — so a delta that only believed `created`
-/// would never show it.
+/// The same move, seen from the destination. The message is not new, so a
+/// delta that reads only `created` does not show it.
 #[test]
 fn a_message_moved_into_the_mailbox_is_reported_as_a_row() {
     let fixture = Fixture::start();
@@ -291,9 +283,9 @@ fn a_message_moved_into_the_mailbox_is_reported_as_a_row() {
     assert!(absent.is_empty(), "nothing left the archive: {absent:?}");
 }
 
-/// A message that is gone is gone from every mailbox, and `Email/get` has
-/// nothing to check membership against — so `destroyed` is the one part of the
-/// delta that is taken at its word.
+/// A destroyed message is gone from all mailboxes, and `Email/get` has no
+/// membership to check. Thus `destroyed` is the only part of the delta that
+/// the code trusts without a check.
 #[test]
 fn a_destroyed_message_is_reported_absent() {
     let fixture = Fixture::start();
@@ -309,9 +301,9 @@ fn a_destroyed_message_is_reported_absent() {
     assert!(present.is_empty());
 }
 
-/// The most ordinary change of all — another client, or the same account on a
-/// phone, marking a message read. The row is still this mailbox's, and it comes
-/// back with the keywords the server now holds.
+/// The most usual change: a different client (for example a phone) marks a
+/// message as read. The row stays in this mailbox, with the current keywords
+/// from the server.
 #[test]
 fn a_flag_another_client_set_comes_back_on_the_row() {
     let fixture = Fixture::start();
@@ -340,9 +332,9 @@ fn a_flag_another_client_set_comes_back_on_the_row() {
     assert!(absent.is_empty(), "a re-flagged message did not leave");
 }
 
-/// The state a delta carries is the one the *next* delta is asked from, and
-/// asking with it immediately has to be quiet: a folder that kept reporting the
-/// same change would redraw the user's message list on every poll.
+/// The state of a delta is the start of the *next* delta. A request with it
+/// directly after must report no change. Else, each poll draws the message
+/// list again.
 #[test]
 fn the_state_a_delta_carries_is_the_one_to_ask_from_next() {
     let fixture = Fixture::start();
@@ -360,11 +352,10 @@ fn the_state_a_delta_carries_is_the_one_to_ask_from_next() {
     }
 }
 
-/// A state the server cannot calculate from — too old, or from some other
-/// server entirely — is answered with the mailbox rather than reported. The
-/// judgement [`MailSync::folder_tree_since`] makes about the same condition,
-/// for the same reason: a Camel folder has nowhere to report it to, and one
-/// that failed here would be a folder that never recovers.
+/// A state that the server cannot use (too old, or from a different server)
+/// causes a new listing, not an error. [`MailSync::folder_tree_since`] does
+/// the same: a Camel folder cannot report this error, and a failure here is
+/// permanent.
 #[test]
 fn a_state_the_server_cannot_calculate_from_lists_the_mailbox_again() {
     let fixture = Fixture::start();
@@ -385,10 +376,9 @@ fn a_state_the_server_cannot_calculate_from_lists_the_mailbox_again() {
     }
 }
 
-/// Same unrecognized state, but answered the way real Stalwart answers it —
-/// `invalidArguments` rather than RFC 8620 §5.2's own `cannotCalculateChanges`
-/// (`STALWART-RFC-FINDINGS.md` finding 17). A Camel store still has nowhere
-/// to report that to, so the answer has to be the same relist.
+/// The same unknown state, with the Stalwart answer: `invalidArguments`, not
+/// the `cannotCalculateChanges` of RFC 8620 §5.2. A Camel store cannot report
+/// it, so the result must also be a new listing.
 #[test]
 fn a_real_stalwart_shaped_unrecognized_state_lists_the_mailbox_again_too() {
     let fixture =
@@ -410,9 +400,9 @@ fn a_real_stalwart_shaped_unrecognized_state_lists_the_mailbox_again_too() {
     }
 }
 
-/// The rows a delta produces are ordered like the rows a listing produces —
-/// oldest first, by the server's own clock — because they are appended to the
-/// same summary and Camel numbers messages in the order they are added.
+/// Delta rows have the same order as listing rows: oldest first, by server
+/// time. They go into the same summary, and Camel numbers messages in the
+/// order of addition.
 #[test]
 fn the_rows_a_delta_produces_are_oldest_first() {
     let fixture = Fixture::start();
@@ -420,8 +410,8 @@ fn the_rows_a_delta_produces_are_oldest_first() {
     let sync = fixture.sync();
     let (state, held) = sync.messages(&inbox).unwrap();
 
-    // Delivered newest first, so that the order they were created in — which is
-    // also the order their ids sort in — is the reverse of the right answer.
+    // Deliver newest first. Creation order (and thus id order) is then the
+    // reverse of the correct order.
     for (index, hour) in [12, 11, 10].into_iter().enumerate() {
         fixture.edit(|account| {
             account.deliver_email(Fixture::message(&inbox, &format!("Message {index}"), hour))
@@ -435,14 +425,13 @@ fn the_rows_a_delta_produces_are_oldest_first() {
     );
 }
 
-/// A delta may name more messages than one `Email/get` is allowed to ask about
-/// — a mailbox that was moved wholesale is exactly that — and asking for more
-/// than the server's `maxObjectsInGet` fails the whole call rather than
-/// answering short.
+/// A delta can name more messages than one `Email/get` permits, for example
+/// after a move of a full mailbox. A request for more than `maxObjectsInGet`
+/// makes the full call fail.
 ///
-/// The mailbox is seeded first so that the delta stays worth following: a folder
-/// holding fewer rows than the delta names would list it again instead, which is
-/// [`a_delta_costlier_than_the_mailbox_lists_it_again`] and not this.
+/// Seed the mailbox first, so that the client follows the delta. With fewer
+/// rows than the delta names, the folder lists again
+/// ([`a_delta_costlier_than_the_mailbox_lists_it_again`]).
 #[test]
 fn more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
@@ -479,16 +468,14 @@ fn more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several() {
     );
 }
 
-/// The bound on catching up. A delta is asked from a state, and a folder that
-/// has been closed for a week is asked from a week-old one: what comes back is
-/// every message the *account* touched since — most of them in mailboxes this
-/// folder is not, each one of them still an id this call has to look up before
-/// it can say so. Listing the one mailbox is the cheaper answer well before
-/// that, so a delta that names more messages than the folder holds rows is not
-/// followed.
+/// The limit on a delta. For a folder closed for a week, the delta starts at a
+/// week-old state. It names all messages that the *account* changed since,
+/// mostly in other mailboxes, and the code must look up each id. A listing of
+/// the mailbox costs less. Thus the client does not follow a delta that names
+/// more messages than the folder has rows.
 ///
-/// Asserted on the wire rather than on the answer, because a delta and a listing
-/// leave the caller holding the same rows: what differs is only what was asked.
+/// The test checks the requests, not the result, because a delta and a listing
+/// give the same rows.
 #[test]
 fn a_delta_costlier_than_the_mailbox_lists_it_again() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
@@ -504,8 +491,8 @@ fn a_delta_costlier_than_the_mailbox_lists_it_again() {
     let (state, held) = sync.messages(&inbox).unwrap();
     assert_eq!(held.len(), 2);
 
-    // Five messages the account touched and this mailbox does not hold: the
-    // delta would look every one of them up to conclude the inbox is unchanged.
+    // Five changed messages that are not in this mailbox. The delta looks up
+    // each of them, only to find no change in the inbox.
     for index in 0..5u32 {
         fixture.edit(|account| {
             account.deliver_email(Fixture::message(
@@ -532,10 +519,9 @@ fn a_delta_costlier_than_the_mailbox_lists_it_again() {
     );
 }
 
-/// The other side of the same bound, and the case that matters far more often: a
-/// mailbox big enough that catching up is the cheap answer stays caught up, one
-/// `Email/get` of the messages that moved, without the whole mailbox being
-/// fetched again.
+/// The other side of the limit, and the more usual case. For a large mailbox,
+/// the delta costs less: `Email/get` of the changed messages only, with no new
+/// fetch of the full mailbox.
 #[test]
 fn a_delta_smaller_than_the_mailbox_is_followed() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
@@ -574,11 +560,10 @@ fn a_delta_smaller_than_the_mailbox_is_followed() {
     );
 }
 
-/// The floor under the bound. A listing is never one round trip — it is the
-/// state, the query, and a `/get` per page — so a delta that fits in a single
-/// `Email/get` is cheaper than relisting whatever the mailbox holds, including
-/// the nearly empty mailbox that would otherwise relist on every message the
-/// account touches anywhere.
+/// The minimum limit. A listing is more than one round trip: the state, the
+/// query, and one `/get` per page. Thus a delta in one `Email/get` costs less
+/// than a listing. Else, an almost empty mailbox lists again for each change
+/// in the account.
 #[test]
 fn a_delta_that_fits_in_one_get_is_followed_however_small_the_mailbox() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
@@ -614,10 +599,9 @@ fn a_delta_that_fits_in_one_get_is_followed_however_small_the_mailbox() {
     );
 }
 
-/// What the bound counts is what has to be looked up. A destroyed message is
-/// taken at the delta's word — it is gone from every mailbox and there is
-/// nothing left to fetch — so a hundred of them cost the same one round trip as
-/// none, and a mailbox that emptied elsewhere must not relist for them.
+/// The limit counts only the messages to look up. The code trusts the delta
+/// for a destroyed message, because there is nothing to fetch. Thus destroyed
+/// messages cost no requests, and do not cause a new listing.
 #[test]
 fn messages_the_delta_only_reports_gone_do_not_count_toward_the_bound() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
@@ -651,8 +635,8 @@ fn messages_the_delta_only_reports_gone_do_not_count_toward_the_bound() {
     );
 }
 
-/// A complex delta with a combination of delivered messages, flag/keyword updates,
-/// moved messages (in/out), and destroyed messages across multiple mailboxes.
+/// A complex delta with delivered messages, keyword updates, a move out, and a
+/// destroyed message, across two mailboxes.
 #[test]
 fn mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates() {
     let fixture = Fixture::start();
@@ -670,11 +654,11 @@ fn mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates() {
     let (state, held) = sync.messages(&inbox).unwrap();
     assert_eq!(held.len(), 4);
 
-    // 1. Deliver a new email to inbox
+    // 1. Deliver a new email to the inbox.
     let delivered =
         fixture.edit(|account| account.deliver_email(Fixture::message(&inbox, "New Arrival", 12)));
 
-    // 2. Mark flagged message as seen + flagged
+    // 2. Mark the flagged message as seen and flagged.
     let unread = Keywords::new(&MessageFlags::default(), &[]);
     let seen_flagged = Keywords::new(
         &MessageFlags {
@@ -689,19 +673,19 @@ fn mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates() {
         .set_keywords(&flagged, &KeywordChange::between(&unread, &seen_flagged))
         .unwrap();
 
-    // 3. Move moved_out to archive
+    // 3. Move `moved_out` to the archive.
     fixture
         .sync()
         .file_message(&moved_out, &Filing::moved(inbox.clone(), archive.clone()))
         .unwrap();
 
-    // 4. Destroy doomed message
+    // 4. Destroy the doomed message.
     assert!(fixture.edit(|account| account.destroy_email(&doomed)));
 
-    // 5. Query delta
+    // 5. Get the delta.
     let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
 
-    // Verify present contains new delivery and updated flagged message
+    // `present` contains the new delivery and the updated flagged message.
     let present_uids = uids(&present);
     assert!(present_uids.contains(&&delivered));
     assert!(present_uids.contains(&&flagged));
@@ -711,7 +695,7 @@ fn mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates() {
     assert!(flagged_row.flags.seen);
     assert!(flagged_row.flags.flagged);
 
-    // Verify absent contains moved_out and doomed
+    // `absent` contains `moved_out` and `doomed`.
     assert!(absent.contains(&moved_out));
     assert!(absent.contains(&doomed));
     assert!(!absent.contains(&kept));

@@ -1,52 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::quotas` against a real JMAP server — the one `Quota/get` call
-//! `jmap-mail`'s `get_quota_info_sync` reads, exercised end to end for the
-//! first time.
+//! Tests `MailSync::quotas` against a real JMAP server. This is the one
+//! `Quota/get` call that `get_quota_info_sync` in `jmap-mail` reads.
 //!
-//! `jmap-mail-sync/tests/quota.rs` and `jmap-mail/tests/quota.rs` both only
-//! ever exercise `jmap_mock::MockServer`, which necessarily answers exactly
-//! the `Quota` shape its own fixtures were given. A real server's actual RFC
-//! 9425 implementation had never been checked: whether it advertises the
-//! capability at all, and whether whatever it sends back for `resourceType`,
-//! `scope` and `types` actually deserializes into `jmap_proto::quota::Quota`.
+//! `jmap-mail-sync/tests/quota.rs` and `jmap-mail/tests/quota.rs` use only
+//! `jmap_mock::MockServer`, which returns the `Quota` shape of its fixtures.
+//! This test checks that the `Quota` objects of a real RFC 9425 server
+//! deserialize into `jmap_proto::quota::Quota`, and that their `resourceType`
+//! and `scope` values are known values.
 //!
-//! It does, but the check found a real bug, now fixed in the same commit:
-//! `quota_data_type::MAIL` held `"Mail"`, but RFC 9425 §4.1's `types` values
-//! come from the JMAP Types Names registry, not a quota-specific enum — a
-//! real Stalwart test account with a disk quota configured (`stw apply` with
-//! an Account's `quotas.maxDiskQuota`) answered `Quota/get` with `types:
-//! ["Email", "SieveScript", "FileNode", "CalendarEvent", "ContactCard"]`,
-//! never `"Mail"`. So `jmap-mail`'s `applies_to_mail` could only ever have
-//! matched through its "absent or empty `types`" branch, never through the
-//! `"Mail"` check itself, on any real server. Fixed to `"Email"`; see
-//! `jmap-mail/src/quota.rs`'s new regression test, which pins the exact
-//! multi-type list this probe observed.
+//! RFC 9425 §4.1 takes the `types` values from the JMAP Types Names registry.
+//! A Stalwart account with a disk quota (`stw apply` with
+//! `quotas.maxDiskQuota`) returned `types: ["Email", "SieveScript",
+//! "FileNode", "CalendarEvent", "ContactCard"]`. Thus
+//! `quota_data_type::MAIL` is `"Email"`, not `"Mail"`. A regression test in
+//! `jmap-mail/src/quota.rs` holds this list.
 //!
-//! A fresh account with no `quotas` ever configured answers `Quota/get` with
-//! an empty `list` even though the server still advertises the capability
-//! (confirmed the same way) — RFC 9425 has no "every account has a quota"
-//! guarantee, so this test tolerates either shape rather than assuming the
-//! write-test account has one configured.
+//! An account with no configured quota returns an empty `list`, but the
+//! server still advertises the capability. RFC 9425 does not require a quota
+//! for each account, thus this test accepts an empty list.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_quota -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -55,7 +44,7 @@ use jmap_mail_sync::MailSync;
 use jmap_proto::quota::{quota_resource_type, quota_scope};
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// Mirrors `jmap-mail-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
