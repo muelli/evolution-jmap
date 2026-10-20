@@ -7381,6 +7381,46 @@ fn the_guest_list_of_a_meeting_is_read_back_as_participants() {
 }
 
 #[test]
+fn a_quote_in_a_guest_name_is_written_with_the_rfc_6868_caret_escape() {
+    // RFC 5545 §3.1 has no escape inside a quoted parameter value, so a `\"`
+    // reaches libical as a backslash in the name. RFC 6868 spells `"` as `^'`.
+    let event: CalendarEvent = serde_json::from_value(json!({
+        "@type": "Event",
+        "uid": "meeting-1",
+        "start": "2026-01-15T13:00:00",
+        "participants": {"p1": {
+            "@type": "Participant",
+            "calendarAddress": "mailto:bob@example.com",
+            "name": "Bob \"the\" Builder ^ \r\nfrom\r^x",
+            "roles": {"attendee": true},
+        }},
+    }))
+    .expect("event");
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=\"Bob ^'the^' Builder ^^ ^nfrom^n^^x\";ROLE=REQ-PARTICIPANT:\
+         mailto:bob@example.com"
+    );
+}
+
+#[test]
+fn a_caret_escape_in_a_guest_name_reads_back_as_the_character_it_stands_for() {
+    // EDS writes a `"` or a line break in a name as RFC 6868 `^'` or `^n`. A
+    // caret before any other character stays as it is (RFC 6868 §3).
+    let event = ical_to_event(&meeting(
+        "ATTENDEE;CN=Bob ^'the^' Builder ^^ ^Nfrom ^x:mailto:bob@example.com\r\n",
+    ))
+    .expect("parse");
+
+    assert_eq!(
+        by_address(&event)["mailto:bob@example.com"]["name"],
+        "Bob \"the\" Builder ^ \nfrom ^x"
+    );
+}
+
+#[test]
 fn each_role_reads_back_as_the_set_that_draws_it() {
     // ROLE is one value and `roles` a set, so a reading has to pick the set the
     // drawing would spell that value from (see PARTICIPANT_ROLES): everybody on

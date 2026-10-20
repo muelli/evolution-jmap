@@ -91,7 +91,7 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     EExtension, EExtensionClass, ENamedParameters, ESource, ESourceCollection,
     e_extension_get_extensible, e_extension_get_type, e_named_parameters_get,
-    e_source_backend_get_backend_name, e_source_collection_get_type,
+    e_source_backend_dup_backend_name, e_source_collection_get_type,
 };
 use evo_sys::{
     E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS, E_CONFIG_LOOKUP_PARAM_SERVERS,
@@ -105,11 +105,11 @@ use evo_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GTRUE, GType, gchar, gint};
-use gobject_sys::{GObject, GObjectClass};
+use gobject_sys::{GObject, GObjectClass, g_object_ref, g_object_unref};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{self, N_, translate_with};
-use jmap_backend_core::marshal::{extension_if_present, read_string};
+use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{self, InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -314,6 +314,23 @@ unsafe fn prior_server_of(source: *mut ESource, email: &str) -> Option<String> {
     if source.is_null() {
         return None;
     }
+    // The source belongs to the main thread and this runs on a worker
+    // thread, so hold a reference while it is read.
+    // SAFETY: a valid source, just checked non-NULL.
+    unsafe { g_object_ref(source.cast()) };
+    // SAFETY: the source is valid and referenced until the unref below.
+    let server = unsafe { prior_server_of_held(source, email) };
+    // SAFETY: drops the reference taken above.
+    unsafe { g_object_unref(source.cast()) };
+    server
+}
+
+/// [`prior_server_of`] for a source the caller holds a reference to.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+unsafe fn prior_server_of_held(source: *mut ESource, email: &str) -> Option<String> {
     // SAFETY: no arguments; registers the extension type the lookup below
     // needs, as `account::read` does for its own.
     unsafe { e_source_collection_get_type() };
@@ -323,8 +340,8 @@ unsafe fn prior_server_of(source: *mut ESource, email: &str) -> Option<String> {
         extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION)
     }?;
     // SAFETY: a live extension, and an `ESourceCollection` is an
-    // `ESourceBackend`; the string is NULL or owned by the extension.
-    let backend_name = unsafe { read_string(e_source_backend_get_backend_name(collection.cast())) };
+    // `ESourceBackend`; the string is NULL or a copy this call owns.
+    let backend_name = unsafe { take_string(e_source_backend_dup_backend_name(collection.cast())) };
     // SAFETY: a valid source, as above.
     let account = unsafe { account::read(source) };
     prior_server(email, backend_name.as_deref(), &account)
@@ -664,13 +681,12 @@ unsafe extern "C" fn run(
         // host the account already names (see `prior_server`).
         let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS).or_else(|| {
             // SAFETY: `config_lookup` is the live lookup this worker runs
-            // for; the source it answers is NULL or one the assistant keeps
-            // alive while the lookup runs (`transfer none`).
-            let source = unsafe {
-                e_config_lookup_get_source(config_lookup, E_CONFIG_LOOKUP_SOURCE_COLLECTION)
-            };
-            // SAFETY: NULL or a valid source, as just said.
-            unsafe { prior_server_of(source, &email) }
+            // for. The source it answers is NULL or one the main thread owns
+            // (`transfer none`); `prior_server_of` takes its own reference at
+            // once, which narrows the window but cannot close it.
+            let source =
+                e_config_lookup_get_source(config_lookup, E_CONFIG_LOOKUP_SOURCE_COLLECTION);
+            prior_server_of(source, &email)
         });
         // RFC 8620 §2.2: the provider may publish its JMAP host as a
         // `_jmap._tcp` record rather than answer at the bare email domain, and
