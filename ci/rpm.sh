@@ -48,7 +48,7 @@ if [[ "${rpm_count}" -eq 0 ]]; then
 	exit 1
 fi
 
-# --strict: a warning fails too, as any lintian tag fails the .deb gate.
+# `--strict` fails on warnings, matching the `.deb` lintian gate.
 rpmlint --strict "${build_dir}"/*.rpm
 
 privlibdir="$(pkg-config --variable=privlibdir evolution-shell-3.0)"

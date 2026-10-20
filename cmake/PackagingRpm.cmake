@@ -3,14 +3,13 @@
 
 include_guard(GLOBAL)
 
-# Only add RPM to the generator list cpack builds by default
-# (`cmake --build <dir> --target package`, which is what the release
-# workflow runs) when rpmbuild is actually installed. Appending it
-# unconditionally broke that exact command on the release image, which
-# has no rpmbuild: CPack's RPM generator aborts the whole `cpack` run with
-# "RPM package requires rpmbuild executable" even though nothing asked for
-# an RPM, taking the .deb down with it. `ci/rpm.sh` is the documented way
-# to build the RPM deliberately, in a Fedora container that has rpmbuild.
+# Add RPM to default CPack generators only when `rpmbuild` exists.
+# The release workflow runs `cmake --build <dir> --target package`.
+# Release images can miss `rpmbuild`.
+# If CPack adds RPM without `rpmbuild`, `cpack` stops with
+# "RPM package requires rpmbuild executable".
+# That failure also blocks `.deb` output, even when no RPM was requested.
+# Use `ci/rpm.sh` to build RPM packages in a Fedora container.
 find_program(RPMBUILD_EXECUTABLE rpmbuild)
 if(RPMBUILD_EXECUTABLE AND NOT "RPM" IN_LIST CPACK_GENERATOR)
 	list(APPEND CPACK_GENERATOR RPM)
@@ -41,9 +40,9 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSES/GPL-3.0-or-later.t
 
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Productivity")
 
-# No runtime helper scripts or service files are shipped in the RPM payload.
-# Leave explicit Requires unset and let RPM's automatic ELF dependency
-# generator own runtime package requirements.
+# The RPM payload ships no helper scripts or service files.
+# Keep explicit Requires unset.
+# Let automatic ELF dependency generation provide runtime package Requires.
 
 set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${EDS_BOOK_BACKEND_DIR}/libebookbackendjmap.so"
@@ -80,7 +79,7 @@ if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
 			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
 	)
 
-	# --strict: a warning fails too, as any lintian tag fails the .deb gate.
+	# `--strict` fails on warnings, matching the `.deb` lintian gate.
 	add_test(
 		NAME package-rpm-lint
 		COMMAND ${CMAKE_COMMAND} -E env

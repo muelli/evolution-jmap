@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Local payload and builder state for step-2 extension verification.
+# Keep local payload and builder state out of Git during step 2 verification.
 payload/
 vendor/
 .build/
