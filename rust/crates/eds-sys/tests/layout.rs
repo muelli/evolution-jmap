@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The bindings are generated from whatever EDS headers are installed, so
-// nothing guarantees on its own that the Rust `struct` we will subclass has
-// the same shape as the C one the runtime allocates. Ask the type system
-// itself: `g_type_query()` reports the instance and class sizes GObject uses
-// for `g_type_register_static()`, and those must match our `size_of`. If they
-// ever drift, every vfunc override in the backends silently writes into the
-// wrong offset, so this is the load-bearing test of the whole FFI layer.
+// The bindings come from the installed EDS headers. Nothing else makes sure
+// that a Rust `struct` to subclass has the shape of the C struct that the
+// runtime allocates. `g_type_query()` reports the instance and class sizes
+// that GObject uses for `g_type_register_static()`, and they must agree with
+// `size_of`. If they do not, each vfunc override in the backends silently
+// writes at the wrong offset. Thus this is the most important test of the FFI
+// layer.
 
 use eds_sys::*;
 use std::mem::size_of;
 
-/// `g_type_query()` only fills the struct for classed types whose class has
-/// been referenced at least once, so take a class ref first. Abstract types
-/// (all the meta backends) can be class-ref'd; only instantiating them fails.
+/// `g_type_query()` fills the struct only for a classed type whose class has a
+/// reference, so take a class ref first. Abstract types (all the meta
+/// backends) accept a class ref; only an instance of them fails.
 fn query(gtype: GType) -> GTypeQuery {
     unsafe {
         let klass = g_type_class_ref(gtype);
@@ -27,26 +27,24 @@ fn query(gtype: GType) -> GTypeQuery {
     }
 }
 
-/// The EDS this test binary was built against and is running on, spelled out
-/// for whoever reads a failure.
+/// The EDS that this test binary was built against and runs on, for the
+/// reader of a failure.
 ///
-/// M10 runs this file against a matrix of EDS releases, where the interesting
-/// question about a mismatch is not only *which type* drifted but *which
-/// version it drifted on* — and a leg's log is read long after the container
-/// that produced it is gone. Three numbers are worth naming, because they can
-/// disagree with each other and each disagreement is a different fault:
+/// This file runs against a matrix of EDS releases. A mismatch report must
+/// name the type and the version, because people read the log of a leg after
+/// its container is gone. Three versions can disagree, and each disagreement
+/// is a different fault:
 ///
-/// - the version pkg-config resolved when `build.rs` chose the include paths
-///   ([`EDS_HEADER_VERSION`]),
-/// - the version the headers themselves state (`EDS_MAJOR_VERSION` and its
-///   two siblings, `#define`d in `libedataserver/eds-version.h`), and
-/// - the version of the shared library this process actually loaded
-///   (`eds_major_version` and friends, which are `extern const guint`).
+/// - the version that pkg-config resolved when `build.rs` chose the include
+///   paths ([`EDS_HEADER_VERSION`]),
+/// - the version that the headers state (`EDS_MAJOR_VERSION` and its two
+///   siblings, `#define`d in `libedataserver/eds-version.h`), and
+/// - the version of the shared library that this process loaded
+///   (`eds_major_version` and its siblings, which are `extern const guint`).
 ///
-/// The first two disagreeing is a `.pc` file that does not describe the
-/// headers beside it; the last two disagreeing is a build against one EDS
-/// deployed on another, which is the ABI contract `docs/eds-versions.md`
-/// writes down.
+/// If the first two disagree, the `.pc` file does not agree with its headers.
+/// If the last two disagree, a build for one EDS runs on a different EDS. The
+/// ABI contract in `docs/eds-versions.md` forbids this.
 fn eds_versions() -> String {
     format!(
         "EDS {EDS_HEADER_VERSION} (pkg-config), headers {}, runtime {}",
@@ -55,20 +53,21 @@ fn eds_versions() -> String {
     )
 }
 
-/// What the installed headers say, from the `#define`s bindgen carried over.
+/// The version of the installed headers, from the `#define`s that bindgen
+/// copied.
 fn header_version() -> String {
     format!("{EDS_MAJOR_VERSION}.{EDS_MINOR_VERSION}.{EDS_MICRO_VERSION}")
 }
 
-/// What the loaded `libedataserver` says, which is the only one of the three
-/// that describes the code this process will actually call.
+/// The version of the loaded `libedataserver`. Only this one of the three
+/// describes the code that this process calls.
 fn runtime_version() -> String {
     unsafe { format!("{eds_major_version}.{eds_minor_version}.{eds_micro_version}") }
 }
 
-/// The message a failed size check carries, built here rather than inline so
-/// that the shape of it — the type that drifted, and the EDS it drifted on —
-/// is one testable thing rather than a format string per assertion.
+/// The message of a failed size check: the type that changed and its EDS. One
+/// function makes the message testable, without a format string in each
+/// assertion.
 fn layout_message(name: &str, which: &str) -> String {
     format!(
         "{name}: {which} size disagrees with g_type_query, under {}",
@@ -96,10 +95,9 @@ macro_rules! assert_layout {
     }};
 }
 
-/// M10 asks that a mismatch fail "loudly, with the version and the offending
-/// type in the output". The type name was always there; the version was not,
-/// and a matrix of otherwise identical legs is exactly where an unversioned
-/// message stops being enough to act on.
+/// A mismatch must fail "loudly, with the version and the offending type in
+/// the output". In a matrix of otherwise identical legs, a message without
+/// the version is not sufficient.
 #[test]
 fn a_layout_failure_names_the_type_and_the_eds_it_ran_against() {
     let message = layout_message("EBookMetaBackend", "instance");
@@ -121,10 +119,10 @@ fn a_layout_failure_names_the_type_and_the_eds_it_ran_against() {
     );
 }
 
-/// The `.pc` file pkg-config answered with must describe the headers next to
-/// it, or `build.rs` chose its include paths off a version claim that is not
-/// the one bindgen then read. Only the release part is compared: pkg-config
-/// carries whatever suffix a distribution appended, and the `#define`s cannot.
+/// The `.pc` file from pkg-config must agree with its headers. If not,
+/// `build.rs` chose its include paths from a version that bindgen did not read.
+/// The test compares only the release part, because pkg-config keeps a suffix
+/// that a distribution adds, and the `#define`s cannot.
 #[test]
 fn pkg_config_describes_the_headers_it_pointed_at() {
     let stated = header_version();
@@ -134,16 +132,14 @@ fn pkg_config_describes_the_headers_it_pointed_at() {
     );
 }
 
-/// The ABI contract in one assertion: an EDS module is built against one
-/// version of these libraries and must be run against that same version.
-/// `eds_check_version` is EDS's own answer to the question — it returns NULL
-/// when the running library can serve code compiled against the version
-/// given, and an English explanation when it cannot.
+/// The ABI contract: an EDS module must run against the version of these
+/// libraries that it was built against. `eds_check_version` returns NULL when
+/// the running library can serve code compiled for the given version, and an
+/// English explanation when it cannot.
 ///
-/// This is the check that turns "the plugin segfaults on a newer EDS" into a
-/// red test, and it is deliberately asked of the *compiled-in* `#define`s
-/// rather than of anything this file knows, so it stays true whatever the
-/// matrix leg installed.
+/// This check changes "the plugin segfaults on a newer EDS" into a failed
+/// test. It uses the compiled-in `#define`s, so it is correct for each EDS
+/// that a matrix leg installs.
 #[test]
 fn the_running_eds_can_serve_what_these_bindings_were_compiled_against() {
     let complaint =
@@ -160,11 +156,10 @@ fn backend_layouts_match_the_gtype_system() {
     assert_layout!(e_source_get_type, ESource, ESourceClass);
 }
 
-/// The type M6's collection backend subclasses. It lives in `libebackend`
-/// beside `EBackend` rather than in either of the data libraries, and it is the
-/// one class whose vfuncs are dispatched by `evolution-source-registry` itself
-/// rather than by a factory subprocess — so a layout drift here misfires in the
-/// process that owns every account, not in one address book's.
+/// The type that the collection backend subclasses. It is in `libebackend`
+/// beside `EBackend`, not in a data library. `evolution-source-registry`
+/// dispatches its vfuncs, not a factory subprocess. Thus a layout error here
+/// fails in the process that owns all accounts, not in one address book.
 #[test]
 fn collection_backend_layout_matches_the_gtype_system() {
     assert_layout!(
@@ -174,9 +169,9 @@ fn collection_backend_layout_matches_the_gtype_system() {
     );
 }
 
-/// And the slots on it the collection backend overrides, for the same reason
-/// the meta backends' are checked below: a name that moved or a signature that
-/// changed is a compile error here rather than a wrong-arity call at runtime.
+/// The slots that the collection backend overrides, as for the meta backends
+/// below. A changed name or signature is then a compile error here, not a
+/// call with the wrong arity at run time.
 #[test]
 fn the_collection_backend_class_exposes_the_vfuncs_the_backend_overrides() {
     let collection = unsafe { std::mem::zeroed::<ECollectionBackendClass>() };
@@ -208,23 +203,20 @@ fn cal_backend_layouts_match_the_gtype_system() {
     assert_layout!(e_cal_cache_get_type, ECalCache, ECalCacheClass);
 }
 
-/// The factories, which are subclassed exactly like the backends and are the
-/// gap in this file: `jmap-backend-book`, `jmap-backend-cal` and
-/// `jmap-backend-collection` each declare a `#[repr(C)]` class struct leading
-/// with one of these and then *write into the parent half* — `factory_name`,
-/// `backend_type`, the calendar's `component_kind`, and the collection's
-/// `prepare_mail`. Those writes land at offsets bindgen computed from the
-/// header, and what EDS reads them back at is decided by the compiled library.
-/// The size check is what says the two agree; without it the whole factory
-/// mechanism is an unverified bet, and the symptom of losing it is a
-/// `g_object_new(0)` per address book with no hint as to why.
-///
-/// The collection factory makes the same bet a third time.
+/// The factories, which have subclasses as the backends do.
+/// `jmap-backend-book`, `jmap-backend-cal` and `jmap-backend-collection` each
+/// declare a `#[repr(C)]` class struct that starts with one of these. Each
+/// writes into the parent half: `factory_name`, `backend_type`, the
+/// `component_kind` of the calendar and the `prepare_mail` of the collection.
+/// Bindgen computes the offsets of these writes from the header. The compiled
+/// library sets the offsets that EDS reads. The size check makes sure that
+/// they agree. Without it, the symptom is a `g_object_new(0)` for each address
+/// book, with no cause shown.
 #[test]
 fn backend_factory_layouts_match_the_gtype_system() {
-    // `EExtension`, the factories' own parent, has no accessor in the
-    // allowlist — the backends never name it — so it is covered only as the
-    // leading bytes of the structs below, which is where they use it.
+    // `EExtension`, the parent of the factories, has no accessor in the
+    // allowlist because the backends do not name it. The structs below cover
+    // it as their first bytes, which is where the backends use it.
     assert_layout!(
         e_backend_factory_get_type,
         EBackendFactory,
@@ -247,10 +239,10 @@ fn backend_factory_layouts_match_the_gtype_system() {
     );
 }
 
-/// And the three slots the factories are subclassed to fill, by name — the same
-/// check `meta_backend_classes_expose_the_vfuncs_the_backends_override` makes
-/// for the backends. `prepare_mail` is the one that is a vfunc rather than a
-/// value, and the one M6 overrides.
+/// The three slots that the factory subclasses fill, by name, as
+/// `meta_backend_classes_expose_the_vfuncs_the_backends_override` does for the
+/// backends. Only `prepare_mail` is a vfunc, and the collection factory
+/// overrides it.
 #[test]
 fn the_collection_factory_class_exposes_the_fields_the_factory_fills() {
     let factory = unsafe { std::mem::zeroed::<ECollectionBackendFactoryClass>() };
@@ -259,10 +251,9 @@ fn the_collection_factory_class_exposes_the_fields_the_factory_fills() {
     assert!(factory.factory_name.is_null());
 }
 
-/// The contact types. `jmap-backend-book` casts an `EContact *` it was handed to
-/// `EVCard *` to render it — the C upcast, which is only an upcast while
-/// `EVCard` really is the first member of `EContact`. That is a claim about a
-/// layout, so it belongs here rather than in a comment.
+/// The contact types. `jmap-backend-book` casts an `EContact *` to `EVCard *`
+/// to render it. This C upcast is correct only while `EVCard` is the first
+/// member of `EContact`, so this layout test checks it.
 #[test]
 fn contact_layouts_match_the_gtype_system_and_a_contact_leads_with_its_vcard() {
     assert_layout!(e_vcard_get_type, EVCard, EVCardClass);
@@ -274,21 +265,19 @@ fn contact_layouts_match_the_gtype_system_and_a_contact_leads_with_its_vcard() {
     let _: EVCardClass = class.parent_class;
 }
 
-/// The two component types the calendar vfuncs pass across the boundary. They
-/// come from libical-glib and libecal rather than from the backend libraries
-/// the rest of this file checks, so their layouts are a separate bet on a
-/// separate library's ABI.
+/// The two component types that the calendar vfuncs pass across the boundary.
+/// They come from libical-glib and libecal, not from the backend libraries, so
+/// their layouts depend on the ABI of different libraries.
 #[test]
 fn component_layouts_match_the_gtype_system() {
     assert_layout!(i_cal_component_get_type, ICalComponent, ICalComponentClass);
     assert_layout!(e_cal_component_get_type, ECalComponent, ECalComponentClass);
 }
 
-/// The classed types M5's mail provider subclasses or is handed. These come
-/// from `libcamel-1.2`, a third library with a third ABI, and unlike the
-/// backend libraries Camel's own `CamelProvider` is *not* in this list: it is a
-/// boxed type with no size GObject can report, so tests/camel.rs pins it by a
-/// round trip through the provider registry instead.
+/// The classed types that the mail provider subclasses or receives. They come
+/// from `libcamel-1.2`, a third library with a third ABI. `CamelProvider` is
+/// not in this list: it is a boxed type, and GObject cannot report its size.
+/// tests/camel.rs checks it with a round trip through the provider registry.
 #[test]
 fn camel_layouts_match_the_gtype_system() {
     assert_layout!(camel_service_get_type, CamelService, CamelServiceClass);
@@ -303,11 +292,11 @@ fn camel_layouts_match_the_gtype_system() {
         CamelTransport,
         CamelTransportClass
     );
-    // The mechanism chain the provider's own named authtype hangs off.
-    // `CamelSasl`'s class is where the `CamelServiceAuthType *` slot that
-    // `camel_sasl_authtype` reads lives, ahead of twenty reserved pointers, so
-    // a class struct one field short here would install our authtype over
-    // Camel's `try_empty_password_sync` slot instead.
+    // The mechanism chain that holds the named authtype of the provider. The
+    // class of `CamelSasl` holds the `CamelServiceAuthType *` slot that
+    // `camel_sasl_authtype` reads, before twenty reserved pointers. If this
+    // class struct is one field short, the provider authtype goes into the
+    // `try_empty_password_sync` slot of Camel.
     assert_layout!(camel_sasl_get_type, CamelSasl, CamelSaslClass);
     assert_layout!(
         camel_sasl_xoauth2_get_type,
@@ -488,11 +477,9 @@ fn camel_layouts_match_the_gtype_system() {
         CamelStreamBufferClass
     );
     assert_layout!(camel_sexp_get_type, CamelSExp, CamelSExpClass);
-    // EDS 3.60 removed `camel-folder-search.h` entirely, so there is no type
-    // here to hold against `g_type_query` on that leg. Gated rather than
-    // deleted because the type is still there on 3.52, which is what the
-    // plugin ships against; the port of the code that *uses* it is tracked in
-    // `docs/eds-version-matrix.md`.
+    // EDS 3.60 removed `camel-folder-search.h`, so that leg has no type to
+    // check. The gate stays because 3.52, the shipped target, has the type.
+    // `docs/eds-version-matrix.md` records the port of the code that uses it.
     #[cfg(camel_folder_search_object)]
     assert_layout!(
         camel_folder_search_get_type,
@@ -527,12 +514,11 @@ fn camel_layouts_match_the_gtype_system() {
     );
 }
 
-/// bindgen will happily regenerate `GObject`, `GError` and friends from the
-/// EDS headers. The layouts would still match, so the tests above would still
-/// pass — but the types would be *distinct* from the gtk-rs ones, and every
-/// pointer crossing between eds-sys and the `glib` crate would need a cast
-/// that silences exactly the mismatch a cast should be catching. These
-/// assignments only compile while the re-exports are the real thing.
+/// Bindgen can regenerate `GObject`, `GError` and similar types from the EDS
+/// headers. The layouts agree, so the tests above pass. But the types are then
+/// different from the gtk-rs types, and each pointer between eds-sys and the
+/// `glib` crate needs a cast that hides the mismatch. These assignments
+/// compile only while the re-exports are the gtk-rs types.
 #[test]
 fn glib_types_are_the_gtk_rs_ones_not_regenerated_copies() {
     let obj: *mut GObject = std::ptr::null_mut();
@@ -544,14 +530,14 @@ fn glib_types_are_the_gtk_rs_ones_not_regenerated_copies() {
     let cancellable: *mut GCancellable = std::ptr::null_mut();
     let _: *mut gio_sys::GCancellable = cancellable;
 
-    // ...and the parent slot of an EDS instance really is that GObject.
+    // The parent slot of an EDS instance is that GObject.
     let backend = unsafe { std::mem::zeroed::<EBackend>() };
     let _: gobject_sys::GObject = backend.parent;
 }
 
-/// The whole point of the meta backends is that they hand us a cache and an
-/// offline/online story for free; make sure the vfuncs we will override in M3
-/// and M4 actually exist in the generated class structs.
+/// The meta backends supply a cache and offline and online behaviour. This test
+/// makes sure that the generated class structs have the vfuncs that the book
+/// and calendar backends override.
 #[test]
 fn meta_backend_classes_expose_the_vfuncs_the_backends_override() {
     let book = unsafe { std::mem::zeroed::<EBookMetaBackendClass>() };

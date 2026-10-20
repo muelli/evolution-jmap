@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The calendar vfuncs do not traffic in strings the way the address book ones
-// do: `load_component_sync` hands back an `ICalComponent *` and
-// `save_component_sync` is given a list of `ECalComponent *`. Both are types
-// from libraries the address book never touched — libical-glib and libecal —
-// so this is the first test that the generated bindings reach them at all, and
-// that the ownership rules the marshalling will rely on are the ones the
-// headers document: `i_cal_component_as_ical_string` transfers the string,
+// The calendar vfuncs do not use strings as the address book vfuncs do.
+// `load_component_sync` returns an `ICalComponent *`, and `save_component_sync`
+// receives a list of `ECalComponent *`. Both types come from libical-glib and
+// libecal, which the address book does not use. These tests are the first to
+// show that the generated bindings reach these libraries. They also show that
+// the marshalling uses the ownership rules that the headers document:
+// `i_cal_component_as_ical_string` transfers the string, and
 // `e_cal_component_get_icalcomponent` does not transfer the component.
 
 use eds_sys::*;
 use std::ffi::{CStr, CString};
 
-/// A minimal calendar object of the shape `jmap-ical` emits and reads: one
-/// `VEVENT` inside a `VCALENDAR`.
+/// A minimal calendar object of the shape that `jmap-ical` writes and reads: one
+/// `VEVENT` in a `VCALENDAR`.
 const OBJECT: &str = "BEGIN:VCALENDAR\r\n\
                       VERSION:2.0\r\n\
                       PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
@@ -29,8 +29,7 @@ fn text(value: &str) -> CString {
     CString::new(value).expect("no interior NUL")
 }
 
-/// Reads an owned `gchar *` and frees it, which is what `as_ical_string`
-/// returns.
+/// Reads an owned `gchar *` (the return value of `as_ical_string`) and frees it.
 unsafe fn take_string(raw: *mut gchar) -> String {
     assert!(!raw.is_null(), "the call returned NULL");
     unsafe {
@@ -59,9 +58,9 @@ fn an_icalendar_object_parses_and_renders_back() {
     }
 }
 
-/// The `VEVENT` inside the envelope is what the mapping reads, and its `UID`
-/// is the identifier EDS keys its cache on — so both the descent into the
-/// child and the borrowed (not transferred) `get_uid` string have to work.
+/// The mapping reads the `VEVENT` in the envelope, and EDS uses its `UID` as the
+/// cache key. Thus the test reads the child and its borrowed (not transferred)
+/// `get_uid` string.
 #[test]
 fn the_vevent_inside_a_vcalendar_is_reachable_with_its_uid() {
     let source = text(OBJECT);
@@ -80,9 +79,9 @@ fn the_vevent_inside_a_vcalendar_is_reachable_with_its_uid() {
     }
 }
 
-/// `load_component_sync` may only hand EDS a component or a failure, never an
-/// empty one, so text that is not a calendar object has to be distinguishable
-/// from text that is. Unlike `EVCard`, libical says so by returning NULL.
+/// `load_component_sync` must give EDS a component or a failure, never an empty
+/// component. Thus text that is not a calendar object must be different from
+/// text that is. Unlike `EVCard`, libical shows this with a NULL return.
 #[test]
 fn text_that_is_not_a_calendar_object_parses_to_null() {
     let source = text("not a calendar object at all");
@@ -91,9 +90,9 @@ fn text_that_is_not_a_calendar_object_parses_to_null() {
     }
 }
 
-/// An empty `VCALENDAR` is the envelope with nothing in it, which parses fine
-/// and is not an event. The marshalling has to notice, or a save would send
-/// the server a patch derived from nothing.
+/// An empty `VCALENDAR` is the envelope with no content. It parses, and it is not
+/// an event. The marshalling must detect this, or a save sends the server a
+/// patch made from nothing.
 #[test]
 fn an_empty_vcalendar_parses_but_holds_no_event() {
     let source = text("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n");
@@ -108,16 +107,14 @@ fn an_empty_vcalendar_parses_but_holds_no_event() {
     }
 }
 
-/// A fresh `VCALENDAR` built in Rust is how the marshalling will re-wrap the
-/// instances `save_component_sync` is handed, so building an envelope and
-/// filling it has to work in that direction too.
+/// The marshalling builds a new `VCALENDAR` in Rust to wrap again the instances
+/// that `save_component_sync` receives. Thus this direction must also work.
 ///
-/// The component put in it is a **clone**. `i_cal_component_take_component`
-/// takes ownership, and a component reached through its parent — which is
-/// every component the vfuncs hand us, since an `ECalComponent` only lends its
-/// own out — is already owned by that parent. Giving it away instead of a copy
-/// aborts the process on a double free; this test is the reason the
-/// marshalling clones, and it fails without the clone.
+/// The envelope gets a **clone**. `i_cal_component_take_component` takes
+/// ownership, but each component that the vfuncs give is a child, and its parent
+/// owns it (an `ECalComponent` only lends its component). To give away the
+/// original instead of a copy aborts the process on a double free. This test is
+/// the reason the marshalling clones, and it fails without the clone.
 #[test]
 fn a_vcalendar_can_be_built_and_given_a_clone_to_own() {
     let source = text(OBJECT);
@@ -132,7 +129,7 @@ fn a_vcalendar_can_be_built_and_given_a_clone_to_own() {
         let rendered = take_string(i_cal_component_as_ical_string(calendar));
         assert!(rendered.starts_with("BEGIN:VCALENDAR"), "{rendered}");
         assert!(rendered.contains("UID:K1"), "lost the event: {rendered}");
-        // The original is untouched: it still belongs to `parsed`.
+        // The original does not change: `parsed` still owns it.
         assert_eq!(
             CStr::from_ptr(i_cal_component_get_uid(event))
                 .to_str()
@@ -146,13 +143,13 @@ fn a_vcalendar_can_be_built_and_given_a_clone_to_own() {
     }
 }
 
-/// `save_component_sync` is handed `ECalComponent`s, not `ICalComponent`s, and
-/// the component it carries is borrowed — a marshalling that unref'd it would
-/// free memory EDS still owns.
+/// `save_component_sync` receives `ECalComponent`s, not `ICalComponent`s, and the
+/// component that each one carries is borrowed. A marshalling that unrefs it
+/// frees memory that EDS still owns.
 ///
-/// The string is a bare `VEVENT`, not the `VCALENDAR` above: an
-/// `ECalComponent` wraps one component of a kind it recognises, so handing it
-/// the envelope yields nothing at all.
+/// The string is a bare `VEVENT`, not the `VCALENDAR` above. An `ECalComponent`
+/// wraps one component of a kind that it recognises, so the envelope gives no
+/// result.
 #[test]
 fn an_ecalcomponent_lends_out_the_icalcomponent_it_carries() {
     let source = text(
@@ -170,16 +167,16 @@ fn an_ecalcomponent_lends_out_the_icalcomponent_it_carries() {
         let uid = i_cal_component_get_uid(inner);
         assert_eq!(CStr::from_ptr(uid).to_str().unwrap(), "K1");
 
-        // Only the ECalComponent is ours; the component above was borrowed,
-        // which is why nothing unrefs it.
+        // Only the ECalComponent is ours. The component above is borrowed, so the
+        // test does not unref it.
         g_object_unref(component.cast());
     }
 }
 
-/// Probing `ECalComponent` attachment accessors and `ICalAttach` object properties.
-/// `e_cal_component_has_attachments` indicates whether any `ATTACH` properties exist,
-/// `e_cal_component_get_attachments` extracts them as a `GSList` of `ICalAttach *`,
-/// and `e_cal_component_set_attachments(comp, NULL)` clears all attachments.
+/// Tests the `ECalComponent` attachment accessors and the `ICalAttach` properties.
+/// `e_cal_component_has_attachments` tells if `ATTACH` properties exist, and
+/// `e_cal_component_get_attachments` returns them as a `GSList` of `ICalAttach *`.
+/// `e_cal_component_set_attachments(comp, NULL)` removes all attachments.
 #[test]
 fn ecalcomponent_attachment_handling_and_icalattach_properties() {
     let source = text(
@@ -236,7 +233,7 @@ fn ecalcomponent_attachment_handling_and_icalattach_properties() {
         }
         g_slist_free_full(attachments, Some(unref_obj));
 
-        // Clearing attachments via set_attachments with NULL removes them all.
+        // `set_attachments` with NULL removes all attachments.
         e_cal_component_set_attachments(comp, std::ptr::null());
         assert_eq!(e_cal_component_has_attachments(comp), 0);
 
@@ -246,10 +243,10 @@ fn ecalcomponent_attachment_handling_and_icalattach_properties() {
     }
 }
 
-/// Probing `ICalProperty` modification for ATTACH and IMAGE lines:
-/// Setting a new URL via `i_cal_attach_new_from_url` and `i_cal_property_set_attach`
-/// modifies the attachment in place while preserving non-standard `X-JMAP-KEY` parameters,
-/// and removing one property leaves other ATTACH and IMAGE properties intact.
+/// Tests changes to `ICalProperty` for ATTACH and IMAGE lines.
+/// `i_cal_attach_new_from_url` and `i_cal_property_set_attach` change the URL in
+/// place and keep the non-standard `X-JMAP-KEY` parameters. The removal of one
+/// property keeps the other ATTACH and IMAGE properties.
 #[test]
 fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
     let source = text(
@@ -275,7 +272,7 @@ fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
         let attach_prop = i_cal_component_get_first_property(event, I_CAL_ATTACH_PROPERTY);
         assert!(!attach_prop.is_null());
 
-        // Modify the first ATTACH in place to a new URL
+        // Change the URL of the first ATTACH in place.
         let new_url = text("https://files.example.com/standup-v2.pdf");
         let new_attach = i_cal_attach_new_from_url(new_url.as_ptr());
         assert!(!new_attach.is_null());
@@ -302,7 +299,7 @@ fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
             "lost image key: {rendered}"
         );
 
-        // Remove the second ATTACH property
+        // Remove the second ATTACH property.
         let second_prop = i_cal_component_get_next_property(event, I_CAL_ATTACH_PROPERTY);
         assert!(!second_prop.is_null());
         i_cal_component_remove_property(event, second_prop);
@@ -329,11 +326,12 @@ fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
     }
 }
 
-/// Probing `ECalComponent` classification, transparency, and status properties:
-/// `e_cal_component_get_classification` maps `CLASS:CONFIDENTIAL` to `E_CAL_COMPONENT_CLASS_CONFIDENTIAL`,
-/// `e_cal_component_get_transparency` maps `TRANSP:TRANSPARENT` to `E_CAL_COMPONENT_TRANSP_TRANSPARENT`,
-/// and `e_cal_component_get_status` maps `STATUS:CONFIRMED` to `I_CAL_STATUS_CONFIRMED`.
-/// Setting values in place modifies the component, and setting NONE clears them.
+/// Tests the `ECalComponent` classification, transparency and status accessors.
+/// `e_cal_component_get_classification`, `_get_transparency` and `_get_status`
+/// map `CLASS:CONFIDENTIAL` to `E_CAL_COMPONENT_CLASS_CONFIDENTIAL`,
+/// `TRANSP:TRANSPARENT` to `E_CAL_COMPONENT_TRANSP_TRANSPARENT`, and
+/// `STATUS:CONFIRMED` to `I_CAL_STATUS_CONFIRMED`. The setters change the
+/// component in place, and the NONE values clear the properties.
 #[test]
 fn ecalcomponent_classification_transparency_and_status_in_eds() {
     let source = text(
@@ -370,7 +368,7 @@ fn ecalcomponent_classification_transparency_and_status_in_eds() {
         );
         assert_eq!(e_cal_component_get_status(comp), I_CAL_STATUS_CONFIRMED);
 
-        // Modify in place
+        // Change in place
         e_cal_component_set_classification(comp, E_CAL_COMPONENT_CLASS_PRIVATE);
         assert_eq!(
             e_cal_component_get_classification(comp),
@@ -401,7 +399,7 @@ fn ecalcomponent_classification_transparency_and_status_in_eds() {
             "modified status missing: {rendered}"
         );
 
-        // Clear fields by setting NONE
+        // Setting NONE clears the fields
         e_cal_component_set_classification(comp, E_CAL_COMPONENT_CLASS_NONE);
         assert_eq!(
             e_cal_component_get_classification(comp),
@@ -438,11 +436,11 @@ fn ecalcomponent_classification_transparency_and_status_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` categories, location, URL, and summary accessors:
-/// `e_cal_component_get_categories` returns a comma-separated string,
-/// `e_cal_component_get_categories_list` returns individual category tokens,
-/// `e_cal_component_get_location` and `e_cal_component_get_url` return their respective strings,
-/// and `e_cal_component_get_summary` returns the structured `ECalComponentText`.
+/// Tests the `ECalComponent` categories, location, URL and summary accessors.
+/// `e_cal_component_get_categories` returns a comma-separated string, and
+/// `e_cal_component_get_categories_list` returns each category as a token.
+/// `e_cal_component_get_location` and `e_cal_component_get_url` return their strings.
+/// `e_cal_component_get_summary` returns the structured `ECalComponentText`.
 #[test]
 fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
     let source = text(
@@ -518,13 +516,13 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
         );
         e_cal_component_text_free(summary_text.cast());
 
-        // Modifying location and URL in place
+        // Change the location and URL in place
         let new_loc = text("Conference Hall A");
         e_cal_component_set_location(comp, new_loc.as_ptr());
         let new_url = text("https://meet.example.com/hall-a");
         e_cal_component_set_url(comp, new_url.as_ptr());
 
-        // Modifying categories
+        // Change the categories
         let new_cats = text("work,engineering");
         e_cal_component_set_categories(comp, new_cats.as_ptr());
 
@@ -543,7 +541,7 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
             "modified categories missing: {rendered}"
         );
 
-        // Clearing categories, location, and url via NULL
+        // Setting NULL clears the categories, location and URL
         e_cal_component_set_categories(comp, std::ptr::null());
         e_cal_component_set_location(comp, std::ptr::null());
         e_cal_component_set_url(comp, std::ptr::null());
@@ -569,13 +567,13 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` organizer and attendee accessors:
-/// `e_cal_component_get_organizer` returns an `ECalComponentOrganizer *`,
-/// with value, CN, SENT-BY, and LANGUAGE accessors;
-/// `e_cal_component_get_attendees` returns a `GSList` of `ECalComponentAttendee *`,
-/// with value, CN, CUTYPE, ROLE, PARTSTAT, and RSVP accessors;
-/// `e_cal_component_set_organizer` and `e_cal_component_set_attendees` support in-place
-/// modification and NULL clearing.
+/// Tests the `ECalComponent` organizer and attendee accessors.
+/// `e_cal_component_get_organizer` returns an `ECalComponentOrganizer *` with
+/// value, CN, SENT-BY and LANGUAGE accessors.
+/// `e_cal_component_get_attendees` returns a `GSList` of `ECalComponentAttendee *`
+/// with value, CN, CUTYPE, ROLE, PARTSTAT and RSVP accessors.
+/// `e_cal_component_set_organizer` and `e_cal_component_set_attendees` change the
+/// values in place, and NULL clears them.
 #[test]
 fn ecalcomponent_organizer_and_attendees_in_eds() {
     let source = text(
@@ -675,7 +673,7 @@ fn ecalcomponent_organizer_and_attendees_in_eds() {
             I_CAL_ROLE_OPTPARTICIPANT
         );
 
-        // Modify organizer CN in place
+        // Change the organizer CN and set the organizer again
         let new_cn = text("Alice Wonderland");
         e_cal_component_organizer_set_cn(organizer, new_cn.as_ptr());
         e_cal_component_set_organizer(comp, organizer);
@@ -693,7 +691,7 @@ fn ecalcomponent_organizer_and_attendees_in_eds() {
         }
         g_slist_free_full(attendees, Some(free_attendee));
 
-        // Clear organizer and attendees via NULL
+        // Setting NULL clears the organizer and the attendees
         e_cal_component_set_organizer(comp, std::ptr::null());
         e_cal_component_set_attendees(comp, std::ptr::null());
 
@@ -714,11 +712,11 @@ fn ecalcomponent_organizer_and_attendees_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` priority, sequence, percent complete, and GEO coordinates:
-/// `e_cal_component_get_priority` returns an integer (1..9, or 0 when unset),
-/// `e_cal_component_get_sequence` returns sequence >= 0,
-/// `e_cal_component_get_percent_complete` returns 0..100 (-1 when unset),
-/// `e_cal_component_get_geo` returns `ICalGeo *` with latitude/longitude.
+/// Tests the `ECalComponent` priority, sequence, percent complete and GEO accessors.
+/// `e_cal_component_get_priority` returns an integer (1..9, or -1 when unset).
+/// `e_cal_component_get_sequence` returns the sequence number.
+/// `e_cal_component_get_percent_complete` returns 0..100 (-1 when unset).
+/// `e_cal_component_get_geo` returns an `ICalGeo *` with latitude and longitude.
 #[test]
 fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
     let source = text(
@@ -758,7 +756,7 @@ fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
         assert!((lon - 13.404954).abs() < 1e-5);
         g_object_unref(geo.cast());
 
-        // Modifying in place
+        // Change in place
         e_cal_component_set_priority(comp, 5);
         e_cal_component_set_sequence(comp, 4);
         e_cal_component_set_percent_complete(comp, 100);
@@ -787,7 +785,7 @@ fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
             "modified geo missing: {rendered}"
         );
 
-        // Clearing via -1 / -1 / NULL
+        // Clear with -1, -1 and NULL
         e_cal_component_set_priority(comp, -1);
         e_cal_component_set_percent_complete(comp, -1);
         e_cal_component_set_geo(comp, std::ptr::null());
@@ -817,14 +815,14 @@ fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` alarm accessors, trigger properties, repeat settings,
-/// in-place alarm modification, and alarm clearing.
-/// `e_cal_component_has_alarms` checks for `VALARM` components,
-/// `e_cal_component_get_alarm_uids` lists alarm UIDs,
-/// `e_cal_component_get_alarm` retrieves an `ECalComponentAlarm`,
-/// `e_cal_component_add_alarm` installs a new/modified alarm,
-/// `e_cal_component_remove_alarm` deletes a specific alarm by UID, and
-/// `e_cal_component_remove_all_alarms` clears all alarms.
+/// Tests the `ECalComponent` alarm accessors, trigger and repeat values, alarm
+/// changes and alarm removal.
+/// `e_cal_component_has_alarms` checks for `VALARM` components.
+/// `e_cal_component_get_alarm_uids` lists the alarm UIDs.
+/// `e_cal_component_get_alarm` returns an `ECalComponentAlarm`.
+/// `e_cal_component_add_alarm` adds a new or changed alarm.
+/// `e_cal_component_remove_alarm` removes one alarm by its UID.
+/// `e_cal_component_remove_all_alarms` removes all alarms.
 #[test]
 fn ecalcomponent_alarm_handling_and_properties_in_eds() {
     let source = text(
@@ -885,7 +883,7 @@ fn ecalcomponent_alarm_handling_and_properties_in_eds() {
         let auid0_c = text(&auid0);
         let auid1_c = text(&auid1);
 
-        // Retrieve alarms by the EDS alarm UIDs
+        // Get the alarms by their EDS alarm UIDs
         let a0 = e_cal_component_get_alarm(comp, auid0_c.as_ptr());
         assert!(!a0.is_null());
         let a1_comp = e_cal_component_get_alarm(comp, auid1_c.as_ptr());
@@ -934,7 +932,7 @@ fn ecalcomponent_alarm_handling_and_properties_in_eds() {
         assert!(!rep_dur.is_null());
         assert_eq!(i_cal_duration_get_minutes(rep_dur), 5);
 
-        // Get alarm2
+        // Examine alarm2
         assert_eq!(
             e_cal_component_alarm_get_action(a2),
             E_CAL_COMPONENT_ALARM_AUDIO
@@ -982,7 +980,7 @@ fn ecalcomponent_alarm_handling_and_properties_in_eds() {
         );
         e_cal_component_alarm_free(a3_read.cast());
 
-        // Remove alarm2 by auid
+        // Remove alarm2 by its alarm UID
         e_cal_component_remove_alarm(comp, a2_uid_to_remove.as_ptr());
         assert!(e_cal_component_get_alarm(comp, a2_uid_to_remove.as_ptr()).is_null());
 
@@ -1004,12 +1002,13 @@ fn ecalcomponent_alarm_handling_and_properties_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` recurrence properties (RRULE, EXDATE, RECURRENCE-ID):
-/// `e_cal_component_has_recurrences` and `e_cal_component_has_rrules` indicate whether recurrence rules exist,
-/// `e_cal_component_get_rrules` extracts recurrence rules as a `GSList` of `ICalRecurrence *`,
-/// `e_cal_component_has_exdates` and `e_cal_component_get_exdates` extract exception dates as `ECalComponentDateTime *`,
-/// `e_cal_component_get_recurid_as_string` extracts the recurrence identifier string,
-/// and setting NULL on setters clears `RRULE`, `EXDATE`, and `RECURRENCE-ID` from the component.
+/// Tests the `ECalComponent` recurrence properties (RRULE, EXDATE, RECURRENCE-ID).
+/// `e_cal_component_has_recurrences` and `e_cal_component_has_rrules` tell if
+/// recurrence rules exist. `e_cal_component_get_rrules` returns them as a
+/// `GSList` of `ICalRecurrence *`. `e_cal_component_has_exdates` and
+/// `e_cal_component_get_exdates` return exception dates as `ECalComponentDateTime *`.
+/// `e_cal_component_get_recurid_as_string` returns the recurrence identifier string.
+/// Setting NULL clears `RRULE`, `EXDATE` and `RECURRENCE-ID` from the component.
 #[test]
 fn ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds() {
     let source = text(
@@ -1079,7 +1078,7 @@ fn ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds() {
 
         g_slist_free_full(exdates, Some(e_cal_component_datetime_free));
 
-        // Modify in place: set a new rule with INTERVAL=1, COUNT=5
+        // Change in place: set a new DAILY rule with INTERVAL=1 and COUNT=5
         let new_recur = i_cal_recurrence_new();
         i_cal_recurrence_set_freq(new_recur, I_CAL_DAILY_RECURRENCE);
         i_cal_recurrence_set_interval(new_recur, 1);
@@ -1096,7 +1095,7 @@ fn ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds() {
             "modified rrule missing: {rendered}"
         );
 
-        // Clear RRULE, EXDATE, RECURRENCE-ID
+        // Clear RRULE, EXDATE and RECURRENCE-ID
         e_cal_component_set_rrules(comp, std::ptr::null());
         e_cal_component_set_exdates(comp, std::ptr::null());
         e_cal_component_set_recurid(comp, std::ptr::null());
@@ -1126,11 +1125,11 @@ fn ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds() {
     }
 }
 
-/// Probing `ICalRecurrence` string parsing, serialization, and `ICalProperty` integration:
-/// `i_cal_recurrence_new_from_string` constructs an `ICalRecurrence` from an RRULE value string,
-/// frequency, interval, and until getters inspect properties,
-/// `i_cal_recurrence_to_string` serializes back to standard RRULE format,
-/// and `i_cal_property_new_rrule` creates a property attached to an `ICalComponent`.
+/// Tests `ICalRecurrence` string parsing and serialization, and its use in an
+/// `ICalProperty`. `i_cal_recurrence_new_from_string` parses an RRULE value
+/// string, and the frequency, interval and until getters read it.
+/// `i_cal_recurrence_to_string` serializes it back to the standard RRULE format.
+/// `i_cal_property_new_rrule` makes a property that an `ICalComponent` can take.
 #[test]
 fn icalrecurrence_properties_and_string_roundtrips() {
     let rrule_str = text("FREQ=MONTHLY;INTERVAL=3;UNTIL=20261231T235959Z");
@@ -1155,7 +1154,7 @@ fn icalrecurrence_properties_and_string_roundtrips() {
             "{serialized}"
         );
 
-        // Create an ICalProperty and attach to a VEVENT
+        // Make an ICalProperty and give it to a VEVENT
         let prop = i_cal_property_new_rrule(recur);
         assert!(!prop.is_null());
 
@@ -1183,12 +1182,11 @@ fn icalrecurrence_properties_and_string_roundtrips() {
     }
 }
 
-/// Probing `ECalComponent` datetime and duration properties (DTSTART, DTEND, DUE, DURATION):
-/// `e_cal_component_get_dtstart` extracts start datetime and TZID,
-/// `e_cal_component_get_dtend` extracts end datetime and TZID,
-/// `e_cal_component_get_due` extracts due datetime for tasks,
-/// `i_cal_component_get_duration` extracts event duration,
-/// and setters modify or clear (via NULL) these properties.
+/// Tests the `ECalComponent` date-time and duration properties (DTSTART, DTEND,
+/// DUE, DURATION). `e_cal_component_get_dtstart` and `e_cal_component_get_dtend`
+/// return the date-time and TZID. `e_cal_component_get_due` returns the due
+/// date-time of a task. `i_cal_component_set_duration` sets the event duration.
+/// The setters change these properties, and NULL clears DTEND and DUE.
 #[test]
 fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
     let source = text(
@@ -1259,7 +1257,7 @@ fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
             "modified dtstart missing: {rendered}"
         );
 
-        // Clear DTEND and set DURATION on inner ICalComponent
+        // Clear DTEND and set DURATION on the inner ICalComponent
         e_cal_component_set_dtend(comp, std::ptr::null());
 
         let dur = i_cal_duration_new_from_string(c"PT1H30M".as_ptr());
@@ -1296,7 +1294,7 @@ fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
         g_object_unref(event.cast());
         g_object_unref(calendar.cast());
 
-        // Test DUE on a VTODO component (libecal restricts DUE to E_CAL_COMPONENT_TODO)
+        // Test DUE on a VTODO (libecal permits DUE only on E_CAL_COMPONENT_TODO)
         let todo_source = text(
             "BEGIN:VCALENDAR\r\n\
              VERSION:2.0\r\n\
@@ -1322,7 +1320,7 @@ fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
         assert_eq!(i_cal_time_get_hour(due_val), 17);
         e_cal_component_datetime_free(initial_due.cast());
 
-        // Modify DUE
+        // Change DUE
         let new_due_time = i_cal_time_new_from_string(c"20260825T180000".as_ptr());
         let new_due_dt = e_cal_component_datetime_new_take(
             new_due_time,
@@ -1352,9 +1350,10 @@ fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
     }
 }
 
-/// Probing `ICalTime` parsing (DATE vs DATE-TIME), UTC flags, and `ICalTimezone` resolution:
-/// `i_cal_time_new_from_string` distinguishes VALUE=DATE from DATE-TIME and UTC from floating/local,
-/// and `i_cal_timezone_get_builtin_timezone` retrieves built-in VTIMEZONE definitions.
+/// Tests `ICalTime` parsing (DATE and DATE-TIME), UTC flags and `ICalTimezone`
+/// lookup. `i_cal_time_new_from_string` distinguishes VALUE=DATE from DATE-TIME,
+/// and UTC from floating or local time. `i_cal_timezone_get_builtin_timezone`
+/// returns built-in VTIMEZONE definitions.
 #[test]
 fn icaltime_date_vs_datetime_and_timezone_resolution() {
     unsafe {
@@ -1378,7 +1377,7 @@ fn icaltime_date_vs_datetime_and_timezone_resolution() {
         assert_eq!(i_cal_time_get_minute(dt_utc), 30);
         g_object_unref(dt_utc.cast());
 
-        // Date-time floating / local
+        // Floating or local date-time
         let dt_local = i_cal_time_new_from_string(c"20260810T090000".as_ptr());
         assert!(!dt_local.is_null());
         assert_eq!(i_cal_time_is_date(dt_local), 0);
@@ -1386,7 +1385,7 @@ fn icaltime_date_vs_datetime_and_timezone_resolution() {
         assert_eq!(i_cal_time_get_hour(dt_local), 9);
         g_object_unref(dt_local.cast());
 
-        // Timezone resolution by IANA name
+        // Timezone lookup by IANA name
         let tz = i_cal_timezone_get_builtin_timezone(c"Europe/Zurich".as_ptr());
         assert!(!tz.is_null());
         let vtz = i_cal_timezone_get_component(tz);
@@ -1399,14 +1398,14 @@ fn icaltime_date_vs_datetime_and_timezone_resolution() {
     }
 }
 
-/// Probing `ECalComponent` description, comment, contact, and summary text lists and multi-locale accessors:
-/// `e_cal_component_get_descriptions` returns a `GSList` of `ECalComponentText *`, with value, ALTREP, and LANGUAGE accessors;
-/// `e_cal_component_dup_description_for_locale` retrieves the localized description;
-/// `e_cal_component_get_comments` and `e_cal_component_dup_comment_for_locale` retrieve comments;
-/// `e_cal_component_get_contacts` returns contact strings;
-/// `e_cal_component_dup_summaries` returns summary entries;
-/// `e_cal_component_set_descriptions`, `e_cal_component_set_comments`, `e_cal_component_set_contacts`, `e_cal_component_set_summaries` support in-place modification;
-/// and setting `NULL` clears them from the component.
+/// Tests the `ECalComponent` description, comment, contact and summary lists and
+/// their locale accessors. `e_cal_component_get_descriptions` returns a `GSList`
+/// of `ECalComponentText *` with value, ALTREP and LANGUAGE accessors. The
+/// `e_cal_component_dup_*_for_locale` functions return the localized description,
+/// comment and summary. `e_cal_component_get_comments`, `_get_contacts` and
+/// `_dup_summaries` return the other lists. `e_cal_component_set_descriptions`
+/// and `e_cal_component_set_contacts` replace the entries, and NULL clears the
+/// descriptions, comments and contacts.
 #[test]
 fn ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds() {
     let source = text(
@@ -1549,7 +1548,7 @@ fn ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds() {
         );
         e_cal_component_text_free(localized_summary.cast());
 
-        // 5. In-place modifications
+        // 5. Replace entries
         let new_desc_text = e_cal_component_text_new(
             text("Updated launch notes").as_ptr(),
             text("https://example.com/v2.html").as_ptr(),
@@ -1576,7 +1575,7 @@ fn ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds() {
             "modified contact missing: {rendered}"
         );
 
-        // 6. Clearing via NULL
+        // 6. Clear with NULL
         e_cal_component_set_descriptions(comp, std::ptr::null());
         e_cal_component_set_comments(comp, std::ptr::null());
         e_cal_component_set_contacts(comp, std::ptr::null());
@@ -1606,13 +1605,15 @@ fn ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` timestamps (`CREATED`, `LAST-MODIFIED`, `DTSTAMP`, `COMPLETED`), recurrence dates (`RDATE` with `ECalComponentPeriod`), and component ID (`ECalComponentId`):
-/// `e_cal_component_get_created`, `e_cal_component_get_last_modified`, and `e_cal_component_get_dtstamp` extract `ICalTime *` timestamps;
-/// `e_cal_component_get_completed` extracts completion timestamp on VTODO;
-/// `e_cal_component_has_rdates` and `e_cal_component_get_rdates` extract `ECalComponentPeriod *` entries;
-/// `e_cal_component_period_get_kind`, `e_cal_component_period_get_start`, `e_cal_component_period_get_end`, and `e_cal_component_period_get_duration` inspect period parameters;
-/// `e_cal_component_get_id` returns an `ECalComponentId *`, with `e_cal_component_id_get_uid`, `e_cal_component_id_get_rid`, `e_cal_component_id_copy`, `e_cal_component_id_equal`, `e_cal_component_id_hash`;
-/// and setters support in-place modification and NULL clearing.
+/// Tests the `ECalComponent` timestamps (`CREATED`, `LAST-MODIFIED`, `DTSTAMP`),
+/// recurrence dates (`RDATE` with `ECalComponentPeriod`) and `ECalComponentId`.
+/// `e_cal_component_get_created`, `_get_last_modified` and `_get_dtstamp` return
+/// `ICalTime *` timestamps. `e_cal_component_has_rdates` and `_get_rdates` return
+/// `ECalComponentPeriod *` entries, and `e_cal_component_period_get_kind`,
+/// `_get_start` and `_get_duration` read them. `e_cal_component_get_id` returns
+/// an `ECalComponentId *`. The test also uses `e_cal_component_id_new`,
+/// `_get_uid`, `_get_rid`, `_copy`, `_equal` and `_hash`. The setters change the
+/// timestamps, and NULL clears `CREATED`, `LAST-MODIFIED` and `RDATE`.
 #[test]
 fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
     let source = text(
@@ -1639,7 +1640,7 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
         let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
         assert!(!comp.is_null());
 
-        // 1. Inspect Timestamps
+        // 1. Inspect timestamps
         let created = e_cal_component_get_created(comp);
         assert!(!created.is_null());
         assert_eq!(i_cal_time_get_year(created), 2026);
@@ -1661,7 +1662,7 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
         assert_eq!(i_cal_time_get_hour(dtstamp), 9);
         g_object_unref(dtstamp.cast());
 
-        // 2. Component ID operations
+        // 2. Component ID
         let comp_id = e_cal_component_get_id(comp);
         assert!(!comp_id.is_null());
         let uid_str = e_cal_component_id_get_uid(comp_id);
@@ -1701,7 +1702,7 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
         e_cal_component_id_free(manual_id.cast());
         e_cal_component_id_free(comp_id.cast());
 
-        // 3. RDATEs & ECalComponentPeriod
+        // 3. RDATEs and ECalComponentPeriod
         assert_eq!(e_cal_component_has_rdates(comp), 1);
         let rdates = e_cal_component_get_rdates(comp);
         assert!(!rdates.is_null());
@@ -1727,7 +1728,7 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
         }
         g_slist_free_full(rdates, Some(free_period));
 
-        // 4. Modify timestamps in place
+        // 4. Change timestamps in place
         let new_created_time = i_cal_time_new_from_string(c"20260802T090000Z".as_ptr());
         e_cal_component_set_created(comp, new_created_time);
         g_object_unref(new_created_time.cast());
@@ -1773,13 +1774,12 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` component types (`ECalComponentVType`), cloning (`e_cal_component_clone`),
-/// recurrence instance check (`e_cal_component_is_instance`), and string serialization (`e_cal_component_get_as_string`):
-/// `e_cal_component_get_vtype` correctly identifies `VEVENT` (`E_CAL_COMPONENT_EVENT`), `VTODO` (`E_CAL_COMPONENT_TODO`),
-/// `VJOURNAL` (`E_CAL_COMPONENT_JOURNAL`), and `VTIMEZONE` (`E_CAL_COMPONENT_TIMEZONE`);
-/// `e_cal_component_is_instance` detects components carrying `RECURRENCE-ID`;
-/// `e_cal_component_get_as_string` serializes the component into an allocated iCalendar string;
-/// and `e_cal_component_clone` yields a distinct deep copy of the component.
+/// Tests `ECalComponentVType`, `e_cal_component_clone`, `e_cal_component_is_instance`
+/// and `e_cal_component_get_as_string`. `e_cal_component_get_vtype` identifies
+/// `VEVENT` (`E_CAL_COMPONENT_EVENT`), `VTODO` (`E_CAL_COMPONENT_TODO`) and
+/// `VJOURNAL` (`E_CAL_COMPONENT_JOURNAL`). `e_cal_component_is_instance` detects
+/// a `RECURRENCE-ID`. `e_cal_component_get_as_string` returns an allocated
+/// iCalendar string. `e_cal_component_clone` returns a different deep copy.
 #[test]
 fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
     let calendar_source = text(
@@ -1817,7 +1817,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         let calendar = i_cal_component_new_from_string(calendar_source.as_ptr());
         assert!(!calendar.is_null());
 
-        // 1. Master Event VEVENT
+        // 1. Master VEVENT
         let event_comp = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
         assert!(!event_comp.is_null());
         let e_event = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event_comp));
@@ -1838,7 +1838,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         );
         g_free(as_str_ptr.cast());
 
-        // Deep cloning
+        // Deep clone
         let cloned_event = e_cal_component_clone(e_event);
         assert!(!cloned_event.is_null());
         assert_ne!(cloned_event, e_event);
@@ -1858,7 +1858,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         g_object_unref(cloned_event.cast());
         g_object_unref(e_event.cast());
 
-        // 2. Recurrence override instance VEVENT
+        // 2. VEVENT that overrides one recurrence instance
         let instance_comp = i_cal_component_get_next_component(calendar, I_CAL_VEVENT_COMPONENT);
         assert!(!instance_comp.is_null());
         let e_instance =
@@ -1895,12 +1895,12 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
     }
 }
 
-/// Probing `ECalComponent` geographic coordinates (`ICalGeo`), task percent complete, priority, and sequence in EDS:
-/// `e_cal_component_get_geo` extracts `ICalGeo *` with `i_cal_geo_get_lat` and `i_cal_geo_get_lon`;
-/// `e_cal_component_set_geo` updates coordinates in place or removes `GEO` with NULL;
-/// `e_cal_component_get_percent_complete` / `e_cal_component_set_percent_complete` manipulate task progress;
-/// `e_cal_component_get_priority` / `e_cal_component_set_priority` manage event/task priority (0..9);
-/// and `e_cal_component_get_sequence` / `e_cal_component_set_sequence` track revision sequences.
+/// Tests the `ECalComponent` GEO (`ICalGeo`), percent complete, priority and sequence.
+/// `e_cal_component_get_geo` returns an `ICalGeo *` for `i_cal_geo_get_lat` and
+/// `i_cal_geo_get_lon`. `e_cal_component_set_geo` changes the coordinates in place,
+/// or removes `GEO` with NULL. `e_cal_component_get/set_percent_complete` manage
+/// task progress. `e_cal_component_get/set_priority` manage event and task
+/// priority (0..9). `e_cal_component_get/set_sequence` manage the revision sequence.
 #[test]
 fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
     let source = text(
@@ -1935,18 +1935,18 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
         let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
         assert!(!comp.is_null());
 
-        // 1. GEO Coordinates extraction
+        // 1. GEO coordinates
         let geo = e_cal_component_get_geo(comp);
         assert!(!geo.is_null());
         assert!((i_cal_geo_get_lat(geo) - 52.520008).abs() < 1e-5);
         assert!((i_cal_geo_get_lon(geo) - 13.404954).abs() < 1e-5);
         g_object_unref(geo.cast());
 
-        // Priority and Sequence inspection
+        // Priority and sequence
         assert_eq!(e_cal_component_get_priority(comp), 1);
         assert_eq!(e_cal_component_get_sequence(comp), 3);
 
-        // 2. In-place modification of GEO, Priority, and Sequence
+        // 2. Change GEO, priority and sequence in place
         let new_geo = i_cal_geo_new(48.856614, 2.352222);
         assert!(!new_geo.is_null());
         e_cal_component_set_geo(comp, new_geo);
@@ -1965,7 +1965,7 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
         assert!(rendered.contains("PRIORITY:2"), "{rendered}");
         assert!(rendered.contains("SEQUENCE:4"), "{rendered}");
 
-        // 3. Clear GEO via NULL
+        // 3. Clear GEO with NULL
         e_cal_component_set_geo(comp, std::ptr::null());
         assert!(e_cal_component_get_geo(comp).is_null());
 
@@ -1979,7 +1979,7 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
 
         g_object_unref(comp.cast());
 
-        // 4. VTODO Task Percent-Complete and Sequence
+        // 4. VTODO percent complete, priority and sequence
         let todo = i_cal_component_get_first_component(calendar, I_CAL_VTODO_COMPONENT);
         assert!(!todo.is_null());
         let comp_todo = e_cal_component_new_from_icalcomponent(i_cal_component_clone(todo));
@@ -2004,22 +2004,22 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
     }
 }
 
-/// The interface a save reaches the calendar's own zones through, and the two
-/// facts the backend's cast rests on.
+/// Tests the interface through which a save gets the zones of the calendar, and
+/// the two facts that the backend cast needs.
 ///
-/// `save_component_sync` is handed an `ECalMetaBackend *` and passes it to the
-/// marshalling as an `ETimezoneCache *`. That cast is unchecked — a raw pointer
-/// cast in Rust asserts nothing — and if the type did not implement the
-/// interface, `e_timezone_cache_get_timezone` would not fail loudly but return
-/// NULL after a GLib critical, which reads exactly like a zone the calendar does
-/// not hold. So the implementation is pinned here rather than trusted.
+/// `save_component_sync` receives an `ECalMetaBackend *` and gives it to the
+/// marshalling as an `ETimezoneCache *`. That cast has no check: a raw pointer
+/// cast in Rust asserts nothing. If the type did not implement the interface,
+/// `e_timezone_cache_get_timezone` would not fail clearly. It would return NULL
+/// after a GLib critical, and that looks the same as a zone that the calendar
+/// does not have. Thus this test pins the implementation and does not trust it.
 ///
-/// `ECalCache` is pinned beside it because that is what the marshalling's tests
-/// stand an `ETimezoneCache` up as, and the two being the same interface is what
-/// makes those tests say anything about the backend.
+/// The test also pins `ECalCache`, because the marshalling tests use it as the
+/// `ETimezoneCache`. Because both types implement the same interface, those
+/// tests are valid for the backend.
 ///
-/// An interface, so `tests/layout.rs` cannot cover it — `g_type_query` reports
-/// nothing about one, the same hole `CamelSubscribable` sits in.
+/// `tests/layout.rs` cannot cover an interface: `g_type_query` gives no data
+/// about one (the same gap as for `CamelSubscribable`).
 #[test]
 fn a_calendar_backend_is_the_timezone_cache_a_save_asks() {
     unsafe {

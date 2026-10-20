@@ -8,17 +8,17 @@
 //! `GROUPWISE`, `ICQ`, `JABBER`, `MSN`, `MATRIX`, `SKYPE`, `YAHOO`), each with
 //! 6 slots (`HOME_1..3`, `WORK_1..3`).
 //!
-//! Two other fields — `E_CONTACT_SIP` and `E_CONTACT_IM_TWITTER` — are defined as
-//! `EContactAttrList` (`GList*` of `char*`) rather than strings, with no
-//! synthetic per-slot fields. This test suite verifies these field properties
-//! directly against the EDS type system and vCard field mappings.
+//! Two other fields (`E_CONTACT_SIP` and `E_CONTACT_IM_TWITTER`) are
+//! `EContactAttrList` (`GList*` of `char*`), not strings, and have no
+//! synthetic per-slot fields. These tests examine the field properties
+//! directly against the EDS type system and the vCard field mappings.
 
 use std::ffi::{CStr, CString};
 
 use eds_sys::*;
-// Not glob-imported: the point of these two is that the call site does not
-// have to know which spelling this EDS uses (see `eds_sys::compat`), and
-// naming them is what keeps that visible here.
+// These two are not glob-imported. The call site does not have to know which
+// spelling this EDS uses (see `eds_sys::compat`), and the explicit names keep
+// that visible here.
 use eds_sys::compat::{e_contact_date_to_string_vcard_30, e_vcard_to_string_vcard_30};
 
 #[test]
@@ -107,16 +107,14 @@ fn instant_messaging_slotted_fields_are_strings_and_have_home_work_slots() {
 
 #[test]
 fn e_contact_field_id_from_vcard_maps_x_lines() {
-    // 3.60 resolves every slotted IM service's `X-` line to the first
-    // `_HOME_1` slot instead of the plain attribute-list field 3.52 uses — a
-    // libebook behaviour change with no header-visible signal of its own
-    // (both symbols exist on both releases). Measured directly against both
-    // legs (this uncovered more of the same drift than
-    // `docs/eds-version-matrix.md` (B) had recorded — it only sampled
-    // JABBER/AIM/GADUGADU, but the change is systemic to every slotted
-    // service). `E_CONTACT_SIP`/`E_CONTACT_IM_TWITTER` have no slots and stay
-    // unaffected on both. See `eds_death_date_field`'s doc comment in
-    // `build.rs` for why that unrelated-looking cfg is the pivot here too.
+    // 3.60 maps the `X-` line of each slotted IM service to its `_HOME_1` slot.
+    // 3.52 maps it to the plain attribute-list field. This libebook change has
+    // no signal of its own in the headers (both symbols exist on both releases).
+    // Measurement on both releases shows that the change applies to every
+    // slotted service. `docs/eds-version-matrix.md` (B) samples only
+    // JABBER/AIM/GADUGADU. `E_CONTACT_SIP`/`E_CONTACT_IM_TWITTER` have no slots
+    // and do not change. `build.rs` (doc comment of `eds_death_date_field`)
+    // tells why that cfg is the pivot here too.
     macro_rules! im_field {
         ($unslotted:ident, $home1:ident) => {
             if cfg!(eds_death_date_field) {
@@ -170,14 +168,13 @@ fn e_contact_field_id_from_vcard_maps_x_lines() {
 
 #[test]
 fn contact_date_fields_are_structured_e_contact_date_types() {
-    // 3.60 swaps which vCard line maps to `E_CONTACT_ANNIVERSARY`
-    // (`ANNIVERSARY` instead of `X-EVOLUTION-ANNIVERSARY`) and adds a
-    // dedicated `DEATHDATE` field EDS 3.52 has no field ID for at all.
-    // `E_CONTACT_DEATHDATE` does not exist in 3.52's `EContactField` enum,
-    // so it can only be named behind the cfg that detects it — see that cfg's
-    // doc comment in `build.rs` for why the anniversary swap piggybacks on
-    // the same signal. Measured on both legs in
-    // `docs/eds-version-matrix.md` (B).
+    // 3.60 maps `ANNIVERSARY` (not `X-EVOLUTION-ANNIVERSARY`) to
+    // `E_CONTACT_ANNIVERSARY`. It also adds a `DEATHDATE` field, which has no
+    // field ID in EDS 3.52. The 3.52 `EContactField` enum has no
+    // `E_CONTACT_DEATHDATE`, thus only the cfg that detects it can name it.
+    // `build.rs` (doc comment of that cfg) tells why the anniversary change
+    // uses the same signal. `docs/eds-version-matrix.md` (B) records the
+    // measurement on both releases.
     #[cfg(eds_death_date_field)]
     let (anniversary_line, evo_anniversary_line, deathdate_line) =
         (E_CONTACT_ANNIVERSARY, 0, E_CONTACT_DEATHDATE);
@@ -188,13 +185,13 @@ fn contact_date_fields_are_structured_e_contact_date_types() {
         let date_type = e_contact_date_get_type();
         assert_ne!(date_type, 0);
 
-        // E_CONTACT_BIRTH_DATE is structured EContactDate, not string
+        // E_CONTACT_BIRTH_DATE is a structured EContactDate, not a string
         assert_eq!(e_contact_field_is_string(E_CONTACT_BIRTH_DATE), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_BIRTH_DATE), date_type);
         let bday_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_BIRTH_DATE));
         assert_eq!(bday_name.to_str().unwrap(), "birth_date");
 
-        // E_CONTACT_ANNIVERSARY is structured EContactDate, not string
+        // E_CONTACT_ANNIVERSARY is a structured EContactDate, not a string
         assert_eq!(e_contact_field_is_string(E_CONTACT_ANNIVERSARY), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_ANNIVERSARY), date_type);
         let ann_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ANNIVERSARY));
@@ -206,8 +203,8 @@ fn contact_date_fields_are_structured_e_contact_date_types() {
             E_CONTACT_BIRTH_DATE
         );
 
-        // ANNIVERSARY / X-EVOLUTION-ANNIVERSARY: exactly one resolves to
-        // E_CONTACT_ANNIVERSARY, the other is unmodeled (field ID 0).
+        // Of ANNIVERSARY and X-EVOLUTION-ANNIVERSARY, exactly one maps to
+        // E_CONTACT_ANNIVERSARY. The other has no field (field ID 0).
         assert_eq!(
             e_contact_field_id_from_vcard(c"ANNIVERSARY".as_ptr()),
             anniversary_line
@@ -217,8 +214,8 @@ fn contact_date_fields_are_structured_e_contact_date_types() {
             evo_anniversary_line
         );
 
-        // DEATHDATE has a field ID only where E_CONTACT_DEATHDATE exists;
-        // X-DEATHDATE stays unmodeled on both.
+        // DEATHDATE has a field ID only where E_CONTACT_DEATHDATE exists.
+        // X-DEATHDATE has no field on both releases.
         assert_eq!(
             e_contact_field_id_from_vcard(c"DEATHDATE".as_ptr()),
             deathdate_line
@@ -256,13 +253,12 @@ fn e_contact_date_parsing_and_formatting() {
 #[test]
 fn e_contact_date_bare_year_and_partial_date_clamping() {
     unsafe {
-        // Bare 4-digit year: VERSION-DEPENDENT. EDS 3.52's
-        // e_contact_date_from_string fails to parse short strings (< 8 chars
-        // or non-ISO) and returns an empty EContactDate (year=0, month=0,
-        // day=0); newer EDS (observed on the CI matrix's Fedora leg,
-        // 2026-08-28) parses the bare year. Both are characterized; what the
-        // invariant pins is that it is one of exactly these two, never a
-        // garbage year, and month/day stay 0 either way.
+        // Bare 4-digit year: the result changes with the EDS version.
+        // In EDS 3.52, e_contact_date_from_string cannot parse short strings
+        // (< 8 chars or non-ISO). It returns an empty EContactDate (year=0,
+        // month=0, day=0). Newer EDS parses the bare year (seen on the CI
+        // Fedora job, 2026-08-28). The year must be one of these two values,
+        // never a garbage year. Month and day stay 0 on both.
         let date = e_contact_date_from_string(c"1984".as_ptr());
         assert!(!date.is_null());
         assert!(
@@ -275,9 +271,9 @@ fn e_contact_date_bare_year_and_partial_date_clamping() {
 
         let formatted = e_contact_date_to_string_vcard_30(date);
         assert!(!formatted.is_null());
-        // CLAMP forces every 0 part into printable range (year -> 1000,
-        // month -> 1, day -> 1): the unparsed arm corrupts 1984 into
-        // 1000-01-01, the parsed arm keeps the year and invents the rest.
+        // CLAMP moves every 0 part into the printable range (year -> 1000,
+        // month -> 1, day -> 1). If the year is not parsed, 1984 becomes
+        // 1000-01-01. If it is parsed, the year stays and EDS invents the rest.
         let formatted_str = CStr::from_ptr(formatted).to_str().unwrap();
         assert!(
             formatted_str == "1000-01-01" || formatted_str == "1984-01-01",
@@ -286,8 +282,8 @@ fn e_contact_date_bare_year_and_partial_date_clamping() {
         g_free(formatted.cast());
         e_contact_date_free(date);
 
-        // Year-month: "1984-05" — same version split; a parsing EDS may keep
-        // the month too, so the parsed arm only pins that the year survived.
+        // Year-month "1984-05": the same version difference. An EDS that
+        // parses it can also keep the month, thus this test checks only the year.
         let ym = e_contact_date_from_string(c"1984-05".as_ptr());
         assert!(!ym.is_null());
         assert!(
@@ -304,8 +300,8 @@ fn e_contact_date_bare_year_and_partial_date_clamping() {
         g_free(formatted_ym_raw.cast());
         e_contact_date_free(ym);
 
-        // Year-less: "--05-20" — same split: an EDS that parses it keeps the
-        // month and day and clamps only the year.
+        // Year-less "--05-20": the same version difference. An EDS that parses
+        // it keeps the month and the day, and clamps only the year.
         let yless = e_contact_date_from_string(c"--05-20".as_ptr());
         assert!(!yless.is_null());
         assert_eq!((*yless).year, 0, "no EDS invents a year for --05-20");
@@ -322,18 +318,17 @@ fn e_contact_date_bare_year_and_partial_date_clamping() {
 
 #[test]
 fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() {
-    // Characterizes Evolution Contact Editor lifecycle on bare-year dates:
-    // When a vCard arrives with BDAY:1984 and X-EVOLUTION-ANNIVERSARY:1996,
-    // EVCard keeps the raw attribute string. But the moment Evolution's contact
-    // editor loads the fields via e_contact_get() and saves them back via
-    // e_contact_set(), EDS clamps year=0 to 1000, month=0 to 1, and day=0 to 1,
-    // corrupting BDAY:1984 into BDAY:1000-01-01 and Anniversary to 1000-01-01!
+    // This test shows the Evolution contact editor cycle on bare-year dates.
+    // For BDAY:1984 and X-EVOLUTION-ANNIVERSARY:1996, EVCard keeps the raw
+    // attribute string. When the editor reads the fields with e_contact_get()
+    // and saves them with e_contact_set(), EDS clamps month=0 and day=0 to 1.
+    // EDS 3.52 also clamps year=0 to 1000, thus BDAY:1984 becomes 1000-01-01.
     unsafe {
         let vcard_raw = c"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:c1\r\nFN:Alice\r\nBDAY:1984\r\nX-EVOLUTION-ANNIVERSARY:1996\r\nEND:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_raw.as_ptr());
         assert!(!contact.is_null());
 
-        // Untouched vCard string contains raw lines
+        // The untouched vCard string contains the raw lines
         let untouched = e_vcard_to_string_vcard_30(contact.cast());
         assert!(
             CStr::from_ptr(untouched)
@@ -349,11 +344,10 @@ fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() 
         );
         g_free(untouched.cast());
 
-        // Contact editor reading: VERSION-DEPENDENT, same split as
-        // `e_contact_date_bare_year_and_partial_date_clamping` above — EDS
-        // 3.52 yields the empty date (year=0), newer EDS parses the bare
-        // year. The corruption this test exists to pin is unchanged either
-        // way: month/day never invent values.
+        // Editor read: the result changes with the EDS version, as in
+        // `e_contact_date_bare_year_and_partial_date_clamping` above. EDS 3.52
+        // gives the empty date (year=0), newer EDS parses the bare year.
+        // On both, the read gives month=0 and day=0.
         let bday = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
         assert!(!bday.is_null());
         assert!(
@@ -374,16 +368,15 @@ fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() 
         assert_eq!((*anniv).month, 0);
         assert_eq!((*anniv).day, 0);
 
-        // Contact editor saving: e_contact_set invokes e_contact_date_to_string,
-        // which clamps the 0 values to 1000-01-01
+        // Editor save: e_contact_set calls e_contact_date_to_string, which
+        // clamps the 0 values (year to 1000, month and day to 1)
         e_contact_set(contact, E_CONTACT_BIRTH_DATE, bday.cast());
         e_contact_set(contact, E_CONTACT_ANNIVERSARY, anniv.cast());
 
         let rewritten = e_vcard_to_string_vcard_30(contact.cast());
         let rewritten_str = CStr::from_ptr(rewritten).to_str().unwrap();
-        // Either way the round trip invents a month and a day; the year is
-        // the version-dependent half — 3.52's unparsed 0 clamps to 1000,
-        // newer EDS keeps the parsed year.
+        // On both versions, the round trip invents a month and a day. In 3.52,
+        // the unparsed year 0 becomes 1000. Newer EDS keeps the parsed year.
         assert!(
             rewritten_str.contains("BDAY:1000-01-01") || rewritten_str.contains("BDAY:1984-01-01"),
             "bare year BDAY must clamp to 1000-01-01 (EDS 3.52) or 1984-01-01 (newer): {rewritten_str}"
@@ -405,17 +398,16 @@ fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() 
 fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
     // `e_contact_date_to_string()` CLAMPs each part into the range it can
     // print: the year to 1000..=9999, the month to 1..=12, the day to 1..=31.
-    // Reading is not clamped, so the round trip is lossy in one direction
-    // only, and silently.
+    // The read does not clamp, thus only the write loses data, without a warning.
     //
-    // This is why `jmap-vcard` states no date line for a year under 1000: the
-    // month and the day survive, the millennium does not.
+    // Thus `jmap-vcard` writes no date line for a year before 1000. The month
+    // and the day stay correct, but the year does not.
     unsafe {
         for (text, written) in [
             ("0800-06-21", "1000-06-21"),
             ("0999-12-31", "1000-12-31"),
             ("0001-01-01", "1000-01-01"),
-            // The first year it can state, and the last, both unchanged.
+            // The first and the last year it can write do not change.
             ("1000-01-01", "1000-01-01"),
             ("9999-12-31", "9999-12-31"),
         ] {
@@ -437,12 +429,10 @@ fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
 
 #[test]
 fn setting_a_birthday_before_the_year_1000_rewrites_the_bday_line() {
-    // The clamp reaching a whole card, which is the shape the hazard actually
-    // takes: a line merely passing through keeps the year it arrived with,
-    // because `EVCard` hands back the attribute it parsed. It is *setting* the
-    // field — which the contact editor does to every field it shows, every
-    // time the user presses Save — that rebuilds the line from the clamped
-    // numbers.
+    // The clamp on a full card, as the hazard occurs in use. An untouched line
+    // keeps its year, because `EVCard` returns the attribute it parsed. A *set*
+    // of the field makes the line again from the clamped numbers. The contact
+    // editor sets every field it shows each time the user clicks Save.
     unsafe {
         let contact = e_contact_new_from_vcard(
             c"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:k8\r\nFN:Karl\r\nBDAY:0800-06-21\r\nEND:VCARD\r\n"
@@ -459,7 +449,7 @@ fn setting_a_birthday_before_the_year_1000_rewrites_the_bday_line() {
         );
         g_free(untouched.cast());
 
-        // What the editor does: read the field out and put it back.
+        // Do as the editor does: read the field and set it again.
         let date = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
         assert!(!date.is_null());
         assert_eq!((*date).year, 800, "reading is not clamped");
@@ -504,7 +494,7 @@ fn contact_org_title_and_role_field_properties() {
         let role_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ROLE));
         assert_eq!(role_name.to_str().unwrap(), "role");
 
-        // vCard field mapping: TITLE and ROLE map directly
+        // vCard field mapping: TITLE and ROLE map directly to their fields
         assert_eq!(
             e_contact_field_id_from_vcard(c"TITLE".as_ptr()),
             E_CONTACT_TITLE
@@ -566,7 +556,7 @@ END:VCARD\r\n";
             "Lead Investigator"
         );
 
-        // Modifying TITLE in place preserves X-JMAP-KEY and leaves second TITLE intact
+        // An in-place change of TITLE keeps X-JMAP-KEY and the second TITLE
         e_contact_set(
             contact,
             E_CONTACT_TITLE,
@@ -585,7 +575,7 @@ END:VCARD\r\n";
         );
         g_free(updated_vcard_ptr.cast());
 
-        // Modifying ORG in place preserves X-JMAP-KEY and leaves second ORG intact
+        // An in-place change of ORG keeps X-JMAP-KEY and the second ORG
         e_contact_set(contact, E_CONTACT_ORG, c"Cyberdyne".as_ptr().cast());
         let updated_org_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_org_vcard = CStr::from_ptr(updated_org_vcard_ptr).to_str().unwrap();
@@ -600,7 +590,7 @@ END:VCARD\r\n";
         );
         g_free(updated_org_vcard_ptr.cast());
 
-        // Modifying ROLE in place preserves X-JMAP-KEY and leaves second ROLE intact
+        // An in-place change of ROLE keeps X-JMAP-KEY and the second ROLE
         e_contact_set(
             contact,
             E_CONTACT_ROLE,
@@ -623,18 +613,18 @@ END:VCARD\r\n";
     }
 }
 
-/// How far into an `ORG` value EDS has fields, and what happens to the rest.
+/// Which components of an `ORG` value have EDS fields, and what occurs to the others.
 ///
-/// The `ORG` line states an employer and then its units, and EDS gives the
-/// first three components a field each: `E_CONTACT_ORG` (the company),
+/// The `ORG` line gives an employer and then its units. EDS gives a field to
+/// each of the first three components: `E_CONTACT_ORG` (the company),
 /// `E_CONTACT_ORG_UNIT` (the department) and `E_CONTACT_OFFICE`. A fourth
-/// component has no field at all — but it is not lost either, because a `set`
-/// rewrites the one component it is the field for and leaves the value's other
-/// components exactly where they were, empties included.
+/// component has no field, but EDS does not lose it. A `set` writes only the
+/// component of its field and keeps all other components in position, empty
+/// components included.
 ///
-/// Which is why `jmap-book-sync`'s `merge_units` may take the edited list at
-/// its word: every unit with a name is written onto the line, and every unit on
-/// the line comes back, whether EDS had a field to show it in or not.
+/// Thus `merge_units` in `jmap-book-sync` can use the edited list as it is.
+/// It writes every named unit onto the line, and every unit on the line comes
+/// back, with or without an EDS field for it.
 #[test]
 fn an_org_component_past_the_third_has_no_field_but_survives_an_edit_of_the_others() {
     unsafe {
@@ -657,13 +647,13 @@ END:VCARD\r\n";
             assert!(!value.is_null(), "no value for field {field}");
             assert_eq!(CStr::from_ptr(value.cast()).to_str().unwrap(), expected);
         }
-        // `Lenses` is in none of them: no field states the fourth component.
+        // `Lenses` is in none of them: no field shows the fourth component.
         for field in [E_CONTACT_ORG, E_CONTACT_ORG_UNIT, E_CONTACT_OFFICE] {
             let value = e_contact_get_const(contact, field);
             assert_ne!(CStr::from_ptr(value.cast()).to_str().unwrap(), "Lenses");
         }
 
-        // Editing the department rewrites that component and no other.
+        // An edit of the department changes only that component.
         e_contact_set(contact, E_CONTACT_ORG_UNIT, c"Acoustics".as_ptr().cast());
         let edited_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
@@ -673,8 +663,8 @@ END:VCARD\r\n";
         );
         g_free(edited_ptr.cast());
 
-        // Clearing a field empties its component in place rather than closing
-        // the gap, so the components after it keep their positions.
+        // A clear of a field empties its component in position and does not
+        // remove it. Thus the components after it keep their positions.
         e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
         let cleared_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared = CStr::from_ptr(cleared_ptr).to_str().unwrap();
@@ -694,7 +684,7 @@ fn contact_address_and_label_field_properties() {
         let addr_type = e_contact_address_get_type();
         assert_ne!(addr_type, 0);
 
-        // Address fields are structured EContactAddress fields (not strings)
+        // Address fields are structured EContactAddress fields, not strings
         assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_HOME), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_ADDRESS_HOME), addr_type);
         let addr_home_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_HOME));
@@ -757,7 +747,7 @@ END:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
         assert!(!contact.is_null());
 
-        // EDS returns typed label values for HOME, WORK, and OTHER synthetic fields
+        // EDS gives the typed label values in the HOME, WORK and OTHER synthetic fields
         let work_label_ptr = e_contact_get_const(contact, E_CONTACT_ADDRESS_LABEL_WORK);
         assert!(!work_label_ptr.is_null());
         assert_eq!(
@@ -779,7 +769,7 @@ END:VCARD\r\n";
             "Postfach 42\n20095 Hamburg"
         );
 
-        // Modifying synthetic address label in place
+        // Change a synthetic address label in place
         e_contact_set(
             contact,
             E_CONTACT_ADDRESS_LABEL_WORK,
@@ -789,7 +779,7 @@ END:VCARD\r\n";
         let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
-        // Synthetic LABEL fields preserve custom parameters and are serialized with TYPE parameter by EDS
+        // A synthetic LABEL field keeps custom parameters, and EDS writes it with a TYPE parameter
         assert!(
             updated_vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:Updated Work Label\\nBerlin"),
             "updated work label should be rendered with key and TYPE=WORK: {updated_vcard}"
@@ -799,7 +789,7 @@ END:VCARD\r\n";
             updated_vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:"),
             "ADR line should retain X-JMAP-KEY: {updated_vcard}"
         );
-        // Secondary HOME label, OTHER label, and bare label remain intact
+        // The HOME label, the OTHER label and the bare label do not change
         assert!(
             updated_vcard
                 .contains("LABEL;X-JMAP-KEY=a2;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany"),
@@ -836,7 +826,7 @@ END:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
         assert!(!contact.is_null());
 
-        // EDS reads distinct slot fields for HOME_1 and WORK_1 across services
+        // EDS reads different slot fields for HOME_1 and WORK_1 of each service
         let jabber_home_ptr = e_contact_get_const(contact, E_CONTACT_IM_JABBER_HOME_1);
         assert!(!jabber_home_ptr.is_null());
         assert_eq!(
@@ -872,7 +862,7 @@ END:VCARD\r\n";
             "123456"
         );
 
-        // Modifying Jabber HOME_1 in place updates only that line and preserves its key
+        // An in-place change of Jabber HOME_1 changes only that line and keeps its key
         e_contact_set(
             contact,
             E_CONTACT_IM_JABBER_HOME_1,
@@ -909,7 +899,7 @@ END:VCARD\r\n";
             "Gadu-Gadu HOME should remain intact: {updated_vcard}"
         );
 
-        // Modifying Skype WORK_1 in place updates only that line and preserves its key
+        // An in-place change of Skype WORK_1 changes only that line and keeps its key
         e_contact_set(
             contact,
             E_CONTACT_IM_SKYPE_WORK_1,
@@ -935,13 +925,13 @@ fn contact_photo_and_logo_field_properties_and_e_contact_photo_type() {
         let photo_type = e_contact_photo_get_type();
         assert_ne!(photo_type, 0);
 
-        // E_CONTACT_PHOTO (94) is a structured EContactPhoto field, not string
+        // E_CONTACT_PHOTO (94) is a structured EContactPhoto field, not a string
         assert_eq!(e_contact_field_is_string(E_CONTACT_PHOTO), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_PHOTO), photo_type);
         let photo_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_PHOTO));
         assert_eq!(photo_name.to_str().unwrap(), "photo");
 
-        // E_CONTACT_LOGO (95) is a structured EContactPhoto field, not string
+        // E_CONTACT_LOGO (95) is a structured EContactPhoto field, not a string
         assert_eq!(e_contact_field_is_string(E_CONTACT_LOGO), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_LOGO), photo_type);
         let logo_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_LOGO));
@@ -973,7 +963,7 @@ fn contact_photo_and_logo_field_properties_and_e_contact_photo_type() {
         // IMAGE has no field ID in EDS
         assert_eq!(e_contact_field_id_from_vcard(c"IMAGE".as_ptr()), 0);
 
-        // EContactPhoto URI manipulation
+        // EContactPhoto with a URI
         let uri_photo = e_contact_photo_new();
         assert!(!uri_photo.is_null());
         (*uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
@@ -986,7 +976,7 @@ fn contact_photo_and_logo_field_properties_and_e_contact_photo_type() {
         );
         e_contact_photo_free(uri_photo);
 
-        // EContactPhoto inlined binary manipulation
+        // EContactPhoto with inlined binary data
         let inlined_photo = e_contact_photo_new();
         assert!(!inlined_photo.is_null());
         assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
@@ -1026,7 +1016,7 @@ END:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
         assert!(!contact.is_null());
 
-        // e_contact_get returns a dynamically allocated EContactPhoto
+        // e_contact_get returns a new allocated EContactPhoto
         let photo_obj = e_contact_get(contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
         assert!(!photo_obj.is_null());
         assert_eq!((*photo_obj).type_, E_CONTACT_PHOTO_TYPE_URI);
@@ -1047,7 +1037,7 @@ END:VCARD\r\n";
         );
         e_contact_photo_free(logo_obj);
 
-        // Replacing E_CONTACT_PHOTO in place with a new inlined photo
+        // Replace E_CONTACT_PHOTO in place with a new inlined photo
         let new_photo = e_contact_photo_new();
         let new_bytes = b"new_avatar_bytes";
         e_contact_photo_set_inlined(new_photo, new_bytes.as_ptr(), new_bytes.len() as gsize);
@@ -1058,7 +1048,7 @@ END:VCARD\r\n";
         let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
-        // The first PHOTO line is replaced with the new inlined photo (EDS shortens image/png to TYPE=png)
+        // The new inlined photo replaces the first PHOTO line (EDS can write image/png as TYPE=png)
         assert!(
             updated_vcard.contains("PHOTO;TYPE=png;ENCODING=b:bmV3X2F2YXRhcl9ieXRlcw==")
                 || updated_vcard
@@ -1066,14 +1056,14 @@ END:VCARD\r\n";
                 || updated_vcard.contains("PHOTO;ENCODING=b;TYPE=PNG:bmV3X2F2YXRhcl9ieXRlcw=="),
             "first PHOTO should be replaced in place: {updated_vcard}"
         );
-        // The second PHOTO line remains intact
+        // The second PHOTO line does not change
         assert!(
             updated_vcard.contains("PHOTO;ENCODING=b;TYPE=jpeg;X-JMAP-KEY=m2:aGVsbG8tcGhvdG8=")
                 || updated_vcard
                     .contains("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:aGVsbG8tcGhvdG8="),
             "second PHOTO should remain intact: {updated_vcard}"
         );
-        // The LOGO line remains intact
+        // The LOGO line does not change
         assert!(
             updated_vcard.contains("LOGO;VALUE=uri;X-JMAP-KEY=l1:https://example.com/logo.png")
                 || updated_vcard
@@ -1083,13 +1073,13 @@ END:VCARD\r\n";
         );
         g_free(updated_vcard_ptr.cast());
 
-        // Clearing E_CONTACT_PHOTO by setting NULL
+        // Clear E_CONTACT_PHOTO with NULL
         e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
 
         let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
-        // The first PHOTO line is removed, while second PHOTO and LOGO remain
+        // EDS removes the first PHOTO line and keeps the second PHOTO and the LOGO
         assert!(
             !cleared_vcard.contains("bmV3X2F2YXRhcl9ieXRlcw=="),
             "first PHOTO should be removed when cleared: {cleared_vcard}"
@@ -1110,11 +1100,12 @@ END:VCARD\r\n";
     }
 }
 
-/// Probing field properties of web, collaboration, note, nickname, spouse, and categories fields:
-/// `E_CONTACT_HOMEPAGE_URL`, `E_CONTACT_BLOG_URL`, `E_CONTACT_VIDEO_URL`, `E_CONTACT_CALENDAR_URI`,
-/// `E_CONTACT_FREEBUSY_URL`, `E_CONTACT_ICS_CALENDAR`, `E_CONTACT_NOTE`, `E_CONTACT_SPOUSE`,
-/// `E_CONTACT_NICKNAME`, and `E_CONTACT_CATEGORIES` are string fields, whereas `E_CONTACT_CATEGORY_LIST`
-/// is a multi-valued list type. `e_contact_field_id_from_vcard` maps standard and X- properties to these IDs.
+/// Field properties of the web, collaboration, note, nickname, spouse and category fields.
+/// `E_CONTACT_HOMEPAGE_URL`, `E_CONTACT_BLOG_URL`, `E_CONTACT_VIDEO_URL`,
+/// `E_CONTACT_CALENDAR_URI`, `E_CONTACT_FREEBUSY_URL`, `E_CONTACT_ICS_CALENDAR`,
+/// `E_CONTACT_NOTE`, `E_CONTACT_SPOUSE`, `E_CONTACT_NICKNAME` and `E_CONTACT_CATEGORIES`
+/// are string fields. `E_CONTACT_CATEGORY_LIST` is a multi-valued list type.
+/// `e_contact_field_id_from_vcard` maps standard and X- properties to these IDs.
 #[test]
 fn contact_web_collaboration_note_and_misc_field_properties() {
     unsafe {
@@ -1149,7 +1140,7 @@ fn contact_web_collaboration_note_and_misc_field_properties() {
         let cat_list_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_CATEGORY_LIST));
         assert_eq!(cat_list_name.to_str().unwrap(), "category_list");
 
-        // e_contact_field_id_from_vcard mapping checks
+        // e_contact_field_id_from_vcard mappings
         assert_eq!(
             e_contact_field_id_from_vcard(c"URL".as_ptr()),
             E_CONTACT_HOMEPAGE_URL
@@ -1170,7 +1161,7 @@ fn contact_web_collaboration_note_and_misc_field_properties() {
             e_contact_field_id_from_vcard(c"NICKNAME".as_ptr()),
             E_CONTACT_NICKNAME
         );
-        // In EDS, the vCard property "CATEGORIES" maps to the multi-valued E_CONTACT_CATEGORY_LIST (93)
+        // EDS maps the vCard property "CATEGORIES" to the multi-valued E_CONTACT_CATEGORY_LIST (93)
         assert_eq!(
             e_contact_field_id_from_vcard(c"CATEGORIES".as_ptr()),
             E_CONTACT_CATEGORY_LIST
@@ -1190,12 +1181,13 @@ fn contact_web_collaboration_note_and_misc_field_properties() {
     }
 }
 
-/// Probing EDS behavior for web URLs, collaboration links, notes, nicknames, spouse, and categories:
-/// - Parsing vCard with multiple URL, CALURI, FBURL, NOTE, NICKNAME, CATEGORIES, and X-EVOLUTION-SPOUSE lines
-///   carrying X-JMAP-KEY parameters;
-/// - Reading via `e_contact_get_const` and `E_CONTACT_CATEGORY_LIST` GList;
-/// - In-place modification via `e_contact_set` updating target line while preserving extra lines and X-JMAP-KEYs;
-/// - Clearing fields removing lines cleanly.
+/// EDS behavior for web URLs, collaboration links, notes, nicknames, spouse and categories:
+/// - It parses a vCard with URL, CALURI, FBURL, NOTE, NICKNAME, CATEGORIES and
+///   X-EVOLUTION-SPOUSE lines that have X-JMAP-KEY parameters.
+/// - It reads them with `e_contact_get_const` and the `E_CONTACT_CATEGORY_LIST` GList.
+/// - An `e_contact_set` changes the target line in place and keeps the other lines
+///   and the X-JMAP-KEYs.
+/// - A clear of a field removes its line.
 #[test]
 fn web_collaboration_note_nickname_categories_vcard_lines_and_modification_in_eds() {
     unsafe {
@@ -1217,7 +1209,7 @@ END:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
         assert!(!contact.is_null());
 
-        // Field getter assertions
+        // Field getters
         let url_ptr = e_contact_get_const(contact, E_CONTACT_HOMEPAGE_URL);
         assert!(!url_ptr.is_null());
         assert_eq!(
@@ -1284,7 +1276,7 @@ END:VCARD\r\n";
         }
         glib_sys::g_list_free_full(cat_list, Some(free_item));
 
-        // Modifying fields in place
+        // Change the fields in place
         e_contact_set(
             contact,
             E_CONTACT_HOMEPAGE_URL,
@@ -1301,7 +1293,7 @@ END:VCARD\r\n";
         let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
-        // First URL is updated in place, second URL preserved
+        // The first URL changes in place, the second URL stays
         assert!(
             updated_vcard.contains("URL;X-JMAP-KEY=l1:https://example.com/new-home")
                 || updated_vcard.contains("URL:https://example.com/new-home")
@@ -1314,7 +1306,7 @@ END:VCARD\r\n";
             "second URL should be preserved: {updated_vcard}"
         );
 
-        // CALURI and FBURL preserved with X-JMAP-KEY
+        // CALURI and FBURL stay with their X-JMAP-KEY
         assert!(
             updated_vcard.contains("CALURI;X-JMAP-KEY=c1:https://example.com/calendar.ics")
                 || updated_vcard.contains("https://example.com/calendar.ics"),
@@ -1326,7 +1318,7 @@ END:VCARD\r\n";
             "FBURL should be preserved: {updated_vcard}"
         );
 
-        // First NOTE is updated, second NOTE is preserved
+        // The first NOTE changes, the second NOTE stays
         assert!(
             updated_vcard.contains("Updated primary note"),
             "first NOTE should be updated: {updated_vcard}"
@@ -1336,13 +1328,13 @@ END:VCARD\r\n";
             "second NOTE should be preserved: {updated_vcard}"
         );
 
-        // NICKNAME updated
+        // NICKNAME changes
         assert!(
             updated_vcard.contains("Vera-Prime"),
             "NICKNAME should be updated: {updated_vcard}"
         );
 
-        // SPOUSE updated
+        // SPOUSE changes
         assert!(
             updated_vcard.contains("Taylor Olden"),
             "SPOUSE should be updated: {updated_vcard}"
@@ -1350,7 +1342,7 @@ END:VCARD\r\n";
 
         g_free(updated_vcard_ptr.cast());
 
-        // Clearing NOTE by passing NULL
+        // Clear NOTE with NULL
         e_contact_set(contact, E_CONTACT_NOTE, std::ptr::null());
         let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
@@ -1444,7 +1436,7 @@ fn contact_telephone_and_email_field_properties() {
         let email_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_EMAIL));
         assert_eq!(email_name.to_str().unwrap(), "email");
 
-        // Relationships & metadata
+        // Relationship and metadata fields
         assert_eq!(e_contact_field_is_string(E_CONTACT_MANAGER), 1);
         let mgr_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_MANAGER));
         assert_eq!(mgr_name.to_str().unwrap(), "manager");
@@ -1515,7 +1507,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // Synthetic phone fields inspection
+        // Synthetic phone fields
         let work_phone = e_contact_get_const(contact, E_CONTACT_PHONE_BUSINESS);
         assert!(!work_phone.is_null());
         assert_eq!(
@@ -1551,7 +1543,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
             "+1-555-0104"
         );
 
-        // Email synthetic fields inspection
+        // Synthetic email fields
         let email_1 = e_contact_get_const(contact, E_CONTACT_EMAIL_1);
         assert!(!email_1.is_null());
         assert_eq!(
@@ -1582,7 +1574,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
             "Olden, Vera"
         );
 
-        // E_CONTACT_TEL and E_CONTACT_EMAIL attribute lists
+        // The E_CONTACT_TEL and E_CONTACT_EMAIL attribute lists
         let tel_list = e_contact_get(contact, E_CONTACT_TEL) as *mut glib_sys::GList;
         assert!(!tel_list.is_null());
         let tel_count = glib_sys::g_list_length(tel_list);
@@ -1600,7 +1592,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
         assert_eq!(email_count, 2);
         glib_sys::g_list_free_full(email_list, Some(free_item));
 
-        // In-place modifications
+        // In-place changes
         e_contact_set(
             contact,
             E_CONTACT_PHONE_MOBILE,
@@ -1639,7 +1631,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
 
         g_free(updated_vcard_ptr.cast());
 
-        // Field clearing by setting NULL
+        // Clear the fields with NULL
         e_contact_set(contact, E_CONTACT_PHONE_MOBILE, std::ptr::null());
         e_contact_set(contact, E_CONTACT_MANAGER, std::ptr::null());
 
@@ -1754,7 +1746,7 @@ fn contact_structured_name_geo_cert_and_boolean_field_properties() {
             E_CONTACT_REV
         );
 
-        // EContactName construction, formatting, and copying
+        // EContactName: construction, formatting and copy
         let name = e_contact_name_new();
         assert!(!name.is_null());
         (*name).family = glib_sys::g_strdup(c"Oldenburg".as_ptr().cast());
@@ -1837,7 +1829,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // Full name and synthetic name components
+        // Full name and the synthetic name components
         let full_name = e_contact_get_const(contact, E_CONTACT_FULL_NAME);
         assert!(!full_name.is_null());
         assert_eq!(
@@ -1856,7 +1848,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
             "Oldenburg"
         );
 
-        // Structured EContactName
+        // The structured EContactName
         let name_struct = e_contact_get(contact, E_CONTACT_NAME) as *mut EContactName;
         assert!(!name_struct.is_null());
         assert_eq!(
@@ -1898,13 +1890,12 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
 
         let name_or_org = e_contact_get_const(contact, E_CONTACT_NAME_OR_ORG);
         assert!(!name_or_org.is_null());
-        // NAME_OR_ORG returns the first of [File-As, Full Name, Org, Email1];
-        // when File-As is not explicit, 3.52 derives it as "Family, Given"
-        // while 3.60 hands back the full name as it stands — a libebook
-        // behaviour change with no header-visible signal of its own, measured
-        // on both legs in docs/eds-version-matrix.md (B). See
-        // `eds_death_date_field`'s doc comment in `build.rs` for why that cfg
-        // is the pivot here too.
+        // NAME_OR_ORG returns the first of [File-As, Full Name, Org, Email1].
+        // If File-As is not explicit, 3.52 makes it "Family, Given", and 3.60
+        // returns the full name unchanged. This libebook change has no signal
+        // of its own in the headers. docs/eds-version-matrix.md (B) records the
+        // measurement on both releases. `build.rs` (doc comment of
+        // `eds_death_date_field`) tells why that cfg is the pivot here too.
         let expected_name_or_org = if cfg!(eds_death_date_field) {
             "Dr. Vera Marie Oldenburg MSc"
         } else {
@@ -1915,7 +1906,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
             expected_name_or_org
         );
 
-        // In-place modification of full name and geo
+        // In-place change of the full name and geo
         e_contact_set(
             contact,
             E_CONTACT_FULL_NAME,
@@ -1950,7 +1941,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
 
         g_free(updated_vcard_ptr.cast());
 
-        // Field clearing by setting NULL
+        // Clear the fields with NULL
         e_contact_set(contact, E_CONTACT_GEO, std::ptr::null());
 
         let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
@@ -1986,7 +1977,7 @@ fn contact_structured_address_and_office_field_properties() {
         let addr_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS));
         assert_eq!(addr_name.to_str().unwrap(), "address");
 
-        // Structured address synthetic fields
+        // Synthetic structured address fields
         let address_fields: &[(EContactField, &str)] = &[
             (E_CONTACT_ADDRESS_HOME, "address_home"),
             (E_CONTACT_ADDRESS_WORK, "address_work"),
@@ -2010,7 +2001,7 @@ fn contact_structured_address_and_office_field_properties() {
             assert_eq!(attr_cstr.to_str().unwrap(), "ADR");
         }
 
-        // Office field is a simple string stored on the ORG attribute (3rd component)
+        // The office field is a simple string in the ORG attribute (3rd component)
         assert_eq!(e_contact_field_is_string(E_CONTACT_OFFICE), 1);
         let office_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_OFFICE));
         assert_eq!(office_name.to_str().unwrap(), "office");
@@ -2042,7 +2033,7 @@ fn contact_structured_address_and_office_field_properties() {
             E_CONTACT_ADDRESS
         );
 
-        // EContactAddress allocation and manipulation
+        // EContactAddress: allocation and field values
         let addr = e_contact_address_new();
         assert!(!addr.is_null());
         (*addr).po = glib_sys::g_strdup(c"PO Box 42".as_ptr().cast());
@@ -2092,7 +2083,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // Structured address inspect
+        // Structured addresses
         let work_addr = e_contact_get(contact, E_CONTACT_ADDRESS_WORK) as *mut EContactAddress;
         assert!(!work_addr.is_null());
         assert_eq!(
@@ -2143,7 +2134,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
         );
         e_contact_address_free(home_addr);
 
-        // Office inspection from 3rd component of ORG
+        // The office from the 3rd component of ORG
         let office = e_contact_get_const(contact, E_CONTACT_OFFICE);
         assert!(!office.is_null());
         assert_eq!(
@@ -2151,7 +2142,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
             "Building 4 Room 204"
         );
 
-        // In-place modification of work address and office
+        // In-place change of the work address and the office
         let new_work_addr = e_contact_address_new();
         (*new_work_addr).street = glib_sys::g_strdup(c"Unter den Linden 5".as_ptr().cast());
         (*new_work_addr).locality = glib_sys::g_strdup(c"Berlin".as_ptr().cast());
@@ -2190,7 +2181,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
 
         g_free(updated_vcard_ptr.cast());
 
-        // Field clearing by setting NULL
+        // Clear the fields with NULL
         e_contact_set(contact, E_CONTACT_ADDRESS_WORK, std::ptr::null());
         e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
 
@@ -2236,9 +2227,9 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // One `ADR` line, and both of the two per-context fields Evolution's
-        // contact editor shows read it. `E_CONTACT_ADDRESS_OTHER` — the field a
-        // line with no `TYPE` lands in — stays empty.
+        // One `ADR` line, and the Evolution contact editor reads it into both of
+        // its two per-context fields. `E_CONTACT_ADDRESS_OTHER` (the field for a
+        // line with no `TYPE`) stays empty.
         let work = e_contact_get(contact, E_CONTACT_ADDRESS_WORK) as *mut EContactAddress;
         let home = e_contact_get(contact, E_CONTACT_ADDRESS_HOME) as *mut EContactAddress;
         let other = e_contact_get(contact, E_CONTACT_ADDRESS_OTHER) as *mut EContactAddress;
@@ -2255,9 +2246,9 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
         assert!(other.is_null());
         e_contact_address_free(home);
 
-        // The same for the telephone: `E_CONTACT_PHONE_BUSINESS` wants
-        // `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME` wants `HOME`+`VOICE`, and a
-        // line carrying all three satisfies both.
+        // The same occurs for the telephone. `E_CONTACT_PHONE_BUSINESS` needs
+        // `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME` needs `HOME`+`VOICE`. A line
+        // with all three types agrees with both.
         let business = e_contact_get_const(contact, E_CONTACT_PHONE_BUSINESS);
         let home_phone = e_contact_get_const(contact, E_CONTACT_PHONE_HOME);
         assert!(!business.is_null() && !home_phone.is_null());
@@ -2270,9 +2261,9 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
             "+49 30 111"
         );
 
-        // Which is why the mapping never writes both: the user retypes the
-        // *work* address, and the one line behind both fields is rewritten, so
-        // their *home* address silently becomes the new work one.
+        // Thus the mapping never writes both. If the user types a new *work*
+        // address, EDS writes the one line behind both fields again. The *home*
+        // address then becomes the new work address, without a warning.
         glib_sys::g_free((*work).street.cast());
         (*work).street = glib_sys::g_strdup(c"Nebenstraße 2".as_ptr().cast());
         e_contact_set(contact, E_CONTACT_ADDRESS_WORK, work.cast());
@@ -2306,7 +2297,7 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
     }
 }
 
-/// Which of the phone fields a `TEL` line wearing these `TYPE`s reaches.
+/// The phone fields that a `TEL` line with these `TYPE`s goes into.
 fn phone_fields_reached(types: &str) -> Vec<&'static str> {
     const FIELDS: [(u32, &str); 6] = [
         (E_CONTACT_PHONE_BUSINESS, "business"),
@@ -2337,41 +2328,39 @@ fn phone_fields_reached(types: &str) -> Vec<&'static str> {
 #[test]
 fn a_line_wearing_several_feature_types_reaches_two_fields_or_none() {
     // The same defect as `a_line_wearing_both_context_types_fills_two_slots_
-    // that_overwrite_each_other`, one axis over: a phone's features also pick
-    // the field, so a number that is both a voice line and a fax fills the
-    // Business Phone field and the Business Fax field alike, and there is one
-    // `TEL` behind both.
+    // that_overwrite_each_other`, on a different axis. The features of a phone
+    // also select the field. Thus a voice-and-fax number fills the Business
+    // Phone field and the Business Fax field, with one `TEL` behind both.
     assert_eq!(
         phone_fields_reached("WORK,VOICE,FAX"),
         ["business", "business_fax"]
     );
-    // A mobile that is also a pager needs no context to reach two.
+    // A mobile that is also a pager goes into two fields without a context.
     assert_eq!(phone_fields_reached("CELL,PAGER"), ["mobile", "pager"]);
-    // And with no context at all the pair reaches *neither* field: the two
-    // unqualified fields are exclusive, so a number that is both a voice line
-    // and a fax is in no field of the contact editor whatsoever.
+    // With no context, the pair goes into *neither* field. The two unqualified
+    // fields are exclusive, thus a voice-and-fax number is in no field of the
+    // contact editor.
     assert_eq!(phone_fields_reached("VOICE,FAX"), [] as [&str; 0]);
     assert_eq!(phone_fields_reached("VOICE"), ["other"]);
     assert_eq!(phone_fields_reached("FAX"), ["other_fax"]);
 
-    // Which feature the mapping keeps when it can state only one follows from
-    // what EDS does with the pair where it resolves it itself: the feature
-    // naming a device wins over the unqualified `VOICE`/`FAX` fields.
+    // If the mapping can write only one feature, it keeps the one that EDS
+    // selects for the pair. The feature that names a device has priority over
+    // the unqualified `VOICE`/`FAX` fields.
     assert_eq!(phone_fields_reached("VOICE,CELL"), ["mobile"]);
     assert_eq!(phone_fields_reached("FAX,CELL"), ["mobile"]);
     assert_eq!(phone_fields_reached("VOICE,PAGER"), ["pager"]);
     assert_eq!(phone_fields_reached("FAX,PAGER"), ["pager"]);
 
-    // `VIDEO` is not a `TYPE` this EDS knows: on its own it reaches nothing,
-    // and beside another feature it is ignored — which is why it is the last
-    // feature the mapping would ever state.
+    // This EDS does not know the `TYPE` `VIDEO`. Alone, it goes into no field.
+    // With another feature, EDS ignores it. Thus the mapping writes it last.
     assert_eq!(phone_fields_reached("VIDEO"), [] as [&str; 0]);
     assert_eq!(phone_fields_reached("VOICE,VIDEO"), ["other"]);
     assert_eq!(phone_fields_reached("FAX,VIDEO"), ["other_fax"]);
     assert_eq!(phone_fields_reached("CELL,VIDEO"), ["mobile"]);
 
-    // A `TEL` that names no feature at all is a voice line to EDS, which is
-    // what makes `voice` the unmarked one: it is still said when left off.
+    // EDS reads a `TEL` with no feature as a voice line. Thus `voice` is the
+    // default feature, and a line without it still has it.
     assert_eq!(phone_fields_reached("WORK"), ["business"]);
 }
 
@@ -2391,7 +2380,7 @@ fn editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other()
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // The user retypes the office phone number.
+        // The user types a new office phone number.
         e_contact_set(
             contact,
             E_CONTACT_PHONE_BUSINESS,
@@ -2446,7 +2435,7 @@ END:VCARD\r\n";
         let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
         assert!(!contact.is_null());
 
-        // 1. Verify all 10 slotted IM fields are strings and hold the expected handles
+        // 1. All 10 slotted IM fields are strings and contain the expected handles
         let slotted_expected: &[(EContactField, &str)] = &[
             (E_CONTACT_IM_JABBER_HOME_1, "vera@jabber.example"),
             (E_CONTACT_IM_AIM_HOME_1, "vera_aim"),
@@ -2474,7 +2463,7 @@ END:VCARD\r\n";
             );
         }
 
-        // 2. Verify X-TWITTER and X-SIP are EContactAttrList (not strings, no slots)
+        // 2. X-TWITTER and X-SIP are EContactAttrList (not strings, no slots)
         let attr_list_type = e_contact_attr_list_get_type();
         assert_eq!(e_contact_field_is_string(E_CONTACT_IM_TWITTER), 0);
         assert_eq!(e_contact_field_type(E_CONTACT_IM_TWITTER), attr_list_type);
@@ -2487,7 +2476,7 @@ END:VCARD\r\n";
             }
         }
 
-        // Read Twitter attribute list
+        // The Twitter attribute list
         let twitter_list = e_contact_get(contact, E_CONTACT_IM_TWITTER) as *mut glib_sys::GList;
         assert!(!twitter_list.is_null());
         let twitter_val = CStr::from_ptr((*twitter_list).data as *const gchar)
@@ -2496,7 +2485,7 @@ END:VCARD\r\n";
         assert_eq!(twitter_val, "@vera_tw");
         glib_sys::g_list_free_full(twitter_list, Some(free_string_item));
 
-        // Read SIP attribute list
+        // The SIP attribute list
         let sip_list = e_contact_get(contact, E_CONTACT_SIP) as *mut glib_sys::GList;
         assert!(!sip_list.is_null());
         let sip_val = CStr::from_ptr((*sip_list).data as *const gchar)
@@ -2512,7 +2501,7 @@ END:VCARD\r\n";
 #[test]
 fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
     unsafe {
-        // 1. Initial contact with no photo
+        // 1. A new contact with no photo
         let contact = e_contact_new();
         assert!(!contact.is_null());
         e_contact_set(
@@ -2524,7 +2513,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         let photo_none = e_contact_get(contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
         assert!(photo_none.is_null());
 
-        // 2. Set URI photo (HTTPS)
+        // 2. Set a URI photo (HTTPS)
         let uri_photo = e_contact_photo_new();
         (*uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
         e_contact_photo_set_uri(uri_photo, c"https://example.com/avatar.jpg".as_ptr());
@@ -2543,7 +2532,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 3. Set URI photo (file:// local URI)
+        // 3. Set a URI photo (local file:// URI)
         let file_uri_photo = e_contact_photo_new();
         (*file_uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
         e_contact_photo_set_uri(
@@ -2565,7 +2554,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 4. Replace URI photo with inlined binary photo (JPEG)
+        // 4. Replace the URI photo with an inlined binary photo (JPEG)
         let inlined_photo = e_contact_photo_new();
         assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
         let sample_jpeg = b"\xFF\xD8\xFF\xE0sample_jpeg_binary_payload";
@@ -2591,7 +2580,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 5. Replace inlined JPEG with inlined PNG photo
+        // 5. Replace the inlined JPEG with an inlined PNG photo
         let png_photo = e_contact_photo_new();
         let sample_png = b"\x89PNG\r\n\x1a\nsample_png_binary_payload";
         e_contact_photo_set_inlined(png_photo, sample_png.as_ptr(), sample_png.len() as gsize);
@@ -2609,7 +2598,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 6. Inlined photo with NULL mime type in EDS -> writes TYPE="X-EVOLUTION-UNKNOWN" or no subtype
+        // 6. Inlined photo, NULL mime type: EDS writes TYPE="X-EVOLUTION-UNKNOWN" or no TYPE
         let unknown_photo = e_contact_photo_new();
         let sample_raw = b"raw_unknown_image_bytes";
         e_contact_photo_set_inlined(
@@ -2617,7 +2606,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
             sample_raw.as_ptr(),
             sample_raw.len() as gsize,
         );
-        // mime_type left as NULL
+        // mime_type stays NULL
         e_contact_set(contact, E_CONTACT_PHOTO, unknown_photo.cast());
         e_contact_photo_free(unknown_photo);
 
@@ -2631,7 +2620,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 7. Clear E_CONTACT_PHOTO (user removed picture in editor)
+        // 7. Clear E_CONTACT_PHOTO (the user removes the picture in the editor)
         e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
 
         let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
@@ -2642,7 +2631,7 @@ fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
         );
         g_free(vcard_ptr.cast());
 
-        // 8. Inbound vCard with PHOTO;VALUE=uri vs bare PHOTO:https://
+        // 8. An inbound vCard with a PHOTO;VALUE=uri line, an inlined PHOTO and a LOGO
         let test_vcard = c"BEGIN:VCARD\r\n\
 VERSION:3.0\r\n\
 FN:Test Multi Photo\r\n\
@@ -2661,11 +2650,11 @@ END:VCARD\r\n";
             CStr::from_ptr(read_uri).to_str().unwrap(),
             "https://example.com/explicit_uri.png"
         );
-        // Note: EDS e_contact_photo_get_mime_type asserts photo->type == E_CONTACT_PHOTO_TYPE_INLINED.
-        // URI photos in EDS do not have a mime_type field.
+        // EDS e_contact_photo_get_mime_type asserts photo->type == E_CONTACT_PHOTO_TYPE_INLINED.
+        // A URI photo in EDS has no mime_type field.
         e_contact_photo_free(read_photo);
 
-        // Replacing first photo with URI on multi-photo contact leaves second photo and logo intact
+        // A URI replaces the first photo, and the second photo and the logo do not change
         let new_uri_obj = e_contact_photo_new();
         (*new_uri_obj).type_ = E_CONTACT_PHOTO_TYPE_URI;
         e_contact_photo_set_uri(

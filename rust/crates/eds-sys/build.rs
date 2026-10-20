@@ -1,22 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Generates the EDS bindings at build time rather than checking them in: the
-// struct layouts differ between EDS releases, and a stale committed binding
-// would be a silently-wrong ABI rather than a build failure. tests/layout.rs
-// cross-checks the result against the running GObject type system.
+// Generates the EDS bindings at build time. The struct layouts differ between
+// EDS releases, and a stale committed binding is a silently wrong ABI, not a
+// build failure. tests/layout.rs compares the result with the GObject type
+// system at run time.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// EDS 3.52 is the target platform (Debian trixie / Fedora 40 era). Older
-/// releases lack `e_book_meta_backend_*`, which the whole design rests on.
+/// The oldest supported EDS (Ubuntu 24.04, Fedora 40). The design rests on
+/// `e_book_meta_backend_*`, which EDS has since 3.26.
 const MIN_EDS: &str = "3.52";
 
-/// Everything the backends touch, and nothing else — a bare `libebackend.h`
-/// pulls in libsoup, libxml2 and json-glib, which would take minutes to
-/// generate and produce a binding surface nobody reads.
+/// All the types the backends use, and no other types. A bare `libebackend.h`
+/// pulls in libsoup, libxml2 and json-glib: minutes of generation for a
+/// binding surface that nobody reads.
 const ALLOWED_TYPES: &[&str] = &[
     "EBackend.*",
     "E(Book|Cal)Backend.*",
@@ -25,30 +25,28 @@ const ALLOWED_TYPES: &[&str] = &[
     "E(Book|Cal)Cache.*",
     "ECache.*",
     "ESource.*",
-    // How an account authenticates with a token rather than a password, in the
-    // three shapes it takes. `EOAuth2Service` is the *interface* a service
-    // implements and `EOAuth2ServiceInterface` its vtable, which is what the
-    // plugin fills in; `EOAuth2Services` is the registry EDS keeps the known
-    // services in; `EOAuth2ServiceBase` is the `EExtension` a service module
-    // subclasses so that the registry finds it.
+    // Token authentication, in three shapes. `EOAuth2Service` is the interface
+    // a service implements, and `EOAuth2ServiceInterface` is its vtable, which
+    // the plugin fills. `EOAuth2Services` is the registry of known services.
+    // `EOAuth2ServiceBase` is the `EExtension` that a service module subclasses
+    // so that the registry finds it.
     //
-    // The vtable mentions `SoupMessage`, which arrives as an opaque forward
-    // declaration — the headers already reach libsoup through
-    // `libedataserver.h`, and `libebackend-1.2` already puts
-    // `-I/usr/include/libsoup-3.0` and `-lsoup-3.0` on the line, so nothing new
-    // is probed for and no libsoup layout is claimed.
+    // The vtable uses `SoupMessage` as an opaque forward declaration. The
+    // headers already reach libsoup through `libedataserver.h`, and
+    // `libebackend-1.2` already adds `-I/usr/include/libsoup-3.0` and
+    // `-lsoup-3.0`. Thus no new probe is necessary and no libsoup layout is
+    // claimed.
     //
-    // Exact names rather than an `EOAuth2Service.*` prefix, for the reason
-    // `CamelFolder` is spelled out below: the prefix also matches
-    // `EOAuth2ServiceGoogle`, `-Outlook` and `-Yahoo`, EDS's own three
-    // built-in services, and emitting their class structs would be this layer
-    // claiming to have layout-checked three types nothing here will ever
-    // subclass. Their `get_type` accessors do ride in on the function prefix
-    // below, which claims nothing: a `GType` is an integer.
+    // Exact names, not an `EOAuth2Service.*` prefix (see `CamelFolder` below).
+    // The prefix also matches `EOAuth2ServiceGoogle`, `-Outlook` and `-Yahoo`,
+    // the three built-in services of EDS. Their class structs would claim a
+    // layout check for three types that nothing here subclasses. Their
+    // `get_type` accessors come in through the function prefix, which claims
+    // nothing: a `GType` is an integer.
     //
-    // The interface is absent from tests/layout.rs because `g_type_query`
-    // reports nothing about an interface. tests/oauth2.rs stands in, pinning
-    // the vtable's slot offsets by dispatching through every one of them.
+    // `g_type_query` gives no data about an interface, so tests/layout.rs
+    // cannot check it. tests/oauth2.rs pins the vtable slot offsets: it
+    // dispatches through each slot.
     "EOAuth2Service",
     "EOAuth2ServiceInterface",
     "EOAuth2ServiceFlags",
@@ -64,64 +62,57 @@ const ALLOWED_TYPES: &[&str] = &[
     "EContact.*",
     "EVCard.*",
     "EComponent.*",
-    // A calendar object, in the two shapes the `ECalMetaBackend` vfuncs use
-    // it: libical-glib's `ICalComponent`, which `load_component_sync` hands
-    // back, and libecal's `ECalComponent` wrapper, which is what
-    // `save_component_sync` is given a list of. Both are pulled in
-    // transitively already, as field and argument types; naming them here is
-    // what also brings their *class* structs, which tests/layout.rs checks
-    // against `g_type_query` like every other type we cross the ABI with.
+    // A calendar object, in the two shapes that the `ECalMetaBackend` vfuncs
+    // use: the libical-glib `ICalComponent` that `load_component_sync` returns,
+    // and the libecal `ECalComponent` wrapper that `save_component_sync` gets
+    // a list of. Both come in already as field and argument types. These names
+    // also bring their class structs, which tests/layout.rs checks with
+    // `g_type_query`.
     "ICal.*",
     "ECalComponent.*",
-    // The zones a calendar knows that no zone database does. An `ECalBackend`
-    // implements this interface, and so does the `ECalCache` behind it, which is
-    // where a `VTIMEZONE` another client wrote arrives: EDS pulls it out of the
-    // object and files it here rather than in the component. A save that only
-    // asked libical's builtin table would therefore find nothing for such a
-    // zone. An interface, so `tests/layout.rs` cannot cover it — `tests/ical.rs`
-    // stands in, as `tests/camel.rs` does for `CamelSubscribable`.
+    // The zones that a calendar knows and no zone database knows. An
+    // `ECalBackend` and its `ECalCache` implement this interface. EDS removes a
+    // `VTIMEZONE` that another client wrote from the object and keeps it here,
+    // not in the component. Thus the builtin table of libical does not find
+    // such a zone. tests/layout.rs cannot check an interface, so tests/ical.rs
+    // does (as tests/camel.rs does for `CamelSubscribable`).
     "ETimezoneCache.*",
-    // The error domain every EDS client speaks. Deliberately just the enum,
-    // not the whole EClient class: the backends produce these codes, they
-    // never talk to an EClient.
+    // The error domain of all EDS clients. Only the enum, not the full EClient
+    // class: the backends make these codes, but they never use an EClient.
     "EClientError",
-    // The address-book-specific half of it. `EBookMetaBackend` itself matches
-    // on `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` — a load that fails with it
-    // means "drop this one from the cache" rather than "the sync failed" — so
-    // reporting a missing contact any other way is a stuck cache entry.
+    // The address book part of it. `EBookMetaBackend` matches on
+    // `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND`: a load that fails with it means
+    // "remove this contact from the cache", not "the sync failed". Any other
+    // report of a missing contact leaves a stuck cache entry.
     "EBookClientError",
-    // And the calendar's, for the same reason and the same match:
-    // `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND` is how a component says it is gone.
-    // The two domains are separate quarks, so the book's code cannot stand in
-    // for it — tests/errors.rs pins that.
+    // The calendar part, for the same reason: a component that is gone reports
+    // `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND`. The two domains are different
+    // quarks, so the book code cannot replace it (tests/errors.rs pins this).
     "ECalClientError",
-    // M5's mail provider. `CamelProvider` is the static struct a
-    // `libcameljmap.so` registers on load, and the rest is the object graph it
-    // names: a store (offline, so the summary cache works disconnected), a
-    // transport, their common `CamelService` parent, the settings objects a
-    // service is configured through and the session that owns it.
+    // The mail provider. `CamelProvider` is the static struct that
+    // `libcameljmap.so` registers on load. The other types are the objects it
+    // names: an offline store (so the summary cache works without a
+    // connection), a transport, their `CamelService` parent, the settings that
+    // configure a service, and the session that owns it.
     "CamelProvider.*",
     "CamelService.*",
     "CamelStore.*",
     "CamelOfflineStore.*",
-    // What a store implements so the user can tick a folder off the account.
-    // An interface rather than a class, and one with three vfuncs Camel puts no
-    // default behind — tests/camel.rs pins both — so it is the first interface
-    // whose vtable one of our types has to fill in rather than merely claim.
+    // The interface a store implements so that the user can subscribe to a
+    // folder. Camel gives no default for its three vfuncs (tests/camel.rs pins
+    // both facts). It is the first interface whose vtable our type must fill.
     "CamelSubscribable.*",
-    // The authentication mechanism half of a provider. `CamelSasl` is the
-    // abstract base whose class carries the `CamelServiceAuthType` that
-    // `camel_sasl_authtype` keys its table by, and `CamelSaslXOAuth2` the
-    // subclass a bearer-token mechanism derives from — the two the provider's
-    // own named mechanism sits under, so that `camel_sasl_is_xoauth2_alias`
-    // answers yes for it.
+    // The authentication mechanism of a provider. The class of the abstract
+    // `CamelSasl` holds the `CamelServiceAuthType` that `camel_sasl_authtype`
+    // uses as its table key. A bearer-token mechanism derives from
+    // `CamelSaslXOAuth2`. The provider mechanism is under these two, so
+    // `camel_sasl_is_xoauth2_alias` returns true for it.
     //
-    // Exact names rather than a `CamelSasl.*` prefix, for the reason
-    // `EOAuth2Service` is spelled out above: the prefix also matches
-    // `CamelSaslAnonymous`, `-CramMd5`, `-DigestMd5`, `-Gssapi`, `-Login`,
-    // `-Ntlm`, `-Plain`, `-Popb4smtp` and the three built-in XOAUTH2 flavours,
-    // and emitting their class structs would be this layer claiming to have
-    // layout-checked eleven types nothing here will ever subclass.
+    // Exact names, not a `CamelSasl.*` prefix (see `EOAuth2Service` above). The
+    // prefix also matches `CamelSaslAnonymous`, `-CramMd5`, `-DigestMd5`,
+    // `-Gssapi`, `-Login`, `-Ntlm`, `-Plain`, `-Popb4smtp` and the three
+    // built-in XOAUTH2 types. Their class structs would claim a layout check
+    // for eleven types that nothing here subclasses.
     "CamelSasl",
     "CamelSaslClass",
     "CamelSaslXOAuth2",
@@ -130,105 +121,94 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelSession.*",
     "CamelSettings.*",
     "CamelNetworkSettings.*",
-    // The settings object a JMAP service is configured through. Camel's stock
-    // classes stop at `CamelOfflineSettings` and none of them implements
-    // `CamelNetworkSettings` (tests/camel.rs pins that), so the provider
-    // declares its own subclass of the former that implements the latter —
-    // which needs both the parent's structs and the enum the `security-method`
-    // property carries.
+    // The settings of a JMAP service. The Camel classes stop at
+    // `CamelOfflineSettings`, and none implements `CamelNetworkSettings`
+    // (tests/camel.rs pins this). Thus the provider subclasses the first and
+    // implements the second. This needs the parent structs and the enum of the
+    // `security-method` property.
     "CamelOfflineSettings.*",
     "CamelNetworkSecurityMethod",
     "CamelURL",
-    // The folder half of a store. `CamelFolderInfo` is what
-    // `get_folder_info_sync` returns — a plain struct, not an object, so it is
-    // named here to bring its flags enum along; `CamelFolder` is the object the
-    // provider's own folder derives from, through `CamelOfflineFolder`, which
-    // is where a folder's disconnected copy of its content lives.
-    // `CamelFolderSummary` is what that folder's rows live in — the object a
-    // message count, a uid list and a `CamelMessageInfo` all come out of.
-    // Exact names rather than a `CamelFolder.*` prefix, which would also pull
-    // in `CamelFolderSearch` and `CamelFolderThread` — two more class structs
-    // this layer would be claiming to have checked.
+    // The folder part of a store. `get_folder_info_sync` returns
+    // `CamelFolderInfo`, a plain struct (not an object): the name brings its
+    // flags enum. The provider folder derives from `CamelFolder` through
+    // `CamelOfflineFolder`, which keeps the offline copy of the content.
+    // `CamelFolderSummary` holds the rows of the folder: the message count, the
+    // uid list and each `CamelMessageInfo` come from it. Exact names, because
+    // a `CamelFolder.*` prefix also pulls in `CamelFolderSearch` and
+    // `CamelFolderThread`: two more class structs that this layer would claim
+    // to check.
     "CamelFolder",
     "CamelFolderClass",
-    // What a folder tells Camel it has changed — four uid lists, and the
-    // argument of the `changed` signal Evolution redraws a message list on.
-    // Plain struct behind a boxed type, like `CamelProvider`, so `g_type_query`
-    // knows nothing of it and tests/camel.rs stands in for tests/layout.rs.
+    // How a folder tells Camel what changed: four uid lists, and the argument
+    // of the `changed` signal on which Evolution redraws a message list. A
+    // plain struct behind a boxed type, like `CamelProvider`, so
+    // `g_type_query` knows nothing of it and tests/camel.rs checks it.
     "CamelFolderChangeInfo",
-    // What `get_quota_info_sync` answers with: a `name`/`used`/`total` node
-    // and a `next` pointer chaining one quota to another, its own public
-    // fields rather than an accessor per field. The same boxed-type shape as
-    // `CamelFolderChangeInfo` above, and the same reason tests/layout.rs does
-    // not check it.
+    // The result of `get_quota_info_sync`: a `name`/`used`/`total` node and a
+    // `next` pointer to the next quota, all public fields with no accessors.
+    // A boxed type like `CamelFolderChangeInfo`, so tests/layout.rs does not
+    // check it.
     "CamelFolderQuotaInfo",
-    // A third error domain beside `CamelServiceError` and `CamelStoreError`,
-    // for the failures that are neither the account's nor the store's:
-    // `CAMEL_FOLDER_ERROR_INVALID_UID` in particular, which is how a message
-    // that was in the last listing and is not there now gets reported without
-    // the account being called broken.
+    // A third error domain, after `CamelServiceError` and `CamelStoreError`,
+    // for failures of neither the account nor the store. For example,
+    // `CAMEL_FOLDER_ERROR_INVALID_UID` reports a message that was in the last
+    // listing and is now gone, without a report that the account is broken.
     "CamelFolderError",
     "CamelFolderInfo",
     "CamelFolderInfoFlags",
     "CamelFolderSummary",
     "CamelFolderSummaryClass",
-    // The flags word of the folder *object*, which is a different word from
-    // `CamelFolderInfoFlags` with different bits in it: the info's flags say
-    // what kind of folder this is, the folder's say how Camel treats it —
-    // whether new mail in it is filtered, whether it is the account's trash.
-    // Two enums one bit-width apart is exactly the kind of thing that is only
-    // caught by naming both.
+    // The flags of the folder object, different from `CamelFolderInfoFlags`
+    // and with different bits. The info flags give the kind of folder. The
+    // folder flags give how Camel treats it: for example, whether Camel
+    // filters new mail in it, or whether it is the trash of the account. Name
+    // both: only then are two such similar enums not mixed up.
     "CamelFolderFlags",
     "CamelOfflineFolder.*",
-    // A folder's contents, a row at a time. `CamelMessageInfo` is the object
-    // Camel keeps one summary row in and `CamelMessageInfoBase` the subclass
-    // that actually stores the columns — the one a summary with no message-info
-    // type of its own instantiates, which is this provider's case.
-    // `CamelMessageFlags` is the row's flags word, a third flags enum with a
-    // third set of bits, and `CamelSummaryMessageID` the union that says how
-    // wide a stored message id is. `CamelNamedFlags` and `CamelNameValueArray`
-    // are what the user flags and the headers come back as.
+    // The contents of a folder, one row at a time. `CamelMessageInfo` holds one
+    // summary row. Its subclass `CamelMessageInfoBase` stores the columns; a
+    // summary with no message-info type of its own (as here) makes one.
+    // `CamelMessageFlags` is the row flags word (a third flags enum with a third
+    // set of bits). The `CamelSummaryMessageID` union gives the width of a
+    // stored message id. The user flags and the headers come back as
+    // `CamelNamedFlags` and `CamelNameValueArray`.
     "CamelMessageInfo.*",
-    // One row as the summary database stores it: the column-per-field struct
-    // Camel's `load` and `save` vfuncs are handed. Named for its `bdata` field,
-    // which is where a message info subclass keeps the column Camel has none of
-    // — for this provider, the keywords the last listing found.
+    // One row as the summary database stores it: the struct with one column
+    // per field that the Camel `load` and `save` vfuncs get. A message info
+    // subclass keeps its own column in the `bdata` field. This provider keeps
+    // the keywords of the last listing there.
     "CamelMIRecord",
-    // And the whole folder as the same database stores it: the header row
-    // beside the message rows, with a `bdata` field of its own. That is where
-    // this provider keeps the `Email` state its last listing was taken at, so
-    // that a folder reopened after a restart can ask for a delta rather than
-    // list the mailbox again.
+    // The full folder as the same database stores it: the header row beside the
+    // message rows, also with a `bdata` field. This provider keeps there the
+    // `Email` state of its last listing. Thus a folder that opens again after a
+    // restart can ask for a delta, not a full listing of the mailbox.
     "CamelFIRecord",
     "CamelMessageFlags",
     "CamelSummaryMessageID",
     "CamelNamedFlags",
     "CamelNameValueArray",
-    // How an address list becomes the single string a summary row stores.
-    // `CamelInternetAddress` is the RFC 5322 one, `CamelAddress` its abstract
-    // parent, which is where the formatting entry point is declared.
+    // How an address list becomes the string that a summary row stores.
+    // `CamelInternetAddress` is the RFC 5322 type. Its abstract parent
+    // `CamelAddress` declares the format entry point.
     "CamelAddress.*",
     "CamelInternetAddress.*",
-    // A message rather than a row about one: what `get_message_sync` returns
-    // and what Evolution's preview pane renders. The four are one chain —
-    // `CamelMimeMessage` is a `CamelMimePart` is a `CamelMedium` is a
-    // `CamelDataWrapper` — and all four are named because the parse entry point
-    // is declared on the *last* of them, so the provider crosses the ABI at
-    // every level of it. `CamelMimeParser` and the stream classes are
-    // deliberately not here: the bytes arrive as one buffer from a blob
-    // download, and `construct_from_data_sync` is the entry point that takes
-    // one.
+    // A message: what `get_message_sync` returns and the Evolution preview pane
+    // shows. The four types are one chain: `CamelMimeMessage` is a
+    // `CamelMimePart` is a `CamelMedium` is a `CamelDataWrapper`. The last
+    // declares the parse entry point, so the provider crosses the ABI at each
+    // level. Not `CamelMimeParser` and not the stream classes: a blob download
+    // gives the bytes as one buffer, and `construct_from_data_sync` takes one.
     "CamelDataWrapper.*",
     "CamelMedium.*",
     "CamelMimePart.*",
     "CamelMultipart.*",
     "CamelMimeMessage.*",
     "CamelTransferEncoding",
-    // Where a message fetched once is kept, so opening it a second time is not
-    // a second download: a directory of files keyed by a path and a name, which
-    // is what IMAPX's message cache is too. A `GObject` like the rest and
-    // therefore layout-checked, though nothing subclasses it — the provider
-    // only ever holds one.
+    // The cache of fetched messages, so a second open is not a second download:
+    // a directory of files with a path and a name as key, as the IMAPX message
+    // cache. A `GObject`, so layout-checked, although nothing subclasses it:
+    // the provider holds only one.
     "CamelDataCache.*",
     // Structured content types, content dispositions, and address headers
     "CamelContentType.*",
@@ -266,7 +246,7 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelMimeFilterGZip.*",
     "CamelMimeFilterGZipMode",
     "CamelMimeFilterWindows.*",
-    // Best encoding, charset, From, yEnc, progress filters, stream buffer, and S-expression search
+    // Bestenc, charset, From, yEnc and progress filters, stream buffer, S-expressions
     "CamelMimeFilterBestenc.*",
     "CamelBestencRequired",
     "CamelBestencEncoding",
@@ -283,14 +263,14 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelSExpTerm.*",
     "CamelSExpTermType",
     "CamelSExpSymbol",
-    // Folder search, message threading, operation, NNTP address, local settings, and memchunk
+    // Folder search, threads, memchunk, operation, NNTP address, local settings
     "CamelFolderSearch.*",
     "CamelFolderThread.*",
     "CamelMemChunk.*",
     "CamelOperation.*",
     "CamelNNTPAddress.*",
     "CamelLocalSettings.*",
-    // Certificate database, junk filter, network service, memory pool, text index, and filter search
+    // Certificate database, junk filter, network service, memory pool, index, filter search
     "CamelCertDB.*",
     "CamelCert.*",
     "CamelCertTrust",
@@ -307,10 +287,9 @@ const ALLOWED_TYPES: &[&str] = &[
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
-    // EDS's own answer to "can the library you loaded serve code compiled
-    // against the version you were built for?". Asking it is cheaper and more
-    // durable than comparing the numbers here, because what counts as
-    // compatible is EDS's rule to state, not ours.
+    // EDS tells if the loaded library can serve code compiled for the build
+    // version. Compatibility is the EDS rule, so this is more durable than a
+    // version comparison here.
     "eds_check_version",
     "e_backend_.*",
     "e_(book|cal)_backend_.*",
@@ -319,59 +298,51 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_(book|cal)_cache_.*",
     "e_cache_.*",
     "e_source_.*",
-    // The token path's own calls, in two prefixes because `e_oauth2_services_*`
-    // does not start with `e_oauth2_service_`. The first brings the wrappers a
-    // service is dispatched through — which is what tests/oauth2.rs calls to
-    // prove the vtable offsets agree — the `util_` helpers that build the form
-    // bodies, and the four `*_sync` entry points that talk to libsecret; the
-    // second brings the registry a service is added to.
+    // The token calls, in two prefixes: `e_oauth2_services_*` does not start
+    // with `e_oauth2_service_`. The first brings the dispatch wrappers (which
+    // tests/oauth2.rs calls to prove the vtable offsets), the `util_` helpers
+    // that make the form bodies, and the four libsecret `*_sync` calls. The
+    // second brings the service registry.
     "e_oauth2_service_.*",
     "e_oauth2_services_.*",
-    // EDS's own `g_object_bind_property`, which is what every collection
-    // backend keeps a child's connection following its account's with. Named
-    // rather than reached for through gobject-sys because the two are not the
-    // same call: EDS's variant takes a lock of its own around creating and
-    // removing the binding, and the sources a registry binds are touched from
-    // more than one thread.
+    // The EDS `g_object_bind_property`, with which each collection backend
+    // makes a child connection follow its account. Not the gobject-sys call:
+    // the EDS variant locks around making and removing the binding, and more
+    // than one thread touches the sources of a registry.
     "e_binding_.*",
-    // The registry's own side of a `.source` file. No backend calls these —
-    // it is handed a finished `ESource` — but they are how a keyfile becomes
-    // one without a running `evolution-source-registry`, which is what lets
-    // the documented manual test recipe be checked by a test. M6's collection
-    // backend meets server-side sources for real.
+    // The registry side of a `.source` file. No backend calls these (a backend
+    // gets a finished `ESource`). They make an `ESource` from a keyfile without
+    // a running `evolution-source-registry`, so a test can check the manual
+    // test recipe. The collection backend meets server-side sources for real.
     "e_server_side_source_.*",
     "e_collection_backend_.*",
     "e_contact_.*",
     "e_vcard_.*",
-    // Building, reading and rendering a calendar object. `i_cal_component_.*`
-    // rather than all of `i_cal_.*`: the mapping in `jmap-ical` does the
-    // property- and value-level work in Rust on the text, so the component is
-    // the only libical type that has to cross the boundary.
+    // Make, read and render a calendar object. Not all of `i_cal_.*`:
+    // `jmap-ical` does the property and value work in Rust on the text, so only
+    // the component crosses the boundary.
     "i_cal_component_.*",
-    // The zones a calendar object refers to, which the envelope a save is built
-    // into has to *define* — RFC 5545 §3.2.19 says a `TZID` parameter names a
-    // `VTIMEZONE` in the same object, and libical's identifier for a builtin
-    // zone is `/freeassociation.sourceforge.net/Europe/Berlin`, which nothing
-    // outside libical can resolve. `_from_tzid` resolves that form and
-    // `get_builtin_timezone` a plain IANA name; `get_component` hands back the
-    // `VTIMEZONE`, whose `X-LIC-LOCATION` is what `jmap-ical` translates the
-    // identifier by. Named one at a time rather than as `i_cal_timezone_.*`,
-    // which is another forty functions for changing the zone directory and
-    // computing UTC offsets that nothing here does.
+    // The zones that a calendar object refers to, which a saved object must
+    // define: RFC 5545 §3.2.19 says a `TZID` parameter names a `VTIMEZONE` in
+    // the same object. The libical identifier for a builtin zone is
+    // `/freeassociation.sourceforge.net/Europe/Berlin`, which only libical can
+    // resolve. `_from_tzid` resolves that form, `get_builtin_timezone` a plain
+    // IANA name. `get_component` returns the `VTIMEZONE`, whose
+    // `X-LIC-LOCATION` `jmap-ical` uses to translate the identifier. Exact
+    // names: `i_cal_timezone_.*` adds about thirty functions (zone directory,
+    // UTC offsets) that nothing here uses.
     "i_cal_timezone_get_builtin_timezone",
     "i_cal_timezone_get_builtin_timezone_from_tzid",
     "i_cal_timezone_get_component",
-    // And the zones that table does not hold, which the calendar itself does:
-    // `e_timezone_cache_get_timezone` is the second place a save looks for the
-    // definition of a `TZID` an instance names. Four functions, so the prefix
-    // costs nothing; `add_timezone` is how a test puts a zone in the way EDS's
-    // own `add_timezone` D-Bus method does.
+    // The zones that the calendar holds and the builtin table does not.
+    // `e_timezone_cache_get_timezone` is the second place where a save finds
+    // the definition of a `TZID`. The prefix is only four functions.
+    // `add_timezone` lets a test add a zone as the EDS `add_timezone` D-Bus
+    // method does.
     "e_timezone_cache_.*",
-    // And the two ends of that: reading the `TZID` parameter off a property,
-    // which is the only place a component says which zone it means, and setting
-    // the `TZID` property of the `VTIMEZONE` copied in beside it, so the
-    // definition carries the identifier the properties actually use rather than
-    // libical's own.
+    // Read the `TZID` parameter of a property: only there does a component name
+    // its zone. Set the `TZID` property of the copied `VTIMEZONE`, so the
+    // definition has the identifier that the properties use, not the libical one.
     "i_cal_attach_.*",
     "i_cal_geo_.*",
     "i_cal_duration_.*",
@@ -383,215 +354,175 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_cal_component_.*",
     "e_client_error_.*",
     "e_(book|cal)_client_error_.*",
-    // How a backend is handed its credentials: EDS fetches them from
-    // libsecret and passes an ENamedParameters to connect_sync.
+    // A backend gets its credentials as an ENamedParameters in connect_sync,
+    // after EDS reads them from libsecret.
     "e_named_parameters_.*",
-    // The rule that decides whether a child source asks for its own password
-    // or shares the one stored on its collection —
-    // `e_source_credentials_provider_ref_credentials_source` is where EDS
-    // applies it, and it compares the two sources' `[Authentication] Host`.
-    // Named exactly rather than as `e_util_.*`, which is a hundred unrelated
-    // helpers: no backend calls this, but the account setup has to write a mail
-    // source that passes it, and the alternative to a test is trusting that two
-    // hosts written in different places stayed the same string.
+    // The rule that decides if a child source asks for its own password or
+    // uses the one of its collection. EDS applies it in
+    // `e_source_credentials_provider_ref_credentials_source`, and it compares
+    // the `[Authentication] Host` of the two sources. Exact name: `e_util_.*`
+    // is a hundred unrelated helpers. No backend calls it, but the account
+    // setup must write a mail source that passes it. Without a test, two hosts
+    // written in different places can silently differ.
     "e_util_can_use_collection_as_credential_source",
-    // How a dismissed reminder is recorded, and how the component lists a
-    // `modify_objects_sync` hands back are freed: the calendar backend's
-    // `discard_alarm_sync` does what EDS's CalDAV backend does with both.
-    // Named exactly, for the reason above.
+    // How to record a dismissed reminder, and how to free the component lists
+    // that `modify_objects_sync` returns. `discard_alarm_sync` of the calendar
+    // backend uses both, as the EDS CalDAV backend does. Exact names, for the
+    // reason above.
     "e_cal_util_set_alarm_acknowledged",
     "e_util_free_nullable_object_slist",
-    // Not an EDS symbol, but the entry point every loadable EDS module must
-    // export; having the signature in scope keeps M2's trampoline honest.
+    // Not an EDS symbol, but each loadable EDS module must export it. The
+    // signature in scope lets the compiler check the module trampoline.
     "e_module_.*",
-    // The base class of everything that extends something else in this
-    // ecosystem — a collection backend factory is one, and so is M7's
-    // `EMailConfigServiceBackend`, which lives in Evolution rather than here
-    // and is bound in `evo-sys`. The type accessor is what a test on that side
-    // holds its parent against, so that the `EExtension` in the parent slot is
-    // provably this crate's and not a second one generated from the same
-    // header.
+    // The base class of all extensions in this ecosystem: a collection backend
+    // factory is one, and so is `EMailConfigServiceBackend`, which is in
+    // Evolution and bound in `evo-sys`. A test there compares its parent with
+    // the type accessor, which proves that the `EExtension` in the parent slot
+    // is the one of this crate, not a second one generated from the same header.
     "e_extension_.*",
-    // The other half of that pair: the interface an extended object
-    // implements, and the call that instantiates every extension targeting
-    // it. `jmap-ui` has no extensible of its own to load extensions for, but
-    // its tests do, to pin what `EExtensionClass::extensible_type` accepts.
+    // The other half: the interface of an extended object, and the call that
+    // makes all extensions for it. `jmap-ui` has no extensible of its own, but
+    // its tests use one to pin what `EExtensionClass::extensible_type` accepts.
     "e_extensible_.*",
-    // The mail provider's side. `camel_provider_module_init` is in here for the
-    // same reason as `e_module_load`: it is declared, not defined, by Camel, so
-    // having the declaration in scope is what makes the module's `extern "C"`
-    // definition a signature the compiler can check rather than a guess.
+    // The mail provider side. Camel declares `camel_provider_module_init` but
+    // does not define it, as with `e_module_load`. The declaration lets the
+    // compiler check the `extern "C"` definition of the module.
     "camel_provider_.*",
     "camel_service_.*",
     "camel_store_.*",
     "camel_offline_store_.*",
-    // The interface above: its type accessor, the three wrappers Evolution's
-    // subscription editor calls a store through, and the two that emit the
-    // signals a store sends back when the answer to one of them changed.
+    // The interface above: its type accessor, the three wrappers that the
+    // Evolution subscription editor calls, and the two that emit the signals
+    // of a store when one of those answers changes.
     "camel_subscribable_.*",
-    // The two type accessors the provider's named mechanism is registered
-    // under and against, plus the two lookups that are the whole reason it
-    // exists: `camel_sasl_authtype`, which is what
-    // `mail_ui_session_authenticate_sync` asks before deciding whether a
-    // mechanism gets one silent attempt or a password prompt, and
-    // `camel_sasl_is_xoauth2_alias`, which is how Evolution's account editor
-    // recognises a bearer mechanism under a name of its own. Named one at a
-    // time rather than by `camel_sasl_.*`, which would also bring
-    // `camel_sasl_new` and the challenge/try-empty-password calls — the
-    // instance-side surface of a mechanism this provider declares but never
-    // instantiates.
+    // The two type accessors that the provider mechanism registers under, and
+    // the two lookups that are its purpose. `mail_ui_session_authenticate_sync`
+    // asks `camel_sasl_authtype` to decide between one silent try and a
+    // password prompt. The Evolution account editor uses
+    // `camel_sasl_is_xoauth2_alias` to identify a bearer mechanism with its own
+    // name. Exact names: `camel_sasl_.*` also brings `camel_sasl_new` and the
+    // challenge and try-empty-password calls, for a mechanism instance that
+    // this provider never makes.
     "camel_sasl_get_type",
     "camel_sasl_xoauth2_get_type",
-    // Upstream's own dynamically-configured XOAUTH2 mechanism (SASL name
-    // "OAuth2Dynamic"), e-d-s `bf6e074`, a built-in alternative to this
-    // provider's `CamelSaslXOAuth2Jmap` on a host whose EDS has it. Only the
-    // type accessor, not the type itself: like `CamelSaslXOAuth2Google` and
-    // its two siblings, this is one of EDS's own built-in subclasses that
-    // nothing here derives from.
+    // The upstream XOAUTH2 mechanism with dynamic configuration (SASL name
+    // "OAuth2Dynamic", e-d-s `bf6e074`): a built-in alternative to
+    // `CamelSaslXOAuth2Jmap` where EDS has it. Only the type accessor: as with
+    // `CamelSaslXOAuth2Google` and its two siblings, nothing here derives from it.
     "camel_sasl_xoauth2_dynamic_get_type",
     "camel_sasl_authtype",
     "camel_sasl_is_xoauth2_alias",
-    // `camel_folder_info_new` and `_free` are the allocator pair the folder
-    // tree is built and torn down with; the type accessor is what
-    // tests/layout.rs queries.
+    // `camel_folder_info_new` and `_free` make and free the folder tree.
+    // tests/layout.rs queries the type accessor.
     "camel_folder_info_.*",
     "camel_folder_get_type",
-    // The quark of the domain above. Its siblings ride in on
-    // `camel_service_.*` and `camel_store_.*`; this one has to be named,
-    // because the folder prefix is deliberately not a wildcard.
+    // The quark of the domain above. Its siblings come in with
+    // `camel_service_.*` and `camel_store_.*`. The folder prefix is not a
+    // wildcard, so this one needs its name.
     "camel_folder_error_quark",
-    // What a constructed folder is asked about itself: the path Camel keys it
-    // by, the name the user sees, the store it hangs off, and the flags word
-    // that says how Camel treats it. Still not all of `camel_folder_.*`, which
-    // would match every `camel_folder_search_*` function too and drag its class
-    // struct in behind them.
+    // What a folder tells about itself: the path that Camel uses as key, the
+    // name that the user sees, its store, and the flags that tell how Camel
+    // treats it. Not all of `camel_folder_.*`: that matches each
+    // `camel_folder_search_*` function and pulls in its class struct.
     "camel_folder_(get|set)_(full_name|display_name|flags)",
     "camel_folder_get_parent_store",
-    // The summary a folder keeps its rows in: `take_folder_summary` is how one
-    // is put on a folder — it takes the reference rather than adding to it —
-    // `get_folder_summary` how it is read back, and
-    // `has_summary_capability` is the flag test Camel itself makes before it
-    // asks a folder for a message count.
+    // The summary of a folder. `take_folder_summary` puts one on a folder (it
+    // takes the reference, it does not add one). `get_folder_summary` reads it.
+    // Camel tests `has_summary_capability` before it asks for a message count.
     "camel_folder_(get|take)_folder_summary",
     "camel_folder_has_summary_capability",
-    // What a folder is asked for once it has a summary to answer from, and
-    // what it says back when a refresh changed something.
-    // `camel_folder_refresh_info_sync` is the wrapper around the vfunc this
-    // provider overrides — named so a test can call it the way Camel does —
-    // `get_message_count` and `get_uids` are the two questions the base class
-    // answers straight out of the summary, and `camel_folder_changed` is how
-    // the answer to them reaches a window that is already open.
+    // `camel_folder_refresh_info_sync` wraps the vfunc that this provider
+    // overrides, so a test can call it as Camel does. The base class answers
+    // `get_message_count` and `get_uids` from the summary.
+    // `camel_folder_changed` sends the changes of a refresh to an open window.
     "camel_folder_refresh_info_sync",
-    // And the wrapper around the vfunc that writes the other way — what
-    // Evolution calls when a folder is closed or the user saves their changes,
-    // so that a test can put a flag change on the server the way Evolution
-    // does rather than by reaching into the class.
+    // The wrapper of the vfunc that writes to the server. Evolution calls it
+    // when it closes a folder or saves changes. A test uses it to put a flag
+    // change on the server as Evolution does.
     "camel_folder_synchronize_sync",
-    // And the wrapper around the vfunc that gets rid of the messages the user
-    // marked deleted — what Evolution's "Expunge" and "Empty Trash" reach.
-    // Named for the same reason as the two around it: a test drives it the way
-    // Evolution does, through the wrapper that takes the folder's lock and
-    // refuses a folder Camel considers read-only, rather than through the
-    // class.
+    // The wrapper of the vfunc that removes the messages marked deleted:
+    // Evolution "Expunge" and "Empty Trash" use it. A test calls it as
+    // Evolution does: the wrapper locks the folder and skips a folder that has
+    // the `CAMEL_FOLDER_HAS_BEEN_DELETED` flag.
     "camel_folder_expunge_sync",
-    // And the wrapper around the vfunc that files messages into another
-    // folder, for the same reason again — with one extra: this wrapper decides
-    // things of its own before it dispatches, answering a transfer into the
-    // folder the messages are already in and one of no messages at all without
-    // asking any provider. A test that reached past it would be testing a call
-    // Evolution cannot make.
+    // The wrapper of the vfunc that moves or copies messages to another folder.
+    // Before dispatch, this wrapper itself completes a transfer to the same
+    // folder or of no messages, with no provider call. A test that skips it
+    // tests a call that Evolution cannot make.
     "camel_folder_transfer_messages_to_sync",
-    // What the three wrappers above take around their vfunc dispatch and
-    // `camel_folder_transfer_messages_to_sync`'s own does not (checked
-    // against evolution-data-server 3.52.3's camel-folder.c directly, not
-    // assumed from the header): a per-folder recursive lock. This provider's
-    // `transfer_messages_to_sync` therefore takes it itself, the way any
-    // provider must that touches a summary a concurrent refresh, synchronise
-    // or expunge on the same folder could otherwise reconcile out from under
-    // it.
+    // The per-folder recursive lock. The refresh, synchronize and expunge
+    // wrappers take it around dispatch; the transfer wrapper does not (from
+    // camel-folder.c of EDS 3.52.3, not from the header). Thus the provider
+    // `transfer_messages_to_sync` takes it, as each provider must that changes
+    // a summary that a concurrent refresh, synchronize or expunge can change.
     "camel_folder_(lock|unlock)",
-    // The wrapper around the vfunc that hands one message over, for the same
-    // reason: a test calls it the way Evolution's preview pane does.
+    // The wrapper of the vfunc that returns one message. A test calls it as
+    // the Evolution preview pane does.
     "camel_folder_get_message_sync",
-    // And the wrapper around the vfunc that takes one in — what Camel's own
-    // cross-store transfer calls on the destination folder, and what the
-    // composer's "save to Drafts" reaches. Named for the same reason again: a
-    // test drives it through the wrapper Evolution calls, which takes the
-    // folder's lock around the dispatch, rather than through the class.
+    // The wrapper of the vfunc that adds one message. The Camel transfer
+    // between stores calls it on the destination folder, and so does "save to
+    // Drafts" in the composer. A test calls it through the wrapper, which locks
+    // the folder around the dispatch.
     "camel_folder_append_message_sync",
     "camel_folder_get_message_count",
-    // Both spellings of the folder's uid list, because which one exists is the
-    // version difference `compat::folder_dup_uids` resolves: `get_uids` with
-    // `free_uids` beside it up to 3.52, `dup_uids` alone from 3.58. Allowlisting
-    // a name this EDS does not declare costs nothing — bindgen emits only what
-    // the headers have — and naming both is what lets the same allowlist serve
-    // both legs.
+    // Both names of the folder uid list: `compat::folder_dup_uids` resolves
+    // which one exists. Up to 3.52, `get_uids` with `free_uids`; from 3.58,
+    // only `dup_uids`. A name that this EDS does not declare costs nothing
+    // (bindgen emits only what the headers have), so one allowlist serves both.
     "camel_folder_(get|free|dup)_uids",
-    // The wrappers around the `cmp_uids` vfunc this provider overrides and
-    // the `sort_uids` one that calls it, so a test orders uids the way Camel's
-    // callers do. Both exist unchanged from 3.52 through master.
+    // The wrappers of the `cmp_uids` vfunc that this provider overrides and of
+    // `sort_uids`, which calls it, so a test sorts uids as the Camel callers
+    // do. Both are the same from 3.52 through master.
     "camel_folder_(cmp|sort)_uids",
-    // The wrapper around the `get_permanent_flags` vfunc this provider
-    // overrides, so a test asks the way Camel's callers do. Unchanged from
-    // 3.52 through master.
+    // The wrapper of the `get_permanent_flags` vfunc that this provider
+    // overrides, so a test asks as the Camel callers do. The same from 3.52
+    // through master.
     "camel_folder_get_permanent_flags",
     "camel_folder_changed",
-    // The wrapper around the `get_quota_info_sync` vfunc this provider
-    // overrides, named for the same reason as `camel_folder_refresh_info_sync`
-    // above: a test drives it the way Evolution's folder-properties dialog
-    // does, through the wrapper, rather than through the class. What the
-    // vfunc builds its answer out of is `camel_folder_quota_info_new`, one
-    // node per quota chained through the struct's own public `next` field
-    // rather than through a second constructor; `_free` is what a test frees
-    // the chain it is handed with, the same way it owns and frees a `GError`.
-    // `_clone` is not named: nothing here ever needs a second reference to a
-    // chain it already owns outright.
+    // The wrapper of the `get_quota_info_sync` vfunc that this provider
+    // overrides, so a test calls it as the Evolution folder properties dialog
+    // does. The vfunc makes one `camel_folder_quota_info_new` node per quota
+    // and chains them through the public `next` field. A test frees the chain
+    // with `_free`, as it frees a `GError`. Not `_clone`: nothing here needs a
+    // second reference to a chain it owns.
     "camel_folder_get_quota_info_sync",
     "camel_folder_quota_info_(new|free)",
     "camel_folder_change_info_.*",
     "camel_folder_summary_.*",
     "camel_offline_folder_get_type",
-    // Filling and reading one summary row. `camel_message_info_new_from_headers`
-    // rides in on the same prefix although it is declared in
-    // camel-folder-summary.h, and that is wanted rather than tolerated: it is
-    // the path a message parsed locally takes, and therefore the only oracle
-    // there is for the two columns a provider has to *compute* — the 64-bit
-    // digests Camel threads on. A provider whose digests disagreed with it
-    // would split a conversation in two the moment the two met.
+    // Write and read one summary row. This prefix also matches
+    // `camel_message_info_new_from_headers` from camel-folder-summary.h, and
+    // that is necessary. A locally parsed message uses it, so it is the only
+    // reference for the 64-bit digests that Camel uses for threads and that a
+    // provider must calculate. Different digests split a conversation in two.
     "camel_message_info_.*",
-    // Where a row keeps what only this provider knows about it. A message info
-    // subclass that adds a column has to write it into the one field of the
-    // summary database Camel reserves for that — `CamelMIRecord.bdata`, a
-    // single string the class chain appends to on the way out and reads back in
-    // the same order on the way in — and these four are the encoding of it, so
-    // that a keyword with a space or a digit in it comes back as the keyword it
-    // was rather than as two.
+    // The encoding of the one summary database field that Camel keeps for a
+    // subclass column: `CamelMIRecord.bdata`, one string that the class chain
+    // appends to on save and reads in the same order on load. These four
+    // functions make sure that a keyword with a space or a digit comes back as
+    // one keyword, not two.
     "camel_util_bdata_.*",
-    // The set a row's user flags — Evolution's labels — are kept in. Replaced
-    // wholesale rather than flag by flag, because JMAP's `keywords` is the
-    // whole truth about a message's labels: a keyword the server stopped
-    // sending is one the user took off somewhere else.
+    // The set of user flags (Evolution labels) of a row. The provider replaces
+    // the full set, not flag by flag: JMAP `keywords` is the full set of labels
+    // of a message, and a missing keyword is one that the user removed elsewhere.
     "camel_named_flags_.*",
     "camel_name_value_array_.*",
-    // Formatting an address list the way a summary row stores it: build a
-    // `CamelInternetAddress`, then `camel_address_format` on it.
+    // Format an address list as a summary row stores it: make a
+    // `CamelInternetAddress`, then call `camel_address_format` on it.
     "camel_address_.*",
     "camel_internet_address_.*",
-    // Turning a downloaded message into the object Camel renders.
-    // `camel_mime_message_new` allocates it and
-    // `camel_data_wrapper_construct_from_data_sync` parses the bytes into it —
-    // one call rather than the stream dance, because a blob download already
-    // produced the whole message as a buffer. The accessors ride in on the same
-    // prefixes and are what a test asks the parsed message about.
-    // `camel_medium_.*` brings `camel_medium_get_content`, which is how the
-    // body is reached without a `CamelMimePart` function of its own; the part's
-    // type accessor is here alone, for tests/layout.rs.
+    // Make the Camel message object from a download. `camel_mime_message_new`
+    // allocates it and `camel_data_wrapper_construct_from_data_sync` parses the
+    // bytes into it: one call, not streams, because a blob download gives the
+    // full message as one buffer. A test asks the parsed message through the
+    // accessors that the same prefixes bring. `camel_medium_.*` brings
+    // `camel_medium_get_content`, which gets the body with no `CamelMimePart`
+    // function. The part type accessor is here only for tests/layout.rs.
     "camel_data_wrapper_.*",
-    // And keeping it, so the next open is not another download. `_new` is the
-    // constructor that also makes the directory, `_add` and `_get` hand over a
-    // `GIOStream` onto one entry, and `_remove` is what a half-written entry is
-    // taken out with. `_get_filename` rides in on the prefix and is what a test
-    // asks where an entry landed.
+    // Keep the message, so the next open is not a download. `_new` also makes
+    // the directory. `_add` and `_get` give a `GIOStream` on one entry.
+    // `_remove` removes an entry that is not complete. A test uses
+    // `_get_filename` to find where an entry is.
     "camel_data_cache_.*",
     "camel_medium_.*",
     "camel_mime_part_.*",
@@ -639,10 +570,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_hostname_utils_.*",
     "camel_sexp_.*",
     "camel_folder_search_.*",
-    // The same helpers under the name 3.58 moved them to (`camel-search-utils.h`)
-    // after deleting `camel-folder-search.h`. Both prefixes are listed for the
-    // reason the folder's uid list is — bindgen emits only what the installed
-    // headers declare, so one allowlist covers both legs.
+    // The same helpers with their 3.58 names (`camel-search-utils.h`), after
+    // 3.58 removed `camel-folder-search.h`. Both prefixes, as for the folder uid
+    // list: bindgen emits only what the headers declare.
     "camel_search_util_.*",
     "camel_folder_thread_.*",
     "camel_folder_threaded_messages_dump",
@@ -661,44 +591,35 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_filter_search_.*",
 ];
 
-/// The names an `ESource` extension is looked up by are `#define`d strings,
-/// not exported symbols, so a typo in one is not a link error — it is an
-/// address book that silently reports no host. Take them from the headers
-/// rather than retyping them. `E_SOURCE_CREDENTIAL_*` are the same thing for
-/// the `ENamedParameters` a backend is authenticated with, where a typo is a
-/// password that reads back as absent.
-/// `EDS_CAMEL_PROVIDER_DIR` is the same kind of thing on Camel's side: the
-/// environment variable that points the provider loader at an uninstalled
-/// build, which the manual test recipe will need and which is a `#define`, so a
-/// typo is a provider directory that is silently never searched.
-/// `CAMEL_FOLDER_TYPE_BIT` and `_MASK` are the same class of thing again: a
-/// folder's type is a small integer packed into the flags word, and the shift
-/// and the mask are `#define`s. Retyping either is a folder that reads back as
-/// some other type.
+/// The `ESource` extension names are `#define`d strings, not exported symbols.
+/// A typo is not a link error but an address book that silently has no host,
+/// so take them from the headers. `E_SOURCE_CREDENTIAL_*` are the same for the
+/// `ENamedParameters` of a backend: a typo is a password that reads as absent.
+/// `EDS_CAMEL_PROVIDER_DIR` is the `#define`d environment variable that points
+/// the Camel provider loader at a build that is not installed (the manual test
+/// recipe uses it). A typo is a provider directory that Camel silently ignores.
+/// `CAMEL_FOLDER_TYPE_BIT` and `_MASK` are `#define`s for the shift and mask of
+/// the folder type in the flags word. A typo gives a folder of a different type.
 const ALLOWED_VARS: &[&str] = &[
-    // Which EDS this is, in the two spellings that can disagree: the
-    // `#define`s state the version of the headers bindgen just read, and the
-    // `extern const guint`s state the version of the `libedataserver` the
-    // process ends up loading. M10's matrix reads both out of a failing leg,
-    // and tests/layout.rs fails when they are not the same ABI — see
-    // docs/eds-versions.md.
+    // The EDS version, in two forms that can differ: the `#define`s give the
+    // header version that bindgen read, and the `extern const guint`s give the
+    // version of the loaded `libedataserver`. The version matrix reads both
+    // from a failing job. tests/layout.rs fails when they are not the same ABI
+    // (see docs/eds-versions.md).
     "EDS_M(AJOR|INOR|ICRO)_VERSION",
     "eds_m(ajor|inor|icro)_version",
     "E_SOURCE_EXTENSION_.*",
     "E_SOURCE_CREDENTIAL_.*",
-    // And the three keys EDS files a token under in libsecret. Same class of
-    // hazard again, one step further along: a typo here is not a password that
-    // reads back as absent but a refresh token written where nothing looks for
-    // it, so the account asks for consent again on every start.
+    // The three keys of a token in libsecret. A typo writes a refresh token
+    // where nothing reads it, so the account asks for consent at each start.
     "E_OAUTH2_SECRET_.*",
     "EDS_CAMEL_PROVIDER_DIR",
     "CAMEL_FOLDER_TYPE_BIT",
     "CAMEL_FOLDER_TYPE_MASK",
     "CAMEL_MAX_PREVIEW_LENGTH",
-    // The keys `initial_setup_sync` files a role's folder under in the
-    // `save_setup` hash table `camel_store_initial_setup_sync` hands the
-    // account wizard; a typo here is a folder the wizard silently never
-    // pre-fills, the same hazard as the libsecret keys above.
+    // The keys under which `initial_setup_sync` puts a role folder in the
+    // `save_setup` hash table that `camel_store_initial_setup_sync` gives the
+    // account wizard. A typo is a folder that the wizard silently does not fill.
     "CAMEL_STORE_SETUP_.*",
     "CAMEL_MIME_FILTER_LINEWRAP_.*",
     "CAMEL_MIME_FILTER_TOHTML_.*",
@@ -714,17 +635,14 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_JUNK_STATUS_.*",
 ];
 
-/// `GType` and friends come from the gtk-rs sys crates so that eds-sys
-/// interoperates with the wider glib ecosystem instead of minting its own
-/// incompatible `GObject`. Anything matching these is emitted as a bare name
-/// and resolved through the glob re-exports below.
+/// `GType` and related types come from the gtk-rs sys crates, so eds-sys works
+/// with the glib ecosystem and does not make its own incompatible `GObject`.
+/// bindgen emits a bare name for a match, which the glob re-exports resolve.
 ///
-/// Both spellings have to be listed. Blocking only the `GObject` typedef
-/// makes bindgen fall back to emitting the `_GObject` *tag* struct the header
-/// declares alongside it — a second, incompatible `GObject` sitting in the
-/// parent slot of every EDS instance struct, with the right layout and the
-/// wrong identity. With the tag blocked too, bindgen uses the typedef name
-/// and picks up the gtk-rs one.
+/// Both forms are necessary. If only the `GObject` typedef is blocked, bindgen
+/// emits the `_GObject` tag struct of the header: a second `GObject` in the
+/// parent slot of each EDS instance struct, with the correct layout and the
+/// wrong identity. With the tag also blocked, bindgen uses the gtk-rs typedef.
 const BLOCKED_TYPES: &[&str] = &[
     "G[A-Z].*",
     "_G[A-Z].*",
@@ -733,141 +651,120 @@ const BLOCKED_TYPES: &[&str] = &[
     "__va_list_tag",
 ];
 
-/// The parts of the EDS API that are present in some releases and absent in
-/// others, each paired with a name whose presence in the generated bindings
-/// settles it: `(cfg name, marker identifier)`.
+/// The parts of the EDS API that only some releases have, each with a name
+/// whose presence in the generated bindings gives the answer:
+/// `(cfg name, marker identifier)`.
 ///
-/// The point of detecting these from *bindgen's own output* rather than from
-/// `EDS_HEADER_VERSION` is that a version comparison encodes a guess about
-/// which release changed what, and a wrong guess is silent on the leg it
-/// guessed wrong about. Here the oracle is clang reading the headers that are
-/// actually installed: if the symbol is in `bindings.rs`, this EDS has it.
-/// A marker is a whole identifier that appears nowhere else in the surface, so
-/// a substring test cannot be fooled by a longer name.
+/// The test reads the output of bindgen, not `EDS_HEADER_VERSION`. A version
+/// comparison is a guess about which release changed what, and a wrong guess
+/// is silent. Here clang reads the installed headers: if the symbol is in
+/// `bindings.rs`, this EDS has it. Each marker is a full identifier found
+/// nowhere else, so a longer name cannot cause a false substring match.
 ///
-/// `M10`'s matrix is what keeps this list honest — see
-/// `docs/eds-version-matrix.md` for what each of these turned out to be, and
-/// which of them the shipped code (as opposed to a probe test) depends on.
+/// The version matrix keeps this list correct. `docs/eds-version-matrix.md`
+/// tells what each entry is, and which ones the shipped code (not only a
+/// probe test) depends on.
 const EDS_FEATURES: &[(&str, &str)] = &[
-    // 3.60 reworked vCard versioning: `EVCardFormat` and its
-    // `EVC_FORMAT_VCARD_30` are gone, `e_vcard_to_string` lost its format
-    // argument, and the version a caller wants is stated with an
-    // `EVCardVersion` to `e_vcard_convert_to_string` instead. The same enum
-    // is what `e_contact_date_to_string` gained a second parameter of, so one
-    // probe covers both — see `src/compat.rs`, which is the only place either
-    // spelling is written.
+    // 3.60 changed vCard versions: `EVCardFormat` and `EVC_FORMAT_VCARD_30` are
+    // gone, `e_vcard_to_string` has no format argument, and the caller gives an
+    // `EVCardVersion` to `e_vcard_convert_to_string`. `e_contact_date_to_string`
+    // has a second parameter of the same enum, so one probe covers both.
+    // `src/compat.rs` is the only place with either form.
     ("eds_vcard_version_enum", "EVCardVersion"),
-    // 3.60 dropped `CamelProvider`'s `auto_detect`, `url_hash` and
-    // `url_equal` fields; the function-pointer typedef of the first goes with
-    // them, and is the marker because a field name is not a distinct
-    // identifier in the bindings.
+    // 3.58 removed the `auto_detect` field of `CamelProvider` and 3.60 removed
+    // `url_hash` and `url_equal`. The marker is the function-pointer typedef of
+    // `auto_detect`, because a field name is not a distinct identifier in the
+    // bindings.
     ("camel_provider_url_helpers", "CamelProviderAutoDetectFunc"),
-    // 3.60 removed `camel-folder-search.h` outright — the `CamelFolderSearch`
-    // object, its class, and the `camel_folder_search_util_*` helpers — in
-    // favour of a `CamelStoreSearch` API. Only `camel_folder_search_sync` and
-    // its two siblings survive, on `CamelFolder` itself.
+    // 3.58 removed `camel-folder-search.h`: the `CamelFolderSearch` object, its
+    // class and the `camel_folder_search_util_*` helpers, for a
+    // `CamelStoreSearch` API. Only `camel_folder_search_sync` and its two
+    // siblings stay, on `CamelFolder`.
     ("camel_folder_search_object", "camel_folder_search_new"),
-    // 3.58 added `CamelFolderClass`'s `search_body_sync` and
-    // `search_header_sync`, the two slots a provider fills to answer a body or
-    // header term from the server instead of leaving `CamelStoreSearch` to
-    // open every message. A probe of its own rather than the negation of the
-    // one above: 3.58 and 3.59 have both, since `CamelFolderSearch` did not go
-    // until 3.60, so neither answer implies the other.
+    // 3.58 added the `search_body_sync` and `search_header_sync` slots of
+    // `CamelFolderClass`. A provider fills them to answer a body or header term
+    // from the server, so `CamelStoreSearch` does not open each message. A
+    // separate probe, not the negation of the one above: the two are
+    // independent changes.
     (
         "camel_folder_search_body_sync",
         "camel_folder_search_body_sync",
     ),
-    // 3.60 made the summary database's row structs private: `CamelMIRecord`
-    // (a message) and `CamelFIRecord` (the folder header beside them), which
-    // is where a provider keeps the one column Camel reserves for it.
+    // 3.58 renamed the summary database row structs `CamelMIRecord` (a message)
+    // and `CamelFIRecord` (the folder header). The provider keeps its column in
+    // them.
     ("camel_summary_records", "CamelMIRecord"),
-    // 3.60 replaced `CamelFolder`'s `get_uids`/`free_uids` pair — an array
-    // borrowed from the folder and handed back to it — with `dup_uids`, an
-    // ordinary reference-counted `GPtrArray` the caller owns. Detected
-    // separately from the summary records above rather than assumed to move
-    // with them: they are two independent renames that happen to have landed
-    // in the same release, and folding them into one probe would make a future
-    // EDS that changed only one of them silently wrong about the other.
+    // 3.58 replaced the `get_uids`/`free_uids` pair of `CamelFolder` (an array
+    // lent by the folder and given back) with `dup_uids`, a reference-counted
+    // `GPtrArray` that the caller owns. A separate probe from the records
+    // above: the two are independent renames in the same release, and one
+    // probe would be silently wrong for an EDS that changes only one.
     ("camel_folder_get_uids", "camel_folder_free_uids"),
-    // 3.60 replaced `camel_uid_cache_get_new_uids`/`_free_uids` with
-    // `camel_uid_cache_dup_new_uids`, whose result is an ordinary
-    // reference-counted `GPtrArray`.
+    // 3.58 replaced `camel_uid_cache_get_new_uids`/`_free_uids` with
+    // `camel_uid_cache_dup_new_uids`, which returns a reference-counted
+    // `GPtrArray`.
     (
         "camel_uid_cache_get_new_uids",
         "camel_uid_cache_get_new_uids",
     ),
-    // 3.60 has no boxed `CamelFolderThread` type; the name now belongs to the
-    // `CamelFolderThreadFlags` enum's `GType`.
+    // From 3.58, `CamelFolderThread` is a final `GObject`, not a boxed type.
     (
         "camel_folder_thread_boxed",
         "camel_folder_thread_messages_get_type",
     ),
-    // 3.60 added a dedicated `E_CONTACT_DEATHDATE` field — absent from 3.52's
-    // `EContactField` enum entirely, so referencing it unconditionally would
-    // fail to compile there (a real header-visible signal, unlike the three
-    // facts below it piggybacks on). Its arrival lines up with several other
-    // `EContact` behaviour changes that carry no header signal of their own —
-    // `X-JABBER`/`X-AIM`/`X-GADUGADU` now resolving to the `_HOME_1` slot
-    // instead of the plain attribute-list field, `ANNIVERSARY` and
-    // `X-EVOLUTION-ANNIVERSARY` swapping which one maps to
-    // `E_CONTACT_ANNIVERSARY`, and `E_CONTACT_NAME_OR_ORG` deriving
-    // differently with no explicit `FILE_AS` — all measured together on the
-    // same two EDS releases (3.52, 3.60.2) in `docs/eds-version-matrix.md`
-    // (B). `eds-sys/tests/contacts.rs` uses this one cfg as the pivot for all
-    // four, since they are empirically all-or-nothing on the same release; if
-    // a future EDS ever decouples them, that is exactly the kind of surprise
-    // this matrix exists to surface.
+    // 3.60 added `E_CONTACT_DEATHDATE`. The 3.52 `EContactField` enum does not
+    // have it, so an unconditional reference does not compile there. Three
+    // `EContact` behavior changes with no header signal arrive with it:
+    // `X-JABBER`/`X-AIM`/`X-GADUGADU` map to the `_HOME_1` slot, not the
+    // attribute-list field; `ANNIVERSARY` and `X-EVOLUTION-ANNIVERSARY` swap
+    // which maps to `E_CONTACT_ANNIVERSARY`; and `E_CONTACT_NAME_OR_ORG`
+    // derives differently with no explicit `FILE_AS`. All four are measured on
+    // 3.52 and 3.60.2 in `docs/eds-version-matrix.md` (B).
+    // `eds-sys/tests/contacts.rs` uses this one cfg for all four, because they
+    // change together. The matrix exists to show a future EDS that separates them.
     ("eds_death_date_field", "E_CONTACT_DEATHDATE"),
     // eds#663 (MR 247, merged upstream 2026-09-29 as `592d95d`; `Since: 3.64`,
-    // not yet released, master-only headers only): `ESourceAuthentication`
-    // gains `credential-store-id`, which the credentials engine now keys an
-    // OAuth 2.0 account's stored token by instead of `credential-name` — a
-    // key that is stable and never shared between two accounts of the same
-    // host, unlike the host-derived one `credential-name` could produce.
-    // Detected by its setter rather than a version comparison, the same
-    // reasoning every other entry in this table gives; no installed headers
-    // anywhere this crate has been built against yet declare it, so this cfg
-    // has never fired outside of the marker itself being read from a future
-    // bindings dump.
+    // not released, only in master headers): `ESourceAuthentication` gets
+    // `credential-store-id`. The credentials engine now uses it, not
+    // `credential-name`, as the key of the stored OAuth 2.0 token. This key is
+    // stable and unique per account, but `credential-name` comes from the host
+    // and can be shared. Detected by its setter, not a version comparison. No
+    // installed headers where this crate was built declare it, so this cfg has
+    // never been set.
     (
         "eds_credential_store_id",
         "e_source_authentication_set_credential_store_id",
     ),
-    // e-d-s `bf6e074` (merged upstream 2026-10-07, plus `efe25dc` for
-    // `e_util_fill_random_bytes`; `Since: 3.64`, not yet released,
-    // master-only headers only): `ESourceOAuth2Client` is the keyfile group
-    // ("OAuth2 Client") an account configured for upstream's own dynamic
-    // OAuth 2.0 support (method "OAuth2Dynamic") writes its client-id,
-    // client-secret, authorization-endpoint, token-endpoint, redirect-uri,
-    // scope, resource and issuer into, instead of this provider's own "JMAP
-    // OAuth2" group. Detected the same way as `eds_credential_store_id`: the
-    // type's own accessor, not a version comparison. `ESourceOAuth2Client`
-    // and `e_source_oauth2_client_get_type` both already match the
-    // `ESource.*`/`e_source_.*` wildcards above, so nothing else needs
-    // adding here for bindgen to emit them once a header declares them.
+    // e-d-s `bf6e074` (merged upstream 2026-10-07, with `efe25dc` for
+    // `e_util_fill_random_bytes`; `Since: 3.64`, not released, only in master
+    // headers): `ESourceOAuth2Client` is the keyfile group ("OAuth2 Client")
+    // where an account with the upstream dynamic OAuth 2.0 support (method
+    // "OAuth2Dynamic") writes its client-id, client-secret,
+    // authorization-endpoint, token-endpoint, redirect-uri, scope, resource and
+    // issuer. This provider uses its own "JMAP OAuth2" group. Detected by the
+    // type accessor, as `eds_credential_store_id` is. The `ESource.*` and
+    // `e_source_.*` wildcards above already match both names, so bindgen emits
+    // them when a header declares them.
     ("eds_oauth2_dynamic", "e_source_oauth2_client_get_type"),
-    // 3.62 removed `camel_data_cache_add` outright in favour of
+    // 3.62 removed `camel_data_cache_add` for
     // `camel_data_cache_add_atomic`/`commit_atomic`/`discard_atomic`: a write
-    // under a temporary name in the cache directory, renamed into place only
-    // once it is complete, instead of a stream opened directly on the final
-    // path. `jmap-mail/src/cache.rs` is the only caller either spelling is
-    // written in.
+    // to a temporary name in the cache directory, renamed into place when it is
+    // complete, not a stream on the final path. `jmap-mail/src/cache.rs` is the
+    // only caller of either form.
     ("camel_data_cache_atomic", "camel_data_cache_add_atomic"),
 ];
 
-/// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated
-/// bindings actually contain, and a `rustc-check-cfg` for every entry either
-/// way so that `-D warnings` does not trip over the ones this EDS lacks.
+/// Emit one `cargo::rustc-cfg` for each [`EDS_FEATURES`] entry that the
+/// generated bindings contain, and a `rustc-check-cfg` for each entry, so that
+/// `-D warnings` does not fail on the entries this EDS does not have.
 ///
-/// The same answer goes out a second time as `cargo::metadata`, because a
-/// `rustc-cfg` reaches only *this* crate: `#[cfg]` in a crate that merely
-/// depends on `eds-sys` would silently be false on every EDS. Cargo hands a
-/// build script's metadata to the build scripts of its direct dependents as
-/// `DEP_EVOLUTION_DATA_SERVER_<KEY>` (the `links` key in `Cargo.toml`
-/// uppercased), so a dependent re-emits the cfgs it needs from there — see
-/// `jmap-mail/build.rs`. That keeps the *detection* single-sourced here, where
-/// the oracle is clang on the installed headers, rather than letting each crate
-/// invent its own version test.
+/// The same answer also goes out as `cargo::metadata`, because a `rustc-cfg`
+/// reaches only this crate: `#[cfg]` in a dependent crate is silently false on
+/// each EDS. Cargo gives this metadata to the build scripts of direct
+/// dependents as `DEP_EVOLUTION_DATA_SERVER_<KEY>` (the `links` key in
+/// `Cargo.toml`, uppercase), and a dependent emits the cfgs it needs again
+/// (see `jmap-mail/build.rs`). Thus the detection stays here, where clang
+/// reads the installed headers, and no crate makes its own version test.
 fn emit_feature_cfgs(bindings: &str) {
     for (cfg, marker) in EDS_FEATURES {
         println!("cargo::rustc-check-cfg=cfg({cfg})");
@@ -878,13 +775,11 @@ fn emit_feature_cfgs(bindings: &str) {
     }
 }
 
-/// The one EDS version the four probed packages describe.
+/// The one EDS version of the four probed packages.
 ///
-/// They are four `.pc` files out of a single tarball, so in every sane
-/// installation they carry the same version — and if they do not, these
-/// bindings are being generated from headers of *mixed* ABIs, which is the
-/// hazard M10 exists to make visible rather than something to average over.
-/// There is no correct binding to emit in that case, so refuse to emit one.
+/// The four `.pc` files come from one tarball, so a correct installation gives
+/// one version. If they differ, the headers are of mixed ABIs, and the version
+/// matrix must show this, not hide it. No binding is correct then, so emit none.
 fn agreed(resolved: &[(&str, String)]) -> String {
     let (_, first) = resolved.first().expect("no packages were probed");
     if let Some((pkg, other)) = resolved.iter().find(|(_, v)| v != first) {
@@ -907,16 +802,16 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
 
-    // The pkg_config crate emits the cargo:rustc-link-lib/-search lines for
-    // us; we only need the include paths for clang.
+    // The pkg_config crate emits the cargo:rustc-link-lib/-search lines; clang
+    // needs only the include paths.
     let mut clang_args = vec!["-DE_CAL_DISABLE_DEPRECATED".to_string()];
     let mut resolved: Vec<(&str, String)> = Vec::new();
     for pkg in [
         "libebackend-1.2",
         "libedata-book-1.2",
         "libedata-cal-2.0",
-        // Camel ships in the same tarball and carries the same version, so the
-        // 3.52 floor applies unchanged.
+        // Camel is in the same tarball with the same version, so the 3.52
+        // minimum applies.
         "camel-1.2",
     ] {
         let lib = pkg_config::Config::new()
@@ -935,34 +830,32 @@ fn main() {
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_args(clang_args)
-        // The headers are not ours and are full of deprecations; their
-        // warnings would drown any real problem.
+        // The headers have many deprecations, and their warnings hide real
+        // problems.
         .clang_arg("-Wno-deprecated-declarations")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Reproducible builds: no comment text (it embeds header paths on
-        // some clang versions) and a stable item order.
+        // Reproducible builds: no comment text (some clang versions put header
+        // paths in it) and a stable item order.
         .generate_comments(false)
         .layout_tests(false)
         .derive_default(false)
         .prepend_enum_name(false)
-        // Plain consts, not `ModuleConsts`: the blocklisted GLib enums are
-        // type aliases in the gtk-rs sys crates, and a module-per-enum style
-        // makes bindgen refer to them as `GSomeFlags::Type`, which does not
-        // exist there.
+        // Plain consts, not `ModuleConsts`: the blocked GLib enums are type
+        // aliases in the gtk-rs sys crates, and with one module per enum bindgen
+        // writes `GSomeFlags::Type`, which does not exist there.
         .default_enum_style(bindgen::EnumVariation::Consts)
-        // String `#define`s come out as `&CStr`, so passing one to a
-        // `*const gchar` parameter is `.as_ptr()` and not a cast from a byte
-        // array that may or may not carry its NUL.
+        // String `#define`s become `&CStr`, so a `*const gchar` argument is
+        // `.as_ptr()`, not a cast from a byte array with or without its NUL.
         .generate_cstr(true)
-        // Edition 2024 denies unsafe ops in unsafe fns; let bindgen write the
-        // inner `unsafe` blocks instead of blanket-allowing the lint.
+        // Edition 2024 denies unsafe operations in unsafe fns. Let bindgen
+        // write the inner `unsafe` blocks; do not allow the lint everywhere.
         .wrap_unsafe_ops(true)
         .raw_line("pub use glib_sys::*;")
         .raw_line("pub use gobject_sys::*;")
         .raw_line("pub use gio_sys::*;")
         // glib-sys and gobject-sys both export these (same C symbols, two
-        // declarations), which makes the globs above ambiguous. An explicit
-        // re-export takes precedence over a glob and settles it.
+        // declarations), so the globs above are ambiguous. An explicit
+        // re-export has priority over a glob.
         .raw_line(
             "pub use glib_sys::{GIOCondition, g_io_condition_get_type, g_variant_get_gtype, \
              G_IO_ERR, G_IO_HUP, G_IO_IN, G_IO_NVAL, G_IO_OUT, G_IO_PRI};",
@@ -990,7 +883,7 @@ fn main() {
         .write_to_file(&written)
         .expect("could not write bindings.rs");
 
-    // Feature-detect against the file rustc is about to compile, rather than
-    // against the version string, so the answer is what this EDS really has.
+    // Detect features in the file that rustc compiles, not from the version
+    // string, so the answer is what this EDS has.
     emit_feature_cfgs(&fs::read_to_string(&written).expect("could not read back bindings.rs"));
 }
