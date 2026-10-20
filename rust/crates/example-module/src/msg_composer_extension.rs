@@ -1,4 +1,4 @@
-//! Message composer extension.
+//! Message composer extension integration.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -108,9 +108,10 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
         obj_class.constructed = Some(instance_constructed);
 
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-        // Looked up, not asked for: an accessor that registers its type from
-        // inside a class initialiser can deadlock against another thread's
-        // registration. `register_type` has already called it.
+        // Resolve by name instead of a getter call.
+        // A getter may register a type inside class init.
+        // That can deadlock against another registration thread.
+        // `register_type` has already registered this type.
         ext_class.extensible_type = ffi::g_type_from_name(c"EMsgComposer".as_ptr());
     }
 }
@@ -122,7 +123,7 @@ unsafe extern "C" fn instance_init(_instance: *mut c_void, _klass: *mut c_void) 
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
-        // Registers the extensible type `class_init` looks up.
+        // Register the extensible type that `class_init` resolves by name.
         ffi::e_msg_composer_get_type();
 
         let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();
