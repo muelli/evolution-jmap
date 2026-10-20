@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The bytes behind one summary row, against a live mock server: what
-//! `Email/get` has to be asked a second time for, what the download answers
-//! with, and the three ways the question can have no answer.
+//! The bytes of one summary row, against a mock server: the second `Email/get`
+//! request, the download result, and the three failure cases.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{MailSync, SyncError};
@@ -27,7 +26,7 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// One message in one mailbox, and its id.
+    /// Seed one message in one mailbox, and return its id.
     fn seed_message(&self, subject: &str, body: &str) -> Id {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -42,8 +41,7 @@ impl Fixture {
         ))
     }
 
-    /// Reach into the account and change the message the way a server would
-    /// have answered differently.
+    /// Change the message in the store, to make the server answer differently.
     fn with_email(&self, uid: &Id, edit: impl FnOnce(&mut jmap_proto::mail::Email)) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -60,15 +58,15 @@ fn the_source_of_a_message_is_the_rfc_5322_bytes_the_server_holds() {
     let source = fixture.sync().message_source(&uid).unwrap();
     let source = String::from_utf8(source).expect("the mock serves a text message");
 
-    // The headers a message list never shows and a reader does: the source is
-    // the message, not a rendering of the summary row.
+    // The source is the message with all headers, not a copy of the summary
+    // row.
     assert!(source.contains("Subject: Lunch?"), "{source}");
     assert!(source.contains("From: Bob <bob@example.com>"), "{source}");
     assert!(
         source.contains("One o'clock at the usual place."),
         "{source}"
     );
-    // A header block, an empty line, a body — the shape a MIME parser needs.
+    // A header block, an empty line, and a body, as a MIME parser needs.
     let (headers, body) = source.split_once("\r\n\r\n").expect("a header/body split");
     assert!(!headers.contains("One o'clock"), "{source}");
     assert_eq!(body, "One o'clock at the usual place.\r\n");
@@ -79,8 +77,8 @@ fn a_message_the_server_no_longer_has_is_reported_as_gone() {
     let fixture = Fixture::start();
     fixture.seed_message("Lunch?", "body");
 
-    // An id of the right shape that the account never held: what a uid left in
-    // a folder summary becomes after another client deleted the message.
+    // A valid id that the account does not have, as after a different client
+    // deletes the message of a summary uid.
     let error = fixture
         .sync()
         .message_source(&Id::new("E404"))
@@ -96,9 +94,8 @@ fn a_message_the_server_no_longer_has_is_reported_as_gone() {
 fn a_message_the_server_names_no_blob_for_cannot_be_read() {
     let fixture = Fixture::start();
     let uid = fixture.seed_message("Lunch?", "body");
-    // RFC 8621 §4.1 makes `blobId` a server-set property of every Email, so a
-    // server that answers without one has broken the protocol rather than
-    // deleted anything — and the message stays unreadable however often we ask.
+    // RFC 8621 §4.1 makes `blobId` a server-set property of each Email. Without
+    // it, the server breaks the protocol, and a retry cannot read the message.
     fixture.with_email(&uid, |email| email.blob_id = None);
 
     let error = fixture
@@ -118,9 +115,9 @@ fn a_message_the_server_names_no_blob_for_cannot_be_read() {
 fn a_blob_the_server_will_not_serve_is_the_downloads_own_failure() {
     let fixture = Fixture::start();
     let uid = fixture.seed_message("Lunch?", "body");
-    // The message is still listed and still names a blob; the blob is gone.
-    // Distinct from both cases above: the row is fine and retrying is not
-    // hopeless, so this must arrive as the transport failure it is.
+    // The message is still listed with a blob id, but the blob is gone. This is
+    // different from the two cases above: the row is correct and a retry can
+    // work, so the result must be a transport failure.
     fixture.with_email(&uid, |email| email.blob_id = Some(Id::new("B404")));
 
     let error = fixture
@@ -143,10 +140,9 @@ fn the_source_is_asked_for_by_the_blob_the_server_names_now() {
     let fixture = Fixture::start();
     let uid = fixture.seed_message("Lunch?", "body");
 
-    // A second message's blob, put on the first: nothing in a folder summary
-    // records a blob id — Camel has no field for one — so the fetch must read
-    // it back off the server rather than remember it, and this is what tells
-    // the two apart.
+    // Put the blob of a second message on the first. A folder summary has no
+    // blob id field, so the fetch must read the blob id from the server. This
+    // test proves that it does.
     let other = fixture.seed_message("Dinner?", "elsewhere entirely");
     let blob = {
         let state = fixture.server.state();
@@ -160,14 +156,13 @@ fn the_source_is_asked_for_by_the_blob_the_server_names_now() {
     assert!(source.contains("Subject: Dinner?"), "{source}");
 }
 
-/// The message that used not to open. A body past the 10 MiB that `ureq`'s
-/// default used to impose comes back whole — this is the layer where that
-/// limit was felt, because one photo attachment reaches it.
+/// A regression: a body larger than the old 10 MiB default limit of `ureq`
+/// arrives complete. One photo attachment can be this large.
 #[test]
 fn a_message_larger_than_ten_mebibytes_is_readable() {
     let fixture = Fixture::start();
-    // Not a round multiple of anything, so a truncated read cannot come out the
-    // right length by accident.
+    // An irregular length, so that a truncated read cannot have the correct
+    // length by accident.
     let body = "x".repeat(11 * 1024 * 1024 + 7);
     let uid = fixture.seed_message("Holiday photos", &body);
 
@@ -180,20 +175,18 @@ fn a_message_larger_than_ten_mebibytes_is_readable() {
     assert!(source.contains(&body), "the body did not arrive whole");
 }
 
-/// Whose number the download is held to. The row says how many octets the
-/// message is, and that is what bounds the read: a row that claims far fewer
-/// than the blob turns out to hold is a server contradicting itself, and the
-/// answer is refused at the ceiling rather than buffered and then judged.
+/// The size of the row limits the download. If the row gives much less than
+/// the blob size, the server contradicts itself. The client refuses the answer
+/// at the ceiling, and does not buffer it first.
 ///
-/// The discriminating half of the test above — without it, a constant large
-/// enough to let any message through would pass both.
+/// This test completes the test above. Without it, a very large constant
+/// limit passes both.
 #[test]
 fn a_row_that_understates_its_size_bounds_the_download_to_what_it_said() {
     let fixture = Fixture::start();
     let uid = fixture.seed_message("Holiday photos", &"x".repeat(512 * 1024));
-    // Well below the message *and* below the margin `download_ceiling` allows
-    // for a server counting line endings differently, so this is a claim about
-    // the row being read rather than about the margin being tight.
+    // Much less than the message, and less than the `download_ceiling` margin.
+    // Thus the test checks the row size, not the margin.
     fixture.with_email(&uid, |email| email.size = Some(1));
 
     let error = fixture
@@ -209,15 +202,15 @@ fn a_row_that_understates_its_size_bounds_the_download_to_what_it_said() {
     }
 }
 
-/// A row with no size to be proportional to still gets a ceiling — this
-/// repository's, not a dependency's, and above the old 10 MiB either way.
+/// A row without a size still gets a ceiling: the limit of this repository,
+/// not of a dependency, and more than the old 10 MiB.
 #[test]
 fn a_row_with_no_size_still_reads_a_large_message() {
     let fixture = Fixture::start();
     let body = "x".repeat(11 * 1024 * 1024 + 7);
     let uid = fixture.seed_message("Holiday photos", &body);
-    // RFC 8621 §4.1.1 makes `size` server-set, so this is a server in the
-    // wrong; it must not cost the user the message.
+    // RFC 8621 §4.1.1 makes `size` server-set, so this server is wrong. The
+    // user must still get the message.
     fixture.with_email(&uid, |email| email.size = None);
 
     let source = fixture

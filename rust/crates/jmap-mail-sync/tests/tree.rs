@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The mailbox-list-to-folder-tree mapping, on hand-written mailbox lists.
+//! The mapping from a mailbox list to a folder tree, with hand-written lists.
 //!
-//! Fixtures rather than a live server, because the interesting inputs here are
-//! the ones no correct server produces: a name with a `/` in it, a parent that
-//! is not in the list, a cycle. `folders.rs` covers the well-behaved case
-//! against `jmap-mockd`.
+//! The tests use fixtures, not a server, because the important inputs come
+//! from no correct server: a name with a `/`, a parent that is not in the
+//! list, a cycle. `folders.rs` tests the correct case against `jmap-mock`.
 
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree, path};
 use jmap_proto::Id;
@@ -42,7 +41,7 @@ fn tree(mailboxes: &[Mailbox]) -> FolderTree {
     FolderTree::from_mailboxes(mailboxes).expect("a well-formed mailbox list")
 }
 
-/// The paths of every folder, parents before children.
+/// The paths of all folders, parents before children.
 fn paths(tree: &FolderTree) -> Vec<String> {
     tree.iter().map(|folder| folder.path.clone()).collect()
 }
@@ -61,7 +60,7 @@ fn siblings_are_ordered_by_sort_order_then_name() {
         with_sort_order(mailbox("M1", "Zebra"), 1),
         with_sort_order(mailbox("M2", "Beta"), 7),
         with_sort_order(mailbox("M3", "Alpha"), 7),
-        // No sortOrder at all sorts as 0 — RFC 8621's own default.
+        // No sortOrder sorts as 0, the default of RFC 8621.
         mailbox("M4", "Omega"),
     ]);
 
@@ -171,7 +170,7 @@ fn a_slash_in_a_name_cannot_invent_a_level() {
     let tree = tree(&[mailbox("M1", "and/or"), mailbox("M2", "100% done")]);
 
     assert_eq!(paths(&tree), ["100%25 done", "and%2For"]);
-    // What the user is shown is unaffected.
+    // The display name does not change.
     assert_eq!(
         tree.find("and%2For")
             .map(|folder| folder.display_name.clone()),
@@ -213,16 +212,15 @@ fn a_name_made_of_dots_cannot_escape_the_cache_directory() {
         mailbox("M3", "..."),
     ]);
 
-    // A path component Camel would resolve as a directory traversal, and one
-    // it would resolve as "the same directory", are both encoded away. Three
-    // dots means nothing to a filesystem, so it survives verbatim.
+    // Encode the components that Camel reads as "parent directory" or "same
+    // directory". Three dots have no meaning to a filesystem, so they stay.
     assert_eq!(paths(&tree), ["%2E", "%2E%2E", "..."]);
 }
 
 #[test]
 fn a_nul_in_a_name_cannot_truncate_the_path() {
-    // The path crosses into C as a string; a NUL in it would either fail to
-    // convert or silently name a different folder.
+    // The path goes to C as a string. A NUL in it makes the conversion fail, or
+    // names a different folder.
     let tree = tree(&[mailbox("M1", "Inbox\0Sent")]);
 
     assert_eq!(paths(&tree), ["Inbox%00Sent"]);
@@ -230,8 +228,8 @@ fn a_nul_in_a_name_cannot_truncate_the_path() {
 
 #[test]
 fn siblings_with_the_same_name_still_get_distinct_paths() {
-    // Illegal per RFC 8621 §2, but a store that maps two mailboxes onto one
-    // path hands back the wrong folder's mail, so it must not be possible.
+    // RFC 8621 §2 forbids this. But if two mailboxes have one path, the store
+    // returns the mail of the wrong folder, so this must not occur.
     let tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Inbox")]);
     let paths = paths(&tree);
 
@@ -245,9 +243,9 @@ fn siblings_with_the_same_name_still_get_distinct_paths() {
         Some(Id::new("M2"))
     );
 
-    // Which of the two keeps the plain path must not depend on the order the
-    // server happened to list them in — the path is remembered in the summary
-    // cache and in saved filters, and it may not move between sessions.
+    // The listing order must not decide which folder keeps the plain path. The
+    // summary cache and saved filters keep the path, so it must stay the same
+    // between sessions.
     let reversed = FolderTree::from_mailboxes(&[mailbox("M2", "Inbox"), mailbox("M1", "Inbox")])
         .expect("a well-formed mailbox list");
     assert_eq!(
@@ -258,8 +256,8 @@ fn siblings_with_the_same_name_still_get_distinct_paths() {
 
 #[test]
 fn an_orphan_is_kept_as_a_top_level_folder() {
-    // Its parent may be a mailbox this account cannot see. Dropping it would
-    // be hiding mail; a top-level folder is visible and correct enough.
+    // The parent can be a mailbox that this account cannot see. If the client
+    // drops the orphan, it hides mail. A top-level folder is visible.
     let tree = tree(&[mailbox("M1", "Inbox"), child("M2", "Shared", "M99")]);
 
     assert_eq!(paths(&tree), ["Inbox", "Shared"]);
@@ -281,8 +279,8 @@ fn a_parent_cycle_does_not_hang_and_keeps_every_mailbox() {
         child("M3", "B", "M2"),
     ]);
 
-    // The cycle is cut at its first member in sibling order, which leaves a
-    // forest: nothing is lost, nothing is reachable twice.
+    // The cut is at the first cycle member in sibling order. The result is a
+    // forest: no mailbox is lost, and no mailbox occurs twice.
     assert_eq!(paths(&tree), ["Inbox", "A", "A/B"]);
     assert_eq!(tree.len(), 3);
 }
@@ -296,8 +294,8 @@ fn a_mailbox_hanging_off_a_cycle_stays_under_its_parent() {
         child("M4", "C", "M3"),
     ]);
 
-    // Cutting the cycle removes one link, A's, and nothing else: C's parent
-    // is still B, so C must not become a second top-level folder.
+    // The cut removes only one link, from A. B is still the parent of C, so
+    // C must not become a second top-level folder.
     assert_eq!(paths(&tree), ["Inbox", "A", "A/B", "A/B/C"]);
 }
 
@@ -310,8 +308,8 @@ fn counts_come_from_the_mailbox_and_saturate() {
             ..mailbox("M1", "Inbox")
         },
         Mailbox {
-            // Just past 32 bits: a wrapping cast would report five messages,
-            // which is a plausible-looking lie rather than an obvious one.
+            // Just more than 32 bits. A wrapping cast gives five messages,
+            // which is wrong but looks correct.
             total_emails: Some(u64::from(u32::MAX) + 5),
             ..mailbox("M2", "Absurd")
         },
@@ -322,15 +320,14 @@ fn counts_come_from_the_mailbox_and_saturate() {
         .map(|folder| (folder.total, folder.unread))
         .collect();
 
-    // Camel counts are 32-bit; saturating beats wrapping to a small number.
-    // "Absurd" sorts before "Inbox" before "Quiet".
+    // Camel counts are 32-bit. Saturation is better than a wrap to a small
+    // number. The order is "Absurd", "Inbox", "Quiet".
     assert_eq!(counts, [(u32::MAX, 0), (12, 3), (0, 0)]);
 }
 
 #[test]
 fn an_absent_subscription_flag_means_subscribed() {
-    // A server that does not model subscriptions must not end up with every
-    // folder hidden.
+    // If a server has no subscriptions, the client must not hide all folders.
     let tree = tree(&[
         mailbox("M1", "Inbox"),
         Mailbox {
@@ -386,8 +383,8 @@ fn a_mailbox_without_an_id_is_a_protocol_error() {
 
 #[test]
 fn a_repeated_id_is_a_protocol_error() {
-    // Two mailboxes with one id make the id-based tie-break above meaningless,
-    // and there is no answer that is right for both.
+    // Two mailboxes with one id break the id tie-break above, and no result is
+    // correct for both.
     let error = FolderTree::from_mailboxes(&[mailbox("M1", "Inbox"), mailbox("M1", "Sent")])
         .expect_err("an id identifies one mailbox");
 
@@ -403,12 +400,11 @@ fn a_mailbox_without_a_name_is_a_protocol_error() {
 }
 
 // ---------------------------------------------------------------------------
-// finding the folder a role names
+// role lookup
 
-/// What `camel_store_get_inbox_folder_sync` is answered from. The role is a
-/// property of the mailbox, not of its name or its place in the tree, so the
-/// lookup has to reach every level — a JMAP server is free to put the inbox
-/// under another mailbox, and several do.
+/// The source for `camel_store_get_inbox_folder_sync`. The role is a property
+/// of the mailbox, not of its name or position. Thus the lookup must search all
+/// levels: a JMAP server can put the inbox below a different mailbox.
 #[test]
 fn a_role_finds_its_folder_wherever_it_sits() {
     let tree = tree(&[
@@ -421,10 +417,9 @@ fn a_role_finds_its_folder_wherever_it_sits() {
     assert_eq!(inbox.id, Id::new("M2"));
 }
 
-/// An account whose server assigns no roles at all — legal, since RFC 8621 §2
-/// makes `role` nullable on every mailbox. There is no inbox to answer with,
-/// and inventing one out of a mailbox called "Inbox" would be this provider
-/// guessing where the user's mail arrives.
+/// A server that gives no roles. This is valid: RFC 8621 §2 makes `role`
+/// nullable. There is no inbox. A mailbox called "Inbox" is only a guess about
+/// where mail arrives, so the provider does not use it.
 #[test]
 fn a_role_no_mailbox_claims_is_not_found() {
     let tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Sent")]);
@@ -433,11 +428,9 @@ fn a_role_no_mailbox_claims_is_not_found() {
     assert!(tree.role(FolderRole::Trash).is_none());
 }
 
-/// Two mailboxes claiming one role is a server bug, and the tree already
-/// settles it by giving the role to the first in sibling order. The lookup must
-/// agree with that decision rather than take the first mailbox whose *JMAP*
-/// role says inbox, or the folder Camel opens as the inbox would not be the one
-/// the folder listing marked `CAMEL_FOLDER_TYPE_INBOX`.
+/// Two mailboxes with one role are a server bug. The tree gives the role to the
+/// first in sibling order, and the lookup must agree. Else, Camel opens a
+/// different inbox than the folder marked `CAMEL_FOLDER_TYPE_INBOX`.
 #[test]
 fn the_role_is_found_on_the_folder_that_kept_it() {
     let tree = tree(&[
@@ -452,13 +445,11 @@ fn the_role_is_found_on_the_folder_that_kept_it() {
     assert_eq!(inbox.display_name, "Real inbox");
 }
 
-/// And the way back: the JMAP name of a role, which is what the caller that
-/// asked for one writes into its error when the account has no such mailbox.
-/// Round-tripping through [`FolderRole::from_jmap`] is the property worth
-/// pinning — a name that did not map back would be one this crate itself would
-/// not recognise in a mailbox — and the spelling is checked against
-/// `jmap_proto` rather than against a literal, because those constants are what
-/// a server's `role` is compared with.
+/// The reverse direction: the JMAP name of a role. A caller puts it in its
+/// error when the account has no such mailbox. The name must go back through
+/// [`FolderRole::from_jmap`], else this crate does not recognise it. The test
+/// compares with the `jmap_proto` constants, not literals, because the code
+/// compares a server `role` with these constants.
 #[test]
 fn every_role_is_named_by_the_jmap_role_it_is_read_from() {
     let roles = [
@@ -480,14 +471,13 @@ fn every_role_is_named_by_the_jmap_role_it_is_read_from() {
     }
 }
 
-/// An unrecognised mailbox role — specifically `"snoozed"` from
-/// `draft-ietf-extra-email-snooze`, but also other roles from the RFC 8457
-/// registry (`\Important`, `\Flagged`, …) or vendor extensions — maps to
-/// `None` via [`FolderRole::from_jmap`].
+/// [`FolderRole::from_jmap`] maps an unknown mailbox role to `None`. Examples
+/// are `"snoozed"` from `draft-ietf-extra-email-snooze`, other roles from the
+/// RFC 8457 registry (`\Important`, `\Flagged`, …), and vendor extensions.
 ///
-/// In Evolution, `role: None` maps to `CAMEL_FOLDER_TYPE_NORMAL`. A mailbox
-/// holding snoozed messages therefore degrades gracefully to an ordinary
-/// folder and does NOT sink or reject the enclosing `Mailbox/get` response.
+/// In Evolution, `role: None` maps to `CAMEL_FOLDER_TYPE_NORMAL`. Thus a
+/// mailbox with snoozed messages becomes a normal folder, and the
+/// `Mailbox/get` response does NOT fail.
 #[test]
 fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
     let unrecognised_roles = [
@@ -514,8 +504,8 @@ fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
         );
     }
 
-    // Deserializing a full Mailbox/get payload containing standard mailboxes
-    // alongside a snoozed mailbox with custom extensions (RFC 8621 / draft-ietf-extra-email-snooze)
+    // Deserialize a full Mailbox/get payload with standard mailboxes and a
+    // snoozed mailbox with extensions (RFC 8621, draft-ietf-extra-email-snooze).
     let payload = serde_json::json!({
         "accountId": "acc_main",
         "state": "state_123",
@@ -561,7 +551,7 @@ fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
     let tree = FolderTree::from_mailboxes(&response.list).expect("builds FolderTree");
     assert_eq!(tree.len(), 4);
 
-    // Standard folders retain their assigned roles
+    // Standard folders keep their roles.
     assert_eq!(
         tree.role(FolderRole::Inbox).map(|f| f.id.as_str()),
         Some("M_inbox")
@@ -571,7 +561,7 @@ fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
         Some("M_sent")
     );
 
-    // Snoozed and important folders degrade to normal folders (role: None)
+    // Snoozed and important folders become normal folders (role: None).
     let snoozed_folder = tree.find("Snoozed").expect("snoozed folder exists in tree");
     assert_eq!(snoozed_folder.id.as_str(), "M_snoozed");
     assert_eq!(snoozed_folder.role, None);
@@ -586,12 +576,11 @@ fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
 }
 
 // ---------------------------------------------------------------------------
-// the one editable property
+// subscription, the only editable property
 
-/// Subscription is the one thing in a listing the *client* decides, so it is
-/// the one thing a tree can be told rather than re-listed for. By id, and at
-/// any depth: the walk that finds the folder is the same one `iter` does, and a
-/// subscription editor's ticks are mostly on folders well below the roots.
+/// The *client* decides the subscription, so the tree can record it without a
+/// new listing. The lookup is by id, at all depths, because a subscription
+/// editor usually changes folders far below the roots.
 #[test]
 fn a_subscription_can_be_recorded_on_a_folder_at_any_depth() {
     let mut tree = tree(&[
@@ -612,9 +601,9 @@ fn a_subscription_can_be_recorded_on_a_folder_at_any_depth() {
     );
 }
 
-/// And a mailbox the tree does not have is reported rather than ignored: the
-/// caller is a write that already succeeded against the server, and "the tree
-/// predates that folder" is a different situation from "the tree was updated".
+/// The tree reports a missing mailbox, and does not ignore it. The server write
+/// already succeeded, and "the tree is older than the folder" is different
+/// from "the tree changed".
 #[test]
 fn a_subscription_for_a_mailbox_the_tree_does_not_have_changes_nothing() {
     let mut tree = tree(&[mailbox("M1", "Inbox")]);
@@ -631,11 +620,9 @@ fn paths_and_subscriptions(tree: &FolderTree) -> Vec<(&str, bool)> {
 }
 
 // ---------------------------------------------------------------------------
-// the two folders a user adds and takes away
+// insert and remove
 
-/// A folder made out of nothing, for the tests below: what
-/// [`MailSync::create_folder`] answers with, which is where the real ones come
-/// from.
+/// A new folder for the tests below, as [`MailSync::create_folder`] returns it.
 fn made(id: &str, path: &str) -> FolderInfo {
     FolderInfo {
         id: Id::new(id),
@@ -649,9 +636,8 @@ fn made(id: &str, path: &str) -> FolderInfo {
     }
 }
 
-/// The other half of `create_folder_sync`: the folder the server just made has
-/// to join the listing the store is holding, or it is a folder Evolution was
-/// told about and cannot open until something refreshes the account.
+/// The second part of `create_folder_sync`: the new folder must go into the
+/// listing of the store. Else, Evolution cannot open it until a refresh.
 #[test]
 fn a_created_folder_joins_the_roots_when_its_path_has_no_parent_in_it() {
     let mut tree = tree(&[mailbox("M1", "Inbox")]);
@@ -661,9 +647,8 @@ fn a_created_folder_joins_the_roots_when_its_path_has_no_parent_in_it() {
     assert_eq!(paths(&tree), ["Inbox", "Projects"]);
 }
 
-/// And under the folder its path names when it has one — the path is what says
-/// where in the tree the folder belongs, because it is built out of the
-/// parent's.
+/// A path with a parent puts the folder below that parent. The path gives the
+/// tree position, because the code makes it from the parent path.
 #[test]
 fn a_created_folder_joins_the_children_of_the_folder_its_path_names() {
     let mut tree = tree(&[mailbox("M1", "Projects"), child("M2", "JMAP", "M1")]);
@@ -676,9 +661,8 @@ fn a_created_folder_joins_the_children_of_the_folder_its_path_names() {
     );
 }
 
-/// A path whose parent is not in the tree is reported rather than guessed at.
-/// The alternative — hanging it off the roots — would be a folder drawn at the
-/// top level of the account that the server has somewhere else entirely.
+/// The tree reports a path with a missing parent, and does not guess. As a
+/// root, the folder shows at the top level, but the server has it elsewhere.
 #[test]
 fn a_created_folder_whose_parent_is_missing_is_not_inserted() {
     let mut tree = tree(&[mailbox("M1", "Inbox")]);
@@ -688,10 +672,9 @@ fn a_created_folder_whose_parent_is_missing_is_not_inserted() {
     assert_eq!(paths(&tree), ["Inbox"]);
 }
 
-/// The tree may be out of date in the one direction the server cannot correct:
-/// it can still hold a folder another client removed, and a create then makes a
-/// second folder with that same path. The new one is the one the server just
-/// confirmed, so it is the one that stays.
+/// The tree can keep a folder that a different client removed. A create then
+/// makes a second folder with the same path. The server just confirmed the new
+/// folder, so the new folder stays.
 #[test]
 fn a_created_folder_replaces_a_stale_namesake() {
     let mut tree = tree(&[mailbox("M1", "Projects")]);
@@ -705,8 +688,8 @@ fn a_created_folder_replaces_a_stale_namesake() {
     );
 }
 
-/// The removal half, and by id for [`FolderTree::set_subscribed`]'s reason: the
-/// caller is a write that named a mailbox, and a path is this crate's invention.
+/// Removal is by id, as for [`FolderTree::set_subscribed`]: the caller write
+/// names a mailbox id, and this crate makes the paths.
 #[test]
 fn a_removed_folder_leaves_the_tree() {
     let mut tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Projects")]);
@@ -716,10 +699,9 @@ fn a_removed_folder_leaves_the_tree() {
     assert_eq!(paths(&tree), ["Inbox"]);
 }
 
-/// What hung under it goes with it. RFC 8621 §2.5 makes the server refuse to
-/// destroy a mailbox that still has children, so a tree that has some describes
-/// folders another client already removed — and leaving them would be folders
-/// under a parent that is not there.
+/// The subtree goes too. RFC 8621 §2.5 makes the server refuse to destroy a
+/// mailbox with children, so a different client already removed these
+/// children. If they stay, their parent is missing.
 #[test]
 fn a_removed_folder_takes_its_subtree_with_it() {
     let mut tree = tree(&[
@@ -734,8 +716,7 @@ fn a_removed_folder_takes_its_subtree_with_it() {
     assert_eq!(paths(&tree), ["Inbox", "Projects"]);
 }
 
-/// And a mailbox the tree does not have is reported rather than ignored, the
-/// same answer a subscription for one gets.
+/// The tree reports a missing mailbox, as for a subscription.
 #[test]
 fn removing_a_mailbox_the_tree_does_not_have_changes_nothing() {
     let mut tree = tree(&[mailbox("M1", "Inbox")]);
@@ -746,11 +727,10 @@ fn removing_a_mailbox_the_tree_does_not_have_changes_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// the folder a user renames, which is also the one they drag somewhere else
+// rename (which is also move)
 
-/// The other half of `rename_folder_sync`, and the reason the tree needs an
-/// edit of its own rather than a remove and an insert: a folder's path is where
-/// it sits, so renaming one moves every path underneath it.
+/// The second part of `rename_folder_sync`. The tree needs a special edit, not
+/// a remove and an insert: a rename changes all paths below the folder.
 #[test]
 fn a_renamed_folder_takes_its_new_name_and_path() {
     let mut tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Projects")]);
@@ -764,9 +744,8 @@ fn a_renamed_folder_takes_its_new_name_and_path() {
     );
 }
 
-/// The name is passed beside the path because the path cannot be read back into
-/// one: the encoding this crate applies to a mailbox name has no decoder here,
-/// and the caller has the name it just sent to the server.
+/// The caller gives the name with the path, because this crate has no decoder
+/// for the name encoding. The caller has the name that it sent to the server.
 #[test]
 fn a_renamed_folder_shows_the_name_rather_than_the_path_component() {
     let mut tree = tree(&[mailbox("M1", "Projects")]);
@@ -781,8 +760,8 @@ fn a_renamed_folder_shows_the_name_rather_than_the_path_component() {
     );
 }
 
-/// A move: the new path names some other parent, and the folder hangs under it
-/// afterwards — the same reading of a path [`FolderTree::insert`] has.
+/// A move: the new path names a different parent, and the folder goes below
+/// it. [`FolderTree::insert`] reads a path the same way.
 #[test]
 fn a_moved_folder_joins_the_children_of_the_folder_its_new_path_names() {
     let mut tree = tree(&[mailbox("M1", "Notes"), mailbox("M2", "Work")]);
@@ -792,11 +771,9 @@ fn a_moved_folder_joins_the_children_of_the_folder_its_new_path_names() {
     assert_eq!(paths(&tree), ["Work", "Work/Notes"]);
 }
 
-/// And back up to the account's top level, which is the move that has no parent
-/// in its path at all. It joins its new siblings at the end of them, as a
-/// created folder does: sibling order is the server's — sortOrder, then name —
-/// and this side has just been told about one folder, not about the order the
-/// account puts it in.
+/// A move to the top level, with no parent in the path. The folder goes after
+/// its new siblings, as a created folder does. The server decides sibling
+/// order (sortOrder, then name), and the client does not know that order.
 #[test]
 fn a_folder_moved_to_the_top_level_joins_the_roots() {
     let mut tree = tree(&[mailbox("M1", "Work"), child("M2", "Notes", "M1")]);
@@ -806,9 +783,8 @@ fn a_folder_moved_to_the_top_level_joins_the_roots() {
     assert_eq!(paths(&tree), ["Work", "Notes"]);
 }
 
-/// What hangs under the folder goes with it, and every one of those paths is
-/// rewritten: a descendant left at its old path is a folder Camel would key by
-/// a string that names nothing.
+/// The subtree moves with the folder, and all its paths change. A descendant
+/// with its old path has a Camel key that names no folder.
 #[test]
 fn a_moved_folder_brings_its_subtree_to_the_new_path() {
     let mut tree = tree(&[
@@ -826,9 +802,8 @@ fn a_moved_folder_brings_its_subtree_to_the_new_path() {
     );
 }
 
-/// Everything a rename does not touch survives it. The server changed two
-/// properties of one mailbox; the counts, the role, the subscription and the id
-/// are the same folder's as before.
+/// A rename keeps all other data. The server changed two properties of one
+/// mailbox. The counts, the role, the subscription and the id do not change.
 #[test]
 fn a_renamed_folder_keeps_what_the_rename_did_not_change() {
     let mut tree = tree(&[Mailbox {
@@ -847,10 +822,9 @@ fn a_renamed_folder_keeps_what_the_rename_did_not_change() {
     assert_eq!(folder.role, Some(FolderRole::Inbox));
 }
 
-/// A new path whose parent is not in the tree is reported rather than guessed
-/// at, the answer [`FolderTree::insert`] gives the same question — and here the
-/// folder must also still be where it was, because the alternative to guessing
-/// is not "lose it".
+/// The tree reports a new path with a missing parent, as
+/// [`FolderTree::insert`] does. The folder must also stay at its old position:
+/// it must not be lost.
 #[test]
 fn a_rename_under_a_parent_the_tree_does_not_have_changes_nothing() {
     let mut tree = tree(&[mailbox("M1", "Notes")]);
@@ -860,9 +834,9 @@ fn a_rename_under_a_parent_the_tree_does_not_have_changes_nothing() {
     assert_eq!(paths(&tree), ["Notes"]);
 }
 
-/// A folder cannot be moved inside itself. The server refuses it, so this only
-/// happens to a tree asked to do something the account never did — and the one
-/// thing it must not do is take the subtree out and have nowhere to put it back.
+/// A folder cannot move into itself. The server refuses this, so it occurs
+/// only if the tree gets a false request. The tree must not remove the subtree
+/// without a position for it.
 #[test]
 fn a_move_into_the_folders_own_subtree_changes_nothing() {
     let mut tree = tree(&[mailbox("M1", "Work"), child("M2", "Notes", "M1")]);
@@ -872,9 +846,8 @@ fn a_move_into_the_folders_own_subtree_changes_nothing() {
     assert_eq!(paths(&tree), ["Work", "Work/Notes"]);
 }
 
-/// The stale namesake a create can find at its destination, which a move can
-/// find at its own: of two folders at one path, the one the server has just
-/// confirmed is the one that stays.
+/// A move, as a create, can find an old folder at its destination path. Of the
+/// two folders, the one that the server just confirmed stays.
 #[test]
 fn a_moved_folder_replaces_a_stale_namesake() {
     let mut tree = tree(&[mailbox("M1", "Notes"), mailbox("M2", "Work")]);
@@ -888,8 +861,7 @@ fn a_moved_folder_replaces_a_stale_namesake() {
     );
 }
 
-/// And a mailbox the tree does not have is reported rather than ignored, as
-/// every other edit here reports one.
+/// The tree reports a missing mailbox, as all other edits do.
 #[test]
 fn renaming_a_mailbox_the_tree_does_not_have_changes_nothing() {
     let mut tree = tree(&[mailbox("M1", "Inbox")]);

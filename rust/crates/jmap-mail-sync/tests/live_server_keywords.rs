@@ -1,35 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::set_keywords` against a real JMAP server — the function
-//! `CamelFolder::set_message_flags` actually calls, exercised end to end for
-//! the first time.
+//! Tests `MailSync::set_keywords` against a real JMAP server. When a folder
+//! synchronizes, `synchronize_sync` in `jmap-mail` sends the flag changes of
+//! the user through this function.
 //!
-//! `jmap-mail-sync/tests/live_server.rs` already proves
-//! `import_message`/`expunge_message` against real Stalwart, and
-//! `jmap-mail-sync/tests/keywords.rs` already proves `KeywordChange`'s own
-//! diff logic against `jmap-mockd`, but nothing had driven `set_keywords`
-//! itself against a real server: this is the single most-executed write in
-//! an ordinary mail client's life (mark read, star, flag), and until now it
-//! had never touched anything but the mock.
+//! `jmap-mail-sync/tests/keywords.rs` tests the diff of `KeywordChange`
+//! against `jmap-mock` only. Marking a message as read, starred or flagged
+//! is the most frequent write of a mail client. This file tests it against a
+//! real server.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_keywords -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -38,8 +33,8 @@ use jmap_mail_sync::{KeywordChange, Keywords, MailSync, MessageFlags};
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,7 +42,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -63,12 +58,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports a message into the Inbox, flags it via `MailSync::set_keywords`,
-/// confirms the flag via `MailSync::messages`, then flips flagged off and
-/// seen on in a second change and confirms that too — proving both that a
-/// keyword change reaches the server and that it names only what changed
-/// (the unrelated flag from the first change does not linger or get
-/// reasserted). Cleans up via `MailSync::expunge_message`.
+/// Imports a message, flags it, then removes the flag and marks it seen in a
+/// second change. `MailSync::messages` checks the flags after each change.
+///
+/// The test shows that a keyword change gets to the server, and that the
+/// second change also removes the flag. The cleanup at the end runs only when
+/// all assertions pass.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn setting_keywords_on_a_message_reaches_the_real_server() {
@@ -139,8 +134,8 @@ fn setting_keywords_on_a_message_reaches_the_real_server() {
         "the message should not be seen yet"
     );
 
-    // Unflag it and mark it seen, in one patch — proves the diff names both
-    // the removal and the addition, not just whichever came first.
+    // Remove the flag and set seen in one patch. The diff must contain the
+    // removal and the addition.
     let seen = Keywords::new(
         &MessageFlags {
             seen: true,

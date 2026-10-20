@@ -1,37 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::import_message`/`expunge_message` against a real JMAP server —
-//! the functions `append_message_sync`/`expunge_sync` actually call,
-//! exercised end to end for the first time.
+//! Tests `MailSync::import_message` and `MailSync::expunge_message` against a
+//! real JMAP server. `append_message_sync` and `expunge_sync` call these
+//! functions.
 //!
-//! `jmap-client/tests/live_server.rs` already proves `Email/import` and
-//! `Mailbox/set` round-trip through `Client` directly, but nothing there
-//! drives `MailSync` itself — the upload-then-import sequencing
-//! `import_message` does, or `expunge_message`'s read-before-write
-//! mailbox-membership decision. Only `jmap-mockd` has ever exercised this
-//! crate's own functions (`jmap-mail-sync/tests/{import,expunge}.rs`); this
-//! file is their live-server counterpart, following the same recipe as
-//! `jmap-cal-sync`'s, `jmap-book-sync`'s, and `jmap-collection-sync`'s.
+//! `jmap-client/tests/live_server.rs` tests `Email/import` and `Mailbox/set`
+//! through `Client` directly. It does not test `MailSync`: the upload before
+//! the import in `import_message`, or the mailbox-membership read before the
+//! write in `expunge_message`. `tests/{import,expunge}.rs` test these
+//! functions against `jmap-mock` only. This file is the live-server
+//! counterpart, with the same structure as the `jmap-cal-sync`,
+//! `jmap-book-sync` and `jmap-collection-sync` live-server tests.
 //!
 //! ## Running it
 //!
-//! Same environment as the other sync crates' live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up for
-//! `jmap-client`'s write-path tests:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other sync
-//! crates, this crate has no such feature, and `#[ignore]` alone already
-//! keeps it out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -40,8 +36,8 @@ use jmap_mail_sync::{Keywords, MailSync};
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,7 +45,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Connects as the write-test account. Returns `None` when
+/// `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -65,9 +62,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports a message into the Inbox via `MailSync::import_message`, confirms
-/// it via `MailSync::messages`, then expunges it via
-/// `MailSync::expunge_message` and confirms it is gone.
+/// Imports a message into the Inbox, finds it with `MailSync::messages`, then
+/// expunges it and makes sure that it is gone.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn importing_then_expunging_a_message_round_trips_through_the_real_server() {

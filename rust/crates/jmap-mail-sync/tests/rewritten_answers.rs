@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Answers the mock server never gives on its own: a failure that is not
-//! `cannotCalculateChanges`, and the races where another client destroys a
-//! message between two calls of ours.
+//! Answers that the mock server does not give by itself: a failure that is not
+//! `cannotCalculateChanges`, and races where a different client destroys a
+//! message between two calls of this client.
 //!
-//! The mock keeps its store consistent, so these answers are made by
-//! rewriting its real response on the way back to the client. Each test
-//! rewrites one method's answer and leaves every other call untouched.
+//! The mock keeps its store consistent, so the tests rewrite its real
+//! responses on the way to the client. Each test rewrites the answer of one
+//! method and does not change other calls.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 type Rewrite = Arc<dyn Fn(&mut Value) + Send + Sync>;
 
-/// The real transport, with `rewrite` applied to every JSON body it answers
-/// with: the session document and every API response.
+/// The real transport, which applies `rewrite` to each JSON response body: the
+/// session document and each API response.
 struct Rewriting {
     inner: UreqTransport,
     rewrite: Rewrite,
@@ -52,13 +52,13 @@ impl Fixture {
         Self { server, account_id }
     }
 
-    /// A sync whose client sees no rewritten answers.
+    /// A sync with a client that gets no rewritten answers.
     fn sync(&self) -> MailSync {
         let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// A sync whose client sees every answer to `method` (the invocation
+    /// A sync with a client that gets each answer to `method` (the invocation
     /// `[name, arguments, callId]`) through `rewrite`.
     fn sync_rewriting(
         &self,
@@ -77,7 +77,7 @@ impl Fixture {
         })
     }
 
-    /// A sync whose client sees every JSON body through `rewrite`.
+    /// A sync with a client that gets each JSON body through `rewrite`.
     fn sync_rewriting_bodies(
         &self,
         rewrite: impl Fn(&mut Value) + Send + Sync + 'static,
@@ -109,18 +109,18 @@ impl Fixture {
         )
     }
 
-    /// A message that predates every state a test asks from.
+    /// Seed a message that is older than each state that a test uses.
     fn seed(&self, mailbox: &Id, subject: &str) -> Id {
         self.edit(|account| account.seed_email(Self::message(mailbox, subject)))
     }
 
-    /// A message that arrives as a state change `Email/changes` reports.
+    /// Deliver a message as a state change that `Email/changes` reports.
     fn deliver(&self, mailbox: &Id, subject: &str) -> Id {
         self.edit(|account| account.deliver_email(Self::message(mailbox, subject)))
     }
 }
 
-/// Replaces a method response with a method-level error of `kind`.
+/// Replace a method response with a method-level error of `kind`.
 fn method_error(kind: &'static str) -> impl Fn(&mut Value) + Send + Sync {
     move |invocation: &mut Value| {
         let call_id = invocation[2].clone();
@@ -128,7 +128,7 @@ fn method_error(kind: &'static str) -> impl Fn(&mut Value) + Send + Sync {
     }
 }
 
-/// Turns every `destroyed` id of an `Email/set` answer into a `notDestroyed`
+/// Change each `destroyed` id of an `Email/set` answer into a `notDestroyed`
 /// entry of `kind`.
 fn not_destroyed(kind: &'static str) -> impl Fn(&mut Value) + Send + Sync {
     move |invocation: &mut Value| {
@@ -146,9 +146,9 @@ fn not_destroyed(kind: &'static str) -> impl Fn(&mut Value) + Send + Sync {
     }
 }
 
-/// Only `cannotCalculateChanges` and an unrecognised state mean "list the
-/// folders again". Any other failure of `Mailbox/changes` is a failure, and a
-/// rebuilt tree would hide it.
+/// Only `cannotCalculateChanges` and an unknown state cause a new folder
+/// listing. Other `Mailbox/changes` failures are errors, and a rebuilt tree
+/// hides them.
 #[test]
 fn an_ordinary_failure_of_mailbox_changes_is_reported_not_rebuilt_over() {
     let fixture = Fixture::start();
@@ -165,8 +165,9 @@ fn an_ordinary_failure_of_mailbox_changes_is_reported_not_rebuilt_over() {
     );
 }
 
-/// The same rule for a mailbox's messages: a failure of `Email/changes` that
-/// is not about the state fails the refresh instead of listing the mailbox.
+/// The same rule for the messages of a mailbox: an `Email/changes` failure
+/// that is not about the state makes the refresh fail. It does not cause a
+/// new listing.
 #[test]
 fn an_ordinary_failure_of_email_changes_is_reported_not_relisted_over() {
     let fixture = Fixture::start();
@@ -184,9 +185,9 @@ fn an_ordinary_failure_of_email_changes_is_reported_not_relisted_over() {
     );
 }
 
-/// A message the delta names and the `Email/get` after it does not answer for
-/// was destroyed between the two calls. The folder may hold a row for it, so
-/// it must be reported absent, not dropped from the answer.
+/// The delta names a message, but the next `Email/get` does not return it:
+/// the message was destroyed between the two calls. The folder can have a row
+/// for it, so the result must report it as absent, not omit it.
 #[test]
 fn a_message_destroyed_between_the_delta_and_its_fetch_is_reported_absent() {
     let fixture = Fixture::start();
@@ -222,9 +223,9 @@ fn a_message_destroyed_between_the_delta_and_its_fetch_is_reported_absent() {
     }
 }
 
-/// Another client destroyed the message after our read of its mailboxes and
-/// before our destroy. The server's `notFound` is the same answer as a uid
-/// the account never held.
+/// A different client destroyed the message after this client read its
+/// mailboxes, but before the destroy. The `notFound` from the server gives the
+/// same result as an unknown uid.
 #[test]
 fn a_message_destroyed_before_its_expunge_lands_is_no_such_message() {
     let fixture = Fixture::start();
@@ -241,9 +242,8 @@ fn a_message_destroyed_before_its_expunge_lands_is_no_such_message() {
     }
 }
 
-/// Any other refusal of the destroy is a failure the user must see. Reading
-/// it as "already gone" would tell Camel the message left the folder while
-/// the server still holds it.
+/// The user must see all other refusals of the destroy. As "already gone",
+/// Camel removes the message from the folder, but the server still has it.
 #[test]
 fn a_refused_expunge_is_reported_as_the_refusal() {
     let fixture = Fixture::start();
@@ -262,10 +262,9 @@ fn a_refused_expunge_is_reported_as_the_refusal() {
     }
 }
 
-/// RFC 8620 §2 types `maxObjectsInGet` as an `UnsignedInt`, so 0 parses, but
-/// a server that advertises 0 has said nothing usable. It gets the same
-/// fallback as a server that leaves the limit out, not a fetch in chunks of
-/// nothing.
+/// RFC 8620 §2 makes `maxObjectsInGet` an `UnsignedInt`, so 0 is valid, but
+/// not usable. The client uses the same fallback as for a missing limit, not
+/// fetches of zero ids.
 #[test]
 fn an_advertised_get_limit_of_zero_falls_back_rather_than_fetching_nothing() {
     let fixture = Fixture::start();

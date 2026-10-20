@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Quota/get` against a live mock server — what `MailSync::quotas` hands to
-//! `jmap-mail`'s `get_quota_info_sync`.
+//! `Quota/get` against a mock server. `MailSync::quotas` supplies the data
+//! for `get_quota_info_sync` in `jmap-mail`.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
@@ -34,9 +34,8 @@ fn every_seeded_quota_comes_back() {
 
     let quotas = fixture.sync().quotas().unwrap();
 
-    // Every fresh account is seeded with one Mail/octets/account quota — see
-    // `jmap-mock`'s `AccountState::new` — so the account-level list is not
-    // empty from the moment it exists.
+    // `AccountState::new` in `jmap-mock` seeds each new account with one
+    // Mail/octets/account quota. Thus the list is never empty.
     assert_eq!(quotas.len(), 1);
     assert_eq!(quotas[0].resource_type, quota_resource_type::OCTETS);
     assert_eq!(quotas[0].scope, quota_scope::ACCOUNT);
@@ -50,10 +49,9 @@ fn a_second_seeded_quota_comes_back_too() {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.account_id).unwrap();
-        // `seed_with_id` rather than `seed`: the account's own construction
-        // already seeded `Q1` through `seed_with_id`, which the `Store`'s
-        // `next_id` counter knows nothing about, so `seed` would allocate
-        // `Q1` again and silently overwrite it.
+        // Use `seed_with_id`, not `seed`. The account constructor seeds `Q1`
+        // with `seed_with_id`, which does not advance the `Store` id counter.
+        // Thus `seed` allocates `Q1` again and overwrites it.
         account.quotas.seed_with_id(
             Id::from("Q2"),
             Quota::new(

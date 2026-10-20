@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What a hostile `Mailbox/get` or `Email/get` can make of what it is read into.
+//! Hostile `Mailbox/get` and `Email/get` answers.
 //!
-//! `tests/tree.rs` already covers the violations a *broken* server sends —
-//! a missing parent, a `parentId` loop, a duplicate id. This file is about the
-//! ones that are not a mistake: a `parentId` chain long enough that the tree's
-//! own recursive `Drop` runs off the end of the stack, which is an abort of the
-//! whole Camel process rather than an error a caller can report, and a
-//! date whose year is chosen so that reading it overflows the arithmetic that
-//! turns it into a count of seconds.
+//! `tests/tree.rs` covers the errors of a *broken* server (a missing parent, a
+//! `parentId` loop, a duplicate id). This file covers intentional attacks:
+//!
+//! - A `parentId` chain so long that the recursive `Drop` of the tree overflows
+//!   the stack. This aborts the full Camel process, and no caller can report it.
+//! - A date with a year that overflows the conversion to a count of seconds.
 
 use jmap_mail_sync::folder::MAX_DEPTH;
 use jmap_mail_sync::{FolderTree, MessageSummary};
@@ -29,8 +28,7 @@ fn chain(count: usize) -> Vec<Mailbox> {
 
 /// The deepest path in `tree`, counting the root as one.
 fn depth(tree: &FolderTree) -> usize {
-    // Iteratively, for the same reason the tree is built that way: the point of
-    // this file is a stack a server chose the size of.
+    // Iterative, because the server sets the depth of the tree.
     let mut deepest = 0;
     let mut stack: Vec<(&jmap_mail_sync::FolderInfo, usize)> =
         tree.roots().iter().map(|folder| (folder, 1)).collect();
@@ -41,8 +39,8 @@ fn depth(tree: &FolderTree) -> usize {
     deepest
 }
 
-/// A chain that fits keeps its shape: the cap must not reshape a tree any real
-/// server could produce.
+/// A chain within the cap keeps its shape. The cap must not change a tree
+/// that a real server can send.
 #[test]
 fn a_chain_within_the_limit_stays_one_chain() {
     let tree = FolderTree::from_mailboxes(&chain(MAX_DEPTH)).expect("a well-formed chain");
@@ -52,9 +50,8 @@ fn a_chain_within_the_limit_stays_one_chain() {
     assert_eq!(depth(&tree), MAX_DEPTH);
 }
 
-/// One past the cap: the mailbox that would have been level 65 becomes a root
-/// of its own, and its descendants hang off it. No mailbox is lost — losing one
-/// is mail the user cannot reach.
+/// Past the cap, the mailbox at level 65 becomes a root, and its descendants
+/// stay below it. No mailbox is lost, because a lost mailbox hides its mail.
 #[test]
 fn a_chain_past_the_limit_is_cut_rather_than_dropped_or_refused() {
     let count = MAX_DEPTH + 3;
@@ -78,9 +75,8 @@ fn a_chain_past_the_limit_is_cut_rather_than_dropped_or_refused() {
     }
 }
 
-/// The regression this cap exists for. Without it the recursive `Drop` of the
-/// returned tree aborts the test binary instead of failing an assertion, which
-/// is exactly the symptom in `evolution-jmap`'s Camel provider.
+/// The regression that the cap prevents. Without the cap, the recursive `Drop`
+/// of the tree aborts the test binary, as it aborts the Camel provider.
 #[test]
 fn a_pathologically_deep_chain_neither_reshapes_into_a_stack_overflow_nor_hangs() {
     let count = 100_000;
@@ -88,11 +84,11 @@ fn a_pathologically_deep_chain_neither_reshapes_into_a_stack_overflow_nor_hangs(
 
     assert_eq!(tree.len(), count);
     assert!(depth(&tree) <= MAX_DEPTH, "depth {}", depth(&tree));
-    // The drop at the end of this scope is the part that used to abort.
+    // The drop at the end of this scope is the step that aborted before.
 }
 
-/// One `Email` as the server sent it, so that what is being tested is the JSON
-/// a listing really parses rather than a struct assembled by hand.
+/// One `Email` parsed from JSON, as a listing parses it, not a struct made
+/// by hand.
 fn email(received_at: &str, sent_at: &str) -> Email {
     serde_json::from_value(serde_json::json!({
         "id": "E1",
@@ -102,16 +98,14 @@ fn email(received_at: &str, sent_at: &str) -> Email {
     .expect("an Email object")
 }
 
-/// The years a `receivedAt` can carry are the ones `i64` can parse, and the
-/// calendar arithmetic that turns one into a count of seconds is not written for
-/// them: `days_from_civil` multiplies the year's era by 146 097 and the answer by
-/// 86 400, both of which run past `i64` long before the parse does.
+/// A `receivedAt` year can be any value that `i64` can parse. The conversion to
+/// seconds overflows `i64` much earlier: `days_from_civil` multiplies the era
+/// by 146 097, and its caller multiplies the day count by 86 400.
 ///
-/// The server picks the string. A debug build panics — inside a Camel refresh,
-/// where the vfunc guard turns it into a failed refresh of a mailbox the user
-/// cannot then read — and a release build wraps, which puts a date computed from
-/// nothing into the summary. Neither is the answer for text that is not a date a
-/// message can carry, which is `None`.
+/// The server sets the string. Without a bound, a debug build panics in a Camel
+/// refresh, and the vfunc guard makes the refresh fail, so the user cannot read
+/// the mailbox. A release build wraps and puts a false date in the summary.
+/// The correct result for such text is `None`.
 #[test]
 fn a_year_no_calendar_can_hold_is_not_a_date_rather_than_an_overflow() {
     for year in [
@@ -129,8 +123,8 @@ fn a_year_no_calendar_can_hold_is_not_a_date_rather_than_an_overflow() {
     }
 }
 
-/// And the same at the other end, where the year is negative: a `-` where the
-/// grammar wants a digit is still text the parse accepts as a year.
+/// The same check for a negative year. The parse accepts a `-` sign as part of
+/// the year, although the grammar requires a digit.
 #[test]
 fn a_year_before_any_calendar_is_not_a_date_either() {
     let stamp = "-9223372036854775808-01-01T00:00:00Z";
@@ -139,9 +133,8 @@ fn a_year_before_any_calendar_is_not_a_date_either() {
     assert_eq!(summary.sent_at, None);
 }
 
-/// The non-regression half: the dates a real server sends still read as the
-/// instants they name, including the ends of the range RFC 3339's four-digit
-/// year allows.
+/// Non-regression: dates from a real server still give the correct instants,
+/// also at the two ends of the RFC 3339 four-digit year range.
 #[test]
 fn the_dates_a_real_server_sends_are_still_read() {
     let summary =

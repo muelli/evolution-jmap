@@ -1,39 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::messages_since` against a real JMAP server — the
-//! `Email/changes` state-token delta path that `get_folder_info_sync`'s
-//! sibling, a folder's own summary refresh, actually uses for incremental
-//! sync (a full `messages` re-listing is the fallback, not the common case).
+//! Tests `MailSync::messages_since` against a real JMAP server. This is the
+//! `Email/changes` delta path that `refresh_info_sync` in `jmap-mail` uses
+//! for an incremental refresh. A full `messages` listing is the fallback.
 //!
-//! `jmap-mail-sync/tests/live_server.rs`, `live_server_keywords.rs`, and
-//! `live_server_filing.rs` already prove import/expunge, keyword changes, and
-//! filing round-trip against real Stalwart, but nothing there drives
-//! `messages_since` itself — every assertion goes through `messages` (a full
-//! listing) instead. `jmap-mail-sync/tests/updates.rs` proves the
-//! present/absent classification logic against `jmap-mockd`; this file is its
-//! live-server counterpart, following the same recipe as
-//! `jmap-book-sync`/`jmap-cal-sync`'s own `live_server_changes.rs`.
+//! The other live-server tests of this crate check the result with
+//! `messages` only. `jmap-mail-sync/tests/updates.rs` tests the present and
+//! absent classification against `jmap-mock`. This file is its live-server
+//! counterpart, with the same structure as `live_server_changes.rs` in
+//! `jmap-book-sync` and `jmap-cal-sync`.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_changes -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment. The cross-account test below also
-//! needs `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a second account
-//! in the same domain.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. They panic when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset. The cross-account test also skips when
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` (a second account in the same domain) is
+//! unset, and panics when only `JMAP_LIVE_SERVER_RECIPIENT_PASSWORD` is unset.
 
 use std::env;
 
@@ -42,8 +36,8 @@ use jmap_mail_sync::{KeywordChange, Keywords, MailSync, MessageFlags, MessageUpd
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,7 +45,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,8 +61,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`
-/// exactly.
+/// Same as `connect_recipient` in `jmap-book-sync/tests/live_server_changes.rs`.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -86,8 +79,8 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// The mailbox found by looking for its role, for a client whose account
-/// needs an Inbox.
+/// Returns the id of the mailbox with the Inbox role. Panics when there is no
+/// Inbox.
 fn inbox_id(client: &Client, account_id: &jmap_proto::Id) -> jmap_proto::Id {
     client
         .mailbox_get(account_id)
@@ -100,7 +93,7 @@ fn inbox_id(client: &Client, account_id: &jmap_proto::Id) -> jmap_proto::Id {
         .expect("the server named the Inbox")
 }
 
-/// The delta, for a call that expects the mailbox to have moved.
+/// Returns the delta. Panics when the update is not `MessageUpdate::Changed`.
 fn changed(
     update: MessageUpdate,
 ) -> (
@@ -123,12 +116,10 @@ fn changed(
     }
 }
 
-/// Imports a message into the Inbox, then confirms `messages_since` reports
-/// it as present from the state captured just before the import; sets a
-/// keyword on it and confirms the edit shows up from the post-import state;
-/// expunges it and confirms the removal shows up from the post-edit state.
-/// Mirrors `tests/updates.rs`'s assertions, now against the real server
-/// rather than `jmap-mockd`.
+/// Imports, flags and expunges a message. After each step, `messages_since`
+/// from the previous state must report the change: present after the import
+/// and the edit, absent after the expunge. `tests/updates.rs` makes the same
+/// assertions against `jmap-mock`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn messages_since_reports_a_create_an_edit_and_a_removal_against_the_real_server() {
@@ -236,18 +227,19 @@ fn messages_since_reports_a_create_an_edit_and_a_removal_against_the_real_server
     );
 }
 
-/// A state is opaque per RFC 8620, but not free-form: Stalwart's own state
-/// strings fail syntax validation (`invalidArguments`) for almost any
-/// hand-written guess, confirmed live in
-/// `jmap-book-sync/tests/live_server_changes.rs`. A syntactically well-formed
-/// state from a *different* account is the reliable way to reach
-/// `cannotCalculateChanges` on the real server. Unlike `BookSync::get_changes`
-/// and `CalSync::get_changes`, which propagate that error to the caller,
-/// `MailSync::messages_since` catches it internally
-/// (`SyncError::is_cannot_calculate_changes`) and relists the mailbox
-/// instead, so this confirms the fallback actually fires on the real error
-/// rather than assuming the mock's shape of it (`jmap-mock/src/setops.rs`)
-/// matches.
+/// Gives `messages_since` a state from a different account. The mailbox must
+/// be listed again (`MessageUpdate::Relisted`).
+///
+/// RFC 8620 makes a state opaque. Stalwart rejects most hand-written states
+/// with `invalidArguments` (see `jmap-book-sync/tests/live_server_changes.rs`).
+/// A valid state from a different account causes `cannotCalculateChanges`.
+///
+/// `BookSync::get_changes` and `CalSync::get_changes` return that error to
+/// the caller. `MailSync::messages_since` catches it and lists the mailbox
+/// again. This test makes sure that the fallback occurs on the real error,
+/// not only on the mock error of `jmap-mock/src/setops.rs`.
+///
+/// The test does not expunge the message that it imports.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn messages_since_relists_the_mailbox_for_another_accounts_state() {
@@ -268,13 +260,10 @@ fn messages_since_relists_the_mailbox_for_another_accounts_state() {
     let owner_inbox_id = inbox_id(&owner, &owner_account_id);
     let owner_sync = MailSync::new(owner, owner_account_id);
 
-    // A brand-new account's mailbox has an empty changelog, and the state
-    // naming "no changes yet" turned out (checked live) to be accepted as
-    // trivially valid for any other brand-new account too, since there is
-    // nothing to diff against either way. Importing a message first gives
-    // the owner a state that is a specific position in its own changelog,
-    // which is what actually reaches cannotCalculateChanges when asked of an
-    // account that never had that position.
+    // A live check showed that the "no changes yet" state of a new account
+    // is valid for each other new account too. An import moves the owner to
+    // a position in its own changelog. The other account does not have that
+    // position, thus the server returns cannotCalculateChanges.
     let subject = format!("agent-mailsync-cannotcalc-{}", unique_suffix());
     let message = format!(
         "From: agent-mailsync@example.invalid\r\n\

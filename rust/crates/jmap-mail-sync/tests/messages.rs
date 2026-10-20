@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Listing a mailbox against a live mock server: what `Email/query` and
-//! `Email/get` actually answer, and the two limits a server is allowed to
-//! impose on either.
+//! Listing a mailbox against a mock server: the `Email/query` and `Email/get`
+//! answers, and the two limits that a server can apply to them.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
@@ -32,10 +31,9 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// Seed a mailbox and `count` messages in it, an hour apart — and *newest
-    /// first*, so that the order they were created in, which is also the order
-    /// their ids sort in, is the reverse of the order a listing must produce.
-    /// Seeded the other way round, every wrong answer here would look right.
+    /// Seed a mailbox with `count` messages, one hour apart, *newest first*.
+    /// Creation order (and thus id order) is then the reverse of the listing
+    /// order. With the opposite order, a wrong answer can look correct.
     fn seed_mailbox_with(&self, name: &str, role: Option<&str>, count: u32) -> Id {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -53,7 +51,7 @@ impl Fixture {
         mailbox
     }
 
-    /// The subjects of a listing, in the order it came back in.
+    /// The subjects of a listing, in the order of the answer.
     fn subjects(messages: &[jmap_mail_sync::MessageSummary]) -> Vec<&str> {
         messages
             .iter()
@@ -155,8 +153,8 @@ fn the_flags_a_listing_carries_are_the_servers_keywords() {
 
 #[test]
 fn more_messages_than_one_get_may_ask_about_are_fetched_in_several() {
-    // Two per `Email/get`, five messages: three calls, and a client that sends
-    // one would be told `requestTooLarge` rather than quietly served.
+    // Two ids per `Email/get` and five messages make three calls. A single call
+    // gets `requestTooLarge`.
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
     let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
 
@@ -178,9 +176,8 @@ fn more_messages_than_one_get_may_ask_about_are_fetched_in_several() {
 
 #[test]
 fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
-    // A server may cap a `/query` answer whether or not the client asked it to
-    // (RFC 8620 §5.5); a client that stops at the first page shows the user a
-    // folder missing most of its mail.
+    // A server can limit a `/query` answer without a client request (RFC 8620
+    // §5.5). If the client stops at the first page, most of the mail is missing.
     let fixture = Fixture::started_with(MockServer::builder().query_page_size(2));
     let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
 
@@ -202,9 +199,9 @@ fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
 
 #[test]
 fn a_server_that_never_stops_paging_is_given_up_on_rather_than_looped_forever() {
-    // A server that keeps claiming a capped, non-empty answer no matter how
-    // far `position` has moved is out of spec (RFC 8620 §5.5), but the client
-    // still has to stop rather than hang, and say why.
+    // A server that always sends a limited, non-empty page, for each
+    // `position`, is out of spec (RFC 8620 §5.5). The client must stop with an
+    // error, not hang.
     let fixture = Fixture::started_with(
         MockServer::builder()
             .query_page_size(2)

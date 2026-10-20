@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Whether the user wants to see a folder, as the `Mailbox/set` that says so.
+//! The folder subscription of the user, as a `Mailbox/set`.
 //!
-//! Camel asks this with two vfuncs of `CamelSubscribable` —
-//! `subscribe_folder_sync` and `unsubscribe_folder_sync` — and JMAP answers
-//! both with the same property: RFC 8621 §2 gives a `Mailbox` an
-//! `isSubscribed`, which is the server's record of a decision that belongs to
-//! the user rather than to the account. So the two vfuncs are one update with
-//! two values, which is why there is one method here and not two.
+//! Camel uses two vfuncs of `CamelSubscribable`: `subscribe_folder_sync` and
+//! `unsubscribe_folder_sync`. JMAP uses one property for both: RFC 8621 §2
+//! gives a `Mailbox` the property `isSubscribed`. The server records a
+//! decision of the user, not of the account. Thus there is one method with two
+//! values, not two methods.
 //!
-//! The two things worth pinning are that the write reaches the *server* — a
-//! subscription kept only in Evolution's own state is one the user's other
-//! client never learns about, which is the whole reason the property exists —
-//! and that it touches nothing else, neither the mailbox's siblings nor the
-//! mail inside it.
+//! The tests check two rules:
+//!
+//! - The write goes to the *server*. Other clients of the user cannot see a
+//!   subscription that only Evolution keeps, and that is the purpose of the
+//!   property.
+//! - The write changes nothing else: not the siblings of the mailbox and not
+//!   its mail.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{MailSync, SyncError};
@@ -39,7 +40,7 @@ impl Fixture {
         MailSync::new(client, self.account_id.clone())
     }
 
-    /// A top-level mailbox of the account, by name.
+    /// Seed a top-level mailbox with the given name.
     fn seed_mailbox(&self, name: &str) -> Id {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -49,7 +50,7 @@ impl Fixture {
             .seed_mailbox(name, None)
     }
 
-    /// What the account's folder tree says about the folder at `path`.
+    /// The subscription state of the folder at `path` in the folder tree.
     fn subscribed(&self, path: &str) -> Option<bool> {
         let (_, tree) = self.sync().folder_tree().unwrap();
         tree.find(path).map(|folder| folder.subscribed)
@@ -78,9 +79,8 @@ fn subscribing_again_reaches_it_too() {
     assert_eq!(fixture.subscribed("Inbox"), Some(true));
 }
 
-/// A mailbox that is already subscribed being subscribed again is what Camel
-/// does whenever the user reopens the subscription editor and presses OK, so it
-/// has to be an ordinary success rather than a refusal.
+/// Camel subscribes a subscribed mailbox again each time the user opens the
+/// subscription editor and pushes OK. Thus this must succeed, not fail.
 #[test]
 fn a_subscription_that_changes_nothing_is_still_a_success() {
     let fixture = Fixture::start();
@@ -91,9 +91,8 @@ fn a_subscription_that_changes_nothing_is_still_a_success() {
     assert_eq!(fixture.subscribed("Inbox"), Some(true));
 }
 
-/// The property is the mailbox's own. A patch naming it must not be read as a
-/// statement about the folders next to it — a subscription editor unticking one
-/// folder and hiding the account is the bug this pins.
+/// The property applies only to its mailbox, not to the sibling folders. This
+/// test prevents a bug where one unsubscribe hides the full account.
 #[test]
 fn one_mailbox_unsubscribed_leaves_its_siblings_alone() {
     let fixture = Fixture::start();
@@ -106,8 +105,8 @@ fn one_mailbox_unsubscribed_leaves_its_siblings_alone() {
     assert_eq!(fixture.subscribed("Sent"), Some(true));
 }
 
-/// And it says nothing about what is in the folder: unsubscribing hides a
-/// folder from a client, it does not empty it.
+/// The property also does not apply to the folder contents. An unsubscribe
+/// hides a folder from a client, but does not remove its mail.
 #[test]
 fn unsubscribing_does_not_touch_the_mail_in_the_folder() {
     let fixture = Fixture::start();
@@ -132,10 +131,9 @@ fn unsubscribing_does_not_touch_the_mail_in_the_folder() {
     assert_eq!(messages.len(), 1);
 }
 
-/// A folder another client deleted while this one still lists it. The user
-/// unticking it is then a decision about something that is already gone, which
-/// is ordinary rather than a broken account — and the layer above can only say
-/// so if the distinction survives this crate.
+/// A different client deleted the folder, but this client still lists it. An
+/// unsubscribe of a deleted folder is normal, not a broken account. The layer
+/// above can only tell this if this crate keeps the difference.
 #[test]
 fn a_mailbox_the_account_does_not_have_is_no_such_folder() {
     let fixture = Fixture::start();

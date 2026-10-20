@@ -1,31 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::set_subscribed`/`rename_folder` against a real JMAP server —
-//! the two `jmap-mail-sync` writes `live_server_folder.rs` (create/delete)
-//! and the rest of this crate's live-server suite (import/expunge, keywords,
-//! filing, send) leave uncovered. Only `jmap-mockd` has ever exercised
-//! either (`jmap-mail-sync/tests/{subscribe,rename_folder}.rs`); this is
-//! their live-server counterpart, following the same recipe as the other
-//! sync crates' live-server tests.
+//! Tests `MailSync::set_subscribed` and `MailSync::rename_folder` against a
+//! real JMAP server. `tests/subscriptions.rs` and `tests/manage.rs` test
+//! these functions against `jmap-mock` only. This file is their live-server
+//! counterpart.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_folder_settings -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -34,8 +29,8 @@ use jmap_mail_sync::MailSync;
 use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover folder can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a folder from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -43,7 +38,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -59,10 +54,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates a top-level folder, flips its subscription both ways (confirming
-/// each via a fresh `folder_tree` listing, since `set_subscribed` writes to
-/// the server rather than returning the new state), renames it (confirming
-/// the returned path and the listing's new display name), then deletes it.
+/// Creates a top-level folder, unsubscribes and subscribes it again, renames
+/// it, then deletes it.
+///
+/// `set_subscribed` does not return the new state, thus a new `folder_tree`
+/// listing checks each change. The cleanup at the end runs only when all
+/// assertions pass.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn subscribing_and_renaming_a_folder_reach_the_real_server() {

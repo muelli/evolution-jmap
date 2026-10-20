@@ -1,34 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::expunge_message`'s multi-mailbox branch against a real JMAP
-//! server.
+//! Tests the multi-mailbox branch of `MailSync::expunge_message` against a
+//! real JMAP server.
 //!
-//! `expunge_message` reads a message's `mailboxIds` first and chooses
-//! between two different writes: `Email/destroy` when this mailbox is the
-//! message's only home, or an `Email/set` update stripping just this
-//! mailbox's membership when another one remains (RFC 8621 section 4.6).
-//! `tests/live_server.rs` and `tests/live_server_filing.rs` only ever
-//! expunge a message that is filed in exactly one mailbox at the time, so
-//! only the destroy branch has ever run against a real server; the update
-//! branch is otherwise covered only against `jmap-mock`
-//! (`tests/expunge.rs`), which cannot prove a real server's `Email/set`
-//! response for a `mailboxIds/<id>: null` patch parses the way this crate
-//! expects. This is that branch's live-server counterpart.
+//! `expunge_message` reads the `mailboxIds` of the message, then selects one
+//! of two writes. When this mailbox is the only mailbox of the message, it
+//! sends `Email/destroy`. When a different mailbox remains, it sends an
+//! `Email/set` update that removes only this mailbox (RFC 8621 section 4.6).
+//!
+//! `tests/live_server.rs` and `tests/live_server_filing.rs` expunge only
+//! messages that are in one mailbox, thus they test only the destroy branch.
+//! `tests/expunge.rs` tests the update branch against `jmap-mock` only. A mock
+//! cannot show that this crate parses the `Email/set` response of a real
+//! server to a `mailboxIds/<id>: null` patch. This file tests the update
+//! branch against a real server.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_expunge -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -38,8 +37,8 @@ use jmap_proto::Id;
 use jmap_proto::mail::role;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message/folder can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message or folder from a
+/// different run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,7 +46,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -63,7 +62,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Whether `mailbox` lists `uid` among its messages.
+/// Returns `true` when `mailbox` lists `uid`.
 fn lists(sync: &MailSync, mailbox: &Id, uid: &Id) -> bool {
     let (_, summaries) = sync
         .messages(mailbox)
@@ -71,10 +70,10 @@ fn lists(sync: &MailSync, mailbox: &Id, uid: &Id) -> bool {
     summaries.iter().any(|summary| &summary.uid == uid)
 }
 
-/// Copies a message into a second folder, then expunges it from the Inbox
-/// while it is still filed in both. The message must survive in the second
-/// folder and disappear from the Inbox, driving `expunge_message`'s
-/// `Email/set` update branch rather than its destroy branch.
+/// Copies a message into a second folder, then expunges it from the Inbox.
+/// The message must stay in the second folder and leave the Inbox. This runs
+/// the `Email/set` update branch of `expunge_message`, not the destroy branch.
+/// The cleanup at the end runs only when all assertions pass.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn expunging_a_message_filed_in_two_mailboxes_only_removes_the_one_membership() {
@@ -118,7 +117,7 @@ fn expunging_a_message_filed_in_two_mailboxes_only_removes_the_one_membership() 
         .import_message(&inbox_id, message.into_bytes(), &Keywords::default(), None)
         .expect("Email/import failed against the real server");
 
-    // Copy it into the new folder — the message is now filed in both.
+    // After the copy, the message is in the Inbox and in the new folder.
     sync.file_message(&uid, &Filing::copied_into(folder.id.clone()))
         .expect("copying the message failed against the real server");
     assert!(
@@ -130,8 +129,8 @@ fn expunging_a_message_filed_in_two_mailboxes_only_removes_the_one_membership() 
         "the message should be filed in the new folder after MailSync::file_message"
     );
 
-    // Expunge it from the Inbox while it is still filed in the new folder
-    // too: this must take the `Email/set` update branch, not destroy.
+    // The message is also in the new folder, thus this expunge must use the
+    // `Email/set` update branch, not destroy.
     sync.expunge_message(&uid, &inbox_id)
         .expect("expunging the message from the Inbox failed against the real server");
     assert!(

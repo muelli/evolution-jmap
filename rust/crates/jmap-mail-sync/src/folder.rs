@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The folder tree: a `Mailbox/get` result in the shape `CamelStore` asks for.
+//! The folder tree: a `Mailbox/get` result in the form that `CamelStore` uses.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,27 +11,25 @@ use jmap_proto::mail::{Mailbox, role};
 use crate::error::SyncError;
 use crate::path::{SEPARATOR, encode_component, join};
 
-/// How deep a `parentId` chain may make the tree before the chain is cut.
+/// The maximum depth of a `parentId` chain. A deeper mailbox becomes
+/// top-level.
 ///
-/// Building the tree is iterative and so is walking it, so neither is what
-/// needs a limit. The tree itself is: a [`FolderInfo`] owns a
-/// `Vec<FolderInfo>`, so the drop glue recurses once per level, and the depth
-/// comes from `parentId`s a *server* chose. A few tens of thousands of
-/// mailboxes in one chain therefore abort the process — "thread has overflowed
-/// its stack" — on a path with no `unsafe` in it at all, and in Camel's case
-/// that is a process serving every other mail account the user has.
+/// The build and the walk are iterative, but a [`FolderInfo`] owns a
+/// `Vec<FolderInfo>`, so drop glue (and the derived `Clone` and `PartialEq`)
+/// recurses once per level. The server selects the `parentId`s. A chain of
+/// some tens of thousands of mailboxes overflows the stack and aborts the
+/// process, without `unsafe` code. In Camel, that process serves all the mail
+/// accounts of the user.
 ///
-/// Cutting the chain rather than rejecting the account is the same answer this
-/// module already gives a `parentId` loop: no mailbox is lost, it just becomes
-/// top-level. The number is far above what a mail store uses — Camel's own
-/// folder paths become unusable long before it — so nothing real is reshaped.
+/// A deep mailbox becomes top-level, as a mailbox in a `parentId` loop does,
+/// so no mailbox is lost. Real mail stores do not go near this depth.
 pub const MAX_DEPTH: usize = 64;
 
-/// The purpose Evolution treats a folder as having.
+/// The purpose of a folder for Evolution.
 ///
-/// Only the roles this crate can act on: everything else in the RFC 8457
-/// registry (`\Important`, `\Flagged`, …) describes a view rather than a
-/// folder Camel has a type for, and is left as a plain folder.
+/// Only the roles that this crate uses. The other roles of the RFC 8457
+/// registry (`\Important`, `\Flagged`, …) are views, not folder types of
+/// Camel, so they become plain folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FolderRole {
     Inbox,
@@ -43,12 +41,11 @@ pub enum FolderRole {
 }
 
 impl FolderRole {
-    /// The role a JMAP `role` property names, if it is one we act on.
+    /// The role that a JMAP `role` value names, if this crate uses it.
     ///
-    /// Case-insensitively, though RFC 8621 §2 requires the value to be
-    /// lower-case: a server that shouts `Inbox` is broken, but the user's
-    /// inbox should still land in Evolution's inbox rather than becoming an
-    /// ordinary folder.
+    /// The comparison ignores case, although RFC 8621 §2 requires lower
+    /// case. Thus the inbox of a server that sends `Inbox` is still the inbox
+    /// in Evolution.
     pub fn from_jmap(role: &str) -> Option<Self> {
         match role.to_ascii_lowercase().as_str() {
             role::INBOX => Some(Self::Inbox),
@@ -61,14 +58,11 @@ impl FolderRole {
         }
     }
 
-    /// The JMAP `role` this is, for a caller that has to name it.
+    /// The JMAP `role` value, in the lower case that RFC 8621 §2 requires.
     ///
-    /// The inverse of [`from_jmap`](Self::from_jmap) on everything it accepts,
-    /// spelled the way RFC 8621 §2 requires — lower-case — rather than the way
-    /// a shouting server may have sent it. What wants it is a message about a
-    /// role the account has no mailbox for: Camel asks a store for its trash
-    /// and its junk by purpose, and "no mailbox of this account has the trash
-    /// role" is the only useful thing such a store can say back.
+    /// The inverse of [`from_jmap`](Self::from_jmap). Error messages use it
+    /// when the account has no mailbox with a role that Camel asks for (for
+    /// example, trash or junk).
     pub fn as_jmap(self) -> &'static str {
         match self {
             Self::Inbox => role::INBOX,
@@ -84,32 +78,31 @@ impl FolderRole {
 /// One folder, with its subfolders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderInfo {
-    /// The JMAP mailbox id — what every `Email/query` filters on.
+    /// The JMAP mailbox id: the filter of each `Email/query`.
     pub id: Id,
-    /// The Camel path: this folder's key, and the concatenation of its
-    /// ancestors' encoded names, encoded as `path.rs` describes.
+    /// The Camel path and the key of the folder: the encoded names of the
+    /// ancestors and of this folder, as `path.rs` describes.
     pub path: String,
-    /// The mailbox name, verbatim — what the user is shown.
+    /// The mailbox name without changes, as the user sees it.
     pub display_name: String,
     pub role: Option<FolderRole>,
-    /// Messages in the folder, and how many of them are unread. Camel counts
-    /// these in 32 bits.
+    /// The number of messages in the folder and the number of unread
+    /// messages. Camel uses 32 bits for these.
     pub total: u32,
     pub unread: u32,
     pub subscribed: bool,
     pub children: Vec<FolderInfo>,
 }
 
-/// Every mailbox of an account, as a forest.
+/// All mailboxes of an account, as a forest.
 ///
-/// A forest and not a tree: JMAP has no root mailbox, so an account's
-/// top-level mailboxes are siblings of each other and of nothing else.
+/// JMAP has no root mailbox, so the top-level mailboxes are siblings.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FolderTree {
     roots: Vec<FolderInfo>,
 }
 
-/// A validated mailbox, with the fields the ordering needs pulled out.
+/// A validated mailbox and its id.
 struct Node<'a> {
     mailbox: &'a Mailbox,
     id: &'a Id,
@@ -118,13 +111,11 @@ struct Node<'a> {
 impl FolderTree {
     /// Build the tree from a `Mailbox/get` list.
     ///
-    /// The list is taken as it comes off the wire, which means most of this
-    /// function is about inputs a correct server never sends: a `parentId`
-    /// naming a mailbox that is not in the list, or a chain of them that
-    /// loops. Neither may lose a mailbox — a folder missing from the tree is
-    /// mail the user cannot reach — and neither may hang, so both end up as
-    /// extra top-level folders. Only a violation that leaves nothing to show
-    /// at all (a mailbox with no id or no name, an id used twice) is an error.
+    /// The list comes from the server without changes. Thus most of this
+    /// function handles input that a correct server does not send: a
+    /// `parentId` of a mailbox that is not in the list, or a `parentId` loop.
+    /// Such a mailbox becomes top-level, so no mailbox is lost and nothing
+    /// hangs. A mailbox without an id or name, or a duplicate id, is an error.
     pub fn from_mailboxes(mailboxes: &[Mailbox]) -> Result<Self, SyncError> {
         let mut nodes = Vec::with_capacity(mailboxes.len());
         for mailbox in mailboxes {
@@ -139,10 +130,9 @@ impl FolderTree {
             nodes.push(Node { mailbox, id });
         }
 
-        // Sibling order, which is also the order roles are claimed in and the
-        // order the tree is walked in. RFC 8621 §2 defines it as sortOrder
-        // first, then the name; the id breaks the remaining tie so that the
-        // result does not depend on the order the server happened to reply in.
+        // Sibling order, which is also the order of role claims and of the
+        // walk. RFC 8621 §2 sorts by sortOrder, then name. The id breaks a
+        // tie, so the result does not depend on the order of the reply.
         nodes.sort_by(|left, right| {
             left.sort_order()
                 .cmp(&right.sort_order())
@@ -160,9 +150,9 @@ impl FolderTree {
             }
         }
 
-        // A parent this account cannot see is no parent: the mailbox becomes
-        // top-level rather than unreachable. A mailbox that is its own parent
-        // needs no case of its own — it is a cycle of one, and `walk` cuts it.
+        // A parent that is not in the list is no parent: the mailbox becomes
+        // top-level. A mailbox that is its own parent is a cycle of one, and
+        // `walk` cuts it.
         let mut parent: Vec<Option<usize>> = nodes
             .iter()
             .map(|node| {
@@ -191,29 +181,26 @@ impl FolderTree {
         })
     }
 
-    /// The account's top-level folders, in sibling order.
+    /// The top-level folders of the account, in sibling order.
     pub fn roots(&self) -> &[FolderInfo] {
         &self.roots
     }
 
-    /// Every folder, depth first, a parent before its children.
+    /// All folders, depth first, each parent before its children.
     pub fn iter(&self) -> impl Iterator<Item = &FolderInfo> {
         Iter {
             stack: self.roots.iter().rev().collect(),
         }
     }
 
-    /// Whether `self` and `other` list the same folders in the same places
-    /// with the same roles and subscriptions — everything Camel's folder
-    /// *tree* is built from — ignoring `total`/`unread`.
+    /// Whether `self` and `other` have the same folders at the same paths,
+    /// with the same names, roles and subscriptions. This ignores `total` and
+    /// `unread`.
     ///
-    /// What this is for: a pushed `Mailbox` state change is RFC 8620's whole
-    /// type advancing, with no word on which property of which mailbox moved
-    /// it, and a message arriving bumps every mailbox it landed in exactly as
-    /// visibly as a create or a rename would. Counts already reach Camel
-    /// through the open folder's own refresh, so a caller deciding whether to
-    /// tell Camel its folder *list* is stale needs the one question this
-    /// answers: did the shape change, or only a count?
+    /// A pushed `Mailbox` state change does not tell which mailbox or property
+    /// changed, and a new message changes the state as a create or a rename
+    /// does. The refresh of the open folder sends counts to Camel, so a caller
+    /// uses this to decide whether the folder list of Camel is out of date.
     pub fn same_shape(&self, other: &Self) -> bool {
         same_shape(&self.roots, &other.roots)
     }
@@ -223,39 +210,28 @@ impl FolderTree {
         self.iter().find(|folder| folder.path == path)
     }
 
-    /// The folder a role names, if any mailbox of the account claims it.
+    /// The folder with a role, if a mailbox of the account has that role.
     ///
-    /// The role that has a caller today is [`FolderRole::Inbox`], which is what
-    /// `camel_store_get_inbox_folder_sync` is answered from. The lookup walks
-    /// the whole tree rather than the roots: RFC 8621 §2 puts `role` on the
-    /// mailbox, with nothing said about where in the hierarchy it sits, and an
-    /// account whose inbox hangs under a per-address parent is ordinary.
+    /// Callers use it for the inbox, trash and junk lookups of Camel, and for
+    /// the Sent and Drafts folders. The lookup examines the full tree:
+    /// RFC 8621 §2 does not limit `role` to the top level, and an inbox under
+    /// a parent folder is usual.
     ///
-    /// It reads the role this crate *assigned* — see
-    /// `claim_roles`, which gives a contested role to the
-    /// first mailbox in sibling order — rather than the mailbox's own `role`
-    /// property. That is what keeps the answer the same folder as the one the
-    /// listing marked `CAMEL_FOLDER_TYPE_INBOX`.
+    /// It reads the role that `claim_roles` assigned, not the `role` property
+    /// of the mailbox. `claim_roles` gives a role to the first claimant only,
+    /// so this result agrees with the folder types of the listing.
     pub fn role(&self, role: FolderRole) -> Option<&FolderInfo> {
         self.iter().find(|folder| folder.role == Some(role))
     }
 
-    /// Records that a mailbox is now subscribed, or is not, reporting whether
-    /// the tree had it at all.
+    /// Sets the subscription of a mailbox. Returns `false` if the tree does not
+    /// have the mailbox.
     ///
-    /// The first edit this type offers, and it exists because the property is
-    /// the one thing in a folder listing a *client* decides. Everything else
-    /// here is the server's — counts, roles, where a mailbox hangs — and the
-    /// honest way to bring any of it up to date is to list the account again. A
-    /// subscription is different: the client has just been told what the new
-    /// value is by the server accepting its write, so re-listing to learn it
-    /// would be asking a question already answered — which is the reason every
-    /// edit below it is here too.
+    /// The server accepted the write, so the caller knows the new value. A new
+    /// listing is not necessary. The edits below exist for the same reason.
     ///
-    /// By mailbox id rather than by path, because the caller is a write that
-    /// named a mailbox and paths are this crate's invention: a folder whose
-    /// parent was renamed between the listing and the write has a different
-    /// path and the same id.
+    /// The key is the mailbox id, not the path: paths are an invention of this
+    /// crate, and the path changes if a parent gets a new name.
     pub fn set_subscribed(&mut self, id: &Id, subscribed: bool) -> bool {
         let mut stack: Vec<&mut FolderInfo> = self.roots.iter_mut().collect();
         while let Some(folder) = stack.pop() {
@@ -268,35 +244,25 @@ impl FolderTree {
         false
     }
 
-    /// Adds a folder the account has just gained, reporting whether the tree
-    /// had somewhere to put it.
+    /// Adds a new folder of the account. Returns `false` if the tree has no
+    /// parent for it.
     ///
-    /// The second edit this type offers, and it is here for the reason the
-    /// first one is: the caller has just been told by the server that the
-    /// folder exists, so re-listing the account to learn it would be asking a
-    /// question already answered — and until something asks, a store holding a
-    /// listing without the new folder in it is a store that cannot open the
-    /// folder Evolution was just handed.
+    /// The server confirmed the folder, so a new listing is not necessary.
+    /// Without this, the store cannot open the folder that it just gave to
+    /// Evolution.
     ///
-    /// Where it goes is read out of its own path rather than passed in beside
-    /// it. A folder's path *is* its position — it is its parent's path with one
-    /// encoded component after it, which is the invariant
-    /// `paths` maintains for every folder here — and a component
-    /// can never contain the separator, so the last one splits the path
-    /// unambiguously. A caller that passed the parent separately could pass one
-    /// that disagrees with the path; there is no such second version to
-    /// disagree with.
+    /// The position comes from the path of the folder: the path is the parent
+    /// path, a separator and one encoded component (see `paths`). A component
+    /// cannot contain the separator, so the last separator splits the path.
+    /// There is no parent argument that can disagree with the path.
     ///
-    /// A parent path no folder answers to inserts nothing. Hanging the folder
-    /// off the roots instead would draw it at the top level of an account that
-    /// has it somewhere else entirely, which is worse than not drawing it until
-    /// the next listing.
+    /// If no folder has the parent path, this inserts nothing. A folder at the
+    /// top level of an account that has it at a different position is worse
+    /// than no folder until the next listing.
     ///
-    /// A sibling that already has the new folder's path is dropped. The tree
-    /// can be out of date in exactly one direction the server will not correct
-    /// — it can still hold a mailbox another client destroyed, whose name is
-    /// then free for this create to reuse — and of the two folders with that
-    /// one path, the one the server has just confirmed is the one to keep.
+    /// A sibling with the same path (and its subtree) is removed. The tree can
+    /// still hold a mailbox that another client deleted, and a create can use
+    /// its name again. Of the two, keep the folder that the server confirmed.
     pub fn insert(&mut self, folder: FolderInfo) -> bool {
         let siblings = match folder.path.rsplit_once(SEPARATOR) {
             Some((parent, _)) => match self.find_mut(parent) {
@@ -311,40 +277,33 @@ impl FolderTree {
         true
     }
 
-    /// Moves a folder to the path it now has, reporting whether the tree could
-    /// put it there.
+    /// Moves a folder to its new path. Returns `false` if the tree cannot put
+    /// the folder there.
     ///
-    /// The third edit, and the one that could not be spelled as the other two:
-    /// a folder's path is *where it is*, so renaming one rewrites the path of
-    /// everything under it as well, and a remove followed by an insert would
-    /// have to rebuild that subtree by hand from a listing nobody has taken.
+    /// The path of a folder is its position, so this also changes the paths
+    /// of all folders below it. A remove and an insert cannot do that without
+    /// a new listing.
     ///
-    /// A rename and a move are one operation here because they are one to the
-    /// caller — Camel names a folder by path, so the folder's name and its
-    /// parent both live in the string it is handed, and it never says which of
-    /// the two the user changed.
+    /// A rename and a move are one operation, because Camel gives one new path
+    /// and does not tell which part changed.
     ///
-    /// `display_name` comes beside the path rather than out of it. The path's
-    /// last component is the name with this crate's encoding applied, and this
-    /// crate has no decoder — while the caller has the name it just sent to the
-    /// server, which is the same name the next listing will report.
+    /// `display_name` is an argument because this crate has no decoder for
+    /// the encoded last component. The caller has the name that it sent to
+    /// the server, which is the name of the next listing.
     ///
-    /// Where the folder ends up is read out of the new path, exactly as
-    /// [`insert`](Self::insert) reads one, and the two refusals are the same:
-    /// a parent path no folder answers to moves nothing, and a folder already
-    /// at the destination path is dropped in favour of this one. A move *into*
-    /// the folder's own subtree is refused too — the server will not do it, and
-    /// a tree that tried would be lifting a subtree out and having nowhere left
-    /// to put it back.
+    /// The new parent comes from the new path, as in [`insert`](Self::insert),
+    /// with the same refusals: if no folder has the parent path, nothing
+    /// moves, and a folder at the destination path is removed. A move into
+    /// the subtree of the folder is also refused. The server refuses it too,
+    /// and the tree has no position for the subtree after that move.
     pub fn rename(&mut self, id: &Id, path: &str, display_name: &str) -> bool {
         let Some(from) = self.iter().find(|folder| folder.id == *id) else {
             return false;
         };
         let from = from.path.clone();
 
-        // Both checks happen before the folder is lifted out, because a folder
-        // taken out of the tree and refused at its destination is one that has
-        // simply disappeared.
+        // Do the checks before the folder leaves the tree. Otherwise a refused
+        // folder is lost.
         if let Some((parent, _)) = path.rsplit_once(SEPARATOR)
             && (within(parent, &from) || self.find(parent).is_none())
         {
@@ -357,32 +316,28 @@ impl FolderTree {
         folder.display_name = display_name.to_owned();
         repath(&mut folder, path.to_owned());
 
-        // The destination was there a moment ago and the only thing removed
-        // since is this folder, which the check above kept out of its own
-        // subtree — so this cannot be the refusal `insert` reports. If it
-        // somehow were, the folder waits for the next listing rather than
-        // hanging at the top level of an account that has it elsewhere, which
-        // is the judgement `insert` already makes.
+        // The destination parent existed before `take`, and `take` removed only
+        // this folder, which is not an ancestor of the destination. Thus
+        // `insert` does not refuse. If it does, the folder stays out of the
+        // tree until the next listing, as `insert` does for a missing parent.
         self.insert(folder)
     }
 
-    /// Takes a folder out of the tree, reporting whether it was in it.
+    /// Removes a folder from the tree. Returns `false` if the tree does not
+    /// have it.
     ///
-    /// By mailbox id, and for the reason [`set_subscribed`](Self::set_subscribed)
-    /// is: the caller is a write that named a mailbox.
+    /// The key is the mailbox id, as in [`set_subscribed`](Self::set_subscribed).
     ///
-    /// Whatever hung under it goes too. RFC 8621 §2.5 has the server refuse to
-    /// destroy a mailbox that still has children, so a destroy that succeeded
-    /// says the server had none — and the children this tree still lists are
-    /// ones another client removed first. Keeping them would leave folders
-    /// under a parent that is not there, at paths nothing answers to.
+    /// This also removes the subtree. RFC 8621 §2.5 makes the server refuse to
+    /// destroy a mailbox with children, so after a successful destroy the
+    /// server had no children of it. Children in this tree are mailboxes that
+    /// another client removed, and their parent path is now invalid.
     pub fn remove(&mut self, id: &Id) -> bool {
         self.take(id).is_some()
     }
 
-    /// The same, handing back what was taken: what [`rename`](Self::rename)
-    /// needs, since a move is a removal that puts the subtree down again
-    /// somewhere else.
+    /// Removes a folder and returns it. [`rename`](Self::rename) uses it to
+    /// move a subtree.
     fn take(&mut self, id: &Id) -> Option<FolderInfo> {
         let mut stack: Vec<&mut Vec<FolderInfo>> = vec![&mut self.roots];
         while let Some(siblings) = stack.pop() {
@@ -394,11 +349,9 @@ impl FolderTree {
         None
     }
 
-    /// The folder at a Camel path, to be edited. The read-only half is
-    /// [`find`](Self::find), and this one is deliberately not public: handing
-    /// out a `&mut FolderInfo` would be handing out the ability to edit a path
-    /// or an id, which is the tree's own structure rather than a property of a
-    /// folder.
+    /// The folder at a Camel path, for an edit. The read-only version is
+    /// [`find`](Self::find). This one is private: a `&mut FolderInfo` lets the
+    /// caller change a path or an id, which is the structure of the tree.
     fn find_mut(&mut self, path: &str) -> Option<&mut FolderInfo> {
         let mut stack: Vec<&mut FolderInfo> = self.roots.iter_mut().collect();
         while let Some(folder) = stack.pop() {
@@ -410,7 +363,7 @@ impl FolderTree {
         None
     }
 
-    /// How many folders the account has, at any depth.
+    /// The number of folders of the account, at all depths.
     pub fn len(&self) -> usize {
         self.iter().count()
     }
@@ -419,11 +372,11 @@ impl FolderTree {
         self.roots.is_empty()
     }
 
-    /// Assign each role to the first mailbox claiming it.
+    /// Give each role to the first mailbox that claims it.
     ///
-    /// Two inboxes is a server bug, and picking one is the only way to answer
-    /// `camel_store_get_inbox_folder`. First in sibling order, so the choice
-    /// is at least the same on every client run.
+    /// Two inboxes are a server error, but `camel_store_get_inbox_folder_sync`
+    /// needs one answer. The order is the sort order of `nodes` (sortOrder,
+    /// name, id), so the result is the same each time.
     fn claim_roles(nodes: &[Node<'_>]) -> Vec<Option<FolderRole>> {
         let mut claimed: BTreeSet<FolderRole> = BTreeSet::new();
         nodes
@@ -438,21 +391,18 @@ impl FolderTree {
             .collect()
     }
 
-    /// Depth-first pre-order over the forest, cutting cycles as it finds them.
+    /// Depth-first pre-order of the forest. This cuts cycles.
     ///
-    /// A mailbox left unvisited after walking the real roots is in a
-    /// `parentId` loop, or hangs off one. Cutting the first such mailbox's
-    /// parent link makes it a root, which walks it and everything below it —
-    /// including the rest of its cycle, since the cut is the only link
-    /// removed. Repeating until nothing is unvisited terminates because each
-    /// pass cuts one mailbox, and leaves a forest that mirrors the tree this
-    /// returns an order for.
+    /// After the walk from the real roots, an unvisited mailbox is in a
+    /// `parentId` loop or below one. The walk cuts the parent link of the
+    /// first unvisited mailbox and walks it as a root, with its subtree and the
+    /// remainder of its cycle. Each pass visits at least one more mailbox, so
+    /// the loop ends. After the loop, `parent` and `children` agree with the
+    /// returned order.
     ///
-    /// A chain longer than [`MAX_DEPTH`] is cut the same way and for a reason
-    /// given there: the tree this describes is dropped recursively, so its depth
-    /// is a stack the server picks the size of. The cut mailbox becomes a root
-    /// and its own subtree starts counting again, so nothing is lost and the
-    /// depth of what comes out is bounded.
+    /// A chain deeper than [`MAX_DEPTH`] is cut in the same way. The cut
+    /// mailbox becomes a root and its subtree counts depth again from 1, so no
+    /// mailbox is lost and the depth has a limit.
     fn walk(
         parent: &mut [Option<usize>],
         children: &mut [Vec<usize>],
@@ -469,8 +419,7 @@ impl FolderTree {
                     continue;
                 }
                 let depth = if depth > MAX_DEPTH {
-                    // Too deep: this mailbox becomes top-level, exactly as one
-                    // in a `parentId` loop does.
+                    // Too deep: the mailbox becomes top-level, as in a loop.
                     if let Some(deep_parent) = parent[index].take() {
                         children[deep_parent].retain(|&child| child != index);
                     }
@@ -498,13 +447,13 @@ impl FolderTree {
         }
     }
 
-    /// The Camel path of every mailbox, indexed like `nodes`.
+    /// The Camel path of each mailbox, with the indices of `nodes`.
     ///
-    /// In `order`, so a parent's path is known before its children need it.
-    /// Distinct mailboxes get distinct paths: the encoding is injective, so
-    /// the only way two siblings can collide is the illegal duplicate name,
-    /// and that one is settled with the id — which no encoded name can end in,
-    /// because `%` in a name is escaped.
+    /// In `order`, so the path of a parent is known before its children.
+    /// Distinct mailboxes get distinct paths. The encoding is injective, so
+    /// only an illegal duplicate sibling name causes a collision. Then the
+    /// path gets `%23` and the encoded id. No encoded name contains `%23`,
+    /// because the encoding escapes `%`.
     fn paths(nodes: &[Node<'_>], parent: &[Option<usize>], order: &[usize]) -> Vec<String> {
         let mut paths = vec![String::new(); nodes.len()];
         let mut used: BTreeSet<String> = BTreeSet::new();
@@ -527,11 +476,11 @@ impl FolderTree {
         paths
     }
 
-    /// Turn the walked order into owned [`FolderInfo`]s.
+    /// Make owned [`FolderInfo`]s from the walk order.
     ///
-    /// Backwards, so that a folder's children are finished before it is: in a
-    /// pre-order they all come after it. Sibling order is restored on the way
-    /// out, since collecting from the reversed walk reverses it.
+    /// In reverse order, so the children of a folder are complete before the
+    /// folder: in a pre-order, they come after it. Each list of children is
+    /// then reversed again to restore sibling order.
     fn assemble(
         nodes: &[Node<'_>],
         parent: &[Option<usize>],
@@ -553,9 +502,8 @@ impl FolderTree {
                 role: roles[index],
                 total: saturate(mailbox.total_emails),
                 unread: saturate(mailbox.unread_emails),
-                // A server that does not model subscriptions reports nothing
-                // here, and treating that as "not subscribed" would hide the
-                // whole account's mail.
+                // A server without subscriptions sends no value. If that means
+                // "not subscribed", all mail of the account is hidden.
                 subscribed: mailbox.is_subscribed.unwrap_or(true),
                 children,
             };
@@ -576,12 +524,11 @@ impl Node<'_> {
     }
 }
 
-/// Whether `path` is `ancestor` or sits somewhere below it.
+/// Whether `path` is `ancestor` or below it.
 ///
-/// A prefix test, and it is one because that is what a path here *is*: every
-/// folder's is its parent's with one more component after it, so the strings
-/// answer the question about the tree. The separator has to be part of the
-/// match — "Work" is not below "Wo".
+/// A prefix test is sufficient, because each path is the parent path with one
+/// more component. The match must include the separator: "Work" is not below
+/// "Wo".
 fn within(path: &str, ancestor: &str) -> bool {
     path == ancestor
         || path
@@ -589,16 +536,13 @@ fn within(path: &str, ancestor: &str) -> bool {
             .is_some_and(|below| below.starts_with(SEPARATOR))
 }
 
-/// Writes `path` onto a folder and rebuilds every path below it.
+/// Sets `path` on a folder and makes the paths of all folders below it again.
 ///
-/// Structurally rather than by rewriting a prefix: a child's path is its
-/// parent's plus its own encoded name, and that last component is the only part
-/// of the old path still worth anything once the folder has moved. It is the
-/// same reading of a path [`FolderTree::insert`] makes.
+/// The path of a child is the parent path and the encoded name of the child.
+/// Only the last component of the old path is still correct after a move.
+/// [`FolderTree::insert`] reads a path the same way.
 ///
-/// Iterative, for [`MAX_DEPTH`]'s reason turned around — the depth of a tree is
-/// a number a server chose, and this walk should not be one more thing that
-/// makes it a stack.
+/// Iterative, for the reason of [`MAX_DEPTH`]: the server selects the depth.
 fn repath(folder: &mut FolderInfo, path: String) {
     let mut stack: Vec<(&mut FolderInfo, String)> = vec![(folder, path)];
     while let Some((folder, path)) = stack.pop() {
@@ -619,16 +563,15 @@ fn repath(folder: &mut FolderInfo, path: String) {
     }
 }
 
-/// A JMAP count in Camel's 32 bits. Saturating, because a count that wraps to
-/// a small number reads as a nearly-empty folder.
+/// A JMAP count in the 32 bits of Camel. Saturating: a count that wraps to a
+/// small number makes a full folder look almost empty.
 fn saturate(count: Option<u64>) -> u32 {
     u32::try_from(count.unwrap_or(0)).unwrap_or(u32::MAX)
 }
 
-/// [`FolderTree::same_shape`], recursing over sibling slices in the order
-/// [`FolderTree::from_mailboxes`] leaves them in — stable across two listings
-/// of the same underlying mailboxes, since that order never depends on a
-/// count.
+/// [`FolderTree::same_shape`] for two lists of siblings, recursively. The
+/// sibling order of [`FolderTree::from_mailboxes`] does not use counts, so two
+/// listings of the same mailboxes have the same order.
 fn same_shape(left: &[FolderInfo], right: &[FolderInfo]) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(left, right)| {
@@ -671,9 +614,8 @@ mod tests {
         }
     }
 
-    /// The property [`FolderTree::same_shape`] exists for: a delivery bumps
-    /// every affected mailbox's counts, and that alone must not read as a
-    /// shape change — see the method's own docs for why.
+    /// A delivery changes the counts of mailboxes, and that is not a shape
+    /// change. Refer to [`FolderTree::same_shape`].
     #[test]
     fn same_shape_ignores_total_and_unread() {
         let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
@@ -708,8 +650,7 @@ mod tests {
         assert!(!before.same_shape(&after));
     }
 
-    /// A rename changes `display_name` and, through it, `path` — either is
-    /// enough on its own, and a rename changes both.
+    /// A rename changes `display_name` and `path`. Each is a shape change.
     #[test]
     fn same_shape_notices_a_rename() {
         let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
@@ -737,8 +678,8 @@ mod tests {
         assert!(!before.same_shape(&after));
     }
 
-    /// A subscription change is a shape change: it is what
-    /// `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` filters the tree on.
+    /// A subscription change is a shape change: Camel filters the tree on
+    /// `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`.
     #[test]
     fn same_shape_notices_a_subscription_change() {
         let mut unsubscribed = mailbox("1", "Inbox", None, 3, 1);

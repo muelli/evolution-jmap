@@ -1,39 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::search` against a real JMAP server — the function
-//! `jmap-mail`'s `folder.rs` calls to delegate a translatable Camel search
-//! expression to `Email/query` (`RFC-SUPPORT.md` item 1), exercised end
-//! to end for the first time.
+//! Tests `MailSync::search` against a real JMAP server. `jmap-mail` calls this
+//! function (from `folder.rs` and `search_body.rs`) to send a Camel search
+//! expression as an `Email/query`.
 //!
-//! `tests/live_server.rs` covers `import_message`/`expunge_message` and
-//! `tests/live_server_folder.rs` covers `create_folder`/`delete_folder`, but
-//! nothing had driven `search` itself against a real server: only
-//! `jmap-mail/tests/search.rs` exercises it, and only against `jmap-mockd`.
-//! What a mock cannot confirm is that `search`'s own AND — the mailbox scope
-//! folded in alongside the caller's filter (`MailSync::search`'s doc comment)
-//! — actually holds on a real server's `Email/query`, rather than the two
-//! conditions silently becoming an OR or the scope being dropped. This file
-//! is `search`'s live-server counterpart, following the same recipe as the
-//! other files in this suite.
+//! `jmap-mail-sync/tests/search.rs` and `jmap-mail/tests/search.rs` test
+//! `search` against `jmap-mock` only. `search` adds the mailbox scope to the
+//! filter of the caller with an AND (see the doc comment of
+//! `MailSync::search`). A mock cannot show that a real server applies this
+//! AND, and does not change it to an OR or drop the scope.
 //!
 //! ## Running it
 //!
-//! Same environment as the other `jmap-mail-sync` live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_search -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other files,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 
@@ -43,8 +35,8 @@ use jmap_proto::mail::{EmailQueryFilter, role};
 use jmap_proto::methods::Filter;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message/folder can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message or folder from a
+/// different run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -52,7 +44,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -83,11 +75,10 @@ fn import(sync: &MailSync, mailbox: &jmap_proto::Id, subject: &str) -> jmap_prot
         .expect("Email/import failed against the real server")
 }
 
-/// Two messages share one distinctive subject token but live in different
-/// folders. Searching either folder for that token should surface only the
-/// message actually filed there — proving `search`'s mailbox scope and the
-/// caller's filter are ANDed together on a real server, not just in the
-/// mock's own translation of the request.
+/// Two messages in different folders have the same subject token. A search
+/// of each folder for the token must find only the message in that folder.
+/// This shows that the real server applies the AND of the mailbox scope and
+/// the filter. The cleanup at the end runs only when all assertions pass.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn searching_a_folder_finds_only_messages_filed_there_on_the_real_server() {

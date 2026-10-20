@@ -1,36 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync` against a mailbox of a size nothing else here has ever reached.
+//! Tests `MailSync` against a large mailbox.
 //!
-//! Every other live-server test in this crate uses a handful of messages; a
-//! real account has tens of thousands, and the failure modes differ:
-//! `Email/query` position paging, `maxObjectsInGet`/`maxCallsInRequest`
-//! chunking, the time a cold listing takes, and whether `messages_since`'s
-//! incremental path stays cheap once a mailbox is no longer small: the
-//! import/listing/catch-up path at N=500, and deletion from an
-//! already-large mailbox.
+//! The other live-server tests of this crate use few messages. A real
+//! account has tens of thousands, and other failures can occur:
+//! `Email/query` position paging, chunks for `maxObjectsInGet` and
+//! `maxCallsInRequest`, the duration of a cold listing, and the cost of the
+//! incremental path of `messages_since`. One test imports and lists 500
+//! messages, then gets the delta. The other test deletes from a large
+//! mailbox.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`. Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_scale -- --ignored --nocapture
 //! ```
 //!
-//! `JMAP_SCALE_TEST_MESSAGES` overrides the batch size (default 500); the
-//! write-test account should be a throwaway created for this alone (see
-//! `stw seed` in the manual-test doc) since this leaves that many messages in
-//! its Inbox for inspection rather than cleaning up after itself — deleting
-//! the whole throwaway account afterwards is cheaper than destroying each
-//! message one at a time over JMAP.
+//! `JMAP_SCALE_TEST_MESSAGES` sets the batch size (default 500). The tests do
+//! not delete the messages that they import, thus use a temporary write-test
+//! account (for example from `stw seed`). To delete the account after the
+//! test is faster than to destroy each message over JMAP.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset, the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. It panics when
+//! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
+//! `JMAP_LIVE_SERVER_URL` is unset.
 
 use std::env;
 use std::time::{Duration, Instant};
@@ -40,8 +37,8 @@ use jmap_mail_sync::{Keywords, MailSync, MessageUpdate};
 use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover messages can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that messages from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,7 +46,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -72,8 +69,8 @@ fn batch_size() -> usize {
         .unwrap_or(500)
 }
 
-/// The resident set size this process has peaked at, read from `/proc`. Linux
-/// only, which every runner this test actually runs on is.
+/// Returns the peak resident set size of this process from `/proc`. Returns
+/// `None` when `/proc/self/status` is not available (not Linux).
 fn peak_rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status.lines().find_map(|line| {
@@ -96,10 +93,8 @@ fn message(subject: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Imports `n` messages into `mailbox`, tagged with `run` and `label` so a
-/// concurrent or prior run's leftovers are never mistaken for this batch's
-/// own. Returns the imported uids, oldest first, and how long the whole
-/// batch took.
+/// Imports `n` messages into `mailbox`, with `run` and `label` in each
+/// subject. Returns the uids in import order and the duration of the batch.
 fn import_batch(
     sync: &MailSync,
     mailbox: &Id,
@@ -212,10 +207,8 @@ fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
     }
 }
 
-/// `destroyed` ids cost nothing in `messages_since` (see its doc comment), so
-/// deleting from an already-large mailbox should stay on the cheap `Changed`
-/// path rather than tripping `catch_up_limit`'s relist, however large the
-/// mailbox has grown.
+/// `messages_since` does not count `destroyed` ids against `catch_up_limit`.
+/// Thus deletions from a large mailbox must give `Changed`, not `Relisted`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn deleting_from_a_real_sized_mailbox_is_reported_without_a_relist() {
@@ -252,8 +245,7 @@ fn deleting_from_a_real_sized_mailbox_is_reported_without_a_relist() {
         .messages(&inbox_id)
         .expect("listing the Inbox failed after the bulk import");
 
-    // "A few hundred", per the item's own wording, capped at the batch size
-    // itself so a small manual run never tries to delete more than exists.
+    // Delete at most 300 messages, and never more than the batch size.
     let delete_count = n.min(300);
     let to_delete: Vec<Id> = imported.into_iter().take(delete_count).collect();
 

@@ -1,58 +1,49 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Why a mail synchronisation step failed.
+//! The cause of a failed mail synchronisation step.
 
-/// A failure from one of [`crate::MailSync`]'s operations.
+/// A failure from one of the [`crate::MailSync`] operations.
 ///
-/// The [`SyncError::Client`] case is kept intact rather than flattened into a
-/// string for the same reason as in `jmap-book-sync` and `jmap-cal-sync`: the
-/// Camel layer above maps it onto the `CAMEL_SERVICE_ERROR` / `CAMEL_ERROR`
-/// codes Evolution branches on, so an authentication failure has to stay
-/// distinguishable from a network outage all the way up.
+/// [`SyncError::Client`] keeps the client error intact, as in `jmap-book-sync`
+/// and `jmap-cal-sync`. The Camel layer maps it to the `CAMEL_SERVICE_ERROR`
+/// or `CAMEL_ERROR` codes of Evolution, so an authentication failure must stay
+/// different from a network failure.
 #[derive(Debug)]
 pub enum SyncError {
-    /// The server said no, could not be reached, or answered with something
-    /// JMAP does not allow.
+    /// The server refused, was not reachable, or sent a reply that JMAP does
+    /// not allow.
     Client(jmap_client::Error),
-    /// A message was asked for by id and the account does not have it.
+    /// The account does not have the message with this id.
     ///
-    /// Its own variant because it is the one failure here that is not a
-    /// failure: a uid in a folder summary is a claim about the last listing,
-    /// and another client deleting the message in the meantime is ordinary.
-    /// Left as a client error it would be reported as a broken account —
-    /// Camel's vocabulary has a code for exactly this, and the layer above can
-    /// only reach for it if the distinction survives the crate boundary.
+    /// This is not a broken account: a uid in a folder summary comes from the
+    /// last listing, and another client can delete the message after it.
+    /// Camel has an error code for this case, and the layer above can use it
+    /// only if this variant is different from a client error.
     NoSuchMessage(jmap_proto::Id),
-    /// A mailbox was asked to change and the account does not have it.
+    /// The account does not have the mailbox that a change is for.
     ///
-    /// The folder-shaped counterpart of [`SyncError::NoSuchMessage`], and its
-    /// own variant for the same reason: a folder in Camel's tree is a claim
-    /// about the last listing, and another client deleting it in the meantime
-    /// is ordinary. Camel has a code for exactly this — the store's
-    /// `NO_FOLDER`, not the service's "the account is broken" — and the layer
-    /// above can only reach for it if the distinction survives the crate
-    /// boundary.
+    /// The folder equivalent of [`SyncError::NoSuchMessage`], for the same
+    /// reason: another client can delete the mailbox after the last listing.
+    /// The layer above maps it to the store code `NO_FOLDER`, not to a service
+    /// error for a broken account.
     NoSuchFolder(jmap_proto::Id),
-    /// A message was to be sent from an address the account has no identity
-    /// for, so there is nothing to submit it through.
+    /// The account has no identity for the sender address of a message, so it
+    /// cannot submit the message.
     ///
-    /// Its own variant, and not a client error, because nothing failed: the
-    /// connection is fine and the server was never asked to send anything. It
-    /// carries the address rather than an id because that is the part the user
-    /// recognises — they chose it in the composer, and it is what they would
-    /// have to change.
+    /// This is not a client error: the connection is good and the server got
+    /// no request. It holds the address, not an id, because the user selected
+    /// the address in the composer and must change it.
     NoIdentity(String),
-    /// A message was to be sent and the account has no mailbox an outgoing
-    /// message may be put in — no Drafts, and no Sent.
+    /// The account has no mailbox for an outgoing message: no Drafts and no
+    /// Sent.
     ///
-    /// Its own variant for [`SyncError::NoIdentity`]'s reason, and it carries
-    /// nothing because there is nothing to name: the missing thing is a mailbox
-    /// that does not exist. RFC 8621 §7 gives a client no way to submit a
-    /// message that is not already in the account's store, so this is a send
-    /// that cannot happen rather than one that failed — see
+    /// Not a client error, for the reason of [`SyncError::NoIdentity`]. It
+    /// holds nothing, because the missing mailbox has no name. RFC 8621 §7
+    /// lets a client submit only a message that is already in the account, so
+    /// the send cannot start. Refer to
     /// [`OutgoingMailboxes::of`](crate::send::OutgoingMailboxes::of) for why
-    /// the Inbox is not used instead.
+    /// the Inbox is not used.
     NoOutgoingFolder,
 }
 
@@ -62,10 +53,10 @@ impl SyncError {
         Self::Client(jmap_client::Error::Protocol(message.into()))
     }
 
-    /// Whether the server rejected the request with HTTP 401 — on a
-    /// long-lived connection, what a bearer token that expired while the
-    /// connection sat idle looks like. The caller's answer is to refresh the
-    /// token and retry once, not to reopen the consent window immediately.
+    /// Whether the server refused the request with HTTP 401. On a long-lived
+    /// connection, this usually means that the bearer token expired while the
+    /// connection was idle. Refresh the token and try again once before you
+    /// open the consent window.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Client(error) if error.is_unauthorized())
     }

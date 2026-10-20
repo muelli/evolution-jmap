@@ -1,42 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where a message is filed, as the change that files it somewhere else.
+//! Message filing: the change that moves or copies a message to a mailbox.
 //!
-//! Camel has one vfunc for this — `transfer_messages_to_sync`, taking a source
-//! folder, a destination folder and a flag saying whether the originals go —
-//! and JMAP answers both of its halves with one property. RFC 8621 §4.6 makes
-//! `mailboxIds` the set of mailboxes a message is in, so a copy adds a member
-//! and a move adds one and takes another away. There is no `Email/copy` and no
-//! `Email/move`, because in JMAP a mailbox is closer to a label than to a
-//! directory: the message is one object either way, and the only difference
-//! between a copy and a move is how many mailboxes end up naming it.
+//! Camel has one vfunc for this: `transfer_messages_to_sync`, with a source
+//! folder, a destination folder and a flag that removes the originals. In
+//! JMAP, one property does both. `mailboxIds` (RFC 8621 §4.1.1) is the set of
+//! mailboxes that contain a message. A copy adds a member. A move adds one
+//! member and removes another. In one account, a mailbox is like a label: the
+//! message is one object, and `Email/copy` copies only between accounts.
 //!
-//! ## A message is always somewhere
+//! ## A message is always in a mailbox
 //!
-//! RFC 8621 §4.6 spends one sentence on the rule this module is built around:
-//! an `Email` in the mail store belongs to one or more `Mailbox`es. It is what
-//! makes a move one patch rather than two requests — a request that removed the
-//! source first would be refused for leaving the message nowhere, and one that
-//! added the destination first would leave the message filed in both if the
-//! second request never happened, which is a copy the user did not ask for and
-//! that nothing afterwards knows to clean up. One `Email/set` update is applied
-//! by the server as one change, so the message is in the old mailbox or the new
-//! one and never in neither.
+//! RFC 8621 §4.1.1: an `Email` in the mail store belongs to one or more
+//! mailboxes. Thus, a move is one patch, not two requests. If the first
+//! request removes the source, the server refuses it. If the first request
+//! adds the destination and the second fails, the message stays in both
+//! mailboxes. The server applies one `Email/set` update as one change.
 //!
-//! It is also why [`Filing::moved`] into the mailbox a message is already in is
-//! empty rather than a patch: the same pointer would have to be both `true` and
-//! `null`, and whichever of the two won, the answer would be wrong — a message
-//! filed where it already was, or a message filed nowhere.
+//! For the same reason, [`Filing::moved`] into the current mailbox gives an
+//! empty patch. Otherwise, one pointer must be both `true` and `null`, and
+//! each result is wrong.
 //!
 //! ## What is not decided here
 //!
-//! Which mailbox a message *came from* is the caller's claim, not something
-//! this checks: a Camel folder knows its own mailbox id, and asking the server
-//! to confirm it would be a round trip spent re-reading what the summary the
-//! user clicked in already said. A `null` for a member that is not there is not
-//! an error — RFC 8620 §5.3 removes the member, and a member that was already
-//! absent is already removed — so a stale claim costs the message nothing.
+//! The source mailbox comes from the caller, and this module does not check
+//! it. A Camel folder knows its own mailbox id, so a check costs a round trip
+//! for no new data. A `null` for an absent member is not an error: RFC 8620
+//! §5.3 removes the member, and the member is already absent.
 
 use jmap_proto::Id;
 use serde_json::{Map, Value};
@@ -46,20 +37,14 @@ use crate::pointer;
 /// The property a filing patches.
 pub(crate) const MAILBOX_IDS: &str = "mailboxIds";
 
-/// The patch that takes a message out of one mailbox and speaks for no other.
+/// The patch that removes a message from one mailbox and adds it to none.
 ///
-/// The other half of what [`Filing`] can express, and deliberately not a
-/// [`Filing`]: every filing has a mailbox the message ends up *in*, because
-/// that is what a copy and a move both have. This one has only a mailbox the
-/// message leaves, which is a request RFC 8621 §4.6 permits exactly when the
-/// message is filed somewhere else as well — a message left in no mailbox at
-/// all is one the store may not hold, and a server keeping that invariant
-/// refuses the write rather than destroying the message on the client's
-/// behalf.
+/// This is not a [`Filing`], because each filing has a destination mailbox.
+/// The server accepts this patch only if the message stays in a different
+/// mailbox (RFC 8621 §4.1.1). Otherwise, the server refuses the write.
 ///
-/// So this is only ever half an answer, and the half that is missing is which
-/// mailboxes the message is in. [`MailSync::expunge_message`](crate::MailSync::
-/// expunge_message) is where the two are put together.
+/// [`MailSync::expunge_message`](crate::MailSync::expunge_message) adds the
+/// check of which mailboxes contain the message.
 pub(crate) fn out_of(mailbox: &Id) -> Value {
     let mut patch = Map::new();
     patch.insert(pointer::member(MAILBOX_IDS, mailbox.as_str()), Value::Null);
@@ -68,13 +53,11 @@ pub(crate) fn out_of(mailbox: &Id) -> Value {
 
 /// What has to happen on the server for a message to be filed somewhere else.
 ///
-/// Built by [`Filing::copied_into`] or [`Filing::moved`] and spent by
-/// [`MailSync::file_message`](crate::MailSync::file_message), in the shape
-/// [`KeywordChange`](crate::KeywordChange) has for the other thing a folder
-/// writes: a difference rather than a state. A whole-set write would say
-/// something about every mailbox the message is in — including the ones another
-/// client filed it into after the listing this filing was decided from — and
-/// what it would say is "gone".
+/// [`Filing::copied_into`] or [`Filing::moved`] makes it, and
+/// [`MailSync::file_message`](crate::MailSync::file_message) sends it. Like
+/// [`KeywordChange`](crate::KeywordChange), it is a difference, not a state.
+/// A write of the full set removes mailboxes that another client added after
+/// the last listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filing {
     /// The mailbox the message is filed into.
@@ -91,8 +74,7 @@ impl Filing {
 
     /// The message gains `into` and loses `out_of`, in one change.
     ///
-    /// A move into the mailbox the message is being moved out of is the one
-    /// filing that has nothing to say; see [`Filing::is_empty`].
+    /// A move into the source mailbox is empty; see [`Filing::is_empty`].
     pub fn moved(out_of: Id, into: Id) -> Self {
         Self {
             into,
@@ -100,24 +82,21 @@ impl Filing {
         }
     }
 
-    /// Whether this filing would leave the message exactly where it is, and is
-    /// therefore a request that is never sent.
+    /// Whether this filing does not move the message. The provider does not
+    /// send an empty filing.
     pub fn is_empty(&self) -> bool {
         self.out_of.as_ref() == Some(&self.into)
     }
 
     /// The filing as the `PatchObject` an `Email/set` update takes.
     ///
-    /// `true` files the message into a mailbox and `null` takes it out — RFC
-    /// 8621 §4.6 gives the value of a set member as `true` and nothing else, so
-    /// "not in it" is the member being absent rather than being `false`.
+    /// `true` adds the message to a mailbox and `null` removes it. RFC 8621
+    /// §4.1.1 permits only `true` as a value, so "not in it" is an absent
+    /// member, not `false`.
     ///
-    /// Both members go in one object, and the object has no order: RFC 8620
-    /// §5.3 defines what a `PatchObject` *results in*, not a sequence of steps,
-    /// so there is no member a server is entitled to apply first and no
-    /// intermediate state with no mailbox in it for it to refuse. That is the
-    /// property a two-request move does not have, and it is why this is one
-    /// patch.
+    /// Both members go in one object. RFC 8620 §5.3 defines the result of a
+    /// `PatchObject`, not an order of steps. Thus, no intermediate state has
+    /// zero mailboxes, and the server has no reason to refuse it.
     pub fn patch(&self) -> Value {
         let mut patch = Map::new();
         if self.is_empty() {

@@ -1,56 +1,51 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::send_message` against a real JMAP server, with actual
-//! intra-server delivery — the function `CamelTransport::send_sync` actually
-//! calls, exercised end to end for the first time.
+//! Tests `MailSync::send_message` against a real JMAP server, with delivery
+//! to a second account on the same server. `CamelTransport::send_sync` calls
+//! this function.
 //!
-//! `jmap-client/tests/live_server.rs::
-//! send_email_delivers_to_a_second_account_on_the_real_server` already proves
-//! `Client::send_email` (`Email/set` + `EmailSubmission/set`, chained) against
-//! real Stalwart, including delivery to a second account. But nothing has
-//! ever driven `MailSync::send_message` itself: the upload-then-stage-then-
-//! submit sequencing through `import_message`, `MailSync::identity_for`'s
-//! address-to-identity lookup, and `MailSync::outgoing_mailboxes`'s Drafts/
-//! Sent staging decision — only `jmap-mockd` has (`jmap-mail-sync/tests/
-//! send.rs`). This file is their live-server counterpart, following the same
-//! two-account recipe `jmap-client`'s own send-email test uses.
+//! `send_email_delivers_to_a_second_account_on_the_real_server` in
+//! `jmap-client/tests/live_server.rs` tests `Client::send_email` (`Email/set`
+//! and `EmailSubmission/set`) with delivery to a second account. It does not
+//! test `MailSync::send_message`: the upload, staging and submission through
+//! `import_message`, the identity lookup of `MailSync::identity_for`, and the
+//! Drafts and Sent selection of `MailSync::outgoing_mailboxes`.
+//! `jmap-mail-sync/tests/send.rs` tests these against `jmap-mock` only. This
+//! file is their live-server counterpart, with the same two-account setup as
+//! the `jmap-client` send test.
 //!
-//! A second test below confirms the other half of `Outgoing::envelope`'s own
-//! reason for existing: that real Stalwart delivers from `envelope.rcptTo`
-//! even when the recipient's address is in no header at all, the way a Bcc
-//! recipient's never is. The first test above never exercises that, since
-//! its envelope recipient is also the `To` header's.
+//! The first test also checks the premise of `Outgoing::accepted_patch` (see
+//! `jmap-mail-sync/src/send.rs`). When the server accepts the submission, it
+//! must also apply the `onSuccessUpdateEmail` patch of `$draft`, `$seen` and
+//! `mailboxIds`. Thus the test lists the Drafts and Sent mailboxes of the
+//! sender after the send. In `tests/send.rs`, this test does the same check
+//! against `jmap-mock`:
+//! `a_sent_message_leaves_the_mailbox_it_was_staged_in_for_the_one_it_is_filed_in`.
 //!
-//! The first test also now confirms `Outgoing::accepted_patch`'s own premise
-//! (`jmap-mail-sync/src/send.rs`'s doc comment): that real Stalwart applies
-//! the combined `$draft`/`$seen`/mailboxIds patch named by
-//! `onSuccessUpdateEmail` atomically with accepting the submission, by
-//! re-listing the *sender's* own Drafts and Sent mailboxes after the send,
-//! not just the recipient's Inbox. `jmap-mail-sync/tests/send.rs`'s
-//! `a_sent_message_leaves_the_mailbox_it_was_staged_in_for_the_one_it_is_
-//! filed_in` already proves this shape against `jmap-mockd`; nothing
-//! previously checked it against a real server.
+//! The second test checks the reason for `Outgoing::envelope`: Stalwart must
+//! deliver to `envelope.rcptTo` when no header contains the recipient address,
+//! as for a Bcc recipient. In the first test, the envelope recipient is also
+//! the `To` recipient.
 //!
 //! ## Running it
 //!
-//! Same environment as the other sync crates' live-server tests, plus the
-//! recipient account from `docs/manual-test-live-server.md` step 3a — see
-//! that file. In short, with `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/
-//! `_WRITE_PASSWORD`/`_RECIPIENT_USER`/`_RECIPIENT_PASSWORD` already set up:
+//! See `docs/manual-test-live-server.md`, steps 3 and 3a. Set
+//! `JMAP_LIVE_SERVER_URL`, `JMAP_LIVE_SERVER_WRITE_USER`,
+//! `JMAP_LIVE_SERVER_WRITE_PASSWORD`, `JMAP_LIVE_SERVER_RECIPIENT_USER` and
+//! `JMAP_LIVE_SERVER_RECIPIENT_PASSWORD`, then:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-mail-sync --test live_server_send -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like the other sync
-//! crates, this crate has no such feature, and `#[ignore]` alone already
-//! keeps it out of a plain `cargo test`.
+//! This crate has no `live-server` feature. `#[ignore]` keeps the test out of
+//! a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` or
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` are unset — the same
-//! tolerance every write-path test in this repository gives an unconfigured
-//! environment.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset. They panic when one of these
+//! variables is set but its `_PASSWORD` variable or `JMAP_LIVE_SERVER_URL` is
+//! unset.
 
 use std::env;
 use std::time::Duration;
@@ -60,8 +55,8 @@ use jmap_mail_sync::{FolderRole, MailSync, Outgoing};
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 use jmap_proto::session::CAPABILITY_MAIL;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover message can never be mistaken for this run's own.
+/// Returns a value unique to this run, so that a message from a different run
+/// cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -69,7 +64,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `connect_for_write` in `jmap-client/tests/live_server.rs`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -86,7 +81,7 @@ fn connect_for_write() -> Option<Client> {
     )
 }
 
-/// Mirrors `jmap-client/tests/live_server.rs::connect_recipient` exactly.
+/// Same as `connect_recipient` in `jmap-client/tests/live_server.rs`.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -104,12 +99,10 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// Sends a message via `MailSync::send_message` from the write-test account
-/// to the recipient account (both on `agent-livewrite.net`, per
-/// `docs/manual-test-live-server.md`), and polls the recipient's own
-/// `MailSync::messages` — not raw `Client::email_query`, to keep the
-/// assertion on this crate's own read path — until the message actually
-/// lands, proving delivery rather than only an accepted submission.
+/// Sends a message from the write-test account to the recipient account and
+/// polls `MailSync::messages` of the recipient until the message arrives.
+/// This shows delivery, not only an accepted submission. Then it checks the
+/// Drafts and Sent mailboxes of the sender.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
@@ -179,8 +172,8 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
         .id
         .clone();
 
-    // Local delivery is not necessarily synchronous with `send_message`
-    // returning, so poll rather than assume it has already landed.
+    // Delivery can occur after `send_message` returns. Poll at most 20 times,
+    // with 1 second between attempts.
     let mut delivered = None;
     for _ in 0..20 {
         let (_, messages) = recipient_sync
@@ -201,12 +194,9 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
 
     assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
 
-    // `Outgoing::accepted_patch`'s own premise: the server applies the
-    // combined `$draft`/`$seen`/mailboxIds patch atomically with accepting
-    // the submission. Proven against `jmap-mockd` by `jmap-mail-sync/tests/
-    // send.rs`'s `a_sent_message_leaves_the_mailbox_it_was_staged_in_for_
-    // the_one_it_is_filed_in`; checked here against the real server for the
-    // first time.
+    // The premise of `Outgoing::accepted_patch`: when the server accepts the
+    // submission, it also applies the `$draft`, `$seen` and `mailboxIds`
+    // patch.
     let (_, staging_messages) = sync
         .messages(&staging)
         .expect("listing the sender's own staging mailbox failed");
@@ -239,13 +229,12 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
     );
 }
 
-/// `jmap-mail/src/envelope.rs`'s own reason for carrying the envelope
-/// separately from the headers: a Bcc recipient has no header, and a server
-/// deriving delivery from the headers instead of `envelope.rcptTo` would
-/// never deliver to them. Every other live-server send test here sets the
-/// envelope recipient equal to the message's own `To` header, so none of
-/// them actually exercise that divergence. This one does: the header names
-/// only the sender, and the envelope alone names the recipient.
+/// Sends a message whose headers name only the sender. Only the envelope
+/// names the recipient, as for a Bcc recipient.
+///
+/// `jmap-mail/src/envelope.rs` keeps the envelope apart from the headers for
+/// this case. A server that delivers from the headers, not from
+/// `envelope.rcptTo`, does not deliver to a Bcc recipient.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
@@ -274,8 +263,8 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
         .expect("the write-test account needs somewhere to stage an outgoing message");
 
     let subject = format!("agent-mailsync-bcc-{}", unique_suffix());
-    // `To` names the sender, not the recipient — the recipient's address is
-    // nowhere in the source bytes at all, the way a real Bcc works.
+    // `To` names the sender. The recipient address is not in the source
+    // bytes, as for a real Bcc.
     let message = format!(
         "From: {sender_email}\r\n\
          To: {sender_email}\r\n\
@@ -312,8 +301,8 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
         .id
         .clone();
 
-    // Local delivery is not necessarily synchronous with `send_message`
-    // returning, so poll rather than assume it has already landed.
+    // Delivery can occur after `send_message` returns. Poll at most 20 times,
+    // with 1 second between attempts.
     let mut delivered = None;
     for _ in 0..20 {
         let (_, messages) = recipient_sync
