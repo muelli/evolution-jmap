@@ -1,24 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The one struct M5's mail provider hands to C by value: `CamelProvider`.
-// Every other type crossed so far is a GObject, whose layout `tests/layout.rs`
-// checks against `g_type_query`. A provider is not — it is a plain struct
-// behind a boxed GType, so GObject knows nothing about its size and there is
-// nothing to query. What stands in for that check here is a round trip: build
-// one in Rust, register it, and ask Camel to hand it back. If a single field
-// were at the wrong offset, the values that come back would be someone else's.
+// `CamelProvider` is the first struct that the mail provider gives to C by value.
+// Most types that this crate crosses are GObjects, and `tests/layout.rs` checks
+// their layout against `g_type_query`. A provider is not a GObject: it is a plain
+// struct behind a boxed GType, so GObject has no size to query. This file uses a
+// round trip instead: build a provider in Rust, register it, and get it back from
+// Camel. A field at the wrong offset gives back incorrect values.
 
 use eds_sys::*;
 use std::ptr;
 
-/// Why this file exists rather than three more lines in `tests/layout.rs`:
 /// `camel_provider_get_type()` registers a *boxed* type, so `g_type_query()`
-/// reports zero for both sizes and the `assert_layout!` macro would compare
-/// `size_of` against nothing at all and pass no matter what.
+/// gives zero for both sizes. In `tests/layout.rs`, `assert_layout!` would compare
+/// `size_of` against zero and always fail, so this check is in this file.
 #[test]
 fn a_provider_is_a_boxed_type_so_gtype_knows_nothing_of_its_size() {
-    // SAFETY: plain type accessor, and `g_type_query` fills a struct we own.
+    // SAFETY: a plain type accessor, and `g_type_query` fills a struct that this
+    // test owns.
     let (fundamental, query) = unsafe {
         let gtype = camel_provider_get_type();
         let mut query = std::mem::zeroed::<GTypeQuery>();
@@ -30,25 +29,25 @@ fn a_provider_is_a_boxed_type_so_gtype_knows_nothing_of_its_size() {
     assert_eq!(query.class_size, 0, "a boxed type has no class");
 }
 
-/// The provider struct is a static description, so the test builds it the way
-/// the real module will: `'static` C string literals, no allocation, no
-/// ownership handed over. `camel_provider_register` takes the pointer and
-/// keeps it, which is why the module's provider has to outlive the module.
+/// The provider struct is a static description. The test builds it as the real
+/// module does: `'static` C string literals, no allocation, no transfer of
+/// ownership. `camel_provider_register` keeps the pointer, so the provider of the
+/// module must live longer than the module.
 #[test]
 fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
-    // `camel_provider_init()` is what scans the provider directory, so this is
-    // the state a loaded `libcameljmap.so` will find itself in — Camel calls
-    // `camel_provider_module_init` from inside it. Registering works without it
-    // (the table is created lazily, checked), but a test of the module's path
-    // should stand where the module stands.
+    // `camel_provider_init()` scans the provider directory. A loaded
+    // `libcameljmap.so` is in this state, because Camel calls
+    // `camel_provider_module_init` from inside `camel_provider_init()`.
+    // Registration works without it (Camel creates the table lazily, checked), but
+    // this test uses the same state as the module.
     // SAFETY: no arguments, and repeated calls are harmless (checked).
     let store_type = unsafe {
         camel_provider_init();
         camel_offline_store_get_type()
     };
 
-    // A protocol nobody else registers, so the test cannot collide with a
-    // provider Camel loaded from disk.
+    // No other provider registers this protocol, so the test cannot collide with
+    // a provider that Camel loads from disk.
     let protocol = c"jmap-eds-sys-roundtrip";
     let mut provider = CamelProvider {
         protocol: protocol.as_ptr(),
@@ -59,12 +58,12 @@ fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
-        // EDS 3.60 dropped these three fields; a provider there states no
-        // URL-hashing or auto-detection callbacks because there is nowhere to
-        // put them. See `docs/eds-version-matrix.md`.
+        // EDS 3.60 removed these three fields. A provider there has no URL-hashing
+        // or auto-detection callbacks, because the struct has no place for them.
+        // See `docs/eds-version-matrix.md`.
         #[cfg(camel_provider_url_helpers)]
         auto_detect: None,
-        // The array is indexed by CamelProviderType; a store and no transport.
+        // CamelProviderType is the array index: a store and no transport.
         object_types: [store_type, G_TYPE_INVALID],
         authtypes: ptr::null_mut(),
         #[cfg(camel_provider_url_helpers)]
@@ -75,9 +74,9 @@ fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
         priv_: ptr::null_mut(),
     };
 
-    // SAFETY: `provider` outlives the call and everything it points at is
-    // 'static. `camel_provider_get` returns the registered pointer or NULL
-    // with `error` set; on the happy path it is the very struct above.
+    // SAFETY: `provider` stays valid for the call, and all that it points to is
+    // 'static. `camel_provider_get` returns the registered pointer, or NULL with
+    // `error` set. On success, that pointer is the struct above.
     unsafe {
         camel_provider_register(&mut provider);
 
@@ -109,10 +108,10 @@ fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
     }
 }
 
-/// `object_types` is a fixed-size array in the struct, and its length is an
-/// enum value in a different header. If EDS ever grew a third provider type
-/// the array would move `authtypes` and everything after it, so the length is
-/// worth pinning rather than trusting bindgen to have followed the `#define`.
+/// `object_types` is a fixed-size array in the struct. Its length is an enum value
+/// in a different header. A third provider type in EDS would move `authtypes` and
+/// all fields after it. Thus the test pins the length and does not trust bindgen
+/// to follow the enum.
 #[test]
 fn the_object_types_array_is_indexed_by_provider_type() {
     assert_eq!(CAMEL_NUM_PROVIDER_TYPES, 2);
@@ -126,27 +125,26 @@ fn the_object_types_array_is_indexed_by_provider_type() {
     );
 }
 
-/// How the manual test recipe will point Camel at an uninstalled build, and a
-/// string Camel compares against `g_getenv`'s key — so a typo is a provider
-/// that is simply never found. Take it from the header.
+/// The manual test recipe uses this variable to point Camel at an uninstalled
+/// build. Camel gives this string to `g_getenv` as the key, so a typo makes Camel
+/// never find the provider. Take the string from the header.
 #[test]
 fn the_provider_directory_override_is_the_variable_camel_reads() {
     assert_eq!(EDS_CAMEL_PROVIDER_DIR, c"EDS_CAMEL_PROVIDER_DIR");
 }
 
-/// `CamelFolderInfo` is the second struct this layer hands to C by value, and
-/// like `CamelProvider` it is not a GObject — `camel_folder_info_get_type` is a
-/// boxed type, so there is no instance size to compare against. What the
-/// builder in `jmap-mail` relies on instead is the allocator's contract:
-/// `camel_folder_info_new` hands back a struct with every field zeroed, so the
-/// builder can fill in only the fields it has something to say about and trust
-/// that `next`, `parent` and `child` are NULL rather than garbage. A
-/// `g_slice_new` instead of a `g_slice_new0` upstream would turn that into a
-/// chain that walks into freed memory the first time Camel follows it.
+/// `CamelFolderInfo` is the second struct that this layer gives to C by value.
+/// Like `CamelProvider`, it is not a GObject: `camel_folder_info_get_type` is a
+/// boxed type, so there is no instance size to compare. The builder in `jmap-mail`
+/// uses the allocator contract instead: `camel_folder_info_new` returns a struct
+/// with all fields zeroed. Thus the builder sets only the fields it has data for,
+/// and `next`, `parent` and `child` are NULL, not garbage. If upstream used
+/// `g_slice_new` instead of `g_slice_new0`, Camel would follow that chain into
+/// freed memory the first time.
 #[test]
 fn a_fresh_folder_info_is_zeroed() {
-    // SAFETY: no arguments; the returned struct is ours until we free it, and
-    // `camel_folder_info_free` walks the (empty) chain and frees the names.
+    // SAFETY: no arguments. The test owns the returned struct until it frees it,
+    // and `camel_folder_info_free` walks the (empty) chain and frees the names.
     unsafe {
         let info = camel_folder_info_new();
         assert!(!info.is_null(), "camel_folder_info_new returned NULL");
@@ -164,16 +162,15 @@ fn a_fresh_folder_info_is_zeroed() {
     }
 }
 
-/// The names in a `CamelFolderInfo` are freed with `g_free`, so they have to be
-/// allocated with `g_malloc` and not with a Rust allocator. Nothing in the type
-/// system says so — both are `*mut gchar` — which makes this the assumption most
-/// worth writing down: the round trip below is what a leak checker looks at, and
-/// a `CString::into_raw` in its place is a heap corruption that usually survives
-/// long enough to corrupt something else.
+/// `camel_folder_info_free` frees the names in a `CamelFolderInfo` with `g_free`.
+/// Thus they must come from `g_malloc`, not from a Rust allocator. The type system
+/// does not show this, because both are `*mut gchar`. A leak checker examines the
+/// round trip below. A `CString::into_raw` in its place causes heap corruption
+/// that usually stays hidden until it corrupts other data.
 #[test]
 fn folder_info_names_survive_a_g_strdup_and_a_free() {
-    // SAFETY: `g_strdup` allocates with g_malloc, which is what
-    // `camel_folder_info_free` releases the two name fields with.
+    // SAFETY: `g_strdup` allocates with g_malloc. `camel_folder_info_free`
+    // releases the two name fields with the matching deallocator.
     unsafe {
         let info = camel_folder_info_new();
         (*info).full_name = glib_sys::g_strdup(c"Parent/Child".as_ptr());
@@ -190,11 +187,11 @@ fn folder_info_names_survive_a_g_strdup_and_a_free() {
     }
 }
 
-/// A folder's *type* is a small integer packed into the flags word, not a bit
-/// per type: `CAMEL_FOLDER_TYPE_MASK` isolates it and the ordinary bit flags
-/// live outside the mask. Setting a type by OR-ing it in — which is what the
-/// role mapping does — is only correct while those two facts hold, and both are
-/// `#define`s in a header rather than anything the compiler checks.
+/// The *type* of a folder is a small integer in the flags word, not one bit for
+/// each type. `CAMEL_FOLDER_TYPE_MASK` isolates it, and the usual bit flags are
+/// outside the mask. The role mapping sets a type with a bitwise OR. That is
+/// correct only while these two facts are true, and both are header `#define`s
+/// that the compiler does not check.
 #[test]
 fn the_folder_type_is_a_field_inside_the_flags_word() {
     assert_eq!(CAMEL_FOLDER_TYPE_MASK, 0x3F << CAMEL_FOLDER_TYPE_BIT);
@@ -216,8 +213,8 @@ fn the_folder_type_is_a_field_inside_the_flags_word() {
         );
     }
 
-    // ...and the flags a JMAP folder also carries do not land in the type
-    // field, so OR-ing them together cannot change the type.
+    // The flags that a JMAP folder also has are outside the type field, so a
+    // bitwise OR with them cannot change the type.
     let flags = CAMEL_FOLDER_SUBSCRIBED
         | CAMEL_FOLDER_SYSTEM
         | CAMEL_FOLDER_CHILDREN
@@ -225,14 +222,13 @@ fn the_folder_type_is_a_field_inside_the_flags_word() {
     assert_eq!(flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags, 0);
 }
 
-/// Why the provider has to declare a settings type of its own rather than
-/// reuse `CamelOfflineSettings`, which is what `CamelOfflineStore` would
-/// otherwise instantiate: none of Camel's stock settings classes implements
-/// `CamelNetworkSettings`. Host, port, user and security method live on that
-/// interface, and every provider in the tree — IMAPx, POP, SMTP — implements it
-/// on its own settings subclass. A store whose settings do not is a store with
-/// no server to talk to, and the symptom is a NULL host at connect time rather
-/// than anything at build time.
+/// None of the stock Camel settings classes implements `CamelNetworkSettings`.
+/// Thus the provider declares its own settings type and does not use
+/// `CamelOfflineSettings`, which `CamelOfflineStore` otherwise instantiates.
+/// Host, port, user and security method are on that interface. Each provider in
+/// the tree (IMAPx, POP, SMTP) implements it on its own settings subclass. A
+/// store whose settings do not implement it has no server. The symptom is a NULL
+/// host at connect time, not an error at build time.
 #[test]
 fn no_stock_camel_settings_class_carries_the_network_properties() {
     // SAFETY: plain type accessors, and `g_type_is_a` only reads the type
@@ -253,9 +249,9 @@ fn no_stock_camel_settings_class_carries_the_network_properties() {
             );
         }
 
-        // ...and it is the *offline* one a `CamelOfflineStore` subclass would
-        // inherit, which is the default the provider's settings type has to
-        // replace and the parent it has to keep.
+        // A `CamelOfflineStore` subclass inherits the *offline* settings type. The
+        // settings type of the provider replaces this default and keeps it as the
+        // parent.
         assert_ne!(
             g_type_is_a(
                 camel_offline_settings_get_type(),
@@ -266,18 +262,17 @@ fn no_stock_camel_settings_class_carries_the_network_properties() {
     }
 }
 
-/// The three values `security-method` can take, and the only one that means
-/// "no encryption". `STARTTLS_ON_STANDARD_PORT` is Camel's recommended value
-/// and its name is about a protocol JMAP does not have — JMAP is HTTP, so both
-/// non-`NONE` values mean the same thing here, TLS, and only `NONE` is a
-/// decision to send credentials in the clear.
+/// The three values of `security-method`, and the only one that means "no
+/// encryption". `STARTTLS_ON_STANDARD_PORT` is the value that Camel recommends.
+/// Its name refers to a protocol that JMAP does not have: JMAP uses HTTP. Thus the
+/// two non-`NONE` values both mean TLS here. Only `NONE` sends credentials in the
+/// clear.
 ///
-/// That `NONE` is *zero* is worth pinning because it is what a settings object
-/// reads back as when nobody has set the property: an implementer that claims
-/// `CamelNetworkSettings` without overriding its properties never receives the
-/// interface's own default, and so silently starts out insecure. The default
-/// that applies once the overrides are in place is pinned where the overrides
-/// are, in `jmap-mail`'s `tests/settings.rs`.
+/// The test pins `NONE` as *zero* because a settings object reads back zero when
+/// no code has set the property. An implementer that claims `CamelNetworkSettings`
+/// but does not override its properties never gets the default of the interface.
+/// Thus it starts insecure without a warning. The default that applies with the
+/// overrides is pinned with the overrides, in `tests/settings.rs` of `jmap-mail`.
 #[test]
 fn the_security_method_that_means_plaintext_is_the_zero_one() {
     assert_eq!(CAMEL_NETWORK_SECURITY_METHOD_NONE, 0);
@@ -285,18 +280,18 @@ fn the_security_method_that_means_plaintext_is_the_zero_one() {
     assert_ne!(CAMEL_NETWORK_SECURITY_METHOD_STARTTLS_ON_STANDARD_PORT, 0);
 }
 
-/// How wide a stored message id is, straight from the union Camel declares it
-/// with. `CamelSummaryMessageID` overlays a `guint64` on eight bytes, and the
-/// digest a provider computes is those eight bytes read back as the integer —
-/// so the two views have to be the same size, and the size has to be eight.
-/// `jmap-mail`'s `message_id_digest` takes exactly that many bytes off the
-/// front of an MD5; a union that had grown would leave it filling half a field
-/// and every message threading on a truncated id.
+/// The width of a stored message id, from the union that Camel declares it with.
+/// `CamelSummaryMessageID` puts a `guint64` over eight bytes. The digest of a
+/// provider is those eight bytes read as the integer, so both views must have the
+/// same size, and that size must be eight. `message_id_digest` in `jmap-mail`
+/// takes exactly that many bytes from the start of an MD5. If the union grew, the
+/// digest would fill only half of the field, and all messages would thread on a
+/// truncated id.
 #[test]
 fn a_stored_message_id_is_eight_bytes_of_a_digest() {
     let id = unsafe { std::mem::zeroed::<CamelSummaryMessageID>() };
     assert_eq!(size_of_val(&id), size_of::<u64>());
-    // SAFETY: reading either arm of a fully-zeroed union is defined, and both
+    // SAFETY: a read of either arm of a fully zeroed union is defined, and both
     // arms are plain data.
     unsafe {
         assert_eq!(size_of_val(id.id.hash.as_ref()), size_of::<u64>());
@@ -304,24 +299,22 @@ fn a_stored_message_id_is_eight_bytes_of_a_digest() {
     }
 }
 
-/// The other plain struct this provider hands across the boundary:
-/// `CamelFolderChangeInfo`, which is what a folder tells Camel it has changed.
-/// Like `CamelProvider` it sits behind a boxed type, so `g_type_query` knows
-/// nothing of its size and `tests/layout.rs` has nothing to check — and unlike
-/// `CamelProvider` it has both public fields *and* accessors for the same four
-/// arrays, which is the layout check standing in for the one GObject would
-/// have given us. A field at the wrong offset is an added uid read out of the
-/// removed list.
+/// `CamelFolderChangeInfo` is a different plain struct that this provider gives
+/// across the boundary. A folder uses it to tell Camel what changed. Like
+/// `CamelProvider`, it is behind a boxed type, so `g_type_query` has no size and
+/// `tests/layout.rs` has nothing to check. Unlike `CamelProvider`, it has public
+/// fields *and* accessors for the same four arrays. A comparison of the two
+/// replaces the GObject layout check. A field at the wrong offset reads an added
+/// uid from the removed list.
 ///
-/// The emptiness half is the contract the refresh vfunc is built on: a fresh
-/// change info reports no changes, so "nothing came back different" and
-/// "nothing to tell Camel about" are the same test — and a folder that emitted
-/// its `changed` signal regardless would redraw the user's message list on
-/// every poll.
+/// The refresh vfunc uses the empty contract: a fresh change info reports no
+/// changes. Thus "no different data came back" and "nothing to tell Camel" are
+/// the same test. A folder that always emitted its `changed` signal would redraw
+/// the message list of the user on each poll.
 #[test]
 fn a_change_info_is_empty_until_something_is_put_in_it() {
-    // SAFETY: the change info is allocated, filled and freed here; the uid is
-    // a NUL-terminated literal the call copies.
+    // SAFETY: this block allocates, fills and frees the change info. The uid is a
+    // NUL-terminated literal that the call copies.
     unsafe {
         let changes = camel_folder_change_info_new();
         assert!(!changes.is_null());
@@ -353,22 +346,22 @@ fn a_change_info_is_empty_until_something_is_put_in_it() {
     }
 }
 
-/// The interface the store implements so a user can tick a folder off the
-/// account: `CamelSubscribable`.
+/// The store implements `CamelSubscribable` so that a user can subscribe and
+/// unsubscribe folders of the account.
 ///
-/// It is here rather than in `tests/layout.rs` for the same reason
-/// `CamelProvider` is — `g_type_query` reports nothing about an interface, so
-/// there is no size to compare `size_of` against. What is checkable is the
-/// shape of the contract the provider signs, and each of the three assertions
-/// below is a decision the store's implementation rests on.
+/// This test is not in `tests/layout.rs` for the same reason as `CamelProvider`:
+/// `g_type_query` gives no data about an interface, so there is no size to
+/// compare with `size_of`. The test checks the shape of the contract that the
+/// provider signs. Each of the three checks below is a decision that the store
+/// implementation uses.
 #[test]
 fn subscribing_is_an_interface_a_store_has_to_implement_itself() {
-    // SAFETY: plain type-system reads; the default vtable ref is dropped
-    // again, and the prerequisite array is g_malloc'd for the caller to free.
+    // SAFETY: plain type-system reads. `g_type_interface_prerequisites` returns a
+    // g_malloc'd array, and the test frees it.
     unsafe {
         let subscribable = camel_subscribable_get_type();
 
-        // An interface, so `tests/layout.rs` cannot cover it.
+        // It is an interface, so `tests/layout.rs` cannot check it.
         assert_eq!(
             g_type_fundamental(subscribable),
             gobject_sys::G_TYPE_INTERFACE
@@ -377,8 +370,8 @@ fn subscribing_is_an_interface_a_store_has_to_implement_itself() {
         g_type_query(subscribable, &mut query);
         assert_eq!(query.type_, 0, "g_type_query knows an interface after all");
 
-        // Only a store can implement it, which is why the provider's own
-        // `CamelJmapStore` is the implementer and not some object beside it.
+        // Only a store can implement it. Thus the `CamelJmapStore` of the provider
+        // is the implementer, not an object next to it.
         let mut n = 0;
         let prerequisites = gobject_sys::g_type_interface_prerequisites(subscribable, &mut n);
         let required = std::slice::from_raw_parts(prerequisites, n as usize).to_vec();
@@ -388,9 +381,9 @@ fn subscribing_is_an_interface_a_store_has_to_implement_itself() {
             "a CamelStore is not what CamelSubscribable requires"
         );
 
-        // And Camel's own offline store — the class the provider derives from
-        // — does not implement it, so everything the interface promises has to
-        // come from the provider.
+        // The offline store of Camel (the parent class of the provider) does not
+        // implement it. Thus the provider must supply all that the interface
+        // promises.
         assert_eq!(
             gobject_sys::g_type_is_a(camel_offline_store_get_type(), subscribable),
             glib_sys::GFALSE,
@@ -399,15 +392,14 @@ fn subscribing_is_an_interface_a_store_has_to_implement_itself() {
     }
 }
 
-/// Camel installs no default behind the three methods, so an implementer that
-/// leaves one NULL is not a store that answers conservatively — it is a call
-/// through a NULL pointer from inside `camel_subscribable_folder_is_subscribed`.
-/// That is what makes filling the vtable, rather than merely declaring the
-/// interface, the whole of implementing it.
+/// Camel has no default for the three methods. If an implementer leaves one NULL,
+/// the store does not give a safe answer: the result is a call through a NULL
+/// pointer from inside `camel_subscribable_folder_is_subscribed`. Thus, to
+/// implement the interface, fill the vtable. A declaration alone is not
+/// sufficient.
 #[test]
 fn the_interface_has_no_default_behind_any_of_its_three_methods() {
-    // SAFETY: the default vtable is ref'd for the length of the reads and
-    // unref'd again.
+    // SAFETY: the test refs the default vtable for the reads and unrefs it after.
     unsafe {
         let vtable = gobject_sys::g_type_default_interface_ref(camel_subscribable_get_type())
             .cast::<CamelSubscribableInterface>();
@@ -421,21 +413,20 @@ fn the_interface_has_no_default_behind_any_of_its_three_methods() {
     }
 }
 
-/// Whether `camel_provider_register` writes back into the struct it is given.
+/// Tests whether `camel_provider_register` writes back into the struct it gets.
 ///
-/// It matters because `jmap-mail`'s `provider::register` hands the registered
-/// struct out as a `&'static CamelProvider` — a *shared* Rust reference to
-/// memory Camel keeps a mutable pointer to for the life of the process. That is
-/// only a claim Rust's model allows while nothing on the C side ever writes
-/// there. Camel's documented in-place work is on `extra_conf`, which a JMAP
-/// account leaves NULL, so the expectation is that the bytes come back
-/// unchanged — and if a Camel release ever starts filling in `priv_` or
-/// defaulting `url_hash`, this is where it surfaces rather than as a
-/// mysteriously mutated `&'static`.
+/// `provider::register` in `jmap-mail` gives the registered struct out as a
+/// `&'static CamelProvider`. That is a *shared* Rust reference to memory that
+/// Camel keeps a mutable pointer to for the life of the process. The Rust model
+/// allows this only while the C side never writes there. Camel documents in-place
+/// work on `extra_conf`, and a JMAP account leaves it NULL. Thus the bytes must
+/// come back unchanged. If a Camel release starts to fill in `priv_` or to set a
+/// default `url_hash`, this test shows it. Otherwise the symptom is a `&'static`
+/// that changes for no clear reason.
 #[test]
 fn registering_a_provider_does_not_write_back_into_the_struct() {
-    // SAFETY: as in the round-trip test above; `provider` outlives the call and
-    // everything it points at is 'static.
+    // SAFETY: as in the round-trip test: no arguments, and repeated calls are
+    // harmless.
     let store_type = unsafe {
         camel_provider_init();
         camel_offline_store_get_type()
@@ -451,7 +442,7 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
-        // Absent on 3.60, as above.
+        // Not in 3.60, as above.
         #[cfg(camel_provider_url_helpers)]
         auto_detect: None,
         object_types: [store_type, G_TYPE_INVALID],
@@ -464,7 +455,8 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
         priv_: ptr::null_mut(),
     };
 
-    // SAFETY: reading the struct's own bytes, which are initialised above.
+    // SAFETY: this reads the bytes of the struct itself, which are initialised
+    // above.
     let before = unsafe {
         std::slice::from_raw_parts(
             (&raw const provider).cast::<u8>(),
@@ -473,9 +465,9 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
         .to_vec()
     };
 
-    // SAFETY: the pointer stays valid for the rest of the process — the struct
-    // is a `static`-lifetime local of a test that never returns it, and Camel
-    // is not asked for it again after this test.
+    // SAFETY: `provider` is valid for this call. It is a local of this test, so
+    // the pointer that Camel keeps is not valid after the test returns. No later
+    // code asks Camel for it.
     unsafe { camel_provider_register(&mut provider) };
 
     // SAFETY: as `before`.
@@ -494,7 +486,7 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
     );
 }
 
-/// Probing `CamelInternetAddress` creation, multiple recipient formatting, index inspection,
+/// Tests `CamelInternetAddress` creation, multiple recipient formatting, index inspection,
 /// cloning, removal, and cleanup in EDS 3.52.
 #[test]
 fn camel_internet_address_formatting_and_lifecycle_in_eds() {
@@ -508,7 +500,7 @@ fn camel_internet_address_formatting_and_lifecycle_in_eds() {
             glib_sys::g_free(formatted_empty.cast());
         }
 
-        // Add 3 addresses (camel_internet_address_add returns 0-based insertion index)
+        // Add 3 addresses. `camel_internet_address_add` returns the 0-based index.
         let added1 = camel_internet_address_add(
             addr,
             c"Alice Smith".as_ptr(),
@@ -593,7 +585,7 @@ fn camel_internet_address_formatting_and_lifecycle_in_eds() {
     }
 }
 
-/// Probing `CamelMimeMessage` parsing, header inspection (Subject, From, Message-ID, Date),
+/// Tests `CamelMimeMessage` parsing, header inspection (Subject, From, Message-ID, Date),
 /// medium content access, and in-place header mutation in EDS 3.52.
 #[test]
 fn camel_mime_message_construction_and_header_access_in_eds() {
@@ -629,7 +621,7 @@ Here is the project update.\r\n";
             "Project Update"
         );
 
-        // Inspect Message-ID (Camel strips surrounding angle brackets)
+        // Inspect Message-ID (Camel removes the angle brackets)
         let msg_id = camel_mime_message_get_message_id(msg);
         assert!(!msg_id.is_null());
         assert_eq!(
@@ -664,7 +656,7 @@ Here is the project update.\r\n";
         let content = camel_medium_get_content(msg.cast::<CamelMedium>());
         assert!(!content.is_null());
 
-        // In-place modification of subject
+        // Change the subject in place
         camel_mime_message_set_subject(msg, c"Revised Project Update".as_ptr());
         let updated_subj = camel_mime_message_get_subject(msg);
         assert_eq!(
@@ -676,7 +668,7 @@ Here is the project update.\r\n";
     }
 }
 
-/// Probing `CamelNamedFlags` user labels / keywords and summary `bdata` encoding in EDS 3.52.
+/// Tests `CamelNamedFlags` user labels / keywords and summary `bdata` encoding in EDS 3.52.
 #[test]
 fn camel_named_flags_and_bdata_encoding_in_eds() {
     unsafe {
@@ -736,7 +728,7 @@ fn camel_named_flags_and_bdata_encoding_in_eds() {
     }
 }
 
-/// Probing `CamelDataCache` disk cache directory path, file naming, and removal in EDS 3.52.
+/// Tests `CamelDataCache` disk cache directory path, file naming, and removal in EDS 3.52.
 #[test]
 fn camel_data_cache_operations_in_eds() {
     unsafe {
@@ -781,7 +773,7 @@ fn camel_data_cache_operations_in_eds() {
     }
 }
 
-/// Probing `CamelNameValueArray` construction, header insertion, named lookup, copying,
+/// Tests `CamelNameValueArray` construction, header insertion, named lookup, copying,
 /// equality, index removal, clearing, and cleanup in EDS 3.52.
 #[test]
 fn camel_name_value_array_lifecycle_and_operations_in_eds() {
@@ -875,7 +867,8 @@ fn camel_name_value_array_lifecycle_and_operations_in_eds() {
     }
 }
 
-/// Probing `CamelMessageFlags` and `CamelFolderFlags` bitmask constants and bit independence in EDS 3.52.
+/// Tests `CamelMessageFlags` and `CamelFolderFlags` bitmask constants and bit independence
+/// in EDS 3.52.
 #[test]
 fn camel_message_flags_and_folder_flags_in_eds() {
     // 1. CamelMessageFlags bitmask isolation
@@ -941,12 +934,12 @@ fn camel_message_flags_and_folder_flags_in_eds() {
     assert_eq!(combined_info_flags & CAMEL_FOLDER_CHILDREN, 0);
 }
 
-/// Probing `CamelMIRecord` and `CamelFIRecord` summary database record structures in EDS 3.52.
+/// Tests `CamelMIRecord` and `CamelFIRecord` summary database records in EDS 3.52.
 ///
-/// EDS 3.60 made both structs private, so there is nothing to probe there.
-/// `jmap-mail`'s summary and message-info classes do read and write them, so
-/// this is a real port rather than a test-only gap — `docs/eds-version-matrix.md`
-/// carries it.
+/// EDS 3.60 made both structs private, so this test has nothing to examine there.
+/// The summary and message-info classes of `jmap-mail` read and write them, so
+/// this is a real port, not only a gap in the tests. `docs/eds-version-matrix.md`
+/// records it.
 #[cfg(camel_summary_records)]
 #[test]
 fn camel_summary_records_mirecord_and_firecord_in_eds() {
@@ -1021,7 +1014,7 @@ fn camel_summary_records_mirecord_and_firecord_in_eds() {
     }
 }
 
-/// Probing `CamelURL` construction, parameter setting/getting, cloning, equality, hash,
+/// Tests `CamelURL` construction, parameter setting/getting, cloning, equality, hash,
 /// string formatting, and cleanup in EDS 3.52.
 #[test]
 fn camel_url_lifecycle_and_parameter_operations_in_eds() {
@@ -1080,7 +1073,7 @@ fn camel_url_lifecycle_and_parameter_operations_in_eds() {
     }
 }
 
-/// Probing `CamelFolderChangeInfo` multi-event batching (add, remove, change, recent),
+/// Tests `CamelFolderChangeInfo` multi-event batching (add, remove, change, recent),
 /// concatenation (`camel_folder_change_info_cat`), clearing, and array access in EDS 3.52.
 #[test]
 fn camel_folder_change_info_batching_and_concatenation_in_eds() {
@@ -1127,7 +1120,7 @@ fn camel_folder_change_info_batching_and_concatenation_in_eds() {
     }
 }
 
-/// Probing Camel error domain quarks (`camel_folder_error_quark`, `camel_service_error_quark`,
+/// Tests Camel error domain quarks (`camel_folder_error_quark`, `camel_service_error_quark`,
 /// `camel_store_error_quark`) and error code constants in EDS 3.52.
 #[test]
 fn camel_error_quarks_and_distinct_domains_in_eds() {
@@ -1165,7 +1158,7 @@ fn camel_error_quarks_and_distinct_domains_in_eds() {
     }
 }
 
-/// Probing `CamelMimePart` description, disposition, filename, content-ID, content-location,
+/// Tests `CamelMimePart` description, disposition, filename, content-ID, content-location,
 /// transfer encoding, and content payload setting in EDS 3.52.
 #[test]
 fn camel_mime_part_headers_disposition_and_encoding_in_eds() {
@@ -1199,7 +1192,8 @@ fn camel_mime_part_headers_disposition_and_encoding_in_eds() {
             "report-jan2026.pdf"
         );
 
-        // Content-ID & Content-Location (Camel expects unbracketed ID and wraps it in Content-ID: <...>)
+        // Content-ID and Content-Location. Camel expects an ID without brackets and
+        // writes it as `Content-ID: <...>`.
         camel_mime_part_set_content_id(part, c"pdf-part-001@example.com".as_ptr());
         let cid = camel_mime_part_get_content_id(part);
         assert!(!cid.is_null());
@@ -1251,7 +1245,7 @@ fn camel_mime_part_headers_disposition_and_encoding_in_eds() {
     }
 }
 
-/// Probing `CamelMultipart` container creation, boundary management, part addition,
+/// Tests `CamelMultipart` container creation, boundary management, part addition,
 /// indexed retrieval, part counting, and preface/postface text in EDS 3.52.
 #[test]
 fn camel_multipart_container_and_part_management_in_eds() {
@@ -1328,7 +1322,7 @@ fn camel_multipart_container_and_part_management_in_eds() {
     }
 }
 
-/// Probing `CamelTransferEncoding` constants and `CAMEL_MAX_PREVIEW_LENGTH` in EDS 3.52.
+/// Tests `CamelTransferEncoding` constants and `CAMEL_MAX_PREVIEW_LENGTH` in EDS 3.52.
 #[test]
 fn camel_transfer_encoding_constants_in_eds() {
     assert_eq!(CAMEL_TRANSFER_ENCODING_DEFAULT, 0);
@@ -1343,7 +1337,8 @@ fn camel_transfer_encoding_constants_in_eds() {
     assert_eq!(CAMEL_MAX_PREVIEW_LENGTH, 256);
 }
 
-/// Probing `CamelContentType` creation, parameter setting, decoding, matching, and formatting in EDS 3.52.
+/// Tests `CamelContentType` creation, parameter setting, decoding, matching, and formatting
+/// in EDS 3.52.
 #[test]
 fn camel_content_type_creation_parameters_and_matching_in_eds() {
     unsafe {
@@ -1409,7 +1404,7 @@ fn camel_content_type_creation_parameters_and_matching_in_eds() {
     }
 }
 
-/// Probing `CamelContentDisposition` decoding, formatting, and attachment checking in EDS 3.52.
+/// Tests `CamelContentDisposition` decoding, formatting, and attachment checking in EDS 3.52.
 #[test]
 fn camel_content_disposition_attachment_parsing_in_eds() {
     unsafe {
@@ -1434,7 +1429,7 @@ fn camel_content_disposition_attachment_parsing_in_eds() {
     }
 }
 
-/// Probing `CamelHeaderAddress` address list decoding, formatting, and encoding in EDS 3.52.
+/// Tests `CamelHeaderAddress` address list decoding, formatting, and encoding in EDS 3.52.
 #[test]
 fn camel_header_address_mailbox_decoding_and_formatting_in_eds() {
     unsafe {
@@ -1492,7 +1487,7 @@ fn camel_header_address_mailbox_decoding_and_formatting_in_eds() {
     }
 }
 
-/// Probing Camel header date decoding, date formatting, and message ID utilities in EDS 3.52.
+/// Tests Camel header date decoding, date formatting, and message ID utilities in EDS 3.52.
 #[test]
 fn camel_header_date_and_msgid_utilities_in_eds() {
     unsafe {
@@ -1536,7 +1531,8 @@ fn camel_header_date_and_msgid_utilities_in_eds() {
     }
 }
 
-/// Probing `CamelMimeMessage` Message-ID, Reply-To, attachment detection, and part lookup by Content-ID in EDS 3.52.
+/// Tests `CamelMimeMessage` Message-ID, Reply-To, attachment detection, and part lookup by
+/// Content-ID in EDS 3.52.
 #[test]
 fn camel_mime_message_attachment_and_reply_to_in_eds() {
     unsafe {
@@ -1611,7 +1607,7 @@ fn camel_mime_message_attachment_and_reply_to_in_eds() {
     }
 }
 
-/// Probing `CamelStreamMem` memory stream and `CamelStreamNull` null sink in EDS 3.52.
+/// Tests `CamelStreamMem` memory stream and `CamelStreamNull` null sink in EDS 3.52.
 #[test]
 fn camel_stream_mem_and_null_stream_operations_in_eds() {
     let test_data = b"Stream payload data for JMAP unit tests\r\n";
@@ -1620,7 +1616,7 @@ fn camel_stream_mem_and_null_stream_operations_in_eds() {
         // 1. CamelStreamMem
         let mem_stream = camel_stream_mem_new();
         assert!(!mem_stream.is_null());
-        // Fresh empty memory stream has 0 bytes, so EOS is TRUE
+        // A fresh memory stream has 0 bytes, so EOS is TRUE
         assert_eq!(camel_stream_eos(mem_stream), glib_sys::GTRUE);
 
         let mut error: *mut glib_sys::GError = std::ptr::null_mut();
@@ -1669,7 +1665,7 @@ fn camel_stream_mem_and_null_stream_operations_in_eds() {
     }
 }
 
-/// Probing `CamelStreamFs` filesystem stream operations in EDS 3.52.
+/// Tests `CamelStreamFs` filesystem stream operations in EDS 3.52.
 #[test]
 fn camel_stream_fs_file_operations_in_eds() {
     unsafe {
@@ -1731,7 +1727,7 @@ fn camel_stream_fs_file_operations_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterBasic` Base64 and Quoted-Printable filtering in EDS 3.52.
+/// Tests `CamelMimeFilterBasic` Base64 and Quoted-Printable filtering in EDS 3.52.
 #[test]
 fn camel_mime_filter_basic_base64_and_qp_in_eds() {
     let plain = b"Hello, JMAP MIME stream filtering!";
@@ -1845,7 +1841,7 @@ fn camel_mime_filter_basic_base64_and_qp_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterCRLF` and `CamelMimeFilterLinewrap` in EDS 3.52.
+/// Tests `CamelMimeFilterCRLF` and `CamelMimeFilterLinewrap` in EDS 3.52.
 #[test]
 fn camel_mime_filter_crlf_and_linewrap_in_eds() {
     unsafe {
@@ -1870,7 +1866,7 @@ fn camel_mime_filter_crlf_and_linewrap_in_eds() {
     }
 }
 
-/// Probing `CamelStreamFilter` stream pipeline with `CamelMimeFilterBasic` in EDS 3.52.
+/// Tests `CamelStreamFilter` stream pipeline with `CamelMimeFilterBasic` in EDS 3.52.
 #[test]
 fn camel_stream_filter_pipeline_in_eds() {
     let base64_input = b"SGVsbG8sIEpNQVAgc3RyZWFtIGZpbHRlciBwaXBlbGluZSE=";
@@ -1913,7 +1909,8 @@ fn camel_stream_filter_pipeline_in_eds() {
     }
 }
 
-/// Probing `CamelMimeParser` streaming, step states, header extraction, and content-type parsing in EDS 3.52.
+/// Tests `CamelMimeParser` streaming, step states, header extraction, and content-type
+/// parsing in EDS 3.52.
 #[test]
 fn camel_mime_parser_streaming_and_header_scanning_in_eds() {
     let raw_email = b"From: Alice <alice@example.com>\r\n\
@@ -1939,7 +1936,7 @@ Body content line 2\r\n";
         let state1 = camel_mime_parser_step(parser, &mut buf_ptr, &mut buf_len);
         assert_eq!(state1, CAMEL_MIME_PARSER_STATE_HEADER);
 
-        // Inspect header (includes leading space after header colon)
+        // Inspect the header (the value includes the space after the colon)
         let mut offset: glib_sys::gint = 0;
         let subj = camel_mime_parser_header(parser, c"Subject".as_ptr(), &mut offset);
         assert!(!subj.is_null());
@@ -1970,7 +1967,7 @@ Body content line 2\r\n";
     }
 }
 
-/// Probing `CamelTrie` case-insensitive and case-sensitive multi-pattern search in EDS 3.52.
+/// Tests `CamelTrie` case-insensitive and case-sensitive multi-pattern search in EDS 3.52.
 #[test]
 fn camel_trie_multi_pattern_search_in_eds() {
     unsafe {
@@ -1990,7 +1987,7 @@ fn camel_trie_multi_pattern_search_in_eds() {
         assert!(!match1.is_null());
         assert_eq!(matched_id, 101);
 
-        // Advance past matched pattern and search next match (urgent -> 104)
+        // Move past the matched pattern and search for the next match (urgent -> 104)
         let offset = match1.offset_from(text.as_ptr().cast()) as usize + 5;
         let remaining = &text[offset..];
         let match2 = camel_trie_search(
@@ -2006,7 +2003,7 @@ fn camel_trie_multi_pattern_search_in_eds() {
     }
 }
 
-/// Probing `CamelUIDCache` creation, caching, querying, and serialization in EDS 3.52.
+/// Tests `CamelUIDCache` creation, caching, querying, and serialization in EDS 3.52.
 #[test]
 fn camel_uid_cache_operations_in_eds() {
     unsafe {
@@ -2027,16 +2024,16 @@ fn camel_uid_cache_operations_in_eds() {
         camel_uid_cache_save_uid(cache, c"UID-1001".as_ptr());
         camel_uid_cache_save_uid(cache, c"UID-1002".as_ptr());
 
-        // Which of a listing's uids the cache has not seen. EDS 3.60 replaced
+        // The uids of a listing that the cache has not seen. EDS 3.60 replaced
         // `camel_uid_cache_get_new_uids`/`_free_uids` with
-        // `camel_uid_cache_dup_new_uids`, whose result is an ordinary
-        // reference-counted `GPtrArray` — a different ownership contract, not
-        // a rename. Nothing in this tree uses the uid cache, so the pre-3.60
-        // spelling is probed where it exists rather than abstracted over; the
-        // creation, save and destroy either side of this block run on both.
+        // `camel_uid_cache_dup_new_uids`. Its result is a usual reference-counted
+        // `GPtrArray`: a different ownership contract, not a rename. No code in
+        // this tree uses the uid cache. Thus the test examines the pre-3.60 API
+        // only where it exists and does not abstract it. The creation, save and
+        // destroy around this block run on both versions.
         #[cfg(camel_uid_cache_get_new_uids)]
         {
-            // Prepare query array containing both old and new UIDs
+            // Make a query array with both old and new UIDs
             let query_array = glib_sys::g_ptr_array_new();
             glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1001".as_ptr()).cast());
             glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1002".as_ptr()).cast());
@@ -2064,16 +2061,17 @@ fn camel_uid_cache_operations_in_eds() {
     }
 }
 
-/// Probing `CamelCharset` character set resolution, stepwise detection, and ISO mapping in EDS 3.52.
+/// Tests `CamelCharset` character set resolution, stepwise detection, and ISO mapping in EDS 3.52.
 #[test]
 fn camel_charset_detection_and_iso_to_windows_in_eds() {
     unsafe {
-        // Pure ASCII text returns NULL from camel_charset_best (no non-ASCII encoding needed)
+        // For pure ASCII text, `camel_charset_best` returns NULL (no non-ASCII
+        // encoding is necessary)
         let ascii_text = c"Simple ASCII content for testing";
         let best_ascii = camel_charset_best(ascii_text.as_ptr(), 32);
         assert!(best_ascii.is_null());
 
-        // UTF-8 multi-byte sequence returns UTF-8 or compatible charset
+        // A UTF-8 multi-byte sequence gives UTF-8 or a compatible charset
         let utf8_sample = c"Umlaut \xc3\xa4\xc3\xb6\xc3\xbc detection";
         let best_utf8 = camel_charset_best(utf8_sample.as_ptr(), 22);
         assert!(!best_utf8.is_null());
@@ -2113,7 +2111,7 @@ fn camel_charset_detection_and_iso_to_windows_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterPreview`, `CamelMimeFilterCanon`, and `camel_text_to_html` in EDS 3.52.
+/// Tests `CamelMimeFilterPreview`, `CamelMimeFilterCanon`, and `camel_text_to_html` in EDS 3.52.
 #[test]
 fn camel_mime_filter_preview_and_html_conversions_in_eds() {
     unsafe {
@@ -2152,7 +2150,8 @@ fn camel_mime_filter_preview_and_html_conversions_in_eds() {
     }
 }
 
-/// Probing `CamelHTMLParser` data loading, stepwise tokenization, tag and attribute extraction in EDS 3.52.
+/// Tests `CamelHTMLParser` data loading, stepwise tokenization, tag and attribute extraction
+/// in EDS 3.52.
 #[test]
 fn camel_html_parser_tokenization_and_attributes_in_eds() {
     unsafe {
@@ -2208,7 +2207,7 @@ fn camel_html_parser_tokenization_and_attributes_in_eds() {
     }
 }
 
-/// Probing `CamelUrlScanner` pattern registration and URL detection in EDS 3.52.
+/// Tests `CamelUrlScanner` pattern registration and URL detection in EDS 3.52.
 #[test]
 fn camel_url_scanner_detection_and_matching_in_eds() {
     unsafe {
@@ -2240,7 +2239,7 @@ fn camel_url_scanner_detection_and_matching_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterEnriched` and `camel_enriched_to_html` in EDS 3.52.
+/// Tests `CamelMimeFilterEnriched` and `camel_enriched_to_html` in EDS 3.52.
 #[test]
 fn camel_mime_filter_enriched_and_conversion_in_eds() {
     unsafe {
@@ -2264,7 +2263,7 @@ fn camel_mime_filter_enriched_and_conversion_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterHTML` HTML-to-plaintext conversion in EDS 3.52.
+/// Tests `CamelMimeFilterHTML` HTML-to-plaintext conversion in EDS 3.52.
 #[test]
 fn camel_mime_filter_html_to_plaintext_in_eds() {
     unsafe {
@@ -2321,7 +2320,7 @@ fn camel_mime_filter_html_to_plaintext_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterGZip` compression and decompression in EDS 3.52.
+/// Tests `CamelMimeFilterGZip` compression and decompression in EDS 3.52.
 #[test]
 fn camel_mime_filter_gzip_compression_and_decompression_in_eds() {
     let payload = b"Compression test payload for CamelMimeFilterGZip in Evolution Data Server.";
@@ -2430,20 +2429,20 @@ fn camel_mime_filter_gzip_compression_and_decompression_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterWindows` Windows charset detection and alias resolution in EDS 3.52.
+/// Tests `CamelMimeFilterWindows` Windows charset detection and alias resolution in EDS 3.52.
 #[test]
 fn camel_mime_filter_windows_charset_aliases_in_eds() {
     unsafe {
         let win_filter = camel_mime_filter_windows_new(c"iso-8859-1".as_ptr());
         assert!(!win_filter.is_null());
 
-        // Initially no windows characters observed
+        // At first, the filter has seen no Windows characters
         assert_eq!(
             camel_mime_filter_windows_is_windows_charset(win_filter.cast()),
             glib_sys::GFALSE
         );
 
-        // Feed bytes containing Windows-1252 specific byte (0x93: left curly double quote)
+        // Feed bytes with a byte specific to Windows-1252 (0x93: left curly double quote)
         let win1252_bytes = [b'A', b'B', 0x93, b'C'];
         let mut out_ptr: *mut gchar = std::ptr::null_mut();
         let mut out_len: gsize = 0;
@@ -2459,7 +2458,7 @@ fn camel_mime_filter_windows_charset_aliases_in_eds() {
             &mut out_pre,
         );
 
-        // Now filter detects Windows charset
+        // Now the filter detects a Windows charset
         assert_eq!(
             camel_mime_filter_windows_is_windows_charset(win_filter.cast()),
             glib_sys::GTRUE
@@ -2473,7 +2472,7 @@ fn camel_mime_filter_windows_charset_aliases_in_eds() {
 
         gobject_sys::g_object_unref(win_filter.cast());
 
-        // For pure ASCII input, filter does not detect Windows charset
+        // For pure ASCII input, the filter does not detect a Windows charset
         let ascii_filter = camel_mime_filter_windows_new(c"iso-8859-1".as_ptr());
         assert!(!ascii_filter.is_null());
         let ascii_bytes = b"Pure ASCII content";
@@ -2500,7 +2499,7 @@ fn camel_mime_filter_windows_charset_aliases_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterBestenc` encoding and charset detection in EDS 3.52.
+/// Tests `CamelMimeFilterBestenc` encoding and charset detection in EDS 3.52.
 #[test]
 fn camel_mime_filter_bestenc_detection_in_eds() {
     unsafe {
@@ -2549,7 +2548,7 @@ fn camel_mime_filter_bestenc_detection_in_eds() {
         );
 
         let best_cs = camel_mime_filter_bestenc_get_best_charset(filter.cast());
-        // For pure ASCII, Camel returns NULL (indicating standard default) or "US-ASCII"
+        // For pure ASCII, Camel returns NULL (the standard default) or "US-ASCII"
         if !best_cs.is_null() {
             assert_eq!(
                 std::ffi::CStr::from_ptr(best_cs).to_str().unwrap(),
@@ -2609,7 +2608,7 @@ fn camel_mime_filter_bestenc_detection_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterCharset` UTF-8 to ISO-8859-1 conversion in EDS 3.52.
+/// Tests `CamelMimeFilterCharset` UTF-8 to ISO-8859-1 conversion in EDS 3.52.
 #[test]
 fn camel_mime_filter_charset_conversion_in_eds() {
     unsafe {
@@ -2659,7 +2658,7 @@ fn camel_mime_filter_charset_conversion_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterFrom` mbox "From " line escaping in EDS 3.52.
+/// Tests `CamelMimeFilterFrom` mbox "From " line escaping in EDS 3.52.
 #[test]
 fn camel_mime_filter_from_escaping_in_eds() {
     unsafe {
@@ -2711,7 +2710,7 @@ fn camel_mime_filter_from_escaping_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterYenc` and yEnc step encoding/decoding in EDS 3.52.
+/// Tests `CamelMimeFilterYenc` and yEnc step encoding/decoding in EDS 3.52.
 #[test]
 fn camel_mime_filter_yenc_encode_and_decode_in_eds() {
     unsafe {
@@ -2761,7 +2760,7 @@ fn camel_mime_filter_yenc_encode_and_decode_in_eds() {
     }
 }
 
-/// Probing `CamelMimeFilterProgress` and `CamelStreamBuffer` line reading in EDS 3.52.
+/// Tests `CamelMimeFilterProgress` and `CamelStreamBuffer` line reading in EDS 3.52.
 #[test]
 fn camel_mime_filter_progress_and_stream_buffer_in_eds() {
     unsafe {
@@ -2802,7 +2801,7 @@ fn camel_mime_filter_progress_and_stream_buffer_in_eds() {
     }
 }
 
-/// Probing `CamelUTF8`, `CamelStringUtils`, and `CamelHostnameUtils` in EDS 3.52.
+/// Tests `CamelUTF8`, `CamelStringUtils`, and `CamelHostnameUtils` in EDS 3.52.
 #[test]
 fn camel_utf8_and_string_utilities_in_eds() {
     unsafe {
@@ -2884,7 +2883,7 @@ fn camel_utf8_and_string_utilities_in_eds() {
     }
 }
 
-/// Probing `CamelSExp` S-expression parsing and evaluation in EDS 3.52.
+/// Tests `CamelSExp` S-expression parsing and evaluation in EDS 3.52.
 #[test]
 fn camel_sexp_parsing_and_evaluation_in_eds() {
     unsafe {
@@ -2907,12 +2906,12 @@ fn camel_sexp_parsing_and_evaluation_in_eds() {
     }
 }
 
-/// Probing `CamelFolderSearch` in EDS 3.52.
+/// Tests `CamelFolderSearch` in EDS 3.52.
 ///
-/// Gone from 3.60, which replaced the whole object with `CamelStoreSearch` and
-/// kept only `camel_folder_search_sync` and its two siblings on `CamelFolder`
-/// itself. `jmap-mail`'s folder search calls the removed API, so this too marks
-/// a port, not just an absent probe.
+/// 3.60 removed it: `CamelStoreSearch` replaced the whole object, and only
+/// `camel_folder_search_sync` and its two siblings stay on `CamelFolder`. The
+/// folder search of `jmap-mail` calls the removed API, so this also marks a port,
+/// not only a missing probe.
 #[cfg(camel_folder_search_object)]
 #[test]
 fn camel_folder_search_utilities_in_eds() {
@@ -2927,10 +2926,10 @@ fn camel_folder_search_utilities_in_eds() {
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, 0);
 
-        // 2. Date comparison helper (date-only comparison). `compare_date`
-        // works in local time, so these are picked at UTC midday: no local
-        // timezone in the -12..+14 range can push dt1/dt2 across a day
-        // boundary, nor fail to push dt3 across one.
+        // 2. Date comparison helper (compares dates only). `compare_date` uses
+        // local time, so these values are at UTC midday. No local timezone in the
+        // -12..+14 range can move dt1/dt2 across a day boundary, or keep dt3 on
+        // the same day.
         let dt1 = 1700049600i64; // 2023-11-15 12:00:00 UTC
         let dt2 = 1700053200i64; // 2023-11-15 13:00:00 UTC, same day
         assert_eq!(camel_folder_search_util_compare_date(dt1, dt2), 0);
@@ -2953,12 +2952,12 @@ fn camel_folder_search_utilities_in_eds() {
     }
 }
 
-/// Probing `CamelFolderThread` boxed type in EDS 3.52.
+/// Tests `CamelFolderThread` boxed type in EDS 3.52.
 ///
 /// 3.60 has no boxed `CamelFolderThread`: threading moved behind
-/// `CamelStoreSearch`, and `camel_folder_thread_flags_get_type` — the enum's
-/// `GType`, a different thing — is what carries the name now. Nothing in this
-/// tree threads messages, so this one is an absent probe and no more.
+/// `CamelStoreSearch`. The name is now on `camel_folder_thread_flags_get_type`,
+/// which is the `GType` of the enum, a different thing. No code in this tree
+/// threads messages, so on 3.60 this probe is absent and no port is necessary.
 #[cfg(camel_folder_thread_boxed)]
 #[test]
 fn camel_folder_thread_messages_in_eds() {
@@ -2969,7 +2968,7 @@ fn camel_folder_thread_messages_in_eds() {
     }
 }
 
-/// Probing `CamelOperation` in EDS 3.52.
+/// Tests `CamelOperation` in EDS 3.52.
 #[test]
 fn camel_operation_and_cancellable_in_eds() {
     unsafe {
@@ -2998,7 +2997,7 @@ fn camel_operation_and_cancellable_in_eds() {
     }
 }
 
-/// Probing `CamelNNTPAddress` in EDS 3.52.
+/// Tests `CamelNNTPAddress` in EDS 3.52.
 #[test]
 fn camel_nntp_address_parsing_and_formatting_in_eds() {
     unsafe {
@@ -3032,7 +3031,7 @@ fn camel_nntp_address_parsing_and_formatting_in_eds() {
     }
 }
 
-/// Probing `CamelFileUtils` in EDS 3.52.
+/// Tests `CamelFileUtils` in EDS 3.52.
 #[test]
 fn camel_file_utilities_in_eds() {
     unsafe {
@@ -3051,7 +3050,7 @@ fn camel_file_utilities_in_eds() {
     }
 }
 
-/// Probing `CamelLocalSettings` and `CamelStoreSettings` in EDS 3.52.
+/// Tests `CamelLocalSettings` and `CamelStoreSettings` in EDS 3.52.
 #[test]
 fn camel_local_and_store_settings_in_eds() {
     unsafe {
@@ -3086,7 +3085,7 @@ fn camel_local_and_store_settings_in_eds() {
             glib_sys::GFALSE
         );
 
-        // Store settings properties inherited by CamelLocalSettings
+        // Store settings properties that CamelLocalSettings inherits
         let store_settings: *mut CamelStoreSettings = settings.cast();
         camel_store_settings_set_filter_inbox(store_settings, glib_sys::GTRUE);
         assert_ne!(
@@ -3104,7 +3103,7 @@ fn camel_local_and_store_settings_in_eds() {
     }
 }
 
-/// Probing `CamelCertDB` and `CamelCert` certificate database operations in EDS 3.52.
+/// Tests `CamelCertDB` and `CamelCert` certificate database operations in EDS 3.52.
 #[test]
 fn camel_certdb_operations_and_host_certificates_in_eds() {
     unsafe {
@@ -3165,7 +3164,7 @@ fn camel_certdb_operations_and_host_certificates_in_eds() {
     }
 }
 
-/// Probing `CamelJunkFilter` interface and status constants in EDS 3.52.
+/// Tests `CamelJunkFilter` interface and status constants in EDS 3.52.
 #[test]
 fn camel_junk_filter_interface_and_status_in_eds() {
     unsafe {
@@ -3184,7 +3183,7 @@ fn camel_junk_filter_interface_and_status_in_eds() {
     }
 }
 
-/// Probing `CamelNetworkService` interface in EDS 3.52.
+/// Tests `CamelNetworkService` interface in EDS 3.52.
 #[test]
 fn camel_network_service_interface_in_eds() {
     unsafe {
@@ -3197,7 +3196,7 @@ fn camel_network_service_interface_in_eds() {
     }
 }
 
-/// Probing `CamelMemPool` allocation and lifecycle in EDS 3.52.
+/// Tests `CamelMemPool` allocation and lifecycle in EDS 3.52.
 #[test]
 fn camel_mempool_allocation_and_flush_in_eds() {
     unsafe {
@@ -3220,7 +3219,7 @@ fn camel_mempool_allocation_and_flush_in_eds() {
     }
 }
 
-/// Probing `CamelTextIndex` creation and word additions in EDS 3.52.
+/// Tests `CamelTextIndex` creation and word additions in EDS 3.52.
 #[test]
 fn camel_text_index_creation_and_words_in_eds() {
     unsafe {
@@ -3245,9 +3244,8 @@ fn camel_text_index_creation_and_words_in_eds() {
         camel_index_name_add_word(name, c"milestone".as_ptr());
 
         let buf = c"Search keywords and token stream";
-        // add_buffer returns the number of bytes *remaining* (not yet processed); the
-        // CamelTextIndex implementation processes all input incrementally, so it always
-        // returns 0 (nothing left over).
+        // add_buffer returns the number of bytes *remaining* (not processed).
+        // CamelTextIndex processes all input incrementally, so it always returns 0.
         let remaining = camel_index_name_add_buffer(name, buf.as_ptr(), 32);
         assert_eq!(remaining, 0);
 
@@ -3264,7 +3262,7 @@ fn camel_text_index_creation_and_words_in_eds() {
     }
 }
 
-/// Probing `CamelFilterSearch` search constants in EDS 3.52.
+/// Tests `CamelFilterSearch` search constants in EDS 3.52.
 #[test]
 fn camel_filter_search_constants_in_eds() {
     assert_eq!(CAMEL_SEARCH_ERROR, -1);

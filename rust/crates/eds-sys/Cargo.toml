@@ -9,8 +9,8 @@ license.workspace = true
 rust-version.workspace = true
 description = "Raw FFI bindings to the Evolution Data Server backend libraries"
 publish = false
-# Tell cargo we handle the linking ourselves in build.rs, so it does not
-# invent `-leds-sys` and does not rerun the build script on every file touch.
+# Declare the native library that build.rs links. Cargo gives the build-script
+# metadata to dependents as `DEP_EVOLUTION_DATA_SERVER_<KEY>`.
 links = "evolution-data-server"
 
 [lints]
@@ -22,8 +22,8 @@ gobject-sys = { workspace = true }
 gio-sys = { workspace = true }
 
 [dev-dependencies]
-# The layout test asserts that our re-exported GLib types *are* the gtk-rs
-# ones, which only means anything if it can name both spellings.
+# The layout test asserts that the re-exported GLib types are the gtk-rs types.
+# For this, it must name both spellings.
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 gio-sys = { workspace = true }

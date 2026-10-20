@@ -1,26 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `EOAuth2Service` is the contract a JMAP account will hand EDS so that a
-// token, rather than a password, comes back out of libsecret. It is an
-// *interface*, and `g_type_query()` reports nothing about one — see
-// `tests/layout.rs`, which is why `CamelSubscribable` and `ETimezoneCache` are
-// pinned elsewhere too. So there is no `size_of` to compare, and the usual
-// load-bearing check of this FFI layer does not apply.
+// `EOAuth2Service` is the contract that lets a JMAP account get a token, not a
+// password, from libsecret through EDS. It is an interface, and
+// `g_type_query()` reports nothing about an interface. Thus `tests/layout.rs`
+// cannot check it, and `CamelSubscribable` and `ETimezoneCache` are also
+// checked in other files. There is no `size_of` to compare.
 //
-// What is checkable, and is what actually matters, is the *offsets*: EDS's own
-// `e_oauth2_service_*()` wrappers read a function pointer out of the vtable at
-// an offset the compiled library decided, and this crate writes one in at an
-// offset bindgen computed from the header. If those disagree, the symptom is a
-// call through whatever pointer happens to sit at the wrong slot — a jump into
-// a `const gchar *`, at authentication time, in a user's session.
+// The offsets are what is important. The `e_oauth2_service_*()` wrappers of
+// EDS read a function pointer from the vtable at an offset that the compiled
+// library set. This crate writes one at an offset that bindgen computed from
+// the header. If they disagree, the call goes through the wrong slot, for
+// example into a `const gchar *`, at authentication time, in a user session.
 //
-// So the check here is behavioural: register a throwaway GObject that
-// implements the interface, fill every slot this crate can name, and then call
-// EDS's C wrappers and see which of our functions ran and what came back. A
-// dispatch that arrives at the function we put in that slot is proof the two
-// sides agree about where the slot is, which a size comparison would only have
-// been evidence for.
+// Thus this test is behavioural. It registers a temporary GObject that
+// implements the interface and fills each slot that this crate can name. Then
+// it calls the C wrappers of EDS and records which probe function ran and its
+// result. A dispatch to the correct function proves that the two sides agree
+// on the slot. A size comparison gives only evidence.
 
 use eds_sys::*;
 use std::ffi::{CStr, c_char, c_uint, c_void};
@@ -28,19 +25,17 @@ use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // ---------------------------------------------------------------------------
-// The registry and the base class, which *are* classed and so can be sized.
+// The registry and the base class, which are classed and thus have a size.
 
-/// `EOAuth2Services` is the object EDS keeps the known services in, and
-/// `EOAuth2ServiceBase` the `EExtension` a service module subclasses. Both are
-/// ordinary `GObject`s, so unlike the interface they answer `g_type_query()` —
-/// and both are types this crate will cross the ABI with, `EOAuth2ServiceBase`
-/// by being subclassed outright.
+/// `EOAuth2Services` is the object that keeps the known services of EDS.
+/// `EOAuth2ServiceBase` is the `EExtension` that a service module subclasses.
+/// Both are `GObject`s, so they answer `g_type_query()`. This crate uses both
+/// across the ABI, and subclasses `EOAuth2ServiceBase`.
 ///
-/// `EExtension` itself is checked here rather than in `tests/layout.rs` for the
-/// same reason: until now nothing named it, and the factories cover it only as
-/// the leading bytes of their own structs. `EOAuth2ServiceBase` *is* an
-/// `EExtension` and nothing else — `struct _EOAuth2ServiceBase { EExtension
-/// parent; }` — so a subclass of it writes into the parent half immediately.
+/// This test also checks `EExtension`, because `tests/layout.rs` covers it only
+/// as the first bytes of the factory structs. `EOAuth2ServiceBase` contains
+/// only an `EExtension` (`struct _EOAuth2ServiceBase { EExtension parent; }`),
+/// so a subclass writes into the parent half immediately.
 #[test]
 fn the_oauth2_registry_and_base_extension_match_the_gtype_system() {
     for (name, gtype, instance, class) in [
@@ -63,8 +58,8 @@ fn the_oauth2_registry_and_base_extension_match_the_gtype_system() {
             size_of::<EOAuth2ServicesClass>(),
         ),
     ] {
-        // SAFETY: a class ref is taken so that `g_type_query` has a class to
-        // report on, and dropped again; the query struct is ours.
+        // SAFETY: the class ref gives `g_type_query` a class to report on, and
+        // is then released. This test owns the query struct.
         let q = unsafe {
             let klass = g_type_class_ref(gtype);
             assert!(!klass.is_null(), "{name}: g_type_class_ref returned NULL");
@@ -85,15 +80,14 @@ fn the_oauth2_registry_and_base_extension_match_the_gtype_system() {
     }
 }
 
-/// Whether this EDS was built with OAuth2 at all. `e_oauth2_services_is_supported()`
-/// is EDS's own answer, and it is a compile-time decision of the distribution's
-/// package, not something a deployment can turn on later. A FALSE here means
-/// the whole token path is unavailable on this machine however correct the code
-/// is, which is worth failing loudly for rather than discovering as an
-/// authentication that silently falls back to asking for a password.
+/// Whether this EDS has OAuth2 support, from `e_oauth2_services_is_supported()`.
+/// The distribution package sets this at compile time; a deployment cannot
+/// change it. FALSE means that no token path is available on this machine.
+/// The test fails loudly, so authentication does not silently ask for a
+/// password.
 #[test]
 fn this_eds_was_built_with_oauth2_support() {
-    // SAFETY: no arguments, no state.
+    // SAFETY: the call has no arguments and no state.
     assert_ne!(
         unsafe { e_oauth2_services_is_supported() },
         GFALSE,
@@ -101,11 +95,10 @@ fn this_eds_was_built_with_oauth2_support() {
     );
 }
 
-/// The three keys EDS files a token under in libsecret. They are `#define`d
-/// strings rather than exported symbols, so retyping one is not a link error —
-/// it is a refresh token written where nothing ever reads it, and an account
-/// that asks for consent again on every start. Taken from the header for the
-/// same reason `E_SOURCE_CREDENTIAL_*` is.
+/// The three keys of a token in libsecret. They are `#define`d strings, not
+/// exported symbols, so a typing error is not a link error. The result is a
+/// refresh token that nothing reads, and an account that asks for consent at
+/// each start. Thus they come from the header, as `E_SOURCE_CREDENTIAL_*` do.
 #[test]
 fn the_secret_keys_are_the_names_eds_stores_a_token_under() {
     assert_eq!(E_OAUTH2_SECRET_REFRESH_TOKEN, c"refresh_token");
@@ -114,42 +107,39 @@ fn the_secret_keys_are_the_names_eds_stores_a_token_under() {
 }
 
 // ---------------------------------------------------------------------------
-// Feature detection, not vtable dispatch: whether this EDS has upstream's
-// OAuth2Dynamic pieces at all (e-d-s `bf6e074`).
+// Feature detection, not vtable dispatch: whether this EDS has the upstream
+// OAuth2Dynamic parts (e-d-s `bf6e074`).
 
-/// `e_source_oauth2_client_get_type` is the marker `eds-sys/build.rs` probes
-/// for the `eds_oauth2_dynamic` cfg. No header this crate has ever built
-/// against declares it (`Since: 3.64`, upstream master-only as of
-/// 2026-10-07), so this test, gated on the cfg being absent, is the one that
-/// should compile and run on this EDS. Before `build.rs` declared the cfg,
-/// naming it here at all was an unexpected-cfg condition under this crate's
-/// `-D warnings`, which is the red this test was written against. A future
-/// EDS that does declare the marker stops compiling this test, which is the
-/// signal to write its `#[cfg(eds_oauth2_dynamic)]` sibling, the same way
-/// `tests/contacts.rs` carries one test per side of `eds_death_date_field`.
+/// `eds-sys/build.rs` probes for the `e_source_oauth2_client_get_type` marker
+/// to set the `eds_oauth2_dynamic` cfg. No header that this crate used declares
+/// it (`Since: 3.64`, only on upstream master as of 2026-10-07). Thus this test,
+/// gated on the absent cfg, compiles and runs on this EDS. Before `build.rs`
+/// declared the cfg, its name here was an unexpected-cfg error under
+/// `-D warnings`; this test was written against that failure. An EDS that
+/// declares the marker does not compile this test. That is the signal to
+/// write its `#[cfg(eds_oauth2_dynamic)]` sibling, as `tests/contacts.rs` has
+/// one test for each side of `eds_death_date_field`.
 #[test]
 #[cfg(not(eds_oauth2_dynamic))]
 fn eds_oauth2_dynamic_is_not_yet_available_on_this_eds() {}
 
-/// The sibling the test above asks for: on an EDS that *does* declare the
-/// marker, pin the two strings this project spells by hand against the ones
-/// upstream actually answers.
+/// The sibling of the test above: on an EDS that declares the marker, compare
+/// the two strings that this project writes by hand with the upstream strings.
 ///
-/// Both are `#define`s of string literals rather than symbols
-/// (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`) or the return of a vfunc
-/// (`eos_dynamic_get_name`), so bindgen hands back neither and
-/// `jmap_config::oauth2::EXTENSION_NAME` and
+/// One is a `#define` of a string literal (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`),
+/// the other is the return value of a vfunc (`eos_dynamic_get_name`). Bindgen
+/// gives neither, so `jmap_config::oauth2::EXTENSION_NAME` and
 /// `jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD` are literals copied from
-/// upstream's source. A copy is only as good as something that checks it:
-/// an account would be written into a group upstream's service never reads,
-/// or under a method `eos_default_can_process` never matches, and in both
-/// cases the symptom is a password prompt rather than an error.
+/// the upstream source. If a copy is wrong, an account goes into a group that
+/// the upstream service does not read, or under a method that
+/// `eos_default_can_process` does not match. Both cause a password prompt, not
+/// an error.
 #[test]
 #[cfg(eds_oauth2_dynamic)]
 fn upstreams_dynamic_oauth2_pieces_answer_to_the_names_this_project_spells() {
-    // SAFETY: no arguments, and each type registers itself on first call;
-    // `g_type_class_ref` returns the initialised class, and the reference is
-    // never given back because the strings below are read out of it.
+    // SAFETY: the calls have no arguments, and each type registers itself on
+    // the first call. `g_type_class_ref` returns the initialised class. The
+    // test keeps the reference, because it reads the strings below from it.
     unsafe {
         let extension_class = gobject_sys::g_type_class_ref(e_source_oauth2_client_get_type())
             .cast::<ESourceExtensionClass>();
@@ -159,7 +149,7 @@ fn upstreams_dynamic_oauth2_pieces_answer_to_the_names_this_project_spells() {
             "ESourceOAuth2Client's keyfile group is not the one this project writes"
         );
 
-        // The service's name comes from a vfunc, so it takes an instance.
+        // The name of the service comes from a vfunc, so it needs an instance.
         // `EOAuth2ServiceDynamic` has no construct properties of its own.
         let service = gobject_sys::g_object_new(e_oauth2_service_dynamic_get_type(), ptr::null())
             .cast::<EOAuth2Service>();
@@ -176,17 +166,15 @@ fn upstreams_dynamic_oauth2_pieces_answer_to_the_names_this_project_spells() {
 // ---------------------------------------------------------------------------
 // The interface itself.
 
-/// An interface, which is what puts it out of `tests/layout.rs`'s reach, and
-/// one any `GObject` may implement: EDS's own services subclass
-/// `EOAuth2ServiceBase` so that the module machinery finds them, but that is a
-/// discovery convention rather than a prerequisite of the interface. Both
-/// halves matter to the implementation to come — the first says a size check is
-/// not available, the second says the type this crate registers is free to have
-/// whatever parent the module loader needs.
+/// An interface, so `tests/layout.rs` cannot check it, and any `GObject` can
+/// implement it. The services of EDS subclass `EOAuth2ServiceBase` so that the
+/// module loader finds them, but the interface does not require it. Thus no
+/// size check is available, and the type that this crate registers can have
+/// the parent that the module loader needs.
 #[test]
 fn the_service_contract_is_an_interface_with_only_a_gobject_behind_it() {
-    // SAFETY: plain type-system reads; the prerequisite array is g_malloc'd
-    // for the caller to free.
+    // SAFETY: these are type-system reads. The prerequisite array is
+    // g_malloc'd, and the caller frees it.
     unsafe {
         let service = e_oauth2_service_get_type();
         assert_eq!(g_type_fundamental(service), gobject_sys::G_TYPE_INTERFACE);
@@ -209,22 +197,21 @@ fn the_service_contract_is_an_interface_with_only_a_gobject_behind_it() {
 
 /// Which slots EDS puts a default behind, and which it leaves NULL.
 ///
-/// This is the list the implementation is written against: a NULL slot is one
-/// whose wrapper `g_return_val_if_fail`s and answers nothing, so leaving it
-/// empty is not "behave conservatively" but "this service cannot be used". The
-/// defaulted ones are the opposite — they already do the RFC 6749 thing, and
-/// overriding one is a decision to differ from it, not a requirement.
+/// The implementation is written against this list. For a NULL slot, the
+/// wrapper `g_return_val_if_fail`s and answers nothing, so an empty slot makes
+/// the service unusable. A slot with a default already follows RFC 6749, and
+/// an override of it is optional.
 #[test]
 fn the_slots_eds_leaves_empty_are_the_ones_a_service_must_fill() {
-    // SAFETY: the default vtable is ref'd for the length of the reads and
-    // unref'd again.
+    // SAFETY: the test holds a ref on the default vtable during the reads, and
+    // then releases it.
     unsafe {
         let vtable = gobject_sys::g_type_default_interface_ref(e_oauth2_service_get_type())
             .cast::<EOAuth2ServiceInterface>();
         assert!(!vtable.is_null(), "the interface has no default vtable");
 
-        // No default: a JMAP service has to say who it is and where it sends
-        // the user, because nothing generic can.
+        // No default: a JMAP service must give its identity and the user's
+        // destination, because generic code cannot.
         assert!((*vtable).get_name.is_none(), "get_name has a default");
         assert!(
             (*vtable).get_display_name.is_none(),
@@ -244,12 +231,11 @@ fn the_slots_eds_leaves_empty_are_the_ones_a_service_must_fill() {
 }
 
 // ---------------------------------------------------------------------------
-// The offsets, proved by dispatching through them.
+// The offsets, proved by dispatch through them.
 
-/// One bit per vtable slot, in the order the C struct declares them, set by the
-/// probe implementation below when EDS dispatches into it. A bit that stays
-/// clear after its wrapper was called means EDS read a different slot than the
-/// one this crate wrote.
+/// One bit for each vtable slot, in the order of the C struct. The probe
+/// implementation below sets a bit when EDS dispatches into it. If a bit stays
+/// clear after its wrapper call, EDS read a different slot than this crate wrote.
 mod slot {
     pub const CAN_PROCESS: u32 = 1 << 0;
     pub const GUESS_CAN_PROCESS: u32 = 1 << 1;
@@ -363,8 +349,8 @@ unsafe extern "C" fn probe_prepare_authentication_uri_query(
     uri_query: *mut GHashTable,
 ) {
     reached(slot::PREPARE_AUTHENTICATION_URI_QUERY);
-    // SAFETY: the wrapper hands us a live hash table of owned strings, which
-    // is exactly what EDS's own helper writes into.
+    // SAFETY: the wrapper gives a live hash table of owned strings, which is
+    // what the EDS helper writes into.
     unsafe { e_oauth2_service_util_set_to_form(uri_query, c"probe_query".as_ptr(), c"1".as_ptr()) };
 }
 
@@ -386,7 +372,7 @@ unsafe extern "C" fn probe_extract_authorization_code(
     out_authorization_code: *mut *mut c_char,
 ) -> i32 {
     reached(slot::EXTRACT_AUTHORIZATION_CODE);
-    // SAFETY: the wrapper's out-parameter, which the caller frees.
+    // SAFETY: this is the out-parameter of the wrapper, which the caller frees.
     unsafe { *out_authorization_code = glib_sys::g_strdup(PROBE_CODE.as_ptr()) };
     GTRUE
 }
@@ -422,17 +408,16 @@ unsafe extern "C" fn probe_extract_error_message(
     out_error_message: *mut *mut c_char,
 ) -> i32 {
     reached(slot::EXTRACT_ERROR_MESSAGE);
-    // SAFETY: the wrapper's out-parameter, which the caller frees.
+    // SAFETY: this is the out-parameter of the wrapper, which the caller frees.
     unsafe { *out_error_message = glib_sys::g_strdup(PROBE_ERROR.as_ptr()) };
     GTRUE
 }
 
-/// Fills the vtable GLib hands us for the probe type. Every slot the header
-/// declares is written, including the two `SoupMessage` ones that the test
-/// below cannot call — see there for why they are still filled.
+/// Fills the vtable that GLib gives for the probe type. It writes every slot
+/// except the two `SoupMessage` slots, which the test below cannot call.
 unsafe extern "C" fn probe_interface_init(iface: *mut c_void, _data: *mut c_void) {
-    // SAFETY: GLib passes the interface struct for the type we registered this
-    // initialiser against, which is `EOAuth2Service`'s.
+    // SAFETY: GLib passes the interface struct of the type that this
+    // initialiser is registered for, which is `EOAuth2Service`.
     let iface = unsafe { &mut *iface.cast::<EOAuth2ServiceInterface>() };
     iface.can_process = Some(probe_can_process);
     iface.guess_can_process = Some(probe_guess_can_process);
@@ -452,11 +437,10 @@ unsafe extern "C" fn probe_interface_init(iface: *mut c_void, _data: *mut c_void
     iface.extract_error_message = Some(probe_extract_error_message);
 }
 
-/// A `GObject` that implements the interface and nothing else, registered once
-/// for the process.
+/// A `GObject` that implements only the interface.
 fn probe_service() -> *mut EOAuth2Service {
-    // SAFETY: a fresh type name, sizes taken from the structs GLib will
-    // allocate, and a `GInterfaceInfo` GLib copies before it returns.
+    // SAFETY: the type name is new, the sizes come from the structs that GLib
+    // allocates, and GLib copies the `GInterfaceInfo` before it returns.
     unsafe {
         let gtype = g_type_register_static_simple(
             gobject_sys::G_TYPE_OBJECT,
@@ -482,10 +466,9 @@ fn probe_service() -> *mut EOAuth2Service {
     }
 }
 
-/// A `GHashTable` of owned strings, which is what every `prepare_*_form`
-/// wrapper is given.
+/// A `GHashTable` of owned strings, as each `prepare_*_form` wrapper receives.
 fn form() -> *mut GHashTable {
-    // SAFETY: the standard string-keyed table with g_free destructors.
+    // SAFETY: the standard table with string keys and g_free destructors.
     unsafe {
         glib_sys::g_hash_table_new_full(
             Some(glib_sys::g_str_hash),
@@ -497,17 +480,18 @@ fn form() -> *mut GHashTable {
 }
 
 fn form_has(table: *mut GHashTable, key: &CStr) -> bool {
-    // SAFETY: a live table and a NUL-terminated key; the lookup borrows.
+    // SAFETY: the table is live and the key is NUL-terminated. The lookup
+    // borrows.
     !unsafe { glib_sys::g_hash_table_lookup(table, key.as_ptr().cast()) }.is_null()
 }
 
-/// A source to hand the wrappers that insist on one. Not backed by the
-/// registry — `e_source_new_with_uid` with a NULL D-Bus object is what EDS
-/// itself does for a source read from a keyfile.
+/// A source for the wrappers that require one. The registry does not back it:
+/// EDS also calls `e_source_new_with_uid` with a NULL D-Bus object for a source
+/// read from a keyfile.
 fn a_source() -> *mut ESource {
     let mut error = ptr::null_mut();
-    // SAFETY: a NUL-terminated uid, no D-Bus object, and a GError
-    // out-parameter, which is the documented call.
+    // SAFETY: the documented call, with a NUL-terminated uid, no D-Bus object
+    // and a GError out-parameter.
     let source = unsafe {
         e_source_new_with_uid(c"jmap-oauth2-probe".as_ptr(), ptr::null_mut(), &mut error)
     };
@@ -515,27 +499,25 @@ fn a_source() -> *mut ESource {
     source
 }
 
-/// The load-bearing test of this file: EDS dispatches into the function this
-/// crate wrote into each slot, and hands back what that function returned.
+/// The most important test of this file: EDS dispatches into the function that
+/// this crate wrote into each slot, and returns the result of that function.
 ///
-/// Sixteen of the eighteen vfuncs are called here. The two that are not are
-/// `prepare_get_token_message` and `prepare_refresh_token_message`, whose
-/// wrappers demand a real `SoupMessage` — and `soup_message_new` is
-/// deliberately not on this crate's allowlist, because nothing in the plugin
-/// constructs one. Their offsets are still pinned, transitively and just as
-/// firmly: `prepare_refresh_token_form` sits immediately after the first and
-/// `extract_error_message` immediately after the second, so a slot of the wrong
-/// size at either would move a slot that *is* dispatched here. Dispatching
-/// through the last declared vfunc is what makes that argument reach the whole
-/// struct rather than a prefix of it.
+/// The test calls sixteen of the eighteen vfuncs. The wrappers of
+/// `prepare_get_token_message` and `prepare_refresh_token_message` require a
+/// real `SoupMessage`. `soup_message_new` is not on the allowlist of this
+/// crate, because the plugin does not construct one. Their offsets are
+/// nevertheless checked: `prepare_refresh_token_form` follows the first and
+/// `extract_error_message` follows the second. A slot of the wrong size at
+/// either moves a dispatched slot. Dispatch through the last declared vfunc
+/// extends this check to the whole struct.
 #[test]
 fn every_vtable_slot_dispatches_to_the_function_this_crate_wrote_into_it() {
     let service = probe_service();
     let source = a_source();
     REACHED.store(0, Ordering::SeqCst);
 
-    // SAFETY: a live implementer, a live source, and out-parameters and hash
-    // tables owned here; every g_strdup'd result is freed below.
+    // SAFETY: the implementer and source are live, and this test owns the
+    // out-parameters and hash tables. Each g_strdup'd result is freed below.
     unsafe {
         assert_ne!(e_oauth2_service_can_process(service, source), GFALSE);
         assert_ne!(
