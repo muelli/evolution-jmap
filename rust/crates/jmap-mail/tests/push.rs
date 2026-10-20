@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The store's half of JMAP Push: the subscription slot a live stream lives
-//! in, and the two things done to it from outside `jmap_mail::push` itself.
+//! in, and the two operations done to it from outside `jmap_mail::push` itself.
 //!
-//! What is *not* here is the wiring that starts a subscription for a real
-//! account — `JmapStore::start_push` needs a GObject to hang a `GWeakRef` on,
-//! and a real `CamelJmapStore` needs a `CamelSession` over a source registry
-//! on the session bus, which no test environment here has. It is a
-//! [`JmapStore::detached`] instance's one documented limit, the same one
-//! `stale_token.rs` records for the credentials half. So the subscription is
-//! built here the way `start_push` builds it and installed by hand, which
-//! leaves every behaviour on this side of that call testable against a real
+//! What is not here is the wiring that starts a subscription for a real
+//! account. `JmapStore::start_push` needs a GObject to hang a `GWeakRef` on.
+//! A real `CamelJmapStore` needs a `CamelSession` over a source registry on
+//! the session bus, which no test environment here has. This is
+//! [`JmapStore::detached`]'s one documented limit, the same one
+//! `stale_token.rs` records for the credentials half. So this file builds the
+//! subscription the way `start_push` builds it and installs it by hand. This
+//! makes every behaviour on this side of that call testable against a real
 //! `jmap-mock` over a real socket.
 
 use std::thread;
@@ -23,8 +23,8 @@ use jmap_mail::store::JmapStore;
 use jmap_mock::MockServer;
 
 /// A subscription of the shape `JmapStore::start_push` makes, against
-/// `server`, sending `token` and refreshing nothing (what a refresh does is
-/// `jmap_mail::push`'s own concern and tested there).
+/// `server`, sending `token`. It refreshes nothing: what a refresh does is
+/// `jmap_mail::push`'s own concern, tested there.
 fn subscription(server: &MockServer, token: &str) -> PushRefresh {
     PushRefresh::start(
         expand_url(
@@ -66,9 +66,9 @@ fn stopping_takes_the_subscription_away() {
     );
 }
 
-/// Camel disconnects every service on shutdown, connected or not, and it is
-/// `disconnect_sync` — through `drop_connection` — that has to leave nothing
-/// behind that could still refresh over a connection that is gone.
+/// Camel disconnects every service on shutdown, connected or not.
+/// `disconnect_sync`, through `drop_connection`, must leave nothing behind
+/// that could still refresh over a connection that is gone.
 #[test]
 fn disconnecting_stops_the_subscription_too() {
     let server = MockServer::builder().start();
@@ -84,9 +84,9 @@ fn disconnecting_stops_the_subscription_too() {
 }
 
 /// The OAuth 2.0 half: a subscription whose token the server has stopped
-/// accepting reconnects once — and only once — fresh headers are installed,
-/// which is what `refresh_credentials` does after it renews the connection's
-/// own access token.
+/// accepting reconnects once, and only once, fresh headers are installed.
+/// `refresh_credentials` installs fresh headers after it renews the
+/// connection's own access token.
 #[test]
 fn refreshing_the_push_headers_lets_a_stalled_subscription_reconnect() {
     let server = MockServer::builder().bearer_token("fresh-token").start();
@@ -111,10 +111,10 @@ fn refreshing_the_push_headers_lets_a_stalled_subscription_reconnect() {
     server.wait_for_event_source_subscriber(Duration::from_secs(5));
 }
 
-/// A push that arrives at a store with no coalescing worker installed — every
-/// [`JmapStore::detached`] instance, since `start_push` is what installs one —
-/// must be a quiet no-op rather than a panic across the `extern "C"`
-/// boundary, which would abort the whole of Evolution.
+/// A push that arrives at a store with no coalescing worker installed must be
+/// a quiet no-op, not a panic across the `extern "C"` boundary, which would
+/// abort all of Evolution. Every [`JmapStore::detached`] instance has no
+/// worker installed, since `start_push` is what installs one.
 #[test]
 fn asking_a_store_with_no_worker_to_refresh_does_nothing() {
     let store = JmapStore::detached();

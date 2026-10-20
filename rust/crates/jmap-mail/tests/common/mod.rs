@@ -4,27 +4,28 @@
 //! A Camel account stood up by hand, for the tests that need a *real* store.
 //!
 //! [`JmapStore::detached`] is enough for anything that only reads the store's
-//! own state, and it is what most of this crate's tests use. It is not enough
-//! for anything that reaches Camel: the parent bytes are zeroed rather than
-//! constructed, so a detached store is not a GObject and passing one to a Camel
-//! function is undefined behaviour. Two things in the provider do reach Camel —
-//! building a folder, which asserts `CAMEL_IS_STORE` on its parent, and calling
-//! a store vfunc through `camel_store_*`, which asserts the same — and both
-//! therefore need what this module builds.
+//! own state, and most of this crate's tests use it. It is not enough for
+//! anything that reaches Camel. Its parent bytes are zeroed, not constructed,
+//! so a detached store is not a GObject, and passing one to a Camel function
+//! is undefined behavior. Two things in the provider reach Camel: building a
+//! folder, which asserts `CAMEL_IS_STORE` on its parent, and calling a store
+//! vfunc through `camel_store_*`, which asserts the same. Both need what this
+//! module builds.
 //!
-//! Camel itself constructs a store through `camel_session_add_service`, which
-//! in Evolution means an `EMailSession` over a source registry on the session
-//! bus. `g_initable_new` with the three construct properties a `CamelService`
-//! needs is the same object without any of that.
+//! Camel itself constructs a store through `camel_session_add_service`. In
+//! Evolution this means an `EMailSession` over a source registry on the
+//! session bus. `g_initable_new`, called with the three construct properties
+//! a `CamelService` needs, builds the same object without any of that.
 //!
-//! `g_initable_new` rather than `g_object_new`, because a `CamelStore` is a
-//! `GInitable` and what its `init` does is open the summary database every
-//! folder of the store keeps its rows in. A store constructed the shorter way
-//! looks complete and has none: `camel_store_get_db` returns NULL, and the
-//! first row a folder removes takes the process down inside Camel. That is a
-//! property of the harness rather than of the provider — Camel constructs a
-//! service no other way — but it only becomes visible once a folder has a
-//! summary, which is why it is being fixed here rather than earlier.
+//! This module uses `g_initable_new`, not `g_object_new`, because a
+//! `CamelStore` is a `GInitable`, and its `init` opens the summary database
+//! that every folder of the store keeps its rows in. A store constructed the
+//! shorter way looks complete but has no summary database:
+//! `camel_store_get_db` returns NULL, and removing the first row of a folder
+//! crashes the process inside Camel. This is a property of the harness, not
+//! of the provider (Camel constructs a service no other way). It only
+//! becomes visible once a folder has a summary, which is why the fix is here
+//! rather than earlier.
 
 #![allow(dead_code)]
 
@@ -50,25 +51,24 @@ use jmap_mail_sync::MailSync;
 /// A session and the store that hangs off it.
 ///
 /// The two are kept together because a `CamelService` holds only a weak
-/// reference to its session: a test that unreffed the session while the store
-/// lived would leave the store pointing at nothing.
+/// reference to its session. A test that unreffed the session while the
+/// store lived would leave the store pointing at nothing.
 pub struct Account {
     session: *mut GObject,
     pub store: *mut CamelStore,
     directory: PathBuf,
 }
 
-/// Tells one account's directory from the next. A store's summary database is
-/// a file under its session's directories, and two accounts sharing one would
-/// be two tests sharing a folder's rows — including two tests running at once,
-/// which is what a Rust test binary does by default.
+/// Tells one account's directory from the next. A store's summary database
+/// is a file under its session's directories. Two accounts sharing one
+/// directory would be two tests sharing a folder's rows, including two
+/// tests that run at once, which is what a Rust test binary does by default.
 static ACCOUNTS: AtomicUsize = AtomicUsize::new(0);
 
 impl Account {
-    /// Constructs the session and the store on it. The provider struct
-    /// [`register`] leaks is what names the store's type, and a
-    /// `CamelService` is constructed with all three of session, provider and
-    /// uid.
+    /// Constructs the session and the store on it. The provider struct that
+    /// [`register`] leaks names the store's type. A `CamelService` is
+    /// constructed with all three of session, provider, and uid.
     pub fn open() -> Self {
         let provider: *const CamelProvider = register();
         let directory = std::env::temp_dir().join(format!(
@@ -80,11 +80,11 @@ impl Account {
         let dir = CString::new(directory.to_string_lossy().as_ref())
             .expect("a temporary directory path with no NUL in it");
 
-        // SAFETY: variadic construct calls. Every property named is one
+        // SAFETY: variadic construct calls. Every named property is one that
         // `CamelSession` or `CamelService` declares, and each value has the
-        // type that property carries — two strings for the session's
+        // type that property carries: two strings for the session's
         // directories, the session and provider for the store, and a NULL
-        // terminating the list.
+        // that terminates the list.
         unsafe {
             let session = g_object_new(
                 camel_session_get_type(),
@@ -134,15 +134,15 @@ impl Account {
         self.jmap().store_connection(sync);
     }
 
-    /// Where Camel says this account may keep files — the session's cache
-    /// directory with the service's uid under it.
+    /// Where Camel says this account may keep files: the session's cache
+    /// directory, with the service's uid under it.
     ///
-    /// Asked of Camel rather than composed from the two, because it is the
-    /// answer the provider itself builds its message cache from: a test that
-    /// guessed the layout would agree with itself rather than with Camel.
+    /// This asks Camel rather than composing the two parts, because it is
+    /// the answer the provider itself builds its message cache from. A test
+    /// that guessed the layout would agree with itself, not with Camel.
     pub fn cache_dir(&self) -> String {
-        // SAFETY: a live `CamelService` — a `CamelStore` is one — and the
-        // string it returns is owned by the service and outlives this call.
+        // SAFETY: a live `CamelService` (a `CamelStore` is one). The string
+        // it returns is owned by the service and outlives this call.
         unsafe {
             let dir = camel_service_get_user_cache_dir(self.store.cast::<CamelService>());
             assert!(!dir.is_null(), "the store has no cache directory");
@@ -153,23 +153,24 @@ impl Account {
 
 /// The other service of an account: a `CamelJmapTransport` on the same session.
 ///
-/// Its own object rather than a field of [`Account`], because that is what it
-/// is in Evolution — two `ESource`s, two `camel_session_add_service` calls, two
-/// services that share a session and nothing else. Most tests want only the
-/// store, and constructing a transport for them would be Camel machinery
-/// running for no reason.
+/// This is its own object, not a field of [`Account`], because that is what
+/// it is in Evolution: two `ESource`s, two `camel_session_add_service` calls,
+/// two services that share a session and nothing else. Most tests want only
+/// the store, and constructing a transport for them would run Camel
+/// machinery for no reason.
 ///
-/// It borrows the account for the session's sake: a `CamelService` holds only a
-/// weak reference to its session, so a transport outliving the account it was
-/// built on would be a service pointing at nothing.
+/// It borrows the account for the session's sake. A `CamelService` holds
+/// only a weak reference to its session, so a transport that outlives the
+/// account it was built on would be a service pointing at nothing.
 pub struct Transport<'a> {
     _account: &'a Account,
     pub service: *mut CamelService,
 }
 
 impl<'a> Transport<'a> {
-    /// Constructs the transport on `account`'s session, with a uid of its own —
-    /// a service is keyed by uid, and two sharing one would be one service.
+    /// Constructs the transport on `account`'s session, with a uid of its own.
+    /// A service is keyed by uid, and two services sharing one uid would be
+    /// one service.
     pub fn open(account: &'a Account) -> Self {
         let provider: *const CamelProvider = register();
 
@@ -227,14 +228,14 @@ impl Drop for Transport<'_> {
 impl Drop for Account {
     fn drop(&mut self) {
         // SAFETY: one reference each, taken at construction and never handed
-        // out; the store goes first because it references the session.
+        // out. The store is freed first, because it references the session.
         unsafe {
             g_object_unref(self.store.cast());
             g_object_unref(self.session.cast());
         }
-        // The summary database the store just closed, and whatever else Camel
-        // put beside it. Best effort: a test that has already failed is not
-        // made better by a panic in its teardown.
+        // Removes the summary database the store just closed, and whatever
+        // else Camel put beside it. Best effort: a test that already failed
+        // is not improved by a panic during its teardown.
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }

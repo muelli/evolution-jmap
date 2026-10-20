@@ -1,19 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Searching a JMAP folder's message *bodies*, the one part of a search that
-//! cannot be answered out of the summary.
+//! Searches a JMAP folder's message bodies. The summary alone cannot answer
+//! this part of a search.
 //!
-//! `tests/search.rs` covers the expression entry point each EDS release has;
-//! this covers the extra slot 3.58 introduced for a body term alone
-//! (`CamelFolderClass::search_body_sync`, see `jmap_mail::search_body`).
+//! `tests/search.rs` covers the expression entry point that every EDS version
+//! has. This file covers the extra slot that EDS 3.58 introduced for a body
+//! term alone (`CamelFolderClass::search_body_sync`, see
+//! `jmap_mail::search_body`).
 //!
-//! The vfunc is compiled on every EDS, because it names nothing older headers
-//! lack, so every test here but the last drives it directly and asserts the
-//! same answers on both legs. The last one is what the older leg genuinely
-//! cannot have: that the function is *installed* in the class and reached
-//! through `camel_folder_search_body_sync`, which is the claim a body search on
-//! a 3.58+ EDS actually rests on.
+//! The vfunc compiles on every EDS version, because it names nothing that
+//! older headers lack. Every test but the last calls the vfunc directly and
+//! checks the same answers on both EDS versions. The last test checks what
+//! only the newer EDS version has. The function is installed in the class and
+//! reachable through `camel_folder_search_body_sync`. This is the claim a
+//! body search on EDS 3.58 or later depends on.
 
 mod common;
 
@@ -32,8 +33,9 @@ use jmap_mail_sync::{FolderInfo, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 
-/// The words of a body term, owned for the length of one call: the input shape
-/// the vfunc takes, built the way `tests/search.rs`'s `UidList` builds one.
+/// Holds the words of a body term for the length of one call. This is the
+/// input shape the vfunc takes, built the way `tests/search.rs`'s `UidList` is
+/// built.
 struct Words {
     array: *mut GPtrArray,
     words: Vec<CString>,
@@ -45,8 +47,9 @@ impl Words {
             .iter()
             .map(|word| CString::new(*word).expect("a word with no NUL"))
             .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
+        // SAFETY: builds a fresh array of pointers into the strings in
+        // `words`. The `Words` value owns `words` and lives at least as long
+        // as the array.
         let array = unsafe {
             let array = g_ptr_array_new();
             for word in &words {
@@ -60,14 +63,14 @@ impl Words {
 
 impl Drop for Words {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointers
-        // in it belong to `self.words`.
+        // SAFETY: frees the one array allocated above. Passes FALSE because
+        // the pointers in it belong to `self.words`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
         self.words.clear();
     }
 }
 
-/// The description of the one mailbox every folder here is a view of.
+/// The one mailbox that every folder in this file is a view of.
 fn mailbox(id: Id) -> FolderInfo {
     FolderInfo {
         id,
@@ -82,16 +85,16 @@ fn mailbox(id: Id) -> FolderInfo {
     }
 }
 
-/// A folder on a live (mock) connection whose mailbox holds two messages with
-/// distinct bodies, and no local summary rows at all.
+/// A folder on a live (mock) connection. Its mailbox holds two messages with
+/// distinct bodies, and the local summary has no rows.
 ///
-/// The empty summary is the point: a body term that fell back to anything
-/// local would find nothing here whatever the words were, so only a real round
-/// trip can tell the two messages apart.
+/// The empty summary is deliberate. A body term that fell back to local data
+/// would find nothing here, regardless of the words used. Only a real round
+/// trip to the server can tell the two messages apart.
 ///
 /// # Safety
 ///
-/// The caller unrefs the folder before dropping the `Account` beside it.
+/// The caller must unref the folder before dropping the `Account` beside it.
 unsafe fn connected_folder_with_two_bodies() -> (MockServer, Account, *mut CamelFolder, Id, Id) {
     let server = MockServer::builder().start();
     let (mailbox_id, lunch, status) = {
@@ -121,21 +124,22 @@ unsafe fn connected_folder_with_two_bodies() -> (MockServer, Account, *mut Camel
     account.connect(MailSync::new(client, server.account_id()));
 
     let info = mailbox(mailbox_id);
-    // SAFETY: `account.store` is a live `CamelStore` for as long as the
-    // `Account` returned alongside it is.
+    // SAFETY: `account.store` is a live `CamelStore` as long as the `Account`
+    // returned alongside it exists.
     let folder = unsafe { new_folder(account.store, &info) };
     assert!(!folder.is_null(), "no folder for the mailbox");
     (server, account, folder, lunch, status)
 }
 
-/// The strings in an array the vfunc answered with, which the caller then
-/// unrefs the way `CamelStoreSearch` does.
+/// Reads the strings from an array that the vfunc returned, then unrefs the
+/// array the way `CamelStoreSearch` does.
 ///
 /// # Safety
 ///
 /// `array` must be a live `GPtrArray` of NUL-terminated strings.
 unsafe fn take(array: *mut GPtrArray) -> Vec<String> {
-    // SAFETY: the contract above; the elements live as long as the array.
+    // SAFETY: meets the contract above. The elements live as long as the
+    // array does.
     unsafe {
         let uids = (0..(*array).len)
             .map(|index| {
@@ -148,10 +152,11 @@ unsafe fn take(array: *mut GPtrArray) -> Vec<String> {
     }
 }
 
-/// A word in one message's body and not the other's picks out that message.
+/// A word in one message's body and not in the other's identifies that
+/// message.
 #[test]
 fn a_body_word_is_answered_by_the_server() {
-    // SAFETY: the account outlives the folder, which this test unrefs.
+    // SAFETY: the account outlives the folder. This test unrefs the folder.
     unsafe {
         let (_server, _account, folder, lunch, _status) = connected_folder_with_two_bodies();
 
@@ -174,9 +179,9 @@ fn a_body_word_is_answered_by_the_server() {
     }
 }
 
-/// A word in neither body is an empty answer rather than a refusal: "no
-/// message has this" is something the server settles, and Camel takes it as
-/// settled.
+/// A word in neither body gives an empty answer, not a refusal. The server
+/// decides that no message has the word, and Camel accepts that answer as
+/// final.
 #[test]
 fn a_word_no_body_has_is_an_empty_answer() {
     // SAFETY: as above.
@@ -202,14 +207,15 @@ fn a_word_no_body_has_is_an_empty_answer() {
     }
 }
 
-/// Every word has to be in the same body, not merely somewhere in the folder.
+/// Every word must appear in the same body, not merely somewhere in the
+/// folder.
 #[test]
 fn several_words_have_to_share_a_body() {
     // SAFETY: as above.
     unsafe {
         let (_server, _account, folder, lunch, _status) = connected_folder_with_two_bodies();
 
-        // Both words are in the folder, one per message.
+        // Both words appear in the folder, one in each message.
         let split = Words::of(&["canteen", "green"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
@@ -224,7 +230,7 @@ fn several_words_have_to_share_a_body() {
         assert_ne!(ok, GFALSE, "the search refused");
         assert_eq!(take(uids), Vec::<String>::new());
 
-        // Both words in the one body, which does match.
+        // Both words are in the same body, which matches.
         let shared = Words::of(&["canteen", "o'clock"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
@@ -243,9 +249,9 @@ fn several_words_have_to_share_a_body() {
     }
 }
 
-/// A folder with no connection behind it refuses, and refusing is what sends
-/// the search to the messages already on disk. An empty answer here would be
-/// the offline case reported as "no message matches".
+/// A folder with no connection refuses the search. The refusal sends the
+/// search to the messages already stored on disk. An empty answer here would
+/// wrongly report the offline case as "no message matches".
 #[test]
 fn a_disconnected_folder_refuses_rather_than_answering_nothing() {
     let account = Account::open();
@@ -275,10 +281,11 @@ fn a_disconnected_folder_refuses_rather_than_answering_nothing() {
     }
 }
 
-/// A term of no words is refused too, and on a connected folder, so that the
-/// refusal is the term's doing and not the connection's. Asking `Email/query`
-/// for an empty body condition would be asking for whatever the server makes
-/// of it, and answering "every message" would be worse.
+/// A term with no words is refused too, on a connected folder. This isolates
+/// the refusal as a result of the empty term, not of the connection state.
+/// Asking `Email/query` with an empty body condition depends on what the
+/// server does with it. Answering with every message would be an even worse
+/// result.
 #[test]
 fn a_term_of_no_words_is_refused() {
     // SAFETY: as above.
@@ -305,13 +312,13 @@ fn a_term_of_no_words_is_refused() {
     }
 }
 
-/// And the vfunc is what Camel reaches: the same search again, this time
-/// through `camel_folder_search_body_sync`, the wrapper `CamelStoreSearch`
+/// Confirms Camel reaches the vfunc. Runs the same search again, this time
+/// through `camel_folder_search_body_sync`, the wrapper that `CamelStoreSearch`
 /// itself calls.
 ///
-/// This is the test the older leg cannot run, and the one the whole item is
-/// for: a class that had not filled the slot in would be answered by the base
-/// implementation, which has no index to consult here and so refuses.
+/// The older EDS version cannot run this test. It is the purpose of this
+/// whole file: a class that had not filled the slot would be answered by the
+/// base implementation, which has no index to consult and so refuses.
 #[cfg(camel_folder_search_body_sync)]
 #[test]
 fn the_slot_camel_calls_is_the_one_this_provider_filled() {

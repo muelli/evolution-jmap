@@ -1,52 +1,57 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Confirms, against a real JMAP server, what `jmap_mail::push`'s own module
-//! doc only assumed: which `StateChange` types actually fire for a new
+//! Confirms, against a real JMAP server, a point that `jmap_mail::push`'s own
+//! module doc only assumed: which `StateChange` types actually fire for a new
 //! message and for a folder-list change.
 //!
-//! `jmap-mail/tests/push.rs` already covers every book-keeping behaviour on
-//! `JmapStore`'s side of a subscription (start, stop, header refresh) against
-//! `jmap-mock` over a real socket, and `jmap_mail::push::actions_for`'s own
-//! unit tests cover the pure `types` -> [`jmap_mail::push::Work`] decision.
-//! Neither has ever seen a real server's own `StateChange` payloads: `dispatch`
-//! itself needs a live `JmapStore` GObject this test environment cannot
-//! construct (same limitation `tests/push.rs`'s own doc comment records), so
-//! this drives [`jmap_backend_core::push::PushRefresh`] by hand, the same way
-//! `tests/push.rs::subscription` does against `jmap-mock`, but against the
-//! real server's own `eventSourceUrl` — exercising the exact matching logic
-//! `dispatch` relies on (`jmap_backend_core::push`'s `concerns`) with a real
-//! payload shape.
+//! `jmap-mail/tests/push.rs` already covers every book-keeping behavior on
+//! `JmapStore`'s side of a subscription (start, stop, header refresh), against
+//! `jmap-mock` over a real socket. `jmap_mail::push::actions_for`'s own unit
+//! tests cover the pure `types` -> [`jmap_mail::push::Work`] decision. Neither
+//! has ever seen a real server's own `StateChange` payloads. `dispatch` needs
+//! a live `JmapStore` GObject, which this test environment cannot construct
+//! (the same limitation that `tests/push.rs`'s own doc comment records). So
+//! this file drives [`jmap_backend_core::push::PushRefresh`] by hand, the same
+//! way `tests/push.rs::subscription` does against `jmap-mock`, but against the
+//! real server's own `eventSourceUrl`. This exercises the exact matching logic
+//! that `dispatch` relies on (`jmap_backend_core::push`'s `concerns`), with a
+//! real payload shape.
 //!
 //! ## A real finding: Stalwart never sends `EmailDelivery`
 //!
-//! `jmap_mail::push::PUSHED_TYPES` is `["Email", "EmailDelivery"]`, and its
-//! own doc comment says "`jmap-mock` tracks only `Email` of the two... asking
-//! for both is what a real server needs" — an assumption, never checked
-//! against a real server before this file. Checked here with a raw
-//! `Email/import` against Stalwart while an unfiltered (`types=*`)
-//! `eventSourceUrl` stream was attached: the pushed `StateChange` names
-//! `Thread`, `Mailbox` and `Email`, never `EmailDelivery`. So on Stalwart,
-//! `EmailDelivery` is not merely redundant with `Email`, it is dead weight:
-//! subscribing to it changes nothing this crate has ever seen fire. Nothing
-//! to fix here — `dispatch` already treats the two as either/or, so it does
-//! not depend on `EmailDelivery` ever arriving — and `PUSHED_TYPES` keeps
-//! asking for both, since a future or different server may yet use it and
-//! there is no cost to asking. Logged as `RFC-SUSPECT` in the night log:
-//! whether never emitting the RFC 8621 §5 delivery-only pseudo-type is within
-//! spec is for the maintainer to judge.
+//! `jmap_mail::push::PUSHED_TYPES` is `["Email", "EmailDelivery"]`. Its own
+//! doc comment says that `jmap-mock` tracks only `Email` of the two, and that
+//! a real server needs both. Before this file, no one had checked that
+//! assumption against a real server.
+//!
+//! This file checks it with a raw `Email/import` against Stalwart, while an
+//! unfiltered (`types=*`) `eventSourceUrl` stream is attached. The pushed
+//! `StateChange` names `Thread`, `Mailbox`, and `Email`, never
+//! `EmailDelivery`.
+//!
+//! So on Stalwart, `EmailDelivery` is not merely redundant with `Email`; it is
+//! dead weight. Subscribing to it changes nothing that this crate has ever
+//! seen fire. Nothing needs fixing here: `dispatch` already treats the two
+//! types as either/or, so it does not depend on `EmailDelivery` ever
+//! arriving. `PUSHED_TYPES` keeps asking for both, because a future or
+//! different server may use `EmailDelivery`, and asking costs nothing.
+//!
+//! This is logged as `RFC-SUSPECT` in the night log. Whether never emitting
+//! the RFC 8621 §5 delivery-only pseudo-type is within spec is for the
+//! maintainer to judge.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests; see
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` are unset.
 
 use std::env;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
@@ -82,10 +87,11 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Subscribes to `types` for `client`'s own account, exactly the shape
-/// `JmapStore::start_push` builds (see `jmap_backend_core::push::start_for_with`),
-/// and returns the subscription alongside a receiver of every matched-types
-/// list the pump observes.
+/// Subscribes to `types` for `client`'s own account, in the exact shape that
+/// `JmapStore::start_push` builds (see
+/// `jmap_backend_core::push::start_for_with`). Returns the subscription
+/// together with a receiver of every matched-types list that the pump
+/// observes.
 fn subscribe(
     client: &Client,
     account_id: &jmap_proto::Id,
@@ -109,8 +115,8 @@ fn subscribe(
     (push, rx)
 }
 
-/// Waits for a match containing `wanted`, tolerating unrelated matches (the
-/// account may have other traffic in a shared test domain).
+/// Waits for a match containing `wanted`. Tolerates unrelated matches, because
+/// the account may have other traffic in a shared test domain.
 fn wait_for(rx: &Receiver<Vec<String>>, wanted: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -128,10 +134,11 @@ fn wait_for(rx: &Receiver<Vec<String>>, wanted: &str, timeout: Duration) -> bool
 }
 
 /// A new message imported into the Inbox pushes a `StateChange` naming
-/// `Email` — confirmed against a real server for the first time. Subscribes
-/// to both `Email` and `EmailDelivery` (`jmap_mail::push::PUSHED_TYPES`
-/// exactly) and only requires `Email`, per this file's own module doc: a raw
-/// probe against Stalwart showed `EmailDelivery` never fires there.
+/// `Email`. This test confirms that against a real server for the first time.
+/// It subscribes to both `Email` and `EmailDelivery`
+/// (`jmap_mail::push::PUSHED_TYPES` exactly), but requires only `Email`. Per
+/// this file's module doc, a raw probe against Stalwart showed that
+/// `EmailDelivery` never fires there.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn importing_a_message_pushes_an_email_state_change() {
@@ -174,9 +181,9 @@ fn importing_a_message_pushes_an_email_state_change() {
     );
 }
 
-/// Creating a mailbox pushes a `StateChange` naming `Mailbox` — the type
-/// `jmap_mail::push::FOLDER_LIST_TYPES` watches to decide whether Camel's
-/// folder tree needs a `camel_store_folder_info_stale` call.
+/// Creating a mailbox pushes a `StateChange` naming `Mailbox`. This is the
+/// type that `jmap_mail::push::FOLDER_LIST_TYPES` watches, to decide whether
+/// Camel's folder tree needs a `camel_store_folder_info_stale` call.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_a_mailbox_pushes_a_mailbox_state_change() {

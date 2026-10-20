@@ -3,10 +3,10 @@
 
 //! Structured tracing tests for `jmap-mail`.
 //!
-//! Asserts structured fields attached to `tracing` events during mail store and
-//! transport operations: folder listing, message listing, changes diffing,
-//! message fetching, keyword updates, filing, expunging, importing, subscriptions,
-//! folder management (create/delete/rename), sending, and service lifecycle.
+//! Each test asserts structured fields in `tracing` events for store and transport operations.
+//! Covered operations: folder listing, message listing, change diffs, message fetch, keyword
+//! updates, filing, expunging, import, subscriptions, folder management (create, delete, rename),
+//! sending, and service lifecycle.
 
 use eds_sys::CAMEL_STORE_FOLDER_INFO_REFRESH;
 use jmap_client::{Client, Credentials};

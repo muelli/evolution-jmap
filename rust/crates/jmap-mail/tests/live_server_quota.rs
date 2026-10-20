@@ -5,29 +5,30 @@
 //! server.
 //!
 //! `jmap-mail-sync/tests/live_server_quota.rs` already proves
-//! `MailSync::quotas` — the one `Quota/get` call this vfunc reads — against
-//! real Stalwart, and `jmap-mail/src/quota.rs` has a unit test pinning
-//! `applies_to_mail`'s classification to that real shape. Neither drives the
-//! vfunc itself: `camel_folder_get_quota_info_sync` on a real `CamelFolder`,
-//! reached through `parent_store` and Camel's own class dispatch, has only
-//! ever run against `jmap-mockd` (`tests/quota.rs`). This is that
-//! confirmation, the same shape as `live_server_append.rs` and
+//! `MailSync::quotas` against real Stalwart (the one `Quota/get` call this
+//! vfunc reads). `jmap-mail/src/quota.rs` has a unit test pinning
+//! `applies_to_mail`'s classification to that real shape. Neither test
+//! drives the vfunc itself. `camel_folder_get_quota_info_sync` on a real
+//! `CamelFolder`, reached through `parent_store` and Camel's own class
+//! dispatch, has only ever run against `jmap-mockd` (`tests/quota.rs`).
+//! This test confirms it, the same shape as `live_server_append.rs` and
 //! `live_server_transfer.rs`.
 //!
-//! Like `jmap-mail-sync`'s own live-server quota test, this tolerates either
-//! an empty quota list (`NoQuota`/`G_IO_ERROR_NOT_SUPPORTED`) or a populated
-//! one, rather than assuming the write-test account has a quota configured.
+//! Like `jmap-mail-sync`'s own live-server quota test, this test tolerates
+//! either an empty quota list (`NoQuota`/`G_IO_ERROR_NOT_SUPPORTED`) or a
+//! populated one. It does not assume the write-test account has a quota
+//! configured.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
+//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or `_PASSWORD` are
 //! unset.
 
 mod common;

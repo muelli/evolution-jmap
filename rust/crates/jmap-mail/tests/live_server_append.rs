@@ -4,26 +4,29 @@
 //! `append_message_sync` against a real JMAP server.
 //!
 //! `jmap-mail-sync::MailSync::import_message` is already proven against real
-//! Stalwart (the setup step of most of that crate's live-server tests), but
-//! `jmap-mail`'s own `append_message_sync` vfunc on top of it — Camel's own
-//! writer serialising the `CamelMimeMessage`, `row_keywords` reading the
-//! `CamelMessageInfo` argument, and the decision that nothing is added to the
-//! folder's local summary until the next listing — has only ever run against
-//! `jmap-mockd` (`tests/append.rs`). This is the live-server counterpart, the
-//! same shape as `tests/live_server_synchronize.rs` and
-//! `tests/live_server_transfer.rs`.
+//! Stalwart (the setup step of most of that crate's live-server tests).
+//! `jmap-mail`'s own `append_message_sync` vfunc has only run against
+//! `jmap-mockd` (`tests/append.rs`), never against a real server. This vfunc
+//! adds three things on top of `import_message`:
+//!
+//! - Camel's own writer serialises the `CamelMimeMessage`.
+//! - `row_keywords` reads the `CamelMessageInfo` argument.
+//! - The folder's local summary gets no new row until the next listing.
+//!
+//! This test is the live-server counterpart, in the same shape as
+//! `tests/live_server_synchronize.rs` and `tests/live_server_transfer.rs`.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
-//! `docs/manual-test-live-server.md`:
+//! This test needs the same environment as the other live-server tests. See
+//! `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test skips, and does not fail, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 mod common;
 
@@ -78,9 +81,9 @@ struct Message(*mut eds_sys::CamelMimeMessage);
 
 impl Message {
     fn parsed(source: &[u8]) -> Self {
-        // SAFETY: a fresh message is a valid `CamelDataWrapper`, `source` is a
-        // live buffer of the length given, and the error out-parameter is a
-        // local that starts NULL.
+        // SAFETY: a fresh message is a valid `CamelDataWrapper`.
+        // `source` is a live buffer of the given length.
+        // The error out-parameter is a local that starts as NULL.
         unsafe {
             let message = camel_mime_message_new();
             let mut error: *mut GError = ptr::null_mut();
@@ -110,8 +113,9 @@ struct Row(*mut eds_sys::CamelMessageInfo);
 
 impl Row {
     fn new() -> Self {
-        // SAFETY: NULL for the summary is the documented way to build a row
-        // that belongs to none, which is what an append's argument is.
+        // SAFETY: NULL for the summary is the documented way to build an
+        // unowned row.
+        // An append's row argument must have no owning summary.
         let info = unsafe { camel_message_info_new(ptr::null_mut()) };
         // SAFETY: a live row this value owns.
         unsafe {
@@ -133,13 +137,18 @@ impl Drop for Row {
     }
 }
 
-/// Appends a real message with a flagged, read, dated row through
-/// `camel_folder_append_message_sync` against a real folder. Confirms the row
-/// is absent from the folder's own local summary until the next refresh
-/// (append does not write it), that a real listing afterwards holds the
-/// keywords and `receivedAt` the row carried, and that `get_message_sync`
-/// reads the same subject back out. Cleans up via `expunge_message` and
-/// `delete_folder`.
+/// Appends a real message with a flagged, read, dated row, through
+/// `camel_folder_append_message_sync`, against a real folder.
+///
+/// Checks three facts:
+///
+/// - The row is absent from the folder's local summary until the next
+///   refresh (append does not write it).
+/// - A listing after the refresh holds the keywords and `receivedAt` value
+///   that the row carried.
+/// - `get_message_sync` reads back the same subject.
+///
+/// Cleans up with `expunge_message` and `delete_folder`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn append_message_sync_carries_a_message_and_its_row_to_the_real_server() {
@@ -174,9 +183,9 @@ fn append_message_sync_carries_a_message_and_its_row_to_the_real_server() {
     )
     .into_bytes();
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
-    // returned.
+    // SAFETY: `account.store` is a live `CamelStore`.
+    // `created` is a `FolderInfo` from a real discovery over that same
+    // store's connection.
     let folder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
@@ -216,9 +225,9 @@ fn append_message_sync_carries_a_message_and_its_row_to_the_real_server() {
 
     let uid_c = CString::new(uid.as_str()).expect("a uid with no NUL");
 
-    // The append does not write the folder's own summary: the row appears
-    // only once the folder is listed, same as a message arriving any other
-    // way.
+    // The append does not write the folder's own summary.
+    // The row appears only once the folder is listed, the same as a message
+    // that arrives any other way.
     // SAFETY: a live folder; a summary with no rows is still a live summary.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
@@ -276,7 +285,7 @@ fn append_message_sync_carries_a_message_and_its_row_to_the_real_server() {
         "the real server should hold the row's own received date"
     );
 
-    // The message that went up is the message that comes back down.
+    // The reopened message is the same message that the append sent.
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: a live folder, a NUL-terminated uid alive across the call, and
     // an out-parameter that is writable and currently NULL.

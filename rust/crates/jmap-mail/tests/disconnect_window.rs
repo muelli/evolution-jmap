@@ -1,25 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The disconnect-window bound: a disconnect must not wait out an in-flight
-//! store operation's whole network round trip.
+//! The disconnect-window bound. A disconnect must not wait out the full
+//! network round trip of an in-flight store operation.
 //!
-//! `JmapStore::drop_connection` takes the connection slot's write lock. Seven
-//! of the store's methods (`messages`, `messages_since`, `message_source`,
-//! `set_keywords`, `file_message`, `expunge_message`, `import_message`) used
-//! to hold that slot's *read* lock across their whole network round trip, so
-//! a disconnect racing one of them waited it out — up to one refresh, the
-//! previously measured worst case. They now clone the connection's `Arc` out
-//! and drop the guard before making the request, so a disconnect no longer
-//! waits on one of these seven. `folders` and the four folder-tree-writing
-//! methods are deliberately unchanged: they hold the lock across their round
-//! trip on purpose, to keep a concurrent `store_connection` from resurrecting
-//! stale data over the listing they are about to write — see the `folders`
-//! field's own doc comment in `src/store.rs`.
+//! `JmapStore::drop_connection` takes the connection slot's write lock.
+//! Seven of the store's methods (`messages`, `messages_since`,
+//! `message_source`, `set_keywords`, `file_message`, `expunge_message`,
+//! `import_message`) used to hold that slot's *read* lock across their
+//! whole network round trip. A disconnect racing one of them waited for
+//! it to finish: up to one refresh, the previously measured worst case.
+//! These methods now clone the connection's `Arc` and drop the guard
+//! before making the request, so a disconnect no longer waits on any of
+//! these seven. `folders` and the four folder-tree-writing methods are
+//! deliberately unchanged. They hold the lock across their round trip on
+//! purpose, to stop a concurrent `store_connection` call from
+//! resurrecting stale data over the listing they are about to write. See
+//! the `folders` field's own doc comment in `src/store.rs`.
 //!
-//! Proven with a fake [`Transport`] that blocks its second call (the first is
-//! session discovery) until the test releases it, so a `messages` call can be
-//! parked mid-flight while `drop_connection` runs concurrently.
+//! The test uses a fake [`Transport`] that blocks its second call (the
+//! first is session discovery) until the test releases it. This lets a
+//! `messages` call park mid-flight while `drop_connection` runs
+//! concurrently.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -34,8 +36,8 @@ use jmap_mail_sync::MailSync;
 use jmap_proto::Id;
 use serde_json::json;
 
-/// Lets the test park a transport call and learn when it actually parked,
-/// rather than racing a sleep against it.
+/// Lets the test park a transport call, and learn when it parks, instead
+/// of racing a sleep against it.
 #[derive(Default)]
 struct Gate {
     started: Mutex<bool>,
@@ -118,16 +120,16 @@ fn session_body() -> Vec<u8> {
 /// `Box<JmapStore>` they point into, which is what makes that sound here too.
 #[derive(Clone, Copy)]
 struct StorePtr(*const JmapStore);
-// SAFETY: every use below only dereferences this while the `Box<JmapStore>`
-// it was taken from is still alive on the test's main thread, and the test
-// joins both threads before that box is dropped.
+// SAFETY: every use below dereferences this only while the
+// `Box<JmapStore>` it came from is still alive on the test's main thread.
+// The test joins both threads before the box drops.
 unsafe impl Send for StorePtr {}
 
 impl StorePtr {
-    /// Taken by value rather than read through `.0` at the call site, so a
-    /// closure capturing this captures the whole `Send` wrapper (Rust's
-    /// disjoint-capture rules would otherwise capture the bare pointer field
-    /// on its own, which is not `Send`).
+    /// Takes `self` by value instead of reading `.0` at the call site. A
+    /// closure that captures this value captures the whole `Send`
+    /// wrapper. Otherwise, Rust's disjoint-capture rules would capture
+    /// the bare pointer field alone, which is not `Send`.
     fn borrow<'a>(self) -> &'a JmapStore {
         // SAFETY: see the type's own doc comment.
         unsafe { &*self.0 }
@@ -164,8 +166,9 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight() {
     });
 
     let received = drop_rx.recv_timeout(Duration::from_secs(2));
-    // Unparks both threads regardless of whether `drop_connection` answered
-    // in time, so a red run cannot leave anything blocked past this test.
+    // Releases both threads regardless of whether `drop_connection`
+    // answered in time. A failed run must not leave anything blocked
+    // past this test.
     gate.release();
     dropping.join().expect("the dropping thread panicked");
     let _ = listing.join().expect("the listing thread panicked");

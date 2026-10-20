@@ -3,23 +3,23 @@
 
 //! `JmapStore`'s own folder-listing cache against a real JMAP server.
 //!
-//! `jmap-mail-sync/tests/live_server_folder.rs` already proves
+//! `jmap-mail-sync/tests/live_server_folder.rs` already proves that
 //! `MailSync::create_folder`/`delete_folder` round-trip through real
-//! Stalwart. What that file cannot reach is `JmapStore`'s layer on top:
-//! [`jmap_mail::store::JmapStore::folders`] holds a cached tree that
-//! `create_folder`/`delete_folder`/`rename_folder`/`set_subscribed` edit in
-//! place, and `folders(REFRESH)` decides, from a real `Mailbox/changes`
-//! answer, whether to keep that cache or rebuild it
+//! Stalwart. That file cannot reach `JmapStore`'s layer on top.
+//!
+//! [`jmap_mail::store::JmapStore::folders`] holds a cached tree.
+//! `create_folder`/`delete_folder`/`rename_folder`/`set_subscribed` edit the
+//! tree in place. `folders(REFRESH)` reads a real `Mailbox/changes` answer
+//! and decides whether to keep the cache or rebuild it
 //! ([`jmap_mail_sync::FolderUpdate`]). Every test of that cache and that
-//! decision so far has run against `jmap-mock`
-//! (`jmap-mail/tests/folders.rs`, `manage.rs`,
-//! `folder_listing_race.rs`) or a mock wrapped in a delayed transport, never
-//! against a real server's own `Mailbox/changes` semantics. This is that
-//! confirmation.
+//! decision so far has run against `jmap-mock` (`jmap-mail/tests/folders.rs`,
+//! `manage.rs`, `folder_listing_race.rs`), or against a mock wrapped in a
+//! delayed transport. None has run against a real server's own
+//! `Mailbox/changes` semantics. This test is that confirmation.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
@@ -61,12 +61,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates a folder, renames it and toggles its subscription entirely
-/// through `JmapStore`'s cache (`folders(0)`, no refresh), then drives one
-/// real `folders(REFRESH)` round trip against the live server to confirm
-/// `Mailbox/changes` is read the way `folder_tree_since` expects, and
-/// finally deletes the folder and confirms a second refresh agrees it is
-/// gone.
+/// Creates a folder, renames it, and toggles its subscription, each time
+/// through `JmapStore`'s cache (`folders(0)`, no refresh). Then it drives one
+/// real `folders(REFRESH)` round trip against the live server, to confirm
+/// that `Mailbox/changes` is read the way `folder_tree_since` expects.
+/// Finally it deletes the folder, and confirms a second refresh agrees that
+/// the folder is gone.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn folder_lifecycle_round_trips_through_the_store_cache_against_the_real_server() {
@@ -125,10 +125,10 @@ fn folder_lifecycle_round_trips_through_the_store_cache_against_the_real_server(
         "set_subscribed(false) should be visible in the store's cache with no refresh"
     );
 
-    // A real `Mailbox/changes` round trip: the account moved (three writes
-    // above) since the cache's state, so this must come back `Rebuilt`
-    // rather than `Unchanged`, and the rebuilt tree must still show the
-    // folder as the store's own edits left it.
+    // A real `Mailbox/changes` round trip. The account changed (three writes
+    // above) since the cache's state, so the result must be `Rebuilt`, not
+    // `Unchanged`. The rebuilt tree must still show the folder as the
+    // store's own edits left it.
     let refreshed = store
         .folders(REFRESH)
         .expect("refresh against the real server failed");
@@ -148,7 +148,7 @@ fn folder_lifecycle_round_trips_through_the_store_cache_against_the_real_server(
         "the store's cache should drop the folder delete_folder just removed"
     );
 
-    // And a second real refresh agrees the server itself no longer has it.
+    // A second real refresh agrees that the server no longer has it.
     let refreshed = store
         .folders(REFRESH)
         .expect("post-delete refresh against the real server failed");

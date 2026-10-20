@@ -2,20 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! A transfer out of a folder must not lose to a listing that was already in
-//! flight when it started.
+//! flight when the transfer started.
 //!
-//! `camel_folder_refresh_info_sync`, `_synchronize_sync` and `_expunge_sync`
+//! `camel_folder_refresh_info_sync`, `_synchronize_sync`, and `_expunge_sync`
 //! each take `camel_folder_lock` for the whole of their vfunc dispatch, so on
-//! one folder those three cannot overlap — but
+//! one folder those three cannot overlap. But
 //! `camel_folder_transfer_messages_to_sync`'s own wrapper takes no such lock
-//! on its source folder, so nothing before this crate's fix serialised a
-//! transfer against a refresh already reconciling the same summary.
+//! on its source folder. So nothing before this crate's fix serialized a
+//! transfer against a refresh that was already reconciling the same summary.
 //!
-//! Reproduced with a transport that wraps a real one against a real
-//! [`MockServer`]: the refresh's `Email/query` is allowed to complete for
-//! real — so its answer truthfully lists the message, which has not moved
-//! yet — but its delivery back to the caller is held until a concurrent
-//! transfer out of the same folder has finished.
+//! This test reproduces the race with a transport that wraps a real one
+//! against a real [`MockServer`]. The refresh's `Email/query` is allowed to
+//! complete for real, so its answer truthfully lists the message, which has
+//! not moved yet. But its delivery back to the caller is held until a
+//! concurrent transfer out of the same folder has finished.
 
 use std::ffi::CString;
 use std::ptr;
@@ -45,8 +45,8 @@ use jmap_proto::mail::role;
 mod common;
 use common::Account;
 
-/// Lets the test park the racing request's response and learn when it
-/// actually parked, rather than racing a sleep against it.
+/// Lets the test park the racing request's response, and learn when it has
+/// actually parked, instead of racing a sleep against it.
 #[derive(Default)]
 struct Gate {
     started: Mutex<bool>,
@@ -82,10 +82,10 @@ impl Gate {
 }
 
 /// Forwards every request to a real transport, but holds the *first*
-/// `Email/query` response back until the test releases it — after actually
-/// making the request, so the answer is the server's honest one for the
-/// mailbox's contents at the time it was asked (before the race's transfer
-/// moves the message away).
+/// `Email/query` response back until the test releases it. The request is
+/// made first, so the answer is the server's honest one for the mailbox's
+/// contents at the time of the request (before the race's transfer moves
+/// the message away).
 struct DelayedDeliveryTransport {
     inner: UreqTransport,
     gate: Arc<Gate>,
@@ -130,8 +130,9 @@ impl UidList {
             .iter()
             .map(|id| CString::new(id.as_str()).expect("a uid with no NUL"))
             .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
+        // SAFETY: a fresh array, filled with pointers into strings. This
+        // struct owns the strings, and drops them after the array, so the
+        // pointers stay valid for as long as the array exists.
         let array = unsafe {
             let array = g_ptr_array_new();
             for uid in &uids {
@@ -145,8 +146,8 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointers
-        // in it belong to `self.uids`.
+        // SAFETY: the one array, allocated above. FALSE, because the
+        // pointers in it belong to `self.uids`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
         self.uids.clear();
     }
@@ -173,11 +174,11 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
 
     let account = Account::open();
 
-    // A plain connection, only to read the mailbox tree `new_folder` needs.
-    // Opening the folders through `camel_store_get_folder_sync` instead
-    // would run this crate's own auto-refresh on first open and consume the
-    // one "never listed" moment this race needs — see `folders.rs`'s
-    // `get_folder_sync`.
+    // A plain connection, only to read the mailbox tree that `new_folder`
+    // needs. Opening the folders through `camel_store_get_folder_sync`
+    // instead would run this crate's own auto-refresh on first open, and
+    // consume the one "never listed" moment this race needs. See
+    // `folders.rs`'s `get_folder_sync`.
     let plain = Client::connect(server.origin(), Credentials::none()).expect("connected");
     account.connect(MailSync::new(plain, account_id.clone()));
     let tree = account.jmap().folders(0).expect("initial tree");
@@ -205,10 +206,9 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
         "the folders would not construct"
     );
 
-    // Never refreshed, so this is the full listing the race needs: a delta
-    // would ask only what changed since a recorded state, and "nothing
-    // changed" cannot resurrect a row the way a listing's "still present"
-    // can.
+    // Never refreshed, so this is the full listing the race needs. A delta
+    // would ask only what changed since a recorded state. "Nothing changed"
+    // cannot resurrect a row the way a listing's "still present" can.
     let refresh = thread::spawn(move || {
         // Named again so the closure captures the whole `Send` wrapper
         // rather than just the raw pointer field inside it.
@@ -230,9 +230,9 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
         let list = UidList::of(&[&uid_to_move]);
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: two live folders of one store, an array of NUL-terminated
-        // uids alive across the call, and two out-parameters that are
-        // writable and currently NULL.
+        // SAFETY: two live folders of one store, and an array of
+        // NUL-terminated uids alive across the call. Two out-parameters,
+        // both writable and currently NULL.
         let ok = unsafe {
             let ok = camel_folder_transfer_messages_to_sync(
                 inbox.0,
@@ -251,19 +251,20 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
             }
             ok != GFALSE
         };
-        // The test is done listening once it has answered either way, so a
+        // The test stops listening once it has answered either way. So a
         // send that fails (the 300ms check below already gave up) is not a
         // bug in this thread.
         let _ = done_tx.send(ok);
     });
 
-    // `camel_folder_transfer_messages_to_sync`'s own wrapper takes no lock —
-    // confirmed against evolution-data-server 3.52.3's `camel-folder.c`,
-    // where `refresh_info_sync`, `synchronize_sync` and `expunge_sync`'s
-    // wrappers all call `camel_folder_lock`/`_unlock` around their vfunc
-    // dispatch and `transfer_messages_to_sync`'s does not. So the vfunc
-    // itself must take it, or the transfer above races ahead of the
-    // in-flight (and, at this instant, still-parked) listing instead of
+    // `camel_folder_transfer_messages_to_sync`'s own wrapper takes no lock.
+    // This is confirmed against evolution-data-server 3.52.3's
+    // `camel-folder.c`, where the wrappers for `refresh_info_sync`,
+    // `synchronize_sync`, and `expunge_sync` all call
+    // `camel_folder_lock`/`_unlock` around their vfunc dispatch, and the
+    // wrapper for `transfer_messages_to_sync` does not. So the vfunc itself
+    // must take the lock, or the transfer above races ahead of the
+    // in-flight (and, at this instant, still-parked) listing, instead of
     // waiting for it.
     match done_rx.recv_timeout(Duration::from_millis(300)) {
         Ok(_) => panic!(
@@ -275,7 +276,8 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
         Err(RecvTimeoutError::Disconnected) => panic!("the transfer thread died without answering"),
     }
 
-    // Lets the parked, now-stale (X still shows present) listing land.
+    // Lets the parked, now-stale listing land (it still shows the message
+    // as present).
     gate.release();
 
     let transferred_ok = done_rx
@@ -288,8 +290,8 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
         "the refresh failed"
     );
 
-    // The message the transfer moved away must not have come back: the
-    // listing that named it was answered before the move and must not be
+    // The message the transfer moved away must not have come back. The
+    // listing that named it was answered before the move, and must not be
     // allowed to write its row back in after the move committed.
     let uid_c = CString::new(uid.as_str()).expect("a uid with no NUL");
     // SAFETY: a live folder with a summary, and a NUL-terminated uid.

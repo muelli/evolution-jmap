@@ -1,55 +1,55 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `append_message_sync`: the vfunc that puts a message Camel is holding into
-//! a JMAP folder.
+//! `append_message_sync`: the vfunc that puts a message Camel holds into a
+//! JMAP folder.
 //!
-//! [`crate::transfer`] files a message the *account already has* into another
-//! of its mailboxes, which is one `Email/set`. This is the other kind of
-//! arrival: a `CamelMimeMessage` that came from somewhere else entirely — the
-//! folder another account's message was dragged out of, the composer saving a
-//! draft, a `.eml` file the user dropped on the folder — and the only way a
-//! JMAP account takes one of those is `Email/import` over an uploaded blob.
-//! The sync half of that was built an increment ago as
-//! [`MailSync::import_message`]; what these tests are about is the Camel half.
+//! [`crate::transfer`] moves a message the *account already has* into another
+//! of its mailboxes. That is one `Email/set` call. This file covers a
+//! different arrival: a `CamelMimeMessage` from an outside source. Sources
+//! include the folder another account's message was dragged out of, the
+//! composer saving a draft, and a `.eml` file the user dropped on the folder.
+//! A JMAP account takes such a message only through `Email/import` over an
+//! uploaded blob. [`MailSync::import_message`] built the sync half of that
+//! earlier. These tests cover the Camel half.
 //!
 //! ## The message goes up as the bytes Camel would write out
 //!
-//! The vfunc's argument is an object, and what `Email/import` takes is a blob,
-//! so something has to serialise it. That is [`jmap_mail::mime`], around
-//! Camel's own writer, for [`crate::message`]'s reason turned around: the parse
-//! on the way in has to be Camel's, so the emit on the way out has to be too,
-//! or this provider would be a second MIME implementation disagreeing with the
-//! first about what the message says. Its own module because sending needs the
-//! same bytes, and [`jmap_mail::mime`]'s own tests are where the writing is
-//! checked; what is checked here is what an append does with them.
+//! The vfunc argument is an object, but `Email/import` takes a blob, so
+//! something must serialize it. [`jmap_mail::mime`] does this, using Camel's
+//! own writer. [`crate::message`] parses incoming mail with Camel's parser for
+//! the same reason: the emit on the way out must also be Camel's. Otherwise
+//! this provider would be a second MIME implementation that disagrees with
+//! the first about the message content. [`jmap_mail::mime`] has its own
+//! module and its own tests, because sending needs the same bytes. These
+//! tests check what an append does with the serialized bytes.
 //!
-//! [`the_message_that_went_up_is_the_message_that_comes_back_down`] is that
-//! round trip end to end — appended as an object, listed as a row, opened again
-//! as an object — because every part of it is a place a byte could be lost.
+//! [`the_message_that_went_up_is_the_message_that_comes_back_down`] checks
+//! that round trip end to end: append as an object, list as a row, open again
+//! as an object. Every step is a place a byte could be lost.
 //!
 //! ## The row comes from the listing, not from the append
 //!
-//! Nothing is added to the folder's summary.
+//! An append adds nothing to the folder's summary.
 //! [`an_appended_message_does_not_appear_in_the_folder_until_it_is_listed`]
-//! pins that, and it is the decision [`crate::transfer`] already made about the
-//! folder a message is dragged *into*, made again here for the same reason: what
-//! this side holds is a uid, and a row built from a uid alone would be a message
-//! list line with no subject, sender or date until a refresh replaced it.
+//! checks this. [`crate::transfer`] made the same decision for the folder a
+//! message is dragged *into*, for the same reason: this side holds only a
+//! uid. A row built from a uid alone would be a message list line with no
+//! subject, sender, or date, until a refresh replaces it.
 //!
 //! ## What Camel knows about the message that the message does not say
 //!
-//! The `CamelMessageInfo` argument is the folder's answer to "and this is what
-//! it was". Two things on it reach the server — the flags and labels, as
-//! keywords, and `date_received`, as `receivedAt` — and both matter for the
-//! ordinary case of moving mail between two accounts: a transfer that arrived
-//! unread when it was read, or dated to the moment of the copy, is a transfer
-//! that lost something the user could see.
+//! The `CamelMessageInfo` argument is the folder's answer to "and this is
+//! what it was". Two parts of it reach the server: the flags and labels, as
+//! keywords, and `date_received`, as `receivedAt`. Both matter for the
+//! ordinary case of moving mail between two accounts. A transfer that
+//! arrives unread when it was read, or dated to the moment of the copy,
+//! loses something the user could see.
 //!
-//! It is also allowed to be absent. `camel_folder_append_message_sync` declares
-//! the argument nullable and Camel's own callers pass NULL for a message
-//! nothing is known about, so [`a_message_appended_with_no_row_carries_no_keywords`]
-//! is a case rather than a defence.
+//! The argument may also be absent. `camel_folder_append_message_sync`
+//! declares it nullable, and Camel's own callers pass NULL for a message
+//! with no known history. [`a_message_appended_with_no_row_carries_no_keywords`]
+//! checks this normal case, not a defensive one.
 //!
 //! [`crate::transfer`]: jmap_mail::transfer
 //! [`crate::message`]: jmap_mail::message
@@ -82,8 +82,8 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::MailboxRights;
 
-/// The RFC 5322 bytes of the message being appended — CRLF line endings, a
-/// header block, a blank line, a body.
+/// The RFC 5322 bytes of the message to append: CRLF line endings, a header
+/// block, a blank line, and a body.
 const MESSAGE: &[u8] = b"From: Bob <bob@example.com>\r\n\
 To: Alice <alice@example.com>\r\n\
 Subject: Lunch?\r\n\
@@ -92,9 +92,9 @@ Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
 \r\n\
 One o'clock at the usual place.\r\n";
 
-/// One connected account with one empty folder open, which is the state every
-/// append starts from — a folder a message arrives in from outside is one
-/// nothing has necessarily listed.
+/// One connected account with one empty folder open. This is the state every
+/// append starts from: a folder receiving an outside message may not yet be
+/// listed.
 struct Fixture {
     server: MockServer,
     account: Account,
@@ -131,9 +131,9 @@ impl Fixture {
         }
     }
 
-    /// The same single-folder account, with its one mailbox's `myRights`
-    /// already set before the first listing: a shared mailbox given every
-    /// right except `mayAddItems`, the shape a read-only share leaves.
+    /// The same single-folder account, with myRights already set on its one
+    /// mailbox before the first listing. The mailbox has every right except
+    /// mayAddItems, the shape a read-only share leaves.
     fn started_without_add_rights() -> Self {
         let server = MockServer::builder().start();
         let account_id = server.account_id();
@@ -173,8 +173,8 @@ impl Fixture {
         }
     }
 
-    /// Through Camel's own wrapper, which is what Evolution calls when a
-    /// message arrives in the folder from outside the account.
+    /// Appends through Camel's own wrapper, the function Evolution calls when
+    /// a message arrives in the folder from outside the account.
     fn append(&self, message: &Message, info: *mut CamelMessageInfo) -> Appended {
         let mut uid: *mut glib_sys::gchar = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
@@ -194,21 +194,21 @@ impl Fixture {
         Appended::new(ok, uid, error)
     }
 
-    /// Through the pointer in the class, skipping what Camel's wrapper does on
-    /// the way in.
+    /// Appends through the pointer in the class, skipping what Camel's
+    /// wrapper does on the way in.
     ///
-    /// That is not a shortcut here, it is the only way to ask the question:
+    /// This is not a shortcut: it is the only way to test the vfunc directly.
     /// `camel_folder_append_message_sync` connects the service before it
-    /// dispatches, so a store whose connection was dropped is one the wrapper
-    /// reconnects — and against these settings, which name no server, the
-    /// failure that comes back is the *reconnection's* (`URL_INVALID`) rather
-    /// than the vfunc's. [`crate::transfer`]'s tests reach past the wrapper for
-    /// the same kind of reason.
+    /// dispatches, so the wrapper reconnects a store whose connection was
+    /// dropped. Against these settings, which name no server, the
+    /// reconnection fails first, so the reported failure is the
+    /// reconnection's (`URL_INVALID`), not the vfunc's. [`crate::transfer`]'s
+    /// tests reach past the wrapper for the same reason.
     fn append_straight(&self, message: &Message, info: *mut CamelMessageInfo) -> Appended {
         let mut uid: *mut glib_sys::gchar = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc; the folder is an instance of that class, and the two
+        // SAFETY: referencing the class runs class_init, which installs the
+        // vfunc. The folder is an instance of that class. Both
         // out-parameters are writable and currently NULL.
         let ok = unsafe {
             let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
@@ -229,9 +229,9 @@ impl Fixture {
         Appended::new(ok, uid, error)
     }
 
-    /// What the mailbox holds now, as a folder refresh would find it — asked
-    /// of the server rather than of the summary, because the summary is
-    /// deliberately not written by an append.
+    /// What the mailbox holds now, as a folder refresh would find it. This
+    /// asks the server, not the summary, because an append does not write
+    /// the summary.
     fn listing(&self) -> Vec<MessageSummary> {
         let client =
             Client::connect(self.server.origin(), Credentials::none()).expect("connected again");
@@ -248,7 +248,7 @@ impl Fixture {
         messages.into_iter().next().expect("the row just counted")
     }
 
-    /// And what the server holds for its keywords.
+    /// The keywords the server holds for the message.
     fn keywords_on_server(&self, uid: &Id) -> BTreeMap<String, bool> {
         let account_id = self.server.account_id();
         let state = self.server.state();
@@ -295,8 +295,9 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // SAFETY: the reference this fixture took from `get_folder_sync`,
-        // released before the store it hangs off.
+        // SAFETY: releases the reference this fixture took from
+        // `get_folder_sync`. The store this folder depends on is released
+        // after this.
         unsafe { g_object_unref(self.archive.cast()) };
     }
 }
@@ -341,9 +342,9 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
     }
 }
 
-/// The object Camel hands the vfunc: a `CamelMimeMessage` parsed out of bytes,
-/// which is exactly how the message reaches the vfunc in Camel's own
-/// cross-store transfer — `get_message_sync` on the source folder.
+/// The object Camel hands the vfunc: a `CamelMimeMessage` parsed from bytes.
+/// This is exactly how the message reaches the vfunc in Camel's own
+/// cross-store transfer, through `get_message_sync` on the source folder.
 struct Message(*mut CamelMimeMessage);
 
 impl Message {
@@ -563,9 +564,9 @@ fn a_message_appended_with_no_row_carries_no_keywords() {
         .append(&Message::parsed(MESSAGE), ptr::null_mut())
         .expect_ok();
 
-    // Camel declares the argument nullable, and an append that invented a
-    // keyword for a message nothing is known about would put a label on it
-    // that every other client would then show.
+    // Camel declares the argument nullable. An append that invents a keyword
+    // for an unknown message would put a label on it that every other
+    // client would show.
     let listed = fixture.only();
     assert!(!listed.flags.seen, "an unknown message arrived read");
     assert!(listed.tags.is_empty(), "{:?}", listed.tags);
@@ -589,9 +590,9 @@ fn the_moment_a_row_says_the_message_arrived_is_the_moment_it_keeps() {
 #[test]
 fn a_message_appended_with_no_moment_is_dated_by_the_server() {
     let fixture = Fixture::start();
-    // A row Camel built and never dated: `date_received` is zero, which is not
-    // 1970 — it is "nothing known", and sending it as a date would file the
-    // message at the epoch forever.
+    // A row Camel built and never dated: `date_received` is zero. This does
+    // not mean 1970, it means "nothing known". Sending it as a date would
+    // file the message at the epoch forever.
     let row = Row::blank();
 
     fixture.append(&Message::parsed(MESSAGE), row.0).expect_ok();
@@ -659,9 +660,9 @@ fn appending_to_a_mailbox_the_account_no_longer_has_fails() {
     );
 }
 
-/// A shared mailbox whose `myRights.mayAddItems` is `false` (RFC 8621 §2),
-/// the shape a read-only share leaves, refuses an append locally, from the
-/// last listing, rather than uploading the message for the server to reject.
+/// A shared mailbox whose `myRights.mayAddItems` is `false` (RFC 8621 §2) has
+/// the shape a read-only share leaves. The append is refused locally, from
+/// the last listing, instead of being uploaded for the server to reject.
 #[test]
 fn appending_to_a_mailbox_without_add_rights_is_refused_locally() {
     let fixture = Fixture::started_without_add_rights();
@@ -696,19 +697,20 @@ fn appending_to_a_mailbox_without_add_rights_is_refused_locally() {
 }
 
 /// A message larger than the account's `maxSizeUpload` (RFC 8620 §6.1) is
-/// refused before a byte of it is sent, and the folder says why.
+/// refused before a byte of it is sent. The folder states the reason.
 ///
-/// The size limit is the one refusal of an append that is knowable in advance:
-/// it is in the session document, and the message is in hand. Sending anyway
-/// costs the user the whole upload — a large attachment over a domestic
-/// connection, minutes of a progress bar — to be told at the end what could
-/// have been said at the start.
+/// The size limit is the one refusal that is knowable in advance: it is in
+/// the session document, and the message is already in hand. Sending the
+/// message anyway would cost the user the whole upload. For a large
+/// attachment on a slow connection, that can mean minutes of a progress bar.
+/// The user would learn at the end what the folder could have said at the
+/// start.
 ///
-/// Reported in `CAMEL_FOLDER_ERROR`, not `CAMEL_SERVICE_ERROR`: nothing is
-/// wrong with the account, and a service error is what Evolution reads to
-/// decide an account is unusable. It is the same judgement this vfunc makes
-/// about a message Camel's writer refuses — the message is what could not be
-/// used.
+/// The test reports this in `CAMEL_FOLDER_ERROR`, not `CAMEL_SERVICE_ERROR`.
+/// Nothing is wrong with the account. Evolution reads a service error as a
+/// sign that the account is unusable. This matches the judgement the vfunc
+/// makes about a message that Camel's writer refuses: the message, not the
+/// account, could not be used.
 #[test]
 fn appending_a_message_over_the_accounts_upload_limit_fails_before_it_is_sent() {
     let fixture = Fixture::started_with(MockServer::builder().size_upload(64));

@@ -4,24 +4,25 @@
 //! `refresh_info_sync`'s delta path against a real JMAP server.
 //!
 //! Every existing live-server test refreshes a freshly-created folder exactly
-//! once, so its summary never holds a prior state and `refresh_info_sync`
+//! once. Its summary never holds a prior state, so `refresh_info_sync`
 //! (`jmap-mail/src/refresh.rs`) always takes the `None => store.messages(...)`
 //! full-listing branch. The `Some(since) => store.messages_since(...)` branch
-//! — a real `Email/changes` request — has only ever run against
-//! `jmap-mockd` (`jmap-mail/tests/refresh.rs`). This is that confirmation: a
-//! folder refreshed twice, with a server-side change between the two.
+//! sends a real `Email/changes` request. Until now it has only run against
+//! `jmap-mockd` (`jmap-mail/tests/refresh.rs`). This file confirms that
+//! branch: it refreshes a folder twice, with a server-side change between the
+//! two refreshes.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! Same environment as the other live-server tests; see
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` are unset.
 
 mod common;
 
@@ -64,14 +65,18 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Imports one message, refreshes a real folder onto it (the full-listing
-/// branch, since the folder has never been refreshed before), then — from an
-/// independent connection — destroys that message and imports a second one,
-/// moving the mailbox on since the state the first refresh recorded. A second
-/// refresh of the same folder object then has a state to ask from, so it
-/// takes the delta branch: a real `Email/changes` request. Confirms the
-/// folder ends up holding only the second message's row, with no further
-/// listing involved, and that an independent connection agrees.
+/// Imports one message and refreshes a real folder onto it. This is the
+/// full-listing branch, because the folder has never refreshed before.
+///
+/// From an independent connection, the test then destroys that message and
+/// imports a second one. This moves the mailbox past the state that the
+/// first refresh recorded.
+///
+/// A second refresh of the same folder object now has a prior state to
+/// compare against, so it takes the delta branch: a real `Email/changes`
+/// request. The test confirms that the folder ends up holding only the
+/// second message's row, with no further listing, and that an independent
+/// connection agrees.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_second_refresh_applies_a_real_delta() {
@@ -119,17 +124,17 @@ fn a_second_refresh_applies_a_real_delta() {
         )
         .expect("import_message failed against the real server for the first message");
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
+    // SAFETY: `account.store` is a live `CamelStore`. `created` is a
+    // `FolderInfo` that a real discovery over that same connection just
     // returned.
     let folder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a live folder, never refreshed before, and a writable,
+    // SAFETY: a live folder, never refreshed before, with a writable,
     // currently-NULL out-parameter. This is the full-listing branch, already
-    // proven live elsewhere; it only builds the state the second refresh
-    // needs.
+    // proven live elsewhere. It only builds the state that the second
+    // refresh needs.
     unsafe {
         assert_ne!(
             camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),
@@ -150,9 +155,9 @@ fn a_second_refresh_applies_a_real_delta() {
         g_object_unref(info.cast());
     }
 
-    // Move the mailbox on from an independent connection: destroy the first
-    // message and import a second, so the state the first refresh recorded is
-    // now behind the server's.
+    // Move the mailbox forward from an independent connection: destroy the
+    // first message and import a second message. The state that the first
+    // refresh recorded is now behind the server's actual state.
     let mover_client = connect_for_write().expect("the write-test account is still there");
     let mover_sync = MailSync::new(mover_client, account_id.clone());
     mover_sync
@@ -168,8 +173,9 @@ fn a_second_refresh_applies_a_real_delta() {
         .expect("import_message failed against the real server for the second message");
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: as above. The folder's summary now holds the first refresh's
-    // state, so this is the delta branch: a real `Email/changes` request.
+    // SAFETY: as above. The folder's summary now holds the state from the
+    // first refresh, so this is the delta branch: a real `Email/changes`
+    // request.
     unsafe {
         assert_ne!(
             camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),
@@ -202,7 +208,7 @@ fn a_second_refresh_applies_a_real_delta() {
     }
 
     // Independent confirmation: a fresh connection, sharing nothing with the
-    // folder's own, agrees on the mailbox's contents.
+    // folder's own connection, agrees on the mailbox's contents.
     let verify_client = connect_for_write().expect("the write-test account is still there");
     let verify_sync = MailSync::new(verify_client, account_id);
     let (_, messages) = verify_sync

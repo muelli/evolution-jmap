@@ -1,32 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `folder_listing_race.rs`'s stale-refresh-vs-concurrent-create race,
-//! proven against a real JMAP server rather than `jmap-mock`.
+//! The stale-refresh-vs-concurrent-create race from
+//! `folder_listing_race.rs`, proven against a real JMAP server instead of
+//! `jmap-mock`.
 //!
-//! `folder_listing_race.rs` already proves the fix (`JmapStore::folders`
-//! must not let a `Mailbox/changes` answer that was computed before a
-//! concurrent `create_folder` but delivered after it erase that folder from
-//! the cache) with a transport that wraps a real one against a real
-//! `jmap_mock::MockServer`: the request is genuinely answered by the
-//! server, only its delivery back to the caller is held. That technique
-//! does not care which server answered the request, so this file reruns the
-//! identical race, gate and all, against real Stalwart instead of the mock:
-//! the one thing the mock version cannot show is whether a real
-//! `Mailbox/changes` answer's own shape still round-trips through the same
-//! decision correctly under the same timing.
+//! `folder_listing_race.rs` proves the fix: `JmapStore::folders` must not
+//! let a `Mailbox/changes` answer erase a folder from the cache, when the
+//! server computed the answer before a concurrent `create_folder` call
+//! but delivered it after. That test uses a transport that wraps a real
+//! one against `jmap_mock::MockServer`. The server genuinely answers the
+//! request; only its delivery back to the caller is held. This technique
+//! does not depend on which server answers the request, so this file
+//! reruns the same race against real Stalwart instead of the mock. Only
+//! the real server can show whether a real `Mailbox/changes` answer's
+//! shape still round-trips through the same decision correctly under the
+//! same timing.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
-//! `docs/manual-test-live-server.md`:
+//! This test needs the same environment as the other live-server tests.
+//! See `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,8 +47,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Lets the test park the `Mailbox/changes` response and learn when it
-/// actually parked, rather than racing a sleep against it. Copy of
+/// Lets the test park the `Mailbox/changes` response, and learn when it
+/// parks, instead of racing a sleep against it. Copy of
 /// `folder_listing_race.rs`'s `Gate`.
 #[derive(Default)]
 struct Gate {
@@ -83,9 +84,9 @@ impl Gate {
     }
 }
 
-/// Forwards every request to a real transport, but holds the *first*
-/// `Mailbox/changes` response back until the test releases it, after
-/// actually making the request against the real server. Copy of
+/// Forwards every request to a real transport. Holds back the *first*
+/// `Mailbox/changes` response until the test releases it, after making
+/// the request against the real server. Copy of
 /// `folder_listing_race.rs`'s `DelayedDeliveryTransport`.
 struct DelayedDeliveryTransport {
     inner: UreqTransport,
@@ -110,13 +111,13 @@ impl Transport for DelayedDeliveryTransport {
 
 /// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
 /// real thread boundary the way Rust's `Sync` would want proof of; see
-/// `folder_listing_race.rs`'s copy of the same wrapper for why that is sound
-/// here too.
+/// `folder_listing_race.rs`'s copy of the same wrapper for why that is
+/// sound here too.
 #[derive(Clone, Copy)]
 struct StorePtr(*const JmapStore);
-// SAFETY: every use below only dereferences this while the `Box<JmapStore>`
-// it was taken from is still alive on the test's main thread, and the test
-// joins the background thread before that box is dropped.
+// SAFETY: every use below dereferences this only while the
+// `Box<JmapStore>` it came from is still alive on the test's main thread.
+// The test joins the background thread before the box drops.
 unsafe impl Send for StorePtr {}
 
 impl StorePtr {
@@ -149,11 +150,11 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
     Some(client)
 }
 
-/// Same scenario as `folder_listing_race.rs`, against real Stalwart: a
-/// refresh's `Mailbox/changes` request is genuinely answered (truthfully:
-/// nothing has changed yet) but its delivery is held until a concurrent
-/// `create_folder` has finished, so the stale-but-honest answer must not
-/// erase the folder the create just added.
+/// Same scenario as `folder_listing_race.rs`, against real Stalwart. A
+/// refresh's `Mailbox/changes` request gets a genuine answer (truthfully:
+/// nothing changed yet), but its delivery is held until a concurrent
+/// `create_folder` call finishes. The stale but honest answer must not
+/// erase the folder that the create just added.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_on_the_real_server()
@@ -170,8 +171,8 @@ fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_o
 
     let store = JmapStore::detached();
     store.store_connection(sync);
-    // Primes the cache with the account's current tree, over a plain
-    // request the gate does not touch (it only holds `Mailbox/changes`).
+    // Primes the cache with the account's current tree. This request is
+    // plain; the gate holds only `Mailbox/changes` requests.
     store.folders(0).expect("initial listing failed");
 
     let store_ptr = StorePtr(&*store as *const JmapStore);
@@ -181,8 +182,8 @@ fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_o
             .folders(eds_sys::CAMEL_STORE_FOLDER_INFO_REFRESH)
     });
 
-    // The refresh's `Mailbox/changes` request has now been genuinely
-    // answered by the real server and is being held back from the caller.
+    // The real server has now genuinely answered the refresh's
+    // `Mailbox/changes` request. Its delivery to the caller is held back.
     gate.wait_for_start();
 
     let name = format!("agent-folderrace-{}", unique_suffix());
@@ -208,7 +209,7 @@ fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_o
          stale (pre-create) answer landing after it; store's tree has {paths:?}"
     );
 
-    // And the store's own held listing agrees.
+    // The store's own held listing agrees too.
     let held = store.folders(0).expect("cached listing");
     let held_paths: Vec<&str> = held.iter().map(|folder| folder.path.as_str()).collect();
     assert!(

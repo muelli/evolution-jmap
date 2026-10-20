@@ -1,52 +1,50 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `refresh_info_sync`: the vfunc where a folder and a server finally meet.
+//! `refresh_info_sync`: the vfunc where a folder and a server meet.
 //!
-//! Everything the last four increments built has been half a path.
-//! `jmap-mail-sync` can list a mailbox and knows nothing of Camel;
-//! `message_info` turns one of those rows into a `CamelMessageInfo` and is
-//! never called; `summary` reconciles a listing against the rows a folder holds
-//! and has to be handed the listing. This is the vfunc that joins them, and it
-//! is the first thing in the crate that answers a question about a folder's
-//! *contents* — which is to say the first thing Evolution can show mail from.
+//! `jmap-mail-sync` can list a mailbox but knows nothing about Camel.
+//! `message_info` turns a listing row into a `CamelMessageInfo`, but no caller
+//! invokes it yet. `summary` reconciles a listing against the rows a folder
+//! holds, but needs the listing handed to it. This vfunc joins all three
+//! pieces. It is the first vfunc in the crate that answers a question about a
+//! folder's *contents*, so it is the first thing that lets Evolution show
+//! mail.
 //!
-//! Two halves, and the tests are about both:
+//! The tests cover two parts:
 //!
-//! - **The fetch.** Camel calls the vfunc on the folder; the folder has a JMAP
-//!   mailbox id and nothing else, so the connection has to come from the store
-//!   it hangs off. What comes back is asserted through Camel's own accessors —
-//!   `camel_folder_get_message_count` and the folder's own uid list — rather than
-//!   through the summary, because those are the two questions Evolution
-//!   actually asks and they are answered by `CamelFolder`'s base class out of
-//!   the summary this provider fills.
-//! - **The telling.** A folder that filled its summary and said nothing is a
-//!   folder whose new mail appears the next time the user clicks away and back.
-//!   Camel's `changed` signal is the notice, and its argument is the diff
-//!   `apply_listing` produces — so what is tested here is that the signal is
-//!   emitted when there is something to say and, just as much, that it is not
-//!   emitted when there is not.
+//! - **The fetch.** Camel calls the vfunc on the folder. The folder holds only
+//!   a JMAP mailbox id, so the connection comes from the store it belongs to.
+//!   Tests check the result through Camel's own accessors,
+//!   `camel_folder_get_message_count` and the folder's uid list, instead of
+//!   through the summary. These two accessors are what Evolution actually
+//!   calls, and `CamelFolder`'s base class answers them from the summary this
+//!   provider fills.
+//! - **The notice.** A folder that fills its summary but emits nothing leaves
+//!   new mail invisible until the user clicks away and back. Camel's `changed`
+//!   signal is the notice. Its argument is the diff that `apply_listing`
+//!   produces. Tests check that the signal fires when there is something to
+//!   report, and stays silent when there is not.
 //!
-//! ## Two things Camel does that a test has to know about
+//! ## Two Camel behaviors a test must account for
 //!
 //! **The wrapper connects first.** `camel_folder_refresh_info_sync` asks the
-//! folder's parent store to connect before it dispatches to the class, so a
-//! refresh never reaches this vfunc on a store that is disconnected and could
-//! be reconnected. That is why the disconnected case below calls the vfunc
-//! through the class pointer instead: what it tests is the race the
-//! `Disconnected` error exists for — the connection going away after Camel
-//! satisfied itself there was one — rather than a state Camel would have fixed
-//! on the way in.
+//! folder's parent store to connect before it calls the vfunc. A refresh never
+//! reaches this vfunc on a store that is disconnected but reconnectable. For
+//! this reason, the disconnected-case test below calls the vfunc through the
+//! class pointer instead of the wrapper. It tests the race that the
+//! `Disconnected` error exists for: the connection drops after Camel confirms
+//! one exists. It does not test a state that Camel already prevents on entry.
 //!
-//! **`changed` is not delivered where it is reported.**
+//! **`changed` delivers away from where it is reported.**
 //! `camel_folder_changed` queues the diff and emits it from the folder's main
-//! context, coalescing whatever else is pending into the same emission.
-//! Nothing arrives on a thread that never iterates a main loop — which a Rust
-//! test thread does not — so [`emissions`] pumps a context before it reads. A
-//! test that did not would observe silence and call it a pass. Which context
-//! is not a detail either: see [`Context`]. Both live in `common::signals`,
-//! which is where they went once the store's five folder signals turned out to
-//! have the same problem.
+//! context. It coalesces this emission with whatever else is pending. A thread
+//! that never iterates a main loop never receives it, and a Rust test thread
+//! does not iterate one. For this reason, [`emissions`] pumps the context
+//! before it reads. A test that skips the pump sees silence and passes
+//! wrongly. The choice of context also matters: see [`Context`]. Both live in
+//! `common::signals`, after the store's five folder signals showed the same
+//! issue.
 
 mod common;
 
@@ -84,14 +82,14 @@ fn edit<R>(server: &MockServer, edit: impl FnOnce(&mut jmap_mock::AccountState) 
     edit(state.account_mut(&account_id).unwrap())
 }
 
-/// A connected account whose inbox holds two messages, and that inbox opened
-/// the way Camel opens it — through the store, so the folder is the one in the
-/// store's own bag and carries the mailbox id `new_folder` put there.
+/// A connected account whose inbox holds two messages. The inbox opens the way
+/// Camel opens it: through the store. The folder is the one in the store's own
+/// bag, and carries the mailbox id that `new_folder` set.
 ///
-/// The archive beside it holds nothing and is never opened. It is there for the
-/// delta tests: `Email/changes` answers for the whole account, so a mailbox
-/// this folder is *not* refreshing is the only way to ask what a folder does
-/// with a change that is none of its business.
+/// The archive beside it holds nothing and stays unopened. It exists for the
+/// delta tests. `Email/changes` answers for the whole account, so a mailbox
+/// this folder is *not* refreshing is the only way to test what a folder does
+/// with a change outside its own business.
 struct Mailbox {
     server: MockServer,
     account: Account,
@@ -104,10 +102,9 @@ fn with_mail() -> Mailbox {
     with_mail_on(MockServer::builder())
 }
 
-/// The same account on a server built to order — which the tests about *how
-/// much* a refresh fetches need, because the bound they exercise is measured in
-/// `Email/get` calls and this mock will answer for two hundred and fifty-six
-/// messages in one.
+/// The same account on a server built to order. Tests about *how much* a
+/// refresh fetches need this, because the bound they exercise is measured in
+/// `Email/get` calls, and this mock answers for 256 messages in one call.
 fn with_mail_on(builder: MockServerBuilder) -> Mailbox {
     let server = builder.start();
     let (inbox, archive) = edit(&server, |account| {
@@ -142,8 +139,8 @@ fn with_mail_on(builder: MockServerBuilder) -> Mailbox {
     }
 }
 
-/// One message arriving in a mailbox the way one arrives at a server: as a
-/// state transition, so that a delta asked from an earlier state names it.
+/// One message arriving in a mailbox, as a state transition. A delta asked
+/// from an earlier state names it.
 fn deliver(server: &MockServer, mailbox: &Id, subject: &str, received_at: &str) -> Id {
     edit(server, |account| {
         account.deliver_email(EmailSeed::new(
@@ -185,8 +182,8 @@ struct Refreshed {
 }
 
 impl Refreshed {
-    /// Through Camel's own wrapper, which is what takes the folder lock,
-    /// connects the parent store and dispatches to the class.
+    /// Calls the vfunc through Camel's own wrapper. The wrapper takes the
+    /// folder lock, connects the parent store, and dispatches to the class.
     fn of(folder: *mut CamelFolder) -> Self {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live folder, and an out-parameter that is writable and
@@ -195,8 +192,8 @@ impl Refreshed {
         Self::new(ok, error)
     }
 
-    /// Through the pointer in the class, skipping the wrapper's own
-    /// preconditions — see this file's note on the reconnect.
+    /// Calls the vfunc through the pointer in the class, skipping the
+    /// wrapper's preconditions. See this file's note on the reconnect.
     fn straight(folder: *mut CamelFolder) -> Self {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: referencing the class runs the class_init that installs the
@@ -248,8 +245,8 @@ impl Drop for Refreshed {
     }
 }
 
-/// The uids Camel would draw the message list from — asked for the way
-/// Evolution asks, which is of the folder rather than of its summary.
+/// The uids Camel draws the message list from. Asked of the folder, the way
+/// Evolution asks, not of its summary.
 fn listed(folder: *mut CamelFolder) -> Vec<String> {
     // SAFETY: a live folder; the array comes back owned and is freed with the
     // function Camel documents for it.
@@ -261,10 +258,10 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
     }
 }
 
-/// The whole point of the increment: a folder that has been refreshed holds the
-/// mailbox's mail, and holds it where Camel looks for it. Both accessors are
-/// `CamelFolder`'s own defaults answering out of the summary this provider
-/// filled, which is the half a test against the summary alone could not show.
+/// The point of this increment: a refreshed folder holds the mailbox's mail,
+/// in the place Camel looks for it. Both accessors are `CamelFolder`'s own
+/// defaults, answering from the summary this provider fills. A test against
+/// the summary alone cannot show this half.
 #[test]
 fn a_refresh_fills_the_folder_from_the_mailbox() {
     let mail = with_mail();
@@ -283,8 +280,8 @@ fn a_refresh_fills_the_folder_from_the_mailbox() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// And it says so. A message list already on screen is redrawn from this signal
-/// and from nothing else.
+/// The folder also announces the refresh. A message list already on screen
+/// redraws only from this signal.
 #[test]
 fn a_refresh_tells_camel_what_arrived() {
     let context = Context::push();
@@ -299,9 +296,9 @@ fn a_refresh_tells_camel_what_arrived() {
     assert_eq!(emissions[0].added.len(), 2);
     assert!(emissions[0].removed.is_empty());
     assert!(emissions[0].changed.is_empty());
-    // A listing cannot tell an arrival from mail the user has had for years,
-    // so none of it is recent. Otherwise the first refresh of an account would
-    // run the user's incoming filters over their whole mailbox.
+    // A listing cannot tell a new arrival from old mail, so none of it counts
+    // as recent. Otherwise the first refresh would run incoming filters over
+    // the whole mailbox.
     assert!(
         emissions[0].recent.is_empty(),
         "a listing called {:?} recent",
@@ -312,10 +309,10 @@ fn a_refresh_tells_camel_what_arrived() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// A refresh is a poll — Camel runs one on a timer and one every time the
-/// folder is opened — so the usual answer is that nothing happened. A folder
-/// that emitted `changed` anyway would redraw the user's message list, and lose
-/// where they were in it, every minute.
+/// A refresh is a poll. Camel runs one on a timer, and one each time the
+/// folder opens, so usually nothing happened. A folder that emits `changed`
+/// anyway redraws the message list and loses the user's place in it every
+/// minute.
 #[test]
 fn a_refresh_that_found_nothing_new_says_nothing() {
     let context = Context::push();
@@ -343,14 +340,14 @@ fn a_refresh_that_found_nothing_new_says_nothing() {
     }
 }
 
-/// The folder is asked, and the connection belongs to the store. A store that
-/// has none cannot answer, and `NOT_CONNECTED` is the code that makes Camel
-/// connect and ask again rather than showing the account as broken — the same
-/// rule `get_folder_info_sync` follows, asked one level down.
+/// The folder is asked, but the connection belongs to the store. A store with
+/// no connection cannot answer. `NOT_CONNECTED` is the code that makes Camel
+/// reconnect and retry, instead of marking the account as broken. The same
+/// rule applies one level down, in `get_folder_info_sync`.
 ///
-/// Called through the class rather than through the wrapper, for the reason
-/// this file's header gives: the wrapper would reconnect the store first, and
-/// what is under test is the window after Camel decided it had.
+/// This test calls the vfunc through the class, not the wrapper, for the
+/// reason given in this file's header: the wrapper reconnects the store
+/// first. This test checks the window after Camel believes it is connected.
 #[test]
 fn a_folder_whose_store_has_no_connection_reports_it() {
     let mail = with_mail();
@@ -372,13 +369,14 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     }
 }
 
-/// A listing comes with the state it was taken at, and the point of that state
-/// is the *next* refresh: `Email/changes` asked from it is one round trip where
-/// a listing is one per page of the mailbox. So a refresh that dropped it would
-/// leave every later refresh as expensive as the first.
+/// A listing comes with the state it was taken at. That state serves the
+/// *next* refresh: `Email/changes` asked from it costs one round trip, while a
+/// full listing costs one round trip per page of the mailbox. A refresh that
+/// dropped the state would make every later refresh as expensive as the
+/// first.
 ///
-/// What is asserted here is only that the folder kept it — asking a delta from
-/// it is the increment after this one.
+/// This test only asserts that the folder kept the state. Asking a delta from
+/// it is covered by a later increment.
 #[test]
 fn a_refresh_keeps_the_state_the_listing_was_taken_at() {
     let mail = with_mail();
@@ -397,9 +395,9 @@ fn a_refresh_keeps_the_state_the_listing_was_taken_at() {
     }
 }
 
-/// And the second refresh's state replaces the first one's. A folder that kept
-/// the older of the two would ask every later delta from a point that recedes
-/// further into the past with every refresh.
+/// The second refresh's state replaces the first one's. A folder that kept the
+/// older state would ask every later delta from a point further in the past
+/// with each refresh.
 #[test]
 fn a_second_refresh_replaces_the_state_the_first_one_kept() {
     let mail = with_mail();
@@ -410,9 +408,9 @@ fn a_second_refresh_replaces_the_state_the_first_one_kept() {
     let first = unsafe { summary_state(camel_folder_get_folder_summary(folder)) };
     assert!(first.is_some());
 
-    // Another client deletes one of the two, which is a state transition on
-    // the account's mail — the mailbox it happened in does not matter here,
-    // only that the server has moved on since the first listing.
+    // Another client deletes one of the two messages: a state transition on
+    // the account's mail. The mailbox does not matter here, only that the
+    // server moved on since the first listing.
     let gone = listed(folder).pop().expect("the folder listed nothing");
     assert!(edit(&mail.server, |account| account
         .destroy_email(&Id::new(gone))));
@@ -430,15 +428,14 @@ fn a_second_refresh_replaces_the_state_the_first_one_kept() {
     }
 }
 
-/// The increment: the second refresh of a mailbox asks what *changed* rather
-/// than fetching the whole thing again.
+/// This increment: the second refresh of a mailbox asks what *changed*,
+/// instead of fetching the whole mailbox again.
 ///
-/// This is what the state kept above is for, and it is the one thing about a
-/// refresh that no assertion over the account's objects can reach: a listing
-/// and a delta leave the folder holding exactly the same rows. The difference
-/// is entirely in what went over the wire, so the wire is what is asserted —
-/// `Email/changes` was asked, and `Email/query`, which is how the whole mailbox
-/// is enumerated, was not.
+/// The state kept above exists for this. No assertion over the account's
+/// objects can reach it: a listing and a delta leave the folder holding the
+/// same rows either way. The difference is only in what went over the wire, so
+/// the test asserts on the wire. `Email/changes` must be asked. `Email/query`,
+/// which enumerates the whole mailbox, must not.
 #[test]
 fn a_second_refresh_asks_what_changed_instead_of_listing_again() {
     let mail = with_mail();
@@ -462,12 +459,13 @@ fn a_second_refresh_asks_what_changed_instead_of_listing_again() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// And a message that arrived since that state is *recent*, which is the fourth
-/// list and the one with consequences: Camel hands it to the session's filter
-/// driver, so this is the folder saying "run the user's rules over this one".
+/// A message that arrived since that state is *recent*: the fourth list, and
+/// the one with consequences. Camel hands it to the session's filter driver,
+/// so the folder says "run the user's rules over this one".
 ///
-/// Only a delta may say it. The listing path deliberately does not — see the
-/// first-refresh test below, where two messages are added and none is recent.
+/// Only a delta may call a message recent. The listing path deliberately does
+/// not: see the first-refresh test above, where two messages are added and
+/// none is recent.
 #[test]
 fn a_message_that_arrived_since_the_last_refresh_is_recent() {
     let context = Context::push();
@@ -496,13 +494,13 @@ fn a_message_that_arrived_since_the_last_refresh_is_recent() {
     }
 }
 
-/// The rule that makes a delta a second path rather than an argument to the
-/// first: a row nothing was said about stays.
+/// The rule that makes a delta a separate path, not just an argument to the
+/// listing: a row the delta says nothing about stays unchanged.
 ///
-/// `Email/changes` answers for the *account*, so a message delivered to the
-/// archive is on this folder's delta too — and it holds none of this folder's
-/// messages. Reconciled as if it were a listing, that delta would empty the
-/// inbox; applied as a delta it changes nothing here, which is also why the
+/// `Email/changes` answers for the whole *account*. A message delivered to the
+/// archive appears in this folder's delta too, even though it holds none of
+/// this folder's messages. Reconciled as if it were a listing, that delta
+/// would empty the inbox. Applied as a delta, it changes nothing here, so the
 /// folder must stay silent.
 #[test]
 fn a_refresh_leaves_the_rows_a_delta_did_not_mention() {
@@ -535,8 +533,8 @@ fn a_refresh_leaves_the_rows_a_delta_did_not_mention() {
     unsafe { g_object_unref(folder.cast()) };
 }
 
-/// And a message the delta says this mailbox no longer holds loses its row, and
-/// is announced as removed so the message list stops drawing it.
+/// A message the delta says this mailbox no longer holds loses its row. The
+/// folder announces it as removed, so the message list stops drawing it.
 #[test]
 fn a_message_a_delta_says_is_gone_leaves_the_folder() {
     let context = Context::push();
@@ -562,19 +560,19 @@ fn a_message_a_delta_says_is_gone_leaves_the_folder() {
     }
 }
 
-/// The recovery. A server may refuse to calculate a delta from a state — too
-/// old to still be in its log, or, as here, one it never issued at all — and
-/// Camel has nowhere to report that to, so the answer has to be the mailbox
-/// itself. A folder that gave up here would be one that never comes back.
+/// The recovery path. A server may refuse to calculate a delta from a state,
+/// for example a state too old for its log, or, as here, one it never issued.
+/// Camel has no way to report this refusal, so the folder must fall back to
+/// listing the mailbox itself. A folder that gives up here never recovers.
 ///
-/// The state is planted rather than aged, because ageing one out means a
-/// server with a bounded changes log; what the folder does with the refusal is
-/// the same either way.
+/// This test plants an invalid state instead of aging a real one out, because
+/// aging one out needs a server with a bounded changes log. The folder's
+/// response to the refusal is the same either way.
 ///
-/// A message is destroyed first so that the answer is a *reconciled* listing
-/// and not just rows written again: what comes back from a relist is the whole
-/// mailbox, so the message it does not name has to lose its row. Applied the
-/// way a delta is applied, it would keep it forever.
+/// A message is destroyed first so the result is a *reconciled* listing, not
+/// just the same rows written again. A relist returns the whole mailbox, so
+/// the folder must drop the row for any message the relist does not name.
+/// Applied the way a delta is applied, that row would stay forever.
 #[test]
 fn a_refresh_from_a_state_the_server_will_not_calculate_from_lists_again() {
     let mail = with_mail();
@@ -611,14 +609,14 @@ fn a_refresh_from_a_state_the_server_will_not_calculate_from_lists_again() {
     }
 }
 
-/// The bound on catching up, from the folder's side: the row count it holds is
-/// what says whether following a delta is still the cheap answer, and it is the
-/// one number the layer below cannot know without paying a round trip for it.
+/// The bound on catching up, from the folder's side. The row count it holds
+/// decides whether following a delta is still the cheap option. The layer
+/// below cannot know this number without paying for a round trip.
 ///
-/// Two mailboxes and a small `Email/get` limit make the difference observable.
-/// The account moves by three messages that are none of this folder's business;
-/// the folder holds two rows, so catching up would fetch more messages than
-/// listing the mailbox would, and it lists instead.
+/// Two mailboxes and a small `Email/get` limit make the difference
+/// observable. The account moves by three messages outside this folder's
+/// business. The folder holds two rows, so catching up would fetch more
+/// messages than listing the mailbox, and the folder lists instead.
 #[test]
 fn a_delta_bigger_than_the_folder_lists_the_mailbox_again() {
     let mail = with_mail_on(MockServer::builder().objects_in_get(2));
@@ -655,10 +653,10 @@ fn a_delta_bigger_than_the_folder_lists_the_mailbox_again() {
     }
 }
 
-/// And the same folder once it holds enough rows for the delta to be worth
-/// following again — which is what pins the number being passed down to the
-/// folder's own count rather than to nothing at all: the account moves by the
-/// same three messages, and this time the mailbox is bigger than they are.
+/// The same folder, once it holds enough rows for the delta to be worth
+/// following again. This confirms the bound passed down is the folder's own
+/// row count, not a constant. The account moves by the same three messages,
+/// but this time the mailbox is bigger than they are.
 #[test]
 fn a_delta_smaller_than_the_folder_is_still_followed() {
     let mail = with_mail_on(MockServer::builder().objects_in_get(2));

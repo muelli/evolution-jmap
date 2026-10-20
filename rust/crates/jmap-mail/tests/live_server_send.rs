@@ -5,27 +5,27 @@
 //! actual `CamelTransport::send_to_sync` vfunc.
 //!
 //! `jmap-mail-sync/tests/live_server_send.rs` already proves `MailSync`'s own
-//! identity lookup, outgoing-mailbox lookup, staging and submission against
-//! real Stalwart, and `jmap-client/tests/live_server.rs` proves
-//! `Client::send_email` the same way. Neither drives the GObject join in
-//! between: `JmapTransport::send_message`'s per-step `retry_once_after`
-//! wrapping, its connection `RwLock`, and the real `send_to_sync` vfunc Camel
+//! identity lookup, outgoing-mailbox lookup, staging, and submission against
+//! real Stalwart. `jmap-client/tests/live_server.rs` proves
+//! `Client::send_email` the same way. Neither test drives the GObject join:
+//! the per-step `retry_once_after` wrapping of `JmapTransport::send_message`,
+//! its connection `RwLock`, and the real `send_to_sync` vfunc that Camel
 //! calls when a user presses Send. `tests/send.rs` proves that join, but only
-//! against `jmap-mockd`. This file is its live-server counterpart, using the
-//! same `tests/common` GObject fixtures and the same two-account recipe
-//! `jmap-mail-sync`'s send test uses.
+//! against `jmap-mockd`. This file is the live-server counterpart. It uses
+//! the same `tests/common` GObject fixtures and the same two-account recipe
+//! as `jmap-mail-sync`'s send test.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! This test needs the same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md` steps 3 and 3a:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing --test live_server_send -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` or
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` are unset.
+//! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`,
+//! `_PASSWORD`, `JMAP_LIVE_SERVER_RECIPIENT_USER`, or `_PASSWORD` is unset.
 
 mod common;
 
@@ -88,15 +88,15 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// The `CamelMimeMessage` `send_to_sync` is handed, parsed out of bytes —
-/// mirrors `tests/send.rs::Message`.
+/// The `CamelMimeMessage` that `send_to_sync` receives, parsed from bytes.
+/// Mirrors `tests/send.rs::Message`.
 struct Message(*mut CamelMimeMessage);
 
 impl Message {
     fn parsed(source: &[u8]) -> Self {
-        // SAFETY: a fresh message is a valid `CamelDataWrapper`, `source` is a
-        // live buffer of the length given, and the error out-parameter is a
-        // local that starts NULL.
+        // SAFETY: a fresh message is a valid `CamelDataWrapper`. `source` is a
+        // live buffer with the given length. The error out-parameter is a
+        // local variable that starts as NULL.
         unsafe {
             let message = camel_mime_message_new();
             let mut error: *mut GError = ptr::null_mut();
@@ -120,14 +120,14 @@ impl Drop for Message {
     }
 }
 
-/// One of the two address lists Camel gives `send_to_sync` — mirrors
+/// One of the two address lists that Camel gives `send_to_sync`. Mirrors
 /// `tests/send.rs::Addresses`.
 struct Addresses(*mut CamelInternetAddress);
 
 impl Addresses {
     fn of(entries: &[(&str, &str)]) -> Self {
-        // SAFETY: a fresh address list, and NUL-terminated strings the setter
-        // copies.
+        // SAFETY: a fresh address list. The setter copies NUL-terminated
+        // strings.
         unsafe {
             let list = camel_internet_address_new();
             for (name, email) in entries {
@@ -151,7 +151,7 @@ impl Drop for Addresses {
     }
 }
 
-/// What one call to the vfunc answered — mirrors `tests/send.rs::Outcome`.
+/// The result of one call to the vfunc. Mirrors `tests/send.rs::Outcome`.
 struct Outcome {
     sent: bool,
     saved: bool,
@@ -160,8 +160,8 @@ struct Outcome {
 
 impl Outcome {
     fn message(&self) -> Option<String> {
-        // SAFETY: the pointer is NULL or an owned `GError` this value holds,
-        // and its message string outlives this borrow.
+        // SAFETY: the pointer is NULL, or an owned `GError` that this value
+        // holds. Its message string outlives this borrow.
         unsafe {
             self.error.as_ref().map(|error| {
                 std::ffi::CStr::from_ptr(error.message)
@@ -180,7 +180,7 @@ impl Drop for Outcome {
 }
 
 /// Sends `message` through `transport` the way `e_mail_session_send_to`
-/// does — mirrors `tests/send.rs::send`.
+/// does. Mirrors `tests/send.rs::send`.
 fn send(
     transport: &Transport,
     message: &Message,
@@ -189,8 +189,8 @@ fn send(
 ) -> Outcome {
     let mut saved: gboolean = GTRUE;
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a live transport of ours, a live message, two live address
-    // lists, and two out-parameters that are locals; the error starts NULL.
+    // SAFETY: a live transport, a live message, and two live address lists.
+    // Both out-parameters are locals, and the error starts as NULL.
     let sent = unsafe {
         camel_transport_send_to_sync(
             transport.service.cast::<CamelTransport>(),
@@ -209,11 +209,11 @@ fn send(
     }
 }
 
-/// Sends a message through the real `send_to_sync` vfunc from the write-test
-/// account to the recipient account, and polls the recipient's own
-/// `MailSync::messages` until it actually lands — proving delivery, not just
-/// an accepted submission, the same way the `MailSync`-level live-server send
-/// test does.
+/// Sends a message through the real `send_to_sync` vfunc, from the
+/// write-test account to the recipient account. Polls the recipient's own
+/// `MailSync::messages` until the message lands. This proves delivery, not
+/// just an accepted submission, the same way the `MailSync`-level
+/// live-server send test does.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_message_sent_through_the_real_vfunc_is_delivered_by_the_real_server() {
@@ -270,8 +270,8 @@ fn a_message_sent_through_the_real_vfunc_is_delivered_by_the_real_server() {
         .id
         .clone();
 
-    // Local delivery is not necessarily synchronous with the vfunc returning,
-    // so poll rather than assume it has already landed.
+    // Local delivery does not necessarily happen before the vfunc returns, so
+    // poll rather than assume the message has already landed.
     let mut delivered = None;
     for _ in 0..20 {
         let (_, messages) = recipient_sync
@@ -302,16 +302,17 @@ fn a_message_sent_through_the_real_vfunc_is_delivered_by_the_real_server() {
 
 /// `jmap-mail-sync/tests/live_server_send.rs`'s
 /// `an_envelope_recipient_absent_from_every_header_is_still_delivered` proves
-/// real Stalwart honours `envelope.rcptTo` over headers, but only by handing
-/// `MailSync::send_message` a hand-built `Envelope` directly. `tests/send.rs`'s
+/// that real Stalwart honours `envelope.rcptTo` over headers, but only by
+/// giving `MailSync::send_message` a hand-built `Envelope` directly.
+/// `tests/send.rs`'s
 /// `the_addresses_camel_hands_over_are_the_envelope_that_goes_out` proves
-/// `src/envelope.rs`'s `read_envelope` builds that same divergence out of a
-/// real `CamelAddress` recipients list, but only against the mock. Neither
+/// that `src/envelope.rs`'s `read_envelope` builds that same divergence from
+/// a real `CamelAddress` recipients list, but only against the mock. Neither
 /// proves the join: a real `CamelAddress` list, with a Bcc-shaped recipient
-/// absent from every header, translated by `read_envelope` and delivered by a
-/// real server through the actual `send_to_sync` vfunc. This test does: the
-/// message's only header-named party is the sender, and the recipient's
-/// address is in the `recipients` argument alone.
+/// absent from every header, translated by `read_envelope`, and delivered by
+/// a real server through the actual `send_to_sync` vfunc. This test proves
+/// that join. The message's only header-named party is the sender. The
+/// recipient's address appears only in the `recipients` argument.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_recipient_absent_from_every_header_is_still_delivered_through_the_real_vfunc() {
@@ -337,8 +338,8 @@ fn a_recipient_absent_from_every_header_is_still_delivered_through_the_real_vfun
     transport.connect(sync);
 
     let subject = format!("agent-transport-bcc-{}", unique_suffix());
-    // `To` names the sender, not the recipient — the recipient's address is
-    // nowhere in the source bytes at all, the way a real Bcc works.
+    // `To` names the sender, not the recipient. The recipient's address is
+    // nowhere in the source bytes, the same way a real Bcc works.
     let message = format!(
         "From: {sender_email}\r\n\
          To: {sender_email}\r\n\
@@ -370,8 +371,8 @@ fn a_recipient_absent_from_every_header_is_still_delivered_through_the_real_vfun
         .id
         .clone();
 
-    // Local delivery is not necessarily synchronous with the vfunc returning,
-    // so poll rather than assume it has already landed.
+    // Local delivery does not necessarily happen before the vfunc returns, so
+    // poll rather than assume the message has already landed.
     let mut delivered = None;
     for _ in 0..20 {
         let (_, messages) = recipient_sync

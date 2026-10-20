@@ -1,17 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The claims this crate's instance structs rest on that the compiler is never
-//! shown.
+//! Claims about this crate's instance structs that the compiler never checks.
 //!
-//! `jmap-backend-book` and `jmap-backend-cal` each carry one of these, which
-//! pins the threading claim behind `Slot` as a compile error rather than a
-//! comment. The mail provider has more instance structs than either.
+//! `jmap-backend-book` and `jmap-backend-cal` each carry one of these structs.
+//! Each one pins the threading claim behind `Slot` as a compile error, not a
+//! comment. The mail provider has more instance structs than either backend.
 //!
-//! Camel is a harder case than EDS, not an easier one: a `CamelStore` is driven
-//! from more threads than a meta backend, and unlike the two backends this crate
-//! also carries a hand-written `unsafe impl Send`/`Sync`, whose justification is
-//! only true while nothing else can reach the pointer it guards.
+//! Camel is a harder case than EDS, not an easier one. A `CamelStore` runs on
+//! more threads than a meta backend. Unlike the two backends, this crate also
+//! carries a hand-written `unsafe impl Send`/`Sync`. Its justification holds
+//! only while nothing else can reach the pointer it guards.
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -24,15 +23,16 @@ use jmap_proto::{Id, State};
 
 /// Everything a `Slot` in this crate holds, and everything inside it.
 ///
-/// The instance arrives at a vfunc as a raw pointer and is turned into a `&` by
-/// hand, so the compiler never sees the sharing: nothing would object if
-/// `MailSync`, the `Client` inside it or the boxed `Transport` inside that grew
-/// an `Rc` or a `RefCell`, and the result would be a data race in the process
-/// serving every other mail account the user has.
+/// A vfunc receives the instance as a raw pointer and converts it to a `&` by
+/// hand, so the compiler never sees the sharing. Nothing would stop
+/// `MailSync`, the `Client` inside it, or the boxed `Transport` inside that,
+/// from gaining an `Rc` or a `RefCell`. The result would be a data race in the
+/// process serving every other mail account of the user.
 ///
-/// One test over every field rather than one per struct, because they are one
-/// claim. It has to name *all* of them to be that claim: a `Slot` added to the
-/// crate without a line here is a struct the compiler is again never shown.
+/// One test covers every field, instead of one test per struct, because all
+/// fields make one claim. The test must name all of them to stay that claim.
+/// A `Slot` added to the crate without a line here is a struct the compiler
+/// never checks.
 #[test]
 fn everything_an_instance_holds_is_shareable_across_threads() {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -43,19 +43,20 @@ fn everything_an_instance_holds_is_shareable_across_threads() {
     // `crate::transport`: the connection a send goes out over.
     assert_send_sync::<Slot<RwLock<Option<MailSync>>>>();
     // `crate::store`: the connection (behind an `Arc`, unlike the
-    // transport's), the listing a refresh renews, the push subscription and
-    // the coalescing folder-refresh worker. `Listing` is private to the
-    // crate, so its two fields stand for it here.
+    // transport's), the listing a refresh renews, the push subscription, and
+    // the coalescing folder-refresh worker.
+    // `Listing` is private to the crate, so its two fields stand in for it
+    // here.
     assert_send_sync::<Slot<RwLock<Option<Arc<MailSync>>>>>();
     assert_send_sync::<State>();
     assert_send_sync::<Arc<FolderTree>>();
     assert_send_sync::<Slot<Mutex<Option<PushRefresh>>>>();
     assert_send_sync::<Slot<Mutex<Option<FolderRefresh>>>>();
-    // `crate::folder`: the mailbox this folder stands for, and the account's
-    // message cache the folder is the owner of.
+    // `crate::folder`: the mailbox this folder represents, and the message
+    // cache that this folder owns for the account.
     assert_send_sync::<Slot<Id>>();
     assert_send_sync::<Slot<MessageCache>>();
-    // `crate::summary`: the `Email` state the rows are current as of.
+    // `crate::summary`: the `Email` state that the rows reflect.
     assert_send_sync::<Slot<Mutex<Option<State>>>>();
     // `crate::message_info`: the keywords the last listing found, and the
     // thread id the server assigned the row.
@@ -63,14 +64,14 @@ fn everything_an_instance_holds_is_shareable_across_threads() {
     assert_send_sync::<Slot<Mutex<Option<Id>>>>();
 }
 
-/// The one hand-written `unsafe impl` in this crate, asserted where it is
+/// The one hand-written `unsafe impl` in this crate, tested where it is
 /// claimed.
 ///
-/// [`MessageCache`] wraps a `*mut CamelDataCache` — not `Send` or `Sync` on its
-/// own — behind a `Mutex`, and says so in an `unsafe impl` of both. That is
-/// sound only while the pointer never leaves the lock, which is a property of
-/// the module rather than of the type, and there is nothing but this line to
-/// notice an accessor that started handing it out.
+/// [`MessageCache`] wraps a `*mut CamelDataCache`, which is not `Send` or
+/// `Sync` on its own, behind a `Mutex`. It claims both traits in an `unsafe
+/// impl`. This claim holds only while the pointer never leaves the lock, a
+/// property of the module, not of the type. Only this test would notice if
+/// an accessor began handing out the pointer.
 #[test]
 fn the_message_cache_still_claims_to_be_shareable() {
     fn assert_send_sync<T: Send + Sync>() {}

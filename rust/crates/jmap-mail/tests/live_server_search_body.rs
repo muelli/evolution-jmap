@@ -4,29 +4,29 @@
 //! `search_body_sync` against a real JMAP server.
 //!
 //! `src/search_body.rs`'s own unit tests cover `body_filter`'s translation
-//! from Camel's word list to an `Email/query` filter, but nothing has driven
-//! the vfunc's other half — `JmapStore::search` actually answering that
-//! filter — against a real server. `tests/live_server_search.rs` proves the
-//! sibling `search_by_expression`/`search_by_uids` path this way; this is the
-//! same recipe for `search_body_sync`.
+//! from Camel's word list to an `Email/query` filter. Nothing has driven the
+//! vfunc's other half, `JmapStore::search` answering that filter against a
+//! real server. `tests/live_server_search.rs` proves the sibling
+//! `search_by_expression`/`search_by_uids` path this way. This is the same
+//! recipe for `search_body_sync`.
 //!
-//! The function is called directly rather than through Camel's vfunc
-//! dispatch: `search_body.rs`'s own doc comment on `search_body_sync` notes
-//! it is compiled on every EDS even though only 3.58 and newer have a slot to
-//! install it into, "so keeping it out of the `#[cfg]` is what lets this
-//! runner's own tests drive it" — this runner's EDS is 3.52.
+//! The function is called directly, not through Camel's vfunc dispatch.
+//! `search_body.rs`'s own doc comment on `search_body_sync` notes that it is
+//! compiled on every EDS, even though only EDS 3.58 and newer have a slot to
+//! install it into. Keeping it out of the `#[cfg]` is what lets this runner's
+//! own tests drive it. This runner's EDS is 3.52.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
-//! `docs/manual-test-live-server.md`:
+//! This test needs the same environment as the other live-server tests. See
+//! `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test skips, and does not fail, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 mod common;
 
@@ -66,7 +66,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A `GPtrArray` of words, owned for the length of one call — the input shape
+/// A `GPtrArray` of words, owned for the length of one call: the input shape
 /// `search_body_sync` takes. Mirrors `tests/live_server_search.rs::UidList`.
 struct WordList {
     array: *mut GPtrArray,
@@ -111,9 +111,9 @@ unsafe fn search(folder: *mut CamelFolder, words: &[&str]) -> Vec<String> {
     let list = WordList::of(words);
     let mut out_uids: *mut GPtrArray = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: `folder` is live per the caller's contract, `list.array` is a
-    // live `GPtrArray` of NUL-terminated strings, and `out_uids`/`error` are
-    // valid places to write.
+    // SAFETY: `folder` is live per the caller's contract.
+    // `list.array` is a live `GPtrArray` of NUL-terminated strings.
+    // `out_uids` and `error` are valid, writable places.
     let ok = unsafe {
         search_body_sync(
             folder,
@@ -144,15 +144,17 @@ unsafe fn search(folder: *mut CamelFolder, words: &[&str]) -> Vec<String> {
             .collect()
     };
     // SAFETY: the one array `search_body_sync` returned, never freed
-    // elsewhere; its own free function releases the pooled strings in it.
+    // elsewhere.
+    // Its own free function releases the pooled strings in it.
     unsafe { g_ptr_array_unref(out_uids) };
     uids
 }
 
-/// Imports two messages with distinct bodies into one real folder, then asks
-/// `search_body_sync` for a word each contains and a word only one contains,
-/// confirming the answer comes from the real server's `Email/query` rather
-/// than a mock.
+/// Imports two messages with distinct bodies into one real folder.
+///
+/// Asks `search_body_sync` for a word each message contains, and for a word
+/// only one message contains. The answer must come from the real server's
+/// `Email/query`, not from a mock.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_body_term_is_answered_by_the_real_server() {
@@ -209,10 +211,12 @@ fn a_body_term_is_answered_by_the_real_server() {
         )
         .expect("import_message failed against the real server for the shared-only message");
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
-    // returned. The mailbox id is set at construction, so no refresh is
-    // needed before the server-side search path can resolve it.
+    // SAFETY: `account.store` is a live `CamelStore`.
+    // `created` is a `FolderInfo` from a real discovery over that same
+    // store's connection.
+    //
+    // The mailbox id is set at construction, so no refresh is needed before
+    // the server-side search path can resolve it.
     let folder: *mut CamelFolder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
@@ -241,7 +245,7 @@ fn a_body_term_is_answered_by_the_real_server() {
         vec![both_words_uid.as_str().to_owned()]
     );
 
-    // A word neither message has finds nothing — an authoritative empty
+    // A word neither message has finds nothing: an authoritative empty
     // answer, not an error.
     // SAFETY: as above.
     assert_eq!(

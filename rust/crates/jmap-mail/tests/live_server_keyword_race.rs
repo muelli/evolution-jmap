@@ -9,23 +9,24 @@
 //! when_the_server_did`) proves `update_message_info`'s replay against a
 //! synthetic listing built by hand. `jmap-mail/tests/live_server_refresh.rs`
 //! proves the delta branch of `refresh_info_sync` against a real server, but
-//! only for a folder with no local, unsaved change on any row. Neither test
-//! combines the two: a row Camel still has queued (the user flagged it, not
-//! yet synchronised) meeting a real `Email/changes` delta that reports
-//! another client changed the same message's keywords in the meantime. This
-//! is that combination.
+//! only for a folder with no local, unsaved change on any row.
+//!
+//! Neither test combines the two cases. This test combines them: a row Camel
+//! still has queued (the user flagged it, not yet synchronised) meets a real
+//! `Email/changes` delta that reports another client changed the same
+//! message's keywords in the meantime.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
-//! `docs/manual-test-live-server.md`:
+//! This test needs the same environment as the other live-server tests. See
+//! `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test skips, and does not fail, when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `_PASSWORD` is unset.
 
 mod common;
 
@@ -108,16 +109,18 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
         .import_message(&created.id, message, &Keywords::default(), None)
         .expect("import_message failed against the real server");
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
-    // returned.
+    // SAFETY: `account.store` is a live `CamelStore`.
+    // `created` is a `FolderInfo` from a real discovery over that same
+    // store's connection.
     let folder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: a live folder, never refreshed before, and a writable,
-    // currently-NULL out-parameter. The full-listing branch, already proven
-    // live elsewhere; it only builds the row the second refresh meets.
+    // currently-NULL out-parameter.
+    //
+    // This call takes the full-listing branch, already proven live
+    // elsewhere. It only builds the row that the second refresh meets.
     unsafe {
         assert_ne!(
             camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),
@@ -128,8 +131,8 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
 
     let uid_c = CString::new(uid.as_str()).expect("a uid with no NUL");
 
-    // SAFETY: the refresh above built a row for the message; nothing else
-    // touches it yet.
+    // SAFETY: the refresh above built a row for the message.
+    // Nothing else touches it yet.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
         let info = camel_folder_summary_get(summary, uid_c.as_ptr());
@@ -144,10 +147,10 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
             "a row a listing built should not start out queued for the server"
         );
 
-        // The user flags the message locally. Camel's own setter is what
-        // marks the row queued — the same call `jmap-mail/tests/
-        // message_info.rs`'s mock tests make, now on a row the real server
-        // itself built.
+        // The user flags the message locally.
+        // Camel's own setter marks the row queued: the same call that
+        // `jmap-mail/tests/message_info.rs`'s mock tests make, now on a row
+        // that the real server built.
         camel_message_info_set_flags(info, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FLAGGED);
         assert_ne!(
             camel_message_info_get_folder_flagged(info),
@@ -158,8 +161,8 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
     }
 
     // From an independent connection, another client changes the same
-    // message's keywords on the real server — a label this test's local
-    // change never mentioned.
+    // message's keywords on the real server.
+    // This test's own local change never mentioned that label.
     let mover_client = connect_for_write().expect("the write-test account is still there");
     let mover_sync = MailSync::new(mover_client, account_id);
     let labelled = Keywords::from_iter([String::from("Urgent")]);
@@ -170,8 +173,10 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
 
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: the folder's summary holds the first refresh's state, so this
-    // is the delta branch — a real `Email/changes` request — and the row it
-    // meets for this uid is the one just flagged and queued above.
+    // call takes the delta branch (a real `Email/changes` request).
+    //
+    // The row it meets for this uid is the one just flagged and queued
+    // above.
     unsafe {
         assert_ne!(
             camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),

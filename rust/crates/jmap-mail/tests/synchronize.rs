@@ -1,51 +1,50 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `synchronize_sync`: the vfunc that puts the user's flag changes on the
+//! `synchronize_sync`: the vfunc that writes the user's flag changes to the
 //! server.
 //!
-//! Every earlier increment of the mail provider reads. This is the one that
-//! writes, and the two halves it joins have been built separately and tested
-//! separately: `jmap-mail-sync`'s `KeywordChange` is the difference between two
-//! keyword sets as the `Email/set` patch that closes it, and
-//! `CamelJmapMessageInfo` is the summary row that remembers the keywords the
-//! last listing found. This is the walk between them — the rows Camel marked
-//! dirty, turned into one patch each.
+//! Earlier parts of the mail provider only read from the server. This part
+//! writes. It joins two halves built and tested separately: `jmap-mail-sync`'s
+//! `KeywordChange` is the difference between two keyword sets, expressed as
+//! the `Email/set` patch that closes it. `CamelJmapMessageInfo` is the summary
+//! row that remembers the keywords the last listing found. This file walks
+//! between them: it turns each row Camel marked dirty into one patch.
 //!
 //! ## Why a difference and not the row
 //!
-//! A `keywords` object holds everything every client ever put on the message.
-//! Sending the row's whole set would speak for keywords this provider has never
-//! heard of — a label from the user's phone, a `$phishing` verdict from the
-//! server's own filter — and what it would say about each of them is "gone".
-//! [`a_keyword_this_client_never_saw_survives_the_change`] is that rule, tested
-//! against a keyword that arrives on the server *after* the folder listed the
-//! message, which is precisely the case a whole-set write destroys.
+//! A `keywords` object holds every keyword any client has put on the message.
+//! Sending the row's whole set would speak for keywords this provider has
+//! never seen, such as a label from the user's phone or a `$phishing` verdict
+//! from the server's own filter. For each of those, the write would say
+//! "gone". [`a_keyword_this_client_never_saw_survives_the_change`] tests this
+//! rule against a keyword that arrives on the server *after* the folder
+//! listed the message. That is the exact case a whole-set write destroys.
 //!
-//! Holding both ends of the difference is what makes it possible, and it is why
-//! [`the_row_remembers_what_it_just_wrote`] matters as much as the write itself:
-//! a row whose remembered set was not renewed after a successful write has a
-//! stale *before*, and the next change is diffed against a set the server
-//! stopped holding a synchronisation ago.
+//! Holding both ends of the difference makes this possible. That is why
+//! [`the_row_remembers_what_it_just_wrote`] matters as much as the write
+//! itself: if a row's remembered set is not renewed after a successful write,
+//! the before is stale. The next change is then diffed against a set the
+//! server stopped holding a synchronisation ago.
 //!
 //! ## The dirty bit is the queue
 //!
-//! Camel marks a row `CAMEL_MESSAGE_FOLDER_FLAGGED` when something about it has
-//! to reach the server, and that bit is the whole work list — there is no
-//! separate queue. So clearing it is not bookkeeping: a bit left set is a row
-//! retried on every synchronisation forever, and a bit cleared without the
-//! write having happened is a change the user made and this provider silently
-//! dropped. Three tests are about which of those a given outcome is.
+//! Camel marks a row `CAMEL_MESSAGE_FOLDER_FLAGGED` when something about it
+//! must reach the server. That bit is the whole work list; there is no
+//! separate queue. Clearing it is not bookkeeping: a bit left set means the
+//! row is retried on every synchronisation forever. A bit cleared without the
+//! write happening means the provider silently dropped a change the user
+//! made. Three tests check which of those an outcome is.
 //!
-//! Which is why [`changing_a_flag_is_what_puts_the_row_on_the_work_list`] is
-//! here at all, testing something Camel does rather than something this provider
-//! does. It fixes both ends of the assumption every other test rests on: that a
-//! row the user changed arrives on the list, and — the half that was actually
-//! wrong when this file was first written — that a row a *listing* built does
-//! not. Camel's column setters and `camel_folder_summary_add` both mark a row as
-//! having to reach the server, so a refresh queued every message it wrote, and
-//! this provider would have written the whole mailbox straight back to the
-//! server it had just read it from.
+//! [`changing_a_flag_is_what_puts_the_row_on_the_work_list`] tests something
+//! Camel does, not something this provider does. It confirms both halves of
+//! an assumption every other test relies on: a row the user changed reaches
+//! the work list, and a row a listing built does not. The second half was
+//! actually wrong when this file was first written: Camel's column setters
+//! and `camel_folder_summary_add` both mark a row as needing to reach the
+//! server. So a refresh queued every message it wrote, and this provider
+//! would have written the whole mailbox back to the server it had just read
+//! it from.
 
 mod common;
 
@@ -72,9 +71,9 @@ use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
-/// One connected account, one message in its inbox, and that inbox opened and
-/// refreshed — which is the state every synchronisation starts from, because a
-/// row can only be dirty if it is there.
+/// One connected account with one message in its inbox. The inbox is open
+/// and refreshed. Every synchronisation starts from this state, because a
+/// row can only be dirty if it exists.
 struct Fixture {
     server: MockServer,
     account: Account,
@@ -83,9 +82,9 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// The message is seeded with `keywords` and the folder is then refreshed,
-    /// so the row's remembered set is exactly what the server holds — the state
-    /// a user's next click starts from.
+    /// The message is seeded with `keywords`, then the folder is refreshed.
+    /// The row's remembered set then matches exactly what the server holds.
+    /// This is the state a user's next click starts from.
     fn start(keywords: &[&str]) -> Self {
         let server = MockServer::builder().start();
         let account_id = server.account_id();
@@ -143,9 +142,9 @@ impl Fixture {
         }
     }
 
-    /// Another listing of the mailbox, the way Evolution's refresh timer asks
-    /// for one — including at the worst possible moment, which is what the two
-    /// tests at the end of this file are about.
+    /// Another listing of the mailbox, the kind Evolution's refresh timer
+    /// requests. Three tests in this file request one between the user's
+    /// click and the write, which is the worst possible moment.
     fn refresh(&self) {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live folder of ours, and an out-parameter that is writable
@@ -159,7 +158,8 @@ impl Fixture {
         }
     }
 
-    /// The summary row for the seeded message, as a reference the caller owns.
+    /// The summary row for the seeded message. The caller owns the returned
+    /// reference.
     fn row(&self) -> *mut CamelMessageInfo {
         let uid = CString::new(self.uid.as_str()).expect("a uid with no NUL");
         // SAFETY: a live folder that has a summary, and a NUL-terminated uid
@@ -209,8 +209,8 @@ impl Fixture {
             .unwrap_or_default()
     }
 
-    /// Puts a keyword on the message the way another client would — behind the
-    /// folder's back, with no listing in between.
+    /// Puts a keyword on the message, as another client would: without the
+    /// folder's knowledge, and with no listing in between.
     fn keyword_from_elsewhere(&self, name: &str) {
         let account_id = self.server.account_id();
         let state = self.server.state();
@@ -239,8 +239,8 @@ impl Fixture {
         });
     }
 
-    /// Through Camel's own wrapper, which is what Evolution calls when a folder
-    /// is closed or the user's changes are saved.
+    /// Through Camel's own wrapper. Evolution calls this wrapper when a
+    /// folder closes, or when the user saves changes.
     fn synchronize(&self) -> Synchronised {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live folder, and an out-parameter that is writable and
@@ -252,12 +252,12 @@ impl Fixture {
         Synchronised::new(ok, error)
     }
 
-    /// Through the pointer in the class, skipping whatever the wrapper does on
-    /// the way in — see [`a_folder_whose_store_has_no_connection_reports_it`].
+    /// Through the pointer in the class. This skips whatever the wrapper does
+    /// on the way in. See [`a_folder_whose_store_has_no_connection_reports_it`].
     fn synchronize_straight(&self) -> Synchronised {
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: referencing the class runs the class_init that installs the
-        // vfunc; `folder` is an instance of that class, and `error` is writable
+        // vfunc. `folder` is an instance of that class, and `error` is writable
         // and currently NULL.
         let ok = unsafe {
             let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
@@ -274,13 +274,14 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // SAFETY: the one reference this fixture took from `get_folder_sync`,
-        // released before the store it hangs off.
+        // SAFETY: releases the one reference this fixture took from
+        // `get_folder_sync`, before releasing the store it depends on.
         unsafe { g_object_unref(self.folder.cast()) };
     }
 }
 
-/// One synchronisation and both of its answers, owned the way Camel owns them.
+/// One synchronisation, and both of its answers. Owned the same way Camel
+/// owns them.
 struct Synchronised {
     ok: bool,
     error: *mut GError,
@@ -324,10 +325,10 @@ impl Drop for Synchronised {
     }
 }
 
-/// The dirty bit is the work list, and Camel is the one who fills it. If
-/// marking a message read did not set it, every test in this file would be
-/// synchronising a folder it had marked dirty by hand — testing the walk
-/// against a queue Evolution never fills.
+/// The dirty bit is the work list, and Camel fills it, not this provider.
+/// If marking a message read did not set this bit, every test in this file
+/// would need to mark the folder dirty by hand before synchronising it.
+/// That would test the walk against a queue Evolution never fills.
 #[test]
 fn changing_a_flag_is_what_puts_the_row_on_the_work_list() {
     let fixture = Fixture::start(&[]);
@@ -358,8 +359,8 @@ fn a_flag_the_user_changed_reaches_the_server() {
     );
 }
 
-/// And the row leaves the work list, or it is written again on every
-/// synchronisation for as long as the folder is open.
+/// The row also leaves the work list. Otherwise it would be written again
+/// on every synchronisation for as long as the folder stays open.
 #[test]
 fn a_row_that_reached_the_server_leaves_the_work_list() {
     let fixture = Fixture::start(&[]);
@@ -373,10 +374,10 @@ fn a_row_that_reached_the_server_leaves_the_work_list() {
     );
 }
 
-/// The reason a flag change is a difference and not a state. `Urgent` arrives
-/// on the server after the folder listed the message, so nothing on this side
-/// has ever heard of it — and a write that sent the row's whole keyword set
-/// would take it off.
+/// The reason a flag change is a difference, not a full state. `Urgent`
+/// arrives on the server after the folder listed the message, so nothing
+/// on this side knows about it. A write that sent the row's whole keyword
+/// set would remove it.
 #[test]
 fn a_keyword_this_client_never_saw_survives_the_change() {
     let fixture = Fixture::start(&["$seen"]);
@@ -392,10 +393,11 @@ fn a_keyword_this_client_never_saw_survives_the_change() {
     );
 }
 
-/// A difference needs a *before*, and the before of the next change is what
-/// this one just wrote. A row that did not renew it would diff the user's next
-/// click against the keywords the last listing found — so unmarking a message
-/// read would produce no change at all, and the flag would never come off.
+/// A difference needs a *before*. The before for the next change is what
+/// this change just wrote. A row that did not renew it would diff the
+/// user's next click against the keywords the last listing found. Then
+/// unmarking a message read would produce no change, and the flag would
+/// never come off.
 #[test]
 fn the_row_remembers_what_it_just_wrote() {
     let fixture = Fixture::start(&[]);
@@ -412,10 +414,11 @@ fn the_row_remembers_what_it_just_wrote() {
     );
 }
 
-/// Camel marks a row dirty for reasons that are not keywords at all —
-/// `CAMEL_MESSAGE_DELETED` is a local mark JMAP has no keyword for. Such a row
-/// must leave the server exactly as it was, and must still leave the work list:
-/// a bit nothing can clear is a row retried on every synchronisation forever.
+/// Camel marks a row dirty for reasons that are not keywords at all.
+/// `CAMEL_MESSAGE_DELETED` is a local mark with no matching JMAP keyword.
+/// Such a row must leave the server unchanged, and must still leave the
+/// work list. A bit nothing can clear means the row is retried on every
+/// synchronisation forever.
 #[test]
 fn a_row_dirty_for_something_that_is_not_a_keyword_leaves_the_server_alone() {
     let fixture = Fixture::start(&["$seen"]);
@@ -430,11 +433,11 @@ fn a_row_dirty_for_something_that_is_not_a_keyword_leaves_the_server_alone() {
     assert!(!fixture.is_dirty(), "the row will be retried forever");
 }
 
-/// A uid in a summary is a claim about the last listing, and another client
-/// destroying the message since is ordinary. The flag change is moot rather
-/// than failed: reporting it would put an alert in front of the user about a
-/// message that is not there, and leaving the row queued would retry a write
-/// that can never succeed.
+/// A uid in a summary is a claim about the last listing. Another client
+/// destroying the message since then is ordinary. The flag change is moot,
+/// not failed: reporting it would alert the user about a message that is
+/// not there. Leaving the row queued would retry a write that can never
+/// succeed.
 #[test]
 fn a_message_another_client_deleted_does_not_fail_the_synchronisation() {
     let fixture = Fixture::start(&[]);
@@ -447,12 +450,12 @@ fn a_message_another_client_deleted_does_not_fail_the_synchronisation() {
 }
 
 /// The race between the two directions, end to end. Evolution refreshes a
-/// folder on a timer and synchronises it when it is closed, so a listing made
-/// *before* the user's click routinely arrives *after* it. Written over the row
-/// whole, that listing would undo the click on screen and leave the row claiming
-/// exactly what it remembers the server holding — so the diff below would be
-/// empty and the change would be lost in silence, with the row still on the work
-/// list and nothing left on it to send.
+/// folder on a timer and synchronises it when the folder closes. A listing
+/// started *before* the user's click often arrives *after* it. Written over
+/// the row whole, that listing would undo the click on screen and leave the
+/// row claiming exactly what it remembers the server holding. The diff
+/// would then be empty, so the change would be lost silently, with the row
+/// still on the work list and nothing left to send.
 #[test]
 fn a_refresh_between_the_click_and_the_write_does_not_lose_the_click() {
     let fixture = Fixture::start(&[]);
@@ -472,10 +475,10 @@ fn a_refresh_between_the_click_and_the_write_does_not_lose_the_click() {
     );
 }
 
-/// And the listing is still applied: what another client did between the click
-/// and the refresh is news the user's outstanding change says nothing about. The
-/// row ends up carrying both, and the write that follows sends only the half
-/// that is this folder's to send.
+/// The listing is still applied. What another client did between the click
+/// and the refresh is news the user's outstanding change says nothing about.
+/// The row ends up carrying both changes, and the write that follows sends
+/// only the half that is this folder's to send.
 #[test]
 fn a_refresh_leaves_a_queued_row_carrying_both_changes() {
     let fixture = Fixture::start(&[]);
@@ -491,11 +494,11 @@ fn a_refresh_leaves_a_queued_row_carrying_both_changes() {
     );
 }
 
-/// The other half of the same rule, and the reason the listing is renewed onto
-/// the row rather than the row's own claim: a server that has *already* been
-/// told — by this folder's own earlier write, or by the user's phone — leaves
-/// nothing to send, and the row settles instead of writing the same keyword on
-/// every synchronisation for as long as the folder is open.
+/// The other half of the same rule. The listing is renewed onto the row
+/// rather than keeping the row's own claim, because a server already told
+/// (by this folder's own earlier write, or by the user's phone) leaves
+/// nothing to send. The row then settles, instead of writing the same
+/// keyword on every synchronisation for as long as the folder stays open.
 #[test]
 fn a_change_the_server_already_made_itself_settles_the_row() {
     let fixture = Fixture::start(&[]);
@@ -512,9 +515,9 @@ fn a_change_the_server_already_made_itself_settles_the_row() {
     assert!(!fixture.is_dirty(), "the row will be retried forever");
 }
 
-/// A folder with nothing queued asks the server nothing — and so succeeds even
-/// with no server to ask, which is what proves no request was made. Camel
-/// synchronises a folder every time it is closed, and a provider that made a
+/// A folder with nothing queued asks the server nothing. It succeeds even
+/// with no server to ask, which proves no request was made. Camel
+/// synchronises a folder every time it closes, and a provider that made a
 /// round trip per close would pay for one on every folder the user clicks
 /// through.
 #[test]
@@ -525,14 +528,14 @@ fn a_folder_with_nothing_queued_needs_no_server() {
     fixture.synchronize_straight().expect_ok();
 }
 
-/// The folder is asked, and the connection belongs to the store. `NOT_CONNECTED`
-/// is the code that makes Camel connect and ask again rather than showing the
-/// account as broken — the same rule `refresh_info_sync` follows.
+/// The folder is asked, and the connection belongs to the store.
+/// `NOT_CONNECTED` is the code that makes Camel connect and ask again,
+/// instead of showing the account as broken. `refresh_info_sync` follows
+/// the same rule.
 ///
-/// Called through the class rather than through the wrapper, the way
-/// `tests/refresh.rs` calls its own: what is under test is the window after
-/// Camel satisfied itself there was a connection, not a state Camel would have
-/// fixed on the way in.
+/// This test calls through the class rather than through the wrapper, as
+/// `tests/refresh.rs` does. It tests the window after Camel confirmed a
+/// connection existed, not a state Camel would have fixed on the way in.
 #[test]
 fn a_folder_whose_store_has_no_connection_reports_it() {
     let fixture = Fixture::start(&[]);
@@ -557,13 +560,13 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
             CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
         );
     }
-    // And the change stays queued: a write that never happened is one the next
-    // synchronisation has to make.
+    // The change also stays queued: a write that never happened is one the
+    // next synchronisation must make.
     assert!(fixture.is_dirty(), "the unsent change was forgotten");
 }
 
-/// A row with nothing set but the one thing a row cannot be without, for a uid
-/// this test overwrites right after — see
+/// A row with nothing set except the one field a row cannot be without.
+/// This test overwrites the uid right after. See
 /// [`a_row_whose_uid_is_not_text_stays_queued`].
 fn blank_message(uid: &str) -> MessageSummary {
     MessageSummary {
@@ -585,14 +588,14 @@ fn blank_message(uid: &str) -> MessageSummary {
     }
 }
 
-/// A uid Camel stored that cannot be read back as text is not one the server
-/// can be asked about either, so `push_row` leaves it queued rather than
-/// settling a row nothing was sent for. That is a corrupted or foreign
-/// summary database, never one this provider writes itself, but Camel's own
-/// storage does not enforce UTF-8 on a uid. The generic settling step used to
-/// run for it anyway, because an unreadable uid produced the very same
-/// `Ok(())` a nothing-to-send row does: the row was marked as if the write
-/// had happened when no request was ever sent.
+/// A uid Camel stored that cannot be read back as text cannot be asked
+/// about on the server either. So `push_row` leaves it queued, instead of
+/// settling a row that nothing was sent for. Such a uid signals a corrupted
+/// or foreign summary database; this provider never writes one itself, but
+/// Camel's own storage does not enforce UTF-8 on a uid. The generic
+/// settling step used to run for it anyway, because an unreadable uid
+/// produced the same `Ok(())` as a nothing-to-send row: it marked the row
+/// as if the write had happened when no request was ever sent.
 #[test]
 fn a_row_whose_uid_is_not_text_stays_queued() {
     let fixture = Fixture::start(&[]);
@@ -605,14 +608,14 @@ fn a_row_whose_uid_is_not_text_stays_queued() {
         "the uid needs to be unreadable as text for this test to mean anything"
     );
 
-    // SAFETY: `summary` is the live summary above, `raw_uid` outlives every
-    // call it is passed to, and `info` is a fresh row this scope owns until it
-    // hands it to the summary, which takes a reference of its own.
+    // SAFETY: `summary` is the live summary above. `raw_uid` outlives every
+    // call it is passed to. `info` is a fresh row this scope owns, until it
+    // hands the row to the summary, which takes its own reference.
     let info = unsafe {
         let info = new_message_info(&blank_message("placeholder"));
         camel_message_info_set_uid(info, raw_uid.as_ptr());
         camel_folder_summary_add(summary, info, GTRUE);
-        // The change nothing here can ever send — see the doc comment above.
+        // Nothing here can ever send this change. See the doc comment above.
         camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
         info
     };

@@ -1,40 +1,48 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Searching a JMAP folder — the one folder operation whose *implementation*
-//! moved between the EDS releases this provider is built against.
+//! Searches a JMAP folder.
 //!
-//! Evolution searches a folder for more than the search bar: every message-list
-//! view is an expression ("Unread Messages", "Hide Deleted Messages"), so a
-//! folder that cannot answer one is a folder whose message list does not draw.
-//! Up to EDS 3.52 answering was the *provider's* job — `CamelFolderClass` left
-//! `search_by_expression` and `search_by_uids` NULL and asserted on a class that
-//! had not filled them in, so [`crate::folder`] fills them with a
-//! `CamelFolderSearch` over the local summary. From 3.58 that whole object is
-//! gone: the vfuncs were replaced by `search_sync`, and the base class installs
-//! an implementation of it over `CamelStoreSearch` that does the same job
-//! against the same rows.
+//! Search is the one folder operation whose *implementation* moved between
+//! the EDS releases this provider targets.
 //!
-//! Which means the port across those two releases is not a call to re-spell —
-//! it is the claim that on the newer EDS the provider should override *nothing*
-//! and let the base class answer. A claim like that is exactly what compiles
-//! cleanly while being wrong, because the symptom is not a build error, it is a
-//! folder that answers every search with nothing. So it is asserted here
-//! behaviourally, on whichever entry point the EDS in front of the test has,
-//! rather than argued for in a comment: the same two rows, the same expression,
-//! and the same expected answer on both legs.
+//! Evolution searches a folder for more than the search bar. Every
+//! message-list view is an expression ("Unread Messages", "Hide Deleted
+//! Messages"). A folder that cannot answer a search is a folder whose
+//! message list does not draw.
 //!
-//! One case now *is* claimed to reach the server: up to EDS 3.52, before
-//! either vfunc touches `CamelFolderSearch`, it tries
-//! `jmap-mail::search_sexp::translate` on the expression, and on a
-//! translatable one, the shapes RFC 8621's contains-only conditions can
-//! express (`header-contains`/`body-contains`/`and`/`or`/`not`), asks
-//! `Email/query` over the whole mailbox instead, since that is the only way
-//! to search a body this provider never downloaded. Everything else,
-//! including a translatable expression asked of a disconnected store, still
-//! answers from the summary exactly as before; the tests below that exercise
-//! the server path are gated to the pre-3.58 leg for that reason; the ones
-//! shared with the 3.58 leg are still testing only the local fallback.
+//! Up to EDS 3.52, answering was the *provider's* job. `CamelFolderClass`
+//! left `search_by_expression` and `search_by_uids` NULL and asserted on a
+//! class that had not filled them in. So [`crate::folder`] fills them with a
+//! `CamelFolderSearch` over the local summary.
+//!
+//! From 3.58, that whole object is gone. The vfuncs were replaced by
+//! `search_sync`. The base class installs an implementation of it over
+//! `CamelStoreSearch`, which does the same job against the same rows.
+//!
+//! Porting across those two releases is not a rename to re-spell. It is the
+//! claim that on the newer EDS, the provider should override *nothing* and
+//! let the base class answer. A claim like that compiles cleanly even when
+//! wrong: the symptom is not a build error, it is a folder that answers
+//! every search with nothing.
+//!
+//! So this file asserts the claim behaviourally, on whichever entry point
+//! the EDS in front of the test has, rather than arguing for it in a
+//! comment: the same two rows, the same expression, and the same expected
+//! answer on both legs.
+//!
+//! One case does reach the server. Up to EDS 3.52, before either vfunc
+//! touches `CamelFolderSearch`, it tries `jmap-mail::search_sexp::translate`
+//! on the expression. On a translatable expression (the shapes RFC 8621's
+//! contains-only conditions express: `header-contains`, `body-contains`,
+//! `and`, `or`, `not`), it asks `Email/query` over the whole mailbox instead.
+//! This is the only way to search a body this provider never downloaded.
+//!
+//! Everything else, including a translatable expression asked of a
+//! disconnected store, still answers from the summary exactly as before.
+//! For that reason, the tests below that exercise the server path are gated
+//! to the pre-3.58 leg. The tests shared with the 3.58 leg still test only
+//! the local fallback.
 
 mod common;
 
@@ -98,13 +106,15 @@ fn message(uid: &str, flags: MessageFlags) -> MessageSummary {
 
 /// A folder holding two rows: `Msg0001` seen, `Msg0002` not.
 ///
-/// The summary is written to the store's database before the search runs, and
-/// that is not tidiness. From 3.58 the base class's `search_sync` evaluates the
-/// expression through `CamelStoreSearch`, which reads the store's
-/// `CamelStoreDB` rather than the summary's in-memory rows — so a folder whose
-/// rows had never been saved would answer nothing on that leg for a reason that
-/// has nothing to do with this provider. `camel_folder_summary_save` is what
-/// Camel itself calls, and it writes the rows and the folder record together.
+/// The summary is written to the store's database before the search runs.
+/// This is not tidiness. From 3.58, the base class's `search_sync` evaluates
+/// the expression through `CamelStoreSearch`, which reads the store's
+/// `CamelStoreDB`, not the summary's in-memory rows. A folder whose rows had
+/// never been saved would answer nothing on that leg, for a reason that has
+/// nothing to do with this provider.
+///
+/// `camel_folder_summary_save` is what Camel itself calls. It writes the rows
+/// and the folder record together.
 ///
 /// # Safety
 ///
@@ -126,7 +136,8 @@ unsafe fn folder_with_two_rows(account: &Account) -> *mut CamelFolder {
     ];
 
     // SAFETY: the folder is live and owns the summary the listing is applied
-    // to; `summary_save` is Camel's own and reports through its `GError`.
+    // to. `summary_save` is Camel's own call, and it reports through its
+    // `GError`.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
         assert!(!summary.is_null(), "the folder kept no summary");
@@ -146,11 +157,11 @@ unsafe fn folder_with_two_rows(account: &Account) -> *mut CamelFolder {
 
 /// The uids `folder` answers `expression` with, in the order Camel gave them.
 ///
-/// The two arms are the same question asked of the two APIs, and the ownership
-/// rules differ as much as the signatures do: up to 3.52 the array comes back
-/// as the return value and goes back through `camel_folder_search_free`, while
-/// from 3.58 it is an out-parameter the caller unrefs — and is left NULL, with
-/// success reported, when nothing matched.
+/// The two arms ask the same question of the two APIs. The ownership rules
+/// differ as much as the signatures do. Up to 3.52, the array comes back as
+/// the return value and goes back through `camel_folder_search_free`. From
+/// 3.58, it is an out-parameter the caller unrefs, left NULL with success
+/// reported when nothing matched.
 ///
 /// # Safety
 ///
@@ -159,8 +170,8 @@ unsafe fn search(folder: *mut CamelFolder, expression: &CStr) -> Vec<String> {
     let mut error: *mut GError = ptr::null_mut();
 
     #[cfg(camel_folder_search_object)]
-    // SAFETY: the folder is live by this function's contract, the expression
-    // outlives the call, and the array returned is freed through the function
+    // SAFETY: the folder is live, by this function's contract. The expression
+    // outlives the call. The array returned is freed through the function
     // Camel pairs with this one.
     let uids = unsafe {
         let result = eds_sys::camel_folder_search_by_expression(
@@ -180,8 +191,8 @@ unsafe fn search(folder: *mut CamelFolder, expression: &CStr) -> Vec<String> {
     };
 
     #[cfg(not(camel_folder_search_object))]
-    // SAFETY: as above; `out` is written by the call and owned by this
-    // function, and a NULL with success is Camel's way of saying "no matches".
+    // SAFETY: as above. `out` is written by the call and owned by this
+    // function. A NULL with success is Camel's way of saying "no matches".
     let uids = unsafe {
         let mut out: *mut GPtrArray = ptr::null_mut();
         let ok = eds_sys::camel_folder_search_sync(
@@ -211,8 +222,8 @@ unsafe fn search(folder: *mut CamelFolder, expression: &CStr) -> Vec<String> {
 ///
 /// `array` must be a live `GPtrArray` of NUL-terminated strings.
 unsafe fn collect(array: *mut GPtrArray) -> Vec<String> {
-    // SAFETY: the contract above; every element lives at least as long as the
-    // array, which the caller frees after this returns.
+    // SAFETY: the contract above. Every element lives at least as long as
+    // the array, which the caller frees after this returns.
     unsafe {
         (0..(*array).len)
             .filter_map(|index| {
@@ -226,10 +237,9 @@ unsafe fn collect(array: *mut GPtrArray) -> Vec<String> {
 /// A search over a flag returns the rows that carry it and no others.
 ///
 /// The expression is the one Evolution's own "Unread Messages" view is built
-/// from, read the other way round, and it is deliberately a *discriminating*
-/// search rather than `(match-all #t)`: a leg that answered with every row —
-/// which is what a search that quietly ignored its expression would do — passes
-/// the second and fails this.
+/// from, read the other way round. It is deliberately a *discriminating*
+/// search, not `(match-all #t)`. A search that quietly ignored its expression
+/// would answer every row: that would pass the test below and fail this one.
 #[test]
 fn a_search_over_a_system_flag_selects_the_rows_that_carry_it() {
     let account = Account::open();
@@ -255,13 +265,13 @@ fn a_search_over_a_system_flag_selects_the_rows_that_carry_it() {
     }
 }
 
-/// And a search that matches everything returns both rows.
+/// A search that matches everything returns both rows.
 ///
-/// The companion to the test above: together they pin that the folder answers
-/// with the rows it holds *and* that the answer depends on the expression. On
-/// its own either one could pass against a broken search — this one against a
-/// search that returns all rows regardless, that one against a search that
-/// happens to filter but over the wrong set.
+/// The companion to the test above. Together they pin that the folder answers
+/// with the rows it holds, and that the answer depends on the expression. On
+/// its own, either test could pass against a broken search: this one against
+/// a search that returns all rows regardless, that one against a search that
+/// filters, but over the wrong set.
 #[test]
 fn a_search_that_matches_everything_returns_every_row() {
     let account = Account::open();
@@ -277,23 +287,24 @@ fn a_search_that_matches_everything_returns_every_row() {
     }
 }
 
-/// A folder wired to a live (mock) connection, its mailbox holding two
-/// server-side messages with distinct subjects, one containing "Lunch", one
-/// not, and no local summary rows at all.
+/// A folder wired to a live (mock) connection. Its mailbox holds two
+/// server-side messages with distinct subjects: one contains "Lunch", one
+/// does not. The folder keeps no local summary rows at all.
 ///
-/// That last part is deliberate: a search that silently fell back to the
+/// The empty summary is deliberate. A search that silently fell back to the
 /// local `CamelFolderSearch` over an empty summary would find nothing,
 /// regardless of the expression. Only a genuine round trip to the server can
 /// tell the two subjects apart here.
 ///
-/// The `MockServer` is part of the return value and not merely used while
-/// building it: dropping it tears down the listener, and every request the
+/// The `MockServer` is part of the return value, not merely used while
+/// building it. Dropping it tears down the listener, and every request the
 /// folder makes happens after this function returns.
 ///
 /// # Safety
 ///
-/// The returned folder outlives the `Account` it hangs off of no longer than
-/// the caller's own use of it; the caller unrefs it.
+/// The caller must not keep the returned folder past its own use of it, and
+/// the `Account` it hangs off of must still be alive. The caller unrefs the
+/// folder.
 #[cfg(camel_folder_search_object)]
 unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut CamelFolder, Id, Id) {
     let server = MockServer::builder().start();
@@ -341,8 +352,9 @@ unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut Cam
     (server, account, folder, lunch, other)
 }
 
-/// A `GPtrArray` of uids, owned for the length of one call: the input shape
-/// `search_by_uids` takes, built the same way `transfer.rs`'s tests build one.
+/// A `GPtrArray` of uids, owned for the length of one call. This is the
+/// input shape `search_by_uids` takes, built the same way `transfer.rs`'s
+/// tests build one.
 #[cfg(camel_folder_search_object)]
 struct UidList {
     array: *mut GPtrArray,
@@ -356,8 +368,8 @@ impl UidList {
             .iter()
             .map(|uid| CString::new(uid.as_str()).expect("a uid with no NUL"))
             .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
+        // SAFETY: a fresh array, filled with pointers into strings that this
+        // same value owns. The strings stay alive as long as the array does.
         let array = unsafe {
             let array = glib_sys::g_ptr_array_new();
             for uid in &uids {
@@ -372,8 +384,9 @@ impl UidList {
 #[cfg(camel_folder_search_object)]
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointers
-        // in it belong to `self.uids`.
+        // SAFETY: the one array, allocated above. `GFALSE` tells the call not
+        // to free the elements, because the pointers in the array belong to
+        // `self.uids`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
         self.uids.clear();
     }
@@ -407,9 +420,9 @@ fn a_translatable_expression_is_delegated_to_the_server() {
     }
 }
 
-/// The same server round trip, narrowed to a uid subset: the extra argument
-/// `search_by_uids` takes and the local path gets from
-/// `camel_folder_search_search` for free.
+/// The same server round trip, narrowed to a uid subset. This is the extra
+/// argument `search_by_uids` takes, which the local path gets for free from
+/// `camel_folder_search_search`.
 #[cfg(camel_folder_search_object)]
 #[test]
 fn a_translatable_expression_over_uids_is_narrowed_to_them() {
@@ -417,8 +430,8 @@ fn a_translatable_expression_over_uids_is_narrowed_to_them() {
     unsafe {
         let (_server, _account, folder, lunch, other) = connected_folder_with_two_subjects();
 
-        // Both uids in the restriction, so the match still has to come from
-        // the filter, not merely from the restriction excluding the other row.
+        // Both uids are in the restriction, so the match must come from the
+        // filter, not merely from the restriction excluding the other row.
         let restrict = UidList::of(&[&lunch, &other]);
         let mut error: *mut GError = ptr::null_mut();
         let result = eds_sys::camel_folder_search_by_uids(
@@ -436,8 +449,8 @@ fn a_translatable_expression_over_uids_is_narrowed_to_them() {
         assert_eq!(collect(result), vec![lunch.as_str().to_owned()]);
         eds_sys::camel_folder_search_free(folder, result);
 
-        // A restriction that excludes the matching row leaves nothing, even
-        // though the same expression matches when unrestricted.
+        // A restriction that excludes the matching row leaves nothing. The
+        // same expression matches when unrestricted.
         let excluding = UidList::of(&[&other]);
         let mut error: *mut GError = ptr::null_mut();
         let result = eds_sys::camel_folder_search_by_uids(

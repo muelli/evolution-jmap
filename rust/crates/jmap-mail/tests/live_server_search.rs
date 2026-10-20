@@ -4,30 +4,34 @@
 //! `search_by_expression`/`search_by_uids` against a real JMAP server.
 //!
 //! `jmap-mail-sync::MailSync::search` is already proven against real
-//! Stalwart. What that leaves unreached is this crate's own vfuncs on top of
-//! it (`folder.rs`'s `server_matches`): `search_sexp::translate`'s e-sexp-to-
-//! JMAP-filter translation, and `narrow`'s uid restriction for
-//! `search_by_uids`. Every test of that layer so far (`tests/search.rs`) has
-//! run against `jmap-mockd`, never against a real server's own `Email/query`
-//! answer to a translated filter. This is the live-server counterpart, the
+//! Stalwart.
+//!
+//! This crate's own vfuncs on top of it are not: `folder.rs`'s
+//! `server_matches`, `search_sexp::translate`'s e-sexp-to-JMAP-filter
+//! translation, and `narrow`'s uid restriction for `search_by_uids`.
+//!
+//! Every test of that layer so far (`tests/search.rs`) runs against
+//! `jmap-mockd`, not against a real server's own `Email/query` answer to a
+//! translated filter. This test is the live-server counterpart. It has the
 //! same shape as `tests/live_server_transfer.rs` and
 //! `tests/live_server_expunge.rs`.
 //!
-//! Only reachable where `camel_folder_search_object` is defined (EDS up to
-//! 3.52, gone from 3.60 in favour of the base class's own `search_sync`); the
-//! runner this test suite builds against is 3.52.3.
+//! This file only builds where `camel_folder_search_object` is defined. EDS
+//! keeps that function up to version 3.52. EDS removes it in 3.60 and
+//! replaces it with the base class's own `search_sync`. The test runner this
+//! suite builds against is version 3.52.3.
 //!
 //! ## Running it
 //!
-//! Same environment as the other live-server tests — see
+//! This test needs the same environment as the other live-server tests. See
 //! `docs/manual-test-live-server.md`:
 //!
 //! ```console
 //! $ cargo test -p jmap-mail --features testing -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The test skips instead of failing when
+//! `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
 
 #![cfg(camel_folder_search_object)]
 
@@ -68,8 +72,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A `GPtrArray` of uids, owned for the length of one call — the input shape
-/// `search_by_uids` takes. Mirrors `tests/search.rs::UidList`.
+/// A `GPtrArray` of uids, owned for the length of one call. This is the
+/// input shape `search_by_uids` takes. Mirrors `tests/search.rs::UidList`.
 struct UidList {
     array: *mut GPtrArray,
     uids: Vec<CString>,
@@ -82,7 +86,7 @@ impl UidList {
             .map(|uid| CString::new(*uid).expect("a uid with no NUL"))
             .collect();
         // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
+        // owns. Those strings outlive the array.
         let array = unsafe {
             let array = glib_sys::g_ptr_array_new();
             for uid in &uids {
@@ -96,8 +100,8 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above; FALSE because the pointers
-        // in it belong to `self.uids`.
+        // SAFETY: the array allocated above. The call passes FALSE because
+        // the pointers in it belong to `self.uids`.
         unsafe { g_ptr_array_free(self.array, GFALSE) };
         self.uids.clear();
     }
@@ -109,8 +113,8 @@ impl Drop for UidList {
 ///
 /// `array` must be a live `GPtrArray` of NUL-terminated strings.
 unsafe fn collect(array: *mut GPtrArray) -> Vec<String> {
-    // SAFETY: the contract above; every element lives at least as long as the
-    // array, which the caller frees after this returns.
+    // SAFETY: the contract above. Every element lives at least as long as
+    // the array. The caller frees the array after this call returns.
     unsafe {
         (0..(*array).len)
             .map(|index| {
@@ -121,13 +125,18 @@ unsafe fn collect(array: *mut GPtrArray) -> Vec<String> {
     }
 }
 
-/// Imports two messages with distinct subjects into one real folder, then
-/// drives a real `camel_folder_search_by_expression` with a `header-contains`
-/// expression `search_sexp::translate` turns into an `Email/query` filter.
-/// Confirms the server-side match set names only the message whose subject
-/// contains the searched word, and that `search_by_uids` narrows the same
-/// expression correctly: to the matching message when both uids are offered,
-/// and to nothing when the restriction excludes it.
+/// Imports two messages with distinct subjects into one real folder.
+///
+/// Drives a real `camel_folder_search_by_expression` with a
+/// `header-contains` expression. `search_sexp::translate` turns this
+/// expression into an `Email/query` filter. The test confirms the
+/// server-side match set names only the message whose subject contains the
+/// searched word.
+///
+/// The test also confirms that `search_by_uids` narrows the same
+/// expression correctly. It narrows to the matching message when both uids
+/// are offered. It narrows to nothing when the restriction excludes the
+/// matching message.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_translatable_expression_is_answered_by_the_real_server() {
@@ -184,10 +193,10 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
         )
         .expect("import_message failed against the real server for the other message");
 
-    // SAFETY: `account.store` is a live `CamelStore`, and `created` is a
-    // `FolderInfo` a real discovery over that same store's connection just
-    // returned. The mailbox id is set at construction, so no refresh is
-    // needed before the server-side search path can resolve it.
+    // SAFETY: `account.store` is a live `CamelStore`. `created` is a
+    // `FolderInfo` that a real discovery over the same store's connection
+    // just returned. Construction sets the mailbox id, so the server-side
+    // search path can resolve it without a refresh.
     let folder: *mut CamelFolder = unsafe { new_folder(account.store, &created) };
     assert!(!folder.is_null(), "the folder would not construct");
 
@@ -217,11 +226,12 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
         unsafe { collect(result) },
         vec![lunch_uid.as_str().to_owned()]
     );
-    // SAFETY: the folder and array match; frees the array `camel_folder_search_by_expression` returned.
+    // SAFETY: the folder and array match. This call frees the array that
+    // `camel_folder_search_by_expression` returned.
     unsafe { eds_sys::camel_folder_search_free(folder, result) };
 
-    // Narrowed to both uids: the match still has to come from the filter, not
-    // merely from the restriction excluding the other row.
+    // Narrowed to both uids. The match must come from the filter, not from
+    // the restriction excluding the other row.
     let restrict = UidList::of(&[lunch_uid.as_str(), other_uid.as_str()]);
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: as above, plus a live `GPtrArray` of NUL-terminated uids.
@@ -250,7 +260,7 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
     // SAFETY: as above.
     unsafe { eds_sys::camel_folder_search_free(folder, result) };
 
-    // Narrowed to exclude the matching row: the restriction wins even though
+    // Narrowed to exclude the matching row. The restriction wins even though
     // the expression alone matches.
     let excluding = UidList::of(&[other_uid.as_str()]);
     let mut error: *mut GError = ptr::null_mut();
@@ -277,8 +287,8 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
     // SAFETY: as above.
     unsafe { eds_sys::camel_folder_search_free(folder, result) };
 
-    // The server refuses to delete a non-empty mailbox, so both messages go
-    // first.
+    // The server refuses to delete a non-empty mailbox, so the test deletes
+    // both messages first.
     account
         .jmap()
         .expunge_message(&lunch_uid, &created.id)

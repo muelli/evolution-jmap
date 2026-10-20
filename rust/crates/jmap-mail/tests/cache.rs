@@ -1,28 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The message cache: a message fetched once, kept on disk.
+//! The message cache: a message fetched once and kept on disk.
 //!
-//! `get_message_sync` downloads a message every time the user clicks its row,
-//! and RFC 8621 §4.1 makes an `Email` immutable — so the second download can
-//! only ever produce the bytes the first one did. `CamelDataCache` is where
-//! Camel's own providers keep those bytes, a file per message under the
-//! account's cache directory, and this is the wrapper around it.
+//! `get_message_sync` downloads a message each time the user clicks its row.
+//! RFC 8621 §4.1 makes an `Email` immutable, so a second download always
+//! produces the same bytes as the first. `CamelDataCache` is where Camel's own
+//! providers store those bytes, one file per message, under the account's
+//! cache directory. This module wraps `CamelDataCache`.
 //!
-//! What the tests here pin is the wrapper's contract rather than the vfunc's
-//! (`tests/message.rs` covers that end): bytes read back as they were written,
-//! a miss that is a miss rather than a failure, two caches over one directory
-//! seeing the same entries — which is what makes a message filed in two
-//! mailboxes one file — and a uid that is a *path* not being allowed to become
-//! one.
+//! The tests here pin the wrapper's contract, not the vfunc's contract
+//! (`tests/message.rs` covers the vfunc). They check: bytes read back exactly
+//! as written; a miss reported as a miss, not a failure; two caches over one
+//! directory sharing the same entries, which lets a message filed in two
+//! mailboxes stay one file; and a uid that is a path, refused as a cache key.
 //!
-//! The entry that is not a message: one shorter than the summary row says the
-//! message is, which is what a process killed mid-write leaves behind and what
-//! Camel's parser would otherwise read as a complete message with a short body.
+//! One entry is not a message: an entry shorter than the summary row claims.
+//! A process killed mid-write leaves an entry like this, and Camel's parser
+//! would otherwise read it as a complete message with a short body.
 //!
-//! And, since this increment, the bound: an entry nobody has opened for long
-//! enough is swept, so that a cache which only ever grew now has a size a user
-//! could describe.
+//! Since this increment, the cache also has a bound: an entry nobody has
+//! opened for long enough is swept. This gives a user a describable size for
+//! a cache that otherwise only grows.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,14 +30,14 @@ use std::time::Duration;
 
 use jmap_mail::cache::MessageCache;
 
-/// The message every test here caches. Long enough that a short read would be
-/// visible as one.
+/// The message every test in this file caches. Long enough that a truncated
+/// read is visible as truncated.
 const SOURCE: &[u8] = b"From: bob@example.com\r\nSubject: Cached\r\n\r\nThe body, \
                         which is longer than the headers so that a truncated \
                         read is not mistaken for a complete one.\r\n";
 
-/// Tells one test's cache directory from the next, including two running at
-/// once — which is what a Rust test binary does by default.
+/// Distinguishes one test's cache directory from the next, including two
+/// tests running at once, which a Rust test binary does by default.
 static DIRECTORIES: AtomicUsize = AtomicUsize::new(0);
 
 /// A directory of its own, removed when the test ends.
@@ -64,18 +63,20 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        // Best effort: a test that has already failed is not made better by a
-        // panic in its teardown.
+        // Best effort: a panic during teardown would not improve a test that
+        // already failed.
         let _ = fs::remove_dir_all(&self.path);
     }
 }
 
-/// Every file the cache has written, wherever under its directory it put them.
+/// Every file the cache has written, wherever under its directory the cache
+/// put them.
 ///
-/// `CamelDataCache` files a key into one of sixty-four subdirectories by a hash
-/// of the key, which is its business rather than this crate's — so the bound
-/// tests below read the tree rather than construct a path, and check the one
-/// thing about the hashing they do depend on (see [`share_a_bucket`]).
+/// `CamelDataCache` files a key into one of sixty-four subdirectories, chosen
+/// by a hash of the key. This hashing is `CamelDataCache`'s own business, not
+/// this crate's. So the bound tests below read the directory tree instead of
+/// constructing a path, and check only the one fact about the hashing they
+/// depend on (see [`share_a_bucket`]).
 fn files_under(directory: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for entry in fs::read_dir(directory).into_iter().flatten().flatten() {
@@ -90,14 +91,14 @@ fn files_under(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Asserts that the cache filed exactly `keys` and put them all in one bucket.
+/// Asserts that the cache filed exactly `keys` entries, all in one bucket.
 ///
-/// Camel sweeps a bucket when something in it is looked up, and skips the entry
-/// being looked up — so an expiry is only observable through *another* key that
-/// hashes to the same bucket. `M1` and `M2` do, which is a fact about
-/// `g_str_hash` rather than a promise; asserting it here means a Camel that
-/// changed its hashing fails these tests with a sentence rather than by quietly
-/// making them prove nothing.
+/// Camel sweeps a bucket when something in it is looked up, but skips the
+/// entry being looked up. So an expiry is observable only through another key
+/// that hashes to the same bucket. `M1` and `M2` hash to the same bucket, a
+/// fact about `g_str_hash`, not a guarantee. Asserting it here means a Camel
+/// that changes its hashing fails these tests with a clear message, instead
+/// of letting them quietly prove nothing.
 fn share_a_bucket(scratch: &Scratch, keys: usize) -> Vec<PathBuf> {
     let files = files_under(&scratch.path);
     assert_eq!(
@@ -130,9 +131,10 @@ fn a_stored_message_reads_back_byte_for_byte() {
     );
 }
 
-/// The path `filename` answers, read as an ordinary file, is the exact bytes
-/// `store` wrote — the whole point of a filename `CamelFolderClass::get_filename`
-/// can hand a caller in place of re-serializing the message.
+/// The path that `filename` returns, read as an ordinary file, holds the
+/// exact bytes `store` wrote. This is the purpose of a filename:
+/// `CamelFolderClass::get_filename` can hand it to a caller instead of
+/// re-serializing the message.
 #[test]
 fn a_stored_messages_filename_reads_back_the_same_bytes() {
     let scratch = Scratch::new();
@@ -148,10 +150,10 @@ fn a_stored_messages_filename_reads_back_the_same_bytes() {
 }
 
 /// `camel_data_cache_get_filename` is a pure path computation, the same one
-/// `store` and `load` use internally to find the entry — so it answers for a
-/// uid that was never stored too, exactly as `camel-imapx-folder.c`'s own
-/// `get_filename` does (no existence check). What is not there yet is the
-/// file, not the answer.
+/// `store` and `load` use internally to find an entry. It answers even for a
+/// uid that was never stored, exactly as `camel-imapx-folder.c`'s own
+/// `get_filename` does: neither checks that the file exists. Only the file is
+/// missing, not the answer.
 #[test]
 fn an_uncached_uid_still_gets_a_computed_filename() {
     let scratch = Scratch::new();
@@ -166,9 +168,9 @@ fn an_uncached_uid_still_gets_a_computed_filename() {
     );
 }
 
-/// The same refusal `store`/`load` give a uid that is a path in disguise:
-/// `filename` is one more way this cache turns a uid into a file name, and a
-/// hostile one gets no path out of it either.
+/// `filename` gives the same refusal as `store` and `load` for a uid that is
+/// a path in disguise. `filename` is one more way this cache turns a uid into
+/// a file name, and a hostile uid gets no path from it either.
 #[test]
 fn a_uid_that_is_a_path_gets_no_filename() {
     let scratch = Scratch::new();
@@ -193,10 +195,10 @@ fn a_uid_that_was_never_cached_is_a_miss() {
     );
 }
 
-/// Re-storing is what a refetched message does, and it has to leave the entry
-/// readable rather than appended to: `camel_data_cache_add` replaces the file,
-/// and a wrapper that opened it for appending would double every message it
-/// cached twice.
+/// A refetched message re-stores its entry, and the result must be readable,
+/// not appended to. `camel_data_cache_add` replaces the file. A wrapper that
+/// opened the file for appending would duplicate the content of every
+/// message cached twice.
 #[test]
 fn storing_a_uid_twice_replaces_the_entry() {
     let scratch = Scratch::new();
@@ -211,11 +213,11 @@ fn storing_a_uid_twice_replaces_the_entry() {
     );
 }
 
-/// A message with no bytes in it is not a message, and an entry with none is
-/// what a process killed between creating one and writing it leaves behind.
-/// Refused at both ends, because the alternative is `get_message_sync` serving
-/// an empty message out of the cache for as long as the entry lives, in
-/// preference to the download that would have replaced it.
+/// A message with no bytes is not a message. An entry with no bytes is what a
+/// process killed between creating and writing it leaves behind. Both
+/// `store` and `load` refuse this entry. Otherwise, `get_message_sync` would
+/// serve an empty message from the cache for as long as the entry lives,
+/// instead of the download that would have replaced it.
 #[test]
 fn an_entry_with_nothing_in_it_is_not_a_message() {
     let scratch = Scratch::new();
@@ -229,9 +231,9 @@ fn an_entry_with_nothing_in_it_is_not_a_message() {
 }
 
 /// The account-wide property. A JMAP email id identifies a message in the
-/// account, not in a mailbox, so the same message filed in two mailboxes is one
-/// entry — which is what lets every folder of an account hold a cache of its
-/// own over one directory without storing the mail twice.
+/// account, not in a mailbox. The same message filed in two mailboxes is
+/// therefore one entry. This lets every folder of an account hold its own
+/// cache over one directory, without storing the mail twice.
 #[test]
 fn two_caches_over_one_directory_share_their_entries() {
     let scratch = Scratch::new();
@@ -246,10 +248,10 @@ fn two_caches_over_one_directory_share_their_entries() {
     );
 }
 
-/// RFC 8620 §1.2 limits an id to URL-safe characters, and a *file name* is what
-/// this cache turns one into. A server that answered `Email/query` with
-/// `../../../../etc/cron.d/x` would otherwise be a server that picks the path
-/// its mail is written to.
+/// RFC 8620 §1.2 limits an id to URL-safe characters, and this cache turns an
+/// id into a file name. Without this check, a server that answered
+/// `Email/query` with `../../../../etc/cron.d/x` could pick the path its mail
+/// is written to.
 #[test]
 fn a_uid_that_is_a_path_is_not_a_key() {
     let scratch = Scratch::new();
@@ -275,8 +277,8 @@ fn a_uid_that_is_a_path_is_not_a_key() {
         );
     }
 
-    // And nothing of the sort reached the filesystem: whatever the cache put
-    // under its own directory, it put nothing above it.
+    // Nothing of this kind reached the filesystem: the cache put nothing
+    // above its own directory.
     assert!(
         !scratch
             .path
@@ -288,10 +290,10 @@ fn a_uid_that_is_a_path_is_not_a_key() {
     );
 }
 
-/// RFC 8620 §1.2 spells a JMAP `Id` as 1 to 255 characters from
-/// `[A-Za-z0-9_-]`, so `_` and `-` inside a uid are not hostile the way a
-/// leading dash or a path separator is: an ordinary id using them must still
-/// be cached.
+/// RFC 8620 §1.2 defines a JMAP `Id` as 1 to 255 characters from
+/// `[A-Za-z0-9_-]`. So `_` and `-` inside a uid are not hostile, unlike a
+/// leading dash or a path separator. An ordinary id using `_` or `-` must
+/// still be cached.
 #[test]
 fn a_uid_with_underscore_or_dash_is_a_key() {
     let scratch = Scratch::new();
@@ -307,11 +309,11 @@ fn a_uid_with_underscore_or_dash_is_a_key() {
     }
 }
 
-/// The check the rest of this block is about: a summary row carries the octet
-/// count RFC 8621 §4.1 defines for the message, and an entry that agrees with it
-/// is the ordinary case — served, unremarkably. Here to pin that the check costs
-/// nothing when nothing is wrong, which is the failure a too-strict comparison
-/// would produce.
+/// The check the rest of this block is about. A summary row carries the
+/// octet count RFC 8621 §4.1 defines for the message. An entry that agrees
+/// with this count is the ordinary case, and it is served without remark.
+/// This test pins that the check costs nothing when nothing is wrong, the
+/// failure mode a too-strict comparison would produce.
 #[test]
 fn an_entry_the_row_agrees_with_is_a_message() {
     let scratch = Scratch::new();
@@ -329,19 +331,19 @@ fn an_entry_the_row_agrees_with_is_a_message() {
     );
 }
 
-/// What a process killed mid-write leaves: a file with the beginning of a
-/// message in it. MIME has no length, so Camel's parser reads one as a complete
-/// message with a short body and says nothing — which is a message that opens
-/// wrong every time it is opened, in preference to the download that would have
-/// been right.
+/// What a process killed mid-write leaves behind: a file holding only the
+/// beginning of a message. MIME has no overall length field, so Camel's
+/// parser reads this file as a complete message with a short body, without
+/// error. This message opens wrong every time, instead of the download that
+/// would open it correctly.
 #[test]
 fn an_entry_shorter_than_the_row_claims_is_not_a_message() {
     let scratch = Scratch::new();
     let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
     let truncated = &SOURCE[..SOURCE.len() - 30];
 
-    // Written without a claim, which is how one gets there: the row is not
-    // consulted by whatever killed the process.
+    // Written without a size claim: whatever killed the process did not
+    // consult the row.
     assert!(cache.store("M1", truncated, None));
 
     assert!(
@@ -350,10 +352,10 @@ fn an_entry_shorter_than_the_row_claims_is_not_a_message() {
     );
 }
 
-/// And it is gone rather than merely refused. Nothing will ever serve it, and an
-/// entry left in place would produce the same critical at every open of the
-/// message — for as long as the bound below took to notice a file the opens
-/// themselves keep looking at.
+/// The refused entry is removed, not merely refused. Nothing will ever serve
+/// it. An entry left in place would keep producing the same critical error at
+/// every open, until the bound below eventually swept the file that each
+/// open keeps checking.
 #[test]
 fn an_entry_that_was_refused_is_dropped() {
     let scratch = Scratch::new();
@@ -368,10 +370,11 @@ fn an_entry_that_was_refused_is_dropped() {
     );
 }
 
-/// The other direction is a server that under-reports rather than a file that is
-/// short, and the two are not the same fault. An exact comparison would make
-/// every message such a server holds one that can never be cached — two round
-/// trips per open, forever — to catch a condition truncation cannot produce.
+/// The other direction is a server that under-reports the size, not a file
+/// that is short. These are not the same fault. An exact comparison would
+/// make every message from such a server impossible to cache, forcing two
+/// round trips per open forever, to catch a condition that truncation cannot
+/// produce.
 #[test]
 fn an_entry_longer_than_the_row_claims_is_still_a_message() {
     let scratch = Scratch::new();
@@ -386,10 +389,10 @@ fn an_entry_longer_than_the_row_claims_is_still_a_message() {
     );
 }
 
-/// Zero is what Camel's counter holds for a row that was never given a size —
-/// an `Email` that arrived without one, or a row read back from a summary
-/// database written before the column existed. It is the absence of a claim, not
-/// a claim that the message is empty.
+/// Zero is what Camel's counter holds for a row that was never given a size:
+/// an `Email` that arrived with no size, or a row read from a summary
+/// database written before the size column existed. Zero means no size
+/// claim, not a claim that the message is empty.
 #[test]
 fn a_row_with_no_size_claims_nothing() {
     let scratch = Scratch::new();
@@ -403,9 +406,9 @@ fn a_row_with_no_size_claims_nothing() {
     );
 }
 
-/// The same rule at the writing end. Bytes the cache would refuse to serve are
-/// not worth the file: what disagrees here is the server with itself rather than
-/// a file with a crash, and writing the entry anyway would leave one that is read
+/// The same rule applies when writing. Bytes the cache would refuse to serve
+/// are not worth storing: here, the server disagrees with itself, not a file
+/// damaged by a crash. Writing the entry anyway would leave one that is read
 /// once, rejected, and removed at every open.
 #[test]
 fn bytes_shorter_than_the_row_claims_are_not_cached() {
@@ -426,11 +429,12 @@ fn bytes_shorter_than_the_row_claims_are_not_cached() {
     );
 }
 
-/// The bound. Nothing used to remove an entry that was merely old, so a cache
-/// grew by every message the account ever opened and stopped growing only when
-/// the disk was full. `CamelDataCache` sweeps lazily — when a lookup touches the
-/// bucket an entry lives in — so what this drives is a lookup of the *other*
-/// key, which is what a second message being opened is.
+/// The bound. Previously, nothing removed an entry just for being old, so a
+/// cache grew by every message the account ever opened, and stopped growing
+/// only when the disk was full. `CamelDataCache` sweeps lazily, only when a
+/// lookup touches the bucket an entry lives in. So this test drives a lookup
+/// of the other key in the bucket, which is what opening a second message
+/// does.
 #[test]
 fn an_entry_nobody_has_opened_within_the_bound_is_swept() {
     let scratch = Scratch::new();
@@ -440,12 +444,13 @@ fn an_entry_nobody_has_opened_within_the_bound_is_swept() {
     assert!(writer.store("M2", SOURCE, None));
     share_a_bucket(&scratch, 2);
 
-    // Long enough that an entry written just now is past a bound of nothing:
-    // the comparison is on whole seconds, so crossing one is the whole of it.
+    // Long enough that an entry written just now is past a bound of zero.
+    // The comparison uses whole seconds, so crossing one second is enough.
     std::thread::sleep(Duration::from_millis(1_500));
 
-    // A bound of nothing rather than a backdated file, because the age Camel
-    // reads is the filesystem's and this crate has no business writing it.
+    // Uses a bound of zero rather than a backdated file: Camel reads the
+    // file's age from the filesystem, and this crate must not write that age
+    // directly.
     let bounded = MessageCache::open_bounded(scratch.as_str(), Duration::ZERO)
         .expect("a cache over the same directory");
     assert_eq!(
@@ -459,11 +464,11 @@ fn an_entry_nobody_has_opened_within_the_bound_is_swept() {
     );
 }
 
-/// And the bound is a bound rather than a clear: the default is long enough that
-/// an entry written a moment ago is one the next open still gets from disk. This
-/// is the test that would fail if the sweep above were `camel_data_cache_clear`
-/// — which is Evolution's *manual* "empty cache", not a policy to apply behind a
-/// user who has opened two messages.
+/// The bound limits entries, it does not clear the cache. The default bound
+/// is long enough that an entry written a moment ago is still served from
+/// disk on the next open. This test would fail if the sweep above were
+/// `camel_data_cache_clear`, which is Evolution's manual "empty cache"
+/// command, not a policy to apply just because a user opened two messages.
 #[test]
 fn an_entry_inside_the_bound_is_left_alone() {
     let scratch = Scratch::new();
@@ -482,9 +487,10 @@ fn an_entry_inside_the_bound_is_left_alone() {
     );
 }
 
-/// A cache that cannot be created is not a failure to report to the user —
-/// mail still opens, it is just fetched every time — so the constructor answers
-/// `None` rather than an error, and every caller treats that as "no cache".
+/// A cache that cannot be created is not a failure to report to the user.
+/// Mail still opens; it is just fetched every time. So the constructor
+/// returns `None` instead of an error, and every caller treats `None` as "no
+/// cache".
 #[test]
 fn a_directory_that_cannot_be_created_is_not_a_cache() {
     let scratch = Scratch::new();
@@ -497,14 +503,14 @@ fn a_directory_that_cannot_be_created_is_not_a_cache() {
     );
 }
 
-/// On EDS 3.62+, `store` writes under a temporary name and renames it into
-/// place (`camel_data_cache_add_atomic`/`commit_atomic` — see
-/// `src/cache.rs`'s module docs), rather than opening a stream directly on
-/// the final path the way 3.52-3.61 do. This is the one thing about that
-/// which a round trip cannot tell apart from the non-atomic arm: a bug that
-/// renamed into place but left the temporary file behind too (instead of
-/// `commit_atomic` consuming it) would still read back correctly, and would
-/// only show up as a `.`-suffixed file this test's directory walk catches.
+/// On EDS 3.62+, `store` writes under a temporary name, then renames it into
+/// place (`camel_data_cache_add_atomic` and `commit_atomic`, see
+/// `src/cache.rs`'s module docs). EDS 3.52-3.61 instead open a stream
+/// directly on the final path. A round trip cannot detect one specific bug
+/// in the atomic path: a bug that renames the file into place but also
+/// leaves the temporary file behind (instead of `commit_atomic` consuming
+/// it) would still read back correctly. This test's directory walk catches
+/// that bug, because it leaves a `.`-suffixed file behind.
 #[cfg(camel_data_cache_atomic)]
 #[test]
 fn storing_leaves_no_temporary_file_behind() {

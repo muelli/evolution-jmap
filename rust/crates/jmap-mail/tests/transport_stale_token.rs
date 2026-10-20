@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A pooled transport connection whose bearer token went stale — the
+//! A pooled transport connection whose bearer token went stale: the
 //! transport half of the hourly re-consent fix.
 //!
-//! `JmapTransport::send_message`'s three network calls (identity lookup,
-//! outgoing-mailbox lookup, the send itself) each now run through
-//! `retry_once_after`: a 401 asks [`JmapTransport::refresh_credentials`] for a
-//! fresh access token and, if one came back, retries once. Mirrors
-//! `jmap-mail/tests/stale_token.rs` (the store's own version) exactly, one
-//! layer over: a [`JmapTransport::detached`] instance has no `CamelService`,
-//! so this proves the same two things that one does — a stale token with
-//! nothing to refresh from is reported once, and a connection whose
-//! credentials were replaced serves the very next call — not the GObject half
-//! of the refresh, which needs a real `CamelService`/`CamelSession` no
-//! headless test here can build.
+//! `JmapTransport::send_message` makes three network calls (identity lookup,
+//! outgoing-mailbox lookup, and the send itself). Each call now runs through
+//! `retry_once_after`: a 401 response asks
+//! [`JmapTransport::refresh_credentials`] for a fresh access token, and
+//! retries once if a token comes back. This mirrors
+//! `jmap-mail/tests/stale_token.rs` (the store's own version), one layer up.
+//! A [`JmapTransport::detached`] instance has no `CamelService`, so this test
+//! proves the same two facts as that one: a stale token with nothing to
+//! refresh from is reported once, and a connection with replaced credentials
+//! serves the very next call. It does not test the GObject half of the
+//! refresh, which needs a real `CamelService`/`CamelSession` that no headless
+//! test here can build.
 
 use jmap_client::{Client, Credentials};
 use jmap_mail::transport::JmapTransport;
@@ -33,7 +34,7 @@ Subject: Lunch?\r\n\
 \r\n\
 One o'clock at the usual place.\r\n";
 
-/// A mock with one identity and one Drafts mailbox to stage into — enough for
+/// A mock with one identity and one Drafts mailbox to stage into: enough for
 /// `send_message`'s two lookups to succeed once authenticated.
 struct Fixture {
     server: MockServer,
@@ -83,12 +84,12 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
     let fixture = Fixture::start();
     let transport = fixture.detached(GOOD);
 
-    // The connection is good to begin with, so the failure below is the
-    // rotation and nothing else.
+    // The connection starts valid, so the failure below comes only from the
+    // token rotation.
     assert!(fixture.send(&transport).is_ok(), "a live token was refused");
 
-    // The server now accepts a different token; the pooled connection still
-    // carries the old one, which is the hourly bug exactly.
+    // The server now accepts a different token. The pooled connection still
+    // carries the old token. This is the hourly bug.
     fixture.server.set_bearer_token(FRESH);
     let before = fixture.server.unauthorized_responses();
     let result = fixture.send(&transport);
