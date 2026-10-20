@@ -37,8 +37,9 @@ const FEATURES: &[&str] = &[
     // `CamelMIRecord`/`CamelFIRecord`, which also settles the shape of
     // `summary_header_save` — `crate::summary`, `crate::message_info`.
     "camel_summary_records",
-    // Whether `CamelProvider` still has the three URL-keyed service-cache
-    // fields — `crate::provider`.
+    // Whether `CamelProvider` still has `auto_detect` (gone in 3.58), and
+    // `url_hash` and `url_equal` (gone in 3.60): `crate::provider`.
+    "camel_provider_auto_detect",
     "camel_provider_url_helpers",
     // Whether a folder's uid list is borrowed (`get_uids`/`free_uids`) or
     // copied (`dup_uids`). Only the tests ask a folder directly, but the cfg is

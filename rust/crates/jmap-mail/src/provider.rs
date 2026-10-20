@@ -170,10 +170,9 @@ pub fn register() -> &'static CamelProvider {
             // Nothing to guess here: a JMAP account is discovered from its
             // session object, which is [`crate::server`]'s job and needs a
             // connection rather than a callback on a struct. Dropped from the
-            // struct in EDS 3.58 along with the two below, so on a newer EDS
-            // there is not even a slot to decline — see the note on
-            // `url_equal`.
-            #[cfg(camel_provider_url_helpers)]
+            // struct in EDS 3.58, so on a newer EDS there is not even a slot
+            // to decline: see the note on `url_equal`.
+            #[cfg(camel_provider_auto_detect)]
             auto_detect: None,
             object_types,
             // The mechanisms the provider advertises, which for this one is
@@ -192,8 +191,8 @@ pub fn register() -> &'static CamelProvider {
             // nothing reaches on a registry-configured account; NULL makes
             // Camel use its own defaults.
             //
-            // EDS 3.58 removed all three of these fields — that cache is gone,
-            // and with it `CamelProviderAutoDetectFunc`. The fields are
+            // EDS 3.60 removed these two fields, and 3.58 `auto_detect`. The
+            // fields are
             // `#[cfg]`-gated rather than the struct being built from zeroed
             // memory on purpose: naming every field keeps this a struct
             // literal, so a field some future EDS *adds* is a compile error

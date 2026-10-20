@@ -74,7 +74,8 @@ These are the current markers:
 | cfg | Marker | Meaning |
 | --- | --- | --- |
 | `eds_vcard_version_enum` | `EVCardVersion` | vCard functions take an `EVCardVersion` (see (A0) below) |
-| `camel_provider_url_helpers` | `CamelProviderAutoDetectFunc` | `CamelProvider` still has `auto_detect`, `url_hash`, `url_equal` |
+| `camel_provider_auto_detect` | `CamelProviderAutoDetectFunc` | `CamelProvider` still has `auto_detect` (removed in 3.58) |
+| `camel_provider_url_helpers` | `pub url_hash: ` | `CamelProvider` still has `url_hash` and `url_equal` (removed in 3.60) |
 | `camel_folder_search_object` | `camel_folder_search_new` | `CamelFolderSearch` exists and the provider implements search |
 | `camel_summary_records` | `CamelMIRecord` | old summary record struct names |
 | `camel_folder_get_uids` | `camel_folder_free_uids` | borrowed folder UID arrays |
@@ -126,8 +127,10 @@ These are the current markers:
   `g_ptr_array_unref`. The wrappers are `compat::summary_dup_uids`,
   `summary_dup_changed` and `summary_free_uids`. If you call the wrong
   function, memory leaks. No error occurs.
-- **`CamelProvider` lost `auto_detect`, `url_hash` and `url_equal`.** A
-  `#[cfg]` gate protects the fields. The provider stays a struct literal that
+- **`CamelProvider` lost `auto_detect` in 3.58, and `url_hash` and
+  `url_equal` in 3.60.** Two `#[cfg]` gates protect the fields, one for each
+  release. A field has no identifier of its own in the bindings, so the
+  marker of the second gate is the field declaration. The provider stays a struct literal that
   names every field. A field that a future EDS adds is therefore a compile
   error. It is not a silent NULL.
 - **`camel_folder_get_uids` and `camel_folder_free_uids` became
