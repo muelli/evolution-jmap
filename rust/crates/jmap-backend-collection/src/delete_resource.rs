@@ -1,87 +1,89 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Deleting an address book or a calendar *from the server* —
-//! [`crate::create_resource`]'s mirror, and the destructive half of it.
+//! Deletes an address book or a calendar *on the server*. This is the opposite
+//! operation of [`crate::create_resource`], and the destructive one.
 //!
-//! Everything in this crate except the create mirrors what the server holds.
-//! The create makes the server hold something new; this makes it stop holding
-//! something, because the user chose "Delete" on an address book or a calendar
-//! of a JMAP account. `ECollectionBackendClass::delete_resource_sync` is that
-//! request, and [`crate::backend`] is where the slot is filled.
+//! All other code in this crate, except the create, copies what the server has.
+//! The create adds an object to the server. This module removes an object from
+//! the server, when the user selects "Delete" on an address book or a calendar of
+//! a JMAP account. `ECollectionBackendClass::delete_resource_sync` is that
+//! request, and [`crate::backend`] sets the slot.
 //!
-//! As with the create, what is here is the EDS ends: which collection the child
-//! `ESource` stands for, and the flag that makes the menu item exist at all. The
-//! decision in between — which JMAP account, which `/set` destroy — is
-//! [`jmap_collection_sync::delete`]'s, where it needs no headers and is tested
-//! against a running `jmap-mockd`.
+//! As with the create, this module contains the EDS parts: it finds the
+//! collection of the child `ESource`, and it sets the flag that makes the menu
+//! item available. [`jmap_collection_sync::delete`] makes the decision between
+//! these parts (which JMAP account, which `/set` destroy). That crate needs no
+//! headers, and its tests use a running `jmap-mockd`.
 //!
-//! ## The obligation, taken from EDS's own documentation of the vfunc
+//! ## The obligation, from the EDS documentation of the vfunc
 //!
 //! `e_collection_backend_delete_resource_sync()`: *"After the server-side
 //! resource is successfully deleted, the implementor must also remove @source
-//! from the @backend's #ECollectionBackend:server."* Hence
-//! [`crate::removal::remove_source`] after the destroy and never before it — the
-//! same `e_source_remove_sync` a populate removes an obsolete child with, and the
-//! same one `ews_backend_delete_resource_sync` ends on.
+//! from the @backend's #ECollectionBackend:server."* Thus
+//! [`crate::removal::remove_source`] comes after the destroy, never before it.
+//! A populate uses the same `e_source_remove_sync` to remove an obsolete child,
+//! and `ews_backend_delete_resource_sync` also ends with it.
 //!
-//! The order is the whole of the error handling. A source removed first and a
-//! destroy that then failed is an address book gone from the sidebar and still
-//! on the server, which the next populate silently puts back under a *new* uid —
-//! losing the old source's offline cache for nothing. A destroy that worked and
-//! a removal that then failed is the recoverable direction: the child is stale,
-//! the next populate finds the collection gone and removes it through
-//! [`crate::removal`], and in the meantime the user has been told.
+//! The order is the only error handling. Consider a removal of the source before
+//! a destroy that then fails. The address book is then gone from the sidebar but
+//! stays on the server. The next populate adds it again under a *new* uid, and
+//! the offline cache of the old source is lost without a reason. Now consider a
+//! destroy that succeeds before a removal that then fails. This is the
+//! recoverable order: the child is stale, and the next populate finds that the
+//! collection is gone and removes it through [`crate::removal`]. Until then, the
+//! user has an error message.
 //!
-//! ## The parent's implementation is not chained up to
+//! ## This override does not call the parent implementation
 //!
-//! For the same reason [`crate::create_resource`] gives, found in the same
-//! place: `collection_backend_delete_resource()` does exactly one thing,
+//! The reason is the same as in [`crate::create_resource`], and it comes from the
+//! same source. `collection_backend_delete_resource()` does only one thing:
 //! `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-//! deleting remote resources")`. The parent *is* the refusal this override
-//! replaces.
+//! deleting remote resources")`. The parent implementation *is* the refusal that
+//! this override replaces.
 //!
-//! ## `remote-deletable` is the child's flag, not the account's
+//! ## `remote-deletable` is a flag of the child, not of the account
 //!
-//! The opposite of `remote-creatable`, which [`crate::populate`] sets on the
-//! account source. `server_side_source_remote_delete_sync()` refuses on the
-//! *child's* own flag before it ever looks for a backend, so without
-//! [`offer_deletion`] this vfunc is unreachable dead code — and with it set on
-//! the wrong sources it is worse than that.
+//! This is the opposite of `remote-creatable`, which [`crate::populate`] sets on
+//! the account source. `server_side_source_remote_delete_sync()` examines the flag
+//! of the *child* and refuses before it looks for a backend. Without
+//! [`offer_deletion`], this vfunc is unreachable. If the flag is set on incorrect
+//! sources, the result is worse.
 //!
-//! It is set from [`crate::backend`]'s `child_added`, which is EDS's own funnel
-//! for every source that appears under a collection: the children a fan-out just
-//! wrote, the cached ones a populate exported before any server was contacted,
-//! and the one a create just published. That is also where EDS itself sets
-//! `removable = FALSE` on every child, for the same "one place, every child"
-//! reason. evolution-ews instead sets it at each of the three sites that mint a
-//! child; one funnel is the same behaviour with no site left to forget.
+//! The `child_added` of [`crate::backend`] sets the flag. EDS calls `child_added`
+//! for each source that appears under a collection: the children that a fan-out
+//! wrote, the cached children that a populate exported before it contacted a
+//! server, and the child that a create published. EDS also sets
+//! `removable = FALSE` on each child there, for the same reason (one place for
+//! all children). evolution-ews sets the flag at each of the three sites that
+//! create a child. One shared place gives the same behaviour, and no site can be
+//! forgotten.
 //!
-//! **This funnel writes the permissive default, not the last word.** It
-//! answers `deletable` for the *identity* question above — is this source a
-//! collection this backend wrote at all — and has no opinion on `myRights`,
-//! because a cached or newly-published child reaches it before or without any
-//! server contact. [`crate::fan_out::adopt`] corrects that default to the
-//! real per-resource `myRights.mayDelete` immediately after a fan-out writes
-//! a child — new or rediscovered — through
-//! [`Collection::set_remote_deletable`](crate::fan_out::Collection::set_remote_deletable),
-//! which is also the only place a rights *change* on an already-existing
-//! child ever reaches it, since `child_added` fires exactly once per source's
-//! life in a running registry.
+//! **This place writes the permissive default, not the final value.** It answers
+//! the *identity* question above: is this source a collection that this backend
+//! wrote? It does not read `myRights`, because a cached or newly published child
+//! gets to it before any server contact, or without one. The only use of rights
+//! here is that it does not offer a shared child (see [`offer_deletion`]).
+//! After a fan-out writes a child (new or found again), [`crate::fan_out::adopt`]
+//! changes that default to the per-resource `myRights.mayDelete` through
+//! [`Collection::set_remote_deletable`](crate::fan_out::Collection::set_remote_deletable).
+//! That is also the only place where a rights *change* on a child that exists
+//! gets to the flag, because `child_added` fires only once in the life of a
+//! source in a running registry.
 //!
-//! ## What may be deleted is decided by what the source says it is
+//! ## The source itself tells what can be deleted
 //!
-//! [`doomed_of`] answers `None` for every source that is not a child this
-//! backend wrote — no `[Address Book]`/`[Calendar]` extension, or no
-//! `[Resource] Identity` — and both the flag and the vfunc are gated on it. That
-//! is not defensive coding: `child_added` fires for this account's mail sources
-//! too, and the vfunc is handed whichever source the user clicked on. A guess
-//! here is not a wrong error message, it is a destroy sent to a JMAP server
-//! naming an id read out of somebody else's keyfile.
+//! [`doomed_of`] returns `None` for each source that is not a child that this
+//! backend wrote: a source without an `[Address Book]`/`[Calendar]` extension, or
+//! without `[Resource] Identity`. Both the flag and the vfunc use this check.
+//! This is necessary: `child_added` also fires for the mail sources of this
+//! account, and the vfunc gets the source that the user selects. An incorrect
+//! guess does not cause only an incorrect error message. It sends a destroy to a
+//! JMAP server with an id from the keyfile of a different source.
 //!
-//! The kind is half of that identity and never inferred from the id — see
-//! [`jmap_collection_sync::delete`] on why an address book and a calendar may
-//! share one.
+//! The kind is half of that identity, and the code never derives it from the id.
+//! [`jmap_collection_sync::delete`] tells why an address book and a calendar can
+//! have the same id.
 
 use std::fmt;
 
@@ -98,23 +100,23 @@ use jmap_collection_sync::{
 use crate::create_resource::collection_of;
 use crate::resource_id::resource_id_of;
 
-/// Why a delete could not be done.
+/// The reason why a delete failed.
 #[derive(Debug)]
 pub enum DeleteError {
-    /// The source is not a collection this backend wrote, so there is nothing
-    /// of this account's to destroy for it. Unreachable through Evolution — the
-    /// same question gates [`offer_deletion`], so a source that answers this
-    /// never offered the menu item — and an error rather than a silent success
-    /// precisely because reaching it means something else is wrong.
+    /// The source is not a collection that this backend wrote, so this account
+    /// has nothing to destroy for it. Evolution cannot cause this error, because
+    /// [`offer_deletion`] uses the same check, and thus such a source has no menu
+    /// item. It is an error and not a silent success, because it shows that a
+    /// different problem exists.
     NotOurs,
-    /// The account could not be turned into a login — a server it may not
-    /// contact, or no credentials for it.
+    /// The account could not supply a login: it has a server that it must not
+    /// contact, or it has no credentials.
     Login(crate::authenticate::LoginError),
-    /// The connection or the destroy itself failed, or the account's server
-    /// holds no place this kind of collection could have come from.
+    /// The connection or the destroy failed, or the server of the account has no
+    /// account for this kind of collection.
     Server(DeleteFailure),
-    /// The collection is gone from the server and EDS would not remove the
-    /// source describing it. Carries EDS's own reason.
+    /// The server no longer has the collection, and EDS did not remove the source
+    /// of the collection. Contains the reason from EDS.
     Stale(String),
 }
 
@@ -146,10 +148,10 @@ impl fmt::Display for DeleteError {
                 c"this is not an address book or a calendar of this JMAP account",
             )),
             Self::Login(failure) => failure.fmt(f),
-            // `Unserved` is `jmap-collection-sync`'s, and that crate builds
-            // without gettext, so its own `Display` is the developer-facing
-            // spelling and the user-facing one is written here — with the same
-            // translated nouns every other account error uses.
+            // `Unserved` comes from `jmap-collection-sync`, which builds without
+            // gettext. Its `Display` is for developers, so this code writes the
+            // text for the user, with the translated nouns of all other account
+            // errors.
             Self::Server(DeleteFailure::Unserved(kind)) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is "address book" or "calendar". Shown when
                 // the JMAP server behind an account offers no account of that
@@ -165,10 +167,10 @@ impl fmt::Display for DeleteError {
                 &[collection_of(*kind).noun().as_str()],
             )),
             Self::Server(failure) => failure.fmt(f),
-            // The msgid below is one long line on purpose: Rust strips a
-            // `\`-continuation's newline *and* the next line's leading spaces,
-            // xgettext strips neither, so a wrapped literal is a msgid no
-            // translation ever matches.
+            // The msgid below is intentionally one long line. For a `\`
+            // continuation, Rust removes the newline *and* the leading spaces of
+            // the next line, but xgettext removes neither. Thus no translation
+            // matches a wrapped literal.
             Self::Stale(reason) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is a developer-facing reason from Evolution
                 // Data Server. Shown when the collection was deleted on the
@@ -183,12 +185,12 @@ impl fmt::Display for DeleteError {
 impl std::error::Error for DeleteError {}
 
 impl DeleteError {
-    /// The `GError` the vfunc reports this through.
+    /// Returns the `GError` that the vfunc uses to report this error.
     ///
-    /// The same split [`CreateError::to_gerror`] makes, for the same reason: a
-    /// `jmap_client::Error` goes through the mapping every other operation in
-    /// these backends uses, so a 401 on a delete becomes the Evolution error
-    /// code a 401 always becomes, and everything else is
+    /// The split is the same as in [`CreateError::to_gerror`], for the same
+    /// reason. A `jmap_client::Error` goes through the mapping that all other
+    /// operations in these backends use. Thus a 401 on a delete becomes the
+    /// usual Evolution error code for a 401. All other errors become
     /// `E_CLIENT_ERROR_INVALID_ARG`.
     ///
     /// [`CreateError::to_gerror`]: crate::create_resource::CreateError::to_gerror
@@ -201,22 +203,22 @@ impl DeleteError {
     }
 }
 
-/// Which collection `source` stands for, or `None` for a source this backend
+/// Returns the collection of `source`, or `None` for a source that this backend
 /// did not write.
 ///
-/// Read through [`resource_id_of`] and [`parse_resource_id`] rather than off the
-/// extensions directly, so that the string the delete acts on is the very one
-/// `dup_resource_id` hands EDS for this child. A second spelling of that read
-/// could disagree with it, and the way it would disagree is by naming a
-/// different object to destroy.
+/// This function reads through [`resource_id_of`] and [`parse_resource_id`], not
+/// directly from the extensions. Thus the delete uses the same string that
+/// `dup_resource_id` gives EDS for this child. A second implementation of that
+/// read could give a different answer, and then the delete would destroy a
+/// different object.
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource` that outlives the call. It is only
-/// read from — no extension is created on it, which matters because this is
-/// asked about sources belonging to other parts of Evolution.
+/// `source` must be NULL or a valid `ESource` that outlives the call. The
+/// function only reads it and adds no extension to it. This is important,
+/// because callers also use it for sources of other parts of Evolution.
 pub unsafe fn doomed_of(source: *mut ESource) -> Option<Doomed> {
-    // SAFETY: the caller's contract is `resource_id_of`'s.
+    // SAFETY: the contract of the caller is the contract of `resource_id_of`.
     let resource_id = unsafe { resource_id_of(source) }?;
     let (kind, collection_id) = parse_resource_id(&resource_id)?;
     Some(Doomed {
@@ -225,31 +227,32 @@ pub unsafe fn doomed_of(source: *mut ESource) -> Option<Doomed> {
     })
 }
 
-/// Offers `child` for deletion if it is a collection this backend wrote, and
-/// says whether it did.
+/// Offers `child` for deletion if it is a collection that this backend wrote.
+/// Returns `true` if it offered the child.
 ///
-/// Called from `child_added` for every source that appears under this
-/// collection — see the module comment on why that is the one place, and on why
-/// a source that is not ours must not be offered.
+/// `child_added` calls this function for each source that appears under this
+/// collection. The module comment tells why that is the only place, and why a
+/// source of a different owner must not be offered.
 ///
-/// The flag is only ever *set*: a source that answers `None` is left exactly as
-/// it was rather than being written `FALSE`, because it may belong to another
-/// part of Evolution that set it `TRUE` for reasons of its own. Nothing here has
-/// any business withdrawing that.
+/// The function only *sets* the flag. It does not write `FALSE` to a source that
+/// returns `None`. That source can belong to a different part of Evolution that
+/// set the flag to `TRUE` for its own reasons. This function must not remove that
+/// value.
 ///
 /// # Safety
 ///
-/// `child` must be NULL or a valid `EServerSideSource` that outlives the call —
-/// which every child of a collection is, since `evolution-source-registry` holds
-/// no other kind. A plain `ESource` would earn a `g_return_if_fail` critical from
-/// EDS rather than undefined behaviour, but it is still not this function's
-/// contract.
+/// `child` must be NULL or a valid `EServerSideSource` that outlives the call.
+/// Each child of a collection is one, because `evolution-source-registry` has no
+/// other type. For a plain `ESource`, EDS logs a `g_return_if_fail` critical and
+/// no undefined behaviour occurs. But the contract of this function still does
+/// not permit it.
 pub unsafe fn offer_deletion(child: *mut ESource) -> bool {
-    // SAFETY: the caller's contract is `doomed_of`'s, NULL included.
+    // SAFETY: the contract of the caller is the contract of `doomed_of`,
+    // including NULL.
     let doomed = unsafe { doomed_of(child) };
-    // A shared child is left to the fan-out, which offers it only when the
-    // owner's `myRights.mayDelete` allows it: deleting it removes the owner's
-    // collection for everyone, so the identity alone is not enough.
+    // The fan-out decides for a shared child. It offers the child only if
+    // `myRights.mayDelete` of the owner permits it. A delete removes the
+    // collection of the owner for all users, so the identity is not sufficient.
     let deletable =
         doomed.is_some_and(|doomed| split_shared_identity(doomed.collection_id.as_str()).is_none());
     tracing::debug!(
@@ -260,20 +263,20 @@ pub unsafe fn offer_deletion(child: *mut ESource) -> bool {
         return false;
     }
 
-    // SAFETY: a valid `EServerSideSource` by this function's contract, non-NULL
-    // because `doomed_of` answered `Some` for it.
+    // SAFETY: a valid `EServerSideSource` because of the contract of this
+    // function. It is not NULL, because `doomed_of` returned `Some` for it.
     unsafe { e_server_side_source_set_remote_deletable(child.cast(), GTRUE) };
     true
 }
 
-/// Connects as `target`/`credentials` say and destroys `doomed` there.
+/// Connects with `target` and `credentials`, and destroys `doomed` on that server.
 ///
-/// [`crate::create_resource::create_on_server`]'s mirror, and split out for the
-/// same reason: the vfunc gets one thing to do with a
-/// [`Login`](crate::authenticate::Login) and one error type to report. The
-/// connect is [`jmap_backend_core::source::connect`]'s — so a bare-domain
-/// account gets the same `_jmap._tcp` autodiscovery a fan-out gets — and the
-/// destroy is [`delete_collection`]'s.
+/// This is the opposite operation of [`crate::create_resource::create_on_server`].
+/// It is a separate function for the same reason: the vfunc has one operation to
+/// do with a [`Login`](crate::authenticate::Login), and one error type to report.
+/// [`jmap_backend_core::source::connect`] makes the connection, so an account with
+/// only a domain gets the same `_jmap._tcp` autodiscovery as a fan-out.
+/// [`delete_collection`] does the destroy.
 pub fn delete_on_server(
     target: &ConnectTarget,
     rebase_urls: bool,
@@ -298,9 +301,9 @@ mod delete_error_display_tests {
     use super::*;
     use crate::authenticate::LoginError;
 
-    /// `DeleteError`'s `Display` writes something for every variant; without
-    /// this test a `Display` that writes nothing still compiles and a
-    /// refused delete reports as an empty error message.
+    /// The `Display` of `DeleteError` writes text for each variant. Without this
+    /// test, a `Display` that writes nothing still compiles, and a refused delete
+    /// shows an empty error message.
     #[test]
     fn every_variant_displays_a_non_empty_message() {
         assert!(!DeleteError::NotOurs.to_string().is_empty());
@@ -330,16 +333,15 @@ mod delete_error_to_gerror_tests {
 
     use super::*;
 
-    /// `NotOurs` goes through `invalid_arg_gerror`, the same as every
-    /// variant but `Login` and a server `Client` failure; without this test
-    /// `to_gerror` can be replaced with a function that always answers the
-    /// null pointer and nothing notices.
+    /// `NotOurs` goes through `invalid_arg_gerror`, as do all variants except
+    /// `Login` and a server `Client` failure. Without this test, a `to_gerror`
+    /// that always returns the null pointer causes no failure.
     #[test]
     fn not_ours_carries_the_invalid_arg_code_and_its_own_message() {
         let error = DeleteError::NotOurs;
         let gerror = error.to_gerror();
         assert!(!gerror.is_null());
-        // SAFETY: a freshly allocated GError this test owns.
+        // SAFETY: a newly allocated GError that this test owns.
         unsafe {
             assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
             assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);

@@ -1,90 +1,96 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What a populate leaves behind so the *next* edit of the account can reach
-//! it: one `"changed"` connection, and the one bit of state that decides
-//! whether that edit is worth another login.
+//! What a populate keeps for the *next* edit of the account: one `"changed"`
+//! connection, and the state that decides if that edit needs a new login.
 //!
-//! EDS does less here than it looks like it does. `ECollectionBackend`
-//! reschedules a populate for exactly four things (`e-collection-backend.c`,
-//! 3.52.3): the three `ESourceCollection` toggles
-//! `calendar-enabled`/`contacts-enabled`/`mail-enabled`
-//! (`collection_backend_notify_collection_cb`), an offline-to-online
-//! transition throttled to once per 24 hours
-//! (`collection_backend_online_changed_cb`), construction, and a manual
-//! `e_source_registry_refresh_backend()`. Nothing reschedules on a generic
-//! edit of the account. So correcting a mistyped host or port mid-session
-//! leaves the account in whatever state its last failed login left it in,
-//! until its owner disables and re-enables it or asks for a refresh.
+//! EDS does less here than it seems to do. `ECollectionBackend` schedules a
+//! populate again for four events only (`e-collection-backend.c`, 3.52.3):
 //!
-//! `e-ews-backend.c` exists partly to cover that: `ews_backend_populate`
-//! connects the account source's own `"changed"` to
-//! `ews_backend_source_changed_cb`, which re-runs populate. This module is
-//! that, and two decisions of its own.
+//! - the three `ESourceCollection` toggles
+//!   `calendar-enabled`/`contacts-enabled`/`mail-enabled`
+//!   (`collection_backend_notify_collection_cb`);
+//! - a transition from offline to online, at most once per 24 hours
+//!   (`collection_backend_online_changed_cb`);
+//! - construction;
+//! - a manual `e_source_registry_refresh_backend()`.
+//!
+//! A general edit of the account schedules nothing. Thus a corrected host or
+//! port during a session leaves the account in the state of its last failed
+//! login. This continues until the owner disables and enables it, or asks for
+//! a refresh.
+//!
+//! `e-ews-backend.c` solves this partly. `ews_backend_populate` connects the
+//! `"changed"` signal of the account source to `ews_backend_source_changed_cb`,
+//! which runs populate again. This module does the same, with two decisions of
+//! its own.
 //!
 //! ## Why no handler id, and no `dispose` override
 //!
-//! EWS keeps the handler id in `priv->source_changed_id` and disconnects it in
-//! `ews_backend_dispose`, reading the source back out of the backend to do so.
-//! [`crate::backend`] uses `g_signal_connect_object` against the backend
-//! instead, and so stores nothing. GObject's own `g_object_watch_closure`,
-//! which is what that call adds, gives two guarantees a hand-written
-//! disconnect has to be written correctly to match: it wraps the marshal in
-//! `g_object_ref`/`g_object_unref` of the watched object, so the backend
-//! cannot be freed *during* a handler call, and it drops the closure from
-//! `g_object_real_dispose`, so the connection is gone by the time the backend
-//! finalizes. What it removes is the failure mode the hand-written version
-//! has: a disconnect that looks up the source again and finds a different one,
-//! or none, leaves a live handler holding a freed backend. The same reasoning
-//! is written out at `jmap_config`'s own `insert_widgets`.
+//! EWS keeps the handler id in `priv->source_changed_id`. It disconnects it in
+//! `ews_backend_dispose`, and reads the source from the backend to do so.
+//! [`crate::backend`] uses `g_signal_connect_object` on the backend instead,
+//! and so stores nothing. That call adds a GObject `g_object_watch_closure`,
+//! which gives two guarantees.
+//!
+//! - It wraps the marshal in `g_object_ref`/`g_object_unref` of the watched
+//!   object, so the backend cannot be freed *during* a handler call.
+//! - It removes the closure in `g_object_real_dispose`, so the connection is
+//!   gone before the backend finalizes.
+//!
+//! A hand-written disconnect can fail: if it finds a different source, or no
+//! source, a live handler keeps a freed backend. `insert_widgets` in
+//! `jmap_config` gives the same reasoning.
 //!
 //! ## Why an edit after a working login does nothing
 //!
-//! A `"changed"` fires for every setting of the account, its display name
-//! included, and a repopulate ends in `e_backend_schedule_credentials_required`
-//! and so in a fresh network fan-out. Answering every edit with one would
-//! re-login for a rename, and would answer the three enabled-toggles twice
-//! over, since EDS reschedules a populate for those itself.
+//! A `"changed"` fires for every setting of the account, the display name
+//! included. A repopulate ends in `e_backend_schedule_credentials_required`,
+//! and thus in a new network fan-out. A repopulate for every edit would log in
+//! again for a rename. It would also double the response to the three
+//! enabled-toggles, because EDS schedules a populate for those itself.
 //!
-//! [`AccountWatch`] is the same answer EWS's `need_update_folders` is: a
-//! populate marks the account unproven, a successful fan-out marks it proven,
-//! and a `"changed"` only repopulates while it is unproven -- and only when the
-//! account no longer names the login the populate read. So the edit that fixes
-//! a broken account gets its retry, and every later edit is free.
+//! [`AccountWatch`] gives the same answer as `need_update_folders` in EWS. A
+//! populate marks the account unproven, and a successful fan-out marks it
+//! proven. A `"changed"` repopulates only while the account is unproven, and
+//! only when the login settings differ from those the populate read. Thus the
+//! edit that repairs a broken account gets its retry, and later edits cost
+//! nothing.
 //!
-//! The cost is the mirror case: breaking a *working* account's host is not
-//! noticed until something else reconnects it. That is what EWS settles for
-//! too, and it is not a regression either way — before this module there was
-//! no handler at all, so no edit of any kind was noticed.
+//! The cost is the opposite case. If a *working* account gets a broken host,
+//! nothing notices until something else connects it again. EWS accepts the
+//! same cost.
 //!
-//! ## Why a populate's own write is not an edit
+//! ## Why the own write of a populate is not an edit
 //!
-//! One `"changed"` of every account is this backend's own. A populate sets
-//! `ESourceCollection`'s `allow-sources-rename`, whose pspec carries
-//! `E_SOURCE_PARAM_SETTING` and whose default is FALSE, and a settings
-//! property reaches `e_source_changed` through `ESourceExtension`'s `notify`
-//! override (`e-source-extension.c`, 3.52.3). The emission is an idle, so it
-//! lands after the populate that wrote it returned -- after that same populate
-//! connected this handler, and long before a fan-out has proved anything.
-//! Answering it with a repopulate would ask every account for a second login
-//! the first time it is ever populated, and `e_backend_schedule_authenticate`
-//! cancels the first login to start the second. evolution-ews does not meet
-//! this because it writes the flag in `constructed`, before its own handler
-//! exists; this backend has no `constructed` override.
+//! One `"changed"` of every account comes from this backend. A populate sets
+//! `allow-sources-rename` of `ESourceCollection`. Its pspec has
+//! `E_SOURCE_PARAM_SETTING` and its default is FALSE. A settings property
+//! reaches `e_source_changed` through the `notify` override of
+//! `ESourceExtension` (`e-source-extension.c`, 3.52.3).
 //!
-//! So `"changed"` on its own is not the question. [`login_fingerprint`] is:
-//! the account settings a login is built from, as one number, recorded by the
-//! populate that read them. An edit that leaves it alone changed nothing a
-//! second login would do differently, whoever made the edit. The three
-//! enabled-toggles are deliberately outside it, because EDS reschedules a
-//! populate for those itself. `e_source_changed` also coalesces a burst of
-//! edits into a single idle emission, so an account editor's *Apply* arrives
-//! as one `"changed"` rather than one per field.
+//! The emission is an idle, so it arrives after the populate returns. That is
+//! after the populate connected this handler, and before a fan-out has proved
+//! anything. A repopulate in response would ask every account for a second
+//! login at its first populate. `e_backend_schedule_authenticate` also cancels
+//! the first login to start the second. evolution-ews writes the flag in
+//! `constructed`, before its handler exists. This backend has no `constructed`
+//! override.
 //!
-//! Only one fan-out can be in flight whatever asks for it: `EBackend` takes
-//! `priv->authenticate_lock` around the whole `authenticate_sync` vfunc ("To
+//! Thus `"changed"` alone is not the test. [`login_fingerprint`] is the test:
+//! the login settings of the account as one number, recorded by the populate
+//! that read them. An edit that does not change it changes nothing for a
+//! second login, independent of who made the edit. The three enabled-toggles
+//! are deliberately not in it, because EDS schedules a populate for those
+//! itself.
+//!
+//! `e_source_changed` also combines a burst of edits into one idle emission.
+//! Thus *Apply* in an account editor gives one `"changed"`, not one per field.
+//!
+//! Only one fan-out can run at a time, whatever starts it. `EBackend` holds
+//! `priv->authenticate_lock` around all of the `authenticate_sync` vfunc ("To
 //! not run multiple authenticate requests simultaneously", `e-backend.c`
-//! 3.52.3), and this crate fans out from nowhere else.
+//! 3.52.3). This crate starts a fan-out from no other place.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -96,20 +102,19 @@ use jmap_backend_core::oauth2::source_uses_oauth2;
 
 use crate::collection_source::{server_of, user_of};
 
-/// The account settings a login is built from, as one number.
+/// The account settings that a login uses, as one number.
 ///
-/// Everything [`login_of`](crate::authenticate::login_of) reads out of the
-/// account except its parts: where the server is, as whom, and by which
-/// authentication method. Two reads that agree describe an account that would
-/// log in exactly the same way, so an edit between them is not one this
-/// module's handler has anything to retry for.
+/// This is all that [`login_of`](crate::authenticate::login_of) reads from the
+/// account, except its parts: the server, the user, and the authentication
+/// method. If two reads agree, the account logs in identically, so the handler
+/// of this module has nothing to retry.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` -- the account EDS constructed the
-/// backend from. It is only read from, and nothing outlives the call.
+/// `source` must be a valid `ESource`: the account from which EDS constructed
+/// the backend. It is only read from, and nothing outlives the call.
 pub unsafe fn login_fingerprint(source: *mut ESource) -> u64 {
-    // SAFETY: a valid source by this function's contract, only read from.
+    // SAFETY: a valid source by the contract of this function, only read from.
     let (server, user, uses_oauth2, uses_api_token) = unsafe {
         (
             server_of(source),
@@ -120,8 +125,8 @@ pub unsafe fn login_fingerprint(source: *mut ESource) -> u64 {
     };
 
     let mut hasher = DefaultHasher::new();
-    // Through `Debug` rather than `Hash`: a field added to `Server` later joins
-    // the fingerprint without anyone having to remember this line.
+    // Through `Debug`, not `Hash`: a new field of `Server` then becomes part of
+    // the fingerprint automatically.
     format!("{server:?}").hash(&mut hasher);
     user.hash(&mut hasher);
     uses_oauth2.hash(&mut hasher);
@@ -129,36 +134,35 @@ pub unsafe fn login_fingerprint(source: *mut ESource) -> u64 {
     hasher.finish()
 }
 
-/// The state one collection backend keeps between a populate and the account
-/// edits that follow it.
+/// The state that one collection backend keeps between a populate and the
+/// later edits of the account.
 ///
-/// Lives inline in [`JmapCollectionBackend`](crate::backend::JmapCollectionBackend),
-/// which is why all-zero has to be its starting state: GObject hands
-/// `instance_init` a zeroed instance struct, and zero here reads as "nothing
-/// connected, nothing proven", which is exactly true of an account no populate
-/// has run for yet. Nothing to undo in `finalize` either, since neither field
-/// owns anything.
+/// It is inline in [`JmapCollectionBackend`](crate::backend::JmapCollectionBackend),
+/// so all-zero must be its initial state. GObject gives `instance_init` a
+/// zeroed instance struct. Zero here means "nothing connected, nothing proven",
+/// which is true for an account before its first populate. `finalize` has
+/// nothing to release, because no field owns anything.
 ///
-/// Atomics rather than `Cell`s because a backend's vfuncs are not all called
-/// from one thread: `populate` runs on `evolution-source-registry`'s main
-/// loop, [`authenticate_sync`](crate::backend) on whichever thread EDS
-/// resolved the credentials on.
+/// The fields are atomics, not `Cell`s, because the vfuncs of a backend run on
+/// different threads. `populate` runs on the main loop of
+/// `evolution-source-registry`. [`authenticate_sync`](crate::backend) runs on
+/// the thread on which EDS resolved the credentials.
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct AccountWatch {
-    /// Whether the account's `"changed"` handler is already connected.
+    /// Whether the `"changed"` handler of the account is already connected.
     connected: AtomicBool,
     /// Whether a fan-out has succeeded since the last populate began.
     proven: AtomicBool,
-    /// The [`login_fingerprint`] the last populate read off the account. Zero
-    /// is the zeroed state, and reads as "no populate has recorded one", which
-    /// makes an edit worth a try: the safe direction, and unreachable anyway,
-    /// since the handler exists only once a populate has connected it.
+    /// The [`login_fingerprint`] that the last populate read from the account.
+    /// Zero means "no populate has recorded one", so an edit causes a retry.
+    /// That is the safe direction. It cannot occur, because only a populate
+    /// connects the handler.
     login: AtomicU64,
 }
 
 impl AccountWatch {
-    /// Not connected, not proven: the zeroed state, spelled out.
+    /// Not connected, not proven: the zeroed state, written explicitly.
     pub const fn new() -> Self {
         Self {
             connected: AtomicBool::new(false),
@@ -169,31 +173,30 @@ impl AccountWatch {
 
     /// Whether this caller is the one that should connect the handler.
     ///
-    /// True for the first caller and no other, which is what keeps a populate
-    /// per reconnect from becoming a handler per reconnect -- and so a
-    /// repopulate per handler, doubling with every pass.
+    /// True for the first caller only. Without this, each reconnect adds a
+    /// populate and a handler, and the repopulates double with every pass.
     pub fn claim_connection(&self) -> bool {
         self.connected
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     }
 
-    /// A populate has begun on the account [`login_fingerprint`] answered
-    /// `login` for, so its settings are unproven again until a fan-out gets
-    /// through with them.
+    /// A populate has started on the account for which [`login_fingerprint`]
+    /// gave `login`. Its settings are unproven again until a fan-out succeeds
+    /// with them.
     pub fn populating(&self, login: u64) {
         self.login.store(login, Ordering::SeqCst);
         self.proven.store(false, Ordering::SeqCst);
     }
 
-    /// A fan-out succeeded: the account names a server this code reached and
-    /// credentials it accepted.
+    /// A fan-out succeeded: this code reached the server of the account, and
+    /// the server accepted its credentials.
     pub fn proven(&self) {
         self.proven.store(true, Ordering::SeqCst);
     }
 
-    /// Whether an edit that left the account with the [`login_fingerprint`]
-    /// `login` is worth re-running populate for.
+    /// Whether an edit that gives the account the [`login_fingerprint`]
+    /// `login` needs a new populate.
     pub fn wants_repopulate(&self, login: u64) -> bool {
         !self.proven.load(Ordering::SeqCst) && self.login.load(Ordering::SeqCst) != login
     }
@@ -203,7 +206,7 @@ impl AccountWatch {
 mod tests {
     use super::AccountWatch;
 
-    /// Two accounts' worth of login settings, as the fingerprints of them.
+    /// The fingerprints of the login settings of two accounts.
     const ONE_SERVER: u64 = 0x1111_1111_1111_1111;
     const ANOTHER_SERVER: u64 = 0x2222_2222_2222_2222;
 

@@ -1,22 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `create_resource_sync`/`delete_resource_sync`'s own layer against a real JMAP
-// server.
+// Tests for the layer of `create_resource_sync` and `delete_resource_sync`
+// against a real JMAP server.
 //
-// `jmap-collection-sync`'s `tests/create.rs`/`tests/delete.rs` already prove
-// `create_collection`/`delete_collection` round-trip through real Stalwart, and
-// this crate's own `tests/live_server.rs` proves `fan_out` on top of that. What
-// neither reaches is the *other* two write vfuncs' own layer:
+// `jmap-collection-sync/tests/live_server.rs` tests the round trip of
+// `create_collection` and `delete_collection` through real Stalwart.
+// `tests/live_server.rs` in this crate tests `fan_out` on that base. Neither
+// file tests the layer of the *other* two write vfuncs:
 // `create_on_server`/`adopt_created` and `delete_on_server` in
-// `create_resource.rs`/`delete_resource.rs` — what Evolution's "New Address
-// Book"/"New Calendar" and "Delete" menu items under a JMAP account actually
-// call. Every test of that layer so far (`tests/create_resource.rs`,
-// `tests/delete_resource.rs`) has run against `jmap-mockd`. This is that
-// confirmation.
+// `create_resource.rs`/`delete_resource.rs`. The "New Address Book", "New
+// Calendar" and "Delete" menu items of Evolution call this layer for a JMAP
+// account. `tests/create_resource.rs` and `tests/delete_resource.rs` test it
+// only against `jmap-mockd`. This file tests it against a real server.
 //
-// Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-// unset; see docs/manual-test-live-server.md.
+// The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+// `_PASSWORD` is not set. See docs/manual-test-live-server.md.
 
 use std::env;
 use std::ffi::{CStr, CString};
@@ -64,10 +63,10 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Where this test's account says its server is — arbitrary and unrelated to
-/// the real server's own address, on purpose: mirrors `tests/live_server.rs`'s
-/// own `connection()`, which explains why (a child must be written from the
-/// login's own connection, not wherever the create happened to reach).
+/// The server address of the account of this test. It is intentionally not
+/// the address of the real server, as in `connection()` of
+/// `tests/live_server.rs`. A child must use the connection of the login, not
+/// the address of the create.
 fn connection() -> Connection {
     Connection {
         host: "jmap.example.com".to_owned(),
@@ -78,21 +77,21 @@ fn connection() -> Connection {
     }
 }
 
-/// A real, empty `EServerSideSource` — what EDS's `remote_create` handler and
-/// `child_added` both hand this backend, minus the `evolution-source-registry`
-/// daemon this runner has none of. Same construction as
-/// `tests/create_resource.rs`/`tests/delete_resource.rs`.
+/// A real, empty `EServerSideSource`, as the `remote_create` handler of EDS and
+/// `child_added` give to this backend. This runner has no
+/// `evolution-source-registry` daemon. The construction is the same as in
+/// `tests/create_resource.rs` and `tests/delete_resource.rs`.
 struct ServerSide {
-    /// Held for as long as the source: `e_server_side_source_new` keeps only a
-    /// weak reference to it.
+    /// Kept for the life of the source. `e_server_side_source_new` keeps only a
+    /// weak reference to the server.
     server: *mut ESourceRegistryServer,
     source: *mut ESource,
 }
 
 impl ServerSide {
     fn new() -> Self {
-        // SAFETY: no arguments; `e_source_get_extension` cannot find an
-        // extension class whose type nothing has referenced yet.
+        // SAFETY: these functions take no arguments. `e_source_get_extension`
+        // cannot find an extension class whose type is not yet referenced.
         unsafe {
             e_source_address_book_get_type();
             e_source_calendar_get_type();
@@ -107,8 +106,9 @@ impl ServerSide {
             .expect("no NUL in a temp path");
         let mut error = ptr::null_mut();
 
-        // SAFETY: the constructor takes no arguments; the path is
-        // NUL-terminated and copied; the GFile is owned here and released below.
+        // SAFETY: the constructor takes no arguments. The path is
+        // NUL-terminated and the callee copies it. This code owns the GFile and
+        // releases it below.
         let (server, source) = unsafe {
             let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
             let file = g_file_new_for_path(path.as_ptr());
@@ -144,8 +144,9 @@ impl ServerSide {
 
 impl Drop for ServerSide {
     fn drop(&mut self) {
-        // SAFETY: this holds the only reference to each; the source is released
-        // first because it holds a weak reference to the server.
+        // SAFETY: this struct holds the only reference to each object. The
+        // source is released first because it holds a weak reference to the
+        // server.
         unsafe {
             g_object_unref(self.source.cast());
             g_object_unref(self.server.cast::<GObject>());
@@ -153,11 +154,11 @@ impl Drop for ServerSide {
     }
 }
 
-/// Creates a real address book through `create_on_server`/`adopt_created`,
-/// confirms an independent connection can see it, deletes it back through
-/// `delete_on_server` the way `delete_resource_sync` would from the child
-/// source a `child_added` fired for, and confirms the independent connection
-/// agrees it is gone.
+/// Creates a real address book through `create_on_server`/`adopt_created`.
+/// Then the test makes sure that an independent connection sees it. It deletes
+/// the address book through `delete_on_server`, as `delete_resource_sync` does
+/// for the child source of a `child_added`. Last, it makes sure that the
+/// independent connection no longer sees it.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn create_resource_then_delete_resource_round_trip_through_the_real_server() {
@@ -186,8 +187,8 @@ fn create_resource_then_delete_resource_round_trip_through_the_real_server() {
     )
     .expect("AddressBook/set create failed against the real server");
 
-    // SAFETY: `scratch.source` is a live `EServerSideSource` this test holds a
-    // reference to.
+    // SAFETY: `scratch.source` is a live `EServerSideSource` that this test
+    // holds a reference to.
     unsafe {
         adopt_created(
             scratch.source,
@@ -217,10 +218,9 @@ fn create_resource_then_delete_resource_round_trip_through_the_real_server() {
          independent connection"
     );
 
-    // The child a `child_added` fired for this collection would carry — built
-    // the same way `adopt_created` above just built `scratch`'s settings, so
-    // `delete_resource_sync` reads back the collection id `create_on_server`
-    // reported.
+    // The child that a `child_added` for this collection gets. Its settings
+    // come from the same `Child` as the settings of `scratch` above. Thus
+    // `delete_resource_sync` reads the collection id from `create_on_server`.
     let doomed_source = ServerSide::new();
     // SAFETY: a live source this test holds a reference to.
     unsafe { apply(doomed_source.source, &created.settings(&connection())) }

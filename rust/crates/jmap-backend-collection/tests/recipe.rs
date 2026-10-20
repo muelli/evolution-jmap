@@ -1,32 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// M6's last acceptance criterion is the same as M3's and M4's: a documented
-// manual recipe with a hand-written `.source` keyfile. A recipe is prose, and
-// nothing else in this repository fails when a group name in it is wrong or when
-// the backend name it tells the reader to write stops being the one the factory
-// answers to. For a *collection* the symptom is quieter than for an address
-// book, because the registry has a factory for every account it cannot place:
-// `BackendName=jmapp` is an account that simply has no children, with no error
-// anywhere.
+// Tests the manual recipe and its hand-written `.source` keyfiles. A recipe is
+// prose, so nothing else fails when a group name or the backend name in it is
+// wrong. For a collection, the symptom is quiet: with `BackendName=jmapp`, the
+// account has no children and shows no error.
 //
-// So the keyfiles are files — the ones in `docs/examples/` the recipe says to
-// copy — and these tests read them the way the registry does.
-// `e_server_side_source_new` on a GFile is exactly what
-// `evolution-source-registry` calls for every file in its sources directory, and
-// it needs neither a bus nor a running daemon; what the reader copies is
-// therefore parsed by EDS's own keyfile code and handed to the same
-// `collection_source` functions `populate` calls.
+// The keyfiles are the files in `docs/examples/` that the recipe tells the
+// reader to copy. The tests read them as the registry does.
+// `evolution-source-registry` calls `e_server_side_source_new` on a GFile for
+// each file in its sources directory. That call needs no bus and no running
+// daemon. Thus the EDS keyfile code parses the files, and the tests give the
+// result to the `collection_source` functions that `populate` calls.
 //
-// The recipe has two runs and this file covers both. The second — an account
-// with `MailEnabled=true` and the three mail sources hand-written under it —
-// exists because the mail half of this backend has no other visible surface:
-// nothing here creates those sources, and what the backend does for them is
-// give them a server. So those tests go one step further than the first run's
-// and call `follow_collection` on the documented files, then read the transport
-// back through `jmap-mail`'s own `ServerConfig` — the same far-end assertion
-// `tests/mail_child.rs` makes, over the files a reader actually copies rather
-// than over sources a test built.
+// The recipe has two runs, and this file covers both. The second run has an
+// account with `MailEnabled=true` and three hand-written mail sources. The
+// backend does not create these sources; it only gives them a server. Thus
+// those tests call `follow_collection` on the documented files. Then they read
+// the transport through the `jmap-mail` `ServerConfig`, as
+// `tests/mail_child.rs` does.
 
 use std::ffi::{CStr, c_char};
 use std::fs;
@@ -64,13 +56,11 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Every keyfile the recipe tells the reader to copy, in the order the document
-/// quotes them — one `.source` file per ```` ```ini ```` block, checked against
-/// the block below.
+/// Each keyfile that the recipe tells the reader to copy, in the order of the
+/// document. Each `.source` file matches one ```` ```ini ```` block.
 ///
-/// The first is the account of the contacts-and-calendars run; the other four
-/// are the mail run's, which is an account plus the three sources a mail account
-/// is made of.
+/// The first is the account of the contacts-and-calendars run. The other four
+/// are for the mail run: an account and the three sources of a mail account.
 const KEYFILES: [&str; 5] = [
     "jmap-mock-collection.source",
     "jmap-mock-mail-collection.source",
@@ -79,13 +69,13 @@ const KEYFILES: [&str; 5] = [
     "jmap-mock-mail-transport.source",
 ];
 
-/// The mail run's account, and the three sources parented to it.
+/// The account of the mail run, and its three child sources.
 const MAIL_COLLECTION: &str = KEYFILES[1];
 const MAIL_STORE: &str = KEYFILES[2];
 const MAIL_IDENTITY: &str = KEYFILES[3];
 const MAIL_TRANSPORT: &str = KEYFILES[4];
 
-/// The repository root, from the crate this test lives in.
+/// The repository root, found from the crate directory.
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
@@ -105,22 +95,19 @@ fn keyfile() -> PathBuf {
     example(KEYFILES[0])
 }
 
-/// The name `[JMAP Backend]` — the extension a `jmap` service's Camel settings
-/// live under — having first generated the `ESourceCamel` subtype that carries
-/// it.
+/// Generates the `ESourceCamel` subtype for `jmap` and returns its extension
+/// name, `[JMAP Backend]`.
 ///
-/// The same helper, for the same reason and with the same `OnceLock`, as
-/// `tests/mail_child.rs`: the provider is linked into this test rather than
-/// installed, so nothing has called `e_source_camel_register_types()` and the one
-/// subtype these tests need is generated directly. Losing the race between
-/// generating and registering it is an abort inside GObject, and Rust runs the
-/// tests in this file as threads of one process.
+/// This helper is the same as the one in `tests/mail_child.rs`. The provider is
+/// linked into the test, not installed, so nothing calls
+/// `e_source_camel_register_types()`. Two threads that generate the subtype at
+/// the same time cause an abort in GObject, so a `OnceLock` guards it.
 fn camel_extension_name() -> *const c_char {
     static NAME: OnceLock<usize> = OnceLock::new();
     let name = *NAME.get_or_init(|| {
         // SAFETY: a NUL-terminated protocol name and a GType derived from
-        // CamelSettings, which is what `settings_type` registers; the name it
-        // hands back is interned and never freed.
+        // CamelSettings, which `settings_type` registers. The returned name is
+        // interned and is never freed.
         unsafe {
             let gtype =
                 e_source_camel_generate_subtype(MAIL_BACKEND_NAME.as_ptr(), settings_type());
@@ -134,13 +121,11 @@ fn camel_extension_name() -> *const c_char {
     name as *const c_char
 }
 
-/// A `.source` file loaded the way `evolution-source-registry` loads one.
+/// A `.source` file loaded as `evolution-source-registry` loads it.
 ///
-/// The same stand-in as `jmap-backend-book`'s and `jmap-backend-cal`'s recipe
-/// tests, and a third copy rather than a shared helper: cargo gives each
-/// integration test its own binary, and the alternative — a support crate in the
-/// workspace whose only user is three test files — would be a published-looking
-/// crate that exists to hold thirty lines.
+/// The recipe tests of `jmap-backend-book` and `jmap-backend-cal` have the same
+/// helper. Each integration test is a separate binary, and a support crate for
+/// thirty lines in three test files is not worth it.
 struct RegistrySource {
     server: *mut gobject_sys::GObject,
     source: *mut ESource,
@@ -149,21 +134,18 @@ struct RegistrySource {
 impl RegistrySource {
     /// Parses `path`.
     ///
-    /// `e_server_side_source_new` insists on a registry server — it is the object
-    /// a server-side source reports changes to — but constructing one neither
-    /// owns a bus name nor reads the user's sources; that only happens when it is
-    /// run. So this is the whole daemon-free part of the daemon, and it is the
-    /// part that turns a keyfile into an `ESource`.
+    /// `e_server_side_source_new` needs a registry server, which receives the
+    /// changes of a server-side source. Construction of the server does not own
+    /// a bus name or read the sources of the user; only a running server does.
     fn load(path: &Path) -> Self {
         let path_string =
             std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
         let mut error = ptr::null_mut();
-        // SAFETY: the constructor takes no arguments; the path is NUL-terminated
-        // and copied; the GFile is owned here and released below.
+        // SAFETY: the constructor takes no arguments. The path is NUL-terminated
+        // and copied. This code owns the GFile and releases it below.
         let (server, source) = unsafe {
-            // `e_source_registry_server_new` is declared as returning its own
-            // base class, `EDBusServer *`, the way EDS's own callers use it; the
-            // cast back down is the one C does implicitly.
+            // `e_source_registry_server_new` returns its base class,
+            // `EDBusServer *`. C does this downcast implicitly.
             let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
             let file = g_file_new_for_path(path_string.as_ptr());
             let source = e_server_side_source_new(server, file, &mut error);
@@ -183,14 +165,14 @@ impl RegistrySource {
         }
     }
 
-    /// The uid the registry gives this file, which is its name without the
-    /// extension — and so the string another file's `Parent=` has to spell.
+    /// The uid that the registry gives this file: its name without the
+    /// extension. The `Parent=` of a child file must use this string.
     fn uid(&self) -> Option<String> {
         // SAFETY: a live source; the getter returns a string owned by it.
         unsafe { read_string(e_source_get_uid(self.source)) }
     }
 
-    /// What this source says it hangs off.
+    /// The uid of the parent that this source names.
     fn parent(&self) -> Option<String> {
         // SAFETY: as above.
         unsafe { read_string(e_source_get_parent(self.source)) }
@@ -201,13 +183,13 @@ impl RegistrySource {
         unsafe { e_source_has_extension(self.source, name.as_ptr()) != GFALSE }
     }
 
-    /// The `CamelSettings` object a Camel service configured from this source
-    /// would be given — `e_source_camel_configure_service`'s own two steps with
-    /// the service left out, exactly as `tests/mail_child.rs` does it.
+    /// The `CamelSettings` object that a Camel service gets from this source.
+    /// As in `tests/mail_child.rs`, this does the two steps of
+    /// `e_source_camel_configure_service` without the service.
     fn camel_settings(&self) -> *mut CamelSettings {
         // SAFETY: a live source and the interned extension name of a registered
-        // `ESourceCamel` subtype; the extension is created on demand and owned
-        // by the source, and so is the settings object it holds.
+        // `ESourceCamel` subtype. The source creates and owns the extension and
+        // its settings object.
         unsafe {
             let extension: *mut ESourceCamel =
                 e_source_get_extension(self.source, camel_extension_name()).cast();
@@ -218,31 +200,29 @@ impl RegistrySource {
         }
     }
 
-    /// The `CamelNetworkSecurityMethod` those settings arrived at — the value
-    /// the string in `[Security] Method` was converted into rather than the
-    /// string itself, because the conversion is where a wrong spelling goes
-    /// quiet.
+    /// The `CamelNetworkSecurityMethod` converted from `[Security] Method`. A
+    /// wrong spelling fails silently in this conversion, so the test reads the
+    /// result, not the string.
     fn camel_security_method(&self) -> CamelNetworkSecurityMethod {
         // SAFETY: the settings object of a live source, which implements
         // `CamelNetworkSettings`.
         unsafe { camel_network_settings_get_security_method(self.camel_settings().cast()) }
     }
 
-    /// The server `jmap-mail` reads off those settings — the last thing its
-    /// `connect_sync` needs before it builds a client.
+    /// The server that `jmap-mail` reads from the settings. Its `connect_sync`
+    /// needs this server to build a client.
     fn server(&self) -> Result<ServerConfig, SourceError> {
         // SAFETY: the settings object of a live source, only read from.
         unsafe { ServerConfig::from_settings(self.camel_settings()) }
     }
 
-    /// What the `[Collection]` group says the backend is called.
+    /// The backend name in the `[Collection]` group.
     fn backend_name(&self) -> Option<String> {
-        // SAFETY: referencing the extension's GType registers it, so that the
-        // lookup below can find it in a test binary that has not otherwise
-        // touched a collection source. Then a header constant naming an extension
-        // the source owns — created rather than merely fetched, which is what
-        // `collection_source` is careful not to do and what a throwaway copy of
-        // the file may.
+        // SAFETY: a reference to the GType of the extension registers it, so the
+        // lookup below can find it. Then a header constant that names an
+        // extension owned by the source. The call can create the extension.
+        // `collection_source` avoids this, but a temporary copy of the file
+        // can accept it.
         let name = unsafe {
             e_source_collection_get_type();
             let extension =
@@ -253,8 +233,8 @@ impl RegistrySource {
         if name.is_null() {
             return None;
         }
-        // SAFETY: a non-NULL return is a NUL-terminated string owned by the
-        // extension, which outlives the copy taken here.
+        // SAFETY: a non-NULL return is a NUL-terminated string that the
+        // extension owns. The extension outlives this copy.
         Some(
             unsafe { CStr::from_ptr(name) }
                 .to_string_lossy()
@@ -265,7 +245,7 @@ impl RegistrySource {
 
 impl Drop for RegistrySource {
     fn drop(&mut self) {
-        // SAFETY: we hold the only reference to each.
+        // SAFETY: this struct holds the only reference to each.
         unsafe {
             g_object_unref(self.source.cast());
             g_object_unref(self.server);
@@ -278,34 +258,31 @@ fn the_recipes_keyfile_describes_the_mock_server() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = RegistrySource::load(&keyfile());
-        // SAFETY: a source alive for the length of each call, which is all
-        // `collection_source`'s functions ask for.
+        // SAFETY: a source that is alive during each call, which is the only
+        // requirement of the `collection_source` functions.
         let (server, user) = unsafe { (server_of(source.source), user_of(source.source)) };
 
-        // `jmap-mockd`'s default port, in the clear, which the shared `origin` rules
-        // allow for loopback and nothing else.
+        // The default port of `jmap-mockd`, without TLS. The shared `origin` rules
+        // allow plaintext only for loopback.
         assert_eq!(
             server
                 .expect("the documented account names a server")
                 .target,
             ConnectTarget::Origin("http://127.0.0.1:8080".into())
         );
-        // No user, on purpose. An account that names one makes `populate` ask EDS to
-        // resolve a password before anything is contacted, and the recipe's first run
-        // would be a prompt rather than a fan-out; `jmap-mockd` with no
-        // `--basic`/`--bearer` wants no credentials at all.
+        // No user, intentionally. With a user, `populate` asks EDS for a password
+        // before a connection, so the first run shows a prompt, not a fan-out.
+        // `jmap-mockd` without `--basic` or `--bearer` needs no credentials.
         assert_eq!(user, None);
     });
 }
 
-/// The three switches that decide what a populate lists — and the reason the
-/// recipe's account has mail off.
+/// The three switches that decide what a populate lists.
 ///
-/// This backend creates no mail children yet, so `MailEnabled=true` would be an
-/// account that claims a part nothing serves. It is not harmless prose: `mail`
-/// is one of the three bits `Parts::any` is a disjunction over, so it is the
-/// difference between an account whose populate contacts the server and one that
-/// returns having done nothing.
+/// The account of the first run has mail off, because the backend does not
+/// create mail sources. The Evolution account assistant creates them, and the
+/// second run writes them by hand. `Parts::any` is true if one of the three
+/// parts is on.
 #[test]
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
     with_timeout(|| {
@@ -335,9 +312,9 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The registry files each collection factory under
-        // `"<factory_name>:Collection"` and asks for the key built from this string.
-        // A mismatch is silent — `e_source_registry_server_ref_backend_factory`
-        // answers NULL and the account keeps sitting there with no children.
+        // `"<factory_name>:Collection"` and looks up the key built from this string.
+        // A mismatch is silent: `e_source_registry_server_ref_backend_factory`
+        // returns NULL and the account has no children.
         assert_eq!(
             RegistrySource::load(&keyfile()).backend_name().as_deref(),
             Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
@@ -349,11 +326,10 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 fn the_recipe_quotes_every_keyfile_verbatim() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The reader copies the files, but reads the document; if the two drift
-        // apart, whichever one they trusted is the wrong one. So an `ini` block in
-        // this document is a whole keyfile quoted verbatim and nothing else — the
-        // fragment showing what a mail source *grows* is fenced without a language,
-        // because it is not a file anybody copies.
+        // The reader copies the files but reads the document, so the two must
+        // agree. Each `ini` block in the document is a full keyfile, quoted
+        // exactly. The fragment that shows the groups a mail source gets has no
+        // language tag, because nobody copies it.
         let recipe = fs::read_to_string(recipe()).expect("the recipe is in docs/");
         let quoted = fenced_blocks(&recipe, "ini");
 
@@ -377,17 +353,15 @@ fn the_recipe_quotes_every_keyfile_verbatim() {
 fn the_mail_runs_account_switches_on_every_part() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The other account in the recipe, and the one difference that matters:
-        // `MailEnabled=true`. EDS binds each mail source's `enabled` to the
-        // account's `mail-enabled` in `collection_backend_bind_child_enabled()`, so
-        // the three sources the reader hand-writes under an account with mail off
-        // are three sources that arrive disabled — present in
-        // `~/.config/evolution/sources/`, absent from Evolution, and with no error
-        // anywhere saying why.
+        // The important difference of the second account is `MailEnabled=true`.
+        // `collection_backend_bind_child_enabled()` binds the `enabled` of each mail
+        // source to the `mail-enabled` of the account. Under an account with mail
+        // off, the three hand-written sources load disabled. They are in
+        // `~/.config/evolution/sources/`, but not in Evolution, and no error shows.
         let account = RegistrySource::load(&example(MAIL_COLLECTION));
 
-        // SAFETY: a source alive for the length of the call, which is all
-        // `collection_source`'s functions ask for.
+        // SAFETY: a source that is alive during the call, which is the only
+        // requirement of the `collection_source` functions.
         assert_eq!(
             unsafe { parts_of(account.source) },
             Parts {
@@ -400,7 +374,7 @@ fn the_mail_runs_account_switches_on_every_part() {
             account.backend_name().as_deref(),
             Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
         );
-        // SAFETY: a source alive for the length of each call.
+        // SAFETY: a source that is alive during each call.
         let (server, user) = unsafe { (server_of(account.source), user_of(account.source)) };
         assert_eq!(
             server
@@ -416,10 +390,10 @@ fn the_mail_runs_account_switches_on_every_part() {
 fn the_documented_mail_sources_hang_off_the_documented_account() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `Parent=` is the whole reason `child_added` ever sees these files: EDS
-        // emits `child-added` on the collection whose uid a source names, and a uid
-        // is a file name here. A typo is three sources that belong to nothing —
-        // Evolution shows the account without them, and nothing is logged.
+        // `child_added` sees these files only because of `Parent=`. EDS emits
+        // `child-added` on the collection whose uid a source names. Here, a uid is
+        // a file name. With a typo, Evolution shows the account without the three
+        // sources, and logs nothing.
         let account = RegistrySource::load(&example(MAIL_COLLECTION));
         let uid = account
             .uid()
@@ -439,16 +413,16 @@ fn the_documented_mail_sources_hang_off_the_documented_account() {
 fn the_documented_mail_sources_point_at_each_other() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The chain `prepare_mail` describes and Evolution walks when the user hits
-        // send: the receiving account names the identity, and the identity names the
-        // transport that identity sends through. Written out by hand here, so the
-        // two uids are two more strings that can be wrong.
+        // When the user sends, Evolution follows the chain that `prepare_mail`
+        // describes. The receiving account names the identity, and the identity
+        // names its transport. The files contain these uids as hand-written text,
+        // so the uids can be wrong.
         let store = RegistrySource::load(&example(MAIL_STORE));
         let identity = RegistrySource::load(&example(MAIL_IDENTITY));
         let transport = RegistrySource::load(&example(MAIL_TRANSPORT));
 
-        // SAFETY: referencing the GTypes registers them, so the lookups below can
-        // find the extensions; each is present on the source it is read from, so
+        // SAFETY: a reference to the GTypes registers them, so the lookups below
+        // can find the extensions. Each extension is present on its source, so
         // nothing is created here.
         let (named_identity, named_transport) = unsafe {
             e_source_mail_account_get_type();
@@ -476,10 +450,9 @@ fn the_documented_mail_sources_point_at_each_other() {
 fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Which of the three `child_added` writes a server onto, decided by the same
-        // function the registry's callback reaches — so the `BackendName=jmap` lines
-        // in two of these files are load-bearing and the identity's absence of one
-        // is deliberate.
+        // `mail_service_of`, which the registry callback calls, decides which of
+        // the three sources `child_added` writes a server on. Thus two files need
+        // `BackendName=jmap`, and the identity intentionally has none.
         for (name, extension) in [
             (MAIL_STORE, E_SOURCE_EXTENSION_MAIL_ACCOUNT),
             (MAIL_TRANSPORT, E_SOURCE_EXTENSION_MAIL_TRANSPORT),
@@ -503,11 +476,9 @@ fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
 fn the_documented_transport_reaches_the_mock_server() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // What the recipe's mail run is for, asserted at the far end: the transport
-        // the reader writes carries a provider and no server at all, and what comes
-        // back out of `~/.config/evolution/sources/` after the registry has seen it
-        // is a source whose Camel settings name the mock. Read through `jmap-mail`'s
-        // own reader, which is what `connect_sync` calls.
+        // The transport that the reader writes has a provider and no server. After
+        // the registry reads it, its Camel settings must name the mock server. The
+        // test reads them with the `jmap-mail` reader that `connect_sync` calls.
         let account = RegistrySource::load(&example(MAIL_COLLECTION));
 
         for name in [MAIL_STORE, MAIL_TRANSPORT] {
@@ -531,8 +502,8 @@ fn the_documented_transport_reaches_the_mock_server() {
                 }),
                 "docs/examples/{name} does not reach the mock server"
             );
-            // The mock speaks no TLS, and a mail source left claiming it does not
-            // connect at all — the failure the recipe's reader would see first.
+            // The mock server has no TLS. A mail source that requests TLS does not
+            // connect.
             assert_eq!(
                 service.camel_security_method(),
                 CAMEL_NETWORK_SECURITY_METHOD_NONE,
@@ -549,7 +520,7 @@ fn a_blocked_recipe_test_times_out_and_fails_fast() {
     });
 }
 
-/// The contents of every ```` ```<language> ```` block in `markdown`.
+/// The contents of each ```` ```<language> ```` block in `markdown`.
 fn fenced_blocks<'a>(markdown: &'a str, language: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&'a str>> = None;

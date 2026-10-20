@@ -1,27 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `ECollectionBackendFactory` subclass — how `evolution-source-registry`
-//! gets from an account's `.source` file to a [`JmapCollectionBackend`].
+//! The `ECollectionBackendFactory` subclass: how `evolution-source-registry`
+//! goes from the `.source` file of an account to a [`JmapCollectionBackend`].
 //!
-//! The registry server is an `EDataFactory` and an `EExtensible` at once, and
-//! those two roles are the whole mechanism. As an extensible it instantiates one
-//! of every registered `EExtension` whose `extensible_type` is
-//! `E_TYPE_SOURCE_REGISTRY_SERVER` — which every `ECollectionBackendFactory` is,
-//! inherited, so nothing here registers anything *with* the server. As a data
-//! factory it files those extensions by the key each one reports and hands an
-//! `ESource` to whichever answers to the `BackendName` in its `[Collection]`
-//! group.
+//! The registry server is an `EDataFactory` and also an `EExtensible`. These
+//! two roles are the full mechanism. As an extensible, it makes one instance of
+//! each registered `EExtension` whose `extensible_type` is
+//! `E_TYPE_SOURCE_REGISTRY_SERVER`. Each `ECollectionBackendFactory` inherits
+//! this type, so this file registers nothing with the server. As a data
+//! factory, it stores those extensions by the key of each one. It gives an
+//! `ESource` to the extension whose key is the `BackendName` in the
+//! `[Collection]` group of the source.
 //!
-//! So this file is the same two assignments as `jmap-backend-book`'s factory,
-//! and the difference is what happens if they are missing.
-//! `e_collection_backend_factory_class_init` fills both fields in with working
+//! Thus this file makes the same two assignments as the factory of
+//! `jmap-backend-book`. The difference is the result when they are missing.
+//! `e_collection_backend_factory_class_init` sets both fields to working
 //! values: `factory_name` is `"none"` and `backend_type` is
-//! `E_TYPE_COLLECTION_BACKEND`. An unfinished factory is therefore not one that
-//! errors — it is one filed under a name no account asks for, or one that builds
-//! EDS's own do-nothing collection backend and gives the user an account that
-//! connects to nothing and says nothing. `tests/factory.rs` holds both against
-//! those defaults by name.
+//! `E_TYPE_COLLECTION_BACKEND`. Thus an incomplete factory gives no error. Its
+//! name matches no account, or it builds the empty collection backend of EDS.
+//! The user then gets an account that connects to nothing and shows no error.
+//! `tests/factory.rs` compares both fields against those defaults.
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,60 +35,57 @@ use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use crate::backend::JmapCollectionBackend;
 use crate::prepare_mail::prepare_mail_trampoline;
 
-/// What an account's `BackendName` has to say for this factory to be the one the
-/// registry picks — and so the name `[Collection]` carries in every JMAP
-/// `.source` file, hand-written or written by M7's setup UI.
+/// The `BackendName` that makes the registry select this factory. Thus it is
+/// the name in `[Collection]` of each JMAP `.source` file, written by hand or
+/// by the setup UI.
 ///
-/// The same spelling as `jmap-backend-book`'s and `jmap-backend-cal`'s
-/// `FACTORY_NAME` and Camel's protocol name, deliberately: they are four
-/// different namespaces, and one account is all four at once.
+/// The spelling is intentionally the same as `FACTORY_NAME` of
+/// `jmap-backend-book` and `jmap-backend-cal` and the Camel protocol name.
+/// They are four different namespaces, and one account uses all four.
 pub const FACTORY_NAME: &CStr = c"jmap";
 
-/// The factory the registry asks for a [`JmapCollectionBackend`].
+/// The factory from which the registry gets a [`JmapCollectionBackend`].
 #[repr(C)]
 pub struct JmapCollectionFactory {
-    /// GObject's; the base class keeps everything this type has.
+    /// For GObject. The base class contains all the data of this type.
     parent: ECollectionBackendFactory,
 }
 
-/// The class struct, which unlike the instance is not empty of interest: the two
-/// fields a collection factory subclass exists to fill in live in the parent
-/// half.
+/// The class struct. Unlike the instance, it is important: the two fields that
+/// a collection factory subclass sets are in its parent part.
 #[repr(C)]
 pub struct JmapCollectionFactoryClass {
     pub parent_class: ECollectionBackendFactoryClass,
 }
 
-/// The backend `GType` the last [`register_dynamic`] of it produced.
+/// The backend `GType` from the last [`register_dynamic`] of the backend.
 ///
-/// `GType` is `gsize`, so an `AtomicUsize` holds one exactly.
+/// `GType` is `gsize`, so an `AtomicUsize` holds it exactly.
 ///
 /// [`register_dynamic`]: jmap_backend_core::subclass::register_dynamic
 static BACKEND_TYPE: AtomicUsize = AtomicUsize::new(0);
 
 /// Records the backend type this factory should build.
 ///
-/// The module entry point registers the backend before the factory and calls
-/// this with the result, which is the Rust spelling of what
-/// `G_DEFINE_DYNAMIC_TYPE` gives a C backend for free: `class_init` runs long
-/// after `e_module_load`, so by the time the factory needs the type it is there.
-/// Going the other way — having `class_init` register the backend itself — would
-/// register it *statically*, and a statically registered type outlives the module
-/// whose code its vfuncs point into.
+/// The module entry point registers the backend before the factory, and calls
+/// this function with the result. `G_DEFINE_DYNAMIC_TYPE` gives the same result
+/// to a C backend. `class_init` runs after `e_module_load`, so the type is
+/// available when the factory needs it. If `class_init` registered the backend,
+/// the registration would be static. A static type stays after the module that
+/// contains the code of its vfuncs is unloaded.
 pub fn remember_backend_type(gtype: GType) {
     BACKEND_TYPE.store(gtype, Ordering::Release);
 }
 
-/// What [`class_init`](ObjectSubclass::class_init) installs as the type to build.
+/// The type that [`class_init`](ObjectSubclass::class_init) sets as the type to
+/// build.
 ///
-/// The fallback is for the case that cannot happen under the registry and does
-/// happen in a test: the factory class referenced without the module ever having
-/// been loaded. Registering the backend statically there is right — there is no
-/// module for it to belong to — and it keeps the alternative out of the picture.
-/// That alternative is not a zero `GType` here, as it is for the address book
-/// factory, but the *inherited* `E_TYPE_COLLECTION_BACKEND`, which is worse: a
-/// `g_object_new` that succeeds, an account that appears, and a collection that
-/// never fans out.
+/// The fallback is for a test, which uses the factory class without a module
+/// load. The registry cannot cause this. A static registration is correct
+/// there, because there is no module. It also prevents the alternative. For the
+/// address book factory the alternative is a zero `GType`. Here it is the
+/// inherited `E_TYPE_COLLECTION_BACKEND`, which is worse: `g_object_new`
+/// succeeds and the account shows, but the collection never fans out.
 fn backend_type() -> GType {
     match BACKEND_TYPE.load(Ordering::Acquire) {
         0 => register_static::<JmapCollectionBackend>(),
@@ -97,42 +93,43 @@ fn backend_type() -> GType {
     }
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the ECollectionBackendFactory
-// instance and class structs respectively, and ECollectionBackendFactory derives
-// from GObject (via EBackendFactory and EExtension).
+// SAFETY: both structs are #[repr(C)]. They start with the instance struct and
+// the class struct of ECollectionBackendFactory. ECollectionBackendFactory
+// derives from GObject (through EBackendFactory and EExtension).
 unsafe impl ObjectSubclass for JmapCollectionFactory {
     const NAME: &'static CStr = c"ECollectionBackendJmapFactory";
     type Instance = JmapCollectionFactory;
     type Class = JmapCollectionFactoryClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the EDS type system initialises itself.
+        // SAFETY: there are no arguments, and the EDS type system initialises
+        // itself.
         unsafe { e_collection_backend_factory_get_type() }
     }
 
     fn class_init_types() -> Vec<GType> {
-        // The backend type below, in the case where `class_init` would
-        // otherwise register it: that runs under GLib's class-initialisation
-        // lock, which cannot take the registration lock without inverting the
-        // two. Under EDS the module has already registered it and this only
+        // Register the backend type here, if necessary, and not in
+        // `class_init`. `class_init` runs under the class-initialisation lock of
+        // GLib, and the registration lock there would invert the lock order.
+        // Under EDS, the module already registered the type, and this only
         // reads the atomic.
         vec![backend_type()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with the parent's; both fields are in that half.
+        // SAFETY: `class` points to a new class struct of this type, which
+        // starts with the struct of the parent. Both fields are in that part.
         let factory = unsafe { &mut (*class).parent_class };
         factory.factory_name = FACTORY_NAME.as_ptr();
         factory.backend_type = backend_type();
 
-        // The third field, and the one that is not about this backend at all:
-        // the mail account, identity and transport sources are not children of
-        // this collection (see `crate::prepare_mail` for why they cannot be),
-        // and `prepare_mail` is the whole of what a collection factory gets to
-        // say about them. The inherited default joins the three together and
-        // stops there, leaving both services nameless; ours names the Camel
-        // provider that serves them, after chaining up.
+        // The third field is not about this backend. The mail account,
+        // identity and transport sources are not children of this collection
+        // (see `crate::prepare_mail` for the reason). `prepare_mail` is the only
+        // control that a collection factory has over them. The inherited
+        // default only connects the three, and gives no name to the two
+        // services. This implementation chains up, then names the Camel
+        // provider for them.
         factory.prepare_mail = Some(prepare_mail_trampoline);
     }
 }
@@ -141,9 +138,8 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
 mod tests {
     use super::{backend_type, remember_backend_type};
 
-    /// A value `register_static::<JmapCollectionBackend>()` could never produce
-    /// on its own, so a pass here is the recorded value coming back, not the
-    /// fallback happening to land on the same number.
+    /// `register_static::<JmapCollectionBackend>()` cannot give this value. Thus
+    /// a pass shows the recorded value, not a fallback with the same number.
     #[test]
     fn remember_backend_type_is_what_backend_type_then_reports() {
         remember_backend_type(0xdead_beef);

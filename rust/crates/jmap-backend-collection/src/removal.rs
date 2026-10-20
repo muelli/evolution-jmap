@@ -1,43 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The half of a populate that deletes: the children this collection already
-//! has and no longer warrants.
+//! The deletion part of a populate: it removes the children that this collection
+//! has and no longer needs.
 //!
-//! A collection backend that only ever created children would leave an address
-//! book deleted in the server's web UI in Evolution's sidebar forever, so a
-//! populate has to close the loop — list the children it already has, and
-//! remove the ones this discovery did not find. That makes it the one place in
-//! this crate that destroys user data on purpose: `e_source_remove_sync()`
-//! takes the child's uid, its `.source` file and its offline cache of the
-//! collection with it, and there is no undo, because the source Evolution would
-//! recreate afterwards is a different source with a different uid.
+//! If a collection backend only created children, an address book that a user
+//! deletes in the web UI of the server stays in the Evolution sidebar. Thus a
+//! populate lists the children that it has and removes the children that the
+//! discovery did not find. This is the only place in this crate that destroys
+//! user data on purpose. `e_source_remove_sync()` removes the uid of the child,
+//! its `.source` file and its offline cache of the collection. No undo is
+//! possible: if Evolution creates the source again, it is a different source
+//! with a different uid.
 //!
-//! The decision itself is [`Fanout::is_obsolete`]'s, in `jmap-collection-sync`,
-//! where it is tested against resource id strings and where the reasoning is
-//! written down — most of all why a child of a *switched-off* part is dormant
-//! rather than obsolete, which is where this backend deliberately parts company
-//! with EDS's WebDAV one. What is here is the two things that need the headers:
-//! reading each child's resource id back off the `ESource`, and the removal.
+//! [`Fanout::is_obsolete`] in `jmap-collection-sync` makes the decision. That
+//! crate tests it with resource id strings and documents the reasons. The most
+//! important reason: a child of a *disabled* part is dormant, not obsolete. Here,
+//! this backend is intentionally different from the EDS WebDAV backend. This
+//! module contains the two operations that need the headers: it reads the
+//! resource id of each child from the `ESource`, and it removes the child.
 //!
-//! ## A child we cannot read is a child we do not touch
+//! ## A child that this module cannot read is not changed
 //!
-//! [`obsolete`] asks [`resource_id_of`] first and gives up on a `None`. That is
-//! not defensive coding, it is the safe direction of a question that has no
-//! third answer: the sources a populate is handed include children of other
-//! collection backends, children written by a future version of this one, and
-//! anything a user hand-edited. "I cannot read this" must not become "this is
-//! obsolete", because the two are indistinguishable from the removal's side and
-//! only one of them is recoverable.
+//! [`obsolete`] calls [`resource_id_of`] first and stops on `None`. This is the
+//! safe answer to a question with only two answers. The sources that a populate
+//! gets include children of other collection backends, children that a later
+//! version of this backend wrote, and files that a user edited. "I cannot read
+//! this" must not become "this is obsolete". From the side of the removal, the
+//! two are the same, and only one of them is recoverable.
 //!
 //! ## A failed removal is reported, not raised
 //!
-//! `ECollectionBackendClass::populate` returns `void`: there is no `GError` to
-//! fill and nobody to hand one to. So [`remove_obsolete`] removes what it can,
-//! keeps going past a refusal, and hands back one [`NotRemoved`] per child it
-//! could not remove — a populate can log those, and the next populate will find
-//! the same children and try again, which is the whole of the recovery
-//! available.
+//! `ECollectionBackendClass::populate` returns `void`: it has no `GError` to set
+//! and no caller to give one to. Thus [`remove_obsolete`] removes what it can and
+//! continues after a refusal. It returns one [`NotRemoved`] for each child that
+//! it could not remove. A populate can log these. The next populate finds the
+//! same children and tries again. This is the only recovery available.
 //!
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 
@@ -51,52 +49,53 @@ use jmap_collection_sync::Fanout;
 
 use crate::resource_id::resource_id_of;
 
-/// A child this populate should have removed and could not.
+/// A child that this populate had to remove and could not remove.
 ///
-/// There is nothing to be done with one but log it: see the module comment on
-/// why a populate has no error path.
+/// The only possible action is to log it. The module comment tells why a
+/// populate has no error path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotRemoved {
-    /// The child, named the way this backend and EDS both know it.
+    /// The resource id of the child, which this backend and EDS both use.
     pub resource_id: String,
-    /// What EDS said, for the log line. Never empty: a refusal that carried no
-    /// `GError` is reported as such rather than as a blank reason.
+    /// The reason from EDS, for the log line. It is never empty: a refusal
+    /// without a `GError` has a message that tells this.
     pub message: String,
 }
 
-/// The children of `fanout`'s collection that this populate must remove, in the
-/// order they were given in.
+/// Returns the children of the collection of `fanout` that this populate must
+/// remove, in the order of `children`.
 ///
-/// `children` is what `e_collection_backend_list_contacts_sources()` and
-/// `e_collection_backend_list_calendar_sources()` answered — every child this
-/// collection has, including the ones this backend did not write, which are
-/// never picked.
+/// `children` is the result of `e_collection_backend_list_contacts_sources()`
+/// and `e_collection_backend_list_calendar_sources()`. It contains each child of
+/// this collection, also the children that this backend did not write. This
+/// function never selects those.
 ///
 /// # Safety
 ///
 /// Each pointer must be NULL or a valid `ESource` that outlives the call. The
-/// sources are only read from; the pointers handed back are the ones handed in.
+/// function only reads the sources. It returns the same pointers that it gets.
 pub unsafe fn obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec<*mut ESource> {
-    // SAFETY: the caller's contract is this function's.
+    // SAFETY: the contract of the caller is the contract of this function.
     unsafe { named_obsolete(fanout, children) }
         .into_iter()
         .map(|(source, _)| source)
         .collect()
 }
 
-/// Removes every child [`obsolete`] picks, and reports the ones EDS refused.
+/// Removes each child that [`obsolete`] selects, and reports the children that
+/// EDS refused to remove.
 ///
-/// A refusal does not stop the removals after it, and it is not an error of the
-/// populate: the child stays, this populate says so, and the next one asks
-/// again.
+/// A refusal does not stop the next removals, and it is not an error of the
+/// populate. The child stays, this populate reports it, and the next populate
+/// tries again.
 ///
 /// # Safety
 ///
-/// As [`obsolete`] — and every source picked is *removed*, which is the
-/// destruction this module's comment describes. A pointer to a source that is
-/// not a child of this backend's collection has no business in `children`.
+/// As [`obsolete`]. Also, this function *removes* each selected source, with the
+/// data loss that the module comment describes. Thus `children` must contain only
+/// children of the collection of this backend.
 pub unsafe fn remove_obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec<NotRemoved> {
-    // SAFETY: the caller's contract is this function's.
+    // SAFETY: the contract of the caller is the contract of this function.
     let obsolete = unsafe { named_obsolete(fanout, children) };
     tracing::debug!(
         obsolete_count = obsolete.len(),
@@ -107,9 +106,8 @@ pub unsafe fn remove_obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec
     obsolete
         .into_iter()
         .filter_map(|(source, resource_id)| {
-            // No cancellable: `populate` is handed none, and there is nothing
-            // above this to cancel it.
-            // SAFETY: a valid child source by the contract above.
+            // No cancellable: `populate` gets none, and no caller can cancel it.
+            // SAFETY: a valid child source because of the contract above.
             let removed = unsafe { remove_source(source, ptr::null_mut()) };
             removed.err().map(|message| NotRemoved {
                 resource_id,
@@ -119,30 +117,31 @@ pub unsafe fn remove_obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec
         .collect()
 }
 
-/// One `e_source_remove_sync`, with the failure turned into a reason worth
-/// printing.
+/// Calls `e_source_remove_sync` once and changes a failure into a readable
+/// reason.
 ///
-/// The one call in this crate that destroys a child, in the one place it is
-/// written: the populate half above removes children the server no longer has,
-/// and [`crate::delete_resource`] removes the one the *user* asked to delete —
-/// EDS's documented obligation on `delete_resource_sync`, and the same
-/// `e_source_remove_sync` `ews_backend_delete_resource_sync` ends on. Removing a
-/// child takes its uid, its `.source` file and its offline cache with it, and
-/// the source Evolution would recreate afterwards is a different source with a
-/// different uid; there is no undo either way in.
+/// This is the only call in this crate that destroys a child. The populate code
+/// above removes children that the server no longer has. [`crate::delete_resource`]
+/// removes the child that the *user* deletes. EDS documents this removal as an
+/// obligation of `delete_resource_sync`, and `ews_backend_delete_resource_sync`
+/// also ends with `e_source_remove_sync`. The removal deletes the uid, the
+/// `.source` file and the offline cache of the child. If Evolution creates the
+/// source again, it is a different source with a different uid. No undo is
+/// possible from either caller.
 ///
-/// The `Err` is a message rather than a `GError` because the two callers report
-/// it differently — a populate logs it, the vfunc puts it in a `GError` of its
-/// own — and neither has anywhere to put a second `GError`'s domain and code.
+/// The `Err` is a message, not a `GError`, because the two callers report it
+/// differently. A populate logs it, and the vfunc puts it in its own `GError`.
+/// Neither caller can use the domain and code of a second `GError`.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — one that is really a child of this
-/// backend's collection — and `cancellable` NULL or a valid `GCancellable`.
+/// `source` must be a valid `ESource` that is a child of the collection of this
+/// backend. `cancellable` must be NULL or a valid `GCancellable`.
 pub unsafe fn remove_source(
     source: *mut ESource,
     cancellable: *mut GCancellable,
 ) -> Result<(), String> {
+    // SAFETY: a valid source because of the contract of this function.
     let resource_id = unsafe { resource_id_of(source) };
     tracing::debug!(
         resource_id = resource_id.as_deref(),
@@ -150,29 +149,29 @@ pub unsafe fn remove_source(
     );
 
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a valid child source, a cancellable satisfying this function's
-    // contract and an out-parameter initialised to NULL are the documented
-    // arguments.
+    // SAFETY: the documented arguments are a valid child source, a cancellable
+    // that agrees with the contract of this function, and an out-parameter set
+    // to NULL.
     let removed = unsafe { e_source_remove_sync(source, cancellable, &mut error) };
 
     if removed != GFALSE {
-        // A success that also set an error would be a broken callee, but
-        // freeing it costs nothing and leaking it costs a report.
+        // Only a defective callee sets an error on success. Free the error,
+        // because a leak causes a report.
         if !error.is_null() {
-            // SAFETY: a GError this call owns and nothing else holds.
+            // SAFETY: a GError that this call owns and that nothing else holds.
             unsafe { g_error_free(error) };
         }
         return Ok(());
     }
 
-    // SAFETY: the call failed, so the out-parameter is NULL or a GError
-    // ownership of which passed to us.
+    // SAFETY: the call failed, so the out-parameter is NULL or a GError that
+    // this function now owns.
     Err(unsafe { take_message(error) })
 }
 
-/// [`obsolete`], with each source's resource id kept — read once, since reading
-/// it twice is two chances for a source that changed underneath to be removed
-/// under a name it no longer has.
+/// As [`obsolete`], but it also returns the resource id of each source. The id is
+/// read only once. If it is read twice, a source that changes between the reads
+/// can be removed under an id that it no longer has.
 ///
 /// # Safety
 ///
@@ -185,9 +184,9 @@ unsafe fn named_obsolete(
         .iter()
         .copied()
         .filter_map(|source| {
-            // A source with no resource id of ours is one we have no opinion
-            // about — see the module comment.
-            // SAFETY: a valid or NULL source by the contract above.
+            // Do not select a source without a resource id of this backend (see
+            // the module comment).
+            // SAFETY: a valid or NULL source because of the contract above.
             let resource_id = unsafe { resource_id_of(source) }?;
             fanout
                 .is_obsolete(&resource_id)
@@ -196,22 +195,22 @@ unsafe fn named_obsolete(
         .collect()
 }
 
-/// The message of a `GError` this call owns, and then frees.
+/// Returns the message of a `GError` that this call owns, then frees the error.
 ///
 /// # Safety
 ///
 /// `error` must be NULL or a `GError` this call may consume.
 unsafe fn take_message(error: *mut GError) -> String {
     if error.is_null() {
-        // A `FALSE` with no `GError` is a callee that did not say why. There is
-        // still a child that was not removed, and a report with no reason is
-        // worth more than no report.
+        // A `FALSE` without a `GError` means that the callee gave no reason. The
+        // child is still not removed, and a report without a reason is better
+        // than no report.
         return "the removal failed and EDS set no error".to_owned();
     }
 
-    // SAFETY: a live GError; its message is a NUL-terminated string it owns.
+    // SAFETY: a live GError. Its message is a NUL-terminated string that it owns.
     let message = unsafe { read_string((*error).message) };
-    // SAFETY: ownership passed to us with the out-parameter.
+    // SAFETY: this function got ownership through the out-parameter.
     unsafe { g_error_free(error) };
 
     message.unwrap_or_else(|| "the removal failed and EDS gave no message".to_owned())

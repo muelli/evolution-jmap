@@ -1,27 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `fan_out`'s removal half against a real JMAP server.
+// Tests for the removal half of `fan_out` against a real JMAP server.
 //
-// `tests/live_server.rs` proves the *adopt* half of `fan_out` against real
-// Stalwart, but its own `Collection` fixture's `existing_children` always
-// answers empty, by its own comment deferring the removal decision to
-// `tests/fan_out.rs`'s mock. `tests/removal.rs` in turn only ever proves the
-// decision (`Fanout::is_obsolete`) against a hand-built `Fanout`, and the
-// mechanics (`e_source_remove_sync`) only down the "EDS refuses" branch —
-// these synthetic sources carry no D-Bus object, so a *successful* removal is
-// not reachable without a real `evolution-source-registry` session, same
-// caveat `docs/manual-test-live-server.md` already carries for other wiring.
+// `tests/live_server.rs` tests the *adopt* half of `fan_out` against real
+// Stalwart. Its `Collection` fixture always returns no `existing_children`. It
+// leaves the removal decision to `tests/fan_out.rs` and the mock.
+// `tests/removal.rs` tests the decision (`Fanout::is_obsolete`) only with a
+// `Fanout` made by hand. It tests the removal (`e_source_remove_sync`) only on
+// the "EDS refuses" branch. These synthetic sources have no D-Bus object. Thus a
+// *successful* removal needs a real `evolution-source-registry` session.
+// `docs/manual-test-live-server.md` gives the same limit for other wiring.
 //
-// What neither file reaches is the join: does a real server-side deletion,
-// seen through a second real `Fanout::discover`, actually drive `fan_out` to
-// judge the previously-adopted child obsolete and attempt its removal? This
-// is that confirmation. The removal attempt itself is still expected to be
-// refused here for the registry-less reason above; what this test pins is
-// that it is attempted, and attempted against the right resource id.
+// Neither file tests the join. This test makes sure that a real deletion on
+// the server, seen through a second real `Fanout::discover`, causes `fan_out`
+// to find the adopted child obsolete and to try its removal. EDS still refuses
+// the removal here, because there is no registry. The test makes sure that
+// `fan_out` tries the removal for the correct resource id.
 //
-// Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-// unset; see docs/manual-test-live-server.md.
+// The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+// `_PASSWORD` is not set. See docs/manual-test-live-server.md.
 
 use std::cell::RefCell;
 use std::env;
@@ -63,7 +61,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A live `ESource` this test holds one reference to.
+/// A live `ESource` that this test holds one reference to.
 struct Source(*mut ESource);
 
 impl Source {
@@ -75,16 +73,16 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        // SAFETY: this holds the last reference; every one handed out was
-        // consumed by the call under test, or is released by `existing_children`'s
-        // own caller (`apply_fanout`) the same way.
+        // SAFETY: this struct holds the last reference. The call under test
+        // consumed each reference that this fixture gave out. For
+        // `existing_children`, its caller (`apply_fanout`) releases them.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// Same fixture shape as `tests/live_server.rs`'s `Collection`, plus the one
-/// thing that file's does not need: a seedable `existing` list, so a second
-/// `fan_out` pass can be handed back the child the first pass created.
+/// The same fixture shape as `Collection` in `tests/live_server.rs`, with one
+/// addition: an `existing` list that the test can fill. Thus a second `fan_out`
+/// pass gets the child that the first pass created.
 #[derive(Default)]
 struct Collection {
     created: RefCell<Vec<(String, Source)>>,
@@ -102,24 +100,24 @@ impl Collection {
             .unwrap_or_else(|| panic!("no child was created for {resource_id}"))
     }
 
-    /// Hands `source` to the next `existing_children()` call, as a real
-    /// `ECollectionBackend` would after a first populate wrote it.
+    /// Gives `source` to the next `existing_children()` call, as a real
+    /// `ECollectionBackend` does after a first populate wrote it.
     fn seed_existing(&self, source: *mut ESource) {
-        // SAFETY: the caller holds a live reference to `source` for the
-        // duration of this call; this takes its own.
+        // SAFETY: the caller holds a live reference to `source` during this
+        // call. This function takes its own reference.
         let owned = unsafe { g_object_ref(source.cast()) }.cast();
         self.existing.borrow_mut().push(Source(owned));
     }
 }
 
-// SAFETY: every pointer handed out is a valid `ESource` carrying a reference
-// of its own, taken with `g_object_ref` just before it is returned.
+// SAFETY: each returned pointer is a valid `ESource` with its own reference.
+// `g_object_ref` takes that reference immediately before the return.
 unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     fn new_child(&self, resource_id: &str) -> *mut ESource {
         let uid = CString::new(format!("jmap-{resource_id}")).expect("no NUL in a resource id");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a
-        // GError out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, the
+        // default main context and a GError out-parameter.
         let raw = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!raw.is_null(), "e_source_new_with_uid failed");
         let source = Source(raw);
@@ -131,8 +129,8 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     }
 
     fn is_new_child(&self, _child: *mut ESource) -> bool {
-        // Every child this test's fan-out sees is newly created: it seeds no
-        // cache of a previous session.
+        // Each child in this fan-out is new, because the test puts no cache of
+        // an earlier session in place.
         true
     }
 
@@ -147,7 +145,7 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     fn set_remote_deletable(&self, _child: *mut ESource, _deletable: bool) {}
 }
 
-/// Mirrors `tests/live_server.rs`'s own `connection()`.
+/// Mirrors `connection()` in `tests/live_server.rs`.
 fn connection() -> Connection {
     Connection {
         host: "jmap.example.com".to_owned(),
@@ -158,12 +156,12 @@ fn connection() -> Connection {
     }
 }
 
-/// Creates a real address book, runs a real `fan_out` to adopt it, deletes it
-/// on the real server, then runs `fan_out` a second time with the first
-/// pass's own child seeded as an existing one. Confirms the real post-deletion
-/// `Fanout::discover` drives `is_obsolete` to pick exactly that child for
-/// removal, not that removal itself succeeds (see the module comment on why
-/// that half needs a real registry session this runner has none of).
+/// Creates a real address book and runs a real `fan_out` to adopt it. Then the
+/// test deletes it on the real server and runs `fan_out` again, with the child
+/// of the first pass as an existing child. The test makes sure that
+/// `is_obsolete` selects exactly that child for removal after the deletion. It
+/// does not make sure that the removal succeeds, because that needs a real
+/// registry session (see the module comment).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_collection_deleted_on_the_server_is_judged_obsolete_on_the_next_fan_out() {
@@ -199,7 +197,8 @@ fn a_collection_deleted_on_the_server_is_judged_obsolete_on_the_next_fan_out() {
     };
 
     let collection = Collection::default();
-    // SAFETY: `Collection`'s impl above satisfies the trait's contract.
+    // SAFETY: the `Collection` implementation above obeys the contract of the
+    // trait.
     let first_pass = unsafe { fan_out(&collection, &login) }
         .expect("first fan_out failed against the real server");
     assert!(

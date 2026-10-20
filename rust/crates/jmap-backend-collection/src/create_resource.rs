@@ -1,99 +1,104 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Creating an address book or a calendar *on the server* — the half of
-//! evolution-ews parity that a backend which only mirrors what it finds cannot
+//! Creates an address book or a calendar *on the server*. This is the part of
+//! parity with evolution-ews that a backend which only copies the server cannot
 //! do.
 //!
-//! Everything else in this crate reads the server and writes Evolution. This is
-//! the one request that goes the other way: Evolution's "New Address Book" and
-//! "New Calendar" dialogs hand the registry a scratch `ESource` describing a
-//! collection that does not exist yet, and the collection backend is asked to
-//! make it exist. `ECollectionBackendClass::create_resource_sync` is that
-//! request, and [`crate::backend`] is where the slot is filled.
+//! All other code in this crate reads the server and writes Evolution. This is
+//! the only request in the opposite direction. The "New Address Book" and "New
+//! Calendar" dialogs of Evolution give the registry a scratch `ESource` for a
+//! collection that does not exist yet, and the collection backend must create
+//! it. `ECollectionBackendClass::create_resource_sync` is that request, and
+//! [`crate::backend`] sets the slot.
 //!
-//! What is here is the EDS ends of it. The decision in the middle — which JMAP
-//! account, which `/set` call, and what [`Child`] the created collection becomes
-//! — is [`jmap_collection_sync::create`]'s, where it needs no headers and is
-//! tested against a running `jmap-mockd`.
+//! This module contains the EDS parts of the request.
+//! [`jmap_collection_sync::create`] makes the decision between these parts
+//! (which JMAP account, which `/set` call, and which [`Child`] the new collection
+//! becomes). That crate needs no headers, and its tests use a running
+//! `jmap-mockd`.
 //!
-//! ## The two obligations, taken from EDS's own documentation of the vfunc
+//! ## The two obligations, from the EDS documentation of the vfunc
 //!
-//! `e_collection_backend_create_resource_sync()` states them, and neither is
-//! visible in the header:
+//! `e_collection_backend_create_resource_sync()` gives them, and the header shows
+//! neither:
 //!
 //! - *"It is the implementor's responsibility to examine @source and determine
 //!   what the equivalent server-side resource would be. If this cannot be
-//!   determined without ambiguity, the function must return an error."* — hence
-//!   [`requested_of`], and hence its `None` for a scratch source that names no
+//!   determined without ambiguity, the function must return an error."* Thus
+//!   [`requested_of`] exists, and it returns `None` for a scratch source with no
 //!   kind.
 //! - *"After the server-side resource is successfully created, the implementor
-//!   must also add an #ESource to @backend's #ECollectionBackend:server."* —
-//!   hence [`adopt_created`] followed by the publish. Creating the collection on
-//!   the server and stopping there would leave Evolution with a dialog that
-//!   closed and no address book: the child would appear only after the next
-//!   populate, so the create would look as if it had silently failed.
+//!   must also add an #ESource to @backend's #ECollectionBackend:server."* Thus
+//!   [`adopt_created`] runs, and then the publish. If the code only created the
+//!   collection on the server, the dialog would close and no address book would
+//!   appear. The child would appear only after the next populate, so the create
+//!   would seem to fail silently.
 //!
-//! ## The parent's implementation is not chained up to
+//! ## This override does not call the parent implementation
 //!
-//! The other way round from [`crate::child_added`], and for a reason that is in
-//! EDS's source rather than its documentation:
-//! `collection_backend_create_resource()` — which the default
-//! `create_resource_sync` drives through a closure — does exactly one thing,
-//! `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-//! creating remote resources")`. So the parent *is* the refusal this override
-//! exists to replace, and chaining up would turn a create that worked into a
-//! create that reported failure.
+//! This is the opposite of [`crate::child_added`]. The reason is in the EDS
+//! source code, not in its documentation. `collection_backend_create_resource()`,
+//! which the default `create_resource_sync` calls through a closure, does only one
+//! thing: `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+//! creating remote resources")`. Thus the parent implementation *is* the refusal
+//! that this override replaces. A call to it would make a successful create
+//! report a failure.
 //!
-//! ## The scratch source is EDS's, and this backend finishes it
+//! ## EDS owns the scratch source, and this backend completes it
 //!
-//! `server_side_source_remote_create_cb()` builds the scratch source with
-//! `e_server_side_source_new_user_file()` — the registry's own source directory,
-//! not this collection's cache — sets the keyfile Evolution sent onto it, and
-//! deliberately does **not** add it to the registry: the comment there says it is
-//! "up to the ECollectionBackend whether to use source as given or create its own
-//! equivalent". This backend uses it as given, which is what evolution-ews does,
-//! and finishes it into exactly the child a populate would have written:
+//! `server_side_source_remote_create_cb()` makes the scratch source with
+//! `e_server_side_source_new_user_file()`, in the source directory of the
+//! registry and not in the cache of this collection. It sets the keyfile from
+//! Evolution on the source. It intentionally does **not** add the source to the
+//! registry: its comment says that it is "up to the ECollectionBackend whether to
+//! use source as given or create its own equivalent". This backend uses the
+//! source as given, as evolution-ews does. It completes the source into the same
+//! child that a populate writes:
 //!
-//! - every setting of the [`Child`] the created collection became, through the
-//!   same [`crate::child_source::apply`] a fan-out uses — so a created child and
-//!   a discovered one differ in no field, least of all in `[Resource] Identity`,
-//!   whose absence would have EDS delete its cache file;
-//! - `parent`, `writable` and `write_directory`, which are precisely what EDS's
-//!   own `collection_backend_new_source()` sets on a child it mints and which the
-//!   scratch source therefore lacks. `removable` is the fourth thing that
-//!   function sets and is deliberately **not** set here: EDS's
-//!   `collection_backend_child_added()` sets it `FALSE` for every child and
-//!   [`crate::child_added`] chains up to that, so the child gets it on publish.
+//! - each setting of the [`Child`] of the new collection, through the same
+//!   [`crate::child_source::apply`] that a fan-out uses. Thus a created child and
+//!   a discovered child have the same fields. This is most important for
+//!   `[Resource] Identity`: without it, EDS deletes the cache file;
+//! - `parent`, `writable` and `write_directory`. EDS
+//!   `collection_backend_new_source()` sets these on a child that it creates, so
+//!   the scratch source does not have them. That function also sets `removable`,
+//!   but this code intentionally does **not** set it. EDS
+//!   `collection_backend_child_added()` sets it to `FALSE` for each child. The
+//!   `child_added` vfunc of [`crate::backend`] calls that parent function, so the
+//!   child gets the value when it is published.
 //!
-//! ## What is deliberately not set here: `remote-deletable`
+//! ## This module intentionally does not set `remote-deletable`
 //!
-//! evolution-ews sets it at each of the three sites that mint a child, this one
-//! included. This backend sets it in one place instead —
-//! [`crate::delete_resource::offer_deletion`], called from `child_added`, which
-//! is EDS's own funnel for every child of a collection and therefore covers a
-//! created child on its publish as well as a discovered or cached one. So its
-//! absence here is where the flag is written, not whether. Unlike a
-//! discovered child, a created one has nothing to correct that default
-//! afterwards — [`crate::fan_out::adopt`]'s per-resource `myRights.mayDelete`
-//! answer is a fan-out's, and a create never runs one — so a freshly created
-//! collection stays deletable until the next populate reads its rights.
+//! evolution-ews sets it at each of the three sites that create a child, also
+//! here. This backend sets it in one place:
+//! [`crate::delete_resource::offer_deletion`], which `child_added` calls. EDS
+//! calls `child_added` for each child of a collection. Thus it also covers a
+//! created child when it is published, and a discovered or cached child. The
+//! flag is thus set elsewhere, not omitted. A discovered child gets a correction
+//! of that default later, but a created child does not.
+//! [`crate::fan_out::adopt`] gives the per-resource `myRights.mayDelete` answer
+//! only in a fan-out, and a create does not run a fan-out. Thus a new collection
+//! stays deletable until the next populate reads its rights.
 //!
-//! ## The credentials are looked up, not remembered
+//! ## The code gets the credentials when it needs them, and does not keep them
 //!
-//! evolution-ews keeps the `ENamedParameters` its `authenticate_sync` was handed
-//! in the backend instance and rebuilds a connection from them whenever it needs
-//! one. This backend does not, because it does not have to:
-//! `e_source_registry_server_ref_credentials_provider()` reaches the very store
-//! `authenticate_sync`'s credentials came out of, and [`stored_password_of`] asks
-//! it at the moment the password is needed. So no secret is held for the life of
-//! the account, there is no instance state to initialise and finalize, and a
-//! create works in a process where no `authenticate_sync` has run for this
-//! account yet. An OAuth 2.0 account goes on through
-//! [`jmap_backend_core::oauth2::access_token`] —
-//! [`crate::authenticate::login_of`] is what decides which — so its token is
-//! always obtained fresh rather than being a remembered one that has since
-//! expired.
+//! evolution-ews keeps the `ENamedParameters` from its `authenticate_sync` in the
+//! backend instance. It makes a new connection from them when necessary. This
+//! backend does not need to do this.
+//! `e_source_registry_server_ref_credentials_provider()` gives access to the store
+//! that supplied the credentials of `authenticate_sync`. [`stored_password_of`]
+//! reads it at the time when the password is necessary. Thus:
+//!
+//! - no secret stays in memory for the life of the account;
+//! - no instance state needs initialization and finalization;
+//! - a create works in a process where `authenticate_sync` did not run for this
+//!   account yet.
+//!
+//! For an OAuth 2.0 account, the code continues through
+//! [`jmap_backend_core::oauth2::access_token`].
+//! [`crate::authenticate::login_of`] selects the path. Thus the code always gets a
+//! new token, not a stored token that is possibly expired.
 //!
 //! [`Child`]: jmap_collection_sync::Child
 
@@ -126,22 +131,22 @@ use jmap_collection_sync::{Child, ChildKind, CreateFailure, Requested, create_co
 use crate::child_source::{UnwritableSetting, apply};
 use crate::resource_id::kind_of;
 
-/// Why a create could not be done.
+/// The reason why a create failed.
 #[derive(Debug)]
 pub enum CreateError {
-    /// The scratch source names neither an address book nor a calendar, which is
-    /// the ambiguity EDS's own documentation of the vfunc says must be an error.
+    /// The scratch source is not an address book or a calendar. The EDS
+    /// documentation of the vfunc says that this ambiguity must be an error.
     UnknownKind,
-    /// The account could not be turned into a login — a server it may not
-    /// contact, or no credentials for it.
+    /// The account could not supply a login: it has a server that it must not
+    /// contact, or it has no credentials.
     Login(crate::authenticate::LoginError),
-    /// The connection or the create itself failed, or the account's server holds
-    /// no place to create this kind of collection.
+    /// The connection or the create failed, or the server of the account has no
+    /// account for this kind of collection.
     Server(CreateFailure),
-    /// The collection was created and a setting could not be written onto the
-    /// source for it. Reported rather than swallowed, and the reason the create
-    /// still counts as failed — see [`adopt_created`]. The kind is carried so
-    /// the message can name what was made and is now un-described.
+    /// The server created the collection, but a setting could not be written to
+    /// its source. This is reported, not ignored, and the create fails because of
+    /// it (see [`adopt_created`]). The variant contains the kind, so the message
+    /// can name the collection that now has no complete source.
     Unwritable(ChildKind, UnwritableSetting),
 }
 
@@ -168,15 +173,15 @@ impl fmt::Display for CreateError {
         match self {
             Self::UnknownKind => f.write_str(&translate(
                 // TRANSLATORS: shown when Evolution asks a JMAP account to
-                // create a collection whose kind the request does not state.
+                // create a collection, and the request does not give the kind.
                 c"the new collection is neither an address book nor a calendar",
             )),
             Self::Login(failure) => failure.fmt(f),
-            // `Unserved` is `jmap-collection-sync`'s, and that crate builds
-            // without gettext, so its own `Display` is the developer-facing
-            // spelling and the user-facing one is written here — with the same
-            // translated nouns every other account error uses, rather than a
-            // second pair of msgids saying "address book" and "calendar".
+            // `Unserved` comes from `jmap-collection-sync`, which builds without
+            // gettext. Its `Display` is for developers, so this code writes the
+            // text for the user. It uses the translated nouns of all other
+            // account errors, not a second pair of msgids for "address book" and
+            // "calendar".
             Self::Server(CreateFailure::Unserved(kind)) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is "address book" or "calendar". Shown when
                 // the JMAP server behind an account offers no account of that
@@ -197,11 +202,10 @@ impl fmt::Display for CreateError {
     }
 }
 
-/// The [`Collection`] a [`ChildKind`] is, so the translated noun is the one
-/// [`Collection::noun`] already carries rather than a second pair of msgids.
+/// Returns the [`Collection`] of a [`ChildKind`]. Thus the translated noun comes
+/// from [`Collection::noun`], and no second pair of msgids is necessary.
 ///
-/// Shared with [`crate::delete_resource`], which names the same two things in
-/// its own messages.
+/// [`crate::delete_resource`] also uses this function for its messages.
 pub(crate) fn collection_of(kind: ChildKind) -> Collection {
     match kind {
         ChildKind::AddressBook => Collection::AddressBook,
@@ -212,15 +216,15 @@ pub(crate) fn collection_of(kind: ChildKind) -> Collection {
 impl std::error::Error for CreateError {}
 
 impl CreateError {
-    /// The `GError` the vfunc reports this through.
+    /// Returns the `GError` that the vfunc uses to report this error.
     ///
     /// A `jmap_client::Error` goes through
-    /// [`jmap_backend_core::error::to_gerror`], the same mapping every other
-    /// operation in these backends uses, so a 401 on a create becomes the
-    /// Evolution error code a 401 always becomes. Everything else is
-    /// `E_CLIENT_ERROR_INVALID_ARG`: each is either something EDS handed us that
-    /// cannot be acted on or a fault in this backend, and neither is a reason to
-    /// report the account itself as broken.
+    /// [`jmap_backend_core::error::to_gerror`], the mapping that all other
+    /// operations in these backends use. Thus a 401 on a create becomes the usual
+    /// Evolution error code for a 401. All other errors become
+    /// `E_CLIENT_ERROR_INVALID_ARG`. Each of them is an EDS input that the code
+    /// cannot use, or a fault in this backend. Neither is a reason to report the
+    /// account as broken.
     pub fn to_gerror(&self) -> *mut GError {
         match self {
             Self::Login(failure) => failure.to_gerror(),
@@ -230,27 +234,27 @@ impl CreateError {
     }
 }
 
-/// What the scratch source `create_resource_sync` was handed asks for, or `None`
-/// if it does not say.
+/// Returns the request of the scratch source that `create_resource_sync` gets, or
+/// `None` if the source does not give one.
 ///
-/// `None` is EDS's documented "cannot be determined without ambiguity": a source
-/// with neither the `[Address Book]` nor the `[Calendar]` extension is one this
-/// backend has no server-side object for, and guessing a kind would create the
-/// wrong sort of collection under a name the user chose for the other.
+/// `None` is the EDS "cannot be determined without ambiguity". This backend has
+/// no server-side object for a source without the `[Address Book]` or the
+/// `[Calendar]` extension. A guessed kind would create the incorrect type of
+/// collection, with a name that the user selected for the other type.
 ///
-/// Reached through [`kind_of`], which tests for the extensions rather than
-/// fetching them — a scratch source is a real `ESource` that gets written to
-/// disk, and `e_source_get_extension` would add the group it was asked about.
+/// The function uses [`kind_of`], which tests for the extensions and does not get
+/// them. A scratch source is a real `ESource` that EDS writes to disk, and
+/// `e_source_get_extension` adds the group that it gets.
 ///
 /// # Safety
 ///
-/// `source` must be NULL or a valid `ESource` that outlives the call. It is only
-/// read from.
+/// `source` must be NULL or a valid `ESource` that outlives the call. The
+/// function only reads it.
 pub unsafe fn requested_of(source: *mut ESource) -> Option<Requested> {
-    // SAFETY: the caller's contract is `kind_of`'s.
+    // SAFETY: the contract of the caller is the contract of `kind_of`.
     let kind = unsafe { kind_of(source) }?;
-    // SAFETY: a valid source, since `kind_of` answered `Some` for it; the getter
-    // returns NULL or a string the source owns.
+    // SAFETY: a valid source, because `kind_of` returned `Some` for it. The
+    // getter returns NULL or a string that the source owns.
     let display_name = unsafe { read_string(e_source_get_display_name(source)) };
     Some(Requested {
         kind,
@@ -258,14 +262,14 @@ pub unsafe fn requested_of(source: *mut ESource) -> Option<Requested> {
     })
 }
 
-/// Connects as `target`/`credentials` say and creates `requested` there.
+/// Connects with `target` and `credentials`, and creates `requested` on that
+/// server.
 ///
-/// One call so that the vfunc has one thing to do with a
-/// [`Login`](crate::authenticate::Login) and one error type to report. Both
-/// halves are somebody else's decision: the connect is
-/// [`jmap_backend_core::source::connect`]'s — so a bare-domain account gets the
-/// same `_jmap._tcp` autodiscovery a fan-out gets — and the create is
-/// [`create_collection`]'s.
+/// This is one function, so the vfunc has one operation to do with a
+/// [`Login`](crate::authenticate::Login), and one error type to report. Other
+/// code makes both decisions. [`jmap_backend_core::source::connect`] makes the
+/// connection, so an account with only a domain gets the same `_jmap._tcp`
+/// autodiscovery as a fan-out. [`create_collection`] does the create.
 pub fn create_on_server(
     target: &ConnectTarget,
     rebase_urls: bool,
@@ -285,45 +289,44 @@ pub fn create_on_server(
     Ok(child)
 }
 
-/// Finishes the scratch source into the child of this collection that `child`
+/// Completes the scratch source into the child of this collection that `child`
 /// describes.
 ///
-/// Everything but the publish, which needs the registry server and so stays in
-/// [`crate::backend`]. In order:
+/// This function does all steps except the publish. The publish needs the
+/// registry server, so it stays in [`crate::backend`]. The steps, in order:
 ///
-/// 1. every [`Setting`](jmap_collection_sync::Setting) of the child, through the
-///    same [`apply`] a fan-out writes a discovered child with. An error here
-///    fails the whole create even though the collection is already on the
-///    server, and that is the honest answer rather than the tidy one: the
-///    alternative is exporting a half-written child, which is exactly what
-///    [`crate::child_source`] exists to prevent. The collection is left behind on
-///    the server, where the next populate finds it and writes a child for it
-///    properly — a leftover the user can see beats a source that looks right and
-///    reaches no server.
-/// 2. `parent`, so the source is a child of this account rather than a top-level
-///    one — and so `child_added` fires for it when it is published;
-/// 3. `write_directory`, so the source's `.source` file is written into this
-///    collection's cache directory, where a fan-out-created child's lives and
-///    where removing the account takes it along, rather than staying in the
-///    registry's user directory where EDS minted it;
-/// 4. `writable`, which is what lets the user rename the address book afterwards.
+/// 1. Each [`Setting`](jmap_collection_sync::Setting) of the child, through the
+///    same [`apply`] that a fan-out uses for a discovered child. An error here
+///    makes the create fail, although the collection is already on the server.
+///    This is the correct answer. The alternative is to export a child that is
+///    only partly written, and [`crate::child_source`] exists to prevent that.
+///    The collection stays on the server. The next populate finds it and writes
+///    a correct child for it. A visible extra collection is better than a source
+///    that looks correct but connects to no server.
+/// 2. `parent`, so the source is a child of this account and not a top-level
+///    source. Also, `child_added` then fires for it when it is published.
+/// 3. `write_directory`, so EDS writes the `.source` file into the cache
+///    directory of this collection. The children that a fan-out creates are also
+///    there, and a removal of the account also removes them. Without this step,
+///    the file stays in the user directory of the registry, where EDS created it.
+/// 4. `writable`, which lets the user rename the address book later.
 ///
-/// Steps 2–4 are `collection_backend_new_source()`'s own, minus the `removable =
-/// FALSE` that `collection_backend_child_added()` applies to every child on
-/// publish; see the module comment.
+/// Steps 2 to 4 are the steps of `collection_backend_new_source()`, without
+/// `removable = FALSE`. `collection_backend_child_added()` sets that value on
+/// each child when it is published (see the module comment).
 ///
-/// `cache_dir` is `None` only for a collection backend EDS gave no cache
-/// directory, which should not happen — it derives one from the account uid — and
-/// is treated as "do not redirect the writes" rather than as an error: the source
-/// still works, it is merely written where EDS put it.
+/// `cache_dir` is `None` only for a collection backend without a cache directory
+/// from EDS. This must not occur, because EDS derives one from the account uid.
+/// The function then does not change the write location, and does not return an
+/// error. The source still works. EDS only writes it in its original location.
 ///
 /// # Safety
 ///
-/// `scratch` must be a valid `EServerSideSource` — the source EDS handed
-/// `create_resource_sync`, which is one by construction
-/// (`server_side_source_remote_create_cb` builds it with
-/// `e_server_side_source_new`). No reference is taken and nothing outlives the
-/// call.
+/// `scratch` must be a valid `EServerSideSource`. The source that EDS gives
+/// `create_resource_sync` is always one, because
+/// `server_side_source_remote_create_cb` makes it with
+/// `e_server_side_source_new`. The function takes no reference, and nothing
+/// stays after the call.
 pub unsafe fn adopt_created(
     scratch: *mut ESource,
     child: &Child,
@@ -338,17 +341,17 @@ pub unsafe fn adopt_created(
         "adopting created collection child source"
     );
 
-    // SAFETY: a valid source by this function's contract.
+    // SAFETY: a valid source because of the contract of this function.
     unsafe { apply(scratch, &child.settings(connection)) }?;
 
     let account_uid = cstring_lossy(account_uid);
-    // SAFETY: as above, and a NUL-terminated string the setter copies.
+    // SAFETY: as above. The string is NUL-terminated, and the setter copies it.
     unsafe { e_source_set_parent(scratch, account_uid.as_ptr()) };
 
     if let Some(cache_dir) = cache_dir {
         let cache_dir = cstring_lossy(cache_dir);
-        // SAFETY: as above; the source is an `EServerSideSource` by this
-        // function's contract, and the setter copies the string.
+        // SAFETY: as above. The source is an `EServerSideSource` because of the
+        // contract of this function, and the setter copies the string.
         unsafe { e_server_side_source_set_write_directory(scratch.cast(), cache_dir.as_ptr()) };
     }
 
@@ -358,11 +361,11 @@ pub unsafe fn adopt_created(
     Ok(())
 }
 
-/// The name of the kind a create was refused for, for a log line.
+/// Returns the name of the kind of a refused create, for a log line.
 ///
-/// Not user-facing — [`CreateError`] is what the user is shown — but a refused
-/// create is worth a line on EDS's own channel, and "address book"/"calendar"
-/// reads better in one than a `Debug` of the enum.
+/// The user does not see this name; the user sees [`CreateError`]. But a refused
+/// create must have a line on the EDS log channel, and "address book" or
+/// "calendar" is easier to read there than a `Debug` of the enum.
 pub fn kind_noun(kind: ChildKind) -> &'static str {
     match kind {
         ChildKind::AddressBook => "address book",
@@ -370,37 +373,37 @@ pub fn kind_noun(kind: ChildKind) -> &'static str {
     }
 }
 
-/// The password EDS has stored for `source`, asked of the registry's own
-/// credentials provider.
+/// Returns the password that EDS stores for `source`. The function gets it from
+/// the credentials provider of the registry.
 ///
-/// The same store `authenticate_sync`'s `ENamedParameters` comes out of, reached
-/// the one way a backend can reach it without being handed one: the provider
-/// behind `e_source_registry_server_ref_credentials_provider()`. That provider
-/// resolves the *credentials source* itself — a child that shares its
-/// collection's password gets the collection's — so passing the account source is
-/// asking exactly the question `authenticate_sync` was answered.
+/// This is the same store that supplies the `ENamedParameters` of
+/// `authenticate_sync`. A backend that does not get them can access the store
+/// only through the provider of `e_source_registry_server_ref_credentials_provider()`.
+/// That provider finds the *credentials source* itself: a child that uses the
+/// password of its collection gets the password of the collection. Thus a lookup
+/// for the account source asks the same question that `authenticate_sync` got an
+/// answer to.
 ///
-/// `None` is "there is no password for this account", which for an account that
-/// names a user becomes [`ConnectError::CredentialsRequired`] and so a prompt. A
-/// lookup that *failed* answers `None` too, and says why in a log line rather
-/// than in the returned value: from the caller's side the two are the same
-/// situation, this operation has no password, and the actionable message for
-/// the user is the prompt either way.
+/// `None` means "this account has no password". For an account with a user name,
+/// this becomes [`ConnectError::CredentialsRequired`], and thus a prompt. A
+/// *failed* lookup also returns `None`, and a log line gives the reason. For the
+/// caller, the two cases are the same: this operation has no password, and in
+/// both cases the prompt is the useful message for the user.
 ///
-/// **Which channel that line goes to is [`classify_lookup_failure`]'s**, and it
-/// is not a detail. Most of that call's failures are not failures of anything:
-/// an OAuth 2.0 account answers `G_IO_ERROR_NOT_SUPPORTED` on the path that then
-/// works perfectly, and a keyring with nothing in it yet answers
-/// `G_IO_ERROR_NOT_FOUND` on the path that becomes a prompt. Only a lookup that
-/// failed for some other reason (no credentials provider at all, libsecret
-/// unreachable) is the system fault GLib's critical channel exists for.
+/// **[`classify_lookup_failure`] selects the log channel for that line**, and this
+/// is important. Most failures of that call are not real failures. An OAuth 2.0
+/// account returns `G_IO_ERROR_NOT_SUPPORTED`, and then the token path works
+/// correctly. A keyring that is still empty returns `G_IO_ERROR_NOT_FOUND`, and
+/// then a prompt occurs. Only a lookup that fails for a different reason (no
+/// credentials provider, or libsecret not reachable) is a system fault for the
+/// GLib critical channel.
 ///
-/// `context` names the vfunc for the critical channel — the same lookup serves
-/// [`crate::delete_resource`]'s vfunc, and a log line that named the wrong one
-/// would send a reader to the wrong module. Every failure here also carries
-/// `source`'s own uid as a structured `account_id` field (there is no single
-/// resource to blame — a credentials lookup runs on the account as a whole),
-/// via [`log_critical_for_account`].
+/// `context` names the vfunc for the critical channel. The vfunc of
+/// [`crate::delete_resource`] also uses this lookup, and a log line with the
+/// incorrect name would send a reader to the incorrect module. Each failure here
+/// also has the uid of `source` as a structured `account_id` field, through
+/// [`log_critical_for_account`]. No single resource is the cause, because a
+/// credentials lookup applies to the full account.
 ///
 /// [`ConnectError::CredentialsRequired`]: jmap_backend_core::connect::ConnectError::CredentialsRequired
 ///
@@ -414,8 +417,8 @@ pub unsafe fn stored_password_of(
     cancellable: *mut GCancellable,
     context: &str,
 ) -> Option<String> {
-    // SAFETY: a valid source by this function's own contract; the uid comes
-    // back `(transfer none)`, borrowed for the length of this call.
+    // SAFETY: a valid source because of the contract of this function. The uid
+    // is `(transfer none)`, borrowed for the duration of this call.
     let account_id = unsafe { read_string(e_source_get_uid(source)) };
     let has_server = !server.is_null();
     tracing::debug!(
@@ -426,8 +429,9 @@ pub unsafe fn stored_password_of(
     );
 
     if server.is_null() {
-        // The registry server is a weak reference on the backend, so NULL means
-        // it is gone — during shutdown, say — and then there is nobody to ask.
+        // The backend has a weak reference to the registry server. Thus NULL
+        // means that the server is gone (for example, during shutdown), and no
+        // provider is available.
         report_critical(
             account_id.as_deref(),
             format!("{context}: the registry server is gone; no credentials to look up"),
@@ -435,8 +439,7 @@ pub unsafe fn stored_password_of(
         return None;
     }
 
-    // SAFETY: a valid registry server; the provider comes back `(transfer
-    // full)`.
+    // SAFETY: a valid registry server. The provider is `(transfer full)`.
     let provider = unsafe {
         Owned::<ESourceCredentialsProvider>::from_raw(
             e_source_registry_server_ref_credentials_provider(server),
@@ -450,8 +453,8 @@ pub unsafe fn stored_password_of(
         return None;
     };
 
-    // SAFETY: a live provider, a valid source and a cancellable satisfying this
-    // function's contract.
+    // SAFETY: a live provider, a valid source and a cancellable that agrees with
+    // the contract of this function.
     unsafe {
         lookup_password(
             provider.as_ptr(),
@@ -463,10 +466,10 @@ pub unsafe fn stored_password_of(
     }
 }
 
-/// [`log_critical_for_account`] when `account_id` is known, else the plain
-/// [`log_critical`] — the account's own uid is not always readable (an
-/// `ESource` with none would be a first for EDS, but it is not this
-/// function's contract to assume it).
+/// Calls [`log_critical_for_account`] if `account_id` is known, else the plain
+/// [`log_critical`]. The uid of the account is possibly not readable. EDS
+/// probably never makes an `ESource` without a uid, but the contract of this
+/// function does not assume it.
 fn report_critical(account_id: Option<&str>, message: String) {
     match account_id {
         Some(account_id) => log_critical_for_account(account_id, &message),
@@ -474,8 +477,8 @@ fn report_critical(account_id: Option<&str>, message: String) {
     }
 }
 
-/// One `e_source_credentials_provider_lookup_sync`, with both things it hands
-/// back released.
+/// Calls `e_source_credentials_provider_lookup_sync` once, and releases the two
+/// values that it returns.
 ///
 /// # Safety
 ///
@@ -491,9 +494,8 @@ unsafe fn lookup_password(
     let mut credentials: *mut ENamedParameters = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
-    // SAFETY: the contract above, and two writable out-parameters initialised to
-    // NULL. The credentials come back `(transfer full)` and the `GError`
-    // likewise.
+    // SAFETY: the contract above, and two writable out-parameters set to NULL.
+    // The credentials and the `GError` are both `(transfer full)`.
     let looked_up = unsafe {
         e_source_credentials_provider_lookup_sync(
             provider,
@@ -505,17 +507,17 @@ unsafe fn lookup_password(
     };
 
     if looked_up == GFALSE {
-        // Classified before the message is taken, since taking it frees the
-        // `GError` this reads the domain and code off.
+        // Classify the error before taking the message. `take_message` frees
+        // the `GError`, and the classification reads its domain and code.
         // SAFETY: the call failed, so `error` is NULL or a live `GError`.
         let failure = unsafe { classify_lookup_failure(error) };
-        // SAFETY: the call failed, so `error` is NULL or a `GError` ownership of
-        // which passed to us; its message is a string the struct owns.
+        // SAFETY: the call failed, so `error` is NULL or a `GError` that this
+        // function now owns. Its message is a string that the struct owns.
         let message = unsafe { take_message(error) };
         match failure {
-            // Not a fault, and the caller's `None` already says everything the
-            // user needs: a prompt, or a token fetch that does not want a
-            // password in the first place.
+            // This is not a fault. The `None` of the caller already gives the
+            // user all that is necessary: a prompt, or a token fetch that needs
+            // no password.
             LookupFailure::NoPassword => tracing::debug!(
                 account_id,
                 context,
@@ -530,67 +532,65 @@ unsafe fn lookup_password(
         return None;
     }
 
-    // A success that also set an error would be a broken callee, but freeing it
-    // costs nothing and leaking it costs a report — the same reasoning as
-    // `crate::removal`'s.
+    // Only a defective callee sets an error on success. Free the error, because
+    // a leak causes a report. `crate::removal` does the same.
     if !error.is_null() {
-        // SAFETY: a `GError` this call owns and nothing else holds.
+        // SAFETY: a `GError` that this call owns and that nothing else holds.
         unsafe { g_error_free(error) };
     }
 
     // SAFETY: the lookup succeeded, so `credentials` is NULL or an
-    // `ENamedParameters` this call owns; `password_of` only reads through it.
+    // `ENamedParameters` that this call owns. `password_of` only reads it.
     let password = unsafe { password_of(credentials) };
     if !credentials.is_null() {
-        // SAFETY: ownership passed to us with the out-parameter, and the borrow
-        // `password_of` took has ended — it answers an owned `String`.
+        // SAFETY: this function got ownership through the out-parameter. The
+        // borrow of `password_of` has ended, because it returns an owned `String`.
         unsafe { e_named_parameters_free(credentials) };
     }
 
     password
 }
 
-/// What a `FALSE` from `e_source_credentials_provider_lookup_sync` means.
+/// The meaning of a `FALSE` from `e_source_credentials_provider_lookup_sync`.
 ///
-/// The distinction exists because a great many of that call's failures are not
-/// failures of anything: see [`classify_lookup_failure`].
+/// This distinction is necessary because many failures of that call are not real
+/// failures (see [`classify_lookup_failure`]).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LookupFailure {
-    /// EDS has no password for this account, and that is an ordinary state
-    /// rather than a fault. The caller's answer is `None` either way; what
-    /// changes is which log channel says so.
+    /// EDS has no password for this account. This is a normal state, not a
+    /// fault. The caller returns `None` in both cases. Only the log channel is
+    /// different.
     NoPassword,
-    /// Something that should not have failed did, and GLib's critical channel
-    /// is where a system fault belongs.
+    /// An operation that must not fail failed. A system fault goes to the GLib
+    /// critical channel.
     Fault,
 }
 
-/// Which of the two a failed lookup is, by domain and code rather than by
-/// message text.
+/// Returns the type of a failed lookup, from the domain and code and not from
+/// the message text.
 ///
-/// Three `G_IO_ERROR` codes are ordinary, each for its own reason found in
-/// EDS's source:
+/// Three `G_IO_ERROR` codes are normal. The reason for each is in the EDS source
+/// code:
 ///
-/// - `G_IO_ERROR_NOT_FOUND` is what
-///   `e_source_credentials_provider_impl_password_lookup_sync` sets, verbatim,
-///   when the keyring holds nothing for the source yet. That is the state
-///   [`stored_password_of`] documents as becoming a credentials prompt.
-/// - `G_IO_ERROR_NOT_SUPPORTED` is the abstract
-///   `ESourceCredentialsProviderImpl` default, and it is what an **OAuth 2.0**
-///   account answers: `e_source_credentials_provider_impl_oauth2` matches the
-///   source through `can_process` and then overrides `can_store` and
-///   `can_prompt` only, leaving `lookup_sync` at the base class's refusal. An
-///   OAuth 2.0 account has no password by construction, and
-///   [`crate::authenticate::login_of`] goes on to fetch a token and succeed, so
-///   this arrives on the *success* path of every create and every delete such
-///   an account performs.
-/// - `G_IO_ERROR_CANCELLED` is the user pressing Stop, which reaches libsecret
-///   because the vfunc's own `GCancellable` is passed straight through.
+/// - `e_source_credentials_provider_impl_password_lookup_sync` sets
+///   `G_IO_ERROR_NOT_FOUND` when the keyring has no entry for the source yet.
+///   [`stored_password_of`] documents that this state becomes a credentials
+///   prompt.
+/// - `G_IO_ERROR_NOT_SUPPORTED` is the default of the abstract
+///   `ESourceCredentialsProviderImpl`. An **OAuth 2.0** account returns it:
+///   `e_source_credentials_provider_impl_oauth2` accepts the source through
+///   `can_process`, and overrides only `can_store` and `can_prompt`. Thus
+///   `lookup_sync` keeps the refusal of the base class. An OAuth 2.0 account
+///   never has a password, and [`crate::authenticate::login_of`] then gets a
+///   token and succeeds. Thus this code occurs on the *success* path of each
+///   create and each delete of such an account.
+/// - `G_IO_ERROR_CANCELLED` occurs when the user selects Stop. It gets to
+///   libsecret because the code gives the `GCancellable` of the vfunc directly to
+///   the lookup.
 ///
-/// Everything else keeps its critical, including a `FALSE` carrying no `GError`
-/// at all. That shape is what the provider's own `g_return_val_if_fail`
-/// produces when it has no implementation to ask, not even the password
-/// fallback.
+/// All other failures stay critical, also a `FALSE` without a `GError`. The
+/// `g_return_val_if_fail` of the provider gives that result when the provider has
+/// no implementation to ask, not even the password fallback.
 ///
 /// # Safety
 ///
@@ -600,8 +600,8 @@ unsafe fn classify_lookup_failure(error: *const GError) -> LookupFailure {
         return LookupFailure::Fault;
     }
 
-    // SAFETY: a live `GError` by the contract above; `g_io_error_quark` takes
-    // no arguments.
+    // SAFETY: a live `GError` because of the contract above. `g_io_error_quark`
+    // has no arguments.
     let (domain, code) = unsafe { ((*error).domain, (*error).code) };
     // SAFETY: as above.
     if domain != unsafe { g_io_error_quark() } {
@@ -616,7 +616,7 @@ unsafe fn classify_lookup_failure(error: *const GError) -> LookupFailure {
     }
 }
 
-/// The message of a `GError` this call owns, and then frees.
+/// Returns the message of a `GError` that this call owns, then frees the error.
 ///
 /// # Safety
 ///
@@ -626,9 +626,9 @@ unsafe fn take_message(error: *mut GError) -> String {
         return "EDS gave no reason".to_owned();
     }
 
-    // SAFETY: a live GError; its message is a NUL-terminated string it owns.
+    // SAFETY: a live GError. Its message is a NUL-terminated string that it owns.
     let message = unsafe { read_string((*error).message) };
-    // SAFETY: ownership passed to us with the out-parameter.
+    // SAFETY: this function got ownership through the out-parameter.
     unsafe { g_error_free(error) };
 
     message.unwrap_or_else(|| "EDS gave no message".to_owned())
@@ -642,38 +642,38 @@ mod tests {
 
     use super::*;
 
-    /// A real `GError` rather than a hand-rolled struct, since
+    /// Makes a real `GError`, not a struct made by hand, because
     /// [`classify_lookup_failure`] reads its `domain` and `code` fields
-    /// directly. The same helper `jmap_backend_core::oauth2`'s tests use.
+    /// directly. The tests of `jmap_backend_core::oauth2` use the same helper.
     fn error(domain: glib_sys::GQuark, code: i32) -> *mut GError {
         let message = CString::new("boom").unwrap();
-        // SAFETY: a valid domain and a NUL-terminated message; every caller
-        // below frees the result.
+        // SAFETY: a valid domain and a NUL-terminated message. Each caller below
+        // frees the result.
         unsafe { glib_sys::g_error_new_literal(domain, code, message.as_ptr()) }
     }
 
     fn classify(domain: glib_sys::GQuark, code: i32) -> LookupFailure {
         let error = error(domain, code);
-        // SAFETY: a live `GError` built above and freed below.
+        // SAFETY: a live `GError` that the code above makes and the code below
+        // frees.
         let failure = unsafe { classify_lookup_failure(error) };
-        // SAFETY: as above; nothing else holds it.
+        // SAFETY: as above. Nothing else holds it.
         unsafe { g_error_free(error) };
         failure
     }
 
-    /// The two shapes EDS answers for an account it simply has no password
-    /// for. `NOT_FOUND` is what
-    /// `e_source_credentials_provider_impl_password_lookup_sync` sets when
-    /// the keyring holds nothing yet; `NOT_SUPPORTED` is the abstract
-    /// `ESourceCredentialsProviderImpl` default, which is what an OAuth 2.0
-    /// account gets, because the OAuth 2.0 impl matches `can_process` and
-    /// then does not override `lookup_sync` at all.
+    /// The two errors that EDS returns for an account without a password.
+    /// `e_source_credentials_provider_impl_password_lookup_sync` sets
+    /// `NOT_FOUND` when the keyring has no entry yet. `NOT_SUPPORTED` is the
+    /// default of the abstract `ESourceCredentialsProviderImpl`. An OAuth 2.0
+    /// account gets it, because the OAuth 2.0 implementation accepts the source
+    /// in `can_process` and does not override `lookup_sync`.
     ///
-    /// Neither is a fault: the first becomes a credentials prompt and the
-    /// second is followed by a perfectly good token fetch. Reporting them on
-    /// GLib's critical channel puts a `g_critical` in the log of every
-    /// create and every delete that then succeeds, and aborts the registry
-    /// outright under `G_DEBUG=fatal-criticals`.
+    /// Neither error is a fault. The first becomes a credentials prompt, and
+    /// after the second a token fetch succeeds. A report on the GLib critical
+    /// channel puts a `g_critical` in the log of each create and each delete
+    /// that then succeeds. Under `G_DEBUG=fatal-criticals`, it also stops the
+    /// registry.
     #[test]
     fn eds_having_no_password_for_an_account_is_not_a_fault() {
         for code in [G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED] {
@@ -685,8 +685,8 @@ mod tests {
         }
     }
 
-    /// A lookup the user cancelled is not a fault either. Reachable because
-    /// the vfunc's own `GCancellable` goes straight through to libsecret.
+    /// A lookup that the user cancels is also not a fault. This can occur
+    /// because the `GCancellable` of the vfunc goes directly to libsecret.
     #[test]
     fn a_cancelled_lookup_is_not_a_fault() {
         assert_eq!(
@@ -695,9 +695,9 @@ mod tests {
         );
     }
 
-    /// Everything else stays on the critical channel, which is the whole
-    /// point of narrowing it: a lookup that failed for a reason EDS did not
-    /// name as one of the above is a system fault worth a report.
+    /// All other failures stay on the critical channel. This is the purpose of
+    /// the classification: a lookup that fails for a reason that is not in the
+    /// list above is a system fault, and it must be reported.
     #[test]
     fn any_other_failure_is_still_a_fault() {
         assert_eq!(
@@ -706,10 +706,10 @@ mod tests {
         );
     }
 
-    /// The domain is compared as well as the code, and not as
-    /// belt-and-braces: `G_IO_ERROR` and `G_DBUS_ERROR` are different
-    /// enumerations, so a code alone would read some unrelated bus failure
-    /// as "this account has no password" and silence it.
+    /// The function compares the domain and the code, and the domain check is
+    /// necessary. `G_IO_ERROR` and `G_DBUS_ERROR` are different enumerations.
+    /// With only the code, an unrelated bus failure would read as "this account
+    /// has no password", and no report would occur.
     #[test]
     fn the_same_code_in_another_domain_is_a_fault() {
         assert_eq!(
@@ -718,14 +718,13 @@ mod tests {
         );
     }
 
-    /// A `FALSE` with no `GError` at all is what
-    /// `e_source_credentials_provider_lookup_sync`'s own
-    /// `g_return_val_if_fail` produces when the provider has no
-    /// implementation to ask, including the password fallback. That really
-    /// is broken, and it keeps its critical.
+    /// The `g_return_val_if_fail` of
+    /// `e_source_credentials_provider_lookup_sync` returns `FALSE` without a
+    /// `GError` when the provider has no implementation to ask, not even the
+    /// password fallback. This is a real fault, and it stays critical.
     #[test]
     fn a_failure_with_no_gerror_is_a_fault() {
-        // SAFETY: NULL is this function's documented input.
+        // SAFETY: NULL is a documented input of this function.
         assert_eq!(
             unsafe { classify_lookup_failure(ptr::null()) },
             LookupFailure::Fault
@@ -737,8 +736,8 @@ mod tests {
 mod kind_noun_tests {
     use super::*;
 
-    /// A name for each kind, not the same word for both: without this test a
-    /// `kind_noun` that always answers one fixed string still compiles.
+    /// Each kind has its own name. Without this test, a `kind_noun` that always
+    /// returns one fixed string still compiles.
     #[test]
     fn kind_noun_names_each_kind() {
         assert_eq!(kind_noun(ChildKind::AddressBook), "address book");
@@ -754,9 +753,9 @@ mod create_error_display_tests {
 
     use super::*;
 
-    /// `CreateError`'s `Display` writes something for every variant; without
-    /// this test a `Display` that writes nothing still compiles and a
-    /// refused create reports as an empty error message.
+    /// The `Display` of `CreateError` writes text for each variant. Without this
+    /// test, a `Display` that writes nothing still compiles, and a refused create
+    /// shows an empty error message.
     #[test]
     fn every_variant_displays_a_non_empty_message() {
         let unknown_kind = CreateError::UnknownKind;
@@ -783,16 +782,15 @@ mod create_error_display_tests {
 mod create_error_to_gerror_tests {
     use super::*;
 
-    /// `UnknownKind` (and every variant but `Login` and a server `Client`
-    /// failure) goes through `invalid_arg_gerror`; without this test
-    /// `to_gerror` can be replaced with a function that always answers the
-    /// null pointer and nothing notices.
+    /// `UnknownKind` goes through `invalid_arg_gerror`, as do all variants except
+    /// `Login` and a server `Client` failure. Without this test, a `to_gerror`
+    /// that always returns the null pointer causes no failure.
     #[test]
     fn unknown_kind_carries_the_invalid_arg_code_and_its_own_message() {
         let error = CreateError::UnknownKind;
         let gerror = error.to_gerror();
         assert!(!gerror.is_null());
-        // SAFETY: a freshly allocated GError this test owns.
+        // SAFETY: a newly allocated GError that this test owns.
         unsafe {
             assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
             assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
@@ -809,9 +807,8 @@ mod report_critical_tests {
 
     use super::*;
 
-    /// With an account id, the line carries it as a structured field;
-    /// without this test `report_critical` can drop its body and nothing
-    /// notices.
+    /// With an account id, the line has the id as a structured field. Without
+    /// this test, an empty `report_critical` causes no failure.
     #[test]
     fn with_an_account_id_the_line_carries_it() {
         let (_, entries) = capture(|| report_critical(Some("account-1"), "boom".to_owned()));
@@ -823,7 +820,7 @@ mod report_critical_tests {
         );
     }
 
-    /// With no account id, the line is still logged, just without that
+    /// Without an account id, the code still logs the line, but without that
     /// field.
     #[test]
     fn with_no_account_id_the_line_is_still_logged() {

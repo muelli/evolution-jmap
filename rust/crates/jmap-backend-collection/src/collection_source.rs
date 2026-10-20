@@ -1,66 +1,61 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the account itself says, read off the collection `ESource`.
+//! Reads the settings of the account from the collection `ESource`.
 //!
-//! [`crate::resource_id`] reads a *child*; this reads the source the children
-//! hang off — the one `evolution-source-registry` handed the backend, which is
-//! the whole description of the account. It is everything `populate` knows
-//! before it contacts anything, and it comes in two answers that are
-//! deliberately not one:
+//! [`crate::resource_id`] reads a *child*. This module reads the parent source
+//! of the children: the source that `evolution-source-registry` gives the
+//! backend, which fully describes the account. It is all that `populate` knows
+//! before it connects. It gives three answers, deliberately separate:
 //!
-//! - [`parts_of`] — which of mail, contacts and calendars the user left
-//!   switched on, as [`Parts`], which is what gates every listing and every
-//!   removal.
-//! - [`server_of`] — where the server is, as a [`Server`]: the origin *this*
-//!   backend fetches `/.well-known/jmap` from, and the [`Connection`] each child
-//!   has to repeat in order to reach the same one.
-//! - [`user_of`] — whom the account authenticates as, which is the one field of
-//!   `[Authentication]` a `populate` needs and the one that cannot come from
-//!   [`server_of`]: see [`user_of`] on why a populate must not fail where
-//!   `authenticate_sync` is the vfunc that can report why.
+//! - [`parts_of`]: which of mail, contacts and calendars are enabled, as
+//!   [`Parts`]. This controls every listing and every removal.
+//! - [`server_of`]: the server, as a [`Server`]. It contains the target that
+//!   *this* backend connects to, and the [`Connection`] that each child copies
+//!   to reach the same server.
+//! - [`user_of`]: the user that the account authenticates as. `populate` needs
+//!   this one field of `[Authentication]`, and it must not come from
+//!   [`server_of`]. See [`user_of`] for the reason.
 //!
-//! Separate functions rather than one because they fail differently and are
-//! needed at different moments. An account with no part enabled has nothing to
-//! populate and must not be reported as broken merely because its host field is
-//! also empty; `populate` asks [`parts_of`] first, returns if
-//! [`Parts::any`] is false, and only then needs a server. Folding them together
-//! would turn a switched-off account into an error dialog.
+//! They are separate functions because they fail differently and are
+//! necessary at different times. An account with no part enabled has nothing
+//! to populate. It is not broken because its host field is also empty.
+//! `populate` calls [`parts_of`] first, and returns if [`Parts::any`] is false.
+//! Only after that does it need a server. One combined function would show an
+//! error dialog for a disabled account.
 //!
-//! ## Both answers come out of one read
+//! ## Both answers come from one read
 //!
-//! [`Server`] carries the assembled origin *and* the field-by-field connection
-//! because both are needed and they must not be read twice. This backend
-//! contacts the server itself, and each child assembles its own origin at the
-//! far end from the fields copied into it ([`Child::settings`]). Two reads of
-//! one source are two chances to disagree, and a disagreement here is an
-//! account that discovers its collections from one server and fetches them from
-//! another.
+//! [`Server`] has the connect target *and* the connection field by field. Both
+//! are necessary, and two reads must not occur. This backend connects to the
+//! server itself. Each child assembles its own origin from the fields copied
+//! into it ([`Child::settings`]). Two reads of one source can disagree. The
+//! account then discovers its collections on one server and fetches them from
+//! a different server.
 //!
-//! The host rules — a bare host name or IP literal, and TLS unless the host is
-//! loopback — are [`jmap_backend_core::source::origin`]'s, not a second copy.
-//! They apply here for two reasons at once: this backend is the first thing to
-//! contact the server, and it is what *writes* the host into the children. A
-//! child re-validates what it was handed, but by then the string has been
-//! written into a `.source` file per collection.
+//! The host rules come from [`jmap_backend_core::source::connect_target`];
+//! this module has no second copy. The rules are a bare host name or IP
+//! literal, and TLS unless the host is loopback. They apply here for two
+//! reasons. This backend connects to the server first, and it *writes* the
+//! host into the children. A child validates the host again, but by then the
+//! host is in one `.source` file per collection.
 //!
 //! ## Nothing here creates an extension
 //!
-//! `e_source_get_extension()` creates the extension it is asked for, and the
-//! source in question is the user's *account* — the file EDS writes back to
-//! disk. So `[Collection]`, `[Security]` and `[Authentication]` are each tested
-//! for before they are read, and their absence is a documented answer rather
-//! than an empty extension:
+//! `e_source_get_extension()` creates the extension that it is asked for. Here
+//! the source is the *account* of the user, which EDS writes to disk. Thus this
+//! module tests for `[Collection]`, `[Security]` and `[Authentication]` before
+//! it reads them. Each absence has a documented meaning, not an empty
+//! extension:
 //!
 //! - no `[Collection]` is [`Parts::ALL`], because
-//!   `e_collection_backend_get_part_enabled()` answers `TRUE` for a source that
-//!   has none;
+//!   `e_collection_backend_get_part_enabled()` answers `TRUE` for a source
+//!   without one;
 //! - no `[Security]` is TLS, because `ESourceSecurity:secure` defaults to
-//!   `FALSE` and reading that as "the user turned TLS off" would downgrade every
-//!   hand-written account — the same rule, and the same reasoning, as
-//!   [`SourceConfig`];
-//! - no `[Authentication]` is [`SourceError::MissingHost`], which is what an
-//!   empty one would have produced anyway, minus the edit to the user's file.
+//!   `FALSE`. To read that as "TLS off" would make every hand-written account
+//!   less secure. [`SourceConfig`] has the same rule for the same reason;
+//! - no `[Authentication]` is [`SourceError::MissingHost`]. An empty group
+//!   gives the same result, but would change the file of the user.
 //!
 //! [`Child::settings`]: jmap_collection_sync::Child::settings
 //! [`SourceConfig`]: jmap_backend_core::source::SourceConfig
@@ -81,53 +76,51 @@ use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
-/// Where the account says its server is, in the two shapes it is needed in.
+/// The server of the account, in the two shapes that are necessary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Server {
-    /// What this backend fetches the session document from — an explicit
-    /// endpoint, or a bare domain eligible for `_jmap._tcp` SRV
-    /// autodiscovery. Decided by [`jmap_backend_core::source::connect_target`]
-    /// from the same fields as the [`connection`](Server::connection) beside
-    /// it, so an address book or calendar backend reconnecting to this
-    /// account's server reaches the same answer.
+    /// Where this backend gets the session document: an explicit endpoint, or
+    /// a bare domain for `_jmap._tcp` SRV autodiscovery.
+    /// [`jmap_backend_core::source::connect_target`] decides it from the same
+    /// fields as the [`connection`](Server::connection). Thus an address book
+    /// or calendar backend that connects again gets the same answer.
     pub target: ConnectTarget,
-    /// The same server field by field, for the children to repeat. Not derived
-    /// from the origin: [`Child::settings`](jmap_collection_sync::Child::settings)
-    /// writes `[Authentication]` and `[Security]` keys, and taking a URL apart
-    /// again to get them back would be a second parser to disagree with.
+    /// The same server field by field, for the children to copy. It is not
+    /// derived from the target.
+    /// [`Child::settings`](jmap_collection_sync::Child::settings) writes
+    /// `[Authentication]` and `[Security]` keys. A parser that takes a URL
+    /// apart again could disagree.
     pub connection: Connection,
-    /// Whether this account opts into rebasing the session's advertised URLs
-    /// onto the origin actually connected through — see
-    /// [`jmap_backend_core::rebase::rebase_urls`].
+    /// Whether this account rebases the URLs of the session onto the origin it
+    /// connected through. See [`jmap_backend_core::rebase::rebase_urls`].
     pub rebase_urls: bool,
 }
 
-/// Which parts of the account are switched on, by
-/// `e_collection_backend_get_part_enabled()`'s two rules.
+/// Which parts of the account are enabled, by the two rules of
+/// `e_collection_backend_get_part_enabled()`.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — the collection source EDS handed the
+/// `source` must be a valid `ESource`: the collection source that EDS gave the
 /// backend. It is only read from, and nothing outlives the call.
 pub unsafe fn parts_of(source: *mut ESource) -> Parts {
-    // As in `SourceConfig::from_source`: `e_source_get_extension` finds an
-    // extension class by walking the registered children of
-    // `E_TYPE_SOURCE_EXTENSION`, so a type nothing has referenced yet is one it
-    // cannot find. Referencing the GType registers it.
+    // `e_source_get_extension` finds only registered children of
+    // `E_TYPE_SOURCE_EXTENSION` (as in `SourceConfig::from_source`). A
+    // reference to the GType registers it.
     // SAFETY: no arguments, and the type system initialises itself.
     unsafe { e_source_collection_get_type() };
 
     // SAFETY: a valid source by the contract above, and a header constant.
     let source_enabled = unsafe { e_source_get_enabled(source) } != GFALSE;
 
-    // Tested for rather than fetched, so that reading the account does not
-    // write to it — see the module comment.
+    // Test for the extension and do not get it, so that a read does not write
+    // to the account. See the module comment.
     // SAFETY: as above.
     let collection =
         unsafe { extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION) }
             .map(|collection| {
-                // SAFETY: the extension is present, so this is the source's own,
-                // which it owns and which outlives the call.
+                // SAFETY: the extension is present, so it belongs to the
+                // source, which owns it and which outlives the call.
                 unsafe {
                     Parts {
                         mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
@@ -140,22 +133,21 @@ pub unsafe fn parts_of(source: *mut ESource) -> Parts {
     Parts::from_collection(source_enabled, collection)
 }
 
-/// Whom the account authenticates as, or `None` for anonymously.
+/// The user that the account authenticates as, or `None` for anonymous.
 ///
-/// The one field of `[Authentication]` a `populate` needs, and deliberately not
-/// a call to [`server_of`]: which of EDS's two "authenticate me" calls a populate
-/// makes depends only on whether there is a password to resolve, while what a
-/// broken host means is `authenticate_sync`'s to answer — that is the vfunc with
-/// a `GError` to say it through. An account with a user and a host that is not a
-/// host must reach that error, not be quietly treated as anonymous by a populate
-/// whose read of the account failed.
+/// `populate` needs this one field of `[Authentication]`, and deliberately does
+/// not call [`server_of`]. The choice between the two EDS "authenticate me"
+/// calls depends only on whether a password is necessary. A broken host is for
+/// `authenticate_sync` to report, because that vfunc has a `GError`. An
+/// account with a user and an invalid host must get that error. A failed read
+/// in `populate` must not make it anonymous.
 ///
-/// `None` covers both spellings of "no user": no `[Authentication]` group at all,
-/// and a `User=` key that is present and empty. The second matters because
-/// [`jmap_backend_core::connect::credentials`] is what decides what the account
-/// authenticates *as*, it reads an empty user as anonymous through the same
-/// [`read_string`], and a populate that disagreed with it would ask EDS for a
-/// password that `credentials` then drops.
+/// `None` covers both forms of "no user": no `[Authentication]` group, and an
+/// empty `User=` key. The second is important.
+/// [`jmap_backend_core::connect::credentials`] decides what the account
+/// authenticates *as*, and reads an empty user as anonymous through the same
+/// [`read_string`]. If `populate` disagreed, it would ask EDS for a password
+/// that `credentials` then discards.
 ///
 /// # Safety
 ///
@@ -164,8 +156,8 @@ pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
     // SAFETY: no arguments; registers the type the lookup below needs.
     unsafe { e_source_authentication_get_type() };
 
-    // Tested for rather than fetched, as everywhere in this module: this is the
-    // account's own file, and `e_source_get_extension` would add the group.
+    // Test for the group and do not get it, as everywhere in this module:
+    // `e_source_get_extension` would add the group to the account file.
     // SAFETY: a valid source by the contract above, and a header constant.
     let auth = unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
@@ -174,7 +166,7 @@ pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
     unsafe { read_string(e_source_authentication_get_user(auth)) }
 }
 
-/// The server this account names, or why it names none.
+/// The server that this account names, or why it names none.
 ///
 /// # Safety
 ///
@@ -186,10 +178,10 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
         e_source_security_get_type();
     }
 
-    // Absent means TLS, and it is asked before any `e_source_get_extension`:
-    // `ESourceSecurity:secure` defaults to FALSE, so an unconditional read
-    // cannot tell an account with no `[Security]` group from one whose owner
-    // switched TLS off.
+    // Absent means TLS, and this test comes before any
+    // `e_source_get_extension`. `ESourceSecurity:secure` defaults to FALSE, so
+    // an unconditional read cannot tell an account without `[Security]` from
+    // an account with TLS off.
     // SAFETY: a valid source by the contract above, and a header constant.
     let secure = match unsafe {
         extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
@@ -199,9 +191,9 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
         Some(security) => unsafe { e_source_security_get_secure(security) != GFALSE },
     };
 
-    // And the same guard again, for the same reason: an account with no
-    // `[Authentication]` names no host, which is what an empty one would have
-    // said too — without adding the group to the user's file.
+    // The same test, for the same reason. An account without
+    // `[Authentication]` names no host, as an empty group does, and the file
+    // of the user does not change.
     // SAFETY: as above.
     let Some(auth) = (unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
@@ -219,24 +211,22 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
         )
     };
 
-    // The validation, and the one place it happens: the target this backend
-    // connects to and the host its children are given come out of the same
-    // checked fields.
+    // The one validation. The connect target of this backend and the host of
+    // its children come from the same checked fields.
     let target = connect_target(host.as_deref(), port, secure)?;
 
-    // SAFETY: `source` is valid by this function's own contract.
+    // SAFETY: `source` is valid by the contract of this function.
     let rebase_urls = unsafe { jmap_backend_core::rebase::rebase_urls(source) };
 
     Ok(Server {
         target,
         rebase_urls,
         connection: Connection {
-            // `connect_target` returned Ok, so the host is present;
-            // unwrapping it here rather than earlier keeps `MissingHost` a
-            // single decision.
+            // `connect_target` returned Ok, so the host is present. The unwrap
+            // is here, not earlier, so that `MissingHost` has one origin.
             host: host.expect("a validated target was built from a host"),
-            // The keyfile writes 0 for "not set", and a child given `Port=0`
-            // would ask for port zero instead of the scheme's default.
+            // The keyfile writes 0 for "not set". A child with `Port=0` would
+            // use port zero, not the default port of the scheme.
             port: (port != 0).then_some(port),
             user,
             auth_method,

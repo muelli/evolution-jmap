@@ -1,80 +1,81 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The mail half of a JMAP account: what this backend says about the three
-//! sources it does *not* create.
+//! The mail half of a JMAP account: what this backend writes on the three
+//! sources that it does *not* create.
 //!
 //! ## Why the mail sources are not children of this collection
 //!
-//! Every other part of M6 works the same way — [`crate::populate`] names a
-//! resource, `e_collection_backend_new_child` mints the `ESource`,
-//! [`crate::resource_id`] reads the name back. Mail does not, and the reason is
-//! in `collection_backend_load_resources()`: on every start it reads each
-//! `.source` file in the backend's cache directory, asks `dup_resource_id` what
-//! it is, and **deletes** the file when the answer is `NULL`. So a mail source
-//! kept in that directory would have to be claimed by `dup_resource_id` — and
-//! every reference implementation refuses to claim one.
-//! `module-google-backend.c`'s `dup_resource_id` chains up only for
-//! `[Calendar]`, `[Memo List]`, `[Task List]` and `[Address Book]` and answers
-//! `NULL` for anything else; evolution-ews answers with its own folder id, which
-//! the mail sources do not carry.
+//! For all other parts, [`crate::populate`] names a resource,
+//! `e_collection_backend_new_child` creates the `ESource`, and
+//! [`crate::resource_id`] reads the name back. Mail is different, because of
+//! `collection_backend_load_resources()`. On every start, it reads each
+//! `.source` file in the cache directory of the backend and asks
+//! `dup_resource_id` for its id. It **deletes** the file when the answer is
+//! `NULL`.
 //!
-//! That is consistent because the mail sources live somewhere else: in the
-//! registry's own source directory, with `Parent` set to the account's uid,
-//! written by the setup UI when the account is created (M7 here). They are
-//! children of the *account* without being cached resources of the *backend* —
+//! Thus `dup_resource_id` must claim a mail source in that directory, and every
+//! reference implementation refuses to claim one. The `dup_resource_id` of
+//! `module-google-backend.c` chains up only for `[Calendar]`, `[Memo List]`,
+//! `[Task List]` and `[Address Book]`, and answers `NULL` for all others.
+//! evolution-ews answers with its own folder id, which the mail sources do not
+//! have.
+//!
+//! This is consistent, because the mail sources are in a different location:
+//! the source directory of the registry, with `Parent` set to the uid of the
+//! account. The setup UI writes them when it creates the account. They are
+//! children of the *account*, but not cached resources of the *backend*.
 //! `e_collection_backend_list_mail_sources()` still finds them, and
 //! `collection_backend_bind_child_enabled()` still binds their `enabled` to the
-//! account's `mail-enabled`.
+//! `mail-enabled` of the account.
 //!
-//! ## So what is left for a collection backend to say
+//! ## What remains for a collection backend
 //!
-//! Exactly this vfunc. `e_collection_backend_factory_prepare_mail` is the hook a
-//! vendor backend fills those three sources in through, and the inherited
-//! implementation does only the wiring that is the same for every vendor: the
-//! mail account's `identity-uid` points at the identity, the identity's
-//! `[Mail Submission] transport-uid` points at the transport, and each of the
-//! three carries the extension that makes it recognisable as what it is. What is
-//! vendor-specific is *which service* the account and the transport are —
-//! `module-google-backend.c` writes `imapx`/`smtp` plus host, port and security
-//! into an `ESourceCamel`; evolution-ews writes the single name `ews` on both
-//! and nothing else, because an EWS account's server comes from the collection.
+//! Only this vfunc. A vendor backend fills the three sources through
+//! `e_collection_backend_factory_prepare_mail`. The inherited implementation
+//! does the wiring that is the same for all vendors. The `identity-uid` of the
+//! mail account refers to the identity. The `[Mail Submission] transport-uid`
+//! of the identity refers to the transport. Each of the three gets the
+//! extension that identifies its type.
 //!
-//! JMAP is the second shape: one protocol, no host of our own to invent. The
-//! name is `jmap` on both sources because [`jmap-mail`'s provider] registers one
-//! `CamelProvider` with a store type *and* a transport type in it — JMAP submits
-//! over the session it reads through (RFC 8621 §7), so there is no second
-//! service beside it the way `smtp` sits beside `imapx`.
+//! The vendor-specific part is *which service* the account and the transport
+//! are. `module-google-backend.c` writes `imapx`/`smtp` and the host, port and
+//! security into an `ESourceCamel`. evolution-ews writes only the name `ews` on
+//! both, because the collection gives the server of an EWS account.
+//!
+//! JMAP has the second shape: one protocol, and no host to invent. The name is
+//! `jmap` on both sources, because [`jmap-mail`'s provider] registers one
+//! `CamelProvider` with a store type *and* a transport type. JMAP submits
+//! through the same session that it reads through (RFC 8621 §7). Thus there is
+//! no second service, unlike `smtp` next to `imapx`.
 //!
 //! [`jmap-mail`'s provider]: ../../jmap_mail/provider/index.html
 //!
-//! ## What this deliberately does not write
+//! ## What this module deliberately does not write
 //!
-//! **The host, the port and the security method.** Google can write them because
-//! they are constants of the vendor; here they are properties of the user's
-//! account, and the place they already live is the collection source's own
-//! `[Authentication]` and `[Security]` — which is what
-//! [`crate::collection_source`] reads and what every child written by
-//! [`crate::child_source`] repeats. Writing them here as well would need the
-//! account, which this vfunc is not given: `prepare_mail` is handed the three
-//! mail sources and the *factory*, not the collection. Guessing them from
-//! nothing would be worse than leaving them for the code that has them.
+//! **The host, the port and the security method.** For Google, they are vendor
+//! constants. Here they are properties of the account of the user. They are
+//! already in the `[Authentication]` and `[Security]` of the collection
+//! source. [`crate::collection_source`] reads them there, and every child from
+//! [`crate::child_source`] copies them. This vfunc does not get the account:
+//! `prepare_mail` gets the three mail sources and the *factory*, not the
+//! collection. A guess would be worse than no value.
 //!
-//! **`[Mail Identity] Address`.** The identity's email address is the one thing
-//! here a JMAP session actually states — `Identity/get` has it — but this vfunc
-//! runs before anything has connected, and an identity written with a wrong
-//! address is a wrong `From:` on sent mail. `jmap-mail-sync`'s `identity` module
-//! is where that answer comes from, once there is a session to ask.
+//! **`[Mail Identity] Address`.** A JMAP session states the email address of
+//! the identity (`Identity/get` has it). But this vfunc runs before any
+//! connection, and a wrong address is a wrong `From:` on sent mail. The
+//! `identity` module of `jmap-mail-sync` gives that address when a session
+//! exists.
 //!
 //! ## Nothing calls it in Evolution 3.52
 //!
-//! Worth writing down, because it bounds what the tests are worth:
-//! `e_collection_backend_factory_prepare_mail` has no caller anywhere in
-//! evolution-data-server 3.52.3 or evolution 3.52.3 — it is public API that
-//! vendor backends implement and that the account-setup path is expected to
-//! call. evolution-ews implements it anyway, and so does this. `tests/prepare_mail.rs`
-//! calls it the way a caller would, which checks the vfunc rather than the fact
-//! that somebody reaches it.
+//! This limits the value of the tests.
+//! `e_collection_backend_factory_prepare_mail` has no caller in
+//! evolution-data-server 3.52.3 or evolution 3.52.3. It is public API that
+//! vendor backends implement, for the account-setup path to call.
+//! evolution-ews implements it, and so does this crate. `tests/prepare_mail.rs`
+//! calls it as a caller would. Thus it tests the vfunc, not that a caller
+//! exists.
 
 use std::ffi::CStr;
 
@@ -86,57 +87,54 @@ use eds_sys::{
 use jmap_backend_core::subclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
-/// The `ESourceBackend:backend-name` written on the mail account and the mail
-/// transport: Camel's protocol, and the first line of `libcameljmap.urls`.
+/// The `ESourceBackend:backend-name` on the mail account and the mail
+/// transport: the Camel protocol, and the first line of `libcameljmap.urls`.
 ///
-/// The same spelling as [`crate::factory::FACTORY_NAME`] and as the book and
-/// calendar backends' — four namespaces, one account, one word. Here it means
-/// the protocol `camel_provider_get` is asked for, which is the only one of the
-/// four that is not an EDS factory name.
+/// The spelling is the same as [`crate::factory::FACTORY_NAME`] and as the book
+/// and calendar backends: four namespaces, one account, one word. Here it is
+/// the protocol that `camel_provider_get` gets. Of the four, only this one is
+/// not an EDS factory name.
 pub const MAIL_BACKEND_NAME: &CStr = c"jmap";
 
-/// The two of the three sources that name a service, each with the extension the
-/// name is written on.
+/// The two of the three sources that name a service, each with the extension
+/// that holds the name.
 ///
-/// The identity is not here, and its absence is the point: it is a person rather
-/// than a service, and `collection_backend_child_is_mail()` would read an
-/// identity carrying `[Mail Account]` as a second receiving account of this
-/// user's.
+/// The identity is deliberately not here: it is a person, not a service.
+/// `collection_backend_child_is_mail()` would read an identity with
+/// `[Mail Account]` as a second receiving account of this user.
 const SERVICES: [&CStr; 2] = [
     E_SOURCE_EXTENSION_MAIL_ACCOUNT,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT,
 ];
 
-/// The `prepare_mail` vfunc: chain up, then name the provider on the two
+/// The `prepare_mail` vfunc: chains up, then names the provider on the two
 /// services.
 ///
 /// # Safety
 ///
-/// The three sources must be NULL or valid `ESource`s that outlive the call, and
-/// `factory` must be a valid `ECollectionBackendFactory` of this subclass — the
-/// arguments EDS's own `e_collection_backend_factory_prepare_mail` checks before
-/// it dispatches here.
+/// The three sources must be NULL or valid `ESource`s that outlive the call,
+/// and `factory` must be a valid `ECollectionBackendFactory` of this subclass.
+/// EDS's own `e_collection_backend_factory_prepare_mail` checks these
+/// arguments before it dispatches here.
 pub unsafe fn prepare_mail(
     factory: *mut ECollectionBackendFactory,
     mail_account_source: *mut ESource,
     mail_identity_source: *mut ESource,
     mail_transport_source: *mut ESource,
 ) {
-    // No `e_source_mail_*_get_type()` calls first, unlike `crate::child_source`.
-    // `e_source_get_extension` finds an extension by walking the registered
-    // children of `E_TYPE_SOURCE_EXTENSION` and returns NULL for a type nothing
-    // has referenced yet — silently, since its `g_critical` is behind
-    // `#ifdef DEBUG` — which would leave the parent's chain-up joining nothing
-    // to nothing. It cannot happen here: `e_source_class_init` ends with a
-    // `g_type_ensure` of every built-in extension, all four mail ones included,
-    // and every source reaching this function is a live `ESource`, so that
-    // class_init has already run. `tests/prepare_mail.rs` is what would notice
-    // if EDS stopped doing it.
+    // Unlike `crate::child_source`, this function does not call
+    // `e_source_mail_*_get_type()`. `e_source_get_extension` returns NULL for
+    // an unregistered type, without a message (its `g_critical` is behind
+    // `#ifdef DEBUG`). The chain-up of the parent would then join nothing.
+    // That cannot occur here: `e_source_class_init` ends with a
+    // `g_type_ensure` of every built-in extension, all four mail ones included.
+    // Every source here is a live `ESource`, so that class_init has run.
+    // `tests/prepare_mail.rs` fails if EDS stops this.
 
-    // The parent type's class rather than `g_type_class_peek_parent` of the
-    // factory's, for the reason `jmap-backend-core`'s finalize trampoline gives:
-    // a further subclass of ours would make that one point back at this
-    // function.
+    // Use the class of the parent type, not `g_type_class_peek_parent` of the
+    // class of the factory. The reason is in the finalize trampoline of
+    // `jmap-backend-core`: for a further subclass, that would point back to
+    // this function.
     // SAFETY: an instance of this subclass exists, so its class does, so the
     // class it derives from is initialised and alive for the process.
     let parent = unsafe {
@@ -145,8 +143,8 @@ pub unsafe fn prepare_mail(
         )
     };
     match parent.and_then(|class| class.prepare_mail) {
-        // SAFETY: the parent's own implementation, called with this vfunc's
-        // arguments on an instance of a type derived from it.
+        // SAFETY: the implementation of the parent, called with the arguments
+        // of this vfunc on an instance of a type derived from it.
         Some(prepare) => unsafe {
             prepare(
                 factory,
@@ -166,9 +164,9 @@ pub unsafe fn prepare_mail(
         .zip(SERVICES)
     {
         if source.is_null() {
-            // Unreachable through EDS's wrapper, which refuses a NULL source
-            // before it dispatches. A caller that reached the vfunc directly
-            // gets one unwritten source rather than a crash in the registry.
+            // Not reachable through the EDS wrapper, which refuses a NULL
+            // source before it dispatches. A direct caller of the vfunc gets
+            // one unwritten source, not a crash in the registry.
             log_critical(&format!(
                 "prepare_mail: no source to write {extension:?} on; it will \
                  name no provider"
@@ -176,10 +174,10 @@ pub unsafe fn prepare_mail(
             continue;
         }
 
-        // SAFETY: a valid source by this function's contract, and a header
-        // constant naming an extension deriving from `ESourceBackend` whose type
-        // is registered above; the extension is created on demand and owned by
-        // the source.
+        // SAFETY: a valid source by the contract of this function, and a
+        // header constant naming an extension deriving from `ESourceBackend`,
+        // whose type `e_source_class_init` registers (see above); the
+        // extension is created on demand and owned by the source.
         let backend: *mut ESourceBackend =
             unsafe { e_source_get_extension(source, extension.as_ptr()) }.cast();
         if backend.is_null() {
@@ -196,12 +194,12 @@ pub unsafe fn prepare_mail(
     }
 }
 
-/// The slot [`crate::factory`] installs, with the panic guard EDS needs in front
-/// of it.
+/// The slot that [`crate::factory`] installs, with the panic guard that EDS
+/// needs before it.
 ///
-/// A panic here would unwind into `evolution-source-registry` — the one process
-/// that owns every data source in the session — so it becomes a critical and a
-/// half-prepared account instead.
+/// A panic here would unwind into `evolution-source-registry`, the one process
+/// that owns every data source in the session. Thus the panic becomes a
+/// critical and a half-prepared account.
 ///
 /// # Safety
 ///

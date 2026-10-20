@@ -1,23 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The half of a populate that deletes: which of the children this collection
-// already has are removed, against real `ESource`s written the way this backend
-// writes them.
+// Tests for the removal half of a populate: which existing children of this
+// collection are removed. The tests use real `ESource`s that this backend
+// writes.
 //
-// `Fanout::is_obsolete` is tested in `jmap-collection-sync` against resource id
-// *strings*, and `child_source::apply` is tested here against the properties it
-// writes. Neither covers the join, and the join is where the damage is:
-// `e_source_remove_sync()` takes the child's uid, its `.source` file and its
-// offline cache with it, so a resource id this backend fails to read back off a
-// source it wrote itself is not a mislabelled row in the sidebar — it is a
-// user's offline copy of an address book, deleted because a populate could not
-// recognise its own child.
+// `jmap-collection-sync` tests `Fanout::is_obsolete` with resource id
+// *strings*. Tests in this crate examine the properties that
+// `child_source::apply` writes. Neither covers the join of the two, and errors
+// in the join cause data loss. `e_source_remove_sync()` removes the uid, the
+// `.source` file and the offline cache of the child. If this backend cannot
+// read a resource id from its own source, a populate deletes the offline copy
+// of an address book of the user.
 //
-// So every source judged below is built by `apply` from a `Child`, which is
-// exactly what `e_collection_backend_new_child` hands back and this backend
-// then writes. Judging a hand-shaped source instead would prove that the rule
-// holds for sources of the shape we imagined writing.
+// Thus `apply` builds each source below from a `Child`, as this backend writes
+// the source after `e_collection_backend_new_child`. A source made by hand
+// shows only that the rule is correct for sources of the expected shape.
 
 use std::ffi::CString;
 use std::ptr;
@@ -37,9 +35,9 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A child source in the state a populate leaves it in: created by EDS under a
-/// resource id, then written by [`apply`]. `e_source_new_with_uid` with a NULL
-/// D-Bus object is what EDS itself uses for a source read from a keyfile.
+/// A child source in the state after a populate. EDS creates it under a
+/// resource id, then [`apply`] writes it. `e_source_new_with_uid` makes it
+/// without the registry.
 struct TestSource(*mut ESource);
 
 impl TestSource {
@@ -48,20 +46,20 @@ impl TestSource {
         let uid =
             CString::new(format!("jmap-{}", child.resource_id)).expect("no NUL in a test uid");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, the default
+        // main context and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
 
-        // SAFETY: a live source of this process's own.
+        // SAFETY: a live source that this process owns.
         unsafe { apply(source, &child.settings(&connection())) }
             .expect("a child this backend wrote");
         Self(source)
     }
 
-    /// A source with nothing on it: neither kind extension, no `[Resource]`.
-    /// What a child of some *other* collection backend looks like to this one,
-    /// and what EDS hands `dup_resource_id` for every file in the cache.
+    /// A source with no kind extension and no `[Resource]`. A child of a
+    /// *different* collection backend has this appearance. EDS gives sources of
+    /// this type to `dup_resource_id` for files in the cache.
     fn foreign() -> Self {
         let uid = CString::new("not-ours").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
@@ -74,7 +72,7 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
+        // SAFETY: this struct holds the only reference.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
@@ -122,8 +120,8 @@ fn resource(id: &str) -> Resource {
     }
 }
 
-/// A login serving both collection kinds, discovered under `parts` — with the
-/// vectors gated the way [`Fanout::discover`] would have gated them.
+/// A login that serves both collection kinds, discovered under `parts`. The
+/// vectors are filtered as [`Fanout::discover`] filters them.
 fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
     Fanout {
         shared: Vec::new(),
@@ -148,9 +146,9 @@ fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
     }
 }
 
-/// The sources [`obsolete`] picked, as the resource ids they were built under —
-/// pointer identity is what the function answers in, but a failed assertion
-/// that prints two addresses says nothing.
+/// The sources that [`obsolete`] selected, as their resource ids. The function
+/// returns pointers, but a failed assertion that shows two addresses gives no
+/// useful data.
 fn picked(fanout: &Fanout, children: &[&TestSource]) -> Vec<String> {
     let pointers: Vec<*mut ESource> = children.iter().map(|child| child.0).collect();
     // SAFETY: every source is alive for the call.
@@ -158,7 +156,7 @@ fn picked(fanout: &Fanout, children: &[&TestSource]) -> Vec<String> {
     obsolete
         .into_iter()
         .map(|source| {
-            // SAFETY: one of the pointers handed in, still alive.
+            // SAFETY: one of the input pointers, still alive.
             unsafe { jmap_backend_collection::resource_id::resource_id_of(source) }
                 .expect("a source with no resource id was picked for removal")
         })
@@ -179,8 +177,8 @@ fn removals(
 fn a_child_whose_collection_the_server_no_longer_lists_is_the_one_removed() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The reason the removal half exists: an address book deleted in the web UI
-        // has to leave the sidebar, and the child that is still there must not.
+        // This is the purpose of the removal half. An address book that the web
+        // UI deleted must leave the sidebar. The other child must stay.
         let gone = TestSource::child(ChildKind::AddressBook, "AB2");
         let still_there = TestSource::child(ChildKind::AddressBook, "AB1");
 
@@ -194,10 +192,11 @@ fn a_child_whose_collection_the_server_no_longer_lists_is_the_one_removed() {
 fn a_child_of_a_part_the_user_switched_off_is_kept() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The switched-off part lists nothing, so every child of that kind looks
-        // like a collection the server no longer has. EDS's WebDAV backend removes
-        // them; this one must not — the cache and the uid are the user's, and
-        // switching contacts back on has to bring the same source back.
+        // A disabled part lists nothing. Thus each child of that kind seems to
+        // be a collection that the server does not have. The WebDAV backend of
+        // EDS removes these children, but this backend must not. The cache and
+        // the uid belong to the user. When the user enables contacts again, the
+        // same source must come back.
         let dormant = TestSource::child(ChildKind::AddressBook, "AB1");
 
         let contacts_off = fanout(
@@ -217,10 +216,10 @@ fn a_child_of_a_part_the_user_switched_off_is_kept() {
 fn a_source_this_backend_did_not_write_is_never_removed() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `e_collection_backend_list_*_sources` answers with what is in the
-        // collection, and a source with no resource id of ours is one we have no
-        // opinion about. Treating "I cannot read this" as "this is obsolete" would
-        // delete a child on the strength of not understanding it.
+        // `e_collection_backend_list_*_sources` returns all sources in the
+        // collection. This backend makes no decision about a source without our
+        // resource id. A source that this backend cannot read is not obsolete.
+        // Otherwise, a removal occurs only because the source is unknown.
         let foreign = TestSource::foreign();
 
         let fanout = fanout(Parts::ALL, &["AB1"], &["Cal1"]);
@@ -233,10 +232,10 @@ fn a_source_this_backend_did_not_write_is_never_removed() {
 fn an_address_book_and_a_calendar_with_one_id_are_judged_apart() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Ids are scoped per account *and* per object type (RFC 8620 §1.2), so one
-        // id naming both is the ordinary case on a server that numbers from one.
-        // The kind is read off the source's own extension, and a judgement that
-        // dropped it would remove the surviving collection's child.
+        // Ids are unique for each account *and* each object type (RFC 8620
+        // §1.2). Thus one id for both kinds is normal on a server that counts
+        // from one. The kind comes from the extension of the source. Without the
+        // kind, the decision removes the child of the remaining collection.
         let book = TestSource::child(ChildKind::AddressBook, "X1");
         let calendar = TestSource::child(ChildKind::Calendar, "X1");
 
@@ -253,8 +252,8 @@ fn an_address_book_and_a_calendar_with_one_id_are_judged_apart() {
 fn every_obsolete_child_is_picked_and_in_the_order_it_was_given_in() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A populate that stopped at the first would leave the rest behind for
-        // another populate to find, and the sidebar half-cleaned in between.
+        // If a populate stops at the first child, the others stay until the next
+        // populate. Until then, the sidebar is only partly correct.
         let first = TestSource::child(ChildKind::AddressBook, "AB1");
         let kept = TestSource::child(ChildKind::AddressBook, "AB2");
         let second = TestSource::child(ChildKind::Calendar, "Cal1");
@@ -272,10 +271,10 @@ fn every_obsolete_child_is_picked_and_in_the_order_it_was_given_in() {
 fn a_child_that_cannot_be_removed_is_reported_with_what_eds_said() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // These sources have no D-Bus object, so EDS refuses the removal — which
-        // is the one branch of `e_source_remove_sync` this machine can drive, and
-        // the branch a populate has to survive: the vfunc returns void, so an
-        // unremovable child can only be reported, never raised.
+        // These sources have no D-Bus object, so EDS refuses the removal. This
+        // test can only run this branch of `e_source_remove_sync`. A populate
+        // must continue after this refusal. The vfunc returns void, so the
+        // backend can only report the failed removal, not return an error.
         let gone = TestSource::child(ChildKind::AddressBook, "AB2");
         let still_there = TestSource::child(ChildKind::AddressBook, "AB1");
 
@@ -295,7 +294,8 @@ fn a_child_that_cannot_be_removed_is_reported_with_what_eds_said() {
 fn a_removal_that_failed_does_not_stop_the_ones_after_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // One child that EDS will not part with must not keep the others.
+        // If EDS refuses to remove one child, the removal of the others must
+        // continue.
         let first = TestSource::child(ChildKind::AddressBook, "AB1");
         let second = TestSource::child(ChildKind::Calendar, "Cal1");
 

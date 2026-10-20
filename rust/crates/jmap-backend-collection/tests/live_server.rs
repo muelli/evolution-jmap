@@ -1,21 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `fan_out`'s own layer against a real JMAP server.
+// Tests for the `fan_out` layer of this crate against a real JMAP server.
 //
-// `jmap-collection-sync/tests/live_server.rs` already proves
-// `create_collection`/`delete_collection` and `Fanout::discover` round-trip
-// through real Stalwart. What that file cannot reach is this crate's own
-// layer on top: `fan_out`/`apply_fanout`/`adopt` in `fan_out.rs`, which turn a
+// `jmap-collection-sync/tests/live_server.rs` tests the round trip of
+// `create_collection`, `delete_collection` and `Fanout::discover` through real
+// Stalwart. That file cannot test the layer of this crate:
+// `fan_out`/`apply_fanout`/`adopt` in `fan_out.rs`. This layer changes a
 // discovered `Fanout` into created, written and exported `ESource` children.
-// Every test of that layer so far (`tests/fan_out.rs`) has run against
-// `jmap-mockd`, never against a real server's own resources, names and
-// `myRights`. This is that confirmation, using the same fake `Collection`
-// trait double `tests/fan_out.rs` uses in place of a live
-// `evolution-source-registry` session bus this runner has none of.
+// `tests/fan_out.rs` tests the layer only against `jmap-mockd`. This file
+// tests it against the resources, names and `myRights` of a real server. It
+// uses the fake `Collection` trait implementation of `tests/fan_out.rs`, because
+// this runner has no `evolution-source-registry` session bus.
 //
-// Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-// unset; see docs/manual-test-live-server.md.
+// The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
+// `_PASSWORD` is not set. See docs/manual-test-live-server.md.
 
 use std::cell::RefCell;
 use std::env;
@@ -64,7 +63,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A live `ESource` this test holds one reference to.
+/// A live `ESource` that this test holds one reference to.
 struct Source(*mut ESource);
 
 impl Source {
@@ -76,15 +75,16 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        // SAFETY: this holds the last reference; every one handed out was
-        // consumed by the call under test.
+        // SAFETY: this struct holds the last reference. The call under test
+        // consumed each reference that this fixture gave out.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// The `ECollectionBackend` half of a fan-out, without one — same shape as
-/// `tests/fan_out.rs`'s fixture, minus the pieces this file does not need
-/// (a cache of previous sessions, a refusal list).
+/// The `ECollectionBackend` half of a fan-out, without an `ECollectionBackend`.
+/// It has the same shape as the fixture of `tests/fan_out.rs`, without the
+/// parts that this file does not need (a cache of earlier sessions and a
+/// refusal list).
 #[derive(Default)]
 struct Collection {
     created: RefCell<Vec<(String, Source)>>,
@@ -98,8 +98,8 @@ impl Collection {
             .borrow()
             .iter()
             .map(|source| {
-                // SAFETY: every published pointer is one this collection
-                // still holds a reference to.
+                // SAFETY: this collection still holds a reference to each
+                // published pointer.
                 unsafe { resource_id_of(*source) }
                     .expect("a child was exported with no resource id on it")
             })
@@ -125,14 +125,14 @@ impl Collection {
     }
 }
 
-// SAFETY: every pointer handed out is a valid `ESource` carrying a reference
-// of its own, taken with `g_object_ref` just before it is returned.
+// SAFETY: each returned pointer is a valid `ESource` with its own reference.
+// `g_object_ref` takes that reference immediately before the return.
 unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     fn new_child(&self, resource_id: &str) -> *mut ESource {
         let uid = CString::new(format!("jmap-{resource_id}")).expect("no NUL in a resource id");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a
-        // GError out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, the
+        // default main context and a GError out-parameter.
         let raw = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!raw.is_null(), "e_source_new_with_uid failed");
         let source = Source(raw);
@@ -144,8 +144,8 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     }
 
     fn is_new_child(&self, _child: *mut ESource) -> bool {
-        // Every child this test's fan-out sees is newly created: it seeds no
-        // cache of a previous session.
+        // Each child in this fan-out is new, because the test puts no cache of
+        // an earlier session in place.
         true
     }
 
@@ -154,16 +154,15 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     }
 
     fn existing_children(&self) -> Vec<*mut ESource> {
-        // This fixture never seeds an existing child, so a fan-out here never
-        // has anything to remove — the removal decision is `tests/fan_out.rs`'s
-        // to cover, against the mock, where the "EDS refuses" branch it hits
-        // either way is exercisable without a real server at all.
+        // This fixture has no existing children, so a fan-out here removes
+        // nothing. `tests/fan_out.rs` tests the removal decision against the
+        // mock. The "EDS refuses" branch does not need a real server.
         Vec::new()
     }
 
     fn set_remote_deletable(&self, child: *mut ESource, deletable: bool) {
-        // SAFETY: every source this is called on is one `new_child` handed
-        // back, alive for this call.
+        // SAFETY: each source here came from `new_child` and is alive for this
+        // call.
         let resource_id = unsafe { resource_id_of(child) }.unwrap_or_default();
         self.remote_deletable
             .borrow_mut()
@@ -171,11 +170,10 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
     }
 }
 
-/// Where this test's login says its server is — arbitrary and unrelated to
-/// the real server's own address, on purpose: `fan_out` must write children
-/// from the login's own connection, not from wherever discovery actually
-/// reached, and only a connection that disagrees with the real origin can
-/// tell those two apart.
+/// The server address of the login of this test. It is intentionally not the
+/// address of the real server. `fan_out` must write children from the
+/// connection of the login, not from the address that discovery used. Only a
+/// different address can show the difference.
 fn connection() -> Connection {
     Connection {
         host: "jmap.example.com".to_owned(),
@@ -187,7 +185,8 @@ fn connection() -> Connection {
 }
 
 fn host_and_port(source: *mut ESource) -> (Option<String>, u16) {
-    // SAFETY: no arguments, and the type system initialises itself.
+    // SAFETY: the function takes no arguments, and the type system
+    // initialises itself.
     unsafe { e_source_authentication_get_type() };
     assert!(
         // SAFETY: a live source, and a header constant.
@@ -195,7 +194,7 @@ fn host_and_port(source: *mut ESource) -> (Option<String>, u16) {
             != GFALSE,
         "a child with no [Authentication] reaches no server"
     );
-    // SAFETY: the extension is present and owned by the source.
+    // SAFETY: the extension is present, and the source owns it.
     unsafe {
         let auth: *mut ESourceAuthentication =
             e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
@@ -207,16 +206,20 @@ fn host_and_port(source: *mut ESource) -> (Option<String>, u16) {
 }
 
 fn display_name(source: *mut ESource) -> Option<String> {
-    // SAFETY: a live source; the name it answers with is its own.
+    // SAFETY: a live source. The source owns the returned name.
     unsafe { jmap_backend_core::marshal::read_string(e_source_get_display_name(source)) }
 }
 
-/// Creates a real address book and a real calendar, runs a real `fan_out`
-/// against the account that holds them, confirms each is adopted, written
-/// from the login's own connection (not the server's address) and exported
-/// under the resource id `create_collection` already named, and that a fresh
-/// discovery's own `myRights` reaches `set_remote_deletable` the same way
-/// `create_collection`'s fallback answered it — then deletes both.
+/// Creates a real address book and a real calendar, then runs a real
+/// `fan_out` against their account. For each collection, the test makes sure
+/// of these points:
+/// - The fan-out adopts it.
+/// - The child uses the connection of the login, not the server address.
+/// - The child is exported under the resource id from `create_collection`.
+/// - The `myRights` of a new discovery give `set_remote_deletable` the same
+///   value as the fallback of `create_collection`.
+///
+/// Then the test deletes both collections.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn fan_out_adopts_and_writes_real_server_collections() {
@@ -261,7 +264,8 @@ fn fan_out_adopts_and_writes_real_server_collections() {
     };
 
     let collection = Collection::default();
-    // SAFETY: `Collection`'s impl above satisfies the trait's contract.
+    // SAFETY: the `Collection` implementation above obeys the contract of the
+    // trait.
     let report =
         unsafe { fan_out(&collection, &login) }.expect("fan_out failed against the real server");
 

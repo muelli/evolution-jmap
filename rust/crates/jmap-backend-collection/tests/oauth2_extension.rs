@@ -1,31 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! That `e_module_load` registers `jmap_config::oauth2`'s `[JMAP OAuth2]`
-//! extension type — the other half of real-server readiness's OAuth2 storage
-//! that neither the storage session nor the service-registration session
-//! closed.
+//! Tests that `e_module_load` registers the `[JMAP OAuth2]` extension type of
+//! `jmap_config::oauth2`.
 //!
-//! `jmap_config::oauth2::apply`/`read` both call `ensure_registered()` before
-//! touching a source, so any caller that only goes through them never sees
-//! the gap. But EDS's own `.source` keyfile parser restores an account's
-//! extensions by the same name lookup those two functions use
-//! (`e_source_get_extension`/`source_find_extension_classes_rec`), and it
-//! runs in every process that loads a JMAP account's source from disk or
-//! over D-Bus — `evolution-source-registry` first among them, which is
-//! exactly the process this crate's module is loaded into. If that process
-//! parses a `[JMAP OAuth2]` group before anything has called `apply`/`read`
-//! on that particular source, the group is silently unrecognised rather than
-//! restored — an account's discovered endpoints and client id, gone on the
-//! next restart, with nothing to say why.
+//! `jmap_config::oauth2::apply` and `read` call `ensure_registered()` before
+//! they use a source. A caller that uses only these functions does not see the
+//! problem. But the `.source` keyfile parser of EDS restores the extensions of
+//! an account with the same name lookup
+//! (`e_source_get_extension`/`source_find_extension_classes_rec`). The parser
+//! runs in each process that loads the source of a JMAP account from disk or
+//! over D-Bus. One such process is `evolution-source-registry`, which loads
+//! the module of this crate. If that process parses a `[JMAP OAuth2]` group
+//! before a call to `apply` or `read` on that source, the parser ignores the
+//! group. Then the discovered endpoints and the client id of the account are
+//! lost at the next restart, and no message shows the cause.
 //!
-//! This test drives the actual failure mode: register nothing but the
-//! module, then ask `e_source_get_extension` for `[JMAP OAuth2]` directly —
-//! the same call EDS's own parser makes — without ever calling
-//! `jmap_config::oauth2::apply`/`read` first. Its own process (this is a
-//! separate `tests/*.rs` binary, like `tests/textdomain.rs`), so nothing else
-//! in this binary can have registered the extension type first and made the
-//! assertion trivially true.
+//! This test causes that failure mode. It registers only the module. Then it
+//! requests `[JMAP OAuth2]` from `e_source_get_extension` directly, as the EDS
+//! parser does, with no earlier call to `apply` or `read`. This file is a
+//! separate test binary (as `tests/textdomain.rs` is). Thus no other test can
+//! register the extension type first and make the assertion pass without
+//! cause.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -45,9 +41,9 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A `GTypeModule` standing in for the `EModule` the registry would load us
-/// as — the same stand-in `tests/factory.rs`, `tests/textdomain.rs` and
-/// `tests/oauth2_service.rs` all use.
+/// A `GTypeModule` in place of the `EModule` that the registry loads. Also
+/// used in `tests/factory.rs`, `tests/textdomain.rs` and
+/// `tests/oauth2_service.rs`.
 #[repr(C)]
 struct TestModule {
     parent: GTypeModule,
@@ -66,13 +62,14 @@ unsafe impl ObjectSubclass for TestModule {
     type Class = TestModuleClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: the function takes no arguments, and the type initialises
+        // itself.
         unsafe { g_type_module_get_type() }
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points at a freshly allocated class struct of ours,
-        // which leads with GTypeModuleClass, where both slots live.
+        // SAFETY: `class` points to our new class struct. It starts with
+        // GTypeModuleClass, which contains both slots.
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.load = Some(module_load);
         vfuncs.unload = Some(module_unload);
@@ -80,8 +77,8 @@ unsafe impl ObjectSubclass for TestModule {
 }
 
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
+    // SAFETY: GLib passes the module that it loads, as the entry point
+    // requires.
     unsafe { load(module) };
     GTRUE
 }
@@ -91,15 +88,15 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     unsafe { unload(module) };
 }
 
-/// A source `e_source_get_extension` has never been asked about before —
-/// nothing in this test calls `jmap_config::oauth2::apply`/`read`, only the
-/// raw EDS entry point EDS's own parser would call.
+/// A source that `e_source_get_extension` has not yet seen. This test does not
+/// call `jmap_config::oauth2::apply` or `read`. It calls only the EDS entry
+/// point that the EDS parser calls.
 fn fresh_source() -> *mut ESource {
     let uid = std::ffi::CString::new("jmap-collection-oauth2-extension-test")
         .expect("no NUL in a literal");
     let mut error = ptr::null_mut();
-    // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-    // out-parameter are the documented arguments.
+    // SAFETY: a NUL-terminated uid, a NULL main context (the default context)
+    // and a GError out-parameter are the documented arguments.
     let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
     assert!(!source.is_null(), "e_source_new_with_uid failed");
     source
@@ -112,14 +109,13 @@ fn the_module_load_registers_the_oauth2_extension_type() {
         let gtype = register_static::<TestModule>();
         assert_ne!(gtype, 0, "the stand-in module type did not register");
 
-        // SAFETY: the type is registered and GTypeModule has no construct
-        // properties of its own.
+        // SAFETY: the type is registered, and GTypeModule has no construct
+        // properties.
         let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
         assert!(!module.is_null(), "g_object_new returned NULL");
 
-        // SAFETY: `module` is a GTypeModule; the reference this takes is never
-        // given back, which is what the registry does for as long as the backend
-        // is wanted.
+        // SAFETY: `module` is a GTypeModule. The test does not release this
+        // use, as the registry does while it needs the backend.
         assert_ne!(
             unsafe { g_type_module_use(module) },
             GFALSE,
@@ -127,11 +123,10 @@ fn the_module_load_registers_the_oauth2_extension_type() {
         );
 
         let source = fresh_source();
-        // SAFETY: `source` is a live, freshly created source; `EXTENSION_NAME` is
-        // a 'static NUL-terminated string. This is the same call EDS's own
-        // `.source` parser makes to restore a group — no `jmap_config::oauth2`
-        // function is called first, so a NULL here means the module load itself
-        // did not register the type.
+        // SAFETY: `source` is a live, new source. `EXTENSION_NAME` is a
+        // 'static NUL-terminated string. The `.source` parser of EDS makes this
+        // call to restore a group. No `jmap_config::oauth2` function runs first.
+        // Thus NULL means that the module load did not register the type.
         let extension = unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) };
         assert!(
             !extension.is_null(),
@@ -141,7 +136,7 @@ fn the_module_load_registers_the_oauth2_extension_type() {
              jmap_config::oauth2::apply/read on the same source"
         );
 
-        // SAFETY: a live source this test created.
+        // SAFETY: a live source that this test created.
         unsafe { g_object_unref(source.cast()) };
     });
 }

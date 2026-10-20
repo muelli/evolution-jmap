@@ -1,17 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Reading the *collection* source — the account itself — against real
-// `ESource`s built with the EDS setters, the way `tests/resource_id.rs` does
-// for a child.
+// Tests for the read of the collection source (the account), with real
+// `ESource`s made with the EDS setters, as `tests/resource_id.rs` does for a
+// child.
 //
-// This is everything `populate` knows before it contacts anything: which parts
-// the user left switched on, where the server is, and what each child has to
-// repeat in order to reach the same one. Three of the failures here are silent
-// rather than loud — a part read as on that is off fetches data the user said
-// they did not want, a `[Security]` read wrong downgrades or upgrades every
-// child of the account at once, and a host that is not a host is a URL aimed
-// somewhere else.
+// This is all that `populate` knows before it contacts a server: the enabled
+// parts, the server, and the data that each child must copy to reach that
+// server. Three failures here are silent. A disabled part read as enabled
+// gets data that the user does not want. A wrong `[Security]` read changes the
+// scheme of all children of the account. An invalid host gives a URL to a
+// different place.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -40,18 +39,16 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// An `ESource` that is not backed by the registry, as in `tests/resource_id.rs`
-/// — `e_source_new_with_uid` with a NULL D-Bus object is what EDS itself uses
-/// for a source read from a keyfile.
+/// An `ESource` without a registry, as in `tests/resource_id.rs`. EDS uses
+/// `e_source_new_with_uid` with a NULL D-Bus object for a source from a keyfile.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
-        // `e_source_get_extension` walks the registered children of
-        // `E_TYPE_SOURCE_EXTENSION`, so a type nothing has referenced yet is
-        // one it cannot find. Under EDS the libraries are loaded long before
-        // any source exists; in a test binary, touching the accessors is what
-        // stands in for that.
+        // `e_source_get_extension` searches the registered children of
+        // `E_TYPE_SOURCE_EXTENSION`, so it cannot find an unregistered type. EDS
+        // loads the libraries before a source exists. In a test binary, a call
+        // to each type accessor does the registration.
         // SAFETY: no arguments, and the type system initialises itself.
         unsafe {
             e_source_collection_get_type();
@@ -68,18 +65,18 @@ impl TestSource {
         Self(source)
     }
 
-    /// The collection source's own `enabled` — the first thing
-    /// `e_collection_backend_get_part_enabled()` looks at.
+    /// The `enabled` property of the collection source.
+    /// `e_collection_backend_get_part_enabled()` checks it first.
     fn enabled(self, enabled: bool) -> Self {
         // SAFETY: a live source.
         unsafe { e_source_set_enabled(self.0, if enabled { GTRUE } else { GFALSE }) };
         self
     }
 
-    /// The `[Collection]` extension's three flags, i.e. the account's ticks.
+    /// The three part flags of the `[Collection]` extension.
     fn parts(self, parts: Parts) -> Self {
-        // SAFETY: a live source and a header constant; the extension is
-        // created on demand and owned by the source.
+        // SAFETY: a live source and a header constant. The source creates the
+        // extension when necessary and owns it.
         unsafe {
             let collection: *mut ESourceCollection =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
@@ -101,7 +98,7 @@ impl TestSource {
         let host = CString::new(host).expect("no NUL in a test host");
         let user = user.map(|user| CString::new(user).expect("no NUL in a test user"));
         let method = method.map(|method| CString::new(method).expect("no NUL in a test method"));
-        // SAFETY: as above; every setter copies the string it is given.
+        // SAFETY: as above. Each setter copies the string that it receives.
         unsafe {
             let auth: *mut ESourceAuthentication =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
@@ -150,13 +147,13 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: the reference `e_source_new_with_uid` returned is given back
+        // SAFETY: this releases the reference from `e_source_new_with_uid`
         // exactly once.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// A well-formed account: TLS, a named port, a user and an auth method.
+/// A valid account: TLS, an explicit port, a user and an authentication method.
 fn account() -> TestSource {
     TestSource::new()
         .enabled(true)
@@ -173,13 +170,11 @@ fn account() -> TestSource {
 fn an_account_that_says_nothing_about_its_parts_has_all_of_them_and_is_not_given_any() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Two things, and the second is the trap `resource_id_of` meets too:
-        // `e_source_get_extension` *creates* the extension it is asked for, so a
-        // read that reached straight for `[Collection]` would write three flags
-        // into the account's own keyfile — the file EDS writes back — where the
-        // user had none. The absence has to be tested for, and it means ALL:
-        // `e_collection_backend_get_part_enabled()` answers TRUE for a source with
-        // no such extension.
+        // `e_source_get_extension` creates the extension that it gets, as
+        // `resource_id_of` also finds. A direct read of `[Collection]` would add
+        // three flags to the keyfile of the account, which EDS writes back. Thus
+        // the read must check for the extension first. A missing extension means
+        // ALL, because `e_collection_backend_get_part_enabled()` returns TRUE.
         let source = TestSource::new().enabled(true);
 
         assert_eq!(source.parts_of(), Parts::ALL);
@@ -194,10 +189,9 @@ fn an_account_that_says_nothing_about_its_parts_has_all_of_them_and_is_not_given
 fn a_disabled_account_has_no_parts_whatever_its_extension_says() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The first thing `e_collection_backend_get_part_enabled()` checks is the
-        // source's own `enabled`, before it looks at the extension at all. An
-        // account the user switched off that still populated would put children in
-        // the sidebar for an account that is not there.
+        // `e_collection_backend_get_part_enabled()` checks the `enabled` property
+        // of the source before the extension. If a disabled account populated, the
+        // sidebar would show children of an account that is not there.
         let source = TestSource::new().enabled(false).parts(Parts::ALL);
 
         assert_eq!(source.parts_of(), Parts::NONE);
@@ -209,9 +203,9 @@ fn a_disabled_account_has_no_parts_whatever_its_extension_says() {
 fn each_tick_is_read_as_the_part_it_is() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // One flag per part, and no cross-wiring: EDS spells the calendar one
-        // singular (`calendar-enabled`) and the contacts one plural, so a swap here
-        // is exactly the kind of thing that reads correctly and behaves backwards.
+        // Each flag must go to its own part. EDS spells the calendar flag in the
+        // singular (`calendar-enabled`) and the contacts flag in the plural. A swap
+        // is easy to miss in the code.
         for parts in [
             Parts::ALL,
             Parts::NONE,
@@ -242,9 +236,9 @@ fn each_tick_is_read_as_the_part_it_is() {
 fn a_switched_off_part_is_read_off_the_account_and_not_off_the_collections() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The gate `Fanout::discover` puts in front of each listing. `wants` is the
-        // sync crate's, but it is only ever asked about the `Parts` this function
-        // produced, so the two have to agree about which flag is which.
+        // `Fanout::discover` uses this condition before each listing. `wants` is in
+        // the sync crate, but it gets only the `Parts` from `parts_of`. Thus the
+        // two must agree about each flag.
         let source = TestSource::new().enabled(true).parts(Parts {
             mail: true,
             contacts: true,
@@ -260,8 +254,8 @@ fn a_switched_off_part_is_read_off_the_account_and_not_off_the_collections() {
 fn an_account_names_the_server_its_children_will_repeat() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A child inherits none of this — EDS binds `oauth2-support` and nothing
-        // else — so every field here is one a child without it cannot connect with.
+        // EDS binds only `oauth2-support` to a child, so the child gets none of
+        // these fields from EDS. Without each field, a child cannot connect.
         let server = account().server_of().expect("a well-formed account");
 
         assert_eq!(
@@ -285,11 +279,10 @@ fn an_account_names_the_server_its_children_will_repeat() {
 fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The reason the origin and the connection come out of one read: this
-        // backend fetches `/.well-known/jmap` itself, and each child assembles its
-        // own origin at the far end from the fields copied here. Two reads of one
-        // source are two chances to disagree — and a disagreement is an account
-        // that discovers collections from one server and fetches them from another.
+        // The origin and the connection come from one read. This backend gets
+        // `/.well-known/jmap` itself, and each child makes its origin from the
+        // copied fields. Two reads could disagree. Then the account would discover
+        // collections on one server and get them from a different server.
         let server = account().server_of().expect("a well-formed account");
         let child = Child {
             resource_id: ChildKind::AddressBook.resource_id(&Id::new("AB1")),
@@ -331,9 +324,9 @@ fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
 fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The keyfile writes 0 for "not set", which is what an unwritten key reads
-        // back as. Passing it on would give the children `Port=0` and this backend
-        // an origin that asks for port zero, instead of the scheme's default.
+        // The keyfile uses 0 for "not set", and a missing key also reads as 0. If
+        // passed on, the children would get `Port=0`, and this backend would use
+        // port zero, not the default port of the scheme.
         let source = TestSource::new()
             .enabled(true)
             .authentication("jmap.example.com", 0, None, None)
@@ -352,12 +345,11 @@ fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
 fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `ESourceSecurity:secure` defaults to FALSE, so an unconditional read
-        // cannot tell "the keyfile has no [Security] group" from "the user turned
-        // TLS off" — and answering the first with plain HTTP would downgrade every
-        // hand-written account, and every child of it, at once. `SourceConfig`
-        // reads the absence as TLS; this has to read it the same way or the account
-        // and its children would disagree about the scheme.
+        // `ESourceSecurity:secure` is FALSE by default. Thus a direct read cannot
+        // tell a missing [Security] group from TLS that the user disabled. Plain
+        // HTTP for a missing group would downgrade each hand-written account and
+        // its children. `SourceConfig` reads a missing group as TLS. This read must
+        // do the same, or the account and its children use different schemes.
         let source =
             TestSource::new()
                 .enabled(true)
@@ -380,10 +372,9 @@ fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
 fn an_account_that_names_no_server_is_refused_without_being_given_an_empty_group() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `MissingHost` rather than a fan-out against nothing. And the same
-        // create-on-read trap once more: this is the account source, which EDS
-        // writes back to disk, so a read that adds an empty `[Authentication]`
-        // group edits the user's account file.
+        // The result is `MissingHost`, not a fan-out with no server. The read
+        // also must not create the extension. EDS writes the account source back
+        // to disk, so an empty `[Authentication]` group would change the file.
         let source = TestSource::new().enabled(true);
 
         assert_eq!(source.server_of(), Err(SourceError::MissingHost));
@@ -398,10 +389,9 @@ fn an_account_that_names_no_server_is_refused_without_being_given_an_empty_group
 fn a_host_that_is_not_a_bare_host_name_is_refused_before_any_child_gets_it() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The origin is assembled by concatenation, so the host field is not just
-        // data. Each child re-validates what it was handed, but by then the same
-        // string has been written into three `.source` files — and this backend has
-        // already contacted whatever it named.
+        // The origin is made by concatenation, so the host field is not only data.
+        // Each child validates the host again. But by then, the `.source` file of
+        // each child contains the string, and this backend has contacted the host.
         for host in ["evil.example.com/x", "jmap.example.com:443", "http://jmap"] {
             let source = TestSource::new()
                 .enabled(true)
@@ -421,10 +411,9 @@ fn a_host_that_is_not_a_bare_host_name_is_refused_before_any_child_gets_it() {
 fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The same rule the book and calendar backends apply, reached through the
-        // same function — this is the one place it could be forgotten, since the
-        // collection backend is the first thing to contact the server and the only
-        // one that writes the setting into the children.
+        // The book and calendar backends apply the same rule through the same
+        // function. The collection backend contacts the server first, and only it
+        // writes the setting into the children.
         let remote = TestSource::new()
             .enabled(true)
             .authentication("jmap.example.com", 0, None, None)
@@ -437,10 +426,9 @@ fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
             ))
         );
 
-        // And the mock server's shape still works, with the children told so
-        // explicitly: an absent `[Security]` reads as TLS at the far end, so a
-        // child of a plain-HTTP account that did not say `none` would refuse to
-        // talk to the account's own server.
+        // A loopback server, as for the mock, still works, and the children get
+        // an explicit `none`. A child reads a missing `[Security]` as TLS. Without
+        // `none`, it would refuse the server of a plain-HTTP account.
         let local = TestSource::new()
             .enabled(true)
             .authentication("127.0.0.1", 31415, None, None)
@@ -459,13 +447,11 @@ fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
 fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `populate` needs one field of `[Authentication]` and only one: whether
-        // the account names a user, which is what decides whether it asks EDS for a
-        // password or for a straight anonymous authenticate. It must not need
-        // `server_of` for that — an account with a user and a broken host has to
-        // reach `authenticate_sync`, which is the vfunc that has a `GError` to
-        // report the broken host through, rather than be quietly treated as
-        // anonymous by a populate that could not read it.
+        // `populate` needs only one field of `[Authentication]`: the user. It
+        // decides between a password request and an anonymous authentication.
+        // This must not need `server_of`. An account with a user and an invalid
+        // host must reach `authenticate_sync`, which reports the host error in a
+        // `GError`. A populate must not treat it as anonymous.
         let source = TestSource::new().enabled(true).authentication(
             "jmap.example.com/nonsense",
             0,
@@ -485,10 +471,9 @@ fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
 fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `None` is what `jmap_backend_core::connect::credentials` reads as
-        // "anonymous on purpose", so it is also what a populate must not ask for a
-        // password for. And the create-on-read trap once more, on the account's own
-        // file.
+        // `jmap_backend_core::connect::credentials` reads `None` as intentionally
+        // anonymous, so a populate must not ask for a password. Also, the read
+        // must not create the extension in the file of the account.
         let source = TestSource::new().enabled(true);
 
         assert_eq!(source.user_of(), None);
@@ -503,12 +488,11 @@ fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
 fn a_user_key_that_is_present_but_empty_is_no_user_at_all() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `User=` in a keyfile reads back as "", and EDS's own collection backends
-        // test `user && *user` for exactly this. It matters here because the two
-        // spellings must not decide differently: `credentials()` answers
-        // `CredentialsRequired` for a named user with no password, so an empty user
-        // read as a user is a password prompt for an account that authenticates
-        // anonymously — and whatever was typed into it would then be dropped.
+        // `User=` in a keyfile reads as "", and the EDS collection backends test
+        // `user && *user` for this case. Both forms must give the same decision.
+        // `credentials()` returns `CredentialsRequired` for a named user with no
+        // password. Thus an empty user read as a user would cause a password
+        // prompt for an anonymous account.
         let source =
             TestSource::new()
                 .enabled(true)

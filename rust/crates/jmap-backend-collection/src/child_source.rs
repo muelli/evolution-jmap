@@ -1,55 +1,53 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Writing a child source — the settings out of `jmap-collection-sync`, onto
-//! the `ESource` `e_collection_backend_new_child` hands back.
+//! Writes a child source: the settings from `jmap-collection-sync`, onto the
+//! `ESource` that `e_collection_backend_new_child` returns.
 //!
-//! The mirror of [`crate::resource_id`], and the half that happens first: a
-//! child is written once, by the populate that discovers its collection, and
-//! read back on every start after that.
-//! [`Child::settings`](jmap_collection_sync::Child::settings) already says
-//! *what* to write, as `(group, key, value)` triples that are exactly how a
-//! `.source` keyfile spells them; this is the part that needs the headers,
-//! because an `ESource` is not a keyfile — the group is an extension object,
-//! the key is a GObject property, and the value has a type.
+//! This is the mirror of [`crate::resource_id`], and it happens first. The
+//! populate that discovers a collection writes its child once. Every later
+//! start reads the child back.
+//! [`Child::settings`](jmap_collection_sync::Child::settings) already gives
+//! *what* to write, as `(group, key, value)` triples in `.source` keyfile
+//! spelling. This module needs the headers, because an `ESource` is not a
+//! keyfile: the group is an extension object, the key is a GObject property,
+//! and the value has a type.
 //!
-//! ## Every setting is written, or none of the child is trusted
+//! ## Every setting is written, or the child is not trusted
 //!
-//! [`apply`] refuses a setting it has no property for instead of skipping it.
-//! Skipping would be the worse failure by far: the child would still be
-//! created, would still look like an address book of this account, and would be
-//! missing whichever single property makes it work — `[Resource] Identity`,
-//! whose absence makes EDS **delete** the child's cache file on the next start
-//! ([`crate::resource_id`]), or `[Authentication] Host`, whose absence makes
-//! every request the address book backend sends go to no server at all.
+//! [`apply`] refuses a setting that has no known property; it does not skip
+//! it. A skip is a much worse failure. The child still exists and looks like
+//! an address book of this account, but one necessary property is missing.
+//! Without `[Resource] Identity`, EDS **deletes** the cache file of the child
+//! on the next start ([`crate::resource_id`]). Without `[Authentication] Host`,
+//! the address book backend sends every request to no server.
 //!
-//! The settings are a closed set, so an [`UnwritableSetting`] means
-//! `jmap-collection-sync` grew a setting this module was not taught to write.
-//! `tests/child_source.rs` writes every shape of child against every shape of
-//! account, so that is a red test here rather than a broken account there.
+//! The settings are a closed set. Thus an [`UnwritableSetting`] means that
+//! `jmap-collection-sync` has a new setting that this module cannot write.
+//! `tests/child_source.rs` writes every shape of child for every shape of
+//! account, so the result is a failed test, not a broken account.
 //!
-//! ## Here `e_source_get_extension` is *wanted* for what it does
+//! ## Here, `e_source_get_extension` is *wanted* for what it does
 //!
-//! Both readers in this crate go out of their way not to call it on a source
-//! they were handed, because it creates the extension it cannot find. This
-//! module is where creating them is the whole point: the source is a fresh
-//! child of ours, and giving it `[Address Book]` is precisely what makes it an
-//! address book to `collection_backend_child_is_contacts()` and to the factory
-//! that will load it. What it must not do is create the extension of the
-//! *other* kind — a child carrying both is one either factory may claim — so
-//! nothing here reaches for an extension a setting did not name.
+//! The two readers in this crate do not call it on a source they get, because
+//! it creates a missing extension. In this module, the creation is the
+//! purpose: the source is a new child of this backend. `[Address Book]` is what
+//! makes it an address book to `collection_backend_child_is_contacts()` and to
+//! the factory that loads it. This module must not create the extension of the
+//! *other* kind, because either factory can claim a child with both. Thus it
+//! gets only the extensions that a setting names.
 //!
 //! ## The two values that are not strings
 //!
 //! - `[Authentication] Port` is a `guint16` on the extension and text in the
-//!   keyfile. The parse is this module's, so its failure is
-//!   [`UnwritableSetting::WrongType`] rather than a silently unset port.
-//! - `[Security] Method` is the string `ESourceSecurity:method` holds — "tls"
-//!   or "none" — while the JMAP backends read the derived boolean
-//!   `ESourceSecurity:secure`. Written through
-//!   `e_source_security_set_method()` rather than `…_set_secure()` so that the
-//!   spelling in [`Child::settings`](jmap_collection_sync::Child::settings) is
-//!   the spelling that has to be right, and a test can catch it if it is not.
+//!   keyfile. This module parses it, so a failure is
+//!   [`UnwritableSetting::WrongType`], not an unset port.
+//! - `[Security] Method` is the string of `ESourceSecurity:method` ("tls" or
+//!   "none"). The JMAP backends read the derived boolean
+//!   `ESourceSecurity:secure`. This module writes through
+//!   `e_source_security_set_method()`, not `…_set_secure()`. Thus the spelling
+//!   in [`Child::settings`](jmap_collection_sync::Child::settings) must be
+//!   correct, and a test finds it if it is not.
 
 use std::ffi::CStr;
 use std::fmt;
@@ -74,45 +72,43 @@ use jmap_collection_sync::child_source::{
 
 use crate::resource_id::KIND_EXTENSIONS;
 
-/// The keyfile groups that are `ESource` extensions and are not a child's kind,
-/// each paired with the constant EDS spells the same group with.
+/// The keyfile groups that are `ESource` extensions but not the kind of a
+/// child. Each has the EDS constant for the same group.
 ///
-/// The same two-spellings-of-one-string pairing as [`KIND_EXTENSIONS`], held
-/// against EDS's `#define`s by `tests/child_source.rs` for the same reason: the
-/// crate that decides what a child is builds without the EDS headers and so
-/// carries its own literals, and a pair that drifts apart is not a compile
-/// error — it is a setting that is quietly never written.
+/// This pairs two spellings of one string, as [`KIND_EXTENSIONS`] does.
+/// `tests/child_source.rs` compares them with the EDS `#define`s. The crate
+/// that decides the child builds without the EDS headers and has its own
+/// literals. If a pair differs, the compiler does not see it: the setting is
+/// never written, and nothing reports it.
 ///
-/// [`EXTENSION_DATA_SOURCE`] is deliberately not here. It is the `ESource`'s
-/// own group rather than an extension, and EDS spells it in `e-source.c`
-/// instead of in a header, so there is no constant to pair it with.
+/// [`EXTENSION_DATA_SOURCE`] is deliberately not here. It is the own group of
+/// the `ESource`, not an extension. EDS spells it in `e-source.c`, not in a
+/// header, so there is no constant for it.
 pub const EXTENSIONS: [(&CStr, &str); 3] = [
     (E_SOURCE_EXTENSION_RESOURCE, EXTENSION_RESOURCE),
     (E_SOURCE_EXTENSION_AUTHENTICATION, EXTENSION_AUTHENTICATION),
     (E_SOURCE_EXTENSION_SECURITY, EXTENSION_SECURITY),
 ];
 
-/// Writes every setting onto `source`, in order.
+/// Writes every setting onto `source`, in sequence.
 ///
-/// The settings are
-/// [`Child::settings`](jmap_collection_sync::Child::settings)' — everything
-/// that makes the source `e_collection_backend_new_child` returned into an
-/// address book or a calendar of this account.
+/// The settings come from
+/// [`Child::settings`](jmap_collection_sync::Child::settings). They make the
+/// source from `e_collection_backend_new_child` into an address book or a
+/// calendar of this account.
 ///
-/// An error leaves the settings before it written and the rest not, which is
-/// why the caller's answer to one has to be to abandon the child rather than to
-/// carry on with it: a half-written child is exactly the shape this module
-/// exists to avoid.
+/// After an error, the settings before it are written and the remaining ones
+/// are not. Thus the caller must abandon the child: this module exists to
+/// prevent a half-written child.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` — a child of this backend's collection,
-/// which this call takes no reference to and does not outlive.
+/// `source` must be a valid `ESource`, a child of the collection of this
+/// backend. This call takes no reference to it and does not outlive it.
 pub unsafe fn apply(source: *mut ESource, settings: &[Setting]) -> Result<(), UnwritableSetting> {
-    // As everywhere an extension is looked up by name: `e_source_get_extension`
-    // walks the registered children of `E_TYPE_SOURCE_EXTENSION`, so a type
-    // nothing has referenced yet is one it cannot find — and here it would
-    // *create* nothing and return NULL. Referencing the GType registers it.
+    // `e_source_get_extension` finds only registered children of
+    // `E_TYPE_SOURCE_EXTENSION`. For an unregistered type it creates nothing
+    // and returns NULL. A reference to the GType registers it.
     // SAFETY: no arguments, and the type system initialises itself.
     unsafe {
         e_source_address_book_get_type();
@@ -123,26 +119,26 @@ pub unsafe fn apply(source: *mut ESource, settings: &[Setting]) -> Result<(), Un
     }
 
     for setting in settings {
-        // SAFETY: a valid source by this function's contract.
+        // SAFETY: a valid source by the contract of this function.
         unsafe { write(source, setting) }?;
     }
     Ok(())
 }
 
-/// One setting, onto the property it names.
+/// Writes one setting onto the property that it names.
 ///
 /// # Safety
 ///
 /// As [`apply`].
 unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), UnwritableSetting> {
-    // Truncating at an interior NUL rather than refusing: the display name is
-    // server data, a JSON string may carry a NUL where a C string may not, and
-    // refusing the write would mean refusing the child. What is kept is what
-    // the name would have meant to every C caller downstream anyway.
+    // Truncate at an interior NUL; do not refuse. The display name is server
+    // data, and a JSON string can contain a NUL that a C string cannot. A
+    // refusal would also refuse the child. Every C caller reads only the part
+    // before the NUL anyway.
     let value = cstring_lossy(&setting.value);
 
-    // The child's kind, when the group names one. Read first because it is
-    // what tells `BackendName` apart from a group that has no such property.
+    // The kind of the child, if the group names one. This comes first, because
+    // it separates `BackendName` from a group without that property.
     let kind = KIND_EXTENSIONS
         .iter()
         .find(|(_, group)| *group == setting.group)
@@ -150,18 +146,19 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
 
     match (setting.group, setting.key) {
         (EXTENSION_DATA_SOURCE, "DisplayName") => {
-            // The source's own property, not an extension's: what Evolution
-            // shows in the sidebar.
+            // A property of the source, not of an extension: the name that
+            // Evolution shows in the sidebar.
             // SAFETY: a live source, and the setter copies the string.
             unsafe { e_source_set_display_name(source, value.as_ptr()) };
         }
-        // The one setting whose group varies, because the group *is* the kind:
-        // an address book child's backend name lives under `[Address Book]`
-        // and a calendar's under `[Calendar]`. Both name the same factory.
+        // The one setting with a variable group, because the group *is* the
+        // kind. An address book child has its backend name under
+        // `[Address Book]`, and a calendar under `[Calendar]`. Both name the
+        // same factory.
         (_, "BackendName") => {
             let name = kind.ok_or_else(|| UnwritableSetting::unknown(setting))?;
             // SAFETY: `name` is a header constant naming an extension deriving
-            // from `ESourceBackend`, whose type is registered above; the
+            // from `ESourceBackend`, whose type `apply` registers; the
             // extension is created on demand and owned by the source.
             unsafe {
                 let backend: *mut ESourceBackend = extension(source, name);
@@ -169,9 +166,9 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
             }
         }
         (EXTENSION_RESOURCE, "Identity") => {
-            // The field the address book and calendar backends read as the
-            // JMAP object to fetch, and the field `dup_resource_id` derives
-            // this child's resource id from. Its absence is a deleted cache.
+            // The address book and calendar backends read this field as the
+            // JMAP object to fetch. `dup_resource_id` derives the resource id
+            // of this child from it. Without it, EDS deletes the cache.
             // SAFETY: as above, with `ESourceResource` the type the name
             // selects.
             unsafe {
@@ -205,7 +202,7 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
             }
         }
         (EXTENSION_SECURITY, "Method") => {
-            // The string, not the derived `secure` boolean — see the module
+            // The string, not the derived `secure` boolean. See the module
             // comment.
             // SAFETY: as above, with `ESourceSecurity` the type the name
             // selects.
@@ -216,11 +213,11 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
         }
         (EXTENSION_CALENDAR, "Color") => {
             // `ESourceCalendar` derives from `ESourceSelectable`
-            // (`e-source-calendar.h`), so the same "Calendar" extension
-            // object answers `e_source_selectable_set_color` too — no second
-            // extension to look up or register.
-            // SAFETY: as above, with `ESourceSelectable` the base class the
-            // "Calendar" extension's own type derives from.
+            // (`e-source-calendar.h`). Thus the same "Calendar" extension
+            // object accepts `e_source_selectable_set_color`, and no second
+            // extension is necessary.
+            // SAFETY: as above, with `ESourceSelectable` the base class from
+            // which the type of the "Calendar" extension derives.
             unsafe {
                 let selectable: *mut ESourceSelectable =
                     extension(source, E_SOURCE_EXTENSION_CALENDAR);
@@ -232,27 +229,26 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
     Ok(())
 }
 
-/// `source`'s extension of that name, created if it has none yet.
+/// The extension of `source` with that name, created if it does not exist.
 ///
 /// # Safety
 ///
 /// `source` must be a valid `ESource`, `name` must name an `ESourceExtension`
-/// subclass whose type is registered, and `T` must be that subclass — the
-/// setters below check with `g_return_if_fail`, so a mismatch is a critical
-/// rather than undefined behaviour, but it is still a lie to the compiler.
+/// subclass whose type is registered, and `T` must be that subclass. The
+/// setters check with `g_return_if_fail`, so a mismatch causes a critical, not
+/// undefined behaviour, but the type is still false to the compiler.
 unsafe fn extension<T>(source: *mut ESource, name: &CStr) -> *mut T {
     // SAFETY: the contract above; the extension is owned by the source and
     // lives as long as it does.
     unsafe { e_source_get_extension(source, name.as_ptr()) }.cast()
 }
 
-/// A setting no `ESource` property was written from.
+/// A setting from which no `ESource` property was written.
 ///
-/// Not a `SourceError`: those are faults in the *user's* account, reported to
-/// Evolution as `E_CLIENT_ERROR` codes. This is a fault in this backend — the
-/// settings come from `jmap-collection-sync`, not from anything a user typed —
-/// and the only thing a caller can do with one is abandon the child and log
-/// which setting it was.
+/// This is not a `SourceError`: those are faults in the account of the *user*,
+/// reported to Evolution as `E_CLIENT_ERROR` codes. This is a fault in this
+/// backend, because the settings come from `jmap-collection-sync`, not from the
+/// user. A caller can only abandon the child and log the setting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnwritableSetting {
     /// No property of any extension is known for this group and key.
@@ -260,7 +256,7 @@ pub enum UnwritableSetting {
         group: &'static str,
         key: &'static str,
     },
-    /// The property is known, but the value is not one it can hold.
+    /// The property is known, but it cannot hold the value.
     WrongType {
         group: &'static str,
         key: &'static str,
@@ -304,9 +300,9 @@ impl std::error::Error for UnwritableSetting {}
 mod unwritable_setting_display_tests {
     use super::*;
 
-    /// `UnwritableSetting`'s `Display` writes something for every variant;
-    /// without this test a `Display` that writes nothing still compiles and
-    /// an abandoned child logs an empty reason.
+    /// The `Display` of `UnwritableSetting` writes text for every variant.
+    /// Without this test, an empty `Display` compiles, and an abandoned child
+    /// logs an empty reason.
     #[test]
     fn every_variant_names_its_group_and_key() {
         let unknown = UnwritableSetting::UnknownProperty {

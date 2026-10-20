@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared test utilities and bounded-execution helpers for `jmap-backend-collection` tests.
+//! Shared test utilities and time-limit helpers for the `jmap-backend-collection`
+//! tests.
 //!
-//! EDS-gated tests run in headless VM environments without a user session bus or with
-//! variable daemon states. Unbounded waits on D-Bus, mock servers, or synchronisation
-//! primitives can wedge a test binary at 0% CPU forever.
+//! The EDS tests run in headless VMs. Some VMs have no user session bus, and the
+//! daemon state can change. A wait without a limit on D-Bus, a mock server or a
+//! synchronisation primitive can stop a test binary permanently at 0% CPU.
 //!
-//! `with_timeout` and `with_timeout_duration` execute test closures on a dedicated worker
-//! thread bounded by a hard deadline (default: 10s). If an operation wedges, it fails
-//! fast with a descriptive panic instead of blocking the entire test runner.
+//! `with_timeout` and `with_timeout_duration` run a test closure on a separate
+//! worker thread with a hard time limit (default: 10 s). If an operation stops,
+//! the test fails quickly with a clear panic. The test runner does not stop.
 
 #![allow(dead_code)]
 
@@ -17,19 +18,21 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// The default hard deadline for tests in this crate.
-/// Normal test operations complete in < 0.1s; anything exceeding 10s is wedged.
+/// The default hard time limit for tests in this crate. Normal test operations
+/// complete in less than 0.1 s. An operation that takes more than 10 s is stuck.
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Runs `f` on a dedicated thread with the default hard timeout ([`TEST_TIMEOUT`]).
+/// Runs `f` on a separate thread with the default hard time limit
+/// ([`TEST_TIMEOUT`]).
 ///
-/// If `f` completes within the deadline, returns its result or propagates any panic.
-/// If `f` exceeds the deadline, panics immediately with a timeout failure.
+/// If `f` completes in time, this function returns its result. If `f` panics,
+/// this function also panics. If `f` takes too long, this function panics
+/// immediately with a timeout failure.
 pub fn with_timeout<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
     with_timeout_duration(TEST_TIMEOUT, f)
 }
 
-/// Runs `f` on a dedicated thread with an explicit `timeout` duration.
+/// Runs `f` on a separate thread with the time limit `timeout`.
 pub fn with_timeout_duration<R: Send + 'static>(
     timeout: Duration,
     f: impl FnOnce() -> R + Send + 'static,

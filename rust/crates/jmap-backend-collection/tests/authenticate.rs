@@ -1,18 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The piece between the account and the fan-out — `authenticate_sync`, minus
-// the instance: an `ESource`, whatever EDS got out of libsecret, and the one
-// `ESourceAuthenticationResult` that decides whether Evolution asks the user
-// for a password again, gives up, or says nothing.
+// Tests for `authenticate_sync` without the backend instance. The inputs are an
+// `ESource` and the credentials that EDS got from libsecret. The output is the
+// `ESourceAuthenticationResult` that tells Evolution to prompt, stop, or accept.
 //
-// Three of the answers here are not merely wrong when they are wrong, they are
-// stuck: an account that answers ERROR where it meant REQUIRED never prompts and
-// so can never be fixed; one that answers REJECTED where it meant ERROR throws
-// away a password that was never the problem; and one that answers REQUIRED for
-// a server that is simply down prompts forever. The fan-out itself is a closure
-// here, because what it does needs a live `ECollectionBackend`, and none of the
-// decisions above do.
+// A wrong result can make an account permanently stuck. ERROR instead of
+// REQUIRED never prompts, so the user cannot fix the account. REJECTED instead
+// of ERROR discards a correct password. REQUIRED for a server that is down
+// prompts forever. The fan-out is a closure because it needs a live
+// `ECollectionBackend`, and these decisions do not.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -49,15 +46,15 @@ use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// An `ESource` that is not backed by the registry, as in
-/// `tests/collection_source.rs` — the account this backend is handed.
+/// The account that the backend receives: an `ESource` without a registry, as in
+/// `tests/collection_source.rs`.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
-        // `e_source_get_extension` walks the registered children of
-        // `E_TYPE_SOURCE_EXTENSION`; touching the accessors is what registers
-        // them in a test binary.
+        // `e_source_get_extension` searches the registered children of
+        // `E_TYPE_SOURCE_EXTENSION`. In a test binary, a call to each type
+        // accessor registers that type.
         // SAFETY: no arguments, and the type system initialises itself.
         unsafe {
             e_source_collection_get_type();
@@ -77,8 +74,8 @@ impl TestSource {
     }
 
     fn parts(self, parts: Parts) -> Self {
-        // SAFETY: a live source and a header constant; the extension is created
-        // on demand and owned by the source.
+        // SAFETY: a live source and a header constant. The source creates the
+        // extension when necessary and owns it.
         unsafe {
             let collection: *mut ESourceCollection =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
@@ -93,7 +90,7 @@ impl TestSource {
     fn authentication(self, host: &str, port: u16, user: Option<&str>) -> Self {
         let host = CString::new(host).expect("no NUL in a test host");
         let user = user.map(|user| CString::new(user).expect("no NUL in a test user"));
-        // SAFETY: as above; every setter copies the string it is given.
+        // SAFETY: as above. Each setter copies the string that it receives.
         unsafe {
             let auth: *mut ESourceAuthentication =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
@@ -116,7 +113,7 @@ impl TestSource {
         self
     }
 
-    /// Marks the account as authenticating with OAuth 2.0, the same field
+    /// Sets the account to use OAuth 2.0. This is the field that
     /// `jmap_backend_core::oauth2::source_uses_oauth2` reads.
     fn oauth2(self) -> Self {
         let method = CString::new("OAuth2").expect("no NUL in a literal");
@@ -129,8 +126,8 @@ impl TestSource {
         self
     }
 
-    /// Marks the account as authenticating with a pasted API token, the same
-    /// field `jmap_backend_core::api_token::source_uses_api_token` reads.
+    /// Sets the account to use a pasted API token. This is the field that
+    /// `jmap_backend_core::api_token::source_uses_api_token` reads.
     fn api_token(self) -> Self {
         let method = CString::new(jmap_backend_core::api_token::API_TOKEN_METHOD.to_bytes())
             .expect("no NUL in a literal");
@@ -146,13 +143,13 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: the reference `e_source_new_with_uid` returned is given back
+        // SAFETY: this releases the reference from `e_source_new_with_uid`
         // exactly once.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
-/// A well-formed account: TLS, a named port, a user, everything switched on.
+/// A valid account: TLS, an explicit port, a user, and all parts enabled.
 fn account() -> TestSource {
     TestSource::new()
         .parts(Parts::ALL)
@@ -160,7 +157,7 @@ fn account() -> TestSource {
         .secure(true)
 }
 
-/// The `ENamedParameters` EDS hands a backend once libsecret answered.
+/// The `ENamedParameters` that EDS gives a backend after libsecret answers.
 struct StoredPassword(*mut ENamedParameters);
 
 impl StoredPassword {
@@ -187,21 +184,19 @@ impl Drop for StoredPassword {
     }
 }
 
-/// The `GError` a call set, taken apart before it is freed. The domain and code
-/// are asserted rather than the message, because Evolution renders the code —
-/// "the password was not accepted" and "a secure connection is not available"
-/// are different dialogs, and the message is translated.
+/// The fields of the `GError` that a call set, copied before the error is freed.
+/// The tests assert the domain and code, not the message. Evolution shows a
+/// different dialog for each code, and the message is translated.
 struct ErrorSeen {
     domain: GQuark,
     code: i32,
     message: String,
 }
 
-/// Runs `authenticate_with` and reports both of the things it answers with.
+/// Runs `authenticate_with` and returns its result and its `GError`.
 ///
-/// The push-credentials seam is a no-op here: every test in this file except
-/// the ones about the seam itself only cares about the enum and the `GError`,
-/// the same two things this helper reported before that seam existed.
+/// The `push_credentials` closure does nothing here. Only the tests for that
+/// closure use [`run_full`].
 fn run<F>(
     source: *mut ESource,
     credentials: *const ENamedParameters,
@@ -214,9 +209,8 @@ where
     run_full(source, credentials, cancellable, fan_out, |_| {})
 }
 
-/// Like [`run`], but also takes the `push_credentials` closure, for the tests
-/// about that seam itself — which record what they were called with in a
-/// `RefCell` the way every other test here records what `fan_out` was handed.
+/// Like [`run`], but also takes the `push_credentials` closure. The tests for
+/// that closure record its argument in a `RefCell`.
 fn run_full<F, P>(
     source: *mut ESource,
     credentials: *const ENamedParameters,
@@ -229,9 +223,9 @@ where
     P: FnOnce(*const ENamedParameters),
 {
     let mut error: *mut GError = ptr::null_mut();
-    // SAFETY: a valid or NULL source, a valid or NULL parameter set, a valid or
-    // NULL cancellable and an out-parameter initialised to NULL are what the
-    // vfunc receives.
+    // SAFETY: the vfunc receives these arguments: a valid or NULL source, a
+    // valid or NULL parameter set, a valid or NULL cancellable, and an
+    // out-parameter set to NULL.
     let result = unsafe {
         authenticate_with(
             source,
@@ -246,7 +240,7 @@ where
     if error.is_null() {
         return (result, None);
     }
-    // SAFETY: a live GError ownership of which passed to us.
+    // SAFETY: a live GError, and this function now owns it.
     let seen = unsafe {
         let seen = ErrorSeen {
             domain: (*error).domain,
@@ -261,8 +255,8 @@ where
     (result, Some(seen))
 }
 
-/// A fan-out that must not happen. Every decision this module makes before the
-/// server is contacted is one that has to be made *without* contacting it.
+/// A fan-out that must not run. The tests that use it check decisions that the
+/// backend makes without a connection to the server.
 fn never(_: Login) -> Result<(), Error> {
     panic!("the fan-out ran for an account that should not have been contacted");
 }
@@ -271,10 +265,9 @@ fn never(_: Login) -> Result<(), Error> {
 fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Not an error: the user switched every part off, so there is nothing to
-        // discover and nothing to complain about. ERROR here would put a dialog in
-        // front of someone for an account they deliberately turned down, and
-        // REJECTED would discard a password that was never tried.
+        // The user disabled all parts, so there is nothing to discover. ERROR
+        // would show a dialog for an account that the user disabled on purpose.
+        // REJECTED would discard a password that the backend did not try.
         let source = account().parts(Parts::NONE);
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -288,11 +281,8 @@ fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
 fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The order the two reads happen in, and the reason it is fixed: an account
-        // with every part off never needs a host, so a missing one must not turn it
-        // into a broken account. Asking for the server first would report every
-        // half-written account as an error the moment the user unticked the last
-        // part.
+        // The backend reads the parts before the server. An account with all
+        // parts disabled needs no host, so a missing host is not an error here.
         let source = TestSource::new().parts(Parts::NONE);
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -306,8 +296,8 @@ fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
 fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // A prompt cannot supply a host, so REQUIRED here is a dialog that comes
-        // back however many times the user answers it.
+        // A prompt cannot supply a host. REQUIRED here would show the dialog
+        // again after each answer.
         let source = TestSource::new().parts(Parts::ALL);
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -324,9 +314,9 @@ fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
 fn a_plain_http_account_is_refused_before_a_password_is_sent() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The rule is `jmap_backend_core::source::origin`'s and it is applied here
-        // because this backend is the first thing to contact the server — and the
-        // credentials would be the first thing it sent.
+        // The rule comes from `jmap_backend_core::source::origin`. This backend
+        // contacts the server first, and its first request would send the
+        // credentials.
         let source = account().secure(false);
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -341,10 +331,9 @@ fn a_plain_http_account_is_refused_before_a_password_is_sent() {
 fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // What EDS passes before it has asked libsecret for anything is NULL. The
-        // account names a user, so it is not anonymous — REQUIRED is what turns
-        // into the prompt, and anything else is an account that can never be
-        // completed.
+        // EDS passes NULL before it asks libsecret. The account names a user, so
+        // it is not anonymous. Only REQUIRED causes the prompt that lets the user
+        // complete the account.
         let source = account();
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -359,10 +348,9 @@ fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
 fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // `marshal::password`'s rule, reaching this layer: an empty stored password
-        // is present, not absent. Reading it as absent would prompt, and a user who
-        // answers the prompt with nothing would be prompted again forever; sending
-        // it and being told it is wrong terminates.
+        // The rule of `marshal::password`: an empty stored password is present,
+        // not absent. If it were absent, an empty answer to the prompt would
+        // cause a new prompt forever. A rejection from the server ends the loop.
         let source = account();
         let stored = StoredPassword::new("");
         let seen = RefCell::new(None);
@@ -387,11 +375,10 @@ fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
 fn an_oauth2_account_is_never_treated_as_anonymous() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // This project's own setup UI can write an OAuth 2.0 account with no
-        // `[Authentication] User` at all — the identity lives in the consent, not
-        // in a typed field. Reading a missing user as "anonymous" the way a plain
-        // password account would be read would silently skip OAuth 2.0 entirely
-        // and fan the account out with no credentials whatsoever.
+        // The setup UI of this project can write an OAuth 2.0 account with no
+        // `[Authentication] User`. The identity comes from the consent, not from
+        // a typed field. If the backend read a missing user as anonymous, it would
+        // skip OAuth 2.0 and fan out with no credentials.
         let source = TestSource::new()
             .parts(Parts::ALL)
             .authentication("jmap.example.com", 8443, None)
@@ -436,12 +423,11 @@ fn a_secret_store_failure_reports_error_and_dbus_error_code() {
 fn an_api_token_account_is_sent_as_bearer_not_basic() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The item-6 "API Token" method: a stored secret that must reach the
-        // fan-out as `Credentials::Bearer`, exactly like `connect_with` already
-        // sends it for the address book, calendar and mail backends — never
-        // as `Credentials::Basic`, which a Bearer-only JMAP endpoint 401s (and a
-        // 401 is what turns into the account's stuck auth-retry loop, since
-        // `ConnectError::auth_result` reads it as a wrong password).
+        // The "API Token" method: the stored secret must reach the fan-out as
+        // `Credentials::Bearer`, as `connect_with` sends it for the address
+        // book, calendar and mail backends. A Bearer-only JMAP endpoint answers
+        // `Credentials::Basic` with 401. `ConnectError::auth_result` reads a 401
+        // as a wrong password, so the account would retry authentication forever.
         let source = account().api_token();
         let stored = StoredPassword::new("t0k3n");
         let seen = RefCell::new(None);
@@ -464,9 +450,9 @@ fn an_api_token_account_is_sent_as_bearer_not_basic() {
 fn an_api_token_account_with_no_stored_token_asks_for_one() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Mirrors `an_account_with_a_user_and_no_stored_password_asks_for_one`:
-        // an API-token account with nothing in libsecret yet must prompt, not
-        // silently fan out with an empty Bearer token.
+        // As in `an_account_with_a_user_and_no_stored_password_asks_for_one`: an
+        // API-token account with no secret in libsecret must prompt. It must not
+        // fan out with an empty Bearer token.
         let source = account().api_token();
 
         let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
@@ -481,9 +467,9 @@ fn an_api_token_account_with_no_stored_token_asks_for_one() {
 fn an_account_with_no_user_is_authenticated_anonymously() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Which is `jmap-mockd` and a development Stalwart. A real server answers
-        // it with the 401 that becomes a prompt anyway, so refusing here would only
-        // break the case that works.
+        // `jmap-mockd` and a development Stalwart accept anonymous access. A real
+        // server answers with a 401, which causes a prompt. A refusal here would
+        // only break the anonymous case.
         let source = TestSource::new()
             .parts(Parts::ALL)
             .authentication("127.0.0.1", 31415, None)
@@ -505,9 +491,8 @@ fn an_account_with_no_user_is_authenticated_anonymously() {
 fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Everything the fan-out needs comes out of one read of the account, so
-        // that the server this backend discovers from and the server it writes into
-        // the children cannot be two different reads that disagree.
+        // The fan-out gets all its data from one read of the account. Thus the
+        // discovery server and the server written into the children are the same.
         let source = account().parts(Parts {
             mail: false,
             contacts: true,
@@ -553,11 +538,10 @@ fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() 
 fn only_a_401_makes_evolution_ask_for_the_password_again() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The rule `jmap_backend_core::connect` states for the book and calendar
-        // backends, reached from the collection backend's own vfunc: REJECTED is
-        // what makes Evolution discard the stored password, so a 403 or a server
-        // that is down must not produce it — the user would be asked to fix
-        // something a password cannot fix, in a loop.
+        // The rule of `jmap_backend_core::connect` for the book and calendar
+        // backends also applies to this vfunc. REJECTED makes Evolution discard
+        // the stored password. A 403 or a server that is down must not give
+        // REJECTED, because a new password cannot fix them.
         let source = account();
         let stored = StoredPassword::new("hunter2");
 
@@ -591,9 +575,8 @@ fn only_a_401_makes_evolution_ask_for_the_password_again() {
 fn a_fan_out_that_worked_sets_no_error() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // GLib's convention, and EDS reads the out-parameter whatever the result
-        // is: a `GError` left over from a previous attempt is how an account that
-        // is fine ends up reported as broken.
+        // This is the GLib convention. EDS reads the out-parameter for each
+        // result, so a stale `GError` would report a good account as broken.
         let source = account();
         let stored = StoredPassword::new("hunter2");
 
@@ -608,11 +591,10 @@ fn a_fan_out_that_worked_sets_no_error() {
 fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // EWS's `e_collection_backend_authenticate_children()`, mirrored here: a
-        // collection that just resolved credentials hands them to its
-        // already-running address-book/calendar children immediately, rather than
-        // leaving each to hit its own credentials-required cycle before it
-        // independently re-fetches the same thing. See this function's own doc.
+        // The same as `e_collection_backend_authenticate_children()` in EWS. The
+        // collection gives the credentials to its running address-book and
+        // calendar children immediately. Otherwise each child gets the same
+        // credentials again by itself. See the documentation of `authenticate_with`.
         let source = account();
         let stored = StoredPassword::new("hunter2");
         let pushed = RefCell::new(Vec::new());
@@ -639,8 +621,8 @@ fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children(
 fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Nothing was freshly authenticated for this login, so there is nothing
-        // honest to hand a child that never got a look at it either.
+        // This login did not authenticate, so there are no credentials to give
+        // to the children.
         let source = account();
         let stored = StoredPassword::new("hunter2");
         let pushed = RefCell::new(Vec::new());
@@ -671,9 +653,9 @@ fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
 fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The fan-out never runs for this account (see
+        // The fan-out does not run for this account (see
         // `an_account_with_nothing_switched_on_is_accepted_without_being_contacted`),
-        // so there is nothing resolved yet to push either.
+        // so there are no credentials to push.
         let source = account().parts(Parts::NONE);
         let pushed = RefCell::new(Vec::new());
 
@@ -695,9 +677,9 @@ fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
 fn a_backend_with_no_account_is_an_error_rather_than_a_crash() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // It should not happen — EDS constructs the backend *from* a source — but a
-        // NULL dereference in `evolution-source-registry` takes every other account
-        // in the session down with it.
+        // EDS constructs the backend from a source, so this is not expected. But a
+        // NULL dereference in `evolution-source-registry` stops all accounts in
+        // the session.
         let (result, error) = run(ptr::null_mut(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
@@ -715,10 +697,9 @@ fn a_backend_with_no_account_is_an_error_rather_than_a_crash() {
 fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The Stop button, reaching a discovery several layers down through a
-        // client this function never sees — and, just as important, not staying
-        // installed past the call: the scope belongs to this operation, not to the
-        // account.
+        // The Stop button must reach a discovery through a client that this
+        // function does not see. The cancellation must also end with the call,
+        // because it belongs to this operation, not to the account.
         let source = account();
         let stored = StoredPassword::new("hunter2");
         // SAFETY: no arguments; the cancellable is unreffed below.
@@ -738,8 +719,8 @@ fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
         let error = error.expect("a cancelled authenticate has to say so");
-        // Reported as GIO's cancellation rather than an EDS client error, so that
-        // Evolution can tell a user who pressed Stop from an account that broke.
+        // The error is a GIO cancellation, not an EDS client error. Thus Evolution
+        // can tell a user who pressed Stop from a broken account.
         // SAFETY: no arguments.
         assert_eq!(error.domain, unsafe { g_io_error_quark() });
         assert_eq!(error.code, G_IO_ERROR_CANCELLED);
@@ -749,7 +730,7 @@ fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
             "the cancellation outlived the operation it belonged to"
         );
 
-        // SAFETY: the reference `g_cancellable_new` returned is given back once.
+        // SAFETY: this releases the reference from `g_cancellable_new` once.
         unsafe { g_object_unref(cancellable.cast()) };
     });
 }
