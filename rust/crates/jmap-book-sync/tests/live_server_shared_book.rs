@@ -1,38 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync` reading and writing a *shared* address book, i.e. one owned by
-//! a different real account, through an ACL grant — the actual point of
-//! sharing, unlike `jmap-client/tests/live_server.rs`'s
-//! `address_book_shared_with_a_second_real_account_is_visible_only_after_the_grant`,
-//! which only checks that the grant changes what `AddressBook/get` *lists*
-//! (visibility and `myRights`) and never calls `ContactCard/get`/`/set`
-//! through the granted account to see whether the shared book's actual
-//! contents are readable, let alone writable once `mayWrite` is granted.
-//! This is exactly the path a real Evolution session takes once a shared
-//! address book is added as a source, so it is worth pinning at the
-//! `BookSync` level, the same way `jmap-cal-sync/tests/
-//! live_server_shared_freebusy.rs` did for free/busy.
+//! Tests `BookSync` reading and writing a *shared* address book: a book that a
+//! different real account owns and shares through an ACL grant.
+//! `jmap-client/tests/live_server.rs`
+//! (`address_book_shared_with_a_second_real_account_is_visible_only_after_the_grant`)
+//! checks only that the grant changes what `AddressBook/get` *lists*
+//! (visibility and `myRights`). It never calls `ContactCard/get` or `/set`
+//! through the granted account. Thus it does not check that the contents are
+//! readable, or writable after a `mayWrite` grant. A real Evolution session
+//! takes this path when the user adds a shared address book as a source. This
+//! test pins it at the `BookSync` level, as
+//! `jmap-cal-sync/tests/live_server_shared_freebusy.rs` does for free/busy.
 //!
-//! Before any grant, the real server was observed answering both ways: a
-//! method-level `forbidden`, and (more often) a successful but empty
-//! listing, matching `live_server.rs`'s own `assert_recipient_cannot_see_
-//! address_book`, which already tolerates both shapes for `AddressBook/get`.
-//! This test accepts either for `ContactCard`, the same way.
+//! Before any grant, the real server gave two answers: a method-level
+//! `forbidden`, or (more often) a successful but empty listing.
+//! `assert_recipient_cannot_see_address_book` in
+//! `jmap-client/tests/live_server.rs` accepts both answers for
+//! `AddressBook/get`. This test accepts both answers for `ContactCard` in the
+//! same way.
 //!
 //! ## Running it
 //!
-//! Needs both `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` from
-//! `docs/manual-test-live-server.md`, since this is inherently a two-account
-//! test: the write-test account owns the shared book, the recipient account
-//! is granted access to it.
+//! This test needs two accounts from `docs/manual-test-live-server.md`.
+//! `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` is the owner of the shared book.
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` is the account that gets the
+//! grant.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either pair is unset.
+//! The test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
 use std::env;
 
@@ -83,10 +83,10 @@ fn connect_recipient() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// A missing grant can surface two ways: a whole method refused outright
-/// (no query/get rights at all, RFC 8620 §3.6.2), or a create let through
-/// method dispatch but rejected per-record (query/get rights but no write,
-/// RFC 8620 §5.3) — `save_contact`'s create hits the latter.
+/// A missing grant shows in one of two ways. The server refuses the whole
+/// method (no query or get rights, RFC 8620 §3.6.2). Or the method runs, but
+/// the server rejects the record (query and get rights, but no write right, RFC
+/// 8620 §5.3). The create of `save_contact` gets the second error.
 fn is_forbidden(error: &SyncError) -> bool {
     matches!(
         error,
@@ -99,12 +99,12 @@ fn is_forbidden(error: &SyncError) -> bool {
     )
 }
 
-/// Whether the recipient can see the owner's contact through
-/// `recipient_sync` (targeting the not-yet-or-no-longer-shared book), the
-/// same way `jmap-client/tests/live_server.rs`'s
-/// `assert_recipient_cannot_see_address_book` treats an absent grant: the
-/// real server answers either shape (a method-level `forbidden`, or a
-/// successful but empty/filtered listing), and both mean the same thing.
+/// Asserts that the recipient cannot see the contact of the owner through
+/// `recipient_sync`, which targets a book that is not shared (yet or any more).
+/// Like `assert_recipient_cannot_see_address_book` in
+/// `jmap-client/tests/live_server.rs`, it accepts both answers of the real
+/// server: a method-level `forbidden`, or a successful listing without the
+/// contact.
 fn assert_owner_contact_not_visible(recipient_sync: &BookSync, owner_uid: &str, when: &str) {
     match recipient_sync.list_existing() {
         Err(error) => assert!(
@@ -130,14 +130,16 @@ fn vcard(name: &str) -> String {
     )
 }
 
-/// Creates a fresh address book and a contact on the owner account, then
-/// drives the recipient account's own `BookSync` against that same book
-/// (owner's account id, owner's book id) through three stages: forbidden
-/// before any grant, read-only once `mayRead` is granted (sees the owner's
-/// contact, but a write is still refused), and read-write once the grant
-/// widens to `mayWrite` (can create a contact the owner then sees too).
-/// Destroys the book (and everything in it) at the end regardless of where
-/// the assertions land.
+/// Creates a new address book and a contact on the owner account. Then the
+/// `BookSync` of the recipient account targets that book (owner account id,
+/// owner book id) in three stages:
+///
+/// - Before any grant: forbidden.
+/// - After a `mayRead` grant: sees the contact of the owner, but a write fails.
+/// - After a `mayWrite` grant: creates a contact that the owner also sees.
+///
+/// At the end, destroys the contacts and the book. A failed assertion stops the
+/// test before this cleanup.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_shared_address_books_contacts_are_readable_then_writable_as_the_grant_widens() {

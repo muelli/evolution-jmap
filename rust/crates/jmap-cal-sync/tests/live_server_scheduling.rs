@@ -1,24 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync`'s scheduling switch against a real JMAP server: with it on, a
-//! meeting saved through the sync layer is delivered by the server to a guest
-//! on the same server, exactly once, and its deletion reaches the guest as a
-//! cancellation; with it off, the guest hears nothing. A dismissed reminder
-//! sends the guest nothing. The mock-side
+//! Tests the scheduling switch of `CalSync` against a real JMAP server. With
+//! the switch on, the server delivers a meeting saved through the sync layer to
+//! a guest on the same server, exactly one time. The deletion of the meeting
+//! reaches the guest as a cancellation. With the switch off, the guest gets
+//! nothing. A dismissed reminder sends nothing to the guest. The mock-server
 //! counterpart is `tests/scheduling.rs`.
 //!
 //! ## Running it
 //!
-//! Needs two throwaway accounts on the same server, so delivery stays
-//! intra-server (see `docs/manual-test-live-server.md`, steps 3 and 3a): the
-//! write-test account organises, the recipient account is the guest.
+//! The tests need two temporary accounts on the same server, so delivery stays
+//! in the server (refer to `docs/manual-test-live-server.md`, steps 3 and 3a).
+//! The write-test account is the organizer, and the recipient account is the
+//! guest.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_scheduling -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either account is not configured.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset. When a `_USER` variable is set,
+//! a missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 use std::time::{Duration, Instant};
@@ -62,7 +65,7 @@ fn default_calendar(client: &Client, account_id: &Id) -> Id {
         .expect("the server named the calendar")
 }
 
-/// The copies of the event with this iCalendar `UID` in `account_id`.
+/// Returns the copies of the event with this iCalendar `UID` in `account_id`.
 fn guest_copies(guest: &Client, account_id: &Id, uid: &str) -> Vec<CalendarEvent> {
     let filter = CalendarEventQueryFilter {
         uid: Some(uid.to_owned()),
@@ -72,8 +75,8 @@ fn guest_copies(guest: &Client, account_id: &Id, uid: &str) -> Vec<CalendarEvent
     guest.event_get(account_id, &ids).unwrap().list
 }
 
-/// Polls the guest's account until `done` holds or the deadline passes, and
-/// returns the last answer either way.
+/// Polls the guest account until `done` is true or the deadline passes. Returns
+/// the last answer.
 fn wait_for(
     guest: &Client,
     account_id: &Id,
@@ -215,8 +218,7 @@ fn with_the_switch_off_the_guest_hears_nothing_from_the_server() {
     );
 }
 
-/// The guest's participation status as the organizer's copy of the meeting
-/// records it.
+/// Returns the participation status of the guest in the organizer copy of the meeting.
 fn status_at_organizer(
     organizer: &Client,
     account_id: &Id,
@@ -244,8 +246,8 @@ fn status_at_organizer(
         .map(str::to_owned)
 }
 
-/// Polls the organizer's copy until the guest's status is `want` or the
-/// deadline passes, and returns the last status seen.
+/// Polls the organizer copy until the guest status is `want` or the deadline
+/// passes. Returns the last status.
 fn wait_for_status(
     organizer: &Client,
     account_id: &Id,
@@ -263,8 +265,9 @@ fn wait_for_status(
     }
 }
 
-/// Both sides of a meeting the organizer has already sent: the organizer's
-/// sync and the id of the stored meeting, the guest's account and sync, and the iCalendar `UID` the invitation carries.
+/// Both sides of a meeting that the organizer sent. Contains the organizer
+/// sync, the stored meeting id, the guest account and sync, and the invitation
+/// `UID`.
 struct Sent {
     organizer: CalSync,
     meeting_id: String,
@@ -340,8 +343,8 @@ fn a_guest_accepting_in_the_calendar_tells_the_organizer() {
         eprintln!("the live accounts are not set; skipping");
         return;
     };
-    // What Evolution's event editor saves: the guest's own copy, as this
-    // sync rendered it, with the guest's status changed.
+    // The event editor of Evolution saves the guest copy, as this sync rendered
+    // it, with a changed guest status.
     let copy = guest_copies(sent.guest_sync.client(), &sent.guest_account, &sent.uid)
         .into_iter()
         .next()
@@ -375,10 +378,10 @@ fn a_guest_accepting_from_the_invitation_mail_updates_its_one_copy_and_tells_the
         eprintln!("the live accounts are not set; skipping");
         return;
     };
-    // What Evolution's invitation view hands `ECalMetaBackend`'s
-    // `receive_objects`: the invitation as mailed, its `UID` the meeting's
-    // own, with the guest's status changed. The meta backend looks that `UID`
-    // up in its cache, which is keyed by JMAP id, finds nothing, and creates.
+    // The invitation view of Evolution gives the mailed invitation, with a
+    // changed guest status, to `ECalMetaBackend` `receive_objects`. Its `UID`
+    // is the meeting `UID`. The meta backend cache uses JMAP ids as keys, so
+    // the lookup of that `UID` fails, and the backend creates.
     let accepted = meeting(&sent.uid, &sent.organizer_user, &sent.guest_user)
         .replace("PARTSTAT=NEEDS-ACTION", "PARTSTAT=ACCEPTED");
     let saved = sent.guest_sync.save_component(&accepted, None);
@@ -418,7 +421,7 @@ fn meeting_with_reminder(uid: &str, organizer: &str, guest: &str) -> String {
     )
 }
 
-/// The subjects of the guest's mails that name `uid`.
+/// Returns the subjects of the guest mails that contain `uid`.
 fn guest_mail(guest: &Client, uid: &str) -> Vec<String> {
     let account_id = guest.primary_account(CAPABILITY_MAIL).unwrap();
     let filter = EmailQueryFilter {
@@ -437,8 +440,9 @@ fn guest_mail(guest: &Client, uid: &str) -> Vec<String> {
         .collect()
 }
 
-/// A dismissed reminder is saved with [`Itip::Suppress`], as the calendar
-/// backend's `discard_alarm_sync` does. The guest gets no second mail.
+/// The test saves a dismissed reminder with [`Itip::Suppress`], as
+/// `discard_alarm_sync` of the calendar backend does. The guest gets no second
+/// mail.
 #[test]
 #[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
 fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
@@ -475,7 +479,7 @@ fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
     }
     assert_eq!(mail.len(), 1, "the guest is invited exactly once: {mail:?}");
 
-    // As EDS does: the server's rendering, with the VALARM acknowledged.
+    // As EDS does: saves the server rendering, with the VALARM acknowledged.
     assert!(
         saved.icalendar.contains("END:VALARM"),
         "{}",

@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `patch::diff` on `virtualLocations`, called directly with an edited event
-//! that the iCalendar reader cannot produce.
+//! Tests `patch::diff` on `virtualLocations` with an edited event that the
+//! iCalendar reader cannot make.
 
 use jmap_cal_sync::patch::diff;
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Value, json};
 
-/// An event that holds one virtual location under the key `v1`.
+/// Returns an event that holds one virtual location under the key `v1`.
 fn joined_online(place: Value) -> CalendarEvent {
     serde_json::from_value(json!({
         "@type": "Event",
@@ -23,7 +23,7 @@ fn joined_online(place: Value) -> CalendarEvent {
 }
 
 /// RFC 8984 §4.2.6 makes `uri` mandatory. A patch that removes it makes the
-/// entry invalid, so an edited `uri` that is empty or absent changes nothing.
+/// entry invalid, so an empty or absent edited `uri` changes nothing.
 #[test]
 fn an_edited_conference_without_a_uri_does_not_remove_the_servers_uri() {
     let current = joined_online(json!({

@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The write side. The theme throughout is that saving a vCard must not
-//! destroy what the vCard could not carry: the mapping drops most of a
-//! JSContact card, so a save that replaced properties wholesale would delete
-//! data the user never touched and cannot even see.
+//! Tests for the write side. A save must not destroy data that the vCard cannot carry.
+//! The mapping drops most of a JSContact card. Thus a save that replaces whole
+//! properties deletes data that the user cannot see.
 
 mod common;
 
 use common::Fixture;
 use serde_json::json;
 
-/// The vCard Evolution hands to `save_contact_sync` for a brand new contact:
-/// the `UID` is a name the local cache invented, not a server identifier.
+/// The vCard that Evolution gives to `save_contact_sync` for a new contact.
+/// The `UID` is a name from the local cache, not a server identifier.
 const NEW_CONTACT: &str = "BEGIN:VCARD\r\n\
 VERSION:3.0\r\n\
 UID:pas-id-68A2F1C400000000\r\n\
@@ -45,7 +44,6 @@ fn saving_a_new_contact_files_it_in_this_book_under_a_server_identifier() {
             .contains_key(&fixture.ours),
         "filed in the book being synced"
     );
-    // The listing agrees with what save reported.
     let (_, contacts) = sync.list_existing().unwrap();
     assert_eq!(contacts, vec![saved]);
 }
@@ -54,7 +52,7 @@ fn saving_a_new_contact_files_it_in_this_book_under_a_server_identifier() {
 fn editing_a_contact_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Properties no vCard we produce can carry.
+    // Properties that no vCard from this mapping can carry.
     fixture.patch(
         &id,
         json!({
@@ -94,8 +92,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
 fn editing_preserves_contexts_the_vcard_cannot_express() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // "school" has no vCard TYPE, so it survives the round trip only if the
-    // patch merges rather than replaces.
+    // No vCard TYPE states "school". It survives the round trip only if the patch
+    // merges the contexts.
     fixture.patch(
         &id,
         json!({"emails/e0/contexts": {"work": true, "school": true}}),
@@ -104,7 +102,7 @@ fn editing_preserves_contexts_the_vcard_cannot_express() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(vcard.contains("TYPE=WORK"), "{vcard}");
-    // The user reclassifies the address as private.
+    // The user changes the address to private.
     let edited = vcard.replace("TYPE=WORK", "TYPE=HOME");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -119,12 +117,10 @@ fn editing_preserves_contexts_the_vcard_cannot_express() {
 fn editing_preserves_the_context_a_line_could_state_only_one_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A phone and an address the contact is reachable at both at work and
-    // privately. Each line carries one slot, because EDS reads a line wearing
-    // both `TYPE`s into two of the contact editor's fields at once and the
-    // next edit of either rewrites the one line behind them — see
-    // `eds-sys`' `a_line_wearing_both_context_types_fills_two_slots_that_
-    // overwrite_each_other`.
+    // A phone and an address for work and private use. Each line states one slot.
+    // EDS reads a line with both `TYPE`s into two editor fields, and an edit of one field
+    // rewrites the line of both. See `eds-sys`'
+    // `a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other`.
     fixture.patch(
         &id,
         json!({
@@ -148,7 +144,7 @@ fn editing_preserves_the_context_a_line_could_state_only_one_of() {
     );
     assert!(vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=HOME:"), "{vcard}");
 
-    // The user edits something else entirely.
+    // The user edits a different field.
     let edited = vcard.replace("Vera Oldenburg", "Vera Oldenburg-Schmidt");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -178,9 +174,8 @@ fn moving_an_entry_to_the_other_slot_still_reclassifies_it() {
     );
     let sync = fixture.sync();
 
-    // The slot the line does carry is still the user's to change: moving the
-    // number out of the home field says the contact is no longer reached
-    // there privately, and only the context the line never stated is kept.
+    // The user can still change the slot that the line states. Removing the number from
+    // the Home field removes the private context. Only the unstated context stays.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace("TYPE=HOME,VOICE", "TYPE=VOICE");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
@@ -195,10 +190,9 @@ fn moving_an_entry_to_the_other_slot_still_reclassifies_it() {
 fn editing_preserves_the_feature_a_line_could_state_only_one_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A work number that is both a voice line and a fax. The line states one
-    // feature, because EDS reads `TYPE=WORK,VOICE,FAX` into both the Business
-    // Phone and the Business Fax field and the next edit of either rewrites
-    // the one line behind them.
+    // A work number that is a voice line and a fax. The line states one feature:
+    // EDS reads `TYPE=WORK,VOICE,FAX` into the Business Phone and Business Fax fields,
+    // and an edit of one field rewrites the line of both.
     fixture.patch(
         &id,
         json!({
@@ -217,7 +211,7 @@ fn editing_preserves_the_feature_a_line_could_state_only_one_of() {
         "{vcard}"
     );
 
-    // The user edits something else entirely.
+    // The user edits a different field.
     let edited = vcard.replace("Vera Oldenburg", "Vera Oldenburg-Schmidt");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -244,10 +238,8 @@ fn moving_a_number_to_another_kind_of_phone_field_reclassifies_it() {
     );
     let sync = fixture.sync();
 
-    // The user retypes the number into the Mobile field: the number is no
-    // longer the office fax, and it is now a mobile. The feature the line
-    // never stated — that it is also a voice line — is not theirs to have
-    // cleared, so it stays.
+    // The user moves the number to the Mobile field: it is a mobile now, not a fax.
+    // The line did not state the voice feature, so the voice feature stays.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(
         vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:"),
@@ -266,7 +258,7 @@ fn moving_a_number_to_another_kind_of_phone_field_reclassifies_it() {
 fn reclassifying_an_entry_that_had_only_one_context_gives_it_the_other() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Only one context, so the line states it and nothing is held back.
+    // The entry has one context, so the line states all of it.
     fixture.patch(
         &id,
         json!({
@@ -279,7 +271,7 @@ fn reclassifying_an_entry_that_had_only_one_context_gives_it_the_other() {
     );
     let sync = fixture.sync();
 
-    // The user moves the number from the Home field to the Business one.
+    // The user moves the number from the Home field to the Business field.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace("TYPE=HOME,VOICE", "TYPE=WORK,VOICE");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
@@ -295,7 +287,7 @@ fn reclassifying_an_entry_that_had_only_one_context_gives_it_the_other() {
 fn editing_preserves_a_preference_ranking_the_vcard_flattens() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // vCard 3.0 has only a PREF flag, so a rank of 30 comes back as "PREF".
+    // vCard 3.0 has only a PREF flag, so a rank of 30 becomes "PREF".
     fixture.patch(&id, json!({"emails/e0/pref": 30}));
     let sync = fixture.sync();
 
@@ -336,7 +328,7 @@ fn removing_and_adding_entries_survives_the_round_trip() {
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    // Drop the phone, add a second address.
+    // Remove the phone and add a second email address.
     let edited = vcard
         .lines()
         .filter(|line| !line.starts_with("TEL"))
@@ -391,13 +383,10 @@ fn editing_the_structured_name_replaces_only_the_mapped_components() {
         by_kind.contains(&("generation", "III")),
         "a component kind the vCard cannot carry was dropped: {by_kind:?}"
     );
-    // Carrying the unmapped kinds across must not also carry the mapped ones
-    // it is meant to be replacing, or the card ends up with two surnames.
-    //
-    // The order is the server's for the components that survived the edit —
-    // which is what keeps a save that changed nothing from rewriting the list,
-    // see `saving_a_name_back_untouched_does_not_rewrite_its_components` — and
-    // the vCard's for the ones it added, here the title the user just typed.
+    // The replaced mapped components must not stay, or the card gets two surnames.
+    // Kept components stay in the server order, so a save without changes does not
+    // rewrite the list (see `saving_a_name_back_untouched_does_not_rewrite_its_components`).
+    // Added components follow in the vCard order.
     assert_eq!(
         by_kind,
         vec![
@@ -422,7 +411,7 @@ fn a_name_the_user_did_not_retype_keeps_how_it_is_pronounced() {
     );
     let sync = fixture.sync();
 
-    // The user changes the surname and leaves the given name where it was.
+    // The user changes the surname and keeps the given name.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(vcard.contains("N:Oldenburg;Vera;;;"), "{vcard}");
     let edited = vcard.replace("N:Oldenburg;Vera;;;", "N:Oldenburg-Meier;Vera;;;");
@@ -439,11 +428,10 @@ fn a_name_the_user_did_not_retype_keeps_how_it_is_pronounced() {
             .and_then(|value| value.as_str())
             .map(str::to_owned)
     };
-    // The `N` value has no field for a pronunciation, so the user never saw it
-    // and cannot have deleted it.
+    // The `N` value has no field for a pronunciation, so the user did not delete it.
     assert_eq!(phonetic("given").as_deref(), Some("VEH-ra"));
-    // The name it spelled out is gone, though, so keeping it would tell the
-    // server that "Oldenburg-Meier" is pronounced "OL-den-boork".
+    // The surname changed. If the old pronunciation stays, the card pronounces
+    // "Oldenburg-Meier" as "OL-den-boork".
     assert_eq!(phonetic("surname"), None);
 }
 
@@ -451,10 +439,8 @@ fn a_name_the_user_did_not_retype_keeps_how_it_is_pronounced() {
 fn a_double_barrelled_given_name_survives_a_save_that_left_it_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Jean Paul Oldenburg", "vera@example.com");
-    // Two components of one kind — RFC 9553 §2.2.1 states a double-barrelled
-    // given name as two `given` components — share the single `N` field their
-    // kind is written into, exactly as a street name and its house number
-    // share theirs.
+    // RFC 9553 §2.2.1 states a double-barrelled given name as two `given` components.
+    // Both share one `N` field, as a street name and a house number share one `ADR` field.
     fixture.patch(
         &id,
         json!({"name/components": [
@@ -514,9 +500,8 @@ fn retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from()
     );
     let sync = fixture.sync();
 
-    // Nothing in `Hans` says which half of `Jean Paul` it replaced, so both are
-    // gone: what must not happen is one of the old halves standing next to the
-    // name the user typed.
+    // `Hans` does not show which half of `Jean Paul` it replaces, so both halves go.
+    // No old half may stay next to the new name.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace("Jean Paul", "Hans");
     assert_ne!(edited, vcard, "the given name was not on the line: {vcard}");
@@ -539,8 +524,7 @@ fn retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from()
 fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The server's own order, which is not the order the `N` value states the
-    // fields in, and one component the value has no field for at all.
+    // The server order differs from the `N` field order, and one component has no `N` field.
     fixture.patch(
         &id,
         json!({"name/components": [
@@ -560,9 +544,8 @@ fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
         state_before,
         "a save that changed nothing rewrote the name"
     );
-    // Nothing was reshuffled either: RFC 9553 leaves the order meaningless
-    // unless `isOrdered` says otherwise, but rewriting it still wakes every
-    // other client for nothing.
+    // The order also stays. RFC 9553 gives the order no meaning unless `isOrdered` is set,
+    // but a rewrite still notifies every other client without cause.
     let components = fixture.card(&id).name.unwrap().components.unwrap();
     let by_kind: Vec<(&str, &str)> = components
         .iter()
@@ -582,9 +565,8 @@ fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
 fn a_name_component_the_n_value_left_out_for_saying_nothing_survives_an_edit() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A component of a kind `N` does have a field for, saying nothing to put
-    // in it: the emitter leaves it off the value, so the user never saw it and
-    // cannot have cleared it by retyping the fields beside it.
+    // A component of a kind with an `N` field, but with an empty value. The emitter
+    // omits it, so the user did not see it and did not clear it.
     fixture.patch(
         &id,
         json!({"name/components": [
@@ -624,8 +606,8 @@ fn a_name_component_the_n_value_left_out_for_saying_nothing_survives_an_edit() {
 fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // `sortAs` and `contexts` have no ORG component and no ORG parameter, so
-    // they survive only if the patch reaches into the entry.
+    // `sortAs` and `contexts` have no ORG component and no ORG parameter.
+    // They survive only if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
@@ -645,7 +627,7 @@ fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
         vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research;Optics"),
         "{vcard}"
     );
-    // The user renames the employer and dissolves the second department.
+    // The user renames the employer and removes the second department.
     let edited = vcard.replace("Acme;Research;Optics", "Acme Ltd;Research");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -686,9 +668,8 @@ fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
 fn editing_one_org_unit_of_two_keeps_the_one_the_line_left_out() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A unit with no name gets no component on the ORG line, so it never
-    // reaches the user — and must not then be deleted by a save that edited
-    // its sibling.
+    // A unit with no name gets no component on the ORG line, so the user does not see it.
+    // A save that edits its sibling must not delete it.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
@@ -743,8 +724,8 @@ fn editing_one_org_unit_of_two_keeps_the_one_the_line_left_out() {
 fn deleting_a_visible_unit_keeps_its_invisible_neighbour_in_place() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The unnamed unit sits between the two visible ones, so it tracks
-    // whichever of them survives rather than the raw position it started at.
+    // The unnamed unit is between the two visible units. Its place follows the
+    // surviving visible units, not its original index.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
@@ -765,7 +746,7 @@ fn deleting_a_visible_unit_keeps_its_invisible_neighbour_in_place() {
         "the unnamed unit has no component on the line: {vcard}"
     );
 
-    // The user deletes "Research" from the line, leaving "Optics" alone.
+    // The user deletes "Research" from the line and keeps "Optics".
     let edited = vcard.replace(";Research;Optics", ";Optics");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -791,8 +772,8 @@ fn deleting_a_visible_unit_keeps_its_invisible_neighbour_in_place() {
 fn saving_an_org_back_untouched_does_not_reshuffle_the_unit_the_line_left_out() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The unnamed unit is *first*, so putting it back at the end would be a
-    // rewrite of a list the user never touched.
+    // The only unit has no name, so the line states no unit. The save must not read
+    // the empty unit list as a removal.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
@@ -854,8 +835,8 @@ fn removing_the_org_line_removes_the_organization() {
 fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A TITLE line is plain text: it has no room for the organisation the
-    // title is held at, so that survives only if the patch reaches in.
+    // A TITLE line is plain text with no room for the organisation of the title.
+    // The organisation survives only if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"titles": {"t1": {
@@ -894,9 +875,8 @@ fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
 fn a_title_of_a_vendor_kind_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // vCard 3.0 has TITLE and ROLE and nothing else, so an entry of a kind
-    // outside RFC 9553 §2.2.5's two is dropped on the way out — and must not
-    // then be deleted by a save that never showed it.
+    // vCard 3.0 has only TITLE and ROLE. The emitter drops an entry of a kind outside
+    // the two of RFC 9553 §2.2.5, so a save must not delete it.
     fixture.patch(
         &id,
         json!({"titles": {"t1": {
@@ -909,9 +889,8 @@ fn a_title_of_a_vendor_kind_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("Knight"), "{vcard}");
-    // The user types a job title into a contact that appears to have none.
-    // The reader counts only the entries it can see, so the key it invents
-    // for this one is `t1` — the key the hidden entry already holds.
+    // The user types a job title into a contact that shows no title. The reader counts
+    // only visible entries, so it gives the new entry `t1`, the key of the hidden entry.
     let edited = vcard.replace("END:VCARD\r\n", "TITLE:Research Scientist\r\nEND:VCARD\r\n");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -955,9 +934,8 @@ fn removing_the_title_line_removes_the_title() {
 fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Three kinds of thing an ADR line has no room for: members of the
-    // address itself, a component of a kind vCard has no field for, and a
-    // member of a component that does have one.
+    // An ADR line has no room for three things. These are members of the address, a
+    // component without a vCard field, and a member of a component with a field.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -981,9 +959,8 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
         "{vcard}"
     );
 
-    // Saving it back untouched must be a no-op, or every open of a contact
-    // rewrites its address: the invisible parts have to come back in the
-    // order and shape they went out in, not merely survive.
+    // A save without changes must change nothing, or each open of a contact rewrites its
+    // address. The hidden parts must keep their order and shape, not only survive.
     let (state_before, _) = sync.list_existing().unwrap();
     sync.save_contact(&vcard, Some(id.as_str())).unwrap();
     assert_eq!(
@@ -992,7 +969,6 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
         "a save that changed nothing rewrote the address"
     );
 
-    // The user moves the contact to Potsdam.
     let edited = vcard.replace("Berlin", "Potsdam");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -1000,9 +976,8 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
     let addresses = stored.addresses.as_ref().expect("addresses");
     assert_eq!(addresses.len(), 1, "patched in place, not re-added");
     let address = &addresses["a1"];
-    // The written-out address does have a line of its own — LABEL — so the
-    // town changes there too: the replacement above edited both lines,
-    // which is what a user retyping an address in Evolution does.
+    // The written-out address has its own LABEL line, so the town changes there too.
+    // The replacement above edits both lines, as an address edit in Evolution does.
     assert_eq!(
         address.full.as_deref(),
         Some("Hauptstraße 1\n10115 Potsdam")
@@ -1039,10 +1014,9 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
 fn retyping_a_street_replaces_the_parts_the_server_stated_it_in() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The street name and the house number share one ADR field, so a user who
-    // retypes that field has edited both at once. Nothing in the text says
-    // where the number ends, so the parts cannot be recovered — what must not
-    // happen is the old number staying behind next to the new street.
+    // The street name and the house number share one ADR field, so an edit of that field
+    // changes both. The text does not show where the number ends, so the parts are lost.
+    // The old number must not stay next to the new street.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1080,9 +1054,8 @@ fn retyping_a_street_replaces_the_parts_the_server_stated_it_in() {
 fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An address stated only in components vCard has no field for gets no
-    // ADR line, so it never reaches the user — and must not then be deleted
-    // by a save, nor have its key taken by the address the user types.
+    // An address with only components that have no vCard field gets no ADR line, so the
+    // user does not see it. A save must not delete it or give its key to a new address.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1095,11 +1068,10 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nADR"), "{vcard}");
-    // Nor a LABEL: the entry says nothing a written-out address could be
-    // built from either, so there is no line of any kind to show it on.
+    // The entry also gets no LABEL, because it has no data for a written-out address.
     assert!(!vcard.contains("\r\nLABEL"), "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents
-    // for this one is `a1` — the key the hidden entry already holds.
+    // The reader counts only visible entries, so it gives the new entry `a1`,
+    // the key of the hidden entry.
     let edited = vcard.replace(
         "END:VCARD\r\n",
         "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\nEND:VCARD\r\n",
@@ -1156,11 +1128,9 @@ fn removing_the_adr_line_removes_the_address() {
 fn an_address_stated_only_as_a_label_is_patched_in_place() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.5.1 allows an address whose components are simply not
-    // known, written out in `full` and nowhere else. It gets a LABEL line
-    // and no ADR, so the key it is filed under crosses on the LABEL — and if
-    // it did not, this save would re-add the address instead of editing it,
-    // losing the members no line can carry.
+    // RFC 9553 §2.5.1 allows an address with no known components, written only in `full`.
+    // It gets a LABEL line and no ADR, so its key goes on the LABEL. Without the key,
+    // this save adds the address again and loses the members that no line can carry.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1213,10 +1183,9 @@ fn an_address_stated_only_as_a_label_is_patched_in_place() {
 fn an_address_shown_only_on_its_label_keeps_the_components_no_adr_field_states() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Every component here is of a kind the seven ADR fields have no room
-    // for, so the address gets a LABEL and no ADR at all — and the user, who
-    // was shown the written-out form and nothing else, cannot have cleared
-    // the components behind it by editing that one line.
+    // No component here has one of the seven ADR fields, so the address gets a LABEL
+    // and no ADR. The user sees only the written-out form, so an edit of that line
+    // does not clear the components.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1267,10 +1236,9 @@ fn an_address_shown_only_on_its_label_keeps_the_components_no_adr_field_states()
 fn clearing_every_adr_field_leaves_the_components_the_line_could_not_state() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An ADR emptied field by field states nothing, so the address reaches
-    // this save on its LABEL alone — the same shape as the test above, only
-    // arrived at by an edit. What the line did state is the user's to have
-    // cleared; the floor, which it never stated, is not.
+    // An ADR with all fields empty states nothing, so the save sees the address only on
+    // its LABEL, as in the test above. The user can clear what the line stated, but
+    // not the floor, which the line did not state.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1312,10 +1280,9 @@ fn clearing_every_adr_field_leaves_the_components_the_line_could_not_state() {
 fn a_component_the_line_left_out_for_saying_nothing_survives_an_edit() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A component of a kind the ADR *does* have a field for, saying nothing
-    // to put in it. The emitter leaves it off the line for the same reason it
-    // leaves an empty entry off a card, so the save must read its absence the
-    // same way — not as the user having cleared a field they never saw filled.
+    // A component of a kind with an ADR field, but with an empty value. The emitter
+    // omits it, as it omits an empty entry from a card. Thus its absence is not a
+    // field that the user cleared.
     fixture.patch(
         &id,
         json!({"addresses": {"a1": {
@@ -1378,8 +1345,7 @@ fn removing_the_label_line_clears_the_written_out_address() {
         .collect();
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // The address itself stays — the user cleared the written-out form, not
-    // the address it was a form of.
+    // The address stays: the user cleared only the written-out form.
     let addresses = fixture.card(&id).addresses.expect("addresses");
     assert_eq!(addresses["a1"].full, None);
     assert_eq!(
@@ -1395,9 +1361,9 @@ fn removing_the_label_line_clears_the_written_out_address() {
 fn editing_a_note_keeps_when_it_was_written_and_by_whom() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.8.1 hangs a timestamp and an author off a note, and a
-    // `NOTE` line (RFC 2426 §3.6.2) is plain text with nowhere to put
-    // either. They survive only if the patch reaches in.
+    // RFC 9553 §2.8.3 gives a note a timestamp and an author. A `NOTE` line
+    // (RFC 2426 §3.6.2) is plain text with no room for either. They survive only
+    // if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"notes": {"n1": {
@@ -1443,9 +1409,8 @@ fn editing_a_note_keeps_when_it_was_written_and_by_whom() {
 fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A note that says nothing gets no NOTE line, so it never reaches the
-    // user — and must not then be deleted by a save, nor have its key taken
-    // by the note the user types.
+    // A note with no text gets no NOTE line, so the user does not see it.
+    // A save must not delete it or give its key to a new note.
     fixture.patch(
         &id,
         json!({"notes": {"n1": {
@@ -1458,8 +1423,8 @@ fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nNOTE"), "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents
-    // for this one is `n1` — the key the hidden entry already holds.
+    // The reader counts only visible entries, so it gives the new entry `n1`,
+    // the key of the hidden entry.
     let edited = vcard.replace("END:VCARD\r\n", "NOTE:owes me a beer\r\nEND:VCARD\r\n");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -1484,10 +1449,9 @@ fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
 fn emptying_one_note_line_of_two_withdraws_that_note_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Two notes, of which Evolution's Notes field shows the user the first —
-    // `E_CONTACT_NOTE` is the first `NOTE` line and stops there. So clearing
-    // that field is an entry withdrawn from a map through a field that cannot
-    // express the map, and the note behind it is not the user's to lose.
+    // Two notes. The Notes field of Evolution shows only the first, because
+    // `E_CONTACT_NOTE` reads only the first `NOTE` line. Clearing that field removes
+    // the first note, and the second note must stay.
     fixture.patch(
         &id,
         json!({"notes": {
@@ -1498,12 +1462,9 @@ fn emptying_one_note_line_of_two_withdraws_that_note_alone() {
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    // The line left standing with no value on it, rather than struck off the
-    // card. That is what libebook-contacts 3.52 does with a field the user
-    // emptied — measured on the spouse line, and measured on this one by
-    // `jmap-functional`'s `unnote` leg — and it is the shape that could go
-    // wrong here: a note read back as the empty string would be a note the
-    // save *keeps*, spelled as nothing.
+    // The line stays with no value. libebook-contacts 3.52 does this with an empty field.
+    // This was measured on the spouse line, and on this line by the `unnote` leg of
+    // `jmap-functional`. A save that reads an empty note keeps it as empty text.
     let edited = vcard.replace(
         "NOTE;X-JMAP-KEY=n1:met at FOSDEM\r\n",
         "NOTE;X-JMAP-KEY=n1:\r\n",
@@ -1527,11 +1488,9 @@ fn emptying_one_note_line_of_two_withdraws_that_note_alone() {
 fn emptying_the_only_note_line_withdraws_the_property() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // One note, so that emptying the field the user is shown leaves nothing on
-    // the card the mapping can see — the other branch of
-    // `emptying_one_note_line_of_two_withdraws_that_note_alone`. There is no
-    // surviving key to null, so what the save must say is that the property
-    // itself is gone.
+    // One note, so an empty field leaves no note that the mapping can see. This is the
+    // other branch of `emptying_one_note_line_of_two_withdraws_that_note_alone`.
+    // No key survives to set to null, so the save must remove the property.
     fixture.patch(
         &id,
         json!({"notes": {
@@ -1541,14 +1500,11 @@ fn emptying_the_only_note_line_withdraws_the_property() {
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    // The line left standing with no value on it rather than struck off the
-    // card, which is what libebook-contacts 3.52 does with a field the user
-    // emptied — measured on this very shape by `jmap-functional`'s
-    // `clearing_the_only_note_through_eds_withdraws_the_whole_property`, whose
-    // client reports one `NOTE` line and no value on it. The distinction from
-    // `removing_the_note_line_removes_the_note` beside this test is therefore
-    // the input rather than the outcome: that one states a card EDS does not
-    // produce for a cleared field, and this one states the card it does.
+    // The line stays with no value, as libebook-contacts 3.52 does with an empty field.
+    // `jmap-functional`'s `clearing_the_only_note_through_eds_withdraws_the_whole_property`
+    // measures this shape: its client reports one `NOTE` line with no value.
+    // `removing_the_note_line_removes_the_note` has the same result but a different input:
+    // a card that EDS does not produce for a cleared field.
     let edited = vcard.replace(
         "NOTE;X-JMAP-KEY=n1:met at FOSDEM\r\n",
         "NOTE;X-JMAP-KEY=n1:\r\n",
@@ -1556,9 +1512,8 @@ fn emptying_the_only_note_line_withdraws_the_property() {
     assert_ne!(edited, vcard, "the emitter did not write the note: {vcard}");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // Gone, rather than an empty map: a `notes` still there saying nothing is a
-    // property the server holds for no reason, and the patch that leaves one is
-    // the per-entry withdrawal aimed at a card that had nothing to keep.
+    // The property goes, not only its entries. An empty `notes` map is a property that
+    // the server keeps without a reason.
     assert_eq!(
         fixture.card(&id).notes,
         None,
@@ -1588,9 +1543,9 @@ fn removing_the_note_line_removes_the_note() {
 fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.2.2 hangs a `contexts` and a `pref` off a nickname, and RFC
-    // 2426 §3.1.3's NICKNAME takes no TYPE and no ranking, so neither reaches
-    // the vCard. They survive only if the patch reaches in.
+    // RFC 9553 §2.2.2 gives a nickname a `contexts` and a `pref`. The NICKNAME of
+    // RFC 2426 §3.1.3 has no TYPE and no ranking, so the vCard states neither.
+    // They survive only if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"nicknames": {"k1": {
@@ -1635,9 +1590,8 @@ fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
 fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An entry that names nothing gets no NICKNAME line, so it never reaches
-    // the user — and must not then be deleted by a save, nor have its key
-    // taken by the nickname the user types.
+    // An entry with no name gets no NICKNAME line, so the user does not see it.
+    // A save must not delete it or give its key to a new nickname.
     fixture.patch(
         &id,
         json!({"nicknames": {"k1": {"@type": "Nickname", "name": "", "pref": 1}}}),
@@ -1646,8 +1600,8 @@ fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nNICKNAME"), "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents
-    // for this one is `k1` — the key the hidden entry already holds.
+    // The reader counts only visible entries, so it gives the new entry `k1`,
+    // the key of the hidden entry.
     let edited = vcard.replace("END:VCARD\r\n", "NICKNAME:Vee\r\nEND:VCARD\r\n");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -1689,9 +1643,9 @@ fn removing_the_nickname_line_removes_the_nickname() {
 fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.6.3 hangs a `mediaType`, a `pref` and a `label` off a link,
-    // and RFC 2426 §3.6.8's URL is a bare URI, so none of them reaches the
-    // vCard. They survive only if the patch reaches in.
+    // RFC 9553 §2.6.3 gives a link a `mediaType`, a `pref` and a `label`. The URL of
+    // RFC 2426 §3.6.8 is only a URI, so the vCard states none of them.
+    // They survive only if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"links": {"l1": {
@@ -1709,9 +1663,8 @@ fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
         "{vcard}"
     );
 
-    // EDS rewrites the value of that line in place and leaves the parameters
-    // where they were, so the key comes back — verified against
-    // libebook-contacts 3.52, where a set on `E_CONTACT_HOMEPAGE_URL` keeps
+    // EDS rewrites only the value of the line and keeps the parameters, so the key
+    // survives. In libebook-contacts 3.52, a set on `E_CONTACT_HOMEPAGE_URL` keeps
     // the `X-JMAP-KEY`.
     let edited = vcard.replace(
         "URL;X-JMAP-KEY=l1:https://vera.example/",
@@ -1743,9 +1696,9 @@ fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
 fn a_link_for_getting_in_touch_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.6.3's `contact` kind has no vCard 3.0 property, so the entry
-    // gets no line and never reaches the user — and must not then be deleted
-    // by a save, nor have its key taken by the home page the user types.
+    // The `contact` kind of RFC 9553 §2.6.3 has no vCard 3.0 property, so the entry
+    // gets no line and the user does not see it. A save must not delete it or give
+    // its key to a new home page.
     fixture.patch(
         &id,
         json!({"links": {"l1": {
@@ -1758,8 +1711,8 @@ fn a_link_for_getting_in_touch_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nURL"), "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents for
-    // a URL line with no parameters is `l1` — the key the hidden entry holds.
+    // The reader counts only visible entries, so it gives a URL line with no
+    // parameters the key `l1`, the key of the hidden entry.
     let edited = vcard.replace(
         "END:VCARD\r\n",
         "URL:https://vera.example/\r\nEND:VCARD\r\n",
@@ -1791,10 +1744,9 @@ fn clearing_the_home_page_removes_the_link() {
     );
     let sync = fixture.sync();
 
-    // What EDS leaves behind when the user empties Evolution's Home Page
-    // field: the line stays, with nothing on it. Measured against
-    // libebook-contacts 3.52, which rewrites the value rather than dropping
-    // the attribute — so the save has to read an empty line as a deletion.
+    // When the user empties the Home Page field, EDS keeps the line with no value.
+    // libebook-contacts 3.52 rewrites the value and keeps the attribute (measured).
+    // Thus the save must read an empty line as a deletion.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "URL;X-JMAP-KEY=l1:https://vera.example/",
@@ -1809,9 +1761,9 @@ fn clearing_the_home_page_removes_the_link() {
 fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.4.1 hangs a `mediaType`, a `pref` and a `label` off a
-    // calendar, and RFC 6350 §6.9.3's CALURI is a bare URI, so none of them
-    // reaches the vCard. They survive only if the patch reaches in.
+    // RFC 9553 §2.4.1 gives a calendar a `mediaType`, a `pref` and a `label`. The
+    // CALURI of RFC 6350 §6.9.3 is only a URI, so the vCard states none of them.
+    // They survive only if the patch edits the entry member by member.
     fixture.patch(
         &id,
         json!({"calendars": {"c1": {
@@ -1830,10 +1782,9 @@ fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
         "{vcard}"
     );
 
-    // EDS rewrites the value of that line in place and leaves the parameters
-    // where they were, so the key comes back — measured against
-    // libebook-contacts 3.52, where a set on `E_CONTACT_CALENDAR_URI` keeps
-    // the `X-JMAP-KEY`, exactly as one on `E_CONTACT_HOMEPAGE_URL` does.
+    // EDS rewrites only the value of the line and keeps the parameters, so the key
+    // survives. In libebook-contacts 3.52, a set on `E_CONTACT_CALENDAR_URI` keeps
+    // the `X-JMAP-KEY`, as a set on `E_CONTACT_HOMEPAGE_URL` does.
     let edited = vcard.replace(
         "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/vera.ics",
         "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/new.ics",
@@ -1872,10 +1823,9 @@ fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
 fn a_calendar_of_no_stated_kind_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.4.1 makes the kind mandatory, so an entry naming none says
-    // nothing about which line its URI belongs on: it gets no line and never
-    // reaches the user — and must not then be deleted by a save, nor have its
-    // key taken by the calendar address the user types.
+    // RFC 9553 §2.4.1 makes the kind mandatory. An entry with no kind does not show
+    // the line for its URI. Thus it gets no line, and the user does not see it.
+    // A save must not delete it or give its key to a new calendar address.
     fixture.patch(
         &id,
         json!({"calendars": {"c1": {
@@ -1887,8 +1837,8 @@ fn a_calendar_of_no_stated_kind_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents for
-    // a CALURI line with no parameters is `c1` — the key the hidden entry holds.
+    // The reader counts only visible entries, so it gives a CALURI line with no
+    // parameters the key `c1`, the key of the hidden entry.
     let edited = vcard.replace(
         "END:VCARD\r\n",
         "CALURI:https://vera.example/cal/vera.ics\r\nEND:VCARD\r\n",
@@ -1921,11 +1871,10 @@ fn clearing_the_free_busy_address_removes_the_calendar() {
     );
     let sync = fixture.sync();
 
-    // What EDS leaves behind when the user empties Evolution's Free/Busy
-    // field: the line stays, with nothing on it. Measured against
-    // libebook-contacts 3.52 — a set to the empty string rewrites the value
-    // and keeps the line, and only a set to NULL drops the line outright — so
-    // the save has to read an empty line as a deletion just as a missing one.
+    // When the user empties the Free/Busy field, EDS keeps the line with no value.
+    // In libebook-contacts 3.52, a set to the empty string keeps the line, and only
+    // a set to NULL removes it (measured). Thus the save must read an empty line
+    // as a deletion, as it reads a missing line.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "FBURL;X-JMAP-KEY=c1:https://vera.example/fb",
@@ -1936,10 +1885,10 @@ fn clearing_the_free_busy_address_removes_the_calendar() {
     assert_eq!(fixture.card(&id).calendars, None);
 }
 
-/// The birthday as EDS hands it back after the user has edited it: the date
-/// line is rebuilt from `E_CONTACT_BIRTH_DATE`, which drops the `X-JMAP-KEY`
-/// this side wrote on it. Verified against libebook-contacts 3.52 — an
-/// untouched line keeps its parameters, a rewritten one does not.
+/// The birthday that EDS returns after the user edits it. EDS builds the date line
+/// again from `E_CONTACT_BIRTH_DATE`, which removes the `X-JMAP-KEY`. In
+/// libebook-contacts 3.52, an unchanged line keeps its parameters and a rewritten
+/// line does not (verified).
 fn as_evolution_rewrites_it(vcard: &str, day: &str) -> String {
     let rebuilt: String = vcard
         .lines()
@@ -1956,10 +1905,9 @@ fn as_evolution_rewrites_it(vcard: &str, day: &str) -> String {
 fn editing_a_birthday_patches_the_date_the_server_stated_it_in() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // `place` — where the birth happened — has no room on a date line, so it
-    // survives only if the entry is patched rather than replaced. And the
-    // entry has to be *found* first: Evolution rebuilds the line from its own
-    // field and drops the key, so it is matched by the kind of date it is.
+    // A date line has no room for `place` (where the birth happened). Thus `place`
+    // survives only if the patch edits the entry and does not replace it. Evolution
+    // removes the key, so the save finds the entry by its kind of date.
     fixture.patch(
         &id,
         json!({"anniversaries": {"k8": {
@@ -1994,9 +1942,9 @@ fn editing_a_birthday_patches_the_date_the_server_stated_it_in() {
 fn an_untouched_point_in_time_birthday_keeps_the_hour_it_names() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.8.1 also dates an anniversary by a Timestamp. The line
-    // states the day, so a save must not read the missing hour as an edit —
-    // not even when Evolution has rewritten the line and lost the key.
+    // RFC 9553 §2.8.1 also allows a Timestamp as the date of an anniversary. The line
+    // states only the day, so a save must not read the missing hour as an edit.
+    // This also applies when Evolution rewrites the line and removes the key.
     fixture.patch(
         &id,
         json!({"anniversaries": {"k8": {
@@ -2037,8 +1985,7 @@ fn retyping_a_point_in_time_birthday_states_the_day_the_user_typed() {
     let edited = as_evolution_rewrites_it(&vcard, "1964-03-28");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // The hour goes with it: the user stated a day, and keeping 23:10 would
-    // be this mapping inventing a time on a date nobody gave one for.
+    // The hour goes too. The user stated a day, and a kept 23:10 adds a time that nobody gave.
     let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
     assert_eq!(
         anniversaries["k8"].date,
@@ -2059,10 +2006,9 @@ fn moving_a_date_to_the_anniversary_line_changes_the_kind_it_is_stated_under() {
     );
     let sync = fixture.sync();
 
-    // A client that keeps the parameters it was given — our own round trip
-    // does — moving the date from the birthday field to the anniversary one.
-    // Evolution itself drops the key here and takes the delete-and-add path
-    // instead; either way the card must stop calling the date a birthday.
+    // A client that keeps the parameters (as the round trip of this mapping does) moves
+    // the date from the birthday field to the anniversary field. Evolution removes the
+    // key and causes a delete and an add. In both cases, the date must stop being a birthday.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "BDAY;X-JMAP-KEY=k8",
@@ -2107,9 +2053,8 @@ fn clearing_the_birthday_removes_the_anniversary() {
 fn a_date_the_vcard_could_not_state_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A year on its own and a deathday: neither reaches the user, so neither
-    // may be deleted by a save, nor have its key taken by the birthday the
-    // user types.
+    // A year alone and a deathday: the user sees neither. A save must not delete
+    // them or give their keys to a new birthday.
     fixture.patch(
         &id,
         json!({"anniversaries": {
@@ -2142,11 +2087,9 @@ fn a_date_the_vcard_could_not_state_survives_a_save_it_was_never_part_of() {
 fn a_birthday_eds_would_move_to_the_year_1000_is_not_stated_and_not_lost() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Karl der Grosse", "karl@example.com");
-    // `e_contact_date_to_string()` CLAMPs the year to 1000..=9999, so a date
-    // before that comes back off the contact editor as the year 1000 — see
-    // `eds-sys/tests/contacts.rs`, where it is measured. Were the line
-    // written, the first save the user made for any reason at all would patch
-    // 800 to 1000 behind their back.
+    // `e_contact_date_to_string()` CLAMPs the year to 1000..=9999, so the contact editor
+    // returns an earlier year as 1000 (measured in `eds-sys/tests/contacts.rs`). If the
+    // emitter writes the line, the next save changes 800 to 1000 without the user knowing.
     fixture.patch(
         &id,
         json!({"anniversaries": {"k8": {
@@ -2159,7 +2102,7 @@ fn a_birthday_eds_would_move_to_the_year_1000_is_not_stated_and_not_lost() {
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("BDAY"), "{vcard}");
 
-    // An edit somewhere else entirely, which is how the user reaches this.
+    // The user edits a different field.
     let edited = vcard.replace("karl@example.com", "karl@aachen.example");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -2218,18 +2161,16 @@ fn saving_something_that_is_not_a_vcard_fails_before_any_request() {
     assert!(fixture.sync().list_existing().unwrap().1.is_empty());
 }
 
-// The same invisibility one property at a time. `titles`, `addresses` and
-// `notes` learned it first, each when it landed; `emails`, `phones` and
-// `organizations` have entries the vCard leaves out too — one whose value is
-// empty — and the save has to see them the same way.
+// Hidden entries, one property at a time. `emails`, `phones` and `organizations` also
+// have entries that the vCard omits (entries with an empty value). The save must treat
+// them as it treats hidden `titles`, `addresses` and `notes`.
 
 #[test]
 fn an_email_with_no_address_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An entry with nothing to state gets no EMAIL line, so it never reaches
-    // the user — and must not then be deleted by a save, nor have its key
-    // taken by the address the user types.
+    // An entry with no address gets no EMAIL line, so the user does not see it.
+    // A save must not delete it or give its key to a new address.
     fixture.patch(
         &id,
         json!({"emails": {
@@ -2241,8 +2182,8 @@ fn an_email_with_no_address_survives_a_save_it_was_never_part_of() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert_eq!(vcard.matches("\r\nEMAIL").count(), 1, "{vcard}");
-    // The reader counts only the entries it can see, so the key it invents
-    // for a typed-in address is `e1` — the key the hidden entry holds.
+    // The reader counts only visible entries, so it gives a new address the key `e1`,
+    // the key of the hidden entry.
     let edited = vcard.replace("END:VCARD\r\n", "EMAIL:beer@example.com\r\nEND:VCARD\r\n");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -2295,8 +2236,8 @@ fn a_phone_with_no_number_survives_a_save_it_was_never_part_of() {
 fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A title of a mapped kind, but naming nothing: the emitter skips it for
-    // the value, which `maps_title_kind` alone cannot see.
+    // A title of a mapped kind, but with no name. The emitter omits it because of its
+    // value, which `maps_title_kind` alone does not check.
     fixture.patch(
         &id,
         json!({"titles": {"t1": {
@@ -2333,8 +2274,7 @@ fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
 fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Neither a name nor a unit, so `organization_components` has nothing to
-    // put on an ORG line.
+    // No name and no unit, so `organization_components` has nothing for an ORG line.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {"@type": "Organization", "sortAs": "Oldenburg"}}}),
@@ -2371,9 +2311,9 @@ fn filing_a_contact_under_a_category_sends_the_whole_set() {
     fixture.patch(&id, json!({"keywords": {"hiking": true}}));
     let sync = fixture.sync();
 
-    // RFC 2426 §3.7.1's `CATEGORIES` holds the tags on one line, which is what
-    // EDS rewrites when the user edits Evolution's Categories field: there is no
-    // key to patch by, so the set goes back replaced whole.
+    // The `CATEGORIES` of RFC 2426 §3.6.1 holds all tags on one line. EDS rewrites that
+    // line when the user edits the Categories field. No key exists to patch by, so the
+    // save replaces the whole set.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(vcard.contains("\r\nCATEGORIES:hiking\r\n"), "{vcard}");
     let edited = vcard.replace("CATEGORIES:hiking", "CATEGORIES:hiking,climbing");
@@ -2396,10 +2336,9 @@ fn clearing_the_categories_leaves_the_contact_filed_under_nothing() {
     fixture.patch(&id, json!({"keywords": {"hiking": true}}));
     let sync = fixture.sync();
 
-    // Which is a `"keywords": null` rather than an empty map: RFC 9553 §2.8.2's
-    // default is no tags, and an empty set would be a different thing to store.
-    // EDS removes the attribute outright when the field is cleared, measured
-    // against libebook-contacts 3.52, so no line at all is what a save sees.
+    // The result is `"keywords": null`, not an empty map. The default of RFC 9553 §2.8.2
+    // is no tags, and an empty set is a different value. When the user clears the field,
+    // libebook-contacts 3.52 removes the attribute (measured), so the save sees no line.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace("CATEGORIES:hiking\r\n", "");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
@@ -2411,13 +2350,9 @@ fn clearing_the_categories_leaves_the_contact_filed_under_nothing() {
 fn a_tag_the_categories_line_cannot_carry_survives_the_set_being_rewritten() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // EDS trims the ends of a category, so this tag would come back renamed and
-    // the next save would rename it on the server. It gets no line, and the
-    // tags that *can* be stated still do — the user sees most of the truth
-    // rather than none of it. The set is replaced whole rather than patched
-    // entry by entry, so the tag the vCard never showed has to be put back on
-    // the set the save writes: it was not shown, so its absence from the edited
-    // card is not the user asking for it to go.
+    // EDS trims the ends of a category, so the next save renames this tag on the server.
+    // Thus the tag gets no line, but the other tags stay on the line. The save replaces
+    // the whole set, so it must add the hidden tag again. Its absence is not a deletion.
     fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
     let sync = fixture.sync();
 
@@ -2442,9 +2377,8 @@ fn a_tag_the_categories_line_cannot_carry_survives_the_set_being_rewritten() {
 fn clearing_the_categories_leaves_the_tag_nobody_saw_behind() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Emptying the field deletes the tags it showed and nothing else. A `null`
-    // here would delete the tag that had no line to be shown on, which is the
-    // one thing the user cannot have meant by clearing a field it was not in.
+    // An empty field deletes only the tags that it showed. A `null` also deletes the
+    // hidden tag, which the user did not see in the field.
     fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
     let sync = fixture.sync();
 
@@ -2462,11 +2396,9 @@ fn clearing_the_categories_leaves_the_tag_nobody_saw_behind() {
 fn a_tag_the_server_set_to_something_else_is_carried_back_as_the_server_had_it() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §1.4.3 has every value of a Set be `true`, so a `false` is the
-    // server contradicting itself and the line cannot state it either way. It
-    // is still the server's own word: carried back untouched rather than
-    // corrected, because correcting it would be this mapping inventing a change
-    // nobody made.
+    // RFC 9553 §1.4.3 requires `true` for every value of a Set, so a `false` is invalid,
+    // and the line cannot state it. The save keeps the server value unchanged. A
+    // correction is a change that nobody made.
     fixture.patch(&id, json!({"keywords": {"hiking": false, "loud": true}}));
     let sync = fixture.sync();
 
@@ -2490,9 +2422,8 @@ fn a_tag_the_server_set_to_something_else_is_carried_back_as_the_server_had_it()
 fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The one place the two sides name the same tag. The user's word wins: they
-    // typed it into a field that says nothing but "filed under", so they mean it
-    // set, whatever the server had against that name before.
+    // Here both sides name the same tag, and the user wins. The Categories field
+    // states only "filed under", so a typed tag is set, whatever the server value was.
     fixture.patch(&id, json!({"keywords": {"hiking": false}}));
     let sync = fixture.sync();
 
@@ -2511,10 +2442,9 @@ fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
 fn a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The tag put back is the tag that was already there, so the set the save
-    // would write is the set the server holds — and a patch naming it would
-    // undo a concurrent edit on another client for no reason at all. The
-    // property must be left unnamed, not merely written back unchanged.
+    // The save adds the hidden tag again, so its set equals the server set. A patch
+    // that names the property can undo a concurrent edit on another client. Thus the
+    // patch must not name the property at all.
     fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
     let sync = fixture.sync();
 
@@ -2548,9 +2478,8 @@ fn an_edit_that_left_the_categories_alone_does_not_rewrite_them() {
     let edited = vcard.replace("vera@example.com", "vera@example.org");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // Not merely equal in the end — the patch must not have named the property
-    // at all, or a concurrent edit on another client would be undone by a save
-    // that had nothing to say about tags.
+    // The patch must not name the property, or it can undo a concurrent edit on
+    // another client. This assertion checks only the result.
     assert_eq!(
         fixture.card(&id).keywords.expect("keywords"),
         [("hiking".to_owned(), json!(true))].into()
@@ -2561,10 +2490,8 @@ fn an_edit_that_left_the_categories_alone_does_not_rewrite_them() {
 fn an_empty_set_on_the_server_is_not_an_edit_waiting_to_happen() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A card whose `keywords` is present but holds nothing draws the same
-    // vCard as one with no `keywords` at all — no `CATEGORIES` line — so the
-    // two have to compare as the same set. Otherwise every save of such a card
-    // would patch the property to a null, an edit nobody made.
+    // An empty `keywords` and no `keywords` give the same vCard (no `CATEGORIES` line),
+    // so the two must compare as equal. If not, each save sets the property to null.
     fixture.patch(&id, json!({"keywords": {}}));
     let sync = fixture.sync();
 
@@ -2599,10 +2526,9 @@ fn editing_an_im_handle_patches_the_entry_by_its_key() {
     );
     let sync = fixture.sync();
 
-    // The handle crosses on the `X-JABBER` line EDS keeps it on, wearing the
-    // key it is filed under, so an edit patches that entry rather than
-    // replacing the property — and the `pref` the line has no parameter for
-    // stays where the server put it.
+    // The handle goes on the `X-JABBER` line with its key, so an edit patches that
+    // entry and does not replace the property. The line has no parameter for `pref`,
+    // so `pref` stays unchanged.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(
         vcard.contains("\r\nX-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n"),
@@ -2628,12 +2554,10 @@ fn editing_an_im_handle_patches_the_entry_by_its_key() {
 fn renaming_a_handle_drops_the_uri_that_named_the_old_one() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An entry may state both, and only the handle has a line. Once the user
-    // has replaced the handle, the URI names somebody the entry no longer
-    // claims to be — and it cannot be rebuilt from the new handle without
-    // knowing the service's URI scheme, which is a guess this mapping refuses
-    // to write. So it goes with the name it belonged to, exactly as an
-    // organisation unit's `sortAs` does when the unit is renamed.
+    // An entry can state a handle and a URI, but only the handle has a line. After a
+    // rename, the URI names the old handle. A new URI needs the URI scheme of the
+    // service, which the mapping does not guess. Thus the URI goes, as the `sortAs` of
+    // a renamed unit goes.
     fixture.patch(
         &id,
         json!({
@@ -2664,11 +2588,10 @@ fn renaming_a_handle_drops_the_uri_that_named_the_old_one() {
 fn renaming_a_handle_the_uri_alone_stated_rewrites_that_uri() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // An entry the server stated as a URI and nothing else. The line draws the
-    // handle out of it, so the entry is now the user's to edit — and the edit
-    // has to go back the way it came. Writing a `user` here would answer a card
-    // shaped one way with a card shaped another, for no reason the user gave;
-    // the scheme that let the handle be read lets it be written.
+    // The server states the entry only as a URI. The line shows the handle from the
+    // URI, so the user can edit it, and the save must write the edit into the URI.
+    // A `user` changes the shape of the entry without a reason. The URI scheme gives
+    // the way to read the handle and also the way to write it.
     fixture.patch(
         &id,
         json!({
@@ -2728,11 +2651,9 @@ fn renaming_a_gadu_gadu_handle_the_uri_alone_stated_rewrites_that_uri() {
 fn an_edit_that_left_a_uri_only_handle_alone_writes_nothing() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The entry crosses as a handle and comes back as one, so the card the
-    // reader builds states a `user` where the server states a `uri`. Comparing
-    // those members rather than the handle they both spell would make every
-    // save an edit of this entry — a patch, and a state the server bumps, each
-    // time the contact is touched for any reason at all.
+    // The line states a handle, so the card from the reader has a `user` where the
+    // server has a `uri`. The save must compare the handles, not the members. If not,
+    // each save patches the entry and the server state changes.
     fixture.patch(
         &id,
         json!({
@@ -2756,8 +2677,7 @@ fn an_edit_that_left_a_uri_only_handle_alone_writes_nothing() {
         "saving the vCard back unchanged rewrote the entry"
     );
 
-    // And an edit elsewhere on the contact leaves the entry in the shape the
-    // server chose for it.
+    // An edit of a different field keeps the entry in the server shape.
     let edited = vcard.replace("vera@example.com", "vera@example.org");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -2773,11 +2693,9 @@ fn an_edit_that_left_a_uri_only_handle_alone_writes_nothing() {
 fn a_handle_no_uri_can_state_is_written_as_the_handle_it_is() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The user is typing into a free-text field, so what they type need not fit
-    // in a URI at all. Rebuilding one around a space would state an identifier
-    // no service could resolve, so the entry changes shape instead: the handle
-    // goes on the `user`, and the URI that named the old one goes, exactly as
-    // it does when an entry stating both is renamed.
+    // The field is free text, so the typed handle can be invalid in a URI. A URI with
+    // a space is an identifier that no service can resolve. Thus the handle goes into
+    // `user`, and the old URI goes, as for a rename of an entry that states both.
     fixture.patch(
         &id,
         json!({
@@ -2815,8 +2733,8 @@ fn an_edit_that_left_the_handle_alone_keeps_the_uri_it_came_with() {
     );
     let sync = fixture.sync();
 
-    // The URI is only dropped by a rename. An edit elsewhere on the contact
-    // must not touch it — nor the handle, nor the service.
+    // Only a rename removes the URI. An edit of a different field must not change
+    // the URI, the handle or the service.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace("vera@example.com", "vera@example.org");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
@@ -2833,11 +2751,9 @@ fn an_edit_that_left_the_handle_alone_keeps_the_uri_it_came_with() {
 fn the_service_spelling_the_server_chose_is_not_rewritten() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.3.2 lets a service be capitalised as the service itself
-    // does and has two names be equal when they match case-insensitively. The
-    // `X-JABBER` line states no spelling at all, so this side reads back the
-    // one the table holds — and a save that wrote it would rename the service
-    // on the server for no reason the user gave.
+    // RFC 9553 §2.3.2 allows any capitalisation of a service name and compares names
+    // case-insensitively. The `X-JABBER` line states no spelling, so the reader uses
+    // the spelling of its table. A save must not write that spelling to the server.
     fixture.patch(
         &id,
         json!({"onlineServices": {"s1": {"service": "jabber", "user": "vera@jabber.example"}}}),
@@ -2863,9 +2779,8 @@ fn clearing_the_last_im_handle_leaves_the_contact_on_no_service() {
     );
     let sync = fixture.sync();
 
-    // EDS removes the attribute outright when the field is cleared, so no line
-    // at all is what a save sees — and every entry the card had was visible,
-    // so the whole property goes.
+    // EDS removes the attribute when the user clears the field, so the save sees no
+    // line. All entries of the card were visible, so the whole property goes.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n",
@@ -2886,11 +2801,9 @@ fn a_key_that_arrived_on_another_services_line_moves_the_service_with_it() {
     );
     let sync = fixture.sync();
 
-    // Nothing Evolution does produces this — changing the service means EDS
-    // clearing one field and setting another, which loses the key — but another
-    // client writing the vCard can, and then the entry the key names really is
-    // at a different service. The line is what states the service, so the save
-    // has to follow it rather than leave the entry claiming the old one.
+    // Evolution does not produce this: a service change clears one field and sets
+    // another, which loses the key. Another client can produce it, and then the entry
+    // is at a different service. The line states the service, so the save follows it.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example",
@@ -2904,15 +2817,13 @@ fn a_key_that_arrived_on_another_services_line_moves_the_service_with_it() {
     assert_eq!(services["s1"].user.as_deref(), Some("vera.oldenburg"));
 }
 
-/// "hello-photo", standing in for the JPEG a real card carries.
+/// "hello-photo", in place of the JPEG of a real card.
 const PHOTO: &str = "aGVsbG8tcGhvdG8=";
-/// What EDS writes for a picture the user has just chosen: no `X-JMAP-KEY`,
-/// because `e_contact_set` rebuilds the line out of the photo it holds —
-/// measured against libebook-contacts 3.52.
+/// What EDS writes for a new picture from the user. It has no `X-JMAP-KEY`, because
+/// `e_contact_set` builds the line again from its photo (measured on libebook-contacts 3.52).
 const CHOSEN: &str = "PHOTO;TYPE=png;ENCODING=b:bmV3LXBob3RvISE=";
 
-/// A card whose picture the server holds, with the members a `PHOTO` line
-/// cannot carry hung off it.
+/// A card with a picture on the server, and with members that a `PHOTO` line cannot carry.
 fn seed_photo(fixture: &Fixture, id: &jmap_proto::Id) {
     fixture.patch(
         id,
@@ -2939,8 +2850,8 @@ fn the_photo_the_user_chose_reaches_the_server() {
         "{vcard}"
     );
 
-    // The key is gone from the line the editor writes back, so the entry it
-    // replaces is the one the line it replaced belonged to.
+    // The editor writes the line without the key. The save must patch the entry of
+    // the line that the new line replaces.
     let edited = vcard.replace(
         &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}"),
         CHOSEN,
@@ -2965,11 +2876,9 @@ fn the_photo_the_user_chose_reaches_the_server() {
 fn a_photo_nobody_touched_is_not_written_back() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Spelled the way a hand-written `data:` URI often is — RFC 4648 §3.2 makes
-    // the padding optional — while the line carries the canonical spelling,
-    // because it is glib's base64 reader that decodes it. So the URI that comes
-    // back is *not* the URI the server holds, and comparing the two would make
-    // every save an edit of a picture nobody chose.
+    // A `data:` URI without padding, as hand-written URIs often are (RFC 4648 §3.2 makes
+    // padding optional). The glib base64 decoder gives the line the canonical spelling.
+    // Thus the returned URI differs from the server URI, and a text compare sees an edit.
     let loose = format!("data:image/jpeg;base64,{}", PHOTO.trim_end_matches('='));
     fixture.patch(
         &id,
@@ -2992,8 +2901,8 @@ fn removing_the_photo_line_removes_the_picture() {
     seed_photo(&fixture, &id);
     let sync = fixture.sync();
 
-    // Measured against libebook-contacts 3.52: clearing the photo removes the
-    // attribute outright, so no line at all is what the save sees.
+    // In libebook-contacts 3.52, clearing the photo removes the attribute (measured),
+    // so the save sees no line.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited: String = vcard
         .lines()
@@ -3028,11 +2937,9 @@ fn a_picture_chosen_for_a_contact_that_had_none_is_added() {
 fn only_the_first_of_several_pictures_is_the_one_the_user_edits() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Measured against libebook-contacts 3.52: `E_CONTACT_PHOTO` reports the
-    // first `PHOTO` line and a `set` replaces that line in place, leaving the
-    // others — parameters and all — where they were. So a card carrying two
-    // pictures comes back with the first rewritten and the second still wearing
-    // its key, and the save must not read the rewrite as both of them changing.
+    // In libebook-contacts 3.52 (measured), `E_CONTACT_PHOTO` reads the first `PHOTO` line,
+    // and a `set` replaces only that line. The other lines keep their parameters. Thus
+    // with two pictures, only the first changes, and the second keeps its key.
     fixture.patch(
         &id,
         json!({"media": {
@@ -3068,9 +2975,9 @@ fn only_the_first_of_several_pictures_is_the_one_the_user_edits() {
 fn a_logo_survives_a_save_it_was_never_part_of() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.6.4 keeps all three kinds of media in one map and only a
-    // photo is the picture Evolution shows, so the logo gets no line — and the
-    // key the reader invents for the one line there is happens to be the logo's.
+    // RFC 9553 §2.6.4 keeps all three kinds of media in one map. Evolution shows only
+    // a photo, so the logo gets no line. The key that the reader makes for the photo
+    // line is the key of the logo.
     fixture.patch(
         &id,
         json!({"media": {
@@ -3102,12 +3009,11 @@ fn a_logo_survives_a_save_it_was_never_part_of() {
     assert_eq!(media.len(), 2, "{media:?}");
 }
 
-/// The spouse line as EDS hands it back after the user has typed in the field:
-/// `e_contact_set(E_CONTACT_SPOUSE, …)` rewrites the value of the first line of
-/// that name in place. The empty name is what clearing the field leaves — a set
-/// to the empty string keeps the line with nothing on it, and only a set to NULL
-/// drops the line outright, measured against libebook-contacts 3.52 as it was
-/// for the Free/Busy field.
+/// The spouse line that EDS returns after the user types in the field.
+/// `e_contact_set(E_CONTACT_SPOUSE, …)` rewrites only the value of the first line
+/// with that name. A cleared field gives the empty name. A set to the empty string
+/// keeps the line with no value, and only a set to NULL removes the line. This was
+/// measured on libebook-contacts 3.52, as for the Free/Busy field.
 fn as_evolution_retypes_the_spouse(vcard: &str, name: &str) -> String {
     let mut rewritten = false;
     let rebuilt: String = vcard
@@ -3130,11 +3036,9 @@ fn as_evolution_retypes_the_spouse(vcard: &str, name: &str) -> String {
 fn retyping_a_spouse_withdraws_the_marriage_and_keeps_what_else_was_said() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself, so the
-    // name on the line *is* the entry's key: a name the user respells is not a
-    // renamed value, it is another entry. What the line stated about the old one
-    // was the marriage and nothing else — the `kin` it never showed is not the
-    // user's to have deleted.
+    // RFC 9553 §2.1.8 uses the related entity as the key of `relatedTo`, so the name on
+    // the line is the key. A changed name is a different entry. The line stated only
+    // the marriage, so the hidden `kin` stays on the old entry.
     fixture.patch(
         &id,
         json!({"relatedTo": {"Jean Paul Oldenburg": {
@@ -3180,11 +3084,9 @@ fn retyping_a_spouse_withdraws_the_marriage_and_keeps_what_else_was_said() {
 fn retyping_a_spouse_who_was_nothing_else_leaves_no_entry_behind() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The common case: the entry said the marriage and no more, so withdrawing
-    // it leaves nothing worth keeping and the whole entry goes. Beside it, a
-    // spouse the card names the way §2.1.8 asks — by the related Card's `uid`,
-    // which gets no line because a URN under the heading "Spouse" is not a
-    // person — and which the save therefore may not touch either.
+    // The usual case: the entry states only the marriage, so the whole entry goes.
+    // The second spouse uses the `uid` of the related Card, as §2.1.8 asks. A URN under
+    // the "Spouse" heading is not a person, so it gets no line, and the save must keep it.
     fixture.patch(
         &id,
         json!({"relatedTo": {
@@ -3220,10 +3122,8 @@ fn retyping_a_spouse_who_was_nothing_else_leaves_no_entry_behind() {
 fn clearing_the_spouse_field_removes_the_relation() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The `@type` tag says what the object is, not anything about the relation,
-    // so an entry wearing it and the marriage still has nothing left once the
-    // marriage is withdrawn — the same judgement the calendar side makes about a
-    // location that named nothing but its name.
+    // The `@type` tag states the object type, not a relation. Thus an entry with
+    // `@type` and the marriage is empty when the marriage goes, and the entry goes too.
     fixture.patch(
         &id,
         json!({"relatedTo": {"Jean Paul Oldenburg": {
@@ -3237,8 +3137,8 @@ fn clearing_the_spouse_field_removes_the_relation() {
     let edited = as_evolution_retypes_the_spouse(&vcard, "");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // The property goes rather than being left as an empty map: that is what
-    // RFC 9553 §2.1.8's default of no relations is stated as.
+    // The property goes, not only its entries: that is how RFC 9553 §2.1.8 states
+    // the default of no relations.
     assert_eq!(fixture.card(&id).related_to, None);
 }
 
@@ -3246,9 +3146,8 @@ fn clearing_the_spouse_field_removes_the_relation() {
 fn clearing_the_spouse_field_keeps_a_relation_the_line_never_showed() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Nineteen of the twenty relation types have no field in Evolution, so a
-    // child is an entry the user was never shown — and emptying the Spouse
-    // field says nothing about it.
+    // Evolution has fields only for the spouse, the manager and the assistant. The user
+    // does not see a child, so an empty Spouse field does not change it.
     fixture.patch(
         &id,
         json!({"relatedTo": {
@@ -3274,9 +3173,8 @@ fn clearing_the_spouse_field_keeps_a_relation_the_line_never_showed() {
 fn a_spouse_the_card_already_relates_to_gains_the_marriage() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The key being the person is what makes this a merge rather than an
-    // addition: typing a name the card already relates to is saying one more
-    // thing about that entry, not naming a second one.
+    // The key is the person, so this is a merge, not an addition. A typed name that
+    // the card already has adds a relation to that entry, not a second entry.
     fixture.patch(
         &id,
         json!({"relatedTo": {"Jean Paul Oldenburg": {
@@ -3319,10 +3217,9 @@ fn the_spouse_the_user_types_reaches_a_card_that_relates_to_nobody() {
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
     let sync = fixture.sync();
 
-    // RFC 8620 §5.3 wants every path segment before the last to exist on the
-    // object already, and a card relating to nobody has no `relatedTo` for a
-    // path to reach into, so the property is written whole. (This mock creates
-    // intermediate objects on demand; a server holding to §5.3 would not.)
+    // RFC 8620 §5.3 requires each path segment before the last to exist. A card with
+    // no relations has no `relatedTo`, so the save writes the whole property. (This mock
+    // creates missing intermediate objects; a server that obeys §5.3 does not.)
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited = vcard.replace(
         "END:VCARD\r\n",
@@ -3345,10 +3242,9 @@ fn the_spouse_the_user_types_reaches_a_card_that_relates_to_nobody() {
 fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A key this side did not choose: `relatedTo` is keyed by a person's name,
-    // and RFC 6901 §3's `/` and `~` mean something inside a patch path. Unescaped
-    // they would send the withdrawal into an object nobody named — and, on the
-    // other side of the edit, file the new spouse under a name split in two.
+    // The key of `relatedTo` is a person's name, and `/` and `~` have a meaning in a patch
+    // path (RFC 6901 §3). Without escapes, the removal goes to a wrong object, and the new
+    // spouse goes under a name split in two.
     fixture.patch(
         &id,
         json!({"relatedTo": {"Anne/Marie Oldenburg": {
@@ -3384,7 +3280,7 @@ fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
     );
 }
 
-/// The manager line as EDS hands it back after the user has typed in the field.
+/// The manager line that EDS returns after the user types in the field.
 fn as_evolution_retypes_the_manager(vcard: &str, name: &str) -> String {
     let mut rewritten = false;
     let rebuilt: String = vcard
@@ -3403,7 +3299,7 @@ fn as_evolution_retypes_the_manager(vcard: &str, name: &str) -> String {
     rebuilt
 }
 
-/// The assistant line as EDS hands it back after the user has typed in the field.
+/// The assistant line that EDS returns after the user types in the field.
 fn as_evolution_retypes_the_assistant(vcard: &str, name: &str) -> String {
     let mut rewritten = false;
     let rebuilt: String = vcard
@@ -3596,7 +3492,7 @@ fn a_card_with_spouse_manager_and_assistant_can_edit_each_independently() {
     assert!(vcard.contains("X-EVOLUTION-MANAGER:Morgan Manager"));
     assert!(vcard.contains("X-EVOLUTION-ASSISTANT:Sam Assistant"));
 
-    // Edit only manager
+    // The user edits only the manager.
     let edited = vcard.replace("Morgan Manager", "Taylor Manager");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -3621,8 +3517,7 @@ fn a_card_with_spouse_manager_and_assistant_can_edit_each_independently() {
 fn unmapped_or_unslotted_services_are_preserved_across_saves() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A card on the server carrying both a mapped service (Jabber) and unslotted /
-    // unmodeled services (Twitter, SIP) which EDS has no per-slot fields for.
+    // A mapped service (Jabber) and two services without an EDS field (Twitter, SIP).
     fixture.patch(
         &id,
         json!({
@@ -3635,7 +3530,6 @@ fn unmapped_or_unslotted_services_are_preserved_across_saves() {
     );
     let sync = fixture.sync();
 
-    // The vCard carries only the mapped Jabber handle.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(
         vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"),
@@ -3644,11 +3538,9 @@ fn unmapped_or_unslotted_services_are_preserved_across_saves() {
     assert!(!vcard.contains("vera_tw"), "{vcard}");
     assert!(!vcard.contains("sip:vera@example.com"), "{vcard}");
 
-    // Edit the Jabber handle
     let edited = vcard.replace("vera@jabber.example", "vera@xmpp.example");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
-    // On the server, Jabber was patched while Twitter and SIP remain completely intact.
     let services = fixture.card(&id).online_services.expect("onlineServices");
     assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
     assert_eq!(services["s_tw"].user.as_deref(), Some("vera_tw"));
@@ -3675,14 +3567,14 @@ fn conventional_im_uri_schemes_are_preserved_across_saves() {
     );
     let sync = fixture.sync();
 
-    // The vCard loaded by EDS contains none of these action/query URIs as X- lines.
+    // The vCard states none of these action or query URIs on an X- line.
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("X-AIM"), "{vcard}");
     assert!(!vcard.contains("X-MSN"), "{vcard}");
     assert!(!vcard.contains("X-YAHOO"), "{vcard}");
     assert!(!vcard.contains("X-ICQ"), "{vcard}");
 
-    // An edit elsewhere on the contact (e.g. email) preserves all four onlineServices intact.
+    // An edit of a different field keeps all four online services.
     let edited = vcard.replace("vera@example.com", "vera@example.org");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -3744,7 +3636,6 @@ fn slotted_conventional_im_handles_are_patched_correctly() {
         "{vcard}"
     );
 
-    // Edit handles in vCard
     let edited = vcard
         .replace("alice_aim", "alice_aim_2")
         .replace("12345678", "87654321")
@@ -3783,7 +3674,7 @@ fn editing_unrelated_field_preserves_year_only_birthday_and_deathday() {
         "{vcard}"
     );
 
-    // Edit the wedding anniversary and add a note
+    // Edit the wedding anniversary and add a note.
     let edited = vcard.replace("1996-08-03", "1996-08-04").replace(
         "END:VCARD\r\n",
         "NOTE:Preserve unmodeled dates\r\nEND:VCARD\r\n",
@@ -3860,7 +3751,7 @@ fn editing_first_org_preserves_secondary_orgs_and_titles() {
         "{vcard}"
     );
 
-    // Edit the first ORG and first TITLE in place
+    // Edit the first ORG and the first TITLE.
     let edited = vcard
         .replace("Acme Ltd;Research", "Acme Corporation;Optics")
         .replace("Research Scientist", "Principal Scientist");
@@ -4073,7 +3964,7 @@ fn editing_work_address_label_preserves_secondary_home_address_and_label() {
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    // Simulate EDS setting a new work address label
+    // EDS sets a new label on the work address.
     let edited = vcard.replace(
         "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Hauptstraße 1\\n10115 Berlin\\nGermany",
         "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Updated Work Label\\nBerlin",
@@ -4118,7 +4009,7 @@ fn saving_contact_with_multiple_im_services_and_contexts_preserves_all_entries()
     assert!(vcard.contains("X-SKYPE;X-JMAP-KEY=s4;TYPE=HOME:vera_skype"));
     assert!(vcard.contains("X-GADUGADU;X-JMAP-KEY=s5;TYPE=WORK:123456"));
 
-    // An edit on an unrelated field preserves all 5 onlineServices intact
+    // An edit of a different field keeps all five online services.
     let edited = vcard.replace(
         "END:VCARD\r\n",
         "NOTE:Preserve all IM services\r\nEND:VCARD\r\n",
@@ -4159,7 +4050,7 @@ fn editing_one_im_handle_preserves_secondary_im_handles_of_same_and_different_se
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    // Edit s1 (Jabber HOME) and s4 (Skype HOME) in place
+    // Edit s1 (Jabber HOME) and s4 (Skype HOME).
     let edited = vcard
         .replace(
             "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@home.example",
@@ -4328,7 +4219,7 @@ fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
     let links = card.links.expect("links");
     assert_eq!(links["l1"].uri, "https://example.com/new-website");
 
-    // Unmodeled preferredLanguages and onlineServices remain intact
+    // The unmapped `preferredLanguages` and the `onlineServices` stay.
     assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
 
     let services = card.online_services.expect("onlineServices");
@@ -4384,7 +4275,7 @@ fn editing_calendars_nicknames_and_spouse_preserves_unmodeled_contact_fields() {
     let rels = card.related_to.expect("relatedTo");
     assert!(rels.contains_key("Taylor Olden"));
 
-    // CryptoKeys preserved
+    // The `cryptoKeys` stay.
     let crypto = card.crypto_keys.as_ref().expect("cryptoKeys");
     assert!(crypto.contains_key("key1"));
 }
@@ -4420,7 +4311,7 @@ fn clearing_categories_and_notes_patches_server_fields() {
     assert_eq!(card.keywords, None, "keywords should be removed: {card:?}");
     assert_eq!(card.notes, None, "notes should be removed: {card:?}");
 
-    // Email and Phone remain intact
+    // The emails and phones stay.
     let emails = card.emails.expect("emails");
     assert_eq!(
         emails.values().next().map(|e| e.address.as_str()),
@@ -4463,7 +4354,7 @@ fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
 
-    // Modify e1 email, add pref to p1 phone, update p2 phone number
+    // Change the e1 email address and the p2 phone number.
     let modified = vcard
         .replace(
             "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:vera.work@example.com",
@@ -4494,7 +4385,7 @@ fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
     assert_eq!(phones["p1"].number, "+49 30 111111");
     assert_eq!(phones["p2"].number, "+49 30 999999");
 
-    // Unmodeled properties intact
+    // The unmapped properties stay.
     assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
     assert!(card.personal_info.as_ref().unwrap().contains_key("expert"));
     assert!(card.crypto_keys.as_ref().unwrap().contains_key("key1"));
@@ -4597,7 +4488,7 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
     assert_eq!(find_comp("surname"), Some("Oldenburg-Smith"));
     assert_eq!(find_comp("credential"), Some("MSc"));
 
-    // Unmodeled properties intact
+    // The unmapped properties stay.
     assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
     assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }
@@ -4693,7 +4584,7 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
             .any(|c| c.kind == "name" && c.value == "Heimweg 99")
     );
 
-    // Unmodeled properties preserved intact
+    // The unmapped properties stay.
     assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
     assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
     assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
@@ -4746,12 +4637,12 @@ fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    // Matrix of diverse cards covering:
+    // The cases cover:
     // - media/photo (data URI and remote URL)
-    // - cryptoKeys and extra preservation bags
+    // - cryptoKeys and unknown properties
     // - links (contact and custom)
     // - labels and multi-component addresses with contexts
-    // - categories / keywords (statable and unstatable)
+    // - categories / keywords (with a line and without a line)
     // - relations / relatedTo (spouses and unmapped kin)
     // - phones (multiple context slots, features, pref)
     // - emails (contexts, pref)
@@ -4932,18 +4823,16 @@ fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
         let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
         fixture.patch(&id, initial_patch);
 
-        // Load 1: Read card as rendered vCard
         let loaded1 = sync.load_contact(id.as_str()).expect(name);
 
-        // Save 1: Save untouched vCard back
+        // Save the vCard back without changes.
         let saved1 = sync
             .save_contact(&loaded1.vcard, Some(id.as_str()))
             .expect(name);
 
-        // Load 2: Fresh reload after Save 1
         let loaded2 = sync.load_contact(id.as_str()).expect(name);
 
-        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        // The second save must send no patch, so the revision stays the same.
         let saved2 = sync
             .save_contact(&loaded2.vcard, Some(id.as_str()))
             .expect(name);
@@ -4952,7 +4841,7 @@ fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
             "case '{name}': second save must not update revision"
         );
 
-        // Assert: diff between server state and parsed vCard is completely empty
+        // The diff between the server card and the parsed vCard must be empty.
         let current_card = fixture.card(&id);
         let parsed_card = jmap_vcard::vcard_to_card(&loaded2.vcard).expect(name);
         let patch_diff = jmap_book_sync::patch::diff(&current_card, &parsed_card);
@@ -5025,7 +4914,6 @@ fn no_op_save_mints_no_patch_on_empty_container_collections() {
         "first save must not increment revision for no-op change"
     );
 
-    // Load 2 and Save 2
     let loaded2 = sync.load_contact(id.as_str()).unwrap();
     let saved2 = sync
         .save_contact(&loaded2.vcard, Some(id.as_str()))
@@ -5200,7 +5088,7 @@ fn reclassifying_a_homepage_link_to_a_blog_or_video_url_patches_kind() {
         "{vcard}"
     );
 
-    // Reclassify from Homepage URL to Blog URL
+    // Move the link from the Homepage URL to the Blog URL.
     let edited = vcard.replace("URL;X-JMAP-KEY=l1:", "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -5211,7 +5099,7 @@ fn reclassifying_a_homepage_link_to_a_blog_or_video_url_patches_kind() {
         "reclassifying URL to X-EVOLUTION-BLOG-URL must patch kind to 'blog'"
     );
 
-    // Reclassify from Blog URL to Video URL
+    // Move the link from the Blog URL to the Video URL.
     let vcard2 = sync.load_contact(id.as_str()).unwrap().vcard;
     let edited2 = vcard2.replace(
         "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:",
@@ -5248,7 +5136,7 @@ fn reclassifying_a_blog_url_back_to_homepage_patches_kind_to_null() {
         "{vcard}"
     );
 
-    // Reclassify back to standard Homepage URL
+    // Move the link back to the Homepage URL.
     let edited = vcard.replace("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:", "URL;X-JMAP-KEY=l1:");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -5278,7 +5166,7 @@ fn reclassifying_a_calendar_uri_to_freebusy_url_patches_kind() {
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(vcard.contains("CALURI;X-JMAP-KEY=c1:"), "{vcard}");
 
-    // Reclassify from Calendar URI to Free/Busy URL
+    // Move the address from the Calendar URI to the Free/Busy URL.
     let edited = vcard.replace("CALURI;X-JMAP-KEY=c1:", "FBURL;X-JMAP-KEY=c1:");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
@@ -5411,7 +5299,7 @@ fn clearing_stated_name_with_unmapped_fields_preserves_unmapped_name_metadata() 
     );
 
     let loaded = sync.load_contact(id.as_str()).unwrap();
-    // User clears the name in Evolution (removes FN and N lines)
+    // The user clears the name in Evolution, which removes the FN and N lines.
     let mut cleared_vcard = String::new();
     for line in loaded.vcard.lines() {
         if !line.starts_with("FN:") && !line.starts_with("N:") {
@@ -5496,7 +5384,7 @@ fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
     let sync = fixture.sync();
 
-    // Populate every mapped and unmapped surface across the JSContact schema
+    // Set mapped and unmapped properties across the JSContact schema.
     fixture.patch(
         &id,
         json!({
@@ -5621,13 +5509,13 @@ fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
         }),
     );
 
-    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    // First load and save, as when the user opens and closes a contact in Evolution.
     let loaded1 = sync.load_contact(id.as_str()).expect("load 1");
     let saved1 = sync
         .save_contact(&loaded1.vcard, Some(id.as_str()))
         .expect("save 1");
 
-    // Second load -> save cycle
+    // Second load and save.
     let loaded2 = sync.load_contact(id.as_str()).expect("load 2");
     let parsed_card2 = jmap_vcard::vcard_to_card(&loaded2.vcard).expect("parse 2");
     let current_card = fixture.card(&id);
@@ -5646,7 +5534,7 @@ fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
         "second save must not change server revision for untouched contact"
     );
 
-    // Verify all unmapped and mapped fields remain preserved server-side
+    // The server keeps all mapped and unmapped properties.
     let stored = fixture.card(&id);
     assert!(stored.crypto_keys.is_some() || stored.extra.contains_key("cryptoKeys"));
     assert!(stored.directories.is_some() || stored.extra.contains_key("directories"));

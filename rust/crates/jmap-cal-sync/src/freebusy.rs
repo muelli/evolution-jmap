@@ -1,39 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Free/busy for the meeting scheduler — `get_free_busy_sync`.
+//! Free/busy for the meeting scheduler (`get_free_busy_sync`).
 //!
-//! Evolution's meeting editor asks a calendar backend "when are these people
-//! busy?" and gets iCalendar `VFREEBUSY` text back. JMAP answers the same
-//! question in two steps, and this module is both of them:
+//! The meeting editor of Evolution asks a calendar backend "when are these
+//! people busy?" and gets iCalendar `VFREEBUSY` text. JMAP answers the same
+//! question in two steps, and this module does the two steps:
 //!
-//! 1. `Principal/query` filtered by email, to turn the address the editor
-//!    holds into a principal id — the server's own notion of that person;
-//! 2. `Principal/getAvailability` for that principal over the requested
-//!    window, which yields the busy periods
-//!    [`jmap_ical::busy_periods_to_vfreebusy`] renders.
+//! 1. `Principal/query` filtered by email, to convert the address of the editor
+//!    into a principal id (the server's identity for that person);
+//! 2. `Principal/getAvailability` for that principal over the requested window.
+//!    This gives the busy periods that [`jmap_ical::busy_periods_to_vfreebusy`]
+//!    renders.
 //!
 //! ## Which failures are answers and which are failures
 //!
-//! Most of the design here is that distinction, because getting it wrong is
-//! not a cosmetic bug: a scheduler that is told an attendee is free books the
-//! slot.
+//! Most of the design is this distinction. An error here is not cosmetic: if a
+//! scheduler thinks that an attendee is free, it books the slot.
 //!
-//! - **An address no principal matches** is an answer. Inviting somebody
-//!   outside the organisation is the ordinary case, and `Principal/query`
-//!   returning nothing is how the server says so. That attendee gets no
-//!   component and the editor leaves their row unknown.
-//! - **`getAvailability` answering `notFound`** is an answer. The draft
-//!   (draft-ietf-jmap-calendars §2.2) uses that one error for both "no such
-//!   principal" and "you may not see this one", so it means "not this person",
-//!   not "something went wrong". Same treatment.
-//! - **Anything else** is a failure and is reported. This is where this module
-//!   parts company with the CalDAV backend, which clears every per-user error
-//!   and falls through silently. A server that could not be reached and a
-//!   server that said nobody is busy are not the same statement, and only one
-//!   of them should let the user drop a meeting into the slot. The vfunc above
-//!   still falls back to `ECalMetaBackend`'s cache when the answer is merely
-//!   *empty* — which is the useful half of the CalDAV behaviour, kept.
+//! - **An address that no principal matches** is an answer. An invitation to a
+//!   person outside the organisation is the usual case. An empty
+//!   `Principal/query` result is how the server tells this. That attendee gets
+//!   no component, and the editor shows their row as unknown.
+//! - **`getAvailability` with the answer `notFound`** is an answer. The draft
+//!   (draft-ietf-jmap-calendars §2.2) uses that one error for "no such
+//!   principal" and for "you cannot see this principal". Thus it means "not
+//!   this person", not "an error occurred". The treatment is the same.
+//! - **All other errors** are failures, and this module reports them. Here this
+//!   module is different from the CalDAV backend, which clears each per-user
+//!   error and continues silently. "The server is not available" and "nobody is
+//!   busy" are different statements. Only the second must let the user put a
+//!   meeting into the slot. The vfunc above still uses the `ECalMetaBackend`
+//!   cache when the answer is only *empty*. This keeps the useful half of the
+//!   CalDAV behaviour.
 
 use jmap_client::Error;
 use jmap_ical::busy_periods_to_vfreebusy;
@@ -43,31 +42,31 @@ use jmap_proto::state::UtcDate;
 use crate::CalSync;
 use crate::error::SyncError;
 
-/// One attendee's free/busy, as `get_free_busy_sync` reports it.
+/// The free/busy of one attendee, as `get_free_busy_sync` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeBusy {
-    /// The address EDS asked about, echoed back exactly as it was spelled so
-    /// the caller can pair the answer with the row it came from.
+    /// The address that EDS asked about, with its exact original spelling, so
+    /// that the caller can pair the answer with its row.
     pub user: String,
     /// A bare `VFREEBUSY` component as iCalendar text.
     pub icalendar: String,
 }
 
 impl CalSync {
-    /// The busy periods of each of `users` between `utc_start` and `utc_end` —
-    /// `get_free_busy_sync`.
+    /// The busy periods of each of `users` between `utc_start` and `utc_end`
+    /// (`get_free_busy_sync`).
     ///
-    /// The window is stated as JMAP `UTCDate`s (RFC 3339, `Z`), which is what
-    /// the caller has after converting the vfunc's two `time_t`s.
+    /// The window is in JMAP `UTCDate`s (RFC 3339, `Z`). The caller makes these
+    /// from the two `time_t` values of the vfunc.
     ///
-    /// Attendees are answered independently and in order; one that the server
-    /// has nothing to say about is left out rather than reported, so a shorter
-    /// list than `users` is the normal result. See the module docs for exactly
-    /// which silences are answers.
+    /// Each attendee gets a separate answer, in sequence. If the server has no
+    /// data for an attendee, the result omits that attendee and reports no
+    /// error. Thus a list shorter than `users` is the normal result. The module
+    /// docs tell which silences are answers.
     ///
-    /// The account asked is this calendar's, not this calendar itself:
-    /// availability is a question about a person's whole diary, and RFC 9670
-    /// hangs principals off the account.
+    /// The query uses the account of this calendar, not the calendar itself.
+    /// Availability is about the full diary of a person, and RFC 9670 attaches
+    /// principals to the account.
     pub fn free_busy(
         &self,
         users: &[String],
@@ -81,13 +80,13 @@ impl CalSync {
             let Some(periods) = self.availability_of(user, &utc_start, &utc_end)? else {
                 continue;
             };
-            // A component that cannot be rendered is dropped rather than
-            // reported, and it is the one silence here that is not an answer
-            // from the server: `busy_periods_to_vfreebusy` refuses when a
-            // period cannot be read, and refusing is already its safe
-            // direction — the attendee reads as unknown, never as free. There
-            // is nothing better to report, since the periods that *did* read
-            // are exactly the ones it will not state on their own.
+            // If a component cannot be rendered, this drops it and does not
+            // report it. This is the only silence here that is not a server
+            // answer: `busy_periods_to_vfreebusy` refuses when it cannot read a
+            // period. A refusal is already the safe result, because the
+            // attendee shows as unknown, never as free. No better report is
+            // possible, because the function does not state the periods that it
+            // *did* read without the others.
             if let Some(icalendar) = busy_periods_to_vfreebusy(user, &utc_start, &utc_end, &periods)
             {
                 answers.push(FreeBusy {
@@ -100,8 +99,8 @@ impl CalSync {
         Ok(answers)
     }
 
-    /// `Ok(None)` when the server has nothing to say about this address;
-    /// `Err` only for a failure that is not about the address.
+    /// `Ok(None)` when the server has no data for this address. `Err` only for
+    /// a failure that is not about the address.
     fn availability_of(
         &self,
         user: &str,
@@ -119,9 +118,10 @@ impl CalSync {
             principal_id,
             utc_start.clone(),
             utc_end.clone(),
-            // The meeting editor renders busy blocks, not their contents, and
-            // an attendee's event titles are theirs. Asking for details we do
-            // not draw would be reading someone's diary for nothing.
+            // The meeting editor shows busy blocks, not their contents, and the
+            // event titles of an attendee are private. A request for details
+            // that the editor does not show would read a person's diary for no
+            // purpose.
             false,
         ) {
             Ok(periods) => Ok(Some(periods)),
@@ -131,23 +131,21 @@ impl CalSync {
     }
 }
 
-/// The bare address inside whatever EDS handed us.
+/// The bare address in the string that EDS gave.
 ///
-/// `ECalMetaBackend`, the CalDAV backend and the Microsoft 365 backend all
-/// build their `ATTENDEE` by prepending `mailto:` to the string in `users`, so
-/// a bare address is what it holds. Stripping the scheme anyway costs one
-/// comparison, and without it a `mailto:`-prefixed entry would be looked up as
-/// an email address and match nobody — a silent wrong answer rather than a
-/// visible failure.
+/// `ECalMetaBackend`, the CalDAV backend and the Microsoft 365 backend all make
+/// their `ATTENDEE` with `mailto:` in front of the string in `users`. Thus the
+/// string is a bare address. To remove the scheme anyway costs one comparison.
+/// Without it, the lookup of a `mailto:` entry as an email address matches
+/// nobody. That is a silent wrong answer, not a visible failure.
 fn address_of(user: &str) -> &str {
     user.split_at_checked("mailto:".len())
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("mailto:"))
         .map_or(user, |(_, address)| address)
 }
 
-/// Whether the server said "not this principal" rather than "something went
-/// wrong" — the draft spells both of its meanings, absent and forbidden, as
-/// this one error.
+/// Whether the server said "not this principal", not "an error occurred". The
+/// draft uses this one error for its two meanings, absent and forbidden.
 fn is_not_found(error: &Error) -> bool {
     matches!(error, Error::Method(method) if method.error_type == "notFound")
 }
@@ -167,7 +165,7 @@ mod tests {
     fn anything_else_is_already_an_address() {
         assert_eq!(address_of("bob@example.com"), "bob@example.com");
         assert_eq!(address_of(""), "");
-        // Not a scheme this understands, and not one to guess at either.
+        // This is not a known scheme, and the function does not guess.
         assert_eq!(address_of("https://example.com"), "https://example.com");
     }
 

@@ -1,44 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync` against a calendar of a size nothing else here has ever reached.
+//! Tests `CalSync` against a large calendar.
 //!
-//! Every other live-server test in `jmap-cal-sync` uses a single event; this
-//! asks the same question of calendars that `jmap-book-sync/tests/
-//! live_server_scale.rs` already asks of address books: cold listing time and
-//! incremental `get_changes` cost once the calendar is no longer tiny, with a
-//! third of the events recurring with an override so the mix is not all
-//! single-occurrence events.
+//! This file asks the same questions of calendars that
+//! `jmap-book-sync/tests/live_server_scale.rs` asks of address books: cold
+//! listing time and incremental `get_changes` cost for a calendar that is not
+//! small. One third of the events recur with an override, so not all events
+//! have a single occurrence.
 //!
-//! This file covers the first slice, scoped down the same way
-//! `jmap-book-sync`'s equivalent was: that file found Stalwart's
-//! `Http.rateLimitAuthenticated` (1000 req/60s) well before 500
-//! `ContactCard/set` calls even at the default throwaway plan, so this starts
-//! at the same 500-event size rather than assuming larger checkpoints are
-//! reachable in one call budget. [`retrying`] absorbs a 429 the same way.
-//! Larger checkpoints (1,000 and 3,000 events) run through this same file
-//! with `JMAP_SCALE_TEST_EVENTS` set higher; the real-EDS leg against a
-//! live-Stalwart calendar factory is `jmap-functional/tests/live-stalwart-
-//! calendar-scale.rs`.
+//! The scope of this file is the same as that of the `jmap-book-sync`
+//! equivalent. That file found that Stalwart's `Http.rateLimitAuthenticated`
+//! (1000 req/60s) stops `ContactCard/set` before 500 calls, also on the default
+//! temporary plan. Thus this file starts at 500 events, and [`retrying`]
+//! absorbs a 429 in the same way. Larger checkpoints (1,000 and 3,000 events)
+//! use this file with a higher `JMAP_SCALE_TEST_EVENTS`. The real-EDS test
+//! against a live-Stalwart calendar factory is
+//! `jmap-functional/tests/live-stalwart-calendar-scale.rs`.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! The environment is the same as for the other live-server tests of this crate.
+//! Refer to `docs/manual-test-live-server.md`. Set
+//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`, then run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_scale -- --ignored --nocapture
 //! ```
 //!
-//! `JMAP_SCALE_TEST_EVENTS` overrides the batch size (default 500); the
-//! write-test account should be a throwaway created for this alone (see
-//! `stw seed` in the manual-test doc) since this leaves that many events in
-//! its calendar for inspection rather than cleaning up after itself.
+//! `JMAP_SCALE_TEST_EVENTS` overrides the batch size (default 500). Use a
+//! temporary write-test account only for this test (refer to `stw seed` in the
+//! manual-test doc). The test does not remove its events: it leaves them in the
+//! calendar for inspection.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset, the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 use std::thread::sleep;
@@ -48,11 +44,11 @@ use jmap_cal_sync::{CalSync, SyncError};
 use jmap_client::{Client, Credentials, Error as ClientError};
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) with a short
-/// sleep, up to 10 times, so a scale run does not fail just because it moved
-/// faster than the server's own rate-limit window. Any other error, or
-/// exhausting the retries, is returned as-is for the caller to `unwrap`/panic
-/// on. Mirrors `jmap-book-sync/tests/live_server_scale.rs::retrying` exactly.
+/// Retries `attempt` after a 5 s sleep on a 429
+/// (`Http.rateLimitAuthenticated`), with at most 20 attempts. Thus a scale run
+/// does not fail when it is faster than the rate-limit window of the server.
+/// Returns any other error, or the last 429, to the caller. Same as
+/// `jmap-book-sync/tests/live_server_scale.rs::retrying`.
 fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, SyncError> {
     for remaining in (0..20).rev() {
         match attempt() {
@@ -65,8 +61,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, S
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover events can never be mistaken for this run's own.
+/// Returns a value unique to this process, so leftover events from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -74,8 +70,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write`, minus the
-/// account address that file also returns, which this one has no use for.
+/// Same as `jmap-cal-sync/tests/live_server.rs::connect_for_write`, but does
+/// not return the account address.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -98,8 +94,8 @@ fn batch_size() -> usize {
         .unwrap_or(500)
 }
 
-/// The resident set size this process has peaked at, read from `/proc`. Linux
-/// only, which every runner this test actually runs on is.
+/// Returns the peak resident set size of this process from `/proc` (Linux only,
+/// as are all runners).
 fn peak_rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status.lines().find_map(|line| {
@@ -125,9 +121,8 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
-/// `(year, month, day)` plus `offset` days, rolling over months and years
-/// correctly -- unlike treating a date as a plain `YYYYMMDD` integer, which
-/// breaks the moment a batch runs past the end of a month.
+/// Returns `(year, month, day)` plus `offset` days, with correct month and year rollover.
+/// A plain `YYYYMMDD` integer gives incorrect dates after the end of a month.
 fn date_plus_days(mut year: u32, mut month: u32, mut day: u32, offset: u32) -> (u32, u32, u32) {
     for _ in 0..offset {
         day += 1;
@@ -143,12 +138,10 @@ fn date_plus_days(mut year: u32, mut month: u32, mut day: u32, offset: u32) -> (
     (year, month, day)
 }
 
-/// One event, as iCalendar: a plain one-hour `VEVENT` for most `i`, and every
-/// third one a daily series with one detached, overridden occurrence
-/// instead, so the mix is a third recurring-with-overrides as the module doc
-/// describes. Each event starts a day later than the last (wrapped to stay
-/// inside 2026) so a calendar of this size is spread out rather than piled
-/// on one date, closer to what a real account looks like.
+/// Returns one event as iCalendar. Most events are a one-hour `VEVENT`.
+/// Each third event is a daily series with one detached, overridden occurrence.
+/// Each event starts one day after the previous one (wrapped after 300 days, in 2026),
+/// so the events spread across dates, as in a real account.
 fn icalendar(run: u128, label: &str, i: usize) -> String {
     let uid = format!("agent-scale-cal-{run}-{label}-{i}@localhost");
     let (year, month, day) = date_plus_days(2026, 1, 1, (i % 300) as u32);
@@ -283,13 +276,12 @@ fn a_real_sized_calendar_round_trips_through_the_real_server() {
     }
 }
 
-/// Deleting from an already-large calendar, the case the import/edit test
-/// above does not reach. Mirrors
-/// `jmap-book-sync/tests/live_server_scale.rs::
-/// deleting_from_a_real_sized_address_book_is_reported_correctly`: unlike
-/// `jmap-mail-sync`'s `messages_since`, `CalSync::get_changes` has no
-/// `catch_up_limit`/relist concept to trip either, so this is confirming that
-/// reading against a real server rather than hunting a threshold bug.
+/// Tests deletion from a large calendar, which the import/edit test does not
+/// do. Same as
+/// `jmap-book-sync/tests/live_server_scale.rs::deleting_from_a_real_sized_address_book_is_reported_correctly`.
+/// `CalSync::get_changes` has no `catch_up_limit`/relist concept (unlike
+/// `messages_since` of `jmap-mail-sync`). Thus this test confirms the result
+/// against a real server, and does not look for a threshold bug.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn deleting_from_a_real_sized_calendar_is_reported_correctly() {
@@ -332,9 +324,7 @@ fn deleting_from_a_real_sized_calendar_is_reported_correctly() {
         .list_existing()
         .expect("listing the calendar failed after the bulk import");
 
-    // "A few hundred", the same scale this file's calendar events use,
-    // capped at the batch size itself so a small manual run never tries to
-    // delete more than exists.
+    // Deletes at most 300 events, and never more than the batch size.
     let delete_count = n.min(300);
     let to_delete: Vec<String> = saved_uids.into_iter().take(delete_count).collect();
 

@@ -1,32 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s nickname scalar-field patch path against a
-//! real JMAP server.
+//! Tests the nickname patch path of `BookSync::save_contact` against a real
+//! JMAP server.
 //!
-//! `patch::diff_nicknames` (`src/patch.rs`) writes `nicknames/<key>/name` as
-//! a nested scalar PatchObject member when an entry's name changes —
-//! `diff_entries`'s per-entry callback, the same shape
-//! `live_server_email_address.rs` already confirmed for `emails/<key>/
-//! address`. `jmap-book-sync/tests/save.rs`'s
-//! `editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry`
-//! already proves the mapping produces that patch against `jmap-mockd`,
-//! which just applies whatever patch it is handed; nothing in this
-//! repository's live-server suite has ever confirmed a real server accepts
-//! a `nicknames/<key>/name` segment and actually replaces the name rather
-//! than rejecting it or adding a second entry.
+//! When the name of an entry changes, `patch::diff_nicknames` (`src/patch.rs`)
+//! writes `nicknames/<key>/name` as a nested scalar PatchObject member. This is
+//! the per-entry callback of `diff_entries`, the shape that
+//! `live_server_email_address.rs` confirms for `emails/<key>/address`.
+//! `tests/save.rs` proves this patch against `jmap-mockd` in
+//! `editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry`,
+//! but `jmap-mockd` applies any patch it receives. This test confirms that a
+//! real server replaces the name and does not reject the segment or add a
+//! second entry.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -34,8 +31,8 @@ use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -59,10 +56,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a contact with one `NICKNAME` line, confirms it round-trips, then
-/// saves an edited vCard with the nickname retyped and confirms the real
-/// server actually replaced the name in place rather than rejecting the
-/// patch or filing a second entry alongside the old one.
+/// Saves a contact with one `NICKNAME` line, then saves it again with a
+/// different nickname. Confirms that the real server replaces the nickname and
+/// does not reject the patch or add a second entry.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn retyping_a_nickname_replaces_it_on_the_real_server() {

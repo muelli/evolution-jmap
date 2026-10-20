@@ -3,14 +3,13 @@
 
 //! A contact photo the server will not take.
 //!
-//! A `PHOTO` goes to the server inline, as a `data:` URI inside
-//! `ContactCard/set`, so a big picture makes the whole card too big. RFC 9610
-//! advertises no size limit for a card, so the client cannot check first; it
-//! learns of the limit from the refusal. The refusal comes in one of two
-//! forms: the server's `tooLarge` SetError (RFC 8620 section 5.3), or a
-//! request over the session's `maxSizeRequest`, which the client refuses
-//! before sending (RFC 8620 section 2). Either way the user has to learn that
-//! the picture is the problem, not see a protocol error.
+//! A `PHOTO` goes to the server inline, as a `data:` URI in `ContactCard/set`.
+//! Thus, a large picture makes the full card too large. RFC 9610 advertises no
+//! card size limit, so the client learns of the limit from the refusal.
+//! These tests cover two refusals: the server's `tooLarge` SetError (RFC 8620
+//! section 5.3), and a request over `maxSizeRequest`, which the client refuses
+//! before sending (RFC 8620 section 2). In both, the user must learn that the
+//! picture causes the problem.
 
 mod common;
 

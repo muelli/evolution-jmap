@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::save_component`/`remove_component` trace their writes with
-//! `account_id`/`calendar_id`.
+//! `CalSync::save_component` and `remove_component` trace their writes with
+//! `account_id` and `calendar_id`.
 
 mod common;
 

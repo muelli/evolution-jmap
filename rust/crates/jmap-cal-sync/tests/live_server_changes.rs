@@ -1,31 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::get_changes` against a real JMAP server — the
-//! `get_changes_sync` vfunc's state-token delta path, which is what EDS
-//! actually uses for incremental sync (a full `list_existing` re-download is
-//! the fallback, not the common case).
+//! Tests `CalSync::get_changes` against a real JMAP server. This is the
+//! state-token delta path of the `get_changes_sync` vfunc, which EDS uses for
+//! incremental sync. A full `list_existing` download is the fallback, not the
+//! usual case.
 //!
-//! `jmap-cal-sync/tests/live_server.rs`/`live_server_save.rs` already prove
-//! `free_busy`/`save_component`/`remove_component` round-trip against real
-//! Stalwart, but nothing there drives `get_changes` itself — every
-//! assertion goes through `list_existing`/`load_component` instead.
-//! `jmap-cal-sync/tests/sync.rs` proves the classification logic
-//! (`ChangeSet` → `Changes`) against `jmap-mockd`; this file is its
-//! live-server counterpart, following the same recipe as
+//! `jmap-cal-sync/tests/live_server.rs`/`live_server_save.rs` prove the
+//! `free_busy`/`save_component`/`remove_component` round trips against a real
+//! Stalwart server. But those tests do not call `get_changes`: all assertions
+//! use `list_existing`/`load_component`. `jmap-cal-sync/tests/sync.rs` proves
+//! the classification logic (`ChangeSet` to `Changes`) against `jmap-mockd`.
+//! This file is its live-server counterpart, with the same recipe as
 //! `jmap-book-sync/tests/live_server_changes.rs`.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
+//! The environment is the same as for `live_server.rs`. Refer to
 //! `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_changes -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that variable is set,
+//! a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
+//! The cross-account test also skips when `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
+//! When that variable is set, a missing `_RECIPIENT_PASSWORD` causes a panic.
 
 use std::env;
 
@@ -36,8 +37,8 @@ use jmap_proto::calendars::Calendar;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 use serde_json::json;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover event can never be mistaken for this run's own.
+/// Returns a value unique to this process, so a leftover event from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -45,8 +46,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_for_write`
-/// exactly.
+/// Same as `jmap-book-sync/tests/live_server_changes.rs::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -62,8 +62,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`
-/// exactly.
+/// Same as `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -81,12 +80,10 @@ fn connect_recipient() -> Option<Client> {
     )
 }
 
-/// Creates an event, then confirms `get_changes` reports it as changed from
-/// the state captured just before the create; edits it and confirms the edit
-/// shows up from the post-create state; removes it and confirms the removal
-/// shows up from the post-edit state. Mirrors
-/// `jmap-cal-sync/tests/sync.rs`'s `get_changes` assertions and
-/// `jmap-book-sync/tests/live_server_changes.rs`'s live-server recipe.
+/// Creates, edits, and removes an event. After each step, `get_changes` from
+/// the previous state must report the step. Uses the `get_changes` assertions
+/// of `jmap-cal-sync/tests/sync.rs` and the live-server recipe of
+/// `jmap-book-sync/tests/live_server_changes.rs`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() {
@@ -187,16 +184,15 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
     );
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_changes.rs`'s test of the same
-/// name: a state is opaque per RFC 8620, but not free-form, and a
-/// syntactically well-formed state from a *different* account is the
-/// reliable way to reach `cannotCalculateChanges` on the real server (a
-/// hand-written bogus string fails Stalwart's own state-syntax validation
-/// first, `invalidArguments`, unlike `jmap-mockd`'s simulation, which accepts
-/// anything unparseable as this error instead). `jmap-cal-sync::get_changes`
-/// shares `jmap-book-sync::get_changes`'s exact
-/// `SyncError::is_cannot_calculate_changes` shape, so the same trick
-/// confirms it here too.
+/// Same as the test with this name in
+/// `jmap-book-sync/tests/live_server_changes.rs`. Per RFC 8620 a state is
+/// opaque, but not free-form. A well-formed state from a *different* account
+/// reliably causes `cannotCalculateChanges` on the real server. A hand-written
+/// incorrect string fails the state-syntax validation of Stalwart first
+/// (`invalidArguments`). The `jmap-mockd` simulation, by contrast, gives this
+/// error for any unparseable string. `jmap-cal-sync::get_changes` has the same
+/// `SyncError::is_cannot_calculate_changes` shape as
+/// `jmap-book-sync::get_changes`, so the same method applies here.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
@@ -249,22 +245,18 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
     );
 }
 
-/// `CalSync::classify` reasons that since `CalendarEvent/changes` is
-/// account-wide, an event that shows up as **updated** but that this
-/// calendar no longer holds must have moved to a different calendar, and
-/// reports it as `removed` rather than `changed` — protocol-semantics
-/// reasoning that had never been checked against a real server (every other
-/// test here only edits or destroys an event within a single calendar, so
-/// `holds()` always took its `Ok(true)` branch).
-/// `jmap-cal-sync/tests/sync.rs`'s
-/// `an_event_moved_to_another_calendar_is_reported_as_removed` already pins
-/// this against `jmap-mockd`; this confirms the same real server behaviour
-/// the move relies on: a raw `CalendarEvent/set` update of `calendarIds`
-/// away from the calendar being synced shows up in `CalendarEvent/changes`
-/// as an updated id, not a destroy, which is exactly what makes
-/// `classify`'s `removed` branch reachable at all. Mirrors
-/// `jmap-book-sync/tests/live_server_changes.rs`'s
-/// `a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server`.
+/// `CalendarEvent/changes` is account-wide. Thus `CalSync::classify` reports an
+/// **updated** event that this calendar does not hold as `removed`, not
+/// `changed`: the event moved to a different calendar. The other tests here
+/// only edit or destroy an event in one calendar, so `holds()` always gives
+/// `Ok(true)`. `an_event_moved_to_another_calendar_is_reported_as_removed` in
+/// `jmap-cal-sync/tests/sync.rs` tests this against `jmap-mockd`. This test
+/// confirms the real server behaviour that the `removed` branch of `classify`
+/// needs. A raw `CalendarEvent/set` update of `calendarIds` to a different
+/// calendar must show in `CalendarEvent/changes` as an updated id, not as a
+/// destroy. Same as
+/// `a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server`
+/// in `jmap-book-sync/tests/live_server_changes.rs`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_event_moved_to_another_calendar_is_reported_as_removed_against_the_real_server() {
@@ -298,9 +290,8 @@ fn an_event_moved_to_another_calendar_is_reported_as_removed_against_the_real_se
         .clone()
         .expect("the server named the new calendar");
 
-    // A second, independent connection: `CalSync::new` takes ownership of a
-    // `Client`, but the raw `calendar_create`/`event_update`/`event_destroy`/
-    // `calendar_destroy` calls below need one too.
+    // `CalSync::new` takes ownership of its `Client`, so the raw
+    // `event_update`/`event_destroy`/`calendar_destroy` calls use a second connection.
     let sync_client =
         connect_for_write().expect("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD vanished mid-test");
     let sync = CalSync::new(sync_client, account_id.clone(), origin_calendar_id);

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The guest list on the way back. A meeting edited in Evolution has to show
-//! the same guests on every other client of the account, so `participants` is
-//! patched; and since a guest is told apart by address while the server files
-//! it under a key of its own choosing, every change lands *in* the server's own
-//! entry, leaving what the `ATTENDEE` line has no room for (`sendTo`,
-//! `invitedBy`, a scheduling sequence) where it was.
+//! Tests the guest list on save. A meeting that the user edits in Evolution must
+//! show the same guests on all other clients of the account, so the save patches
+//! `participants`. The address identifies a guest, but the server uses its own
+//! keys. Thus each change goes *into* the server's entry, and the data that the
+//! `ATTENDEE` line has no space for (`sendTo`, `invitedBy`, a scheduling
+//! sequence) stays.
 
 mod common;
 
@@ -16,7 +16,7 @@ use jmap_ical::{event_to_ical, ical_to_event};
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value, json};
 
-/// A meeting as the server holds it, with the guest list given.
+/// Returns a meeting as the server holds it, with the given guest list.
 fn meeting(participants: Value) -> CalendarEvent {
     serde_json::from_value(json!({
         "@type": "Event",
@@ -31,12 +31,12 @@ fn meeting(participants: Value) -> CalendarEvent {
     .expect("a CalendarEvent")
 }
 
-/// The component Evolution was shown, unfolded so a test can edit one line.
+/// Returns the component that Evolution shows, unfolded so that a test can edit one line.
 fn drawn(event: &CalendarEvent) -> String {
     event_to_ical(event).replace("\r\n ", "")
 }
 
-/// What EDS hands back after the user edited the drawing.
+/// Returns the event that EDS gives back after the user edits the component.
 fn saved(icalendar: &str) -> CalendarEvent {
     ical_to_event(icalendar).expect("an edited component parses")
 }
@@ -48,9 +48,9 @@ fn patch_of(pairs: &[(&str, Value)]) -> Map<String, Value> {
         .collect()
 }
 
-/// The shape both Stalwart and Fastmail store a meeting in once they have
-/// normalised it: the organizer's `{owner, attendee}` comes back as `{owner}`,
-/// and a plain guest's `{attendee}` comes back with no `roles` at all.
+/// Returns a meeting in the form that Stalwart and Fastmail store after they
+/// normalise it: the organizer's `{owner, attendee}` becomes `{owner}`, and a
+/// plain guest's `{attendee}` becomes no `roles`.
 fn normalised_meeting() -> CalendarEvent {
     meeting(json!({
         "o": {
@@ -74,8 +74,8 @@ fn normalised_meeting() -> CalendarEvent {
 #[test]
 fn an_edit_that_leaves_the_guests_alone_sends_none_against_normalised_roles() {
     let current = normalised_meeting();
-    // What Evolution's editor writes back for the same meeting: the organizer
-    // on its own guest list too, and every role spelled out.
+    // Evolution's editor writes back the same meeting with the organizer also on
+    // the guest list, and with all roles stated.
     let icalendar = drawn(&current)
         .replace("SUMMARY:Planning", "SUMMARY:Planning (moved)")
         .replace(
@@ -141,7 +141,7 @@ fn a_guest_made_optional_keeps_the_roles_the_line_cannot_show() {
     );
 }
 
-/// A role that the `ROLE` parameter can state goes when the line stops stating it.
+/// A role that the `ROLE` parameter can state goes when the line no longer states it.
 /// A role that the line cannot state stays.
 #[test]
 fn a_chair_made_a_plain_guest_loses_the_chair_role_and_keeps_the_rest() {
@@ -176,9 +176,9 @@ fn a_chair_made_a_plain_guest_loses_the_chair_role_and_keeps_the_rest() {
 
 #[test]
 fn a_guest_added_in_evolution_is_filed_under_a_key_the_server_does_not_use() {
-    // The server's own keys here are the very ones this crate invents when it
-    // reads a guest list off a component, so taking the edited event's key as
-    // it came would overwrite the organizer.
+    // The server keys here are the same keys that this crate invents when it
+    // reads a guest list from a component. Thus the key of the edited event
+    // would overwrite the organizer.
     let current = meeting(json!({
         "p1": {
             "@type": "Participant",
@@ -279,8 +279,8 @@ fn removing_every_guest_turns_the_meeting_back_into_an_appointment() {
 
 #[test]
 fn a_participant_no_line_could_show_outlives_the_guests_removed_beside_it() {
-    // Reachable only through a web form: no CAL-ADDRESS names it, so it was
-    // never on the component and its absence there is not a deletion.
+    // Only a web form reaches this participant. No CAL-ADDRESS names it, so it was
+    // never on the component, and its absence there is not a deletion.
     let mut current = normalised_meeting();
     current.participants.as_mut().unwrap().insert(
         "w".to_owned(),

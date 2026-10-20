@@ -1,38 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`/`remove_contact` against a real JMAP server —
-//! the sync-layer functions `EBookMetaBackendSync::save_contact_sync`/
-//! `remove_contact_sync` actually call, exercised end to end for the first
-//! time.
+//! Tests `BookSync::save_contact` and `remove_contact` against a real JMAP
+//! server. `EBookMetaBackendSync::save_contact_sync` and `remove_contact_sync`
+//! call these functions.
 //!
-//! `jmap-client/tests/live_server.rs` already proves `ContactCard/set`
-//! round-trips against real Stalwart directly through `Client`, but nothing
-//! there drives `BookSync` itself — the vCard-to-`ContactCard` mapping
-//! (`jmap_vcard::vcard_to_card`) and the create/update decision `save_contact`
-//! makes. Only `jmap-mockd` has ever exercised this crate's own functions
-//! (`jmap-book-sync/tests/save.rs`); this file is their live-server
-//! counterpart, following the same recipe as `jmap-cal-sync/tests/
-//! live_server.rs`.
+//! `jmap-client/tests/live_server.rs` proves the `ContactCard/set` round trip
+//! against real Stalwart through `Client` directly, but it does not use
+//! `BookSync`. This file tests the vCard-to-`ContactCard` mapping
+//! (`jmap_vcard::vcard_to_card`) and the create-or-update decision of
+//! `save_contact`. `tests/save.rs` tests the same functions against
+//! `jmap-mockd`. This file is the live-server counterpart and follows the
+//! recipe of `jmap-cal-sync/tests/live_server.rs`.
 //!
 //! ## Running it
 //!
-//! Same environment as `jmap-cal-sync`'s live-server test — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up for
-//! `jmap-client`'s write-path tests:
+//! Use the same environment as the live-server test of `jmap-cal-sync` (see
+//! `docs/manual-test-live-server.md`). Set `JMAP_LIVE_SERVER_URL`,
+//! `JMAP_LIVE_SERVER_WRITE_USER` and `JMAP_LIVE_SERVER_WRITE_PASSWORD`, then
+//! run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like `jmap-cal-sync`,
-//! this crate has no such feature, and `#[ignore]` alone already keeps it
-//! out of a plain `cargo test`.
+//! This crate has no `live-server` feature, as in `jmap-cal-sync`. `#[ignore]`
+//! keeps the tests out of a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -40,8 +35,8 @@ use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,7 +44,8 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write`, but returns
+/// only the client.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -65,10 +61,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a new vCard via `BookSync::save_contact`, confirms it via
-/// `list_existing`, edits it (a name change, mirroring what Evolution sends
-/// on a contact rename), confirms the edit via `load_contact`, then removes
-/// it via `remove_contact` and confirms it is gone.
+/// Saves a new vCard, changes its name (as Evolution does on a contact rename),
+/// then removes it. Confirms each step through `list_existing` or
+/// `load_contact`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn saving_then_removing_a_contact_round_trips_through_the_real_server() {

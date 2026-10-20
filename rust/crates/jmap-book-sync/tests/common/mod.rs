@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A mock server holding two address books, so that "only this book" is
-//! something the tests can actually observe.
+//! A mock server with two address books, so tests can observe "only this book".
 
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
@@ -87,9 +86,8 @@ impl Fixture {
             .expect("card exists")
     }
 
-    /// Null out a stored card's own `id`, simulating a server that violates
-    /// RFC 8620 §5.1 by answering `ContactCard/get` with a matched record
-    /// carrying no id.
+    /// Remove a stored card's `id`. This simulates a server that violates
+    /// RFC 8620 §5.1: `ContactCard/get` returns a matched record with no id.
     pub fn strip_id(&self, id: &Id) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -97,10 +95,9 @@ impl Fixture {
         account.contact_cards.get_mut(id).expect("card exists").id = None;
     }
 
-    /// Overwrites a card's `addressBookIds` directly in the store, as an
-    /// update another client made — to reach a state a conforming server
-    /// never sends (RFC 9610 gives every present value as `true`), while
-    /// still logging the change `ContactCard/changes` is asked to report on.
+    /// Overwrite a card's `addressBookIds` in the store, as an update from a different client.
+    /// This gives a state that a conforming server never sends (RFC 9610 gives
+    /// every present value as `true`). The store still logs the change for `ContactCard/changes`.
     pub fn set_address_book_ids(&self, id: &Id, address_book_ids: BTreeMap<Id, bool>) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();

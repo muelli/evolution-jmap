@@ -1,128 +1,115 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Property tests for `patch::diff`'s keyed-map properties (RFC 8620 §5.3).
+//! Property tests for the keyed-map properties of `patch::diff` (RFC 8620
+//! §5.3).
 //!
-//! The invariant: for a pair of cards (`current`, `edited`) built so that
-//! every entry is one the vCard mapping actually states (`states_*` true),
-//! applying `diff(current, edited)` to `current` under plain PatchObject
-//! semantics yields `edited`, and `diff(current, current)` is empty. This
-//! covers the properties whose diff logic is the generic add/modify/remove
-//! shape (`diff_entries`) with no further merge or rekey heuristic:
-//! nicknames, notes, titles, links, calendars, and the whole-set-replace
-//! `keywords`; plus `organizations`, whose entries are patched member by
-//! member and whose `units` list is merged by name (`merge_units`).
-//! `patch.rs`'s own module doc explains why `related_to` deliberately keeps
-//! entries the vCard never showed untouched: it needs a generator that
-//! models that lossiness on purpose, not a card built from entries that are
-//! all stateable, and is left for a later increment.
+//! The invariant: take a pair of cards (`current`, `edited`) where the vCard
+//! mapping states every entry (`states_*` is true). Applying `diff(current,
+//! edited)` to `current` with plain PatchObject semantics gives `edited`, and
+//! `diff(current, current)` is empty. This invariant covers the properties
+//! whose diff is the generic add/modify/remove shape of `diff_entries`, with no
+//! further merge or rekey rule. These are nicknames, notes, titles, links,
+//! calendars and the whole-set-replace `keywords`. It also covers
+//! `organizations`, whose entries are patched member by member and whose
+//! `units` list is merged by name (`merge_units`).
 //!
-//! `anniversaries` and `media` are covered here too, but not by the same
-//! invariant: their keys never survive Evolution at all (EDS rebuilds the
-//! date line, and the first `PHOTO` line, dropping parameters, every time),
-//! so literal equality with the edited card is the wrong thing to check —
-//! that key is an artifact of the reader, not anything the user chose or the
-//! save should reproduce. What `rekey_keyless` promises instead is that the
-//! content lands back under *current's* key when it pairs (by `kind` for an
-//! anniversary, with the first unclaimed visible entry for a photo), and
-//! only a genuine addition (nothing to pair with) keeps the edited card's
-//! own key, so `arb_anniversary_cards`/`arb_media_cards` build a third,
-//! explicit "expected" card to say so, and `anniversaries_round_trip`/
-//! `media_round_trip` check against that rather than against `edited`
-//! directly. Scoped out, left for later: for anniversaries, a `kind` change
-//! on a literally-surviving key (needs a key collision this generator does
-//! not construct) and the `Timestamp` (point-in-time) date shape, whose
-//! whole-value-replace branch this increment does not exercise; for media,
-//! `data:` URI photos (so `mediaType` and the base64/subtype comparison in
-//! `same_photo` stay untested), a second simultaneously-visible photo
-//! (`rekey_keyless`'s "first unclaimed" ordering rather than its
-//! single-candidate case), and non-photo (`logo`/`sound`) entries passing
-//! through `diff_entries` untouched.
+//! `anniversaries` and `media` use a different invariant. Their keys never
+//! survive Evolution: EDS rebuilds the date line and the first `PHOTO` line,
+//! without parameters, every time. Thus literal equality with the edited card
+//! is the wrong check, because the reader makes that key, not the user.
+//! Instead, `rekey_keyless` promises that the content goes back under the key
+//! of *current* when it pairs. An anniversary pairs by `kind`, and a photo
+//! pairs with the first unclaimed visible entry. Only a true addition (nothing
+//! to pair with) keeps the key of the edited card. Thus `arb_anniversary_cards`
+//! and `arb_media_cards` build a third, explicit "expected" card.
+//! `anniversaries_round_trip` and `media_round_trip` compare with that card,
+//! not with `edited`. Out of scope for anniversaries: a `kind` change on a key
+//! that survives literally (this needs a key collision that the generator does
+//! not make). Also out of scope: the `Timestamp` (point-in-time) date shape and
+//! its whole-value-replace branch. Out of scope for media: `data:` URI photos
+//! (so `mediaType` and the base64/subtype comparison in `same_photo` stay
+//! untested). Also out of scope: a second photo that is visible at the same
+//! time (the "first unclaimed" order of `rekey_keyless`). Also out of scope:
+//! non-photo entries (`logo`, `sound`) that pass through `diff_entries`
+//! unchanged.
 //!
-//! `online_services` is covered by two tests: `online_services_service_round_trip`
-//! is the plain `diff_entries` shape (a service rename with the handle held
-//! constant), and `online_services_handle_round_trip` checks the one
-//! shape-preserving case the module doc calls out — a `vcard_to_card` parse
-//! always builds an entry as `{user: Some(handle), uri: None}` (see its
-//! `IMPP`/`X-` branches), so `edited` is always that shape, but `current` can
-//! be `uri`-drawn from an earlier whole-value write, and a handle rename on
-//! that shape rewrites the `uri` around the new handle rather than switching
-//! to `user`. That is a third, explicit "expected" card again, not literal
-//! equality with `edited`, for the same reason anniversaries' and media's is.
-//! Both tests hold every field the vCard mapping does not read back
-//! (`contexts`, `pref`, `label`, `extra`) at its default on every entry, so
-//! equality on those fields is never in question; only `user`/`uri`/`service`
-//! vary.
+//! Two tests cover `online_services`. `online_services_service_round_trip` is
+//! the plain `diff_entries` shape: a service rename with a constant handle.
+//! `online_services_handle_round_trip` checks the shape-preserving case that
+//! the module doc of `patch.rs` names. A `vcard_to_card` parse always builds an
+//! entry as `{user: Some(handle), uri: None}` (see its `IMPP` and `X-`
+//! branches), so `edited` always has that shape. But an earlier whole-value
+//! write can leave `current` with a handle drawn from `uri`. A handle rename on
+//! that shape rebuilds the `uri` around the new handle and does not change to
+//! `user`. This test also uses a third, explicit "expected" card, for the same
+//! reason as anniversaries and media. Both tests keep each field that the vCard
+//! mapping does not read back (`contexts`, `pref`, `label`, `extra`) at its
+//! default on every entry. Only `user`, `uri` and `service` vary.
 //!
-//! `addresses_components_round_trip` covers `merge_components`
-//! (`restore_address_components` plus `merge_named`, the list-merge-by-value
-//! `units` also uses), exercised through `arb_address_components_pair`'s
-//! per-`ADR`-field-kind slot. Unlike `anniversaries`/`media`/
-//! `online_services`, an address's own key does survive Evolution (the `ADR`
-//! line keeps `X-JMAP-KEY`), so this is a literal round trip with `edited`,
-//! no third "expected" card needed. Scoped out, left for later: the
-//! `number`/`name` joined-field case (`restore_shared_fields`'s splice,
-//! which only matters once two component kinds share one `ADR` field), and
-//! `full` (`LABEL`), `contexts` and `pref`, held at their default on both
-//! sides the way `online_services`' non-core fields were.
+//! `addresses_components_round_trip` covers `merge_components` through the
+//! per-`ADR`-field-kind slots of `arb_address_components_pair`.
+//! `merge_components` is `restore_address_components` plus `merge_named`, the
+//! list merge by value that `units` also uses. Unlike in `anniversaries`,
+//! `media` and `online_services`, the key of an address survives Evolution (the
+//! `ADR` line keeps `X-JMAP-KEY`). Thus this test is a literal round trip with
+//! `edited` and needs no "expected" card. Out of scope: the joined
+//! `number`/`name` field case (the splice of `restore_shared_fields`, which
+//! matters only when two component kinds share one `ADR` field). Also out of
+//! scope: `full` (`LABEL`), `contexts` and `pref`, which stay at their default
+//! on both sides, as the non-core fields of `online_services` do.
 //!
-//! Title's `kind` is kept to `Some("title")`/`Some("role")` here rather than
-//! also generating `None`: `title_kind()` treats an absent `kind` as
-//! "title", and `diff_titles` writes that default back out as the literal
-//! string whenever the (defaulted) kind changes, so a round trip that started
-//! from `None` lands on `Some("title")` rather than `None` again — a
-//! representation difference `title_kind()` calls equivalent but
-//! `PartialEq` does not. Restricting the generator to the two explicit
-//! spellings exercises the same comparison without that false alarm.
+//! The generator gives a title `kind` of `Some("title")` or `Some("role")`,
+//! never `None`. `title_kind()` treats an absent `kind` as "title".
+//! `diff_titles` writes that default as a literal string when the (defaulted)
+//! kind changes. Thus a round trip from `None` can end at `Some("title")`, not
+//! at `None`. `title_kind()` treats these as equal, but `PartialEq` does not.
+//! The two explicit spellings test the same comparison without that false
+//! alarm.
 //!
-//! `organizations`' units need a restriction of their own, for the same kind
-//! of reason. `read_organization` (jmap-vcard) never sets a parsed
-//! `OrgUnit`'s `sortAs` or `extra`, so a freshly-parsed edited unit is
-//! always bare; only the server-held current side ever carries one.
-//! `merge_units` reuses current's whole struct for a unit whose name is
-//! unchanged, and the edited (bare) struct otherwise, so the generator
-//! keeps every kept unit's edited-side value an exact clone of current's
-//! rather than inventing a different `sortAs` for an unchanged name, which
-//! a real vCard parse could never produce anyway. Out of scope here, left
-//! for later: invisible (empty-name) current units, whose reinsertion
-//! follows an anchor/position rule this generator does not model, and
-//! simultaneous renames matched by position rather than by name (the two
-//! are observably identical here, since nothing in the merged output
-//! depends on which original slot a failed name match was paired with once
-//! no invisible unit's position is at stake). Organization-level
-//! `sortAs`/`contexts` are out of scope too: `diff_organizations` never
-//! patches them, so their preservation is not this property's job, and is
-//! already covered by `tests/save.rs`.
+//! The units of `organizations` need a restriction too, for a similar reason.
+//! `read_organization` (jmap-vcard) never sets `sortAs` or `extra` on a parsed
+//! `OrgUnit`, so a parsed edited unit is always bare. Only the current side
+//! from the server can carry them. `merge_units` uses the whole struct of
+//! current for a unit with an unchanged name, and the bare edited struct
+//! otherwise. Thus the generator makes the edited value of each kept unit an
+//! exact clone of the current value. A real vCard parse cannot give a different
+//! `sortAs` for an unchanged name. Out of scope: invisible (empty-name) current
+//! units, whose reinsertion follows an anchor and position rule that the
+//! generator does not model. Also out of scope: simultaneous renames matched by
+//! position, not by name. Here the two are observably identical. With no
+//! invisible unit at stake, the merged output does not depend on the slot that
+//! a failed name match pairs with. The organization-level `sortAs` and
+//! `contexts` are out of scope too: `diff_organizations` never patches them,
+//! and `tests/save.rs` covers their preservation.
 //!
-//! `name_components_round_trip` covers the same `merge_named` machinery
-//! again, this time through `diff_name`'s component-list branch
-//! (`restore_name_components` plus the merge). A `Name` is a single struct
-//! rather than a keyed map, so there is no entry key at all, surviving or
-//! not: `diff_name` always writes the whole merged list back under
-//! `name/components`, a literal round trip with `edited` like addresses'.
-//! The one joined-field case here is `restore_shared_fields`'s splice of two
-//! same-kind components sharing one `N` field, a double-barrelled given name
-//! with both components of kind `given`, and the generator avoids it by
-//! construction: one component per kind. `full`, `isOrdered`, `sortAs` and
-//! `extra` are held at their default on both sides, the way addresses held
-//! `full`/`contexts`/`pref`.
+//! `name_components_round_trip` covers the same `merge_named` logic through the
+//! component-list branch of `diff_name` (`restore_name_components` plus the
+//! merge). A `Name` is one struct, not a keyed map, so it has no entry key.
+//! `diff_name` always writes the whole merged list under `name/components`, so
+//! this test is a literal round trip with `edited`, as for addresses. The one
+//! joined-field case here is the splice of `restore_shared_fields`: two `given`
+//! components that share one `N` field (a double-barrelled given name). The
+//! generator avoids it by construction: it makes one component per kind.
+//! `full`, `isOrdered`, `sortAs` and `extra` stay at their default on both
+//! sides, as `full`, `contexts` and `pref` do for addresses.
 //!
-//! `related_to_round_trip` covers `diff_related_to`, the one property keyed
-//! by the related entity's own name rather than by an id, so an edit is a
-//! withdrawal from one key and a claim on another instead of a change to an
-//! entry. `arb_related_to_cards` builds several independent named slots, one
-//! mapped kind (`spouse`) at a time: a bare withdrawal deletes the whole
-//! entry, one that leaves an unmapped relation type (`kin`) or an extra
-//! member strikes only `relation/spouse`, and a claim either creates a whole
-//! new entry, reaches into an existing entry's own `relation/spouse`, or
-//! replaces a relation-less existing entry's whole `relation` field,
-//! depending on what the server already held under that name. Because a
+//! `related_to_round_trip` covers `diff_related_to`. This is the one property
+//! keyed by the name of the related entity, not by an id. Thus an edit is a
+//! withdrawal from one key and a claim on another key, not a change to an
+//! entry. `arb_related_to_cards` builds several independent named slots, with
+//! one mapped kind (`spouse`) at a time. A bare withdrawal deletes the whole
+//! entry. A withdrawal that leaves an unmapped relation type (`kin`) or an
+//! extra member removes only `relation/spouse`. The effect of a claim depends
+//! on what the server already held under that name. It creates a whole new
+//! entry or writes into the `relation/spouse` of an existing entry. For an
+//! existing entry without a `relation` field, it replaces the whole field. A
 //! withdrawal on one slot and a claim on another are independent adds and
-//! removes keyed by name, the rename the module doc describes falls out
-//! without any special-casing. Scoped out, left for later: two mapped kinds
-//! changing on the same name at once (`is_gaining_other_kind`), already
-//! covered by `a_new_relation_stating_two_mapped_kinds_at_once_is_written_once`
-//! in `patch.rs`'s own unit tests.
+//! removes keyed by name. Thus the rename that the module doc of `patch.rs`
+//! describes needs no special case. Out of scope: two mapped kinds that change
+//! on the same name at once (`is_gaining_other_kind` in `diff_related_to`). The
+//! unit test `a_new_relation_stating_two_mapped_kinds_at_once_is_written_once`
+//! in `patch.rs` covers that case.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,8 +121,9 @@ use jmap_proto::contacts::{
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
 
-/// RFC 8620 §5.3: a `null` value at the end of a path removes that member,
-/// anything else sets it; every path segment before the last already exists.
+/// Applies a patch per RFC 8620 §5.3: a `null` value at the end of a path
+/// removes that member, and any other value sets it. A missing parent segment
+/// becomes an empty object.
 fn apply_patch(target: &mut Value, patch: &Map<String, Value>) {
     for (path, value) in patch {
         let segments: Vec<String> = path.split('/').map(unescape_pointer).collect();
@@ -177,12 +165,12 @@ fn round_trips(current_card: &ContactCard, edited_card: &ContactCard) -> Result<
     Ok(())
 }
 
-/// Builds a `(current, edited)` pair of keyed maps out of four independent
-/// groups: entries unchanged on both sides (`s*`), entries present on both
-/// sides with only their diffable field(s) changed (`m*`), entries only on
-/// the edited side (`a*`), and entries only on the current side (`r*`). The
-/// prefixes keep every group's keys disjoint, so `diff_entries`' add/remove/
-/// keep branches are exercised without any accidental key collision.
+/// Builds a `(current, edited)` pair of keyed maps from four independent
+/// groups. The groups are unchanged entries (`s*`), changed entries (`m*`),
+/// edited-only entries (`a*`) and current-only entries (`r*`). A changed entry
+/// is on both sides, with only its diffable fields changed. The prefixes keep
+/// the keys of the groups disjoint. Thus the add, remove and keep branches of
+/// `diff_entries` run without accidental key collisions.
 fn entry_sets<T: Clone + std::fmt::Debug>(
     stable: impl Strategy<Value = T>,
     modified_pair: impl Strategy<Value = (T, T)>,
@@ -431,13 +419,12 @@ fn bare_unit(name: String) -> OrgUnit {
     }
 }
 
-/// A `(current, edited)` units list pair. `kept` units carry the same name
-/// and `sortAs` on both sides (a real vCard round trip can only touch a
-/// unit's name, so an unchanged name never comes back with a different
-/// `sortAs`); `removed` names are current-only; `added` names are
-/// edited-only and bare, matching a freshly-parsed unit. No name collides
-/// across the three groups, so `merge_units` resolves every edited unit by
-/// an exact name match or not at all, never by its position fallback.
+/// A `(current, edited)` pair of units lists. `kept` units have the same name
+/// and `sortAs` on both sides. A real vCard round trip can change only the name
+/// of a unit, so it never changes `sortAs` for an unchanged name. `removed`
+/// names are current-only. `added` names are edited-only and bare, like a
+/// parsed unit. No name occurs in two groups, so `merge_units` matches each
+/// edited unit by exact name or not at all, never by position.
 fn arb_units_pair() -> impl Strategy<Value = (Vec<OrgUnit>, Vec<OrgUnit>)> {
     (
         proptest::collection::vec(arb_sort_as(), 0..=2),
@@ -504,9 +491,9 @@ fn arb_address_value() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9 ]{1,10}"
 }
 
-/// The vCard-mapped `ADR` component kinds, minus `number`: it shares its field
-/// with `name` (`restore_shared_fields`'s splice), which is its own later
-/// increment, so every kind here matches a single `ADR` field on its own.
+/// The vCard-mapped `ADR` component kinds, without `number`. `number` shares
+/// its field with `name` (the splice of `restore_shared_fields`), which is out
+/// of scope here. Thus each kind here matches one `ADR` field on its own.
 const ADDRESS_COMPONENT_KINDS: [&str; 7] = [
     "postOfficeBox",
     "apartment",
@@ -524,10 +511,9 @@ fn arb_address_with_components() -> impl Strategy<Value = Address> {
     })
 }
 
-/// One component kind's slot across (current, edited): absent on both sides,
-/// present only on the edited side (a genuine addition), present only on
-/// current (removed), present unchanged on both (kept), or present on both
-/// with independently-chosen values (modified).
+/// One component kind's slot across (current, edited). The slot is absent on
+/// both sides, edited only (a true addition), or current only (removed). Or it
+/// is on both sides, unchanged (kept) or with different values (modified).
 #[derive(Clone, Debug)]
 enum AddressComponentSlot {
     Absent,
@@ -549,23 +535,21 @@ fn arb_address_component_slot() -> impl Strategy<Value = AddressComponentSlot> {
     ]
 }
 
-/// Builds a `(current, edited)` address pair, one slot per `ADDRESS_COMPONENT_KINDS`
-/// kind, modelling `merge_components`: a `Kept` kind's component is the
-/// server's own copy, matched by `(kind, value)` and so placed in the result
-/// wherever `current` had it; a `Removed` one is dropped (its kind is stated,
-/// i.e. mapped and non-empty, so its disappearance from the line is the user
-/// deleting it); an `Added` or a `Modified` kind's new value is a `spare`
-/// entry with nothing in `current` to match, so it is appended after every
-/// kept component, in `edited`'s own order — which is also where `edited`
-/// states it, since `edited` is built kept-first, new-material-after, the
-/// same order `current` is. That is what keeps `merge_components`' result a
-/// literal match for `edited` rather than needing a third "expected" card,
-/// unlike `anniversaries`/`media`/`online_services`, whose keys do not
-/// survive Evolution at all.
+/// Builds a `(current, edited)` address pair, one slot per
+/// `ADDRESS_COMPONENT_KINDS` kind, as a model of `merge_components`. A `Kept`
+/// component is the server copy. The merge matches it by `(kind, value)` and
+/// puts it where `current` had it. A `Removed` component is dropped: its kind
+/// is stated (mapped and not empty), so its absence from the line means that
+/// the user deleted it. The new value of an `Added` or `Modified` kind is a
+/// `spare` entry with no match in `current`. The merge appends it after all
+/// kept components, in the order of `edited`. `edited` states it at the same
+/// place, because the generator builds both sides with kept components first
+/// and new components after. Thus the result of `merge_components` matches
+/// `edited` literally and needs no "expected" card. `anniversaries`, `media`
+/// and `online_services` need one, because their keys do not survive Evolution.
 ///
-/// `full`, `contexts` and `pref` are held at their default on both sides,
-/// left for a later increment the way `online_services`' non-core fields
-/// were.
+/// `full`, `contexts` and `pref` stay at their default on both sides, as the
+/// non-core fields of `online_services` do.
 fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
     proptest::collection::vec(arb_address_component_slot(), ADDRESS_COMPONENT_KINDS.len())
         .prop_filter(
@@ -627,17 +611,16 @@ fn arb_name_value() -> impl Strategy<Value = String> {
     "[a-zA-Z]{1,10}"
 }
 
-/// The vCard-mapped `N` component kinds. Unlike `ADDRESS_COMPONENT_KINDS`
-/// none needs excluding: each sits at its own `N` field (`given` and
-/// `given2` included, RFC 9553 §2.2.1's two halves of a double-barrelled
-/// given name are both the kind `given`, not one of each), so one component
-/// per kind never shares a field with another kind. Sharing only arises
-/// from two components of the *same* kind, which this generator does not
-/// construct.
+/// The vCard-mapped `N` component kinds. Unlike `ADDRESS_COMPONENT_KINDS`, no
+/// kind needs exclusion: each kind has its own `N` field. This includes `given`
+/// and `given2`: per RFC 9553 §2.2.1, both halves of a double-barrelled given
+/// name have the kind `given`. Thus one component per kind never shares a field
+/// with another kind. A shared field occurs only with two components of the
+/// *same* kind, which this generator does not make.
 const NAME_COMPONENT_KINDS: [&str; 5] = ["title", "given", "given2", "surname", "credential"];
 
-/// [`AddressComponentSlot`] for a `Name`'s components: same four shapes
-/// (kept, added, removed, modified), over [`NameComponent`] instead of
+/// Same as [`AddressComponentSlot`] for the components of a `Name`: the same
+/// shapes (kept, added, removed, modified) over [`NameComponent`], not
 /// [`AddressComponent`].
 #[derive(Clone, Debug)]
 enum NameComponentSlot {
@@ -661,18 +644,16 @@ fn arb_name_component_slot() -> impl Strategy<Value = NameComponentSlot> {
 }
 
 /// Builds a `(current, edited)` pair of `Name.components`, one slot per
-/// [`NAME_COMPONENT_KINDS`] kind, the same way [`arb_address_components_pair`]
-/// builds an address's: a `Kept` kind's component is the server's own copy,
-/// matched by `(kind, value)`; a `Removed` one is dropped (its kind is
-/// stated, so its disappearance is the user deleting it); an `Added` or
-/// `Modified` kind's new value has nothing in `current` to match, so it is
-/// appended after every kept component, in the same order on both sides.
-/// That keeps `merge_named`'s result a literal match for `edited` without
-/// needing a third "expected" card.
+/// [`NAME_COMPONENT_KINDS`] kind, in the same way as
+/// [`arb_address_components_pair`]. A `Kept` component is the server copy,
+/// matched by `(kind, value)`. A `Removed` component is dropped: its kind is
+/// stated, so its absence means that the user deleted it. The new value of an
+/// `Added` or `Modified` kind has no match in `current`. Thus the merge appends
+/// it after all kept components, in the same order on both sides. The result of
+/// `merge_named` then matches `edited` literally and needs no "expected" card.
 ///
-/// `full`, `isOrdered`, `sortAs` and `extra` are held at their default on
-/// both sides, left for a later increment the way `online_services`'
-/// non-core fields were.
+/// `full`, `isOrdered`, `sortAs` and `extra` stay at their default on both
+/// sides, as the non-core fields of `online_services` do.
 fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
     proptest::collection::vec(arb_name_component_slot(), NAME_COMPONENT_KINDS.len())
         .prop_filter(
@@ -730,10 +711,9 @@ fn card_with_name(name: Name) -> ContactCard {
     }
 }
 
-/// One `kind`'s slot across (current, edited): absent on both sides, present
-/// only on the edited side (a genuine addition), present only on current
-/// (removed), or present on both with independently-chosen dates (a
-/// modification, possibly a no-op one).
+/// One `kind`'s slot across (current, edited). The slot is absent on both
+/// sides, edited only (a true addition) or current only (removed). Or it is on
+/// both sides with independent dates (a modification, which can be a no-op).
 #[derive(Clone, Debug)]
 enum AnniversarySlot {
     Absent,
@@ -742,11 +722,11 @@ enum AnniversarySlot {
     Modified(Value, Value),
 }
 
-/// A `PartialDate` (RFC 9553 §2.8.1) safely inside the range a vCard 3.0 date
-/// line can state and read back exactly: year 1000-9999 keeps clear of
-/// `Day::survives_the_field_it_lands_in`'s clamp, already covered by
-/// `eds-sys/tests/contacts.rs`, and day 1-28 keeps every month valid without
-/// having to model which months are short.
+/// A `PartialDate` (RFC 9553 §2.8.1) well inside the range that a vCard 3.0
+/// date line can state and read back exactly. Years 1000-9999 avoid the clamp
+/// of `Day::survives_the_field_it_lands_in`, which `eds-sys/tests/contacts.rs`
+/// covers. Days 1-28 are valid in every month, so the generator does not need
+/// to model short months.
 fn arb_anniversary_date() -> impl Strategy<Value = Value> {
     (1000u32..=9999, 1u32..=12, 1u32..=28).prop_map(|(year, month, day)| {
         json!({"@type": "PartialDate", "year": year, "month": month, "day": day})
@@ -770,13 +750,13 @@ fn card_with_anniversaries(map: BTreeMap<String, Anniversary>) -> ContactCard {
     }
 }
 
-/// Builds (current, edited, expected) for the two kinds a vCard anniversary
-/// can be (`birth`, `wedding`), each with its own slot. `current` and
-/// `edited` always use different keys per kind (`c-<kind>` / `e-<kind>`),
-/// modelling that an anniversary's key is never the same one twice; `expected`
-/// is what `rekey_keyless` should produce: a `Modified` slot lands under
-/// current's key (the pairing this increment exists to check), an `Added`
-/// one keeps edited's own key, and a `Removed` one leaves no entry at all.
+/// Builds (current, edited, expected) for the two kinds that a vCard
+/// anniversary can have (`birth`, `wedding`), with one slot each. `current` and
+/// `edited` always use different keys per kind (`c-<kind>`, `e-<kind>`),
+/// because an anniversary never gets the same key twice. `expected` is the
+/// result that `rekey_keyless` must give. A `Modified` slot goes under the key
+/// of current: this is the pairing under test. An `Added` slot keeps the key of
+/// edited, and a `Removed` slot leaves no entry.
 fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
     (arb_anniversary_slot(), arb_anniversary_slot()).prop_map(|(birth, wedding)| {
         let mut current = BTreeMap::new();
@@ -814,10 +794,10 @@ fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, C
     })
 }
 
-/// One photo's slot across (current, edited), same shape as
-/// `AnniversarySlot`: absent, a genuine addition, a removal, or present on
-/// both with independently-chosen URIs (a modification, possibly a no-op
-/// one).
+/// One photo's slot across (current, edited), with the same shapes as
+/// `AnniversarySlot`. The slot is absent, a true addition or a removal. Or it
+/// is on both sides with independent URIs (a modification, which can be a
+/// no-op).
 #[derive(Clone, Debug)]
 enum MediaSlot {
     Absent,
@@ -826,8 +806,8 @@ enum MediaSlot {
     Modified(String, String),
 }
 
-/// A non-`data:` URI, so `same_photo` reduces to comparing this string:
-/// `data:` URIs and `mediaType` are left for a later increment.
+/// A URI that is not a `data:` URI, so `same_photo` compares only this string.
+/// `data:` URIs and `mediaType` are out of scope.
 fn arb_photo_uri() -> impl Strategy<Value = String> {
     "[a-z]{3,8}://[a-z0-9]{1,10}\\.jpg"
 }
@@ -848,13 +828,13 @@ fn card_with_media(map: BTreeMap<String, Media>) -> ContactCard {
     }
 }
 
-/// Builds (current, edited, expected) for the one photo Evolution shows and
-/// can edit. Like `arb_anniversary_cards`, `current` and `edited` always use
-/// different keys (`c-photo` / `e-photo`), modelling that a photo's key is
-/// never the same one twice; `expected` is what `rekey_keyless` should
-/// produce: a `Modified` slot lands under current's key (the pairing this
-/// increment exists to check), an `Added` one keeps edited's own key, and a
-/// `Removed` one leaves no entry at all.
+/// Builds (current, edited, expected) for the one photo that Evolution shows
+/// and can edit. As in `arb_anniversary_cards`, `current` and `edited` always
+/// use different keys (`c-photo`, `e-photo`), because a photo never gets the
+/// same key twice. `expected` is the result that `rekey_keyless` must give. A
+/// `Modified` slot goes under the key of current: this is the pairing under
+/// test. An `Added` slot keeps the key of edited, and a `Removed` slot leaves
+/// no entry.
 fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
     arb_media_slot().prop_map(|slot| {
         let mut current = BTreeMap::new();
@@ -890,20 +870,23 @@ fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Contact
     })
 }
 
-/// Plain `[a-zA-Z0-9]{1,10}`: non-empty and free of `/?#%` and whitespace, so
-/// it is always `plain_handle` (drawable from, and rebuildable into, a URI)
-/// and always `states_online_service`-visible.
+/// Plain `[a-zA-Z0-9]{1,10}`: not empty, and free of `/?#%` and whitespace.
+/// Thus it is always a `plain_handle` (the code can draw it from a URI and
+/// rebuild a URI around it). It is also always visible to
+/// `states_online_service`.
 fn arb_handle() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9]{1,10}"
 }
 
-/// Two service names from `SERVICE_SCHEMES`/`ONLINE_SERVICES` with exactly one
-/// scheme each, so a handle drawn from or rebuilt into a URI is unambiguous.
+/// Two service names from `SERVICE_SCHEMES` and `ONLINE_SERVICES`. `SERVICE_A`
+/// has exactly one scheme, so a handle drawn from or rebuilt into its URI is
+/// unambiguous. `SERVICE_B` has two schemes and occurs only in `user`-stated
+/// entries, never in a URI.
 const SERVICE_A: &str = "Skype";
 const SERVICE_B: &str = "Yahoo";
 
-/// The shape every real `vcard_to_card` parse builds an online-service entry
-/// in: a plain `user`, never a `uri`.
+/// The shape in which every real `vcard_to_card` parse builds an online-service
+/// entry: a plain `user`, never a `uri`.
 fn user_stated(service: &str, handle: String) -> OnlineService {
     OnlineService {
         service: Some(service.to_owned()),
@@ -933,10 +916,9 @@ fn card_with_online_services(map: BTreeMap<String, OnlineService>) -> ContactCar
     }
 }
 
-/// The two shapes a server-held entry's handle can be stated in: a plain
-/// `user`, or drawn from a `uri` with no `user` of its own (from an earlier
-/// whole-value write — never from a `vcard_to_card` parse, which only ever
-/// produces the first).
+/// The two shapes that can state the handle of a server-held entry: a plain
+/// `user`, or a `uri` with no `user`. The second shape comes from an earlier
+/// whole-value write, never from a `vcard_to_card` parse.
 #[derive(Clone, Copy, Debug)]
 enum CurrentShape {
     UserStated,
@@ -955,12 +937,12 @@ fn shaped(shape: CurrentShape, handle: String) -> OnlineService {
     }
 }
 
-/// One entry's (current, edited, expected) triple for a handle rename.
-/// `edited` is always `user`-shaped, as every real parse builds it; `current`
-/// varies. `expected` is what the save should produce: a `user`-shaped
-/// current keeps stating the new handle as a `user`, and a `uri`-drawn
-/// current keeps the `uri` shape, rebuilt around the new handle — the member
-/// the old handle was drawn from is the one the rename goes back on.
+/// One entry's (current, edited, expected) triple for a handle rename. `edited`
+/// always has the `user` shape, as every real parse builds it; `current`
+/// varies. `expected` is the result that the save must give. A `user`-shaped
+/// current keeps the new handle in `user`. A `uri`-drawn current keeps the
+/// `uri` shape, rebuilt around the new handle: the rename writes into the
+/// member that held the old handle.
 fn arb_online_service_handle_cards()
 -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
     (
@@ -981,9 +963,9 @@ fn arb_online_service_handle_cards()
         })
 }
 
-/// Like [`round_trips`], but against an `expected` card distinct from
-/// `edited`: the right check for a property whose key `rekey_keyless`
-/// reassigns rather than preserves. See `arb_anniversary_cards`.
+/// Like [`round_trips`], but compares with an `expected` card that differs from
+/// `edited`. Use it for a property whose key `rekey_keyless` reassigns. See
+/// `arb_anniversary_cards`.
 fn round_trips_to(
     current_card: &ContactCard,
     edited_card: &ContactCard,
@@ -999,11 +981,10 @@ fn round_trips_to(
     Ok(())
 }
 
-/// The one mapped relation kind this generator exercises; `diff_related_to`
-/// treats `spouse`/`manager`/`assistant` identically, so covering one is
-/// enough to exercise the withdraw/claim shapes without also constructing
-/// the two-kinds-at-once interaction `patch.rs`'s own unit tests already
-/// cover.
+/// The one mapped relation kind that this generator uses. `diff_related_to`
+/// treats `spouse`, `manager` and `assistant` identically, so one kind covers
+/// the withdraw and claim shapes. The generator does not make the
+/// two-kinds-at-once case, which the unit tests of `patch.rs` cover.
 const RELATION_KIND: &str = "spouse";
 
 fn bare_relation() -> Relation {
@@ -1020,29 +1001,29 @@ fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
     }
 }
 
-/// One name's slot in `arb_related_to_cards`, covering every shape
-/// `diff_related_to` distinguishes for a single mapped kind.
+/// One name's slot in `arb_related_to_cards`. The variants cover each shape
+/// that `diff_related_to` separates for one mapped kind.
 #[derive(Clone, Debug)]
 enum RelatedSlot {
-    /// States the kind on the same name both sides: no patch for this key.
+    /// States the kind on the same name on both sides: no patch for this key.
     Kept,
-    /// Current states the kind, bare: withdrawal deletes the whole entry.
+    /// Current states only the kind: the withdrawal deletes the whole entry.
     RemovedBare,
-    /// Current states the kind alongside an unmapped relation type (`kin`):
-    /// withdrawal strikes only `relation/spouse`, the entry and `kin` stay.
+    /// Current states the kind with an unmapped relation type (`kin`). The
+    /// withdrawal removes only `relation/spouse`; the entry and `kin` stay.
     RemovedKeepsUnmappedKind,
-    /// Current states the kind alongside an extra member vCard has no field
-    /// for: the same partial withdrawal, through the other guard.
+    /// Current states the kind with an extra member that vCard has no field
+    /// for. This is the same partial withdrawal, through the other guard.
     RemovedKeepsExtra(String),
-    /// Edited states the kind on a name the server never held at all: a
+    /// Edited states the kind on a name that the server never held: a
     /// whole-entry create.
     AddedNew,
-    /// Edited states the kind on a name the server already held with an
-    /// unmapped relation type: reaches into that entry's `relation/spouse`.
+    /// Edited states the kind on a name that the server held with an unmapped
+    /// relation type: the patch writes into `relation/spouse` of that entry.
     AddedExistingWithRelation,
-    /// Edited states the kind on a name the server already held with only
-    /// extra members and no `relation` field at all: replaces the whole
-    /// (absent) `relation` field.
+    /// Edited states the kind on a name that the server held with only
+    /// extra members. The patch replaces the whole (absent) `relation`
+    /// field.
     AddedExistingNoRelation(String),
 }
 
@@ -1058,10 +1039,10 @@ fn arb_related_slot() -> impl Strategy<Value = RelatedSlot> {
     ]
 }
 
-/// Builds (current, edited, expected) across several independent named
-/// slots. A withdrawal on one slot and a claim on another model the rename
-/// the module doc describes: keyed by name rather than id, it is just an
-/// independent remove and an independent add.
+/// Builds (current, edited, expected) across several independent named slots. A
+/// withdrawal on one slot and a claim on another make the rename that the
+/// module doc of `patch.rs` describes. The key is the name, not an id, so the
+/// rename is an independent remove and an independent add.
 fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
     proptest::collection::vec(arb_related_slot(), 0..=4)
         .prop_filter(

@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps sixteen
-//! properties of a JSCalendar event and drops the rest, so a save that
-//! replaced properties wholesale would delete data the user never touched and
-//! cannot even see.
+//! The write side. A save must not destroy data that the component cannot carry. The
+//! mapping drops some properties of a JSCalendar event. So a save that replaces
+//! properties whole deletes data that the user never touched and cannot see.
 
 mod common;
 
@@ -14,9 +12,8 @@ use jmap_cal_sync::{SyncError, Unsendable};
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
-/// The component Evolution hands to `save_component_sync` for a brand new
-/// appointment: the `UID` is a name the local cache invented, not a server
-/// identifier.
+/// The component that Evolution gives to `save_component_sync` for a new appointment. The
+/// local cache invented the `UID`; it is not a server identifier.
 const NEW_EVENT: &str = "BEGIN:VCALENDAR\r\n\
 VERSION:2.0\r\n\
 BEGIN:VEVENT\r\n\
@@ -51,7 +48,7 @@ fn saving_a_new_event_files_it_in_this_calendar_under_a_server_identifier() {
             .contains_key(&fixture.ours),
         "filed in the calendar being synced"
     );
-    // The listing agrees with what save reported.
+    // The listing agrees with the result of the save.
     let (_, events) = sync.list_existing().unwrap();
     assert_eq!(events, vec![saved]);
 }
@@ -71,10 +68,9 @@ fn a_new_events_icalendar_uid_becomes_the_jscalendar_uid() {
 
 #[test]
 fn a_new_event_that_states_its_end_rather_than_its_length_still_has_one() {
-    // What Evolution's appointment editor actually writes: DTEND, never
-    // DURATION. An event saved from it used to reach the server with no
-    // duration at all — RFC 8984's P0D — so the meeting the user scheduled for
-    // an hour and a half was shared as a zero-length one.
+    // Evolution's appointment editor writes DTEND, never DURATION. Such an event reached
+    // the server with no duration (RFC 8984's P0D), so a 90-minute meeting became a
+    // zero-length one.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace("DURATION:PT90M", "DTEND;TZID=Europe/Berlin:20260115T143000");
 
@@ -83,8 +79,7 @@ fn a_new_event_that_states_its_end_rather_than_its_length_still_has_one() {
     let stored = fixture.event(&saved.uid.as_str().into());
     assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
     assert_eq!(stored.duration.as_deref(), Some("PT1H30M"));
-    // And what EDS is handed back says the same, in the one spelling this
-    // mapping writes.
+    // EDS receives the same length, in the one form that this mapping writes.
     assert!(
         saved.icalendar.contains("\r\nDURATION:PT1H30M\r\n"),
         "{saved:?}"
@@ -93,9 +88,9 @@ fn a_new_event_that_states_its_end_rather_than_its_length_still_has_one() {
 
 #[test]
 fn a_new_all_day_event_reaches_the_server_as_one() {
-    // What Evolution writes for an all-day appointment: DTSTART and DTEND as
-    // DATE values. Without showWithoutTime the server — and every other client
-    // reading from it — was told about a midnight appointment instead.
+    // Evolution writes an all-day appointment as DTSTART and DTEND DATE values. Without
+    // showWithoutTime, the server and every client that reads it saw a midnight
+    // appointment.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT
         .replace(
@@ -110,9 +105,9 @@ fn a_new_all_day_event_reaches_the_server_as_one() {
     assert_eq!(stored.show_without_time, Some(true));
     assert_eq!(stored.start.as_deref(), Some("2026-01-15T00:00:00"));
     assert_eq!(stored.duration.as_deref(), Some("P1D"));
-    // RFC 5545 §3.2.19 and RFC 8984 §4.1.5 agree that a day has no zone.
+    // RFC 5545 §3.2.19 and RFC 8984 §4.1.5 agree: a day has no zone.
     assert_eq!(stored.time_zone, None);
-    // And EDS gets the same event back, still without a time.
+    // EDS receives the same event, still without a time.
     assert!(
         saved
             .icalendar
@@ -125,8 +120,8 @@ fn a_new_all_day_event_reaches_the_server_as_one() {
 fn giving_an_all_day_event_a_time_clears_the_flag_on_the_server() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Retreat", "2026-01-15T00:00:00");
-    // A day has no zone (RFC 8984 §4.1.5), and `CalendarEvent::simple` seeds
-    // one, so it goes as part of making this event all-day.
+    // A day has no zone (RFC 8984 §4.1.5). `CalendarEvent::simple` seeds one, so the
+    // all-day patch removes it.
     fixture.patch(
         &id,
         json!({"showWithoutTime": true, "duration": "P1D", "timeZone": null}),
@@ -154,10 +149,9 @@ fn giving_an_all_day_event_a_time_clears_the_flag_on_the_server() {
 
 #[test]
 fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
-    // A server may set showWithoutTime on an event no DATE value can hold — one
-    // that starts at 09:00, or, as here, one carrying a zone. The component
-    // shows it as timed, which loses the flag; the save must not read that loss
-    // back as the user having cleared it.
+    // A server can set showWithoutTime on an event that no DATE value can hold: one at
+    // 09:00 or, as here, one with a zone. The component shows it as timed and loses the
+    // flag. The save must not read that loss as the user clearing the flag.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Retreat", "2026-01-15T00:00:00");
     fixture.patch(
@@ -185,12 +179,11 @@ fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
 
 #[test]
 fn a_save_leaves_the_servers_own_timestamps_alone() {
-    // `created` and `updated` (RFC 8984 §4.1.5, §4.1.6) are the server's record
-    // of the event. They are drawn onto the component — as CREATED, and as the
-    // DTSTAMP and LAST-MODIFIED RFC 5545 §3.8.7.2 makes the same instant — and
-    // never read back off it, which is what this pins: an editor rewrites all
-    // three from its own clock on every save, so a save that read them would
-    // report the *client's* moment as when the server last changed the event.
+    // `created` and `updated` (RFC 8984 §4.1.5, §4.1.6) are the server's record of the
+    // event. The component shows them as CREATED, and as DTSTAMP and LAST-MODIFIED (one
+    // instant, RFC 5545 §3.8.7.2). The save never reads them back. An editor rewrites all
+    // three from its own clock on each save, so a read reports the client's time as the
+    // server's last change.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
     fixture.patch(
@@ -228,16 +221,13 @@ fn a_save_leaves_the_servers_own_timestamps_alone() {
 fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // A property no component we produce can carry. (`locations` was the
-    // exemplar here until the place an event happens at became mapped,
-    // `keywords` until the tags did, `freeBusyStatus` until the transparency
-    // did, `priority` until the importance did and `useDefaultAlerts` until the
-    // reminders did; the scheduling revision is still nowhere on a component.)
+    // `sequence` is a property that no component from this mapping can carry. (Earlier
+    // examples were `locations`, `keywords`, `freeBusyStatus`, `priority` and
+    // `useDefaultAlerts`; all are now mapped.)
     //
-    // The guest list beside it is the other half of the same rule, one step on:
-    // it is drawn (the ATTENDEE below) and patched one member at a time, so a
-    // save that never touched it must leave the `sendTo` the line has no room
-    // for, and everything else, as it was.
+    // The guest list is drawn (the ATTENDEE below) and patched one member at a time. A
+    // save that does not touch it must keep the `sendTo` that the line cannot hold, and
+    // all other members.
     let guest = json!({
         "@type": "Participant",
         "name": "Vera Example",
@@ -245,11 +235,10 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "roles": {"attendee": true},
         "participationStatus": "accepted",
     });
-    // And where the event is joined online, which is neither: it is drawn as the
-    // CONFERENCE below *and* editable, but only one member at a time — the
-    // `description` beside the URI has no room on the line, so it survives a
-    // save the way an unmapped property does. Here nothing about it was edited,
-    // so the whole entry has to come back untouched.
+    // The online meeting is drawn as the CONFERENCE below and is editable, but only one
+    // member at a time. The line cannot hold the `description`, so it survives a save
+    // like an unmapped property. Nothing about it changed here, so the whole entry must
+    // stay unchanged.
     let online = json!({
         "@type": "VirtualLocation",
         "name": "Team room",
@@ -257,11 +246,10 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "uri": "https://meet.example.com/standup",
         "features": {"video": true},
     });
-    // And what the event points at, which is the conference's case again: the
-    // ATTACH below is drawn *and* editable, but only the address on it — a
-    // Link's `title` (RFC 8984 §1.4.11) has no room on the line, and the media
-    // type and size are the server's own description of the resource. Nothing
-    // about it was edited here, so the whole entry has to come back untouched.
+    // The link is the same case: the ATTACH below is editable, but only its address. The
+    // line cannot hold a Link's `title` (RFC 8984 §1.4.11). The media type and size are
+    // the server's own description of the resource. Nothing about it changed here, so the
+    // whole entry must stay unchanged.
     let agenda = json!({
         "@type": "Link",
         "href": "https://files.example.com/standup.pdf",
@@ -281,8 +269,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let sync = fixture.sync();
 
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
-    // Unfolded first: RFC 5545 §3.1 splits a content line longer than 75 octets,
-    // and this one is.
+    // Unfold first: RFC 5545 §3.1 splits a content line longer than 75 octets, and this
+    // line is longer.
     assert!(
         icalendar
             .replace("\r\n ", "")
@@ -341,15 +329,14 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     );
 }
 
-/// A component with its folds undone. RFC 5545 §3.1 splits a content line
-/// longer than 75 octets, and a `CONFERENCE` carrying a label and a key is
-/// longer than that — so an edit expressed as a text substitution has to name
-/// the line the reader sees rather than the first fragment the emitter wrote.
+/// A component with its folds removed. RFC 5545 §3.1 splits a content line longer than 75
+/// octets, and a `CONFERENCE` with a label and a key is longer. So a text substitution
+/// must name the full line, not the first fragment that the emitter wrote.
 fn unfolded(icalendar: &str) -> String {
     icalendar.replace("\r\n ", "")
 }
 
-/// An event with somewhere to join it online, and the sync that serves it.
+/// An event with an online meeting, and the sync that serves it.
 fn joined_online(fixture: &Fixture, places: Value) -> (jmap_proto::Id, jmap_cal_sync::CalSync) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"virtualLocations": places}));
@@ -357,8 +344,8 @@ fn joined_online(fixture: &Fixture, places: Value) -> (jmap_proto::Id, jmap_cal_
     (id, sync)
 }
 
-/// The one virtual location the tests below start from: a link, a name, the
-/// ways of taking part, and a note with no room on the `CONFERENCE` line.
+/// The start virtual location for the tests below: a link, a name, the ways to take
+/// part, and a note that the `CONFERENCE` line cannot hold.
 fn team_room() -> Value {
     json!({
         "@type": "VirtualLocation",
@@ -371,11 +358,10 @@ fn team_room() -> Value {
 
 #[test]
 fn moving_where_an_event_is_joined_online_patches_the_link_in_place() {
-    // The second property patched *into* rather than replaced, for the reason
-    // `locations` was the first: a VirtualLocation says more than its line does.
-    // Naming `virtualLocations` in the patch would replace the entry whole and
-    // take the description with it, so the save names the one member the user
-    // edited and everything beside it stays as the server had it.
+    // The second property that a save patches into and does not replace, like
+    // `locations`: a VirtualLocation holds more than its line shows. A patch that names
+    // `virtualLocations` replaces the entry and deletes the description. So the save
+    // names only the member that the user edited.
     let fixture = Fixture::start();
     let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
 
@@ -398,10 +384,10 @@ fn moving_where_an_event_is_joined_online_patches_the_link_in_place() {
 
 #[test]
 fn renaming_a_conference_and_changing_how_it_is_joined_both_arrive() {
-    // The other two members a CONFERENCE shows: RFC 7986 §6.4's LABEL is the
-    // VirtualLocation's `name`, and §6.3's FEATURE its `features`. The set goes
-    // back replaced whole, which is safe exactly because `maps_virtual_locations`
-    // has already refused the save for a set the line could not draw in full.
+    // The other two members that a CONFERENCE shows: RFC 7986 §6.4's LABEL is the `name`,
+    // and §6.3's FEATURE is the `features`. The save replaces the set whole. This is safe
+    // because `maps_virtual_locations` already refuses a set that the line cannot draw in
+    // full.
     let fixture = Fixture::start();
     let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
 
@@ -420,10 +406,10 @@ fn renaming_a_conference_and_changing_how_it_is_joined_both_arrive() {
 
 #[test]
 fn clearing_a_conferences_name_removes_it_rather_than_naming_it_nothing() {
-    // A LABEL the user deleted is `"virtualLocations/v1/name": null`: RFC 8620
-    // §5.3 removes a property to mean "back to the default", and RFC 8984 §4.2.6
-    // defaults `name` to the empty string. Storing "" instead would be a place
-    // whose name is nothing, which is a different claim.
+    // A deleted LABEL becomes `"virtualLocations/v1/name": null`. RFC 8620 §5.3 removes a
+    // property to mean "the default", and RFC 8984 §4.2.6 makes the empty string the
+    // default `name`. To store "" claims a place whose name is nothing, which is
+    // different.
     let fixture = Fixture::start();
     let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
 
@@ -439,13 +425,11 @@ fn clearing_a_conferences_name_removes_it_rather_than_naming_it_nothing() {
 
 #[test]
 fn a_conference_missing_from_the_component_is_left_where_it_is() {
-    // The conservative half of this mapping, and the reason is that a missing
-    // line does not say who removed it. Evolution 3.52 has no UI for a
-    // conference; whether its editor writes back a property it does not
-    // understand is not something this repository can answer without a real
-    // Evolution. Deleting the server's entry on that reading would destroy a
-    // link the user never touched, so a save that names fewer conferences than
-    // the server holds simply says nothing about the ones it does not name.
+    // The conservative half of this mapping: a missing line does not tell who removed it.
+    // Evolution 3.52 has no UI for a conference. Only a real Evolution can show if its
+    // editor writes back a property that it does not know. To delete the server's entry
+    // can destroy a link that the user never touched. So the save ignores the conferences
+    // that it does not name.
     let fixture = Fixture::start();
     let (id, sync) = joined_online(
         &fixture,
@@ -478,12 +462,10 @@ fn a_conference_missing_from_the_component_is_left_where_it_is() {
 
 #[test]
 fn a_conference_the_server_does_not_hold_is_not_created_by_a_save() {
-    // The other half of the same caution, and a rule RFC 8620 §5.3 also asks
-    // for: a patch may only reach through objects that already exist. A line
-    // carrying a key the server never chose — or none at all, which is what any
-    // other client's component looks like — is therefore not an entry this save
-    // can name, so it is left for the create path, where the whole property is
-    // written at once.
+    // The other half of the same caution, which RFC 8620 §5.3 also requires: a patch can
+    // only go through objects that already exist. A line with a key that the server never
+    // chose, or with no key (as from any other client), names no entry for this save. The
+    // create path, which writes the whole property, handles it.
     let fixture = Fixture::start();
     let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
 
@@ -511,11 +493,10 @@ fn a_conference_the_server_does_not_hold_is_not_created_by_a_save() {
 
 #[test]
 fn an_event_whose_conference_is_shown_in_part_is_not_patched_at_all() {
-    // The rule every conditionally-mapped property has: a drawing that left
-    // something out is not a drawing the user can have edited. Here it is a way
-    // of taking part outside RFC 7986 §6.3's vocabulary, which the CONFERENCE
-    // line cannot carry — so the whole property is left alone, including the
-    // entry whose URI the save really did change.
+    // Each conditionally-mapped property has this rule: the user cannot have edited a
+    // drawing that omitted something. Here a way to take part is outside RFC 7986 §6.3,
+    // and the CONFERENCE line cannot hold it. So the save leaves the whole property
+    // alone, also the entry whose URI the save changed.
     let fixture = Fixture::start();
     let mut hologram = team_room();
     hologram["features"] = json!({"hologram": true});
@@ -538,9 +519,9 @@ fn an_event_whose_conference_is_shown_in_part_is_not_patched_at_all() {
 
 #[test]
 fn a_new_events_conference_reaches_the_server() {
-    // The create path writes the property whole — there is no server entry to
-    // patch into — so a component that already names somewhere to join, which is
-    // what an event copied out of another calendar looks like, arrives with it.
+    // The create path writes the whole property, because no server entry exists to patch.
+    // So a component that already names an online meeting (for example, an event copied
+    // from another calendar) keeps it.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "END:VEVENT",
@@ -566,16 +547,15 @@ fn a_new_events_conference_reaches_the_server() {
     );
 }
 
-/// An event pointing at whatever external resources are passed, and the sync
-/// that serves it.
+/// An event that points at the given external resources, and the sync that serves it.
 fn points_at(fixture: &Fixture, links: Value) -> (jmap_proto::Id, jmap_cal_sync::CalSync) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"links": links}));
     (id, fixture.sync())
 }
 
-/// The one link the tests below start from: an address, the media type and size
-/// the server knows for it, and the two members no `ATTACH` line has room for.
+/// The start link for the tests below: an address, its server-known media type and
+/// size, and two members that no `ATTACH` line can hold.
 fn agenda() -> Value {
     json!({
         "@type": "Link",
@@ -589,12 +569,10 @@ fn agenda() -> Value {
 
 #[test]
 fn moving_an_attachment_patches_the_entry_the_server_chose() {
-    // The third property patched *into* rather than replaced, for the reason the
-    // other two are: a Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a
-    // `title` that no ATTACH line has room for, so naming `links` in the patch
-    // would delete half of a resource the user was never shown. The save names
-    // `links/<key>/href` under the key the line was drawn with, and everything
-    // beside it stays as the server had it.
+    // The third property that a save patches into and does not replace. A Link (RFC 8984
+    // §1.4.11) holds a `cid`, a `rel` and a `title` that no ATTACH line can hold. A patch
+    // that names `links` deletes half of a resource that the user never saw. So the save
+    // names `links/<key>/href` under the drawn key, and all else stays.
     let fixture = Fixture::start();
     let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
 
@@ -615,12 +593,10 @@ fn moving_an_attachment_patches_the_entry_the_server_chose() {
 
 #[test]
 fn the_media_type_and_size_the_server_stated_are_not_rewritten_by_a_save() {
-    // `href` is the only member of a Link a save ever names, and this is why:
-    // `contentType` and `size` are the *server's* description of the resource —
-    // §1.4.11 calls the size an estimate — not a field the user was offered. An
-    // editor that rewrites the line without the parameters it has no UI for is
-    // the ordinary case, and reading that as "the user cleared the media type"
-    // would delete what the server knows on the first save of an unrelated edit.
+    // A save names only the `href` of a Link. `contentType` and `size` are the server's
+    // description of the resource (§1.4.11 calls the size an estimate), not fields that
+    // the user saw. An editor usually rewrites the line without these parameters. To read
+    // that as a cleared media type deletes server data on the first unrelated edit.
     let fixture = Fixture::start();
     let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
 
@@ -642,14 +618,11 @@ fn the_media_type_and_size_the_server_stated_are_not_rewritten_by_a_save() {
 
 #[test]
 fn an_attachment_missing_from_the_component_is_left_where_it_is() {
-    // The same caution a missing CONFERENCE gets, and for the same reason: a
-    // line that is gone does not say who removed it. Evolution's editor keeps
-    // attachments in a store of its own and writes what it kept, so a component
-    // that names fewer resources than the server holds is as likely to be an
-    // editor that dropped a line it had no URI for as a user who removed the
-    // file. Reading it as a deletion would destroy a document nobody touched;
-    // the cost of the other reading is that a removal made elsewhere comes back
-    // on the next sync.
+    // A missing ATTACH gets the same caution as a missing CONFERENCE: a missing line does
+    // not tell who removed it. Evolution's editor keeps attachments in its own store and
+    // writes what it kept. So a missing line can come from an editor that had no URI, or
+    // from a user who removed the file. To read it as a deletion can destroy a document
+    // that nobody touched. The cost: a removal made elsewhere returns on the next sync.
     let fixture = Fixture::start();
     let minutes = json!({
         "@type": "Link",
@@ -680,11 +653,10 @@ fn an_attachment_missing_from_the_component_is_left_where_it_is() {
 
 #[test]
 fn a_resource_the_server_does_not_hold_is_not_created_by_a_save() {
-    // RFC 8620 §5.3 lets a patch reach only through objects that already exist,
-    // so a line carrying a key the server never chose — or none at all, which is
-    // what another client's component looks like — names no entry this save can
-    // patch. Creating one instead is not available either: a resource the user
-    // added is a file to upload as a blob, not an address the server can fetch.
+    // RFC 8620 §5.3 lets a patch go only through objects that already exist. A line with
+    // a key that the server never chose, or with no key (as from another client), names
+    // no entry to patch. A create is not possible either: a new resource is a file to
+    // upload as a blob, not an address for the server to fetch.
     let fixture = Fixture::start();
     let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
 
@@ -707,14 +679,12 @@ fn a_resource_the_server_does_not_hold_is_not_created_by_a_save() {
 
 #[test]
 fn an_attachment_under_a_key_this_side_invented_is_not_patched_onto_another() {
-    // A key outside RFC 8984 §1.4.4's `Id` grammar cannot ride on the line, so
-    // the drawing of that entry reads back under an invented key — and an
-    // invented key avoids only the keys the *document* names, so it can collide
-    // with a key the server holds for an entry the drawing left out. Here it
-    // does: `k1` is a resource with no address to draw. Patching `links/k1/href`
-    // would give that entry the address of the agenda the user edited and lose
-    // the edit itself, so the address the server stated is checked against the
-    // one that was drawn, and an edit under a key this side invented is dropped.
+    // A key outside RFC 8984 §1.4.4's `Id` grammar cannot go on the line, so that entry
+    // reads back under an invented key. An invented key avoids only the keys that the
+    // document names. So it can collide with a server key for an entry that the drawing
+    // omitted. Here `k1` is a resource with no address to draw. To patch `links/k1/href`
+    // gives that entry the agenda's address and loses the edit. So the save compares the
+    // server's address with the drawn address, and drops an edit under an invented key.
     let fixture = Fixture::start();
     let addressless = json!({
         "@type": "Link",
@@ -866,9 +836,9 @@ fn readdressing_an_image_preserves_icon_rel_and_display() {
 
 #[test]
 fn a_new_events_attachment_reaches_the_server() {
-    // The create path writes the property whole — there is no server entry to
-    // patch into — so a component that already points somewhere, which is what
-    // an event copied out of another calendar looks like, arrives with it.
+    // The create path writes the whole property, because no server entry exists to patch.
+    // So a component that already points at a resource (for example, an event copied from
+    // another calendar) keeps it.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "END:VEVENT",
@@ -896,11 +866,10 @@ fn a_new_events_attachment_reaches_the_server() {
 
 #[test]
 fn a_new_events_local_attachment_is_not_sent_to_the_server() {
-    // Where Evolution keeps a file the user attached: a `file:` URI into its own
-    // store. It is not an address anybody else could fetch, and the path names
-    // the user's home directory — so it is not filed as a Link, and the event is
-    // created without it. Sending the file means uploading it as a blob, which
-    // this backend does not do yet.
+    // Evolution keeps an attached file in its own store, as a `file:` URI. Nobody else
+    // can fetch that address, and the path names the user's home directory. So the save
+    // does not file it as a Link, and creates the event without it. To send the file
+    // needs a blob upload, which this backend does not do yet.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "END:VEVENT",
@@ -965,14 +934,12 @@ fn moving_an_event_to_another_zone_lengthening_it_and_unconfirming_it_all_arrive
 
 #[test]
 fn a_length_the_component_could_not_state_survives_a_save() {
-    // The server's own `duration` can be one iCalendar has no room for: RFC 5545
-    // §3.3.6 spells a negative length and RFC 8984 §1.4.6 does not, so a value
-    // this way round is a value the mapping refuses to write — libical refusing
-    // the content line would cost the whole component, and the appointment with
-    // it. What must not follow is a save *clearing* it. The baseline a save diffs
-    // against is the server's event put through the same rendering, so the length
-    // is absent on both sides and an edit elsewhere leaves the server's value
-    // where it was.
+    // The server's `duration` can be a value that iCalendar cannot hold. RFC 5545 §3.3.6
+    // spells a negative length and RFC 8984 §1.4.6 does not, so the mapping refuses to
+    // write this value. If libical refused the line, the whole component and the
+    // appointment would be lost. The save must not clear the value. The baseline is the
+    // server's event through the same rendering, so both sides omit the length and the
+    // server keeps it.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"duration": "-PT1H"}));
@@ -994,10 +961,10 @@ fn a_length_the_component_could_not_state_survives_a_save() {
 
 #[test]
 fn an_occurrence_whose_length_the_component_could_not_state_is_left_alone() {
-    // One level down, where the property is replaced whole rather than patched
-    // key by key. An override the component cannot describe comes back as the
-    // empty patch, so writing the map would delete the length the server holds —
-    // the same reason a rule with a `byDay` leaves `recurrenceRule` untouched.
+    // The same rule one level down, where the save replaces the property whole and does
+    // not patch it key by key. An override that the component cannot describe reads back
+    // as the empty patch. So to write the map deletes the server's length. For the same
+    // reason, a rule with a `byDay` leaves `recurrenceRule` unchanged.
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
     fixture.patch(
@@ -1006,8 +973,8 @@ fn an_occurrence_whose_length_the_component_could_not_state_is_left_alone() {
     );
     let sync = fixture.sync();
 
-    // Placed by an RDATE, at the series' length: the occurrence is shown, and
-    // the length it really has is not.
+    // An RDATE places the occurrence at the series' length: the occurrence shows, but its
+    // real length does not.
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(icalendar.contains("RDATE:20260120T090000Z"), "{icalendar}");
     let edited = with_line(&icalendar, "EXDATE:20260116T090000Z");
@@ -1054,9 +1021,9 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `rscale` has no place in the RecurrenceRule this crate models — a rule
-    // counted in the Chinese calendar has no `RRULE` spelling libical reads — so
-    // the RRULE the user edited is a narrower rule than the one on the server.
+    // The RecurrenceRule that this crate models has no `rscale`, and libical reads no
+    // `RRULE` for a Chinese-calendar rule. So the RRULE that the user edited is narrower
+    // than the server's rule.
     fixture.patch(
         &id,
         json!({"recurrenceRule":{
@@ -1100,8 +1067,8 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
     );
     let sync = fixture.sync();
 
-    // RFC 8984 §4.3.3's `until` is a local time in the event's own zone, so it
-    // is drawn the way DTSTART is.
+    // RFC 8984 §4.3.3's `until` is a local time in the event's zone, so the mapping draws
+    // it like DTSTART.
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(
         icalendar.contains("UNTIL=20260901T090000\r\n")
@@ -1109,12 +1076,11 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
         "{icalendar}"
     );
 
-    // RFC 5545 §3.3.10 asks for a UTC instant there instead, whenever DTSTART
-    // names a zone — so that is what a conformant editor writes back, and what
-    // an event imported from anywhere else carries: the same moment, two hours
-    // earlier on the clock. Read as a local time it would tell the server the
-    // series stops at 07:00 Zurich time, which is before the last occurrence
-    // begins, so the day the user could still see would be gone from it.
+    // RFC 5545 §3.3.10 requires a UTC instant there when DTSTART names a zone. A
+    // conformant editor writes that, and so does an imported event: the same moment, two
+    // hours earlier on the clock. As a local time, it ends the series at 07:00 Zurich
+    // time. That is before the last occurrence starts, so the server loses a day that the
+    // user can still see.
     let edited = icalendar.replace("UNTIL=20260901T090000", "UNTIL=20260901T070000Z");
     assert_ne!(edited, icalendar);
     sync.save_component(&edited, Some(id.as_str())).unwrap();
@@ -1129,8 +1095,8 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
 
 #[test]
 fn a_new_events_recurrence_reaches_the_server() {
-    // The ordinary series, so that the refusal below is known to be about the
-    // rule it cannot state rather than about recurrence on a create at all.
+    // An ordinary series. It shows that the refusal below is about the rule, not about
+    // recurrence on a create.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "DURATION:PT90M",
@@ -1150,20 +1116,19 @@ fn a_new_events_recurrence_reaches_the_server() {
 
 #[test]
 fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
-    // RFC 5545 §3.3.10 requires `UNTIL` to be a UTC instant wherever `DTSTART`
-    // names a zone, and turning that instant into RFC 8984 §4.3.3's local time
-    // needs a zone database `jmap-ical` deliberately does not carry — so the
-    // value is kept as it was stated and `maps_recurrence_rule` reports that the
-    // rule cannot be sent. This is the commonest such rule there is: every
-    // "repeat until <date>" a conformant editor writes in a zoned calendar.
+    // RFC 5545 §3.3.10 requires `UNTIL` as a UTC instant when `DTSTART` names a zone, and
+    // RFC 8984 §4.3.3 wants a local time. Without a `VTIMEZONE` in the document, the
+    // conversion needs a zone database, and `jmap-ical` deliberately carries none. So the
+    // value stays as stated, and `maps_recurrence_rule` reports that the rule cannot be
+    // sent. This is the most common such rule: every "repeat until <date>" that a
+    // conformant editor writes in a zoned calendar.
     //
-    // An edit leaves `recurrenceRule` alone and the server's own rule stands
-    // (see `a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence`).
-    // A create has no rule to leave standing, so the save is refused instead:
-    // sending it invites a strict server to reject the whole set, and a lenient
-    // one to store a `until` that is no LocalDateTime — which this mapping then
-    // cannot draw, so Evolution would show a single appointment while the
-    // server ran a series.
+    // An edit leaves `recurrenceRule` alone, and the server's rule stays (see
+    // `a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence`). A create
+    // has no rule to keep, so the sync refuses the save. A strict server can reject the
+    // whole set. A lenient one can store an `until` that is no LocalDateTime. This
+    // mapping cannot draw that, so Evolution shows one appointment while the server runs
+    // a series.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "DURATION:PT90M",
@@ -1185,20 +1150,17 @@ fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
 
 #[test]
 fn a_series_end_that_cannot_be_stated_is_refused_by_naming_the_zone_and_the_date() {
-    // The refusal above, carrying what the person it happens to has to be
-    // told. What is left of it after the document's own `VTIMEZONE` became the
-    // conversion (see below) is narrow — a zone the entry names and does not
-    // define, or defines in a shape `jmap-ical`'s evaluator will not guess at —
-    // and a message that blames "an end date stated as a UTC instant" now
-    // describes the case that *works*. So the refusal names which instant and
-    // which zone instead: the two facts that tell the user which appointment to
-    // change, and tell whoever reads the bug report which zone definition to
-    // look at.
+    // The refusal above must tell the user what happened. The document's own `VTIMEZONE`
+    // now does the conversion (see below), so few cases remain. These are a zone that the
+    // entry names but does not define, or defines in a shape that `jmap-ical`'s evaluator
+    // does not guess at. A message about "an end date stated as a UTC instant" now
+    // describes the case that works. So the refusal names the instant and the zone. These
+    // two facts tell the user which appointment to change, and tell a bug reader which
+    // zone definition to examine.
     //
-    // Two facts rather than a sentence, because the sentence is written where
-    // it can be translated — `jmap_backend_cal::ops`, over this reason. The
-    // instant is the value as it was *kept*, normalised out of the component's
-    // `20260331T120000Z`, which is the form the user is shown.
+    // The refusal carries two facts, not a sentence, because `jmap_backend_cal::ops`
+    // writes the translatable sentence from this reason. The instant is the kept value,
+    // normalised from the component's `20260331T120000Z`. The user sees this form.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "DURATION:PT90M",
@@ -1218,13 +1180,11 @@ fn a_series_end_that_cannot_be_stated_is_refused_by_naming_the_zone_and_the_date
 
 #[test]
 fn a_zone_defined_in_a_shape_the_evaluator_refuses_is_named_in_the_refusal_too() {
-    // The other half, and the one that survives a document doing everything
-    // right: Berlin, defined, but with a transition rule written in a shape
-    // `jmap-ical`'s zone evaluator refuses whole — here an `INTERVAL` other
-    // than 1. The conversion is unavailable for the same reason as above and
-    // the user gets the same answer, which is the point: one message covering
-    // "not defined" and "defined unreadably", because from where the user sits
-    // those are one problem with their calendar entry's time zone.
+    // The other case, which remains when a document does everything correctly. Berlin is
+    // defined, but with a transition rule that `jmap-ical`'s zone evaluator refuses whole
+    // (here an `INTERVAL` other than 1). The conversion is not available, and the user
+    // gets the same answer. For the user, "not defined" and "defined unreadably" are one
+    // problem with the entry's time zone.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT
         .replace(
@@ -1251,9 +1211,8 @@ fn a_zone_defined_in_a_shape_the_evaluator_refuses_is_named_in_the_refusal_too()
     );
 }
 
-/// Berlin as libical writes it, and as every component Evolution hands a save
-/// carries it: the `VTIMEZONE` RFC 5545 §3.6.5 says defines the `TZID` beside
-/// it.
+/// Berlin as libical writes it, and as every component that Evolution saves contains it:
+/// the `VTIMEZONE` that defines the `TZID` beside it (RFC 5545 §3.6.5).
 const BERLIN: &str = "BEGIN:VTIMEZONE\r\n\
 TZID:Europe/Berlin\r\n\
 BEGIN:DAYLIGHT\r\n\
@@ -1272,13 +1231,11 @@ END:VTIMEZONE\r\n";
 
 #[test]
 fn a_new_events_series_end_converts_through_the_zone_the_document_defines() {
-    // The refusal above is what is left when a document names a zone and does
-    // not define it. A real one defines it, and then the UTC instant §3.3.10
-    // requires converts into the local time §4.3.3 wants without any zone
-    // database: the rules are in the file. So the commonest recurring save
-    // there is — "repeat weekly until <date>" in a zoned calendar — reaches the
-    // server as the series it is, rather than as an error the user has to work
-    // around.
+    // The refusal above applies when a document names a zone but does not define it. A
+    // real document defines it. Then the UTC instant that §3.3.10 requires converts to
+    // the local time that §4.3.3 wants, with no zone database: the rules are in the file.
+    // So the most common recurring save ("repeat weekly until <date>" in a zoned
+    // calendar) reaches the server as a series, not as an error.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT
         .replace("BEGIN:VEVENT", &format!("{BERLIN}BEGIN:VEVENT"))
@@ -1293,16 +1250,15 @@ fn a_new_events_series_end_converts_through_the_zone_the_document_defines() {
         .event(&saved.uid.as_str().into())
         .recurrence_rule
         .unwrap();
-    // Two hours on, the last Sunday of March having passed two days earlier.
+    // Two hours later, because the last Sunday of March was two days earlier.
     assert_eq!(rules.until.as_deref(), Some("2026-03-31T14:00:00"));
 }
 
 #[test]
 fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
-    // The other half of the same refusal, and the one that is not about time
-    // zones: RFC 7529's leap-month spelling is a month JSCalendar states only
-    // beside the `rscale` this mapping drops, so the rule that would go out
-    // names a month the server is entitled to reject.
+    // The other cause of the same refusal, which is not about time zones. JSCalendar
+    // states RFC 7529's leap month only beside the `rscale` that this mapping drops. So
+    // the outgoing rule names a month that the server can reject.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "DURATION:PT90M",
@@ -1311,9 +1267,8 @@ fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
 
     let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
 
-    // And it must not be reported as a time-zone problem: this rule has no end
-    // at all, so a refusal naming the event's zone would send the user to
-    // change something that is not what stopped the save.
+    // The refusal must not name a time zone: this rule has no end. A zone in the message
+    // makes the user change something that did not stop the save.
     assert_eq!(
         failure_reason(&failure),
         &Unsendable::Recurrence,
@@ -1321,7 +1276,7 @@ fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
     );
 }
 
-/// The reason a refused save carries, or a panic naming what came instead.
+/// The reason that a refused save carries, or a panic that names the other result.
 fn failure_reason(failure: &SyncError) -> &Unsendable {
     match failure {
         SyncError::Unsendable(reason) => reason,
@@ -1348,8 +1303,7 @@ fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
         icalendar.contains("RRULE:FREQ=WEEKLY;BYDAY=MO"),
         "{icalendar}"
     );
-    // Adding the Thursday, which is what the appointment editor's recurrence
-    // page does to the RRULE.
+    // Add Thursday, as the recurrence page of the appointment editor does.
     let edited = icalendar.replace("BYDAY=MO", "BYDAY=MO,TH");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1379,8 +1333,8 @@ fn the_days_of_the_month_a_rule_repeats_on_reach_the_server() {
         icalendar.contains("RRULE:FREQ=MONTHLY;BYMONTHDAY=15"),
         "{icalendar}"
     );
-    // Moving it to the last day of the month, which is what the appointment
-    // editor's recurrence page writes for "on the last day".
+    // Move it to the last day of the month, as the editor's recurrence page writes for
+    // "on the last day".
     let edited = icalendar.replace("BYMONTHDAY=15", "BYMONTHDAY=-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1407,8 +1361,8 @@ fn the_months_a_yearly_rule_repeats_in_reach_the_server() {
         icalendar.contains("RRULE:FREQ=YEARLY;BYMONTH=3"),
         "{icalendar}"
     );
-    // Adding the second half-year, which is what the appointment editor's
-    // recurrence page writes for a yearly series in two months.
+    // Add the second half-year, as the editor's recurrence page writes for a yearly
+    // series in two months.
     let edited = icalendar.replace("BYMONTH=3", "BYMONTH=3,9");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1438,8 +1392,8 @@ fn the_days_of_the_year_a_rule_repeats_on_reach_the_server() {
         icalendar.contains("RRULE:FREQ=YEARLY;BYYEARDAY=1"),
         "{icalendar}"
     );
-    // Adding the last day of the year, which is the negative form RFC 8984
-    // §4.3.3 counts back from 31 December with.
+    // Add the last day of the year: the negative form, which RFC 8984 §4.3.3 counts back
+    // from 31 December.
     let edited = icalendar.replace("BYYEARDAY=1", "BYYEARDAY=1,-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1449,11 +1403,10 @@ fn the_days_of_the_year_a_rule_repeats_on_reach_the_server() {
 
 #[test]
 fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
-    // `FREQ=MONTHLY;BYYEARDAY=100` is a rule RFC 5545 §3.3.10 does not admit — a
-    // month is not a period a day of the year sits inside — and neither calcard
-    // nor libical judges it, so the check is on the way out: `recurrenceRule` goes
-    // to the server replaced whole, and one part it is entitled to reject would
-    // cost every other edit in the save.
+    // RFC 5545 §3.3.10 does not admit `FREQ=MONTHLY;BYYEARDAY=100`: a day of the year is
+    // not inside a month. Neither calcard nor libical checks it, so the check occurs on
+    // output. The save replaces `recurrenceRule` whole, so one part that the server can
+    // reject loses every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1480,11 +1433,10 @@ fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
 
 #[test]
 fn a_leap_month_is_not_sent() {
-    // A month iCalendar can only name under RFC 7529's `RSCALE` (RFC 8984
-    // §4.3.3's `5L`). calcard carries the token rather than judging it, so the
-    // check is on the way out: `recurrenceRule` goes to the server replaced
-    // whole, and one part it is entitled to reject would cost every other edit in
-    // the save.
+    // RFC 7529's `RSCALE` is the only iCalendar way to name this month (RFC 8984 §4.3.3's
+    // `5L`). calcard carries the token without a check, so the check occurs on output.
+    // The save replaces `recurrenceRule` whole, so one part that the server can reject
+    // loses every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Festival", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1530,8 +1482,8 @@ fn the_day_a_rules_weeks_start_on_reaches_the_server() {
         icalendar.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU"),
         "{icalendar}"
     );
-    // Counting the weeks from Saturday instead, which is what the appointment
-    // editor's recurrence page writes when the calendar's week start changes.
+    // Count the weeks from Saturday, as the editor's recurrence page writes when the
+    // calendar's week start changes.
     let edited = icalendar.replace("WKST=SU", "WKST=SA");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1541,12 +1493,10 @@ fn the_day_a_rules_weeks_start_on_reaches_the_server() {
 
 #[test]
 fn a_day_no_week_starts_on_is_not_sent() {
-    // A `firstDayOfWeek` outside RFC 8984 §4.3.3's closed vocabulary is one no
-    // `WKST` can say, and libical refuses a component carrying `WKST=XX` outright
-    // — so the rule is shown without it, and a save must not write the property
-    // back: `recurrenceRule` goes to the server replaced whole, so the day would
-    // be dropped from the server's own rule by a save that never touched the
-    // recurrence.
+    // A `firstDayOfWeek` outside RFC 8984 §4.3.3's closed vocabulary has no `WKST` form,
+    // and libical refuses a component with `WKST=XX`. So the rule shows without it. The
+    // save replaces `recurrenceRule` whole, so a save that did not touch the recurrence
+    // must not write it. That write drops the day from the server's rule.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1564,8 +1514,8 @@ fn a_day_no_week_starts_on_is_not_sent() {
         icalendar.contains("RRULE:FREQ=WEEKLY\r\n"),
         "the day is left off the rule the user is shown: {icalendar}"
     );
-    // So an edit to the recurrence is an edit to a rule the user was shown in
-    // part, and is dropped whole rather than sent as the narrower rule it is.
+    // So an edit to the recurrence edits a rule that the user saw only in part. The save
+    // drops the edit whole, and does not send the narrower rule.
     let edited = icalendar
         .replace("RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY;COUNT=4")
         .replace("SUMMARY:Standup", "SUMMARY:Daily standup");
@@ -1609,8 +1559,8 @@ fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
         icalendar.contains("RRULE:FREQ=YEARLY;BYWEEKNO=1;WKST=SU"),
         "{icalendar}"
     );
-    // Adding the last week of the year, which is the negative form RFC 8984
-    // §4.3.3 counts back from the end of the year with.
+    // Add the last week of the year: the negative form, which RFC 8984 §4.3.3 counts back
+    // from the end of the year.
     let edited = icalendar.replace("BYWEEKNO=1;", "BYWEEKNO=1,-1;");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1625,11 +1575,10 @@ fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
 
 #[test]
 fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
-    // `FREQ=MONTHLY;BYWEEKNO=20` is a rule RFC 5545 §3.3.10 does not admit — it
-    // admits `BYWEEKNO` beside `YEARLY` and nothing else — and neither calcard nor
-    // libical judges it, so the check is on the way out: `recurrenceRule` goes to
-    // the server replaced whole, and one part it is entitled to reject would cost
-    // every other edit in the save.
+    // RFC 5545 §3.3.10 does not admit `FREQ=MONTHLY;BYWEEKNO=20`: it admits `BYWEEKNO`
+    // only with `YEARLY`. Neither calcard nor libical checks it, so the check occurs on
+    // output. The save replaces `recurrenceRule` whole, so one part that the server can
+    // reject loses every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1656,11 +1605,10 @@ fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
 
 #[test]
 fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
-    // A `byWeekNo` outside RFC 5545's `ordwk` is one no `BYWEEKNO` this mapping
-    // will write can carry — 54 is a week no year has — so the rule is shown
-    // without it, and a save must not write the property back: `recurrenceRule`
-    // goes to the server replaced whole, so the week would be dropped from the
-    // server's own rule by a save that only narrowed it.
+    // A `byWeekNo` outside RFC 5545's `ordwk` fits no `BYWEEKNO` that this mapping writes
+    // (no year has week 54). So the rule shows without it. The save replaces
+    // `recurrenceRule` whole, so a save that only narrowed the rule must not write it.
+    // That write drops the week from the server's rule.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1678,8 +1626,8 @@ fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
         icalendar.contains("RRULE:FREQ=YEARLY\r\n"),
         "the week is left off the rule the user is shown: {icalendar}"
     );
-    // So an edit to the recurrence is an edit to a rule the user was shown in
-    // part, and is dropped whole rather than sent as the narrower rule it is.
+    // So an edit to the recurrence edits a rule that the user saw only in part. The save
+    // drops the edit whole, and does not send the narrower rule.
     let edited = icalendar
         .replace("RRULE:FREQ=YEARLY", "RRULE:FREQ=YEARLY;COUNT=4")
         .replace("SUMMARY:Stocktake", "SUMMARY:Annual stocktake");
@@ -1723,8 +1671,8 @@ fn the_occurrence_of_the_set_a_rule_takes_reaches_the_server() {
         icalendar.contains("RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1"),
         "{icalendar}"
     );
-    // Adding the first Friday of the month, which is the positive form counting
-    // from the start of the set the `BYDAY` expands to.
+    // Add the first Friday of the month: the positive form, which counts from the start
+    // of the set that `BYDAY` expands to.
     let edited = icalendar.replace("BYSETPOS=-1", "BYSETPOS=1,-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1739,11 +1687,10 @@ fn the_occurrence_of_the_set_a_rule_takes_reaches_the_server() {
 
 #[test]
 fn a_position_with_nothing_to_select_from_is_not_sent() {
-    // `FREQ=MONTHLY;BYSETPOS=2` is a rule RFC 5545 §3.3.10 does not admit —
-    // `BYSETPOS` MUST only be used together with another `BYxxx` part — and
-    // libical keeps it rather than judging it, so the check is on the way out.
-    // Sent, it would name a series whose second-and-only occurrence per month
-    // does not exist.
+    // RFC 5545 §3.3.10 does not admit `FREQ=MONTHLY;BYSETPOS=2`: `BYSETPOS` MUST only
+    // occur with another `BYxxx` part. libical keeps it without a check, so the check
+    // occurs on output. If sent, it names a series whose second (and only) monthly
+    // occurrence does not exist.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1770,11 +1717,10 @@ fn a_position_with_nothing_to_select_from_is_not_sent() {
 
 #[test]
 fn a_position_the_server_holds_alone_is_not_cleared_from_its_rule() {
-    // The mirror of the above, in the direction that loses data. A
-    // `bySetPosition` the server holds with no other `by*` beside it is one no
-    // `RRULE` this mapping writes can carry, so the rule is shown without it —
-    // and `recurrenceRule` goes back replaced whole, so a save that only
-    // narrowed the rule would delete the position from the server's own copy.
+    // The opposite direction, which loses data. No `RRULE` that this mapping writes can
+    // hold a `bySetPosition` with no other `by*` part, so the rule shows without it. The
+    // save replaces `recurrenceRule` whole, so a save that only narrowed the rule deletes
+    // the position from the server's copy.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1834,8 +1780,8 @@ fn the_hours_of_the_day_a_rule_repeats_at_reach_the_server() {
         icalendar.contains("RRULE:FREQ=DAILY;BYHOUR=9"),
         "{icalendar}"
     );
-    // A second standup after lunch — the hours are a set, so the added one goes
-    // out beside the one that was there.
+    // A second standup after lunch. The hours are a set, so the save sends the new hour
+    // together with the old one.
     let edited = icalendar.replace("BYHOUR=9", "BYHOUR=9,14");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1845,9 +1791,9 @@ fn the_hours_of_the_day_a_rule_repeats_at_reach_the_server() {
 
 #[test]
 fn an_hour_no_day_has_is_not_sent() {
-    // 24 is outside RFC 5545 §3.3.10's `hour`, and libical answers such a rule by
-    // dropping the whole `RRULE` — so the check is on the way out, before a rule
-    // the server might keep and no reader can expand reaches it.
+    // RFC 5545 §3.3.10's `hour` excludes 24, and libical drops the whole `RRULE` for such
+    // a rule. So the check occurs on output, before the server can keep a rule that no
+    // reader can expand.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1874,10 +1820,9 @@ fn an_hour_no_day_has_is_not_sent() {
 
 #[test]
 fn hours_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
-    // The direction that loses data. The server's own `byHour` is one this mapping
-    // *can* write — so what has to be checked is that it goes back out again
-    // rather than being dropped by a save that touched the rule for another
-    // reason, since `recurrenceRule` is replaced whole.
+    // The direction that loses data. This mapping can write the server's `byHour`. The
+    // save replaces `recurrenceRule` whole, so a save that changed the rule for another
+    // reason must send `byHour` again.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1922,8 +1867,8 @@ fn the_minutes_and_seconds_a_rule_repeats_at_reach_the_server() {
         icalendar.contains("RRULE:FREQ=HOURLY;BYSECOND=0;BYMINUTE=0"),
         "{icalendar}"
     );
-    // A second poll on the half hour — both parts are sets, so the added value
-    // goes out beside the one that was there.
+    // A second poll on the half hour. Both parts are sets, so the save sends the new
+    // value together with the old one.
     let edited = icalendar.replace("BYMINUTE=0", "BYMINUTE=0,30");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -1934,11 +1879,10 @@ fn the_minutes_and_seconds_a_rule_repeats_at_reach_the_server() {
 
 #[test]
 fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
-    // RFC 5545 §3.3.10's `seconds` runs to 60 and its `minutes` only to 59, and
-    // libical answers a rule naming the sixtieth minute by dropping the whole
-    // `RRULE` — so the check is on the way out, before a rule the server might
-    // keep and no reader can expand reaches it. The leap second, in the same save,
-    // is a value that must *not* be caught by that check.
+    // RFC 5545 §3.3.10's `seconds` goes to 60, but its `minutes` only to 59. libical
+    // drops the whole `RRULE` for a rule with minute 60. So the check occurs on output,
+    // before the server can keep a rule that no reader can expand. That check must not
+    // catch the leap second in the same save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
     fixture.patch(
@@ -1981,9 +1925,9 @@ fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
 
 #[test]
 fn minutes_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
-    // The direction that loses data: `recurrenceRule` is replaced whole, so a
-    // save that touched the rule for another reason has to carry the minutes and
-    // seconds the server already held back out with it.
+    // The direction that loses data. The save replaces `recurrenceRule` whole, so a save
+    // that changed the rule for another reason must send the server's minutes and seconds
+    // again.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
     fixture.patch(
@@ -2009,11 +1953,10 @@ fn minutes_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
 
 #[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
-    // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
-    // calcard hands it back rather than judging it — so, as with an ordinal
-    // weekday, the check is on the way out: `recurrenceRule` goes to the server
-    // replaced whole, and one part it may reject would cost every other edit in
-    // the save.
+    // RFC 5545 §3.3.10 does not admit `FREQ=WEEKLY;BYMONTHDAY=15`, and calcard returns it
+    // without a check. So, as for an ordinal weekday, the check occurs on output. The
+    // save replaces `recurrenceRule` whole, so one part that the server can reject loses
+    // every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -2040,11 +1983,10 @@ fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
 
 #[test]
 fn a_days_ordinal_the_rrule_should_not_carry_is_not_sent() {
-    // `FREQ=WEEKLY;BYDAY=2MO` is a rule RFC 5545 §3.3.10 does not admit — an
-    // ordinal needs a month or a year to count within. calcard hands it back
-    // rather than judging it, so the check is on the way out, like the series'
-    // own `timeZone`: `recurrenceRule` goes to the server replaced whole, and
-    // one part it is entitled to reject would cost every other edit in the save.
+    // RFC 5545 §3.3.10 does not admit `FREQ=WEEKLY;BYDAY=2MO`: an ordinal needs a month
+    // or a year to count in. calcard returns it without a check, so the check occurs on
+    // output, as for the series' `timeZone`. The save replaces `recurrenceRule` whole, so
+    // one part that the server can reject loses every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -2069,8 +2011,8 @@ fn a_days_ordinal_the_rrule_should_not_carry_is_not_sent() {
     );
 }
 
-/// A daily event on the server, so that the tests below have a recurrence to
-/// name single instances of.
+/// A daily event on the server, so the tests below have a recurrence with single
+/// instances to name.
 fn seed_daily(fixture: &Fixture) -> jmap_proto::Id {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
@@ -2081,8 +2023,8 @@ fn seed_daily(fixture: &Fixture) -> jmap_proto::Id {
     id
 }
 
-/// The component with `line` inserted ahead of its `END:VEVENT`, which is what
-/// deleting one occurrence in Evolution amounts to.
+/// The component with `line` before its `END:VEVENT`. Evolution does this when the user
+/// deletes one occurrence.
 fn with_line(icalendar: &str, line: &str) -> String {
     icalendar.replace("END:VEVENT\r\n", &format!("{line}\r\nEND:VEVENT\r\n"))
 }
@@ -2103,7 +2045,7 @@ fn deleting_one_occurrence_reaches_the_server_as_an_excluded_override() {
         Some([("2026-01-16T09:00:00".to_owned(), json!({"excluded": true}))].into()),
         "the instance the user deleted is off, and only that one"
     );
-    // The rule it is an exception to is untouched.
+    // The series rule stays unchanged.
     assert_eq!(stored.recurrence_rule.unwrap().frequency, "daily");
 }
 
@@ -2126,8 +2068,8 @@ fn restoring_a_deleted_occurrence_removes_the_override() {
         .collect();
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    // Removing the property is how a PatchObject says "back to the default",
-    // which for recurrenceOverrides is no named instances at all.
+    // A PatchObject removes a property to mean "the default", which for
+    // recurrenceOverrides is no named instances.
     assert_eq!(fixture.event(&id).recurrence_overrides, None);
 }
 
@@ -2135,8 +2077,8 @@ fn restoring_a_deleted_occurrence_removes_the_override() {
 fn an_instance_edited_on_its_own_survives_an_edit_to_another_instance() {
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
-    // An override that changes the instance is a VEVENT of its own in the
-    // component, so deleting a *different* occurrence has to leave it standing.
+    // An override that changes the instance is a separate VEVENT in the component. A
+    // deletion of a different occurrence must keep it.
     fixture.patch(
         &id,
         json!({"recurrenceOverrides": {
@@ -2164,9 +2106,9 @@ fn an_instance_edited_on_its_own_survives_an_edit_to_another_instance() {
     );
 }
 
-/// The component with `vevent` appended inside its envelope, which is what
-/// editing one occurrence in Evolution amounts to: a second instance of the
-/// same uid, carrying the `RECURRENCE-ID` of the day it replaces.
+/// The component with `vevent` added inside its envelope. Evolution does this when the
+/// user edits one occurrence: a second instance of the same uid, with the `RECURRENCE-ID`
+/// of the day it replaces.
 fn with_instance(icalendar: &str, vevent: &str) -> String {
     icalendar.replace("END:VCALENDAR\r\n", &format!("{vevent}END:VCALENDAR\r\n"))
 }
@@ -2178,10 +2120,9 @@ fn editing_one_occurrence_reaches_the_server_as_a_patched_override() {
     let sync = fixture.sync();
 
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
-    // A detached instance is a whole component, not a patch: Evolution clones
-    // the series and edits that, so what it restates unchanged — here the
-    // status, and the length it states as a DTEND — is not an edit, and only
-    // the moved start and the new title reach the server.
+    // A detached instance is a full component, not a patch: Evolution copies the series
+    // and edits the copy. What it repeats unchanged (here the status, and the length as a
+    // DTEND) is not an edit. Only the new start and title reach the server.
     let edited = with_instance(
         &icalendar,
         &format!(
@@ -2210,8 +2151,7 @@ fn editing_one_occurrence_reaches_the_server_as_a_patched_override() {
             .into()
         ),
     );
-    // The series is what it was: one daily rule, and the title the other
-    // occurrences still carry.
+    // The series is unchanged: one daily rule, and the title of the other occurrences.
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup"));
     assert_eq!(stored.recurrence_rule.unwrap().frequency, "daily");
@@ -2234,8 +2174,8 @@ fn undoing_an_edit_to_one_occurrence_removes_the_override() {
         icalendar.contains("RECURRENCE-ID:20260120T090000Z"),
         "{icalendar}"
     );
-    // Deleting the detached instance is how Evolution says "this occurrence is
-    // like the others again".
+    // Evolution deletes the detached instance to make the occurrence like the others
+    // again.
     let detached = icalendar.rfind("BEGIN:VEVENT").expect("two instances");
     let series = format!("{}END:VCALENDAR\r\n", &icalendar[..detached]);
     sync.save_component(&series, Some(id.as_str())).unwrap();
@@ -2245,11 +2185,10 @@ fn undoing_an_edit_to_one_occurrence_removes_the_override() {
 
 #[test]
 fn an_instance_the_server_says_is_not_excluded_stays_spelled_that_way() {
-    // RFC 8984 §4.3.4 defaults `excluded` to false, so an override that says so
-    // out loud and one that says nothing are the same instance, and the
-    // component has the same single RDATE for both. Re-saving it must not
-    // rewrite the property merely because the spelling comes back shorter —
-    // the baseline is the round trip, not the server's own event.
+    // RFC 8984 §4.3.4 defaults `excluded` to false. So an override that states false and
+    // one that states nothing are the same instance, with the same single RDATE. A save
+    // must not rewrite the property only because its form is shorter: the baseline is the
+    // round trip, not the server's event.
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
     fixture.patch(
@@ -2302,8 +2241,8 @@ fn a_save_whose_start_cannot_be_read_leaves_the_servers_start_alone() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
 
-    // JSCalendar has no way to say "no start", so a component whose DTSTART
-    // the mapping cannot read must not be turned into one that says it.
+    // JSCalendar cannot say "no start". So a component with an unreadable DTSTART must
+    // not become an event that says it.
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
     let edited = icalendar
         .replace("DTSTART:20260115T090000Z", "DTSTART:whenever")
@@ -2319,11 +2258,11 @@ fn a_save_whose_start_cannot_be_read_leaves_the_servers_start_alone() {
 fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // Three things the component cannot say exactly: a time zone spelled the
-    // other legal way, a recurrence part the RRULE has to drop — here a
-    // `bySetPosition` with no other `by*` beside it to select from — and an
-    // instance edited on its own, which an RDATE can place but not describe.
-    // None of them is an edit, and none may look like one.
+    // The component cannot state three things exactly. The first is a time zone in its
+    // other legal spelling. The second is a recurrence part that the RRULE must drop:
+    // here a `bySetPosition` with no other `by*` part. The third is an instance edited
+    // alone, which an RDATE can place but not describe. None of them is an edit, and none
+    // must look like one.
     fixture.patch(
         &id,
         json!({
@@ -2354,21 +2293,19 @@ fn a_save_that_changes_nothing_sends_no_patch() {
     );
 }
 
-/// The `TZID` Evolution puts on every zoned component it saves: libical names
-/// its builtin zones with a solidus-prefixed identifier of its own, and the
-/// appointment editor sets the start with the zone object, so this is what
-/// comes back even for a component we handed out spelling the zone plainly.
+/// The `TZID` that Evolution puts on every zoned component it saves. libical names its
+/// built-in zones with its own solidus-prefixed identifier, and the editor sets the start
+/// with the zone object. So this identifier returns even for a component that had the
+/// plain zone name.
 const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
 
-/// The `VTIMEZONE` libical writes beside it, trimmed to the two lines that
-/// matter here; `X-LIC-LOCATION` is its record of which IANA zone this is.
+/// The `VTIMEZONE` that libical writes beside it, cut to the two lines that matter here.
+/// `X-LIC-LOCATION` records the IANA zone.
 ///
-/// The envelope the backend builds does carry it:
-/// `marshal::icalendar_from_instances` copies in a definition for every zone the
-/// instances refer to, which is the other half of the answer these tests are the
-/// mapping's half of. `jmap-functional`'s calendar leg is what says the two
-/// halves meet through real EDS — this crate can only supply the identifier by
-/// hand.
+/// The backend's envelope carries it: `marshal::icalendar_from_instances` copies in a
+/// definition for every zone that the instances use. These tests cover the mapping's
+/// half. `jmap-functional`'s calendar leg shows that the two halves meet through real
+/// EDS; this crate can only supply the identifier by hand.
 const LIBICAL_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
 TZID:/freeassociation.sourceforge.net/Europe/Berlin\r\n\
 X-LIC-LOCATION:Europe/Berlin\r\n\
@@ -2376,11 +2313,10 @@ BEGIN:STANDARD\r\nTZNAME:CET\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
 DTSTART:19701025T030000\r\nEND:STANDARD\r\n\
 END:VTIMEZONE\r\n";
 
-/// Respelling a zone is not changing it. Every save of a zoned appointment
-/// arrives with libical's own identifier in place of the name we wrote, and
-/// reading that as an edit would put a string into `timeZone` that RFC 8984
-/// §1.4.8 only admits beside a `timeZones` definition: a value a server is
-/// entitled to reject, taking the user's real edits down with it.
+/// A new spelling of a zone is not a zone change. Each save of a zoned appointment
+/// returns libical's identifier instead of the name that the mapping wrote. As an edit,
+/// it puts into `timeZone` a string that RFC 8984 §1.4.8 admits only beside a `timeZones`
+/// definition. A server can reject that value, and the user's real edits with it.
 #[test]
 fn the_zone_evolution_respells_is_not_read_as_a_zone_change() {
     let fixture = Fixture::start();
@@ -2405,8 +2341,8 @@ fn the_zone_evolution_respells_is_not_read_as_a_zone_change() {
     assert_eq!(stored.start.as_deref(), Some("2026-01-15T09:00:00"));
 }
 
-/// The same respelling on the other side of a real move: the zone the user
-/// picked has to reach the server as the name JSCalendar spells it with.
+/// The same respelling with a real move: the chosen zone must reach the server under its
+/// JSCalendar name.
 #[test]
 fn a_move_to_another_zone_arrives_under_its_iana_name() {
     let fixture = Fixture::start();
@@ -2435,19 +2371,17 @@ fn a_move_to_another_zone_arrives_under_its_iana_name() {
     assert_eq!(stored.time_zone.as_deref(), Some("America/New_York"));
 }
 
-/// A zone only the document knows about, on a *new* appointment.
+/// A zone that only the document knows, on a *new* appointment.
 ///
-/// This is the one place where leaving the zone alone is not available. On an
-/// edit the server already holds a zone and keeping it is the conservative
-/// answer; on a create there is nothing to keep, so a zone that cannot be stated
-/// files the appointment floating — a wall-clock time in no particular zone,
-/// which every reader resolves to its own.
+/// Here the save cannot leave the zone alone. On an edit, the server already holds a
+/// zone, and to keep it is the conservative answer. On a create there is nothing to keep.
+/// A zone that cannot be stated makes the appointment floating: a wall-clock time that
+/// each reader resolves in its own zone.
 ///
-/// RFC 8984 §1.4.8 gives such a zone a way to be stated all the same: the custom
-/// identifier, sent beside the §4.7.2 `timeZones` entry that defines it. The
-/// definition is the document's own — read off the `VTIMEZONE` an Exchange
-/// invitation or another client's `.ics` carries — so the event goes out saying
-/// which zone it is in and what that zone does, rather than saying nothing.
+/// RFC 8984 §1.4.8 gives such a zone a form: the custom identifier, sent beside the
+/// §4.7.2 `timeZones` entry that defines it. The definition comes from the document's own
+/// `VTIMEZONE`, as in an Exchange invitation or another client's `.ics`. So the event
+/// states its zone and the rules of that zone.
 #[test]
 fn a_new_event_in_a_zone_only_the_document_defines_carries_its_definition() {
     let fixture = Fixture::start();
@@ -2470,18 +2404,18 @@ fn a_new_event_in_a_zone_only_the_document_defines_carries_its_definition() {
         .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
     assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
     assert_eq!(zone["daylight"][0]["offsetTo"], json!("+0200"));
-    // And EDS gets the event back with the definition still beside it, because
-    // that is the only thing that makes the `TZID` resolvable.
+    // EDS receives the event with the definition beside it, because only that makes the
+    // `TZID` resolvable.
     assert!(
         saved.icalendar.contains(&format!("TZID:{CUSTOM_TZID}\r\n")),
         "{saved:?}"
     );
 }
 
-/// A zone the document leaves undefined still files the appointment floating: a
-/// solidus-prefixed identifier with no `VTIMEZONE` beside it is a reference to
-/// nothing, and a server is entitled to refuse the whole `CalendarEvent/set` for
-/// it — which would cost the user the appointment rather than its zone.
+/// A zone that the document does not define still makes the appointment floating. A
+/// solidus-prefixed identifier with no `VTIMEZONE` refers to nothing. A server can refuse
+/// the whole `CalendarEvent/set` for it, and the user then loses the appointment, not
+/// only its zone.
 #[test]
 fn a_new_event_naming_a_zone_nothing_defines_is_filed_floating() {
     let fixture = Fixture::start();
@@ -2495,18 +2429,16 @@ fn a_new_event_naming_a_zone_nothing_defines_is_filed_floating() {
     assert_eq!(stored.time_zones, None);
 }
 
-/// A series in a zone that cannot be sent, over an occurrence in one that can.
+/// A series in a zone that cannot be sent, with an occurrence in a zone that can.
 ///
-/// The series' `TZID` is a Windows name, so the create files the series
-/// floating — there is no `TimeZoneId` to state it by. The occurrence the user
-/// moved is in a different zone, one the document *defines*, which RFC 8984
-/// §1.4.8 does admit; dropping `timeZones` wholesale along with the series'
-/// zone took that definition with it and left the override's identifier
-/// dangling, which is the shape a server may refuse the whole
-/// `CalendarEvent/set` for.
+/// The series' `TZID` is a Windows name, so the create makes the series floating: no
+/// `TimeZoneId` can state it. The moved occurrence is in a different zone that the
+/// document *defines*, which RFC 8984 §1.4.8 admits. Earlier, the save dropped all of
+/// `timeZones` with the series' zone. That removed the definition and left the override's
+/// identifier dangling, so a server could refuse the whole `CalendarEvent/set`.
 ///
-/// So the map is pruned to what is still referred to, not emptied: the series
-/// goes floating, and the occurrence keeps the zone it was moved into.
+/// So the save prunes the map to the zones still in use, and does not empty it. The
+/// series becomes floating, and the occurrence keeps its zone.
 #[test]
 fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names() {
     let fixture = Fixture::start();
@@ -2552,9 +2484,9 @@ fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names()
     assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
 }
 
-/// The identifier a server invents for a zone no database names — RFC 8984
-/// §1.4.8's second form, and the `VTIMEZONE` that defines it, as a document
-/// written elsewhere carries the pair.
+/// The identifier that a server invents for a zone that no database names (RFC 8984
+/// §1.4.8's second form), and the `VTIMEZONE` that defines it. A document from elsewhere
+/// carries the pair.
 const CUSTOM_TZID: &str = "/example.com/Europe-Berlin";
 
 const CUSTOM_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
@@ -2567,17 +2499,15 @@ TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
 RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\nTZNAME:CEST\r\nEND:DAYLIGHT\r\n\
 END:VTIMEZONE\r\n";
 
-/// A zone nothing in the document explains: a Windows name from Exchange, and
-/// libical's own identifier with no `VTIMEZONE` beside it to translate it. The
-/// backend's envelope now defines the zones its components name, so the second
-/// shape no longer reaches this crate from Evolution — but a document is not
-/// only ever built there, and an identifier no zone database knows (the first
-/// shape) still arrives undefined however careful the envelope is.
+/// A zone that nothing in the document explains: a Windows name from Exchange, or
+/// libical's own identifier with no `VTIMEZONE` to translate it. The backend's envelope
+/// now defines the zones that its components name, so Evolution no longer sends the
+/// second form. But other sources also build documents, and an identifier that no zone
+/// database knows (the first form) still arrives undefined.
 ///
-/// Neither is a value JSCalendar can carry, so neither is sent; the server
-/// keeps the zone it had, which is the zone the component was showing. The cost
-/// stays on the record for the case that remains: a zone the user really did
-/// change to something unresolvable is not seen either.
+/// JSCalendar cannot carry either value, so the save sends neither. The server keeps its
+/// zone, which is the zone that the component showed. The known cost for the remaining
+/// case: the save also ignores a real user change to an unresolvable zone.
 #[test]
 fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
     for tzid in ["Unknown Vendor Standard Time", LIBICAL_TZID] {
@@ -2602,10 +2532,9 @@ fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
     }
 }
 
-/// The same value on a create, where there is no server zone to keep. The
-/// appointment is filed floating rather than not at all: a wall-clock time
-/// with no zone shows correctly for the user who typed it, and an event the
-/// server refused shows nothing.
+/// The same value on a create, where there is no server zone to keep. The appointment
+/// becomes floating, not lost. A wall-clock time with no zone shows correctly for the
+/// user who typed it, and a refused event shows nothing.
 #[test]
 fn a_new_events_unnameable_zone_is_not_sent() {
     let fixture = Fixture::start();
@@ -2620,8 +2549,8 @@ fn a_new_events_unnameable_zone_is_not_sent() {
     assert_eq!(stored.time_zone, None);
 }
 
-/// And a create carrying libical's spelling, which is what Evolution actually
-/// hands the backend for a brand-new zoned appointment.
+/// A create with libical's spelling, which is what Evolution gives the backend for a new
+/// zoned appointment.
 #[test]
 fn a_new_events_zone_arrives_under_its_iana_name() {
     let fixture = Fixture::start();
@@ -2637,12 +2566,11 @@ fn a_new_events_zone_arrives_under_its_iana_name() {
     assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
 }
 
-/// One occurrence moved into another zone, which is what Evolution's appointment
-/// editor writes when the user opens a single day of a series and changes its
-/// time zone: a detached component whose own `DTSTART` carries a `TZID` the
-/// series' does not. The zone has to reach the server inside the override, or the
-/// wall-clock time the user typed is resolved against the series' zone and the
-/// occurrence lands hours away.
+/// One occurrence moved into another zone. Evolution's editor writes this when
+/// the user changes the time zone of one day of a series. The result is a
+/// detached component whose `DTSTART` has a different `TZID` from the series.
+/// The zone must reach the server in the override. If not, the series' zone
+/// resolves the typed wall-clock time, and the occurrence moves by hours.
 #[test]
 fn moving_one_occurrence_to_another_zone_arrives_under_its_iana_name() {
     let fixture = Fixture::start();
@@ -2653,16 +2581,16 @@ fn moving_one_occurrence_to_another_zone_arrives_under_its_iana_name() {
         .load_component(id.as_str())
         .unwrap()
         .icalendar
-        // The definition the zone the instance moves to needs, once, ahead of
-        // the series: two copies would be two zones under one TZID.
+        // Put the definition for the instance's new zone once, before the series: two
+        // copies make two zones under one TZID.
         .replacen(
             "BEGIN:VEVENT",
             &format!("{LIBICAL_VTIMEZONE}BEGIN:VEVENT"),
             1,
         );
-    // The series is in UTC; the instance goes to Berlin, spelled the way libical
-    // spells its builtin zones. What the instance restates unchanged — the title
-    // and the status — is not an edit, so only the zone and the start arrive.
+    // The series is in UTC. The instance moves to Berlin, in libical's spelling for
+    // built-in zones. The instance repeats the title and the status unchanged, which is
+    // not an edit, so only the zone and the start reach the server.
     let edited = with_instance(
         &icalendar,
         &format!(
@@ -2690,12 +2618,11 @@ fn moving_one_occurrence_to_another_zone_arrives_under_its_iana_name() {
     );
 }
 
-/// And the zone no document explains, one level down from
-/// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`]:
-/// `recurrenceOverrides` is replaced whole, so an entry holding a value RFC 8984
-/// §1.4.8 does not admit cannot be sent at all: the server would be entitled to
-/// reject the whole `CalendarEvent/set` and take the user's other edits with it.
-/// The property is left alone and the rest of the save still arrives.
+/// The unexplained zone one level down from
+/// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`]. The save replaces
+/// `recurrenceOverrides` whole, so it cannot send an entry with a value that RFC 8984
+/// §1.4.8 does not admit. The server can reject the whole `CalendarEvent/set` and the
+/// user's other edits with it. So the save leaves the property alone and sends the rest.
 #[test]
 fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
     let fixture = Fixture::start();
@@ -2734,22 +2661,21 @@ fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
     );
 }
 
-/// One occurrence moved into a zone the *document* defines — the other half of
-/// [`an_occurrences_unnameable_zone_leaves_the_overrides_alone`], and the half
-/// that has to arrive.
+/// One occurrence moved into a zone that the *document* defines: the other half of
+/// [`an_occurrences_unnameable_zone_leaves_the_overrides_alone`], and the half that must
+/// arrive.
 ///
-/// This is the user who drags one day of a series into the zone an invitation
-/// brought: Evolution files that `VTIMEZONE` in the calendar's own timezone
-/// store, the backend's envelope copies it back beside the components that name
-/// it, and what reaches this crate is a custom identifier *with* its RFC 8984
-/// §4.7.2 definition. §1.4.8 admits that pair, so the save has something to send
-/// — and must send both halves: the identifier alone is a dangling reference the
-/// server may reject the whole `CalendarEvent/set` over.
+/// The user moves one day of a series into the zone that an invitation brought. Evolution
+/// files that `VTIMEZONE` in the calendar's own timezone store. The backend's envelope
+/// copies it back beside the components that name it. So this crate receives a custom
+/// identifier *with* its RFC 8984 §4.7.2 definition. §1.4.8 admits that pair, so the save
+/// must send both halves. The identifier alone is a dangling reference, and the server
+/// can reject the whole `CalendarEvent/set` for it.
 ///
-/// The definition goes out as its own entry, `timeZones/<pointer>`, not as the
-/// property replaced whole. That is what keeps the module's rule where a
-/// `VTIMEZONE` cannot show a zone's `aliases`, `url` or `validUntil`: an entry
-/// the server did not have is added, and nothing it did have is touched — see
+/// The definition goes as its own entry, `timeZones/<pointer>`, and does not replace the
+/// property. This keeps the module's rule, because a `VTIMEZONE` cannot show a zone's
+/// `aliases`, `url` or `validUntil`. The save adds an entry that the server did not have,
+/// and touches nothing that it had. See
 /// [`an_occurrence_moved_into_a_zone_the_server_defines_leaves_the_definition_alone`].
 #[test]
 fn moving_one_occurrence_into_a_zone_only_the_document_defines_sends_the_definition() {
@@ -2757,8 +2683,8 @@ fn moving_one_occurrence_into_a_zone_only_the_document_defines_sends_the_definit
     let id = seed_daily(&fixture);
     let sync = fixture.sync();
 
-    // The definition ahead of the series, once: two copies would be two zones
-    // under one `TZID`.
+    // Put the definition once, before the series: two copies make two zones under one
+    // `TZID`.
     let icalendar = sync
         .load_component(id.as_str())
         .unwrap()
@@ -2805,20 +2731,18 @@ fn moving_one_occurrence_into_a_zone_only_the_document_defines_sends_the_definit
     assert_eq!(zone["daylight"][0]["offsetTo"], json!("+0200"));
 }
 
-/// The same move onto an identifier the **server** already defines, which is
-/// what a second edit of the same occurrence is.
+/// The same move into an identifier that the **server** already defines, as in a second
+/// edit of the same occurrence.
 ///
-/// Nothing needs adding, and nothing may be written: the server's own entry may
-/// carry an `url`, a `validUntil` or a set of `aliases`, none of which a
-/// `VTIMEZONE` has room for and none of which the user was ever shown. So the
-/// override goes out naming the zone and the definition beside it is left
-/// exactly as it stood.
+/// The save must add nothing and write nothing. The server's entry can have a `url`, a
+/// `validUntil` or `aliases`. A `VTIMEZONE` cannot hold these, and the user never saw
+/// them. So the override names the zone, and the definition beside it stays unchanged.
 #[test]
 fn an_occurrence_moved_into_a_zone_the_server_defines_leaves_the_definition_alone() {
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
-    // A definition richer than any document can state, filed under the same
-    // identifier the component below names.
+    // A definition with more data than a document can state, under the identifier that
+    // the component below names.
     let held = json!({
         "@type": "TimeZone",
         "tzId": CUSTOM_TZID,
@@ -2883,10 +2807,10 @@ fn an_occurrence_moved_into_a_zone_the_server_defines_leaves_the_definition_alon
     );
 }
 
-/// And the whole series moved into a zone only the document defines, which is
-/// the same pair one level up: the user changes the appointment's time zone to
-/// the one an invitation brought, and `timeZone` and its `timeZones` entry have
-/// to travel together or the identifier reaches the server naming nothing.
+/// The whole series moved into a zone that only the document defines: the same pair one
+/// level up. The user changes the appointment's zone to the one that an invitation
+/// brought. `timeZone` and its `timeZones` entry must go together, or the identifier
+/// names nothing.
 #[test]
 fn moving_a_series_into_a_zone_only_the_document_defines_sends_the_definition() {
     let fixture = Fixture::start();
@@ -2915,16 +2839,15 @@ fn moving_a_series_into_a_zone_only_the_document_defines_sends_the_definition() 
     assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
 }
 
-/// A second identifier arriving at an event that already has a `timeZones` map —
-/// the case the pointer path exists for.
+/// A second identifier for an event that already has a `timeZones` map: the case for the
+/// pointer path.
 ///
-/// Where the server holds no map at all the property has to be written whole
-/// (RFC 8620 §5.3 wants every path segment before the last to exist already),
-/// and nothing is at risk because there was nothing there. Where it *does* hold
-/// one, writing the property would delete the zone the series is in — which is
-/// the definition the appointment's own clock resolves against, so the whole
-/// event would go unresolvable to add one occurrence's zone. So the entry goes
-/// in under its own pointer and the map keeps everything else, `url` and all.
+/// If the server holds no map, the save writes the whole property (RFC 8620 §5.3 requires
+/// all path segments before the last to exist). Nothing is at risk, because nothing was
+/// there. If the server holds a map, to write the property deletes the series' zone. The
+/// appointment's own clock resolves against that definition, so the whole event becomes
+/// unresolvable. So the save adds the entry under its own pointer, and the map keeps
+/// everything else, `url` included.
 #[test]
 fn a_second_zone_is_added_to_the_map_the_server_already_holds() {
     let fixture = Fixture::start();
@@ -2948,8 +2871,8 @@ fn a_second_zone_is_added_to_the_map_the_server_already_holds() {
     );
     let sync = fixture.sync();
 
-    // The series keeps the zone the server named; the occurrence moves into the
-    // second one, which only this document defines.
+    // The series keeps the server's zone. The occurrence moves into the second zone,
+    // which only this document defines.
     let icalendar = sync
         .load_component(id.as_str())
         .unwrap()
@@ -2998,8 +2921,8 @@ fn a_second_zone_is_added_to_the_map_the_server_already_holds() {
     );
 }
 
-/// A second identifier for a zone on the other side of the Atlantic, so that a
-/// definition arriving under it cannot be [`CUSTOM_VTIMEZONE`] by another name.
+/// A second identifier, for a zone in America, so a definition under it cannot be
+/// [`CUSTOM_VTIMEZONE`] under a different name.
 const OTHER_CUSTOM_TZID: &str = "/example.com/America-New_York";
 
 const OTHER_CUSTOM_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
@@ -3012,8 +2935,8 @@ TZOFFSETFROM:-0500\r\nTZOFFSETTO:-0400\r\n\
 RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3\r\nTZNAME:EDT\r\nEND:DAYLIGHT\r\n\
 END:VTIMEZONE\r\n";
 
-/// An event with one place, keyed the way a server keys it, and the component
-/// Evolution is shown for it.
+/// An event with one place, with a server-style key, and the component that Evolution
+/// shows for it.
 fn placed(fixture: &Fixture, location: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"locations": {"srv1": location}}));
@@ -3027,8 +2950,8 @@ fn placed(fixture: &Fixture, location: serde_json::Value) -> (jmap_proto::Id, St
 
 #[test]
 fn naming_a_place_reaches_the_server_as_a_location() {
-    // The event had none, so RFC 8620 §5.3 leaves nowhere to patch into: the
-    // property is written whole, under a key the component invented.
+    // The event had no place, so RFC 8620 §5.3 gives no path to patch. The save writes
+    // the whole property, under a key that the component invented.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -3051,9 +2974,9 @@ fn naming_a_place_reaches_the_server_as_a_location() {
 
 #[test]
 fn renaming_a_place_keeps_what_the_component_could_not_show() {
-    // The point of patching `locations/<key>/name` rather than replacing the
-    // property: a `LOCATION` line is one string, and the place the user renamed
-    // also has coordinates, a description and a zone that were never on it.
+    // The reason to patch `locations/<key>/name` and not to replace the property: a
+    // `LOCATION` line is one string. The renamed place also has coordinates, a
+    // description and a zone that were never on the line.
     let fixture = Fixture::start();
     let (id, icalendar) = placed(
         &fixture,
@@ -3091,9 +3014,8 @@ fn renaming_a_place_keeps_what_the_component_could_not_show() {
 
 #[test]
 fn a_place_renamed_without_its_key_still_reaches_the_servers_own_entry() {
-    // Evolution's appointment editor writes the LOCATION afresh, so the
-    // X-JMAP-KEY the component was shown with may not come back. The name is
-    // what the diff compares, and the key it patches is the server's own.
+    // Evolution's editor writes the LOCATION again, so the component can lose its
+    // X-JMAP-KEY. The diff compares the name, and patches the server's own key.
     let fixture = Fixture::start();
     let (id, icalendar) = placed(
         &fixture,
@@ -3146,8 +3068,8 @@ fn a_place_that_did_not_change_is_not_sent_at_all() {
 
 #[test]
 fn clearing_a_place_that_was_only_a_name_removes_it() {
-    // Nothing is left of the entry, and `maps_locations` has already said there
-    // is no second place that would be stranded, so the property goes.
+    // Nothing remains of the entry, and `maps_locations` already confirmed that no second
+    // place is lost. So the save removes the property.
     let fixture = Fixture::start();
     let (id, icalendar) = placed(&fixture, json!({"@type": "Location", "name": "Room 42"}));
 
@@ -3189,8 +3111,8 @@ fn clearing_a_place_that_said_more_than_its_name_keeps_the_rest() {
 
 #[test]
 fn a_second_place_the_component_could_not_show_is_left_alone() {
-    // One LOCATION line, two places: the user was never shown the second, so
-    // an edit to the first is not theirs to have made either.
+    // One LOCATION line, two places. The user never saw the second place, so an edit to
+    // the first cannot be the user's edit either.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let places = json!({
@@ -3219,8 +3141,7 @@ fn a_second_place_the_component_could_not_show_is_left_alone() {
     );
 }
 
-/// An event tagged the way a server tags it, and the component Evolution is
-/// shown for it.
+/// An event with server-style tags, and the component that Evolution shows for it.
 fn tagged(fixture: &Fixture, keywords: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"keywords": keywords}));
@@ -3234,8 +3155,8 @@ fn tagged(fixture: &Fixture, keywords: serde_json::Value) -> (jmap_proto::Id, St
 
 #[test]
 fn tagging_an_event_reaches_the_server_as_keywords() {
-    // What Evolution's "Categories…" button writes. Unlike a place, the set is
-    // shown whole, so it goes back replaced whole — no key to patch into.
+    // Evolution's "Categories…" button writes this. Unlike a place, the set shows whole,
+    // so the save replaces it whole, with no key to patch.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -3304,9 +3225,8 @@ fn a_tag_set_that_did_not_change_is_not_sent_at_all() {
 
 #[test]
 fn clearing_every_tag_removes_the_property() {
-    // A PatchObject removes a property to say "back to the default", and RFC 8984
-    // §4.2.9's default is no keywords at all. An empty map would be a different
-    // thing to store and to send back.
+    // A PatchObject removes a property to mean "the default", and RFC 8984 §4.2.9's
+    // default is no keywords. An empty map is a different value to store and to return.
     let fixture = Fixture::start();
     let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "planning": true}));
 
@@ -3322,13 +3242,12 @@ fn clearing_every_tag_removes_the_property() {
 
 #[test]
 fn a_tag_the_component_could_not_show_survives_the_set_being_rewritten() {
-    // RFC 8984 §1.4.3 has every value of a Set be `true`; this server said
-    // otherwise, so the tag never reached the CATEGORIES line. The property goes
-    // back replaced whole, so a save that wrote only what the line showed would
-    // delete the tag the user never saw — and one that refused to write at all
-    // would drop the edit they did make. The tag is carried onto the set
-    // instead, exactly as the server stated it: an unshown tag is not the
-    // user's to delete, and its odd value is the server's word to keep.
+    // RFC 8984 §1.4.3 requires each value of a Set to be `true`. This server sent another
+    // value, so the tag never reached the CATEGORIES line. The save replaces the property
+    // whole. To write only the line deletes the unseen tag, and to write nothing drops
+    // the user's edit. So the save copies the tag into the set exactly as the server
+    // stated it. An unseen tag is not the user's to delete, and its odd value is the
+    // server's to keep.
     let fixture = Fixture::start();
     let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "odd": "yes"}));
     assert_eq!(
@@ -3370,9 +3289,8 @@ fn a_tag_the_component_could_not_show_survives_the_set_being_rewritten() {
 
 #[test]
 fn clearing_every_tag_leaves_the_tag_nobody_saw_behind() {
-    // Emptying the field deletes the tags it showed and nothing else. A `null`
-    // here would delete the tag that had no line to be shown on, which is the
-    // one thing the user cannot have meant by clearing a field it was not in.
+    // To empty the field deletes only the tags that it showed. A `null` deletes the tag
+    // that had no line, which the user cannot have meant.
     let fixture = Fixture::start();
     let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "odd": "yes"}));
 
@@ -3391,11 +3309,9 @@ fn clearing_every_tag_leaves_the_tag_nobody_saw_behind() {
 
 #[test]
 fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
-    // The one place the two sides name the same tag. The user's word wins: they
-    // typed it into a field that says nothing but "filed under", so they mean it
-    // set, whatever the server had against that name before. Carrying the
-    // server's value back over it would take the tag the user just typed and
-    // quietly unset it.
+    // The only case where both sides name the same tag. The user's word wins: the user
+    // typed it into a "filed under" field, so the tag is set. To copy the server's value
+    // over it silently unsets the tag that the user just typed.
     let fixture = Fixture::start();
     let (id, icalendar) = tagged(&fixture, json!({"offsite": false}));
     assert!(!icalendar.contains("CATEGORIES"), "{icalendar}");
@@ -3414,10 +3330,9 @@ fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
 
 #[test]
 fn a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen() {
-    // The tag put back is the tag that was already there, so the set the save
-    // would write is the set the server holds — and a patch naming it would undo
-    // a concurrent edit on another client for no reason at all. The property
-    // must be left unnamed, not merely written back unchanged.
+    // The restored tag is the existing tag, so the set to write equals the server's set.
+    // A patch that names it can undo a concurrent edit from another client. The save must
+    // not name the property, and not only write it back unchanged.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"keywords": {"offsite": true, "odd": "yes"}}));
@@ -3446,20 +3361,18 @@ fn a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen() {
 
 #[test]
 fn refiling_one_occurrence_reaches_the_server_as_an_override() {
-    // One occurrence of a tagged series filed elsewhere: EDS keeps the master and
-    // adds a VEVENT carrying its RECURRENCE-ID, and the CATEGORIES on that
-    // component are what that occurrence is now filed under — replacing the
-    // series' set for that instance rather than adding to it, which is what a
-    // PatchObject naming `keywords` means.
+    // One occurrence of a tagged series filed under a different tag. EDS keeps the master
+    // and adds a VEVENT with its RECURRENCE-ID. The CATEGORIES on that component replace
+    // the series' set for that instance, and do not add to it. A PatchObject that names
+    // `keywords` means this.
     let fixture = Fixture::start();
     let (id, _) = tagged(&fixture, json!({"offsite": true}));
     fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Everything the series states, restated but for the tags — an instance is
-    // compared against the series property by property, so a line left off here
-    // would be an edit to that property and not to the filing.
+    // Repeat all series properties except the tags. The comparison with the series is per
+    // property, so a missing line is an edit to that property, not to the filing.
     let instance = format!(
         "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
          DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
@@ -3488,11 +3401,10 @@ fn refiling_one_occurrence_reaches_the_server_as_an_override() {
 
 #[test]
 fn a_tag_one_occurrence_could_not_show_leaves_the_overrides_alone() {
-    // The `a_tag_the_component_could_not_show_leaves_the_whole_set_alone` rule one
-    // level down. This instance's set holds an entry RFC 8984 §1.4.3 does not
-    // admit, so the occurrence could only be placed by a bare RDATE — and
-    // `recurrenceOverrides` goes back replaced whole, so sending what was drawn
-    // would delete the tag the user never saw along with the whole override.
+    // An unseen tag one level down. This instance's set holds an entry that RFC 8984
+    // §1.4.3 does not admit, so only a bare RDATE can place the occurrence. The save
+    // replaces `recurrenceOverrides` whole, so to send the drawing deletes the unseen tag
+    // and the whole override.
     let fixture = Fixture::start();
     let (id, _) = tagged(&fixture, json!({"offsite": true}));
     let overrides = json!({"2026-01-22T09:00:00": {"keywords": {"cancelled": true, "odd": "yes"}}});
@@ -3528,8 +3440,8 @@ fn a_tag_one_occurrence_could_not_show_leaves_the_overrides_alone() {
 
 #[test]
 fn a_tag_holding_a_comma_survives_the_save_as_one_tag() {
-    // CATEGORIES is a value list, so the escaping is what keeps one tag from
-    // becoming two on the way through the component and back.
+    // CATEGORIES is a value list, so the escape keeps one tag from becoming two in the
+    // round trip.
     let fixture = Fixture::start();
     let (id, icalendar) = tagged(&fixture, json!({"Berlin, offsite": true}));
     assert!(
@@ -3558,8 +3470,7 @@ fn a_tag_holding_a_comma_survives_the_save_as_one_tag() {
     );
 }
 
-/// An event reminded the way a server reminds, and the component Evolution is
-/// shown for it.
+/// An event with server-style reminders, and the component that Evolution shows for it.
 fn reminded(fixture: &Fixture, alerts: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"alerts": alerts}));
@@ -3571,8 +3482,7 @@ fn reminded(fixture: &Fixture, alerts: serde_json::Value) -> (jmap_proto::Id, St
     (id, icalendar)
 }
 
-/// The reminder a server states: a message a quarter of an hour before the
-/// appointment.
+/// The reminder that a server states: a message 15 minutes before the appointment.
 fn quarter_of_an_hour_before() -> serde_json::Value {
     json!({
         "@type": "Alert",
@@ -3581,8 +3491,8 @@ fn quarter_of_an_hour_before() -> serde_json::Value {
     })
 }
 
-/// A reminder at an absolute instant (RFC 8984 §4.5.2's AbsoluteTrigger), which
-/// the VALARMs this mapping draws do not state.
+/// A reminder at an absolute instant (RFC 8984 §4.5.2's AbsoluteTrigger). The VALARMs
+/// that this mapping draws do not state it.
 fn at_an_instant() -> serde_json::Value {
     json!({
         "@type": "Alert",
@@ -3591,9 +3501,8 @@ fn at_an_instant() -> serde_json::Value {
     })
 }
 
-/// The `VALARM` Evolution's own editor writes for such a reminder: no RFC 9074
-/// `UID`, an `X-EVOLUTION-ALARM-UID` of its own, and the summary repeated as the
-/// text to display.
+/// The `VALARM` that Evolution's editor writes for such a reminder: no RFC 9074 `UID`,
+/// its own `X-EVOLUTION-ALARM-UID`, and the summary as the display text.
 const EVOLUTION_VALARM: &str = "BEGIN:VALARM\r\n\
 X-EVOLUTION-ALARM-UID:20260115T090000Z-4711\r\n\
 ACTION:DISPLAY\r\n\
@@ -3603,8 +3512,8 @@ END:VALARM\r\n";
 
 #[test]
 fn setting_a_reminder_reaches_the_server_as_an_alert() {
-    // What Evolution's "Reminder" control writes: a VALARM inside the VEVENT,
-    // which is the first mapped property that is a component rather than a line.
+    // Evolution's "Reminder" control writes a VALARM inside the VEVENT: the first mapped
+    // property that is a component, not a line.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -3615,18 +3524,17 @@ fn setting_a_reminder_reaches_the_server_as_an_alert() {
 
     assert_eq!(
         fixture.event(&id).alerts,
-        // Keyed by the one this mapping invents: the component named no id the
-        // `alerts` map could use.
+        // The key is the one that this mapping invents, because the component named no id
+        // for the `alerts` map.
         Some([("a1".to_owned(), quarter_of_an_hour_before())].into())
     );
 }
 
 #[test]
 fn moving_a_reminder_sends_the_whole_set_under_the_servers_own_key() {
-    // Unlike a place, an alert is not patched into: the whole map goes back. What
-    // must survive that is the key the server chose, which rides on the VALARM's
-    // RFC 9074 UID — a save under a different key would leave the user with the
-    // same reminder twice.
+    // Unlike a place, the save does not patch into an alert: it sends the whole map. The
+    // server's key must survive, on the VALARM's RFC 9074 UID. Under a different key, the
+    // user gets the same reminder two times.
     let fixture = Fixture::start();
     let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
     assert!(icalendar.contains("\r\nUID:k1\r\n"), "{icalendar}");
@@ -3667,9 +3575,8 @@ fn a_reminder_that_did_not_change_is_not_sent_at_all() {
 
 #[test]
 fn clearing_the_reminder_removes_the_property() {
-    // A PatchObject removes a property to say "back to the default", and RFC 8984
-    // §4.5.2's default is no alerts at all — an empty map would be a different
-    // thing to store.
+    // A PatchObject removes a property to mean "the default", and RFC 8984 §4.5.2's
+    // default is no alerts. An empty map is a different value to store.
     let fixture = Fixture::start();
     let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
 
@@ -3688,9 +3595,9 @@ fn clearing_the_reminder_removes_the_property() {
 
 #[test]
 fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
-    // A reminder at an absolute instant (RFC 8984 §4.5.2's AbsoluteTrigger) is
-    // one the VALARM this mapping writes does not carry, so the alert was never
-    // drawn, and a set replaced whole would delete what the user never saw.
+    // The VALARM that this mapping writes cannot hold a reminder at an absolute instant
+    // (RFC 8984 §4.5.2's AbsoluteTrigger), so the alert was never drawn. To replace the
+    // set whole deletes what the user never saw.
     let fixture = Fixture::start();
     let alerts = json!({"k1": quarter_of_an_hour_before(), "k2": at_an_instant()});
     let (id, icalendar) = reminded(&fixture, alerts.clone());
@@ -3723,11 +3630,10 @@ fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
 
 #[test]
 fn dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant() {
-    // What EDS does to dismiss a reminder (`e_cal_util_set_alarm_acknowledged`,
-    // as its CalDAV backend's `discard_alarm_sync` uses it) is to write RFC 9074
-    // §6.1's ACKNOWLEDGED onto the VALARM and save the component. RFC 8984
-    // §4.5.2's `acknowledged` is the same instant, and other clients read it to
-    // stop showing the same reminder.
+    // To dismiss a reminder, EDS writes RFC 9074 §6.1's ACKNOWLEDGED onto the VALARM and
+    // saves the component (`e_cal_util_set_alarm_acknowledged`, as its CalDAV backend's
+    // `discard_alarm_sync` uses it). RFC 8984 §4.5.2's `acknowledged` is the same
+    // instant. Other clients read it to stop the same reminder.
     let fixture = Fixture::start();
     let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
 
@@ -3746,7 +3652,7 @@ fn dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant() {
     let stored = fixture.event(&id);
     assert_eq!(stored.alerts, Some([("k1".to_owned(), dismissed)].into()));
 
-    // And the dismissal is shown back, so the next unrelated save keeps it.
+    // The component shows the dismissal again, so the next unrelated save keeps it.
     let shown = fixture
         .sync()
         .load_component(id.as_str())
@@ -3760,21 +3666,19 @@ fn dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant() {
 
 #[test]
 fn setting_a_reminder_on_one_occurrence_reaches_the_server_as_an_override() {
-    // One occurrence of a reminded series reminded differently: EDS keeps the
-    // master and adds a VEVENT carrying its RECURRENCE-ID, and the VALARMs inside
-    // that component are the reminders that occurrence now has — replacing the
-    // series' set for that instance rather than adding to it, which is what a
-    // PatchObject naming `alerts` means.
+    // One occurrence of a reminded series with different reminders. EDS keeps the master
+    // and adds a VEVENT with its RECURRENCE-ID. The VALARMs in that component replace the
+    // series' set for that instance, and do not add to it. A PatchObject that names
+    // `alerts` means this.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
     fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Everything the series states, restated but for the reminder — an instance is
-    // compared against the series property by property, so a line left off here
-    // would be an edit to that property and not to the reminder. The alarm keeps
-    // the server's own key on its RFC 9074 UID: an hour earlier is the same
+    // Repeat all series properties except the reminder. The comparison with the series is
+    // per property, so a missing line is an edit to that property, not to the reminder.
+    // The alarm keeps the server's key on its RFC 9074 UID: one hour earlier is the same
     // reminder moved, not a second one.
     let instance = format!(
         "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
@@ -3807,12 +3711,12 @@ fn setting_a_reminder_on_one_occurrence_reaches_the_server_as_an_override() {
 
 #[test]
 fn a_reminder_one_occurrence_could_not_show_leaves_the_overrides_alone() {
-    // The `a_reminder_the_component_could_not_show_leaves_the_whole_set_alone`
-    // rule one level down. This instance's set holds a reminder at an absolute
-    // instant, which no VALARM here says, so the occurrence could only be placed
-    // by a bare RDATE, and `recurrenceOverrides` goes back replaced whole, so
-    // sending what was drawn would delete that reminder along with the whole
-    // override.
+    // The overrides form of
+    // `a_reminder_the_component_could_not_show_leaves_the_whole_set_alone`. This
+    // instance's set has a reminder at an absolute instant, which no VALARM here states.
+    // So only a bare RDATE can place the occurrence. The save replaces
+    // `recurrenceOverrides` whole, so to send the drawing deletes that reminder and the
+    // whole override.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
     let overrides = json!({"2026-01-22T09:00:00": {"alerts": {"k2": at_an_instant()}}});
@@ -3848,20 +3752,18 @@ fn a_reminder_one_occurrence_could_not_show_leaves_the_overrides_alone() {
 
 #[test]
 fn an_occurrence_of_an_event_that_takes_the_default_reminders_keeps_its_own() {
-    // `an_event_that_takes_the_default_reminders_keeps_them` one level down, and
-    // the reason `alerts` is the one restated property whose coverage the *series*
-    // decides: RFC 8984 §4.5.1's `useDefaultAlerts` is not a property an override
-    // may restate, so it is the series' answer for every instance, and an
-    // occurrence's own reminders are ignored exactly as the series' are. Nothing is
-    // drawn for them, so a save must leave the property alone rather than replace
-    // it with what was drawn.
+    // `an_event_that_takes_the_default_reminders_keeps_them` one level down. It is also
+    // why the *series* decides the coverage of `alerts`, the only restated property where
+    // it does. An override cannot restate RFC 8984 §4.5.1's `useDefaultAlerts`, so the
+    // series' value applies to every instance. The occurrence's own reminders are then
+    // ignored, like the series' reminders. Nothing is drawn for them, so a save must
+    // leave the property alone.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
-    // The override renames the occurrence *and* states reminders for it, so the
-    // instance is drawn — and what the user then edits is the title on that
-    // component, which is what makes `recurrenceOverrides` go back replaced whole.
-    // With the reminders called covered, that replacement is what would delete
-    // them.
+    // The override renames the occurrence *and* states reminders for it, so the instance
+    // is drawn. The user then edits that title, so the save replaces
+    // `recurrenceOverrides` whole. If the reminders counted as covered, that replacement
+    // deletes them.
     let overrides = json!({
         "2026-01-22T09:00:00": {
             "title": "Standup (demo)",
@@ -3887,9 +3789,9 @@ fn an_occurrence_of_an_event_that_takes_the_default_reminders_keeps_its_own() {
     let edited = icalendar.replace("SUMMARY:Standup (demo)", "SUMMARY:Standup (demo, short)");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    // Nothing about the override reaches the server — including the rename the
-    // user just made, which is the cost of the property going back whole or not at
-    // all: one entry that cannot be stated holds the rest of them still.
+    // No part of the override reaches the server, also not the user's rename. That is the
+    // cost of a property that goes whole or not at all: one entry that cannot be stated
+    // stops all others.
     let stored = fixture.event(&id);
     assert_eq!(
         stored.recurrence_overrides,
@@ -3900,17 +3802,16 @@ fn an_occurrence_of_an_event_that_takes_the_default_reminders_keeps_its_own() {
 
 #[test]
 fn an_event_that_takes_the_default_reminders_keeps_them() {
-    // RFC 8984 §4.5.1: with `useDefaultAlerts` true it is the user's own default
-    // reminders that fire and the `alerts` property is ignored, so there is
-    // nothing to show and nothing a save could usefully write. Honouring a
-    // reminder added here would take a save that cleared the flag too, which this
-    // mapping does not do.
+    // RFC 8984 §4.5.1: when `useDefaultAlerts` is true, the user's own default reminders
+    // fire and `alerts` has no effect. So there is nothing to show, and nothing useful
+    // for a save to write. To use a reminder added here, the save must also clear the
+    // flag, which this mapping does not do.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
     fixture.patch(&id, json!({"useDefaultAlerts": true}));
     let sync = fixture.sync();
-    // Re-read after the flag was set: the reminder was drawn before it, and is
-    // not now.
+    // Read again after the flag change: the reminder was drawn before the change, and is
+    // not drawn now.
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(!icalendar.contains("VALARM"), "{icalendar}");
 
@@ -3939,8 +3840,8 @@ fn an_event_that_takes_the_default_reminders_keeps_them() {
     );
 }
 
-/// An event whose transparency the server states, and the component Evolution is
-/// shown for it.
+/// An event with a server-stated transparency, and the component that Evolution shows for
+/// it.
 fn shown_as(fixture: &Fixture, free_busy_status: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"freeBusyStatus": free_busy_status}));
@@ -3954,10 +3855,9 @@ fn shown_as(fixture: &Fixture, free_busy_status: serde_json::Value) -> (jmap_pro
 
 #[test]
 fn showing_an_event_as_free_reaches_the_server_as_a_free_busy_status() {
-    // Evolution's "Show Time as: Free", which is a TRANSP line on the component
-    // and RFC 8984 §4.4.2's `freeBusyStatus` on the server. The event the mock
-    // holds says nothing about it, so this is also the case of a property the
-    // save creates rather than changes.
+    // Evolution's "Show Time as: Free" is a TRANSP line on the component, and RFC 8984
+    // §4.4.2's `freeBusyStatus` on the server. The mock's event does not state it, so the
+    // save also creates a property here, and does not only change one.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -4003,10 +3903,9 @@ fn marking_a_free_event_busy_again_sends_the_other_state() {
 
 #[test]
 fn removing_the_transp_line_removes_the_property() {
-    // A PatchObject removes a property to say "back to the default", and RFC 8984
-    // §4.4.2's default is busy — which is also what iCalendar means by a VEVENT
-    // with no TRANSP on it (RFC 5545 §3.8.2.7), so the two agree about what the
-    // user just asked for.
+    // A PatchObject removes a property to mean "the default". RFC 8984 §4.4.2's default
+    // is busy, and iCalendar means the same by a VEVENT with no TRANSP (RFC 5545
+    // §3.8.2.7).
     let fixture = Fixture::start();
     let (id, icalendar) = shown_as(&fixture, json!("free"));
 
@@ -4022,10 +3921,10 @@ fn removing_the_transp_line_removes_the_property() {
 
 #[test]
 fn a_transparency_the_component_could_not_show_is_not_cleared_by_a_save() {
-    // JSCalendar's vocabulary is closed and this server answered outside it, so
-    // no TRANSP line was drawn. The baseline is what keeps that from reading as
-    // the user clearing the field: the server's own event goes through the same
-    // rendering, loses the value on both sides, and the save sends nothing.
+    // JSCalendar's vocabulary is closed, and this server's value is outside it, so no
+    // TRANSP line was drawn. The baseline is the server's event through the same
+    // rendering. It loses the value too, so the save does not see a cleared field and
+    // sends nothing.
     let fixture = Fixture::start();
     let (id, icalendar) = shown_as(&fixture, json!("maybe"));
     assert!(!icalendar.contains("TRANSP"), "{icalendar}");
@@ -4051,18 +3950,16 @@ fn a_transparency_the_component_could_not_show_is_not_cleared_by_a_save() {
 
 #[test]
 fn marking_one_occurrence_free_reaches_the_server_as_an_override() {
-    // "Show Time as: Free" on a single occurrence: EDS keeps the master and adds
-    // a VEVENT carrying its RECURRENCE-ID, and the transparency on that component
-    // is the one property of it that differs.
+    // "Show Time as: Free" on one occurrence. EDS keeps the master and adds a VEVENT with
+    // its RECURRENCE-ID, and only its transparency differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Everything the series states, restated — an instance is compared against
-    // the series property by property, so a line left off here would be an edit
-    // to that property and not to the transparency.
+    // Repeat all series properties. The comparison with the series is per property, so a
+    // missing line is an edit to that property, not to the transparency.
     let instance = format!(
         "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
          DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
@@ -4083,8 +3980,8 @@ fn marking_one_occurrence_free_reaches_the_server_as_an_override() {
     );
 }
 
-/// An event whose importance the server states, and the component Evolution is
-/// shown for it.
+/// An event with a server-stated importance, and the component that Evolution shows for
+/// it.
 fn prioritised(fixture: &Fixture, priority: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"priority": priority}));
@@ -4099,9 +3996,8 @@ fn prioritised(fixture: &Fixture, priority: serde_json::Value) -> (jmap_proto::I
 #[test]
 fn making_an_event_urgent_reaches_the_server_as_a_priority() {
     // A PRIORITY line on the component (RFC 5545 §3.8.1.9) and RFC 8984 §4.4.1's
-    // `priority` on the server, which are the same integer. The event the mock
-    // holds says nothing about it, so this is also the case of a property the save
-    // creates rather than changes.
+    // `priority` on the server are the same integer. The mock's event does not state it,
+    // so the save also creates a property here, and does not only change one.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -4147,10 +4043,8 @@ fn lowering_an_events_priority_sends_the_number_the_component_now_carries() {
 
 #[test]
 fn removing_the_priority_line_removes_the_property() {
-    // A PatchObject removes a property to say "back to the default", and RFC 8984
-    // §4.4.1's default is 0 — which is also what RFC 5545 §3.8.1.9 means by a
-    // VEVENT with no PRIORITY on it, so the two agree about what the user just
-    // asked for.
+    // A PatchObject removes a property to mean "the default". RFC 8984 §4.4.1's default
+    // is 0, and RFC 5545 §3.8.1.9 means the same by a VEVENT with no PRIORITY.
     let fixture = Fixture::start();
     let (id, icalendar) = prioritised(&fixture, json!(5));
 
@@ -4166,10 +4060,10 @@ fn removing_the_priority_line_removes_the_property() {
 
 #[test]
 fn a_priority_the_component_could_not_show_is_not_cleared_by_a_save() {
-    // The range both formats share is 0..=9 and this server answered outside it,
-    // so no PRIORITY line was drawn. The baseline is what keeps that from reading
-    // as the user clearing the field: the server's own event goes through the same
-    // rendering, loses the value on both sides, and the save sends nothing.
+    // Both formats share the range 0..=9, and this server's value is outside it, so no
+    // PRIORITY line was drawn. The baseline is the server's event through the same
+    // rendering. It loses the value too, so the save does not see a cleared field and
+    // sends nothing.
     let fixture = Fixture::start();
     let (id, icalendar) = prioritised(&fixture, json!(42));
     assert!(!icalendar.contains("PRIORITY"), "{icalendar}");
@@ -4195,18 +4089,16 @@ fn a_priority_the_component_could_not_show_is_not_cleared_by_a_save() {
 
 #[test]
 fn making_one_occurrence_urgent_reaches_the_server_as_an_override() {
-    // One occurrence of a series marked important: EDS keeps the master and adds a
-    // VEVENT carrying its RECURRENCE-ID, and the priority on that component is the
-    // one property of it that differs.
+    // One occurrence of a series marked important. EDS keeps the master and adds a VEVENT
+    // with its RECURRENCE-ID, and only its priority differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Everything the series states, restated — an instance is compared against
-    // the series property by property, so a line left off here would be an edit
-    // to that property and not to the priority.
+    // Repeat all series properties. The comparison with the series is per property, so a
+    // missing line is an edit to that property, not to the priority.
     let instance = format!(
         "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
          DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
@@ -4221,8 +4113,8 @@ fn making_one_occurrence_urgent_reaches_the_server_as_an_override() {
     );
 }
 
-/// An event whose classification the server states, and the component Evolution
-/// is shown for it.
+/// An event with a server-stated classification, and the component that Evolution shows
+/// for it.
 fn classified(fixture: &Fixture, privacy: serde_json::Value) -> (jmap_proto::Id, String) {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"privacy": privacy}));
@@ -4236,10 +4128,10 @@ fn classified(fixture: &Fixture, privacy: serde_json::Value) -> (jmap_proto::Id,
 
 #[test]
 fn marking_an_event_private_reaches_the_server_as_a_privacy() {
-    // Evolution's Options ▸ Classification ▸ Private, which is a CLASS line on the
-    // component (RFC 5545 §3.8.1.3) and RFC 8984 §4.4.3's `privacy` on the server.
-    // The event the mock holds says nothing about it, so this is also the case of a
-    // property the save creates rather than changes.
+    // Evolution's Options ▸ Classification ▸ Private is a CLASS line on the component
+    // (RFC 5545 §3.8.1.3), and RFC 8984 §4.4.3's `privacy` on the server. The mock's
+    // event does not state it, so the save also creates a property here, and does not
+    // only change one.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -4271,24 +4163,21 @@ fn the_privacy_the_server_states_is_shown_and_left_alone_by_an_unrelated_edit() 
 
 #[test]
 fn saving_a_public_event_back_unchanged_sends_no_patch() {
-    // The case Evolution's appointment editor makes routine: it writes CLASS on
-    // every save from its Classification menu, and public is what that menu
-    // defaults to. So the component comes back stating the default explicitly, and
-    // the save must send *nothing* — which it only can because the baseline is
-    // rendered with the line too. That is the whole reason `CLASS:PUBLIC` is
-    // written out rather than left off as the default it also is: were it left
-    // off, the baseline would differ from the component on every save of a public
-    // event, forever, and each one would carry a redundant `"privacy": "public"`.
+    // Evolution's editor makes this case routine: it writes CLASS on every save from its
+    // Classification menu, and the menu default is public. So the component states the
+    // default explicitly, and the save must send *nothing*. That works only because the
+    // baseline also renders the line. This is why the mapping writes `CLASS:PUBLIC`,
+    // although it is the default. Without it, the baseline always differs from a public
+    // event's component, and each save sends a redundant `"privacy": "public"`.
     //
-    // `get_changes` is the witness. A save that patches nothing never reaches the
-    // server, so the account state does not move; one that patches the default
-    // back in does, and the event turns up in the delta.
+    // `get_changes` is the witness. A save with no patch does not reach the server, so
+    // the account state stays. A save that patches the default makes the event show in
+    // the delta.
     //
-    // The component is shaped the way the editor leaves it — carrying a CLASS
-    // line whether or not the rendering already put one there — rather than saved
-    // back verbatim. Saving the rendering verbatim would pass no matter what the
-    // writer does, since both sides of the diff would then agree by construction;
-    // it is the editor's line meeting a baseline that lacks it that costs a patch.
+    // The test shapes the component as the editor leaves it: with a CLASS line, whether
+    // or not the rendering wrote one. An unchanged rendering passes for any writer,
+    // because both sides of the diff agree by construction. Only the editor's line
+    // against a baseline without it costs a patch.
     let fixture = Fixture::start();
     let (id, icalendar) = classified(&fixture, json!("public"));
     let as_the_editor_leaves_it = if icalendar.contains("CLASS:") {
@@ -4342,10 +4231,8 @@ fn hiding_a_private_event_completely_sends_the_other_classification() {
 
 #[test]
 fn removing_the_class_line_removes_the_property() {
-    // A PatchObject removes a property to say "back to the default", and RFC 8984
-    // §4.4.3's default is public — which is also what RFC 5545 §3.8.1.3 means by a
-    // VEVENT with no CLASS on it, so the two agree about what the user just asked
-    // for.
+    // A PatchObject removes a property to mean "the default". RFC 8984 §4.4.3's default
+    // is public, and RFC 5545 §3.8.1.3 means the same by a VEVENT with no CLASS.
     let fixture = Fixture::start();
     let (id, icalendar) = classified(&fixture, json!("secret"));
 
@@ -4361,13 +4248,11 @@ fn removing_the_class_line_removes_the_property() {
 
 #[test]
 fn a_privacy_the_component_could_not_show_is_not_cleared_by_a_save() {
-    // RFC 8984 §4.4.3 leaves the vocabulary open and this server answered outside
-    // the three values iCalendar can spell, so no CLASS line was drawn. The
-    // baseline is what keeps that from reading as the user making the event
-    // public: the server's own event goes through the same rendering, loses the
-    // value on both sides, and the save sends nothing. Which matters more here
-    // than for the other closed vocabularies — the value being dropped is the one
-    // that says who may read the event.
+    // RFC 8984 §4.4.3 leaves the vocabulary open, and this server's value is none of the
+    // three that iCalendar can spell. So no CLASS line was drawn. The baseline is the
+    // server's event through the same rendering. It loses the value too, so the save does
+    // not see a change to public and sends nothing. This matters more here than for the
+    // closed vocabularies: the lost value controls who can read the event.
     let fixture = Fixture::start();
     let (id, icalendar) = classified(&fixture, json!("x-eyes-only"));
     assert!(!icalendar.contains("CLASS"), "{icalendar}");
@@ -4393,18 +4278,16 @@ fn a_privacy_the_component_could_not_show_is_not_cleared_by_a_save() {
 
 #[test]
 fn hiding_one_occurrence_reaches_the_server_as_an_override() {
-    // One occurrence of a series marked private: EDS keeps the master and adds a
-    // VEVENT carrying its RECURRENCE-ID, and the classification on that component
-    // is the one property of it that differs.
+    // One occurrence of a series marked private. EDS keeps the master and adds a VEVENT
+    // with its RECURRENCE-ID, and only its classification differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Everything the series states, restated — an instance is compared against
-    // the series property by property, so a line left off here would be an edit
-    // to that property and not to the classification.
+    // Repeat all series properties. The comparison with the series is per property, so a
+    // missing line is an edit to that property, not to the classification.
     let instance = format!(
         "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
          DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
@@ -4500,7 +4383,7 @@ fn editing_location_and_categories_preserves_unmodeled_alarms_and_links() {
     assert!(keywords.contains_key("offsite"));
     assert!(keywords.contains_key("engineering"));
 
-    // Unmodeled links and alerts are preserved
+    // The links and alerts that the edit did not touch stay.
     let links = stored.links.expect("links");
     assert!(links.contains_key("l1"));
     assert_eq!(links["l1"]["size"], json!(51200));
@@ -4540,7 +4423,7 @@ fn clearing_location_and_categories_generates_targeted_null_patches() {
     assert_eq!(stored.locations, None);
     assert_eq!(stored.keywords, None);
 
-    // Links are preserved
+    // The links stay.
     let links = stored.links.expect("links");
     assert!(links.contains_key("l1"));
     assert_eq!(
@@ -4598,13 +4481,13 @@ fn editing_priority_preserves_unmodeled_participants_and_geo_coordinates() {
     let stored = fixture.event(&id);
     assert_eq!(stored.priority, Some(5));
 
-    // Participants are preserved intact
+    // The participants stay unchanged.
     let parts = stored.participants.expect("participants");
     assert_eq!(parts["alice"]["name"], json!("Alice Example"));
     assert_eq!(parts["alice"]["roles"]["chair"], json!(true));
     assert_eq!(parts["bob"]["participationStatus"], json!("declined"));
 
-    // Locations and links are preserved intact
+    // The locations and links stay unchanged.
     let locs = stored.locations.expect("locations");
     assert_eq!(locs["loc1"]["name"], json!("Room 42"));
     assert_eq!(
@@ -4798,7 +4681,6 @@ fn removing_all_alerts_generates_targeted_null_patch() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Remove the entire VALARM component
     let valarm_start = loaded.find("BEGIN:VALARM\r\n").expect("VALARM start");
     let valarm_end = loaded.find("END:VALARM\r\n").expect("VALARM end") + "END:VALARM\r\n".len();
     let mut edited = loaded.clone();
@@ -4848,7 +4730,6 @@ fn editing_recurring_event_summary_preserves_recurrence_rule_and_overrides() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Modify SUMMARY on the master VEVENT
     let edited = loaded.replacen(
         "SUMMARY:Sprint Planning\r\n",
         "SUMMARY:Weekly Sprint Planning\r\n",
@@ -4913,7 +4794,6 @@ fn clearing_exdates_and_overrides_patches_server_recurrence_map() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Remove EXDATE line
     let exdate_line = loaded
         .lines()
         .find(|l| l.starts_with("EXDATE"))
@@ -4972,7 +4852,6 @@ fn editing_event_datetime_and_duration_preserves_unmodeled_locations_and_links()
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Modify DTSTART and DURATION
     let edited = loaded
         .replace("20260115T130000", "20260116T150000")
         .replace("DURATION:PT1H", "DURATION:PT2H30M");
@@ -4984,7 +4863,7 @@ fn editing_event_datetime_and_duration_preserves_unmodeled_locations_and_links()
     assert_eq!(stored.duration.as_deref(), Some("PT2H30M"));
     assert_eq!(stored.time_zone.as_deref(), Some("Europe/Berlin"));
 
-    // Locations, links, and alerts are preserved intact
+    // The locations, links and alerts stay unchanged.
     let locs = stored.locations.expect("locations");
     assert_eq!(locs["loc1"]["name"], json!("Room 101"));
     assert_eq!(locs["loc1"]["coordinates"], json!("geo:48.8566,2.3522"));
@@ -5024,7 +4903,6 @@ fn editing_allday_dates_preserves_unmodeled_virtual_locations_and_keywords() {
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(loaded.contains("VALUE=DATE:20260115"), "{loaded}");
 
-    // Modify all-day start and duration
     let edited = loaded
         .replace("20260115", "20260117")
         .replace("DURATION:P2D", "DURATION:P3D");
@@ -5086,7 +4964,6 @@ fn editing_descriptions_and_timestamps_preserves_unmodeled_event_fields() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Modify DESCRIPTION in place
     let edited = loaded.replace(
         "DESCRIPTION:Initial architecture review\r\n",
         "DESCRIPTION:Updated architecture review with team\\; all welcome\r\n",
@@ -5100,7 +4977,7 @@ fn editing_descriptions_and_timestamps_preserves_unmodeled_event_fields() {
         Some("Updated architecture review with team; all welcome")
     );
 
-    // Unmodeled keywords, alerts, virtualLocations, and links are preserved
+    // The keywords, alerts, virtualLocations and links that the edit did not touch stay.
     let kws = stored.keywords.expect("keywords");
     assert!(kws.contains_key("architecture"));
     assert!(kws.contains_key("review"));
@@ -5149,7 +5026,6 @@ fn clearing_descriptions_and_comments_patches_server_fields() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Remove DESCRIPTION line
     let desc_line = loaded
         .lines()
         .find(|l| l.starts_with("DESCRIPTION"))
@@ -5161,7 +5037,7 @@ fn clearing_descriptions_and_comments_patches_server_fields() {
     let stored = fixture.event(&id);
     assert_eq!(stored.description, None);
 
-    // Locations and alerts are preserved
+    // The locations and alerts stay.
     let locs = stored.locations.expect("locations");
     assert_eq!(locs["loc1"]["name"], json!("Room 101"));
 
@@ -5171,10 +5047,9 @@ fn clearing_descriptions_and_comments_patches_server_fields() {
 
 #[test]
 fn cancelling_an_event_reaches_the_server_as_cancelled_status() {
-    // An organiser marks an event as cancelled: Evolution removes the
-    // `STATUS:CONFIRMED` line and writes `STATUS:CANCELLED`. The server must
-    // learn the new state and must not lose the description or location that
-    // were already on the event.
+    // An organiser marks an event as cancelled: Evolution replaces `STATUS:CONFIRMED`
+    // with `STATUS:CANCELLED`. The server must get the new status and keep the
+    // description and location.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Offsite Workshop", "2026-03-10T09:00:00");
     fixture.patch(
@@ -5195,7 +5070,6 @@ fn cancelling_an_event_reaches_the_server_as_cancelled_status() {
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(loaded.contains("STATUS:CONFIRMED\r\n"), "{loaded}");
 
-    // Simulate what Evolution does when the user marks the event cancelled.
     let edited = loaded.replace("STATUS:CONFIRMED\r\n", "STATUS:CANCELLED\r\n");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -5220,8 +5094,8 @@ fn cancelling_an_event_reaches_the_server_as_cancelled_status() {
 
 #[test]
 fn clearing_status_removes_it_from_the_server() {
-    // The user undoes a tentative mark: Evolution drops the `STATUS` line
-    // entirely. The server's `status` must become absent (null patch).
+    // The user removes a tentative mark: Evolution drops the `STATUS` line. The server's
+    // `status` must become absent (null patch).
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Uncertain Meeting", "2026-03-12T14:00:00");
     fixture.patch(
@@ -5236,7 +5110,6 @@ fn clearing_status_removes_it_from_the_server() {
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(loaded.contains("STATUS:TENTATIVE\r\n"), "{loaded}");
 
-    // Drop the STATUS line.
     let edited: String = loaded
         .lines()
         .filter(|l| !l.starts_with("STATUS"))
@@ -5246,16 +5119,16 @@ fn clearing_status_removes_it_from_the_server() {
 
     let stored = fixture.event(&id);
     assert_eq!(stored.status, None, "status was not cleared on the server");
-    // The keyword the user never touched must survive.
+    // The keyword that the user did not touch must stay.
     let kws = stored.keywords.expect("keywords");
     assert!(kws.contains_key("planning"), "keyword was lost: {kws:?}");
 }
 
 #[test]
 fn clearing_privacy_removes_the_classification_from_the_server() {
-    // The user removes the Classification setting: Evolution drops the
-    // `CLASS` line. The server's `privacy` must become absent (null patch),
-    // reverting to the RFC 8984 default of `public`.
+    // The user removes the Classification: Evolution drops the `CLASS` line. The server's
+    // `privacy` must become absent (null patch), so the RFC 8984 default `public`
+    // applies.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Strategic Review", "2026-03-15T11:00:00");
     fixture.patch(
@@ -5279,7 +5152,6 @@ fn clearing_privacy_removes_the_classification_from_the_server() {
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
     assert!(loaded.contains("CLASS:CONFIDENTIAL\r\n"), "{loaded}");
 
-    // Drop the CLASS line (the user cleared the Classification field).
     let edited: String = loaded
         .lines()
         .filter(|l| !l.starts_with("CLASS"))
@@ -5292,7 +5164,7 @@ fn clearing_privacy_removes_the_classification_from_the_server() {
         stored.privacy, None,
         "privacy was not cleared on the server"
     );
-    // The alert the user never touched must survive.
+    // The alert that the user did not touch must stay.
     let alerts = stored.alerts.expect("alerts");
     assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
 }
@@ -5347,7 +5219,7 @@ fn editing_location_and_priority_preserves_unmodeled_event_fields() {
         "{loaded}"
     );
 
-    // Edit location name and change priority to 1 (high priority).
+    // PRIORITY:1 is high priority.
     let edited = loaded
         .replace("Room 101", "Room 204 (West Wing)")
         .replace("PRIORITY:3", "PRIORITY:1");
@@ -5359,14 +5231,14 @@ fn editing_location_and_priority_preserves_unmodeled_event_fields() {
 
     let locs = stored.locations.expect("locations");
     assert_eq!(locs["loc1"]["name"], json!("Room 204 (West Wing)"));
-    // Unmodeled coordinates and description on the location survive
+    // The location's unmapped coordinates and description stay.
     assert_eq!(
         locs["loc1"]["coordinates"],
         json!("geo:52.520008,13.404954")
     );
     assert_eq!(locs["loc1"]["description"], json!("Main Building"));
 
-    // Virtual locations, links, and alerts survive
+    // The virtual locations, links and alerts stay.
     let vlocs = stored.virtual_locations.expect("virtual locations");
     assert_eq!(vlocs["v1"]["uri"], json!("https://meet.example.com/arch"));
 
@@ -5402,7 +5274,6 @@ fn clearing_location_and_priority_patches_server_fields() {
     let sync = fixture.sync();
     let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
 
-    // Drop LOCATION and PRIORITY lines.
     let edited: String = loaded
         .lines()
         .filter(|l| !l.starts_with("LOCATION") && !l.starts_with("PRIORITY"))
@@ -5415,7 +5286,7 @@ fn clearing_location_and_priority_patches_server_fields() {
     assert_eq!(stored.priority, None);
     assert_eq!(stored.locations, None);
 
-    // Unmodified description and keywords survive
+    // The unchanged description and keywords stay.
     assert_eq!(stored.description.as_deref(), Some("Weekly status check"));
     let kws = stored.keywords.expect("keywords");
     assert!(kws.contains_key("standup"));
@@ -5426,16 +5297,16 @@ fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
 
-    // Matrix covering:
-    // - alerts (relative/absolute triggers, action, useDefaultAlerts)
-    // - recurrenceRule (daily/weekly/monthly RRULE, INTERVAL, UNTIL, COUNT)
-    // - recurrenceOverrides (EXDATE, RDATE, RECURRENCE-ID overrides)
-    // - zones (IANA, custom timeZones)
+    // The cases cover:
+    // - alerts (relative triggers, display action)
+    // - recurrenceRule (monthly RRULE with INTERVAL and COUNT)
+    // - recurrenceOverrides (one EXDATE)
+    // - an IANA timeZone
     // - locations and virtualLocations (LOCATION, CONFERENCE)
-    // - links (ATTACH, IMAGE)
-    // - keywords / categories
+    // - links (ATTACH)
+    // - keywords (CATEGORIES)
     // - privacy, status, priority, freeBusyStatus, showWithoutTime
-    // - unmodeled extra properties
+    // - an unmapped extra property
     let cases = vec![
         (
             "composite_recurring_event",
@@ -5536,18 +5407,15 @@ fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
         let id = fixture.seed(&fixture.ours, "Seed Event", "2026-01-15T10:00:00");
         fixture.patch(&id, initial_patch);
 
-        // Load 1: Read event as rendered iCalendar
         let loaded1 = sync.load_component(id.as_str()).expect(name);
 
-        // Save 1: Save untouched iCalendar back
         let saved1 = sync
             .save_component(&loaded1.icalendar, Some(id.as_str()))
             .expect(name);
 
-        // Load 2: Fresh reload after Save 1
         let loaded2 = sync.load_component(id.as_str()).expect(name);
 
-        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        // The second save must send no patch and keep the same revision.
         let saved2 = sync
             .save_component(&loaded2.icalendar, Some(id.as_str()))
             .expect(name);
@@ -5556,7 +5424,7 @@ fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
             "case '{name}': second save must not update revision"
         );
 
-        // Assert: diff between server state and parsed event is completely empty
+        // The diff between the server state and the parsed event must be empty.
         let current_event = fixture.event(&id);
         let parsed_event = jmap_ical::ical_to_event(&loaded2.icalendar).expect(name);
         let patch_diff = jmap_cal_sync::patch::diff(&current_event, &parsed_event);
@@ -5628,7 +5496,8 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
         "diff after round-trip must be empty, found: {patch_diff:?}"
     );
 
-    // Direct diff when edited carries explicit empty containers / empty names:
+    // A direct diff, where the edited event has explicit empty containers and empty
+    // names.
     let mut edited_with_empty = parsed_event.clone();
     edited_with_empty.time_zone = Some("".to_owned());
     edited_with_empty.locations =
@@ -5692,7 +5561,7 @@ fn diff_normalizes_empty_timezone_and_start_against_absent_baseline() {
         "diff with None timeZone against empty timeZone must be empty, found: {patch2:?}"
     );
 
-    // Clearing timeZone via empty string from an event with a timeZone patches null:
+    // An empty `timeZone` on an event that has a zone patches null.
     let mut current_with_tz = current.clone();
     current_with_tz.time_zone = Some("Europe/Berlin".to_owned());
     let mut edited_cleared_tz = current_with_tz.clone();
@@ -5711,7 +5580,7 @@ fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
     let id = fixture.seed(&fixture.ours, "Sprint Retrospective", "2026-06-15T10:00:00");
     let sync = fixture.sync();
 
-    // Populate every mapped and unmapped surface across the JSCalendar schema
+    // Fill every mapped and unmapped property of the JSCalendar schema.
     fixture.patch(
         &id,
         json!({
@@ -5793,13 +5662,13 @@ fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
         }),
     );
 
-    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    // The first load and save, as when the user opens and saves the event unchanged in
+    // Evolution.
     let loaded1 = sync.load_component(id.as_str()).expect("load 1");
     let saved1 = sync
         .save_component(&loaded1.icalendar, Some(id.as_str()))
         .expect("save 1");
 
-    // Second load -> save cycle
     let loaded2 = sync.load_component(id.as_str()).expect("load 2");
     let parsed_event2 = jmap_ical::ical_to_event(&loaded2.icalendar).expect("parse 2");
     let current_event = fixture.event(&id);
@@ -5818,7 +5687,7 @@ fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
         "second save must not change server revision for untouched event"
     );
 
-    // Verify all unmapped and mapped fields remain preserved server-side
+    // All mapped and unmapped fields must stay unchanged on the server.
     let stored = fixture.event(&id);
     assert_eq!(
         stored.title.as_deref(),
@@ -5837,10 +5706,10 @@ fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
     );
 }
 
-/// The invitation a guest accepts from their mail, as Evolution's invitation
-/// view hands it to `receive_objects`: its `UID` is the meeting's own, which
-/// the server already delivered into this calendar, while the local cache is
-/// keyed by JMAP id and so finds nothing and creates.
+/// The invitation that a guest accepts from mail, as Evolution's invitation view gives it
+/// to `receive_objects`. Its `UID` is the meeting's own, and the server already delivered
+/// the meeting into this calendar. The local cache uses JMAP ids as keys, so it finds
+/// nothing and creates the event.
 const ACCEPTED_INVITATION: &str = "BEGIN:VCALENDAR\r\n\
 VERSION:2.0\r\n\
 METHOD:REQUEST\r\n\
@@ -5909,8 +5778,8 @@ fn a_new_event_whose_uid_only_another_calendar_holds_is_still_created_here() {
 
     let result = fixture.sync().save_component(ACCEPTED_INVITATION, None);
 
-    // The event in the other calendar is not edited from this one: the create
-    // goes ahead, and a server that holds a `uid` once per account refuses it.
+    // This calendar does not edit the event in the other calendar. The create continues,
+    // and a server that allows a `uid` only once per account refuses it.
     assert!(result.is_err(), "{result:?}");
     assert_eq!(
         fixture.event(&theirs).participants,

@@ -5,64 +5,66 @@
 
 use jmap_ical::ICalError;
 
-/// A failure from one of [`crate::CalSync`]'s operations.
+/// A failure from one of the operations of [`crate::CalSync`].
 ///
-/// The [`SyncError::Client`] case is kept intact rather than flattened into a
-/// string because the GObject layer maps it onto the `E_CLIENT_ERROR` codes
-/// Evolution branches on — an authentication failure has to stay
-/// distinguishable from a network outage all the way up.
+/// [`SyncError::Client`] keeps the client error and does not convert it into a
+/// string. The GObject layer maps it to the `E_CLIENT_ERROR` codes that
+/// Evolution uses. Thus an authentication failure stays different from a
+/// network failure through all layers.
 #[derive(Debug)]
 pub enum SyncError {
-    /// The server said no, or could not be reached.
+    /// The server refused the request, or the server was not available.
     Client(jmap_client::Error),
-    /// A component handed to us by Evolution could not be read.
+    /// Evolution gave a component that this crate cannot read.
     ICal(ICalError),
     /// No event on the server has this identifier.
     NotFound(String),
-    /// A component Evolution handed us was read, and holds a value this
-    /// mapping cannot state as JSCalendar — so the save was refused rather
-    /// than carried out on an event that is not the one described.
+    /// Evolution gave a component that this crate can read, but it has a value
+    /// that this mapping cannot state as JSCalendar. Thus the save is refused,
+    /// and no different event is filed.
     ///
-    /// Only a *create* can end this way. An edit goes out as a PatchObject
-    /// naming only what the round trip preserved, so a property that cannot be
-    /// sent is simply left out and the server's own value stands; a create has
-    /// no value to leave standing, and the choices are an event the user did
-    /// not describe or no event at all. Refusing is the one of those the user
-    /// finds out about.
+    /// Only a *create* can fail this way. An edit is a PatchObject that names
+    /// only what the round trip kept, so a property that cannot be sent is
+    /// omitted and the server value stays. A create has no server value. The
+    /// only alternatives are an event that the user did not describe, or no
+    /// event. The user sees a refusal, so this is the choice.
     Unsendable(Unsendable),
-    /// The server was asked to send the change's scheduling messages and
-    /// refused, so the change was not applied.
+    /// The server got a request to send the scheduling messages of the change,
+    /// but refused. Thus the change is not applied.
     ///
-    /// Its own case rather than the server's error left in
-    /// [`SyncError::Client`] because Evolution has been told the server mails
-    /// the guests: the user has to learn that nobody was told, and what to
-    /// change, in a sentence `jmap_backend_cal::ops` translates.
+    /// This is a separate case, and not the server error in
+    /// [`SyncError::Client`], because Evolution knows that the server sends
+    /// mail to the guests. The user must know that no guest got a message, and
+    /// what to change. `jmap_backend_cal::ops` gives this in a translated
+    /// sentence.
     Unscheduled(Unscheduled),
 }
 
-/// Why the server would not send a change's scheduling messages
+/// Why the server did not send the scheduling messages of a change
 /// (`docs/MEETING-SCHEDULING.md`, rule 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unscheduled {
     /// `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section 5.9.2):
-    /// some guest has no calendar address the server can send to.
+    /// the server cannot send to the calendar address of one or more guests.
     ///
-    /// The server does not say which, so `addresses` are the ones the event
-    /// gives that are not `mailto:`, the one transport (iMIP) every server we
-    /// know delivers by. Empty when the event was not at hand (a delete) or
-    /// every address is a `mailto:` the server still would not take.
+    /// The server does not tell which guest. Thus `addresses` are the event
+    /// addresses that are not `mailto:`, because iMIP (`mailto:`) is the only
+    /// transport that all known servers use. The list is empty when the event
+    /// is not available (a delete), or when each address is a `mailto:` that
+    /// the server also refused.
     Unreachable {
-        /// The event's non-`mailto:` calendar addresses, sorted.
+        /// The calendar addresses of the event that are not `mailto:`, sorted.
         addresses: Vec<String>,
     },
-    /// `invalidArguments` on a call that asked the server to schedule: by
-    /// RFC 8620 section 3.9, a server that does not implement
-    /// `sendSchedulingMessages`. Only the account's switch can fix this.
+    /// `invalidArguments` on a call that asked the server to schedule. By RFC
+    /// 8620 section 3.9, this is a server that does not implement
+    /// `sendSchedulingMessages`. Only the account switch can correct this.
     NotImplemented,
 }
 
 impl std::fmt::Display for Unscheduled {
-    /// The developer's account, in English; see [`Unsendable`]'s for why.
+    /// The developer's text, in English. The [`Unsendable`] implementation
+    /// tells why.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreachable { addresses } if addresses.is_empty() => {
@@ -80,50 +82,50 @@ impl std::fmt::Display for Unscheduled {
     }
 }
 
-/// What a component said that could not be stated as JSCalendar.
+/// What a component contains that cannot be stated as JSCalendar.
 ///
-/// A reason rather than a sentence, and the difference is the point. The
-/// sentence a user reads has to be translated, and gettext is bound on the
-/// other side of the FFI — `jmap_backend_core`'s `i18n`, which an EDS-linked
-/// crate can reach and the sync layer cannot, its tests having no EDS to link
-/// against. So this crate says what happened and `jmap_backend_cal::ops` says
-/// it in the user's language, over these values.
+/// This is a reason, not a sentence, and that difference is intentional. The
+/// sentence for the user must be translated, and gettext is bound on the other
+/// side of the FFI, in the `i18n` of `jmap_backend_core`. An EDS-linked crate
+/// can use it, but the sync layer cannot, because its tests have no EDS to link
+/// against. Thus this crate tells what occurred, and `jmap_backend_cal::ops`
+/// tells it in the user's language from these values.
 ///
-/// The variants are the two answers worth giving rather than every distinction
-/// the code could draw: one of them names something the user can go and change,
-/// and the other admits it cannot.
+/// The variants are the two useful answers, not each distinction that the code
+/// can make. One names a thing that the user can change. The other tells that
+/// the code cannot identify the cause.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unsendable {
-    /// A recurrence whose end is an instant that could not be restated in the
-    /// event's own time zone, because the entry defines that zone nowhere or
-    /// defines it in a shape the evaluator will not guess at.
+    /// A recurrence whose end is an instant that cannot be restated in the time
+    /// zone of the event. The entry does not define that zone, or defines it in
+    /// a shape that the evaluator does not accept.
     ///
-    /// `until` is the instant as the mapping kept it — normalised, so it is the
-    /// digits the user is shown rather than the component's own spelling — and
-    /// `zone` is the identifier the event names. Between them they say which
-    /// appointment to change and which `VTIMEZONE` a bug report should quote.
+    /// `until` is the instant as the mapping kept it. It is normalised, so it
+    /// has the digits that the user sees, not the spelling in the component.
+    /// `zone` is the identifier that the event names. Together they tell which
+    /// appointment to change and which `VTIMEZONE` a bug report must quote.
     RecurrenceEnd {
         /// The end of the series, as the mapping kept it.
         until: String,
-        /// The time zone the event is in.
+        /// The time zone of the event.
         zone: String,
     },
-    /// A recurrence rule this mapping cannot state, for any other reason.
+    /// A recurrence rule that this mapping cannot state, for a different
+    /// reason.
     ///
-    /// Deliberately carries nothing. The mapping knows the rule will not
-    /// survive the round trip; which part of it is at fault is a question about
-    /// our own narrowing rather than about the user's calendar, and a dialog is
-    /// no place to answer it.
+    /// This variant intentionally contains no data. The mapping knows that the
+    /// rule cannot do the round trip. The part that causes the problem is a
+    /// question about the narrowing in the mapping, not about the user's
+    /// calendar. A dialog is not the correct place for that question.
     Recurrence,
 }
 
 impl std::fmt::Display for Unsendable {
-    /// The developer's account of the refusal, in English and untranslated.
+    /// The developer's text for the refusal, in English and not translated.
     ///
-    /// This is what reaches a log, and what a [`SyncError`] renders as. The
-    /// user's sentence is the one in `jmap_backend_cal::ops`; keeping the two
-    /// apart is what stops a translated string from being the text a bug report
-    /// quotes, and stops one phrasing from having to serve both audiences.
+    /// A log gets this text, and a [`SyncError`] shows as this text. The user's
+    /// sentence is in `jmap_backend_cal::ops`. The separation keeps translated
+    /// strings out of bug reports, and gives each audience its own phrasing.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RecurrenceEnd { until, zone } => write!(
@@ -137,17 +139,15 @@ impl std::fmt::Display for Unsendable {
 }
 
 impl SyncError {
-    /// Whether the server refused an incremental sync because the state it
-    /// was given is too old (RFC 8620 §5.2) — or, against real Stalwart,
-    /// unrecognized altogether, which it answers as `invalidArguments`
-    /// rather than the RFC's own `cannotCalculateChanges`
-    /// (`jmap_client::Error::is_unrecognized_changes_state`,
-    /// `STALWART-RFC-FINDINGS.md` finding 17).
+    /// Whether the server refused an incremental sync because the state is too
+    /// old (RFC 8620 §5.2). Real Stalwart also refuses an unrecognized state,
+    /// but with `invalidArguments`, not with the RFC's `cannotCalculateChanges`
+    /// (`jmap_client::Error::is_unrecognized_changes_state`).
     ///
-    /// This is not a real error: the caller's answer is to fall back to
-    /// [`crate::CalSync::list_existing`] and let the meta backend diff the
-    /// whole calendar, which is why it gets its own predicate rather than
-    /// being left for callers to string-match.
+    /// This is not a real error. The caller then uses
+    /// [`crate::CalSync::list_existing`], and the meta backend compares the
+    /// full calendar. Thus this predicate exists, so that callers do not
+    /// compare strings.
     pub fn is_cannot_calculate_changes(&self) -> bool {
         matches!(
             self,
@@ -156,15 +156,15 @@ impl SyncError {
         )
     }
 
-    /// Whether the server rejected the request with HTTP 401 — on a
-    /// long-lived connection, what a bearer token that expired while the
-    /// connection sat idle looks like. The caller's answer is to refresh the
-    /// token and retry once, not to reopen the consent window immediately.
+    /// Whether the server refused the request with HTTP 401. On a long-lived
+    /// connection, this occurs when a bearer token expires while the connection
+    /// is idle. The caller then refreshes the token and tries again one time.
+    /// It does not open the consent window immediately.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Client(error) if error.is_unauthorized())
     }
 
-    /// A protocol violation, phrased as a client error so it maps like one.
+    /// A protocol violation, as a client error so that it maps the same way.
     pub(crate) fn protocol(message: impl Into<String>) -> Self {
         Self::Client(jmap_client::Error::Protocol(message.into()))
     }

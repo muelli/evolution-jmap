@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`/`remove_contact` trace their writes with
-//! `account_id`/`address_book_id`.
+//! `BookSync::save_contact` and `remove_contact` trace their writes with
+//! `account_id` and `address_book_id`.
 
 mod common;
 

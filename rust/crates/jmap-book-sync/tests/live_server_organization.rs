@@ -1,31 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s property-removal diff path against a real
-//! JMAP server.
+//! Tests the property-removal diff path of `BookSync::save_contact` against a
+//! real JMAP server.
 //!
-//! `patch::diff` writes a nested-null PatchObject segment (`organizations/
-//! o1: null`) for a keyed-map entry that vanishes between saves — see
-//! `diff_entries` in `src/patch.rs`. `jmap-book-sync/tests/save.rs`'s
-//! `removing_the_org_line_removes_the_organization` already proves the
-//! mapping produces that patch against `jmap-mockd`, but `jmap-mockd` just
-//! applies whatever patch it is handed; nothing in this repository's
-//! live-server suite has ever confirmed a real server accepts a
-//! `<property>/<key>: null` segment and actually deletes the entry rather
-//! than rejecting it or leaving it in place. `jmap-book-sync/tests/
-//! live_server.rs` only renames FN/N, which never reaches this path.
+//! For a keyed-map entry that the edit removes, `patch::diff` writes a
+//! nested-null PatchObject segment (`organizations/o1: null`). See
+//! `diff_entries` in `src/patch.rs`. `tests/save.rs` proves this patch against
+//! `jmap-mockd` in `removing_the_org_line_removes_the_organization`, but
+//! `jmap-mockd` applies any patch it receives. This test confirms that a real
+//! server deletes the entry for a `<property>/<key>: null` segment, and does
+//! not reject the segment or keep the entry. `live_server.rs` changes only FN
+//! and N, which do not reach this path.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -33,8 +30,8 @@ use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -58,11 +55,10 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a contact with an `ORG` line, confirms it round-trips, then saves
-/// an edited vCard with the `ORG` line stripped and confirms the
-/// organization is actually gone on reload — proving real Stalwart accepts
-/// and applies an `organizations/<key>: null` patch segment the way
-/// `diff_organizations`/`diff_entries` assumes.
+/// Saves a contact with an `ORG` line, then saves it again without the `ORG`
+/// line. Confirms on reload that the organization is gone. This proves that
+/// real Stalwart applies an `organizations/<key>: null` patch segment, as
+/// `diff_organizations` and `diff_entries` expect.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn removing_the_org_line_removes_the_organization_on_the_real_server() {

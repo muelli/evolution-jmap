@@ -1,46 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Chases the same 429/duplicate-commit RFC-SUSPECT as
-//! `live_server_429_commit_repro.rs`, but under a concurrent load shape
-//! neither that test nor the isolated repro before it tried: two importers
-//! writing to the SAME account at the SAME time, rather than one sequential
-//! writer alone.
+//! Examines the same 429/duplicate-commit RFC-SUSPECT as
+//! `live_server_429_commit_repro.rs`, but under a concurrent load shape that no
+//! earlier test used. Two importers write to the SAME account at the SAME time,
+//! not one sequential writer.
 //!
-//! Both prior investigations end on the same unexplored lead: a single
-//! sequential writer never shows a 429-rejected create landing anyway, but
-//! the original field observation happened on a Stalwart instance shared
-//! across concurrent lanes, so contention on the account's write path or its
-//! rate limiter (a check-then-act race between two writers, not a property
-//! of any one writer's own retry) remains untested.
+//! Both prior investigations stop at the same lead. One sequential writer never
+//! shows a 429-rejected create that the server commits. But the original field
+//! observation occurred on a Stalwart instance that concurrent lanes shared.
+//! Thus contention on the account write path or on its rate limiter is not
+//! tested. This is a check-then-act race between two writers, not a property of
+//! the retry of one writer.
 //!
-//! Two independent `Client` connections authenticate to the same account and
-//! each run their own thread, each with its own UID namespace (no
-//! deliberate UID collision between the two importers; the point is
-//! concurrent pressure on the account, not a shared UID). Each thread uses
-//! the same live-diagnosis-before-retry shape as the sequential repro: the
-//! instant a create 429s, it polls for that exact UID before sending the
-//! retry, so an early landing is caught directly rather than inferred from
-//! the retry's own outcome.
+//! Two independent `Client` connections authenticate to the same account, each
+//! in its own thread. Each thread has its own UID namespace: the goal is
+//! concurrent pressure on the account, not a shared UID. Each thread examines a
+//! 429 as the sequential repro does. When a create gets a 429, the thread polls
+//! for that UID before it sends the retry. Thus it detects an early landing
+//! directly.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server scale tests (see
-//! `docs/manual-test-live-server.md`); use a dedicated throwaway account
+//! The environment is the same as for the other live-server scale tests of this crate
+//! (refer to `docs/manual-test-live-server.md`). Use a dedicated temporary account
 //! (`stw seed`), not a shared one.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_429_concurrent_importers_repro -- --ignored --nocapture
 //! ```
 //!
-//! `JMAP_429_REPRO_EVENTS` overrides the batch size per importer (default
-//! 550 each, so two importers together approach the same ballpark around
-//! `Http.rateLimitAuthenticated`'s 1000 req/60s window the sequential repro
-//! used, split across two concurrent writers instead of one).
+//! `JMAP_429_REPRO_EVENTS` overrides the batch size per importer (default 550).
+//! Thus the two importers together approach the 1000 req/60s window of
+//! `Http.rateLimitAuthenticated`, as the sequential repro does with one writer.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset, the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 use std::thread::sleep;
@@ -51,7 +46,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// Mirrors `live_server_429_commit_repro.rs::connect_for_write` exactly.
+/// Same as `live_server_429_commit_repro.rs::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,8 +62,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover events can never be mistaken for this run's own.
+/// Returns a value unique to this process, so leftover events from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -83,8 +78,8 @@ fn batch_size() -> usize {
         .unwrap_or(550)
 }
 
-/// Whether `uid` is visible yet via a fresh `CalendarEvent/query`, read
-/// straight from the server rather than inferred from any create response.
+/// Returns whether a new `CalendarEvent/query` on the server shows `uid`. A 429
+/// gives `false`.
 fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
     let filter = CalendarEventQueryFilter {
         uid: Some(uid.to_owned()),
@@ -97,8 +92,7 @@ fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
     }
 }
 
-/// Whether `error` is the specific rejection this hypothesis is about: an
-/// `already exists`-shaped `/set` failure, not some other rejection.
+/// Returns whether `error` is a `/set` failure with an `already exists` description.
 fn is_already_exists(error: &ClientError) -> bool {
     matches!(
         error,
@@ -117,9 +111,8 @@ struct Stats {
     duplicate_after_retry: usize,
 }
 
-/// Creates one event, diagnosing a 429 the moment it happens rather than
-/// just retrying through it. Identical shape to the sequential repro's own
-/// helper.
+/// Creates one event and examines the first 429 before the retry.
+/// Same as the helper of the sequential repro.
 fn create_with_429_diagnostics(
     client: &Client,
     account_id: &Id,
@@ -167,8 +160,8 @@ fn create_with_429_diagnostics(
     }
 }
 
-/// One importer's whole run: connects independently, then creates `n`
-/// events under its own `importer_tag` UID namespace.
+/// Runs one importer: connects independently, then creates `n` events in the
+/// `importer_tag` UID namespace.
 fn run_importer(
     origin: String,
     user: String,

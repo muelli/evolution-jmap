@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::free_busy` against the mock server: the whole of what
-//! `get_free_busy_sync` means, minus the marshalling.
+//! Tests `CalSync::free_busy` against the mock server: the full behaviour of
+//! `get_free_busy_sync`, without the marshalling.
 //!
-//! Two JMAP calls per attendee — `Principal/query` to turn the address the
-//! meeting editor holds into a principal id, then `Principal/getAvailability`
-//! for that principal's busy periods — and one `VFREEBUSY` per attendee we got
-//! an answer for. The interesting cases are all about the attendees we did
-//! *not* get an answer for, because "no answer" and "free" must never come out
-//! looking the same.
+//! Each attendee costs two JMAP calls. `Principal/query` changes the address from
+//! the meeting editor into a principal id, and `Principal/getAvailability` gets the
+//! busy periods of that principal. Each attendee with an answer gets one
+//! `VFREEBUSY`. The important cases are the attendees *without* an answer, because
+//! "no answer" and "free" must never look the same.
 
 mod common;
 
@@ -27,8 +26,8 @@ use serde_json::{Value, json};
 const WINDOW_START: &str = "2026-09-01T00:00:00Z";
 const WINDOW_END: &str = "2026-09-02T00:00:00Z";
 
-/// The real transport, with every `Principal/getAvailability` answer replaced
-/// by a method-level error of `kind`.
+/// The real transport, but each `Principal/getAvailability` answer becomes a
+/// method-level error of `kind`.
 struct FailingAvailability {
     inner: UreqTransport,
     kind: &'static str,
@@ -55,8 +54,8 @@ impl Transport for FailingAvailability {
     }
 }
 
-/// A [`CalSync`] over `fixture.ours` whose client sees every
-/// `Principal/getAvailability` answer replaced by a `kind` error.
+/// Returns a [`CalSync`] for `fixture.ours`. Its client gets a `kind` error for each
+/// `Principal/getAvailability` call.
 fn sync_failing_availability(fixture: &Fixture, kind: &'static str) -> CalSync {
     let client = Client::builder()
         .transport(FailingAvailability {
@@ -68,8 +67,8 @@ fn sync_failing_availability(fixture: &Fixture, kind: &'static str) -> CalSync {
     CalSync::new(client, fixture.account_id.clone(), fixture.ours.clone())
 }
 
-/// Seeds a principal for `email`; `may_get_availability` false models a
-/// server that knows the person but will not disclose their calendar.
+/// Adds a principal for `email`. When `may_get_availability` is false, the server
+/// knows the person but does not disclose the calendar.
 fn seed_principal(fixture: &Fixture, name: &str, email: &str, may_get_availability: bool) -> Id {
     let state = fixture.server.state();
     let mut state = state.lock().unwrap();
@@ -114,8 +113,8 @@ fn an_attendees_events_come_back_as_a_vfreebusy_naming_them() {
         ics.contains("\r\nFREEBUSY;FBTYPE=BUSY:20260901T090000Z/20260901T100000Z\r\n"),
         "{ics}",
     );
-    // The window asked about, restated, so an empty answer still says which
-    // question it answers.
+    // The answer states the requested window, so an empty answer still identifies
+    // its question.
     assert!(ics.contains("\r\nDTSTART:20260901T000000Z\r\n"), "{ics}");
     assert!(ics.contains("\r\nDTEND:20260902T000000Z\r\n"), "{ics}");
 }
@@ -133,10 +132,9 @@ fn each_attendee_gets_a_component_of_their_own() {
     assert_eq!(users, vec!["bob@example.com", "carol@example.com"]);
 }
 
-/// The address is what the meeting editor holds, and the three EDS backends
-/// that answer this vfunc all treat it as bare. A `mailto:` in front of it is
-/// still the same person, and looking up `mailto:bob@example.com` as an email
-/// address finds nobody.
+/// The address comes from the meeting editor, and the three EDS backends that
+/// answer this vfunc all treat it as bare. A `mailto:` prefix does not change the
+/// person, and a search for `mailto:bob@example.com` as an email address finds nobody.
 #[test]
 fn a_mailto_prefixed_attendee_resolves_to_the_same_principal() {
     let fixture = Fixture::start();
@@ -146,8 +144,8 @@ fn a_mailto_prefixed_attendee_resolves_to_the_same_principal() {
     let answers = ask(&fixture, &["MAILTO:bob@example.com"]).unwrap();
 
     assert_eq!(answers.len(), 1);
-    // Echoed back as EDS spelled it: the caller pairs the answer with the row
-    // it asked about.
+    // The answer repeats the address as EDS wrote it, because the caller uses it
+    // to find the row of the answer.
     assert_eq!(answers[0].user, "MAILTO:bob@example.com");
     assert!(
         answers[0]
@@ -158,9 +156,9 @@ fn a_mailto_prefixed_attendee_resolves_to_the_same_principal() {
     );
 }
 
-/// A person the server has never heard of is not an error — it is the ordinary
-/// case of inviting someone outside the organisation. They get no component,
-/// and the scheduler shows their row as unknown.
+/// A person that the server does not know is not an error. This is the usual case
+/// of an invitation to a person outside the organisation. The person gets no
+/// component, and the scheduler shows the row as unknown.
 #[test]
 fn an_address_no_principal_matches_is_silently_absent() {
     let fixture = Fixture::start();
@@ -173,10 +171,9 @@ fn an_address_no_principal_matches_is_silently_absent() {
     assert_eq!(users, vec!["bob@example.com"]);
 }
 
-/// `getAvailability` answers `notFound` both for a principal that does not
-/// exist and for one the caller may not see (draft §2.2). Neither is a
-/// failure of the operation, so it must not sink the attendees that did
-/// answer.
+/// `getAvailability` answers `notFound` for a principal that does not exist and for
+/// one that the caller must not see (draft §2.2). Neither is a failure of the
+/// operation, so neither must stop the answers for other attendees.
 #[test]
 fn a_principal_that_will_not_disclose_availability_is_absent_not_an_error() {
     let fixture = Fixture::start();
@@ -190,11 +187,10 @@ fn a_principal_that_will_not_disclose_availability_is_absent_not_an_error() {
     assert_eq!(users, vec!["bob@example.com"]);
 }
 
-/// The discrimination the two tests above rest on. `notFound` is the draft's
-/// way of saying "not this principal", and is swallowed; every *other* server
-/// failure is reported, because a server that could not answer and a server
-/// that answered "nobody is busy" must not look the same — the user books a
-/// meeting on the strength of the second.
+/// The two tests above rely on this distinction. `notFound` is how the draft says
+/// "not this principal", and the sync ignores it. The sync reports each *other*
+/// server failure: a server that cannot answer and a server that answers "nobody is
+/// busy" must look different, because the user books a meeting from the second.
 #[test]
 fn a_server_failure_that_is_not_not_found_is_reported() {
     let fixture = Fixture::start();
@@ -212,11 +208,10 @@ fn a_server_failure_that_is_not_not_found_is_reported() {
     assert!(matches!(error, SyncError::Client(_)), "{error:?}");
 }
 
-/// The test above triggers its failure before `getAvailability` is even
-/// asked, in `Principal/query`. This one proves the same rule for the later
-/// call: once a principal is found, a non-`notFound` failure of
-/// `getAvailability` itself must still be reported, not read as "nobody to
-/// disclose".
+/// The test above causes its failure in `Principal/query`, before the
+/// `getAvailability` call. This test proves the same rule for the later call. After
+/// the sync finds a principal, it must report a failure of `getAvailability` other
+/// than `notFound`, and not read it as "nobody to disclose".
 #[test]
 fn a_getavailability_failure_that_is_not_not_found_is_reported() {
     let fixture = Fixture::start();
@@ -229,8 +224,8 @@ fn a_getavailability_failure_that_is_not_not_found_is_reported() {
     assert!(matches!(error, SyncError::Client(_)), "{error:?}");
 }
 
-/// Nobody to ask about is not a failure, and costs no request: the meeting
-/// editor asks this on every keystroke that adds a row.
+/// An empty list of attendees is not a failure, and it costs no request: the
+/// meeting editor asks this on each keystroke that adds a row.
 #[test]
 fn no_users_at_all_is_an_empty_answer_and_no_request() {
     let fixture = Fixture::start();
@@ -240,8 +235,8 @@ fn no_users_at_all_is_an_empty_answer_and_no_request() {
     assert_eq!(fixture.server.api_requests(), before);
 }
 
-/// An attendee with nothing on gets a component all the same — see the
-/// `jmap-ical` suite for why that is not the same as no component.
+/// An attendee with no busy periods still gets a component. The `jmap-ical` tests
+/// show why this is different from no component.
 #[test]
 fn a_free_attendee_still_gets_a_component() {
     let fixture = Fixture::start();
@@ -257,9 +252,9 @@ fn a_free_attendee_still_gets_a_component() {
     );
 }
 
-/// Availability is a question about a person, not about one calendar, so it is
-/// asked of the account rather than of the calendar this `CalSync` syncs — an
-/// event in the account's *other* calendar still makes them busy.
+/// Availability is about a person, not about one calendar. Thus the sync asks the
+/// account, not the calendar of this `CalSync`, and an event in the *other*
+/// calendar of the account also makes the person busy.
 #[test]
 fn availability_spans_the_account_not_just_this_calendar() {
     let fixture = Fixture::start();
@@ -277,8 +272,8 @@ fn availability_spans_the_account_not_just_this_calendar() {
     );
 }
 
-/// Two calls per attendee and no more — the meeting editor re-asks this
-/// whenever the window is dragged, so a third round trip per row would be felt.
+/// Each attendee costs two calls and no more. The meeting editor asks again each
+/// time the user drags the window, so a third round trip per row is too slow.
 #[test]
 fn an_attendee_costs_one_query_and_one_availability_call() {
     let fixture = Fixture::start();

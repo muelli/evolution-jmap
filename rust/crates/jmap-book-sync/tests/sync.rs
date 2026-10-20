@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The read side of the backend: what exists, what one card looks like, and
-//! what changed — all against a live mock server rather than a fixture.
+//! The read side of the backend (card list, one card, changes), against a running mock server.
 
 mod common;
 
@@ -44,15 +43,14 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     let sync = fixture.sync();
     let before = sync.load_contact(id.as_str()).unwrap().revision;
 
-    // A property the vCard mapping drops: EDS cannot see it change, so
-    // re-downloading every card because of it would be pure churn.
+    // The vCard mapping drops this property. EDS cannot see it, so it must not change the revision.
     fixture.patch(
         &id,
         json!({"preferredLanguages": {"l1": {"language": "de-DE", "pref": 1}}}),
     );
     assert_eq!(sync.load_contact(id.as_str()).unwrap().revision, before);
 
-    // One it carries: the user's employer is on the card they are shown.
+    // The mapping keeps this property: the user sees the employer on the card.
     fixture.patch(&id, json!({"organizations": {"o1": {"name": "Acme"}}}));
     let with_employer = sync.load_contact(id.as_str()).unwrap().revision;
     assert_ne!(with_employer, before);
@@ -106,9 +104,8 @@ fn list_existing_reports_a_matched_card_without_an_id_as_a_protocol_violation() 
 #[test]
 fn get_changes_reports_creations_updates_and_destructions() {
     let fixture = Fixture::start();
-    // Present before the window: a card created *and* destroyed inside one
-    // window is correctly reported in neither list, so it cannot stand in
-    // for a destruction.
+    // Create this card before the window. A card created *and* destroyed in
+    // one window is correctly in neither list, so it cannot test a destruction.
     let doomed = fixture.seed(&fixture.ours, "Ines Tollow", "ines@example.com");
     let edited = fixture.seed(&fixture.ours, "Ada Reinsch", "ada@example.com");
     let sync = fixture.sync();
@@ -135,7 +132,7 @@ fn get_changes_reports_creations_updates_and_destructions() {
     assert_eq!(changes.removed, vec![doomed.to_string()]);
     assert_ne!(changes.new_state, state);
 
-    // Nothing has happened since, so the follow-up delta is empty.
+    // Nothing changed since, so the next delta is empty.
     let quiet = sync.get_changes(&changes.new_state).unwrap();
     assert!(quiet.changed.is_empty() && quiet.removed.is_empty());
 }
@@ -165,19 +162,16 @@ fn a_card_moved_to_another_address_book_is_reported_as_removed() {
         json!({"addressBookIds": {fixture.theirs.to_string(): true}}),
     );
 
-    // It comes back as an update, not a destruction; reporting it as changed
-    // would leave the book showing a contact it no longer contains.
+    // The server reports an update, not a destruction. Reporting it as changed
+    // keeps a contact in the book that the book no longer contains.
     let changes = sync.get_changes(&state).unwrap();
     assert!(changes.changed.is_empty(), "{:?}", changes.changed);
     assert_eq!(changes.removed, vec![moved.to_string()]);
 }
 
-/// A server that spells non-membership with a `false` entry instead of
-/// omitting the key is violating RFC 9610's set semantics, the same
-/// malformed shape `jmap-mail-sync`'s `messages_since` refuses rather than
-/// guesses at. Counting the entry as absence would be a guess this crate has
-/// no basis for, so it must be refused rather than silently reported as the
-/// card having left the book.
+/// A `false` entry for non-membership violates RFC 9610's set semantics.
+/// `jmap-mail-sync`'s `messages_since` refuses the same malformed shape.
+/// This crate has no basis to read the entry as absence, so it must refuse it.
 #[test]
 fn get_changes_refuses_a_false_valued_address_book_entry() {
     let fixture = Fixture::start();

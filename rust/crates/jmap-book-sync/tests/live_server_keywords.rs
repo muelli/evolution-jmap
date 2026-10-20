@@ -1,36 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s whole-object patch path for `keywords`,
+//! Tests the whole-object patch path of `BookSync::save_contact` for `keywords`
 //! against a real JMAP server.
 //!
-//! `patch::diff_keywords` (`src/patch.rs`) writes the entire `keywords` set
-//! as one value (a full map, or `Value::Null` when empty), composed by
-//! carrying forward any server-side tag `states_keyword` says a `CATEGORIES`
-//! line cannot draw (not `true`, empty, holding a `\r`, or edged with
-//! whitespace) alongside whatever the edited vCard's `CATEGORIES` line
-//! states — a shape distinct from the entry-level `organizations/<key>: null`
-//! removal `live_server_organization.rs` confirmed and the triply-nested
-//! scalar merge `live_server_related_to.rs` confirmed: here the whole
-//! property is replaced at once. `jmap-book-sync/tests/save.rs`'s
-//! `a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen`
-//! already proves the mapping produces that patch against `jmap-mockd` with
-//! a `" quiet"` tag (EDS trims leading/trailing whitespace, so vCard can
-//! never draw it); nothing in this repository's live-server suite has ever
-//! confirmed a real server accepts that whole-object replace or preserves
-//! an unstatable tag's exact, whitespace-edged key through the round trip.
+//! `patch::diff_keywords` (`src/patch.rs`) writes the whole `keywords` set as
+//! one value: a full map, or `Value::Null` when the set is empty. The set holds
+//! the tags of the edited `CATEGORIES` line. It also keeps each server-side tag
+//! that a `CATEGORIES` line cannot draw, per `states_keyword`. Such a tag is
+//! not `true`, is empty, holds a `\r`, or has whitespace at an edge. This shape
+//! replaces the whole property at once. It differs from the
+//! `organizations/<key>: null` removal in `live_server_organization.rs` and the
+//! triply-nested scalar merge in `live_server_related_to.rs`. `tests/save.rs`
+//! proves this patch against `jmap-mockd` in
+//! `a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen`, with a
+//! `" quiet"` tag. EDS trims leading and trailing whitespace, so a vCard cannot
+//! draw that tag. This test confirms that a real server accepts the
+//! whole-object replace and keeps the exact key of a tag with whitespace at an
+//! edge.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -40,8 +38,8 @@ use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use serde_json::json;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,12 +63,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Seeds a tag no `CATEGORIES` line can state (`" quiet"`, edged with
-/// whitespace EDS would trim), then adds a tag the only way a vCard can:
-/// `CATEGORIES:hiking`. Confirms the real server accepts the whole-object
-/// replace `diff_keywords` sends and keeps the unstatable tag's exact key
-/// alongside the new one, rather than rejecting the shape, trimming the
-/// key itself, or dropping the carried-forward member.
+/// Seeds a tag that no `CATEGORIES` line can state (`" quiet"`, with whitespace
+/// that EDS trims). Then adds a tag through the only path that a vCard has:
+/// `CATEGORIES:hiking`. Confirms that the real server accepts the whole-object
+/// replace from `diff_keywords` and keeps the exact key of the unstatable tag
+/// beside the new tag. The server does not reject the shape, trim the key, or
+/// drop the kept member.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn adding_a_tag_beside_one_the_vcard_cannot_show_merges_on_the_real_server() {
@@ -78,12 +76,9 @@ fn adding_a_tag_beside_one_the_vcard_cannot_show_merges_on_the_real_server() {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
     };
-    // A second connection to the same account, used only for the raw
-    // `ContactCard/set`/`get` calls `BookSync`'s vCard-only API cannot make:
-    // seeding the vCard-unreachable tag and reading the merged set back
-    // directly. `Client` is not `Clone` (it owns a transport), so this
-    // mirrors `live_server_related_to.rs`'s own two-connection shape rather
-    // than sharing one.
+    // Use a second connection to the same account for the raw `ContactCard/set`
+    // and `/get` calls. The vCard-only API of `BookSync` cannot make them, and
+    // `Client` is not `Clone`.
     let verify = connect_for_write().expect("just checked JMAP_LIVE_SERVER_WRITE_USER is set");
 
     let account_id = client
@@ -113,8 +108,8 @@ fn adding_a_tag_beside_one_the_vcard_cannot_show_merges_on_the_real_server() {
         .save_contact(&vcard, None)
         .expect("ContactCard/set create failed against the real server");
 
-    // Only a raw patch can put the card in this shape: a leading space makes
-    // the tag one `states_keyword` refuses to draw, so no vCard states it.
+    // Only a raw patch can put the card in this shape. `states_keyword` refuses
+    // to draw a tag with a leading space, so no vCard states it.
     verify
         .contact_update(
             &account_id,

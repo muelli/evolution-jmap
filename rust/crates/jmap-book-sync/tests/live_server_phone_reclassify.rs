@@ -1,34 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `BookSync::save_contact`'s nested-object patch path, against a real JMAP
-//! server.
+//! Tests the nested-object patch path of `BookSync::save_contact` against a
+//! real JMAP server.
 //!
-//! `patch::diff_flags` (`src/patch.rs`) writes a full-object-replace
-//! PatchObject segment (`phones/<key>/features: {...}`), a structurally
-//! different shape from the entry-level `organizations/<key>: null` removal
-//! `live_server_organization.rs` already confirmed live: here the value at
-//! the patched path is itself a JSON object, three levels deep, not a
-//! scalar or `null`. `jmap-book-sync/tests/save.rs`'s
-//! `moving_a_number_to_another_kind_of_phone_field_reclassifies_it` already
-//! proves the mapping produces that patch against `jmap-mockd`, which just
-//! applies whatever patch it is handed; nothing in this repository's
-//! live-server suite has ever confirmed a real server accepts a nested
-//! object value at a `/`-joined path and actually merges it into the
-//! property the way `diff_flags` assumes, rather than rejecting the shape
-//! or replacing the whole `phones` map.
+//! `patch::diff_flags` (`src/patch.rs`) writes a full-object PatchObject
+//! segment (`phones/<key>/features: {...}`). Here the value at the patched path
+//! is a JSON object, three levels deep, not a scalar or `null`. This shape
+//! differs from the entry-level `organizations/<key>: null` removal that
+//! `live_server_organization.rs` confirms. `tests/save.rs` proves this patch
+//! against `jmap-mockd` in
+//! `moving_a_number_to_another_kind_of_phone_field_reclassifies_it`, but
+//! `jmap-mockd` applies any patch it receives. This test confirms that a real
+//! server merges a nested object value at a `/`-joined path into the property,
+//! as `diff_flags` expects. The server does not reject the shape or replace the
+//! whole `phones` map.
 //!
 //! ## Running it
 //!
-//! Same environment as `live_server.rs` — see
-//! `docs/manual-test-live-server.md`.
+//! Use the same environment as `live_server.rs` (see
+//! `docs/manual-test-live-server.md`).
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-book-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
 use std::env;
 
@@ -38,8 +35,8 @@ use jmap_proto::methods::GetRequest;
 use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_CORE};
 use serde_json::Value;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover contact can never be mistaken for this run's own.
+/// Returns a value unique to this process run, so a leftover contact from
+/// another run never matches this run.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -63,13 +60,12 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// The raw JSContact `phones/<key>/features` object for a card, fetched
-/// straight through `ContactCard/get` rather than through `BookSync`'s
-/// vCard-only API. Needed because a `TEL` line's `TYPE` can only ever spell
-/// one feature at a time ([`feature_slot`] in `jmap-vcard`) — a "kept but
-/// unstated" feature like `voice` here is real on the card but invisible in
-/// the vCard string `BookSync` hands back, so only a raw fetch can confirm
-/// the *merge* actually happened server-side rather than a plain replace.
+/// Fetches the raw JSContact `phones/<key>/features` object of a card through
+/// `ContactCard/get`, not through the vCard-only API of `BookSync`. The `TYPE`
+/// of a `TEL` line can spell only one feature ([`feature_slot`] in
+/// `jmap-vcard`). Thus a kept but unstated feature, such as `voice` here, is on
+/// the card but not in the vCard from `BookSync`. Only a raw fetch can confirm
+/// that the server merged the features and did not replace them.
 fn phone_features(client: &Client, account_id: &jmap_proto::Id, card_id: &str) -> Value {
     let response = client
         .single_call(
@@ -81,15 +77,15 @@ fn phone_features(client: &Client, account_id: &jmap_proto::Id, card_id: &str) -
     response["list"][0]["phones"]["p1"]["features"].clone()
 }
 
-/// Creates a contact with a phone line stating both `voice` and `fax`,
-/// confirms the server folds it down to one `TYPE` (`FAX`, per
-/// `feature_slot`'s ordering) while keeping the unstated `voice` feature on
-/// the card, then retypes the number into the Mobile field (`TYPE=CELL`)
-/// and confirms, via a raw `ContactCard/get`, that the card now holds both
-/// the new `mobile` feature and the kept `voice` one — proving real
-/// Stalwart accepts and merges a nested-object `phones/<key>/features`
-/// patch segment the way `diff_flags` assumes, rather than rejecting it or
-/// replacing the whole `phones` map with just what was sent.
+/// Creates a contact with a phone line that states `voice` and `fax`. Confirms
+/// that the server folds the line to one `TYPE` (`FAX`, per the order of
+/// `feature_slot`) and keeps the unstated `voice` feature. Then moves the
+/// number to the Mobile field (`TYPE=CELL`). A raw `ContactCard/get` confirms
+/// that the card holds the new `mobile` feature and the kept `voice` feature.
+/// This proves that real Stalwart merges a nested-object
+/// `phones/<key>/features` patch segment, as `diff_flags` expects. Stalwart
+/// does not reject the segment or replace the whole `phones` map with the sent
+/// value.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn reclassifying_a_phone_feature_merges_on_the_real_server() {
@@ -97,8 +93,8 @@ fn reclassifying_a_phone_feature_merges_on_the_real_server() {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
     };
-    // A second connection to the same account, used only to read back the
-    // raw ContactCard JSON `BookSync`'s API cannot expose.
+    // A second connection to the same account reads the raw ContactCard JSON
+    // that the API of `BookSync` cannot expose.
     let verify = connect_for_write().expect("just checked JMAP_LIVE_SERVER_WRITE_USER is set");
 
     let account_id = client
@@ -139,9 +135,8 @@ fn reclassifying_a_phone_feature_merges_on_the_real_server() {
         "voice must be on the card even though FAX alone won the TYPE slot",
     );
 
-    // The user retypes the number into the Mobile field: it is no longer
-    // the office fax, and it is now a mobile. The feature the line never
-    // stated (voice) is not theirs to have cleared, so it must stay.
+    // The user moves the number to the Mobile field: it is now a mobile, not
+    // the office fax. The line never stated `voice`, so the save must keep it.
     let edited_vcard = saved.vcard.replace("TYPE=FAX:", "TYPE=CELL:");
     let updated = sync
         .save_contact(&edited_vcard, Some(&saved.uid))

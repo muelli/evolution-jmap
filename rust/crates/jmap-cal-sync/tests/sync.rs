@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The read side of the calendar backend: what exists, what one event looks
-//! like as iCalendar, and what changed — all against a live mock server
-//! rather than a fixture.
+//! Tests the read side of the calendar backend against a live mock server, not a
+//! fixture: the list of events, one event as iCalendar, and the changes.
 
 mod common;
 
@@ -46,19 +45,17 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     let sync = fixture.sync();
     let before = sync.load_component(id.as_str()).unwrap().revision;
 
-    // A property the iCalendar mapping drops: EDS cannot see it change, so
-    // re-downloading every event because of it would be pure churn.
-    // (`useDefaultAlerts` was the exemplar here until the reminders became
-    // mapped — it now decides whether they are drawn.)
+    // The iCalendar mapping drops this property. EDS cannot see it change, so a
+    // new download of each event would be unnecessary work. (`useDefaultAlerts` is
+    // not an example: it controls if the reminders are shown.)
     fixture.patch(&id, json!({"sequence": 3}));
     assert_eq!(sync.load_component(id.as_str()).unwrap().revision, before);
 
     fixture.patch(&id, json!({"title": "Standup (short)"}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 
-    // And one the mapping draws — the place the event happens at, which reaches
-    // the component as its LOCATION — has to move the revision, or Evolution
-    // keeps showing the room the meeting was moved out of.
+    // The place goes to the component as LOCATION, so it must change the revision.
+    // If not, Evolution continues to show the old room.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(
         &id,
@@ -66,30 +63,27 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     );
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 
-    // The same for the tags, which reach it as CATEGORIES: a tag added on the
-    // server has to show up in Evolution's category list.
+    // The same for the tags (CATEGORIES): a tag added on the server must show in
+    // Evolution's category list.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"keywords": {"offsite": true}}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 
-    // And the importance, which reaches it as PRIORITY. (This was the exemplar of
-    // a *dropped* property above until the property became mapped.)
+    // The same for the priority (PRIORITY).
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"priority": 1}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 
-    // And who may see it, which reaches it as CLASS — the one on this list where a
-    // stale revision is a confidentiality problem and not just a stale display: an
-    // event the server has since made private would keep being shown, and offered
-    // for editing, as the public one Evolution cached.
+    // The same for the privacy (CLASS). Here an old revision is a confidentiality
+    // problem: Evolution would continue to show and offer for editing an event
+    // that the server made private.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"privacy": "private"}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 
-    // And the reminders, which reach it as VALARMs — the first mapped property
-    // that is a child component, so a revision computed from the properties alone
-    // would miss it and leave the user un-reminded of an event they were reminded
-    // of on every other client.
+    // The same for the reminders (VALARM). This is the first mapped child
+    // component, so a revision from the properties only would not see it. The
+    // user would then get no reminder, but other clients give one.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(
         &id,
@@ -144,9 +138,8 @@ fn list_existing_reports_a_matched_event_without_an_id_as_a_protocol_violation()
 #[test]
 fn get_changes_reports_creations_updates_and_destructions() {
     let fixture = Fixture::start();
-    // Present before the window: an event created *and* destroyed inside one
-    // window is correctly reported in neither list, so it cannot stand in for
-    // a destruction.
+    // Create this event before the window. An event that is created *and*
+    // destroyed in one window is in neither list, so it cannot test a destruction.
     let doomed = fixture.seed(&fixture.ours, "Cancelled offsite", "2026-01-16T09:00:00");
     let edited = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     let sync = fixture.sync();
@@ -173,7 +166,7 @@ fn get_changes_reports_creations_updates_and_destructions() {
     assert_eq!(changes.removed, vec![doomed.to_string()]);
     assert_ne!(changes.new_state, state);
 
-    // Nothing has happened since, so the follow-up delta is empty.
+    // Nothing changed since, so the next delta is empty.
     let quiet = sync.get_changes(&changes.new_state).unwrap();
     assert!(quiet.changed.is_empty() && quiet.removed.is_empty());
 }
@@ -203,19 +196,18 @@ fn an_event_moved_to_another_calendar_is_reported_as_removed() {
         json!({"calendarIds": {fixture.theirs.to_string(): true}}),
     );
 
-    // It comes back as an update, not a destruction; reporting it as changed
-    // would leave the calendar showing an appointment it no longer contains.
+    // The server reports an update, not a destruction. If the sync reported it as
+    // changed, the calendar would show an appointment that it does not contain.
     let changes = sync.get_changes(&state).unwrap();
     assert!(changes.changed.is_empty(), "{:?}", changes.changed);
     assert_eq!(changes.removed, vec![moved.to_string()]);
 }
 
-/// A server that spells non-membership with a `false` entry instead of
-/// omitting the key is violating the set semantics `calendarIds` has (RFC
-/// 8620 §1.5), the same malformed shape `jmap-mail-sync`'s `messages_since`
-/// refuses rather than guesses at. Counting the entry as absence would be a
-/// guess this crate has no basis for, so it must be refused rather than
-/// silently reported as the event having left the calendar.
+/// A server that states non-membership with a `false` entry, and does not omit the
+/// key, violates the set semantics of `calendarIds` (RFC 8620 §1.5). The
+/// `messages_since` of `jmap-mail-sync` also refuses this incorrect shape. This
+/// crate has no basis to read the entry as absence. Thus it must refuse it and not
+/// report that the event left the calendar.
 #[test]
 fn get_changes_refuses_a_false_valued_calendar_entry() {
     let fixture = Fixture::start();

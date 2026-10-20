@@ -3,21 +3,22 @@
 
 #![forbid(unsafe_code)]
 
-//! Calendar synchronisation, in the shape `ECalMetaBackend` asks for.
+//! Calendar synchronisation, in the shape that `ECalMetaBackend` requires.
 //!
-//! One EDS calendar source is one JMAP calendar, and this crate is the whole
-//! of what syncing it means: which events exist, what an event looks like as
-//! an iCalendar object, what changed since a state string, and how an edit
-//! made in Evolution turns into a `CalendarEvent/set`. Each entry point
-//! corresponds to one vfunc — [`CalSync::list_existing`] to
-//! `list_existing_sync`, [`CalSync::save_component`] to
+//! One EDS calendar source is one JMAP calendar, and this crate contains all of
+//! its synchronisation logic. It lists the events, renders an event as an
+//! iCalendar object, and finds the changes since a state string. It also
+//! converts an edit made in Evolution into a `CalendarEvent/set`. Each entry
+//! point agrees with one vfunc: [`CalSync::list_existing`] with
+//! `list_existing_sync`, [`CalSync::save_component`] with
 //! `save_component_sync`, and so on.
 //!
-//! It deliberately knows nothing about GObject or the Evolution headers, so
-//! the interesting half of the backend is testable against `jmap-mockd` on
-//! any machine. The subclass on top is left with lifecycle and marshalling.
-//! It is the calendar-side counterpart of `jmap-book-sync`, and follows its
-//! shape closely enough that the two read as one design.
+//! This crate intentionally has no knowledge of GObject or the Evolution
+//! headers. Thus the tests of the important half of the backend can run against
+//! `jmap-mockd` on any machine. The subclass above this crate does only
+//! lifecycle and marshalling. This crate is the calendar counterpart of
+//! `jmap-book-sync`, and has almost the same shape, so that the two crates show
+//! one design.
 
 pub mod color;
 pub mod error;
@@ -40,12 +41,12 @@ use serde_json::Value;
 pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
 
-/// One event, as the meta backend wants it: an identifier, a change token and
-/// the object itself.
+/// One event in the form that the meta backend uses: an identifier, a change
+/// token and the object.
 ///
-/// This is the payload of an `ECalMetaBackendInfo`. `uid` is the JMAP id —
-/// see the crate docs of `jmap-ical` for why it, and not the JSCalendar
-/// `uid`, is what EDS keys on.
+/// This is the payload of an `ECalMetaBackendInfo`. `uid` is the JMAP id. The
+/// crate docs of `jmap-ical` tell why EDS uses it as the key, and not the
+/// JSCalendar `uid`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentInfo {
     pub uid: String,
@@ -60,32 +61,33 @@ pub struct Changes {
     pub new_state: State,
     /// Events that were created or modified, already rendered.
     pub changed: Vec<ComponentInfo>,
-    /// Identifiers that are gone from *this* calendar, whether they were
-    /// destroyed or merely moved elsewhere.
+    /// Identifiers of events that are no longer in *this* calendar: destroyed
+    /// events and events moved to a different calendar.
     pub removed: Vec<String>,
 }
 
-/// Whether one change may tell the meeting's guests about itself.
+/// Whether one change can tell the meeting guests about the change.
 ///
-/// The per-change half of the scheduling rule in `docs/MEETING-SCHEDULING.md`:
-/// [`Itip::Suppress`] is EDS's `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`,
-/// set when the user chose not to send an update. It only matters while the
-/// account's switch ([`CalSync::with_server_scheduling`]) is on; with it off
-/// the server is never asked, whatever the change says.
+/// This is the per-change half of the scheduling rule in
+/// `docs/MEETING-SCHEDULING.md`. [`Itip::Suppress`] is the EDS flag
+/// `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`, which EDS sets when the user
+/// chooses not to send an update. It has an effect only while the account
+/// switch ([`CalSync::with_server_scheduling`]) is on. While the switch is off,
+/// the server never gets the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Itip {
-    /// Let the server send what the change calls for.
+    /// The server sends the messages that the change requires.
     #[default]
     Send,
     /// Ask the server to send nothing for this change.
     Suppress,
 }
 
-/// `error` from a create, edit or delete, as the [`Unscheduled`] refusal it is
-/// when the call asked the server to schedule; any other error as it came.
+/// Returns `error` from a create, edit or delete as an [`Unscheduled`] refusal
+/// when the call asked the server to schedule. Other errors stay as they are.
 ///
-/// `event` is the event as sent, where there is one, to name the guests the
-/// server could not reach.
+/// `event` is the event that was sent, if there is one. It gives the guests
+/// that the server cannot reach.
 fn refused(error: jmap_client::Error, schedule: bool, event: Option<&CalendarEvent>) -> SyncError {
     if !schedule {
         return error.into();
@@ -107,10 +109,10 @@ fn refused(error: jmap_client::Error, schedule: bool, event: Option<&CalendarEve
     }
 }
 
-/// The calendar addresses `event` gives that are not `mailto:`, sorted and
-/// without repeats: the guests a server that delivers only by iMIP cannot
-/// reach. Only the event's own participants; one an override adds for a
-/// single occurrence is not named.
+/// The calendar addresses of the participants and the organizer of `event` that
+/// are not `mailto:`, sorted and without duplicates. A server that delivers
+/// only by iMIP cannot reach these guests. A participant that an override adds
+/// for one occurrence is not included.
 fn unreachable_addresses(event: &CalendarEvent) -> Vec<String> {
     let participants = event
         .participants
@@ -148,20 +150,20 @@ impl CalSync {
         }
     }
 
-    /// The account's "server handles meeting invitations" switch.
+    /// Sets the account switch "server handles meeting invitations".
     ///
-    /// On, every create, edit and delete carries `sendSchedulingMessages`
-    /// (draft-ietf-jmap-calendars §5.9.2) unless the change says
-    /// [`Itip::Suppress`], and the server mails the guests, or the organizer
-    /// when this account only attends. The draft has no way to ask a server
-    /// whether it will, so this is the user's to say (see
-    /// `docs/MEETING-SCHEDULING.md`). Off, the default, nothing is ever
-    /// asked: Evolution sends the iTIP itself, and asking the server as well
-    /// would mail every guest twice.
+    /// When the switch is on, each create, edit and delete sends
+    /// `sendSchedulingMessages` (draft-ietf-jmap-calendars §5.9.2), unless the
+    /// change is [`Itip::Suppress`]. The server then sends mail to the guests,
+    /// or to the organizer when this account is only an attendee. The draft
+    /// gives no method to ask a server if it schedules, so the user must set
+    /// the switch (see `docs/MEETING-SCHEDULING.md`). When the switch is off
+    /// (the default), the server never gets the request. Evolution then sends
+    /// the iTIP itself, and a server request would send each guest two mails.
     ///
-    /// The flag goes out whether or not the event has participants. An event
-    /// without any is not a scheduled one, so the server has nobody to send
-    /// to, and a delete does not have to load the event first to find out.
+    /// The flag is sent also when the event has no participants. Such an event
+    /// is not scheduled, so the server has nobody to send to. Thus a delete
+    /// does not have to load the event first to examine it.
     pub fn with_server_scheduling(mut self, on: bool) -> Self {
         self.server_schedules = on;
         self
@@ -189,12 +191,12 @@ impl CalSync {
         &self.calendar_id
     }
 
-    /// Every event in this calendar, with the state that listing is current
-    /// as of — `list_existing_sync`.
+    /// Returns every event in this calendar and the state of that list
+    /// (`list_existing_sync`).
     ///
-    /// No time range is applied. `ECalMetaBackend` keeps a full local cache
-    /// and answers ranged queries out of it, so narrowing here would hide
-    /// events rather than save work.
+    /// No time range applies. `ECalMetaBackend` keeps a full local cache and
+    /// answers range queries from it, so a range here would hide events and not
+    /// decrease work.
     pub fn list_existing(&self) -> Result<(State, Vec<ComponentInfo>), SyncError> {
         let query = self.client.event_query(
             &self.account_id,
@@ -209,29 +211,30 @@ impl CalSync {
         Ok((response.state, events))
     }
 
-    /// One event by identifier — `load_component_sync`.
+    /// Returns one event by identifier (`load_component_sync`).
     ///
-    /// Membership of this calendar is not checked: EDS asks by the identity
-    /// it was given, and an event that has moved out is reported gone by
-    /// [`CalSync::get_changes`] rather than by making loads fail.
+    /// This does not check that the event is in this calendar. EDS asks by the
+    /// identifier that it has. [`CalSync::get_changes`] reports an event that
+    /// moved out as removed, so loads do not fail for it.
     pub fn load_component(&self, uid: &str) -> Result<ComponentInfo, SyncError> {
         ComponentInfo::render(&self.fetch(uid)?)
     }
 
-    /// Store an iCalendar object — `save_component_sync`.
+    /// Stores an iCalendar object (`save_component_sync`).
     ///
-    /// With no `existing_uid` this is a create: the component's `UID` is a
-    /// name Evolution invented locally, never a JMAP id, so it does not
-    /// become one. It is not thrown away either — it moves to the JSCalendar
-    /// `uid`, which is the property that means what an iCalendar `UID` means,
-    /// so the identity any iTIP correspondence already quotes survives the
-    /// trip to the server. Otherwise this is an edit, sent as a PatchObject
-    /// that names only what the round trip preserved — see [`patch`].
+    /// With no `existing_uid`, this is a create, unless this calendar already
+    /// holds an event with the same JSCalendar `uid` (then it is an edit of
+    /// that event). On a create, the component `UID` is a name that Evolution
+    /// made locally, never a JMAP id, so it does not become the id. It goes to
+    /// the JSCalendar `uid`, which has the same meaning as an iCalendar `UID`.
+    /// Thus the server keeps the identity that iTIP messages already use. With
+    /// `existing_uid`, this is an edit: a PatchObject that names only what the
+    /// round trip kept (see [`patch`]).
     ///
-    /// A create is the one of the two that can fail over the component itself:
-    /// there is no server-side value to fall back on, so a recurrence rule this
-    /// mapping cannot state is [`SyncError::Unsendable`] rather than an event
-    /// filed without it. See the comment on that check.
+    /// Only a create can fail because of the component itself, because the
+    /// server has no value to use in its place. Thus a recurrence rule that
+    /// this mapping cannot state causes [`SyncError::Unsendable`], and the
+    /// event is not filed without the rule. See the comment on that check.
     pub fn save_component(
         &self,
         icalendar: &str,
@@ -240,12 +243,14 @@ impl CalSync {
         self.save_component_with(icalendar, existing_uid, Itip::Send)
     }
 
-    /// [`CalSync::save_component`], saying whether the guests may be told.
+    /// [`CalSync::save_component`], with a value that tells if the guests can
+    /// get messages.
     ///
-    /// A server that cannot reach a guest refuses the whole change
-    /// (`noSupportedScheduleMethods`, §5.9.2) and stores nothing, and that
-    /// refusal is this save's error: Evolution has been told the server sends,
-    /// so quietly saving without scheduling would leave the guests uninvited.
+    /// If the server cannot reach a guest, it refuses the full change
+    /// (`noSupportedScheduleMethods`, §5.9.2) and stores nothing. That refusal
+    /// is the error of this save. Evolution knows that the server sends the
+    /// messages, so a save without scheduling would leave the guests without an
+    /// invitation.
     pub fn save_component_with(
         &self,
         icalendar: &str,
@@ -254,13 +259,13 @@ impl CalSync {
     ) -> Result<ComponentInfo, SyncError> {
         let schedule = self.schedules(itip);
         let mut event = ical_to_event(icalendar)?;
-        // A create of a meeting this calendar already holds: the invitation a
-        // guest accepts from their mail. Evolution hands it over under the
-        // meeting's own `UID`, which its cache (keyed by JMAP id) does not
-        // know, but the server delivered the meeting here already and holds a
-        // `uid` once (Stalwart refuses the second copy with
-        // `invalidProperties`). So it is an edit of that copy, which is also
-        // what sends the guest's answer to the organizer.
+        // A create of a meeting that this calendar already holds: the
+        // invitation that a guest accepts from their mail. Evolution sends it
+        // with the meeting `UID`, which its cache (keyed by JMAP id) does not
+        // know. But the server already delivered the meeting here, and it holds
+        // a `uid` only once (Stalwart refuses a second copy with
+        // `invalidProperties`). Thus this is an edit of that copy. The edit
+        // also sends the guest's answer to the organizer.
         let held;
         let existing_uid = match existing_uid {
             Some(uid) => Some(uid),
@@ -277,35 +282,34 @@ impl CalSync {
             let local = event.id.take();
             event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
             event.calendar_ids = Some(BTreeMap::from([(self.calendar_id.clone(), true)]));
-            // A recurrence this mapping cannot state, which is the one thing a
-            // create refuses outright rather than files without.
+            // A recurrence that this mapping cannot state is the only thing
+            // that a create refuses fully and does not file without.
             //
-            // The zone below is dropped rather than refused because a
-            // wall-clock time with no zone is still the appointment the person
-            // who typed it sees. There is no such reading here: an event
-            // created without its recurrence is a different event — one
-            // occurrence where the user asked for a series — and nothing says
-            // so. Sending the rule as it stands is worse again, because the
-            // property is not one a server has to accept: a strict one refuses
-            // the whole `CalendarEvent/set`, and a lenient one stores an
-            // `until` that is no RFC 8984 §4.3.3 LocalDateTime, which
-            // [`event_to_ical`] then cannot draw — so Evolution would show a
-            // single appointment while the server ran the series, invited its
-            // guests and fired its alarms.
+            // The zone below is removed and not refused, because a wall-clock
+            // time without a zone still shows the appointment that the user
+            // typed. A recurrence has no such alternative. An event created
+            // without its recurrence is a different event (one occurrence
+            // instead of a series), and no message tells the user. To send the
+            // rule unchanged is worse, because a server does not have to accept
+            // the property. A strict server refuses the full
+            // `CalendarEvent/set`. A lenient server stores an `until` that is
+            // not an RFC 8984 §4.3.3 LocalDateTime, which [`event_to_ical`]
+            // cannot draw. Then Evolution shows one appointment, but the server
+            // runs the series, invites its guests and fires its alarms.
             //
-            // So the save fails and Evolution says so. The user can then state
-            // the same series a way that does map — a repeat count rather than
-            // an end date — which is a worse thing to be asked for than a
-            // recurrence that just works, and a better one than a meeting
-            // series that quietly happened once. The rule this actually costs
-            // is `UNTIL` beside a `TZID` the document does not define, or
-            // defines in a shape `jmap-ical`'s zone evaluator will not guess
-            // at: RFC 5545 §3.3.10 requires the UTC instant there and RFC 8984
-            // §4.3.3 wants a local time in the event's zone, and what converts
-            // between them is the document's own `VTIMEZONE` — where there is
-            // one. See [`maps_recurrence_rule`], [`unsendable_recurrence`] for
-            // what the user is then told, and [`patch::diff`] for the edit,
-            // which leaves the property alone instead.
+            // Thus the save fails and Evolution tells the user. The user can
+            // then state the series in a form that maps: a repeat count, not an
+            // end date. This is less good than a recurrence that works, but
+            // better than a meeting series that occurs only once without a
+            // message. The affected rule is `UNTIL` with a `TZID` that the
+            // document does not define, or defines in a shape that the zone
+            // evaluator of `jmap-ical` does not accept. RFC 5545 §3.3.10
+            // requires a UTC instant there, and RFC 8984 §4.3.3 requires a
+            // local time in the event zone. Only the document's own `VTIMEZONE`
+            // converts between them, if the document has one. See
+            // [`maps_recurrence_rule`], [`unsendable_recurrence`] for the
+            // message to the user, and [`patch::diff`] for the edit, which does
+            // not change the property.
             if let Some(rule) = event
                 .recurrence_rule
                 .iter()
@@ -316,28 +320,29 @@ impl CalSync {
                     event.time_zone.as_deref(),
                 )));
             }
-            // A zone the document gave no JSCalendar spelling for. On an edit
-            // the server's own zone stands (see [`patch`]); on a create there is
-            // none to stand, so the appointment is filed floating. A
-            // wall-clock time with no zone shows correctly for the user who
-            // typed it, and an event the server refused shows nothing at all.
+            // A zone for which the document gives no JSCalendar spelling. On an
+            // edit, the server zone stays (see [`patch`]). On a create, there
+            // is no server zone, so the appointment is filed floating. A
+            // floating wall-clock time shows correctly for the user who typed
+            // it. An event that the server refused shows nothing.
             //
-            // Which is the answer only where there is no spelling. An IANA name
-            // has one, and so does a zone the document *defines* — RFC 8984
-            // §1.4.8's custom identifier, sent beside the §4.7.2 `timeZones`
-            // entry that says what it is, which is how an appointment whose zone
-            // came from an Exchange invitation rather than a database reaches
-            // the server as the event it is. See [`maps_time_zone`], and
-            // `jmap_ical`'s `read_time_zones`, which is where the definition is
-            // read off the `VTIMEZONE`.
+            // This applies only when no spelling exists. An IANA name has a
+            // spelling. A zone that the document *defines* also has one: the
+            // RFC 8984 §1.4.8 custom identifier, sent with the §4.7.2
+            // `timeZones` entry that defines it. Thus an appointment with a
+            // zone from an Exchange invitation (not from a database) gets to
+            // the server as the correct event. See [`maps_time_zone`], and
+            // `read_time_zones` in `jmap_ical`, which reads the definition from
+            // the `VTIMEZONE`.
             if !maps_time_zone(&event) {
                 event.time_zone = None;
-                // With the zone goes its definition: a `timeZones` entry nothing
-                // refers to is a claim about a zone the event is not in. Only
-                // its own, though — an occurrence the user moved into a zone of
-                // its own still names one, and taking the whole map left that
-                // override pointing at a `TimeZoneId` nothing defined, which is
-                // the shape a server may refuse the entire save over.
+                // The zone definition goes too: a `timeZones` entry that
+                // nothing refers to is a claim about a zone that the event is
+                // not in. Only the event's own entry goes. An occurrence that
+                // the user moved into a different zone still names that zone.
+                // If the full map went, that override would name a `TimeZoneId`
+                // that nothing defines, and a server can refuse the full save
+                // for that.
                 prune_time_zones(&mut event);
             }
             let account_id = self.account_id().to_string();
@@ -359,13 +364,11 @@ impl CalSync {
                         return Err(refused(error, schedule, Some(&event)));
                     }
                 };
-            // RFC 8620 §5.3 only requires the server to report properties
-            // it set itself, so `stored` may carry nothing but `id` (a real
-            // deployment does exactly this — see `tests/terse_create.rs`).
-            // Render from a fresh load rather than `stored` directly, so the
-            // iCalendar object handed back to EDS always reflects what was
-            // actually filed, not merely what a chatty server happened to
-            // echo.
+            // RFC 8620 §5.3 requires the server to report only the properties
+            // that it set itself, so `stored` can contain only `id` (a real
+            // deployment does this, see `tests/terse_create.rs`). Thus render
+            // from a new load, not from `stored`, so that EDS gets what the
+            // server filed, not only what the server echoed.
             let id = stored
                 .id
                 .as_ref()
@@ -409,10 +412,10 @@ impl CalSync {
     }
 
     /// The JMAP id of the event in this calendar whose JSCalendar `uid` is
-    /// `uid`, if there is one.
+    /// `uid`, if such an event exists.
     ///
-    /// Only this calendar's: an event in another calendar is not edited from
-    /// this one, so a create there goes ahead and the server decides.
+    /// Only this calendar: this calendar does not edit an event in a different
+    /// calendar. Thus the create continues, and the server decides.
     fn holding(&self, uid: &str) -> Result<Option<String>, SyncError> {
         let filter = CalendarEventQueryFilter {
             uid: Some(uid.to_owned()),
@@ -422,12 +425,13 @@ impl CalSync {
         Ok(ids.into_iter().next().map(|id| id.to_string()))
     }
 
-    /// Destroy an event — `remove_component_sync`.
+    /// Destroys an event (`remove_component_sync`).
     pub fn remove_component(&self, uid: &str) -> Result<(), SyncError> {
         self.remove_component_with(uid, Itip::Send)
     }
 
-    /// [`CalSync::remove_component`], saying whether the guests may be told.
+    /// [`CalSync::remove_component`], with a value that tells if the guests can
+    /// get messages.
     pub fn remove_component_with(&self, uid: &str, itip: Itip) -> Result<(), SyncError> {
         let schedule = self.schedules(itip);
         let account_id = self.account_id().to_string();
@@ -455,11 +459,11 @@ impl CalSync {
         Ok(())
     }
 
-    /// What changed since `since` — `get_changes_sync`.
+    /// What changed since `since` (`get_changes_sync`).
     ///
-    /// Fails with a [`SyncError::is_cannot_calculate_changes`] error if the
-    /// state is too old for the server, which the caller answers by listing
-    /// the calendar in full.
+    /// If the state is too old for the server, this fails with a
+    /// [`SyncError::is_cannot_calculate_changes`] error. The caller then lists
+    /// the full calendar.
     pub fn get_changes(&self, since: &State) -> Result<Changes, SyncError> {
         self.classify(
             self.client
@@ -467,19 +471,20 @@ impl CalSync {
         )
     }
 
-    /// Turn a raw `/changes` delta into the two lists the meta backend takes.
+    /// Converts a raw `/changes` delta into the two lists that the meta backend
+    /// uses.
     ///
-    /// `CalendarEvent/changes` is account-wide, so most of the work is
-    /// deciding what an event that is *not* in this calendar means. The
-    /// created/updated distinction is what makes that decidable without
-    /// consulting the local cache: an event that shows up as **updated** and
-    /// is not ours may have just been moved out, and has to be reported gone
-    /// or Evolution keeps showing an appointment the calendar no longer
-    /// contains; an event that shows up as **created** and is not ours was
-    /// never in this calendar, so it is simply not our business.
+    /// `CalendarEvent/changes` covers the full account, so the main work is to
+    /// decide what an event that is *not* in this calendar means. The
+    /// difference between created and updated makes this possible without the
+    /// local cache. An **updated** event that is not in this calendar possibly
+    /// moved out. It must be reported as removed, or Evolution continues to
+    /// show an appointment that the calendar does not contain. A **created**
+    /// event that is not in this calendar was never in it, so this calendar
+    /// ignores it.
     ///
-    /// The delta arrives normalised — [`jmap_client::Client::all_changes`] has
-    /// already decided what an id named by several pages is — so no event is
+    /// The delta is already normalised: [`jmap_client::Client::all_changes`]
+    /// decides the status of an id that several pages name. Thus no event is
     /// both a candidate and a removal.
     fn classify(&self, delta: ChangeSet) -> Result<Changes, SyncError> {
         let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
@@ -500,8 +505,8 @@ impl CalSync {
                     removed.push(id.to_string());
                 }
             }
-            // Gone between the /changes call and the /get: only interesting
-            // for an event that already existed.
+            // Removed between the /changes call and the /get. This is important
+            // only for an event that existed before.
             removed.extend(
                 response
                     .not_found
@@ -518,15 +523,15 @@ impl CalSync {
         })
     }
 
-    /// Whether `event` is filed in the calendar this instance syncs.
+    /// Whether `event` is filed in the calendar that this instance
+    /// synchronises.
     ///
-    /// `calendarIds` is a set (RFC 8620 §1.5), so a present member is always
-    /// `true`; a server that spells non-membership with a `false` entry
-    /// instead of omitting the key is violating that, the same way
-    /// `jmap-mail-sync`'s `messages_since` refuses the analogous
-    /// `mailboxIds` violation rather than guessing which way it means. There
-    /// is no safe reading to fall back to, so it is refused here too rather
-    /// than silently counted as absence.
+    /// `calendarIds` is a set (RFC 8620 §1.5), so each member that is present
+    /// is `true`. A server that writes non-membership as a `false` entry, and
+    /// does not omit the key, violates this. `messages_since` in
+    /// `jmap-mail-sync` refuses the same `mailboxIds` violation and does not
+    /// guess its meaning. No safe interpretation exists, so this function also
+    /// refuses it and does not count it as absence.
     fn holds(&self, event: &CalendarEvent) -> Result<bool, SyncError> {
         match event
             .calendar_ids
@@ -560,27 +565,24 @@ impl CalSync {
     }
 }
 
-/// Why a create was refused over its recurrence.
+/// Why a create was refused because of its recurrence.
 ///
-/// Two answers, because there are two things worth saying and only one of them
-/// is actionable. Where the rule's end is what could not be stated — see
-/// [`unstateable_until`] — the reason carries the instant and the zone it could
-/// not be stated in, which between them identify the appointment to change and
-/// the `VTIMEZONE` to look at. Every other refusal is the general one: the
-/// mapping knows the rule cannot be written back, but nothing about *which*
-/// part of it would help someone reading a dialog.
+/// Two answers exist, because only one of the two possible statements gives the
+/// user an action. When the end of the rule cannot be stated (see
+/// [`unstateable_until`]), the reason contains the instant and the zone.
+/// Together they identify the appointment to change and the `VTIMEZONE` to
+/// examine. Each other refusal is the general one: the mapping knows that it
+/// cannot write the rule back, but no detail helps a person who reads a dialog.
 ///
-/// Naming the zone matters more than it looks. Since the document's own
-/// `VTIMEZONE` became the conversion, an end date stated as a UTC instant is
-/// the case that *works*; what is left is a calendar entry whose zone is
-/// missing or written unreadably, and a refusal that did not say which zone
-/// would leave the user with an error they cannot tell apart from the one this
-/// code used to give for the ordinary case.
+/// The zone name is important. The document's own `VTIMEZONE` does the
+/// conversion, so an end date as a UTC instant is the case that *works*. The
+/// remaining case is an entry whose zone is missing or not readable. Without
+/// the zone name, the user cannot tell this error from the error that this code
+/// gave before for the ordinary case.
 ///
-/// The sentence the user reads is `jmap_backend_cal::ops`'s, over these two
-/// values — that is where gettext is bound and where the string can therefore
-/// be translated, which is the whole reason this hands back a reason rather
-/// than prose.
+/// `jmap_backend_cal::ops` makes the sentence for the user from these two
+/// values. Gettext is bound there, so only there can the string be translated.
+/// That is why this function returns a reason and not text.
 fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> Unsendable {
     match (unstateable_until(rule), time_zone) {
         (Some(until), Some(zone)) => Unsendable::RecurrenceEnd {
@@ -592,7 +594,7 @@ fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> Unse
 }
 
 impl ComponentInfo {
-    /// Render an event, deriving its revision from the result.
+    /// Renders an event and calculates its revision from the result.
     fn render(event: &CalendarEvent) -> Result<Self, SyncError> {
         let uid = event
             .id
@@ -612,17 +614,17 @@ impl ComponentInfo {
 
 /// The change token for a rendered event.
 ///
-/// JSCalendar's `updated` timestamp is the obvious candidate and the wrong
-/// one: RFC 8984 leaves it optional, so a server that omits it would make
-/// every event look unchanged forever. A digest of the component is always
-/// available, and it is a *better* token than a timestamp — it changes
-/// exactly when something EDS can see changes, so a server-side edit to a
-/// property this mapping drops does not churn every client's cache.
+/// The JSCalendar `updated` timestamp is the obvious candidate, but it is
+/// wrong. RFC 8984 makes it optional, so if a server omits it, every event
+/// looks unchanged permanently. A digest of the component is always available,
+/// and it is a *better* token than a timestamp. It changes exactly when a
+/// change that EDS can see occurs. Thus a server-side edit to a property that
+/// this mapping drops does not invalidate the cache of each client.
 ///
-/// FNV-1a rather than `DefaultHasher`, and spelled out here rather than
-/// shared with `jmap-book-sync`: revisions are persisted in the EDS cache and
-/// compared across restarts, and `DefaultHasher`'s output is explicitly not
-/// stable between Rust releases.
+/// This uses FNV-1a, not `DefaultHasher`, and has its own copy, not one shared
+/// with `jmap-book-sync`. The EDS cache keeps revisions and compares them
+/// across restarts, and the output of `DefaultHasher` can change between Rust
+/// releases.
 fn revision_of(icalendar: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in icalendar.as_bytes() {
@@ -637,9 +639,9 @@ mod tests {
     use super::*;
     use jmap_proto::error::{MethodError, SetError};
 
-    /// Revisions outlive the process in the EDS cache, so the digest is
-    /// pinned to the published FNV-1a 64-bit test vectors: any drift would
-    /// make every cached event look changed after an upgrade.
+    /// The EDS cache keeps revisions after the process stops, so this test pins
+    /// the digest to the published FNV-1a 64-bit test vectors. A change would
+    /// make each cached event look changed after an upgrade.
     #[test]
     fn revision_of_is_fnv1a_64() {
         assert_eq!(revision_of(""), "cbf29ce484222325");
