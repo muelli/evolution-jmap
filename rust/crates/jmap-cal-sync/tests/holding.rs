@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::save_component`'s create path matches a re-sent event to the one
-//! it already holds by its own UID, not by whichever event in the calendar a
-//! query without that filter would return first.
+//! The create path of `CalSync::save_component` matches a re-sent event to the
+//! stored event by its UID, not to the first event that an unfiltered query returns.
 
 mod common;
 

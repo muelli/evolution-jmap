@@ -1,19 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::save_component`'s create path must not trust `CalendarEvent/set`'s
-//! `created` object to carry the properties the client itself just sent.
+//! The create path of `CalSync::save_component` must not expect the `created`
+//! object of `CalendarEvent/set` to hold the properties that the client sent.
 //!
-//! RFC 8620 §5.3 only requires the server to report properties it set
-//! itself; a real deployment (Stalwart, found via `jmap-cal-sync/tests/
-//! live_server_save.rs` against the live test server) takes this literally
-//! and answers a `CalendarEvent/set` create with `{"id": "..."}` alone.
-//! Before this fix, `save_component`'s create branch rendered its return
-//! value straight from that terse object, so the iCalendar object
-//! `save_component_sync` hands back to EDS — the record EDS caches
-//! immediately, before any later sync — was missing the summary, start time,
-//! and every other property the caller just wrote. Mirrors
-//! `jmap-book-sync/tests/terse_create.rs`'s identical finding for contacts.
+//! RFC 8620 §5.3 requires the server to report only the properties that it set.
+//! Stalwart (found with `jmap-cal-sync/tests/live_server_save.rs` against the live
+//! test server) answers a create with only `{"id": "..."}`. The iCalendar object
+//! that `save_component_sync` gives to EDS is the record that EDS caches
+//! immediately, so it must not be built from that short object. If it is, the
+//! summary, the start and all other properties that the caller wrote are missing.
+//! `jmap-book-sync/tests/terse_create.rs` tests the same problem for contacts.
 
 use jmap_cal_sync::CalSync;
 use jmap_client::{Client, Credentials};
@@ -57,8 +54,8 @@ fn saving_a_new_event_against_a_terse_server_still_renders_what_was_sent() {
         saved.icalendar
     );
 
-    // The revision must match a normal load of the same event — otherwise
-    // the very next `get_changes` looks like an external edit happened.
+    // The revision must match a normal load of the same event. If not, the next
+    // `get_changes` reports an external edit.
     let reloaded = sync.load_component(&saved.uid).unwrap();
     assert_eq!(saved.revision, reloaded.revision);
 }

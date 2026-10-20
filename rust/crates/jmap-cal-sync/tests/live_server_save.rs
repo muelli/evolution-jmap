@@ -1,42 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::save_component`/`remove_component` against a real JMAP server —
-//! the sync-layer functions `ECalMetaBackend::save_component_sync`/
-//! `remove_component_sync` actually call, exercised end to end for the first
-//! time.
+//! Tests `CalSync::save_component`/`remove_component` end to end against a real
+//! JMAP server. `ECalMetaBackend::save_component_sync`/`remove_component_sync`
+//! call these sync-layer functions.
 //!
-//! `jmap-client/tests/live_server.rs` already proves `CalendarEvent/set`
-//! round-trips against real Stalwart directly through `Client`, and
-//! `jmap-cal-sync/tests/live_server.rs` already proves `CalSync::free_busy`
-//! (a read-side decision) against it — but nothing has ever driven
-//! `CalSync::save_component`/`remove_component` themselves: the
+//! `jmap-client/tests/live_server.rs` proves the `CalendarEvent/set` round
+//! trips against a real Stalwart server directly through `Client`.
+//! `jmap-cal-sync/tests/live_server.rs` proves `CalSync::free_busy` (a
+//! read-side decision) against it. This file tests
+//! `CalSync::save_component`/`remove_component`: the
 //! iCalendar-to-`CalendarEvent` mapping (`jmap_ical::ical_to_event`) and the
-//! create/update decision `save_component` makes, the calendar-side
-//! counterpart of exactly what `jmap-book-sync/tests/live_server.rs` already
-//! proved for `BookSync::save_contact`/`remove_contact`. Only `jmap-mockd`
-//! has ever exercised this crate's own write functions
-//! (`jmap-cal-sync/tests/save.rs`); this file is their live-server
-//! counterpart, following the same recipe as `jmap-book-sync`'s.
+//! create/update decision of `save_component`.
+//! `jmap-book-sync/tests/live_server.rs` tests the same for
+//! `BookSync::save_contact`/`remove_contact`. The mock-server counterpart is
+//! `jmap-cal-sync/tests/save.rs` (on `jmap-mockd`). This file uses the same
+//! recipe as `jmap-book-sync`.
 //!
 //! ## Running it
 //!
-//! Same environment as `jmap-cal-sync/tests/live_server.rs` — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up for
-//! `jmap-client`'s write-path tests:
+//! The environment is the same as for `jmap-cal-sync/tests/live_server.rs`.
+//! Refer to `docs/manual-test-live-server.md`. Set the
+//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` variables that the
+//! `jmap-client` write-path tests use, then run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_save -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like this crate's other
-//! live-server file, `#[ignore]` alone already keeps it out of a plain
+//! No `--features live-server` gate is necessary. As for the other live-server
+//! files of this crate, `#[ignore]` alone keeps the tests out of a plain
 //! `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 
@@ -44,8 +41,8 @@ use jmap_cal_sync::CalSync;
 use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover event can never be mistaken for this run's own.
+/// Returns a value unique to this process, so a leftover event from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -53,7 +50,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server.rs::connect_for_write` exactly.
+/// Same as `jmap-book-sync/tests/live_server.rs::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -69,11 +66,10 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Saves a new iCalendar VEVENT via `CalSync::save_component`, confirms it
-/// via `list_existing`, edits it (a summary change, mirroring what
-/// Evolution's appointment editor sends on a rename), confirms the edit via
-/// `load_component`, then removes it via `remove_component` and confirms it
-/// is gone.
+/// Saves a new iCalendar VEVENT with `CalSync::save_component` and confirms it
+/// with `list_existing`. Changes the summary, as the appointment editor of
+/// Evolution does on a rename, and confirms with `load_component`. Then removes
+/// the event with `remove_component` and confirms that it is gone.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn saving_then_removing_an_event_round_trips_through_the_real_server() {
@@ -153,20 +149,19 @@ fn saving_then_removing_an_event_round_trips_through_the_real_server() {
     );
 }
 
-/// The first `RRULE` line in an iCalendar document, `None` if there is none.
+/// Returns the first `RRULE` line in an iCalendar document, or `None`.
 fn rrule_line(icalendar: &str) -> Option<&str> {
     icalendar.lines().find(|line| line.starts_with("RRULE:"))
 }
 
-/// Saves a recurring `VEVENT`, then saves an edit that only changes its
-/// summary, and confirms the reloaded event's `RRULE` is exactly what the
-/// server returned on create. `patch::diff_recurrence` only ever sends
-/// `recurrenceRule` when the baseline (the server's own event, rendered to
-/// iCalendar and re-parsed) differs from the edit; the baseline exists
-/// specifically so real Stalwart's own `RRULE` spelling is never misread as a
-/// user edit and narrowed or dropped. This is the first time that guard has
-/// been driven by an actual Stalwart round trip rather than `jmap-mockd`'s
-/// modeled `RRULE` strings.
+/// Saves a recurring `VEVENT`, then saves an edit that changes only its
+/// summary. The reloaded `RRULE` must be exactly the `RRULE` that the server
+/// returned on create. `patch::diff_recurrence` sends `recurrenceRule` only
+/// when the baseline differs from the edit. The baseline is the server event,
+/// rendered to iCalendar and parsed again. Thus the `RRULE` spelling of
+/// Stalwart is not read as a user edit, which can narrow or drop the rule. This
+/// test checks that guard with a real Stalwart round trip, not with the `RRULE`
+/// strings of `jmap-mockd`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
@@ -232,15 +227,13 @@ fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying an `RRULE`, then saves an edit that changes the
-/// rule itself (adding `COUNT`), and confirms the reloaded event's `RRULE`
-/// carries the new rule rather than the old one. `patch::diff_recurrence`
-/// sends the whole edited `recurrenceRule` whenever it differs from the
-/// baseline; `tests/save.rs`'s rule-editing tests (e.g.
-/// `the_weeks_of_the_year_a_rule_repeats_in_reach_the_server`) prove this
-/// against `jmap-mockd`. This is the first time the positive edit itself,
-/// rather than only the guard that leaves an untouched `RRULE` alone (the
-/// test above), has been driven by an actual Stalwart round trip.
+/// Saves a `VEVENT` with an `RRULE`, then saves an edit that adds `COUNT` to
+/// the rule. The reloaded `RRULE` must have the new rule, not the old one.
+/// `patch::diff_recurrence` sends the full edited `recurrenceRule` when it
+/// differs from the baseline. The rule-editing tests of `tests/save.rs` (for
+/// example `the_weeks_of_the_year_a_rule_repeats_in_reach_the_server`) prove
+/// this against `jmap-mockd`. This test checks the edit itself with a real
+/// Stalwart round trip. The test above checks only the guard.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn changing_an_events_recurrence_rule_reaches_the_real_server() {
@@ -309,23 +302,22 @@ fn changing_an_events_recurrence_rule_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// The `CATEGORIES` line of an iCalendar document, `None` if there is none.
+/// Returns the `CATEGORIES` line of an iCalendar document, or `None`.
 fn categories_line(icalendar: &str) -> Option<&str> {
     icalendar
         .lines()
         .find(|line| line.starts_with("CATEGORIES"))
 }
 
-/// Saves a `VEVENT` carrying two tags, one of them holding a comma (so the
-/// `CATEGORIES` escaping round-trips too), then saves an edit that only
-/// changes the summary, and confirms the reloaded event's `CATEGORIES` line
-/// is unchanged. `patch::diff_keywords` only ever sends `keywords` when the
-/// baseline (the server's own event, rendered to iCalendar and re-parsed)
-/// differs from the edit, the same guard `diff_recurrence`/`diff_overrides`
-/// use for `RRULE`/overrides — here so real Stalwart's own `CATEGORIES`
-/// spelling is never misread as the user clearing or changing their tags.
-/// This is the first time that guard has been driven by an actual Stalwart
-/// round trip rather than `jmap-mockd`'s modeled `CATEGORIES` strings.
+/// Saves a `VEVENT` with two tags, and one tag has a comma (this also tests the
+/// `CATEGORIES` escaping). Then saves an edit that changes only the summary.
+/// The reloaded `CATEGORIES` line must not change. `patch::diff_keywords` sends
+/// `keywords` only when the baseline (the server event, rendered to iCalendar
+/// and parsed again) differs from the edit. `diff_recurrence`/`diff_overrides`
+/// use the same guard for `RRULE`/overrides. Here, the guard prevents a
+/// misreading of the `CATEGORIES` spelling of Stalwart as a tag change by the
+/// user. This test checks that guard with a real Stalwart round trip, not with
+/// the `CATEGORIES` strings of `jmap-mockd`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_an_events_categories_unchanged() {
@@ -391,16 +383,14 @@ fn an_unrelated_edit_leaves_an_events_categories_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying a single `CATEGORIES` tag, then saves an edit
-/// that adds a second tag to the same line, and confirms the reloaded
-/// event's `CATEGORIES` carries both. `patch::diff_keywords` sends the whole
-/// `keywords` map on any change, never a per-tag patch — the same shape
-/// `diff_alerts` uses and already has live confirmation for.
-/// `tests/save.rs`'s `adding_a_tag_to_a_tagged_event_sends_the_whole_set`
-/// proves this against `jmap-mockd`; this is the first time the positive
-/// edit itself, rather than only the guard that leaves an untouched
-/// `CATEGORIES` alone (the test above), has been driven by an actual
-/// Stalwart round trip.
+/// Saves a `VEVENT` with one `CATEGORIES` tag, then saves an edit that adds a
+/// second tag to the same line. The reloaded `CATEGORIES` must have the two
+/// tags. On each change, `patch::diff_keywords` sends the full `keywords` map,
+/// never a per-tag patch. `diff_alerts` uses the same shape, and live tests
+/// confirm it. `adding_a_tag_to_a_tagged_event_sends_the_whole_set` in
+/// `tests/save.rs` proves this against `jmap-mockd`. This test checks the edit
+/// itself with a real Stalwart round trip. The test above checks only the
+/// guard.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn adding_a_tag_to_an_events_categories_reaches_the_real_server() {
@@ -462,22 +452,21 @@ fn adding_a_tag_to_an_events_categories_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// The `LOCATION` line of an iCalendar document, `None` if there is none.
+/// Returns the `LOCATION` line of an iCalendar document, or `None`.
 fn location_line(icalendar: &str) -> Option<&str> {
     icalendar.lines().find(|line| line.starts_with("LOCATION"))
 }
 
-/// Saves a `VEVENT` carrying a single `LOCATION`, then saves an edit that only
-/// changes the summary, and confirms the reloaded event's `LOCATION` line is
-/// unchanged. `patch::diff_locations` only ever sends `locations/<key>/name`
-/// when the baseline (the server's own event, rendered to iCalendar and
-/// re-parsed) names a different place than the edit, the same guard
-/// `diff_recurrence`/`diff_keywords`/`diff_overrides` use for their own
-/// properties — here so real Stalwart's own `LOCATION`/`X-JMAP-KEY` round trip
-/// is never misread as the user renaming or clearing the place. This is the
-/// first time that guard has been driven by an actual Stalwart round trip
-/// rather than `jmap-mockd`'s modeled one
-/// (`a_place_that_did_not_change_is_not_sent_at_all` in `tests/save.rs`).
+/// Saves a `VEVENT` with one `LOCATION`, then saves an edit that changes only
+/// the summary. The reloaded `LOCATION` line must not change.
+/// `patch::diff_locations` sends `locations/<key>/name` only when the baseline
+/// (the server event, rendered to iCalendar and parsed again) names a different
+/// place than the edit. `diff_recurrence`/`diff_keywords`/`diff_overrides` use
+/// the same guard for their properties. Here, the guard prevents a misreading
+/// of the Stalwart `LOCATION`/`X-JMAP-KEY` round trip as a rename or clear.
+/// This test checks that guard with a real Stalwart round trip, not with the
+/// `jmap-mockd` model (`a_place_that_did_not_change_is_not_sent_at_all` in
+/// `tests/save.rs`).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_an_events_location_unchanged() {
@@ -543,20 +532,17 @@ fn an_unrelated_edit_leaves_an_events_location_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying a single `LOCATION`, then saves an edit that
-/// renames the place by rewriting the `LOCATION` line itself without its
-/// `X-JMAP-KEY` (the way Evolution's appointment editor writes a `LOCATION`
-/// it has no UI concept of a key for), and confirms the reloaded event shows
-/// the new name on the server's own entry rather than a second, duplicate
-/// one. `patch::diff_locations` resolves which entry a keyless rename
-/// belongs to by position (there is only ever one place to rename) and
-/// patches `locations/<key>/name` under the server's own key, never the
-/// property whole — `tests/save.rs`'s
-/// `a_place_renamed_without_its_key_still_reaches_the_servers_own_entry`
-/// proves this against `jmap-mockd`; this is the first time the positive
-/// rename itself, rather than only the guard that leaves an untouched
-/// `LOCATION` alone (the test above), has been driven by an actual Stalwart
-/// round trip.
+/// Saves a `VEVENT` with one `LOCATION`. Then saves an edit that writes the
+/// `LOCATION` line again with a new name and without its `X-JMAP-KEY`, as the
+/// appointment editor of Evolution does. (The editor has no UI concept of a
+/// key.) The reloaded event must show the new name on the server entry, not on
+/// a second, duplicate entry. `patch::diff_locations` uses the key of the one
+/// server entry (there is only one place to rename). It patches
+/// `locations/<key>/name` under that key, never the full property.
+/// `a_place_renamed_without_its_key_still_reaches_the_servers_own_entry` in
+/// `tests/save.rs` proves this against `jmap-mockd`. This test checks the
+/// rename itself with a real Stalwart round trip. The test above checks only
+/// the guard.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn renaming_an_events_location_reaches_the_real_server() {
@@ -636,25 +622,23 @@ fn renaming_an_events_location_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// The `CONFERENCE` line of an iCalendar document, `None` if there is none.
+/// Returns the `CONFERENCE` line of an iCalendar document, or `None`.
 fn conference_line(icalendar: &str) -> Option<&str> {
     icalendar
         .lines()
         .find(|line| line.starts_with("CONFERENCE"))
 }
 
-/// Saves a `VEVENT` carrying a single `CONFERENCE` (RFC 7986 section 5.11),
-/// then saves an edit that only changes the summary, and confirms the
-/// reloaded event's `CONFERENCE` line is unchanged. `patch::diff_virtual_locations`
-/// only ever sends `virtualLocations/<key>/uri` when the baseline (the
-/// server's own event, rendered to iCalendar and re-parsed) names a
-/// different place to join online than the edit, the same guard
-/// `diff_locations` uses for `LOCATION` — here so real Stalwart's own
-/// `CONFERENCE`/`X-JMAP-KEY` round trip is never misread as the user
-/// renaming or clearing the place to join online. This is the first time
-/// that guard has been driven by an actual Stalwart round trip rather than
-/// `jmap-mockd`'s modeled one (`a_place_that_did_not_change_is_not_sent_at_all`
-/// in `tests/save.rs`).
+/// Saves a `VEVENT` with one `CONFERENCE` (RFC 7986 section 5.11), then saves
+/// an edit that changes only the summary. The reloaded `CONFERENCE` line must
+/// not change. `patch::diff_virtual_locations` sends
+/// `virtualLocations/<key>/uri` only when the baseline (the server event,
+/// rendered to iCalendar and parsed again) names a different online place than
+/// the edit. `diff_locations` uses the same guard for `LOCATION`. Here, the
+/// guard prevents a misreading of the Stalwart `CONFERENCE`/`X-JMAP-KEY` round
+/// trip as a rename or clear. This test checks that guard with a real Stalwart
+/// round trip, not with the `jmap-mockd` model
+/// (`a_place_that_did_not_change_is_not_sent_at_all` in `tests/save.rs`).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_an_events_conference_unchanged() {
@@ -720,18 +704,16 @@ fn an_unrelated_edit_leaves_an_events_conference_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying a single `CONFERENCE`, then saves an edit that
-/// rewrites only the URI inside the same line (keeping whatever
-/// `X-JMAP-KEY` the server assigned on create, the way a client that
-/// understood the key would edit it), and confirms the reloaded event shows
-/// the new address on the server's own entry rather than a second, duplicate
-/// one. `patch::diff_virtual_locations` resolves the entry to patch by the
-/// server-chosen key and writes `virtualLocations/<key>/uri` alone, leaving
-/// any other member untouched — `tests/save.rs`'s
-/// `moving_where_an_event_is_joined_online_patches_the_link_in_place` proves
-/// this against `jmap-mockd`; this is the first time the positive rename
-/// itself, rather than only the guard that leaves an untouched `CONFERENCE`
-/// alone (the test above), has been driven by an actual Stalwart round trip.
+/// Saves a `VEVENT` with one `CONFERENCE`, then saves an edit that changes only
+/// the URI in that line. The edit keeps the `X-JMAP-KEY` that the server gave
+/// on create, as a client that knows the key does. The reloaded event must show
+/// the new address on the server entry, not on a second, duplicate entry.
+/// `patch::diff_virtual_locations` finds the entry by the server key and writes
+/// only `virtualLocations/<key>/uri`. All other members stay.
+/// `moving_where_an_event_is_joined_online_patches_the_link_in_place` in
+/// `tests/save.rs` proves this against `jmap-mockd`. This test checks the
+/// change itself with a real Stalwart round trip. The test above checks only
+/// the guard.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn renaming_an_events_conference_reaches_the_real_server() {
@@ -819,17 +801,15 @@ fn attach_line(icalendar: &str) -> Option<&str> {
     icalendar.lines().find(|line| line.starts_with("ATTACH"))
 }
 
-/// Saves a `VEVENT` carrying a single `ATTACH` (an https URI, not a `file:`
-/// one — `diff_links` never reads those back), then saves an edit that only
-/// changes the summary, and confirms the reloaded event's `ATTACH` line is
-/// unchanged. `patch::diff_links` only ever sends `links/<key>/href` when the
-/// baseline (the server's own event, rendered to iCalendar and re-parsed)
-/// names a different address than the edit, the same guard `diff_locations`
-/// and `diff_virtual_locations` use — here so real Stalwart's own
-/// `ATTACH`/`X-JMAP-KEY` round trip is never misread as the user rewriting or
-/// clearing the resource's address. This is the first time that guard has
-/// been driven by an actual Stalwart round trip rather than `jmap-mockd`'s
-/// modeled one (`tests/save.rs`'s links coverage).
+/// Saves a `VEVENT` with one `ATTACH`, then saves an edit that changes only the
+/// summary. The `ATTACH` is an https URI, because `jmap_ical` never reads a
+/// `file:` URI. The reloaded `ATTACH` line must not change. `patch::diff_links`
+/// sends `links/<key>/href` only when the baseline (the server event, rendered
+/// to iCalendar and parsed again) names a different address than the edit.
+/// `diff_locations` and `diff_virtual_locations` use the same guard. Here, the
+/// guard prevents a misreading of the Stalwart `ATTACH`/`X-JMAP-KEY` round trip
+/// as an address change. This test checks that guard with a real Stalwart round
+/// trip, not with the `jmap-mockd` model (the links tests in `tests/save.rs`).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_an_events_attach_unchanged() {
@@ -895,19 +875,16 @@ fn an_unrelated_edit_leaves_an_events_attach_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying a single `ATTACH`, then saves an edit that
-/// rewrites only the URI inside the same line (keeping whatever
-/// `X-JMAP-KEY` the server assigned on create, the way a client that
-/// understood the key would edit it), and confirms the reloaded event shows
-/// the new address on the server's own entry rather than a second, duplicate
-/// one. `patch::diff_links` resolves the entry to patch by the
-/// server-chosen key, confirms it via `the_servers_own_entry`'s href match,
-/// and writes `links/<key>/href` alone, leaving any other member untouched
-/// — `tests/save.rs`'s `moving_an_attachment_patches_the_entry_the_server_
-/// chose` proves this against `jmap-mockd`; this is the first time the
-/// positive rehref itself, rather than only the guard that leaves an
-/// untouched `ATTACH` alone (the test above), has been driven by an actual
-/// Stalwart round trip.
+/// Saves a `VEVENT` with one `ATTACH`, then saves an edit that changes only the
+/// URI in that line. The edit keeps the `X-JMAP-KEY` that the server gave on
+/// create, as a client that knows the key does. The reloaded event must show
+/// the new address on the server entry, not on a second, duplicate entry.
+/// `patch::diff_links` finds the entry by the server key and confirms it with
+/// the href match of `the_servers_own_entry`. Then it writes only
+/// `links/<key>/href`. All other members stay.
+/// `moving_an_attachment_patches_the_entry_the_server_chose` in `tests/save.rs`
+/// proves this against `jmap-mockd`. This test checks the href change itself
+/// with a real Stalwart round trip. The test above checks only the guard.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn renaming_an_events_attachment_reaches_the_real_server() {
@@ -986,15 +963,14 @@ fn renaming_an_events_attachment_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a recurring `VEVENT`, deletes one occurrence (an `EXDATE`), then
-/// saves a second edit that only changes the summary, and confirms the
-/// `EXDATE` is still present on reload. `patch::diff_overrides` only ever
-/// sends `recurrenceOverrides` when the baseline (the server's own event,
-/// rendered to iCalendar and re-parsed) differs from the edit, the same
-/// guard `diff_recurrence` uses for `RRULE` — here so a real excluded
-/// instance is never misread by an unrelated edit and dropped. This is the
-/// first time that guard has been driven by an actual Stalwart round trip
-/// for overrides rather than `jmap-mockd`'s modeled ones
+/// Saves a recurring `VEVENT` and deletes one occurrence (an `EXDATE`). Then
+/// saves a second edit that changes only the summary. The reloaded event must
+/// still have the `EXDATE`. `patch::diff_overrides` sends `recurrenceOverrides`
+/// only when the baseline (the server event, rendered to iCalendar and parsed
+/// again) differs from the edit. `diff_recurrence` uses the same guard for
+/// `RRULE`. Here, an unrelated edit must not drop an excluded instance. This
+/// test checks that guard for overrides with a real Stalwart round trip, not
+/// with the `jmap-mockd` model
 /// (`deleting_one_occurrence_reaches_the_server_as_an_excluded_override` in
 /// `tests/save.rs`).
 #[test]
@@ -1073,8 +1049,8 @@ fn an_unrelated_edit_leaves_a_deleted_occurrences_exdate_in_place() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// The lines of the single `VALARM` block in an iCalendar document: its
-/// `UID` and `TRIGGER` lines, or `None` if there is no `VALARM`.
+/// Returns the `UID` and `TRIGGER` lines of the one `VALARM` block in an
+/// iCalendar document, or `None`.
 fn valarm_uid_and_trigger(icalendar: &str) -> Option<(&str, &str)> {
     let start = icalendar.find("BEGIN:VALARM")?;
     let end = icalendar[start..].find("END:VALARM")? + start;
@@ -1084,19 +1060,16 @@ fn valarm_uid_and_trigger(icalendar: &str) -> Option<(&str, &str)> {
     Some((uid, trigger))
 }
 
-/// Saves a `VEVENT` carrying a single reminder (a `VALARM` naming an explicit
-/// RFC 9074 `UID`), then saves an edit that only changes the summary, and
-/// confirms the reloaded event's `VALARM` is byte-identical. `patch::
-/// diff_alerts` only sends the whole `alerts` map when the baseline (the
-/// server's own event, rendered to iCalendar and re-parsed) names a
-/// different set of reminders than the edit, the same guard the
-/// locations/virtualLocations/links families use — here so real Stalwart's
-/// own `VALARM`/`UID` round trip is never misread as the user moving or
-/// clearing the reminder. `tests/save.rs`'s
-/// `a_reminder_that_did_not_change_is_not_sent_at_all` proves this against
-/// `jmap-mockd`; this is the first time the guard itself, rather than only
-/// the positive edit (the test below), has been driven by an actual
-/// Stalwart round trip.
+/// Saves a `VEVENT` with one reminder (a `VALARM` with an explicit RFC 9074
+/// `UID`). Then saves an edit that changes only the summary. The reloaded
+/// `VALARM` must be byte-identical. `patch::diff_alerts` sends the full
+/// `alerts` map only when the baseline (the server event, rendered to iCalendar
+/// and parsed again) names a different set of reminders than the edit. The
+/// locations/virtualLocations/links families use the same guard. Here, the
+/// guard prevents a misreading of the Stalwart `VALARM`/`UID` round trip as a
+/// reminder change. `a_reminder_that_did_not_change_is_not_sent_at_all` in
+/// `tests/save.rs` proves this against `jmap-mockd`. This test checks the guard
+/// with a real Stalwart round trip. The test below checks the edit.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn an_unrelated_edit_leaves_an_events_reminder_unchanged() {
@@ -1180,18 +1153,16 @@ fn an_unrelated_edit_leaves_an_events_reminder_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a `VEVENT` carrying a single reminder (a `VALARM` naming an explicit
-/// RFC 9074 `UID`, the way a client that understood the key would write one),
-/// then saves an edit that rewrites only the `TRIGGER` of that same `VALARM`,
-/// and confirms the reloaded event shows the new offset under the same `UID`
-/// rather than a second, duplicate reminder. `patch::diff_alerts` sends the
-/// whole `alerts` map, not a per-member patch, but keyed by each `VALARM`'s
-/// own `UID` (`jmap_ical::read_alerts`), so an edit under the server's own
-/// key must still land on the one entry that already exists, not a new one
-/// next to it. `tests/save.rs`'s
-/// `moving_a_reminder_sends_the_whole_set_under_the_servers_own_key` proves
-/// this against `jmap-mockd`; this is the first time the positive edit
-/// itself has been driven by an actual Stalwart round trip.
+/// Saves a `VEVENT` with one reminder (a `VALARM` with an explicit RFC 9074
+/// `UID`, as a client that knows the key writes it). Then saves an edit that
+/// changes only the `TRIGGER` of that `VALARM`. The reloaded event must show
+/// the new offset under the same `UID`, not a second, duplicate reminder.
+/// `patch::diff_alerts` sends the full `alerts` map, not a per-member patch.
+/// The map keys are the `UID`s of the `VALARM`s (`jmap_ical::read_alerts`).
+/// Thus an edit under the server key must go to the existing entry, not to a
+/// new entry. `moving_a_reminder_sends_the_whole_set_under_the_servers_own_key`
+/// in `tests/save.rs` proves this against `jmap-mockd`. This test checks the
+/// edit with a real Stalwart round trip.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn moving_an_events_reminder_reaches_the_real_server() {
@@ -1276,13 +1247,13 @@ fn moving_an_events_reminder_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// Saves a reminded `VEVENT`, then saves the dismissal the way EDS writes one
-/// (RFC 9074 §6.1 `ACKNOWLEDGED` added to the `VALARM`, which is what
-/// `e_cal_util_set_alarm_acknowledged` does), and confirms the server stored it
-/// as RFC 8984 §4.5.2's `acknowledged` under the same key: the reloaded event
-/// shows it back, on the one reminder, at the same instant. `tests/save.rs`'s
-/// `dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant` is the
-/// `jmap-mockd` counterpart.
+/// Saves a `VEVENT` with a reminder, then saves the dismissal as EDS writes it.
+/// (`e_cal_util_set_alarm_acknowledged` adds an RFC 9074 §6.1 `ACKNOWLEDGED` to
+/// the `VALARM`.) The server must store it as the RFC 8984 §4.5.2
+/// `acknowledged` under the same key. The reloaded event must show it on the
+/// one reminder, at the same instant. The `jmap-mockd` counterpart is
+/// `dismissing_a_reminder_reaches_the_server_as_its_acknowledged_instant` in
+/// `tests/save.rs`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn dismissing_an_events_reminder_reaches_the_real_server() {
@@ -1373,21 +1344,21 @@ fn dismissing_an_events_reminder_reaches_the_real_server() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
-/// The `ATTENDEE` line for `address`, unfolded, `None` if there is none.
+/// Returns the unfolded `ATTENDEE` line for `address`, or `None`.
 fn attendee_line<'a>(icalendar: &'a str, address: &str) -> Option<&'a str> {
     icalendar
         .split("\r\n")
         .find(|line| line.starts_with("ATTENDEE") && line.ends_with(address))
 }
 
-/// A meeting's guest list edited the way Evolution's meeting editor edits it:
-/// one guest's reply changed, one guest removed, one added. Each change has to
-/// land in the server's own entry for that address, and once the server has
-/// normalised the roles, saving the same guest list again (organizer listed
-/// as a guest too, every `ROLE` spelled out) must not patch anything back.
+/// Edits the guest list of a meeting as the meeting editor of Evolution does:
+/// one changed reply, one removed guest, one added guest.
+/// Each change must go to the server entry for that address.
+/// After the server normalises the roles, the same guest list must give no patch.
+/// (In that list, the organizer is also a guest, and the `ROLE` is spelled out.)
 ///
-/// Every address is on a `.test` domain (RFC 2606), so nothing the server
-/// might send on the guests' behalf can reach a real person.
+/// All addresses use a `.test` domain (RFC 2606), so no message from the server
+/// can reach a real person.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn editing_a_meetings_guests_reaches_the_real_server() {
@@ -1481,8 +1452,8 @@ fn editing_a_meetings_guests_reaches_the_real_server() {
     assert!(find(&olga).is_some(), "the organizer stays: {guests:?}");
     assert_eq!(guests.len(), 3, "{guests:?}");
 
-    // The server's normalised shape against the same guest list as
-    // Evolution writes it: nothing to send.
+    // Compares the normalised server shape with the same guest list as
+    // Evolution writes it: no patch.
     let reshown = sync
         .load_component(&saved.uid)
         .unwrap()

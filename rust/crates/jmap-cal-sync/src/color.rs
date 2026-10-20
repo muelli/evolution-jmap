@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Calendar-colour write-back — `source_changed`.
+//! Write-back of the calendar colour (`source_changed`).
 //!
-//! `ESourceSelectable`'s colour is the one calendar property that can be
-//! edited locally without going through EDS's usual save-a-component path
-//! (the colour picker in the calendar-properties dialog writes it straight
-//! to the `ESource`), so it needs its own, narrower `Calendar/set` call
-//! rather than riding on [`crate::CalSync::save_component`].
+//! The colour of `ESourceSelectable` is the only calendar property that a user
+//! can edit locally without the usual EDS component save. The colour picker in
+//! the calendar-properties dialog writes it directly to the `ESource`. Thus it
+//! needs its own, smaller `Calendar/set` call, and does not use
+//! [`crate::CalSync::save_component`].
 
 use serde_json::{Value, json};
 
@@ -15,8 +15,8 @@ use crate::CalSync;
 use crate::error::SyncError;
 
 impl CalSync {
-    /// Push a colour edit — `None` clears it, matching the omitted-vs-empty
-    /// rule the read path already uses for `Calendar.color`.
+    /// Sends a colour edit. `None` clears the colour, which agrees with the
+    /// omitted-or-empty rule of the read path for `Calendar.color`.
     pub fn set_color(&self, color: Option<&str>) -> Result<(), SyncError> {
         let account_id = self.account_id().to_string();
         let calendar_id = self.calendar_id().to_string();

@@ -1,37 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::set_color` against a real JMAP server — the sync-layer
-//! function `source_changed` calls when the calendar-properties dialog's
-//! colour picker writes straight to the `ESource`, exercised end to end for
-//! the first time.
+//! Tests `CalSync::set_color` end to end against a real JMAP server.
+//! `source_changed` calls this sync-layer function when the colour picker of
+//! the calendar-properties dialog writes directly to the `ESource`.
 //!
-//! `jmap-cal-sync/tests/live_server.rs` proves `CalSync::free_busy` and
-//! `live_server_save.rs` proves `CalSync::save_component`/
-//! `remove_component` against the real server, but neither drives
-//! `set_color` — the last of this crate's four user-triggered writes to get
-//! a live-server test. Only `jmap-mockd` has ever exercised it
-//! (`jmap-cal-sync/tests/color.rs`); this
-//! file is its live-server counterpart, following the same recipe as this
-//! crate's other live-server files.
+//! `jmap-cal-sync/tests/live_server.rs` proves `CalSync::free_busy`, and
+//! `live_server_save.rs` proves `CalSync::save_component`/`remove_component`.
+//! Neither one calls `set_color`, the last of the four user-triggered operations
+//! of this crate to get a live-server test. The mock-server counterpart is
+//! `jmap-cal-sync/tests/color.rs` (on `jmap-mockd`). This file uses the same
+//! recipe as the other live-server files of this crate.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server tests — see
-//! `docs/manual-test-live-server.md`. In short, with
-//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` already set up:
+//! The environment is the same as for the other live-server tests of this crate.
+//! Refer to `docs/manual-test-live-server.md`. Set
+//! `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`, then run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_color -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — like this crate's other
-//! live-server files, `#[ignore]` alone already keeps it out of a plain
-//! `cargo test`.
+//! No `--features live-server` gate is necessary. `#[ignore]` alone keeps the
+//! test out of a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 
@@ -40,8 +35,8 @@ use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::Calendar;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover calendar can never be mistaken for this run's own.
+/// Returns a value unique to this process, so a leftover calendar from a
+/// different run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,8 +44,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server_save.rs::connect_for_write`
-/// exactly.
+/// Same as `jmap-cal-sync/tests/live_server_save.rs::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -66,9 +60,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Creates a throwaway calendar, pushes a colour via `CalSync::set_color`,
-/// confirms it via a fresh `Calendar/get`, clears it (`None`), confirms the
-/// clear, then destroys the calendar.
+/// Creates a temporary calendar and sets a colour with `CalSync::set_color`.
+/// Clears the colour (`None`), and confirms each change with a new `Calendar/get`.
+/// Then destroys the calendar.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn setting_then_clearing_a_calendar_colour_round_trips_through_the_real_server() {

@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Who tells the guests. With the account's "server handles meeting
-//! invitations" switch on, every create, edit and delete asks the server to
-//! send the iTIP messages itself (`sendSchedulingMessages`,
-//! draft-ietf-jmap-calendars §5.9.2), unless Evolution said not to for this
-//! one change (`E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`). With it off,
-//! nothing is ever asked and Evolution mails the guests as before. The mock
-//! records what it would have sent in a per-account scheduling outbox.
+//! Tests which side tells the guests. When the account's "server handles meeting
+//! invitations" switch is on, each create, edit and delete asks the server to
+//! send the iTIP messages (`sendSchedulingMessages`, draft-ietf-jmap-calendars
+//! §5.9.2). The exception is a change for which Evolution sets
+//! `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. When the switch is off, the
+//! server gets no request, and Evolution sends mail to the guests. The mock
+//! records the messages in a scheduling outbox for each account.
 
 use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled};
 use jmap_client::{Client, Credentials};
@@ -29,8 +29,8 @@ impl Fixture {
         Self::on(MockServer::builder().start())
     }
 
-    /// An account that is Olga, so a meeting she organises has this account
-    /// as its origin and the server invites and cancels on her behalf.
+    /// Returns an account that is Olga. A meeting that she organises comes from
+    /// this account, and the server sends invitations and cancellations for her.
     fn on(server: MockServer) -> Self {
         let account_id = server.account_id();
         let calendar_id = {
@@ -53,7 +53,7 @@ impl Fixture {
             .with_server_scheduling(server_schedules)
     }
 
-    /// Every message the server sent, as (method, recipient), sorted.
+    /// Returns all messages that the server sent, as sorted (method, recipient) pairs.
     fn sent(&self) -> Vec<(String, String)> {
         let state = self.server.state();
         let state = state.lock().unwrap();
@@ -79,7 +79,7 @@ impl Fixture {
     }
 }
 
-/// A meeting Olga organises, with the guests given.
+/// Returns a meeting that Olga organises, with the given guests.
 fn meeting(guests: &[&str]) -> String {
     let mut attendees = format!("ATTENDEE;CN=Olga;PARTSTAT=ACCEPTED:{OLGA}\r\n");
     for guest in guests {
@@ -195,10 +195,9 @@ fn the_switch_is_off_unless_turned_on() {
     assert!(fixture.sync(true).server_schedules());
 }
 
-/// §5.9.2: a guest the server has no way to reach (the mock, like Stalwart,
-/// delivers only to `mailto:`) makes it refuse the change,
-/// and the refusal reaches the caller as an error rather than a meeting filed
-/// with nobody told.
+/// §5.9.2: the server refuses a change with a guest that it cannot reach (the
+/// mock, like Stalwart, delivers only to `mailto:`). The caller gets an error, not
+/// a stored meeting about which nobody knows.
 #[test]
 fn a_guest_the_server_cannot_reach_fails_the_create_and_nothing_is_stored() {
     let fixture = Fixture::start();
@@ -219,8 +218,8 @@ fn a_guest_the_server_cannot_reach_fails_the_create_and_nothing_is_stored() {
     assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
 }
 
-/// An edit that adds such a guest is refused the same way, naming only the
-/// guest the server cannot reach, and the stored meeting is left as it was.
+/// The server refuses an edit that adds such a guest in the same way. The refusal
+/// names only the unreachable guest, and the stored meeting does not change.
 #[test]
 fn adding_a_guest_the_server_cannot_reach_fails_the_edit_and_names_only_them() {
     let fixture = Fixture::start();
@@ -238,9 +237,9 @@ fn adding_a_guest_the_server_cannot_reach_fails_the_edit_and_names_only_them() {
     assert_eq!(fixture.sent(), vec![request(VERA)]);
 }
 
-/// A delete names nobody: the sync layer does not load the event to remove
-/// it, so it has no guest list to name from. The refusal still fails the
-/// delete rather than removing the meeting with its guests left expecting it.
+/// The refusal of a delete names nobody: the sync layer does not load the event
+/// before removal, so it has no guest list. The delete still fails, so the
+/// meeting stays and the guests do not wait for a cancelled meeting.
 #[test]
 fn a_refused_delete_is_a_scheduling_refusal_too() {
     let fixture = Fixture::start();
@@ -257,10 +256,10 @@ fn a_refused_delete_is_a_scheduling_refusal_too() {
     assert_eq!(fixture.stored(), 1, "the meeting is still there");
 }
 
-/// A server that does not implement `sendSchedulingMessages` and says so
-/// (`invalidArguments`, RFC 8620 section 3.9) fails every change made while
-/// the switch is on, as [`Unscheduled::NotImplemented`]: the user has to turn
-/// the switch off, and only they can.
+/// A server that does not implement `sendSchedulingMessages` and reports this
+/// (`invalidArguments`, RFC 8620 section 3.9) causes each change to fail with
+/// [`Unscheduled::NotImplemented`] while the switch is on. Only the user can
+/// set the switch to off.
 #[test]
 fn a_server_that_does_not_schedule_fails_each_change_while_the_switch_is_on() {
     let fixture = Fixture::on(MockServer::builder().without_scheduling().start());
@@ -297,8 +296,8 @@ fn a_server_that_does_not_schedule_fails_each_change_while_the_switch_is_on() {
     assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
 }
 
-/// The same server, with the switch off: nothing is asked, so nothing is
-/// refused, and the guests are still synced as data for Evolution to mail.
+/// The same server with the switch off gets no request and refuses nothing. The
+/// guests still sync as data, and Evolution sends mail to them.
 #[test]
 fn a_server_that_does_not_schedule_is_fine_with_the_switch_off() {
     let fixture = Fixture::on(MockServer::builder().without_scheduling().start());

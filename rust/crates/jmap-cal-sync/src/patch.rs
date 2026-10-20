@@ -1,99 +1,85 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Turning an edited component back into a `CalendarEvent/set` PatchObject.
+//! Converts an edited component back into a `CalendarEvent/set` PatchObject.
 //!
-//! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps nineteen properties and
-//! drops everything else, so a save that sent the parsed event back whole
-//! would silently delete what it could not represent (a guest's `sendTo`, the
-//! sequence number), none of which the user ever saw, let alone asked to
-//! remove.
+//! A `VEVENT` is a lossy view of a JSCalendar event. The mapping reads a fixed
+//! set of properties and drops all others. If a save
+//! sent the parsed event back whole, it would delete data that the user did not
+//! see and did not remove (for example, a guest's `sendTo` or the sequence number).
 //!
-//! The lossiness also recurs *inside* the properties that are mapped, and
-//! this module answers that with one move: it does not compare the edited
-//! event against the event the server holds, but against **the server's event
-//! put through the same round trip**. That baseline is, by construction,
-//! exactly what Evolution was shown, so a difference from it is an edit and
-//! nothing else is. It falls out that
+//! Data also gets lost *inside* the mapped properties. Thus this module does not
+//! compare the edited event with the server's event. It compares the edited event
+//! with **the server's event after the same round trip**. This baseline is exactly
+//! what Evolution showed, so each difference from it is an edit, and nothing else is.
+//! As a result:
 //!
-//! - a `timeZone` of `UTC` is not rewritten to `Etc/UTC` merely because the
-//!   `Z` suffix the component carries reads back as the latter,
-//! - an `RRULE` that had to drop `INTERVAL=1` does not come back as a rule
-//!   with `interval` removed,
-//! - and a `status` outside the closed vocabulary is not cleared by a save
-//!   that never touched it.
+//! - a `timeZone` of `UTC` does not change to `Etc/UTC` because the `Z` suffix on
+//!   the component reads back as `Etc/UTC`,
+//! - an `RRULE` that dropped `INTERVAL=1` does not send a rule without `interval`,
+//! - a `status` outside the closed vocabulary stays when a save does not change it.
 //!
-//! Ten properties need more than the baseline, because for them "no
-//! difference" is not the whole question:
+//! Ten properties need more than the baseline, because "no difference" does not
+//! answer the full question for them:
 //!
-//! - **`locations` is a map of places and the component has one line.** So the
-//!   name is patched *into* the server's own entry rather than the property
-//!   being replaced, which is one of the two places this module reaches below
-//!   the top level — see `diff_locations`.
-//! - **`virtualLocations` is a map of places and the component has a line
-//!   each.** Which line stands for which entry is therefore a real question,
-//!   and the answer rides on the line as an `X-JMAP-KEY`; the members the line
-//!   shows are patched into the entry it names, and a line naming an entry the
-//!   server does not hold is neither created nor read as a deletion — see
+//! - **`locations` is a map of places, and the component has one line.** The save
+//!   patches the name *into* the server's entry and does not replace the property.
+//!   See `diff_locations`.
+//! - **`virtualLocations` is a map of places, and the component has one line for
+//!   each.** Each line carries the key of its entry in an `X-JMAP-KEY`. The save
+//!   patches the members that the line shows into that entry. A line with a key
+//!   that the server does not hold creates nothing and deletes nothing. See
 //!   `diff_virtual_locations`.
 //! - **`links` is a map of resources, and only one member of an entry is the
-//!   user's.** A line shows the address, the media type and the size; the type
-//!   and the size are the server's own description of what it holds, and the
-//!   `cid` and `title` beside them have no room on the line at all. So the save
-//!   patches `links/<key>/href` and nothing else — see `diff_links`.
-//! - **`keywords` is a set, and a set has no keys to leave unnamed.** The
-//!   property goes back replaced whole, so a tag that never reached the
-//!   `CATEGORIES` line is one the user never saw and a plain rewrite would
-//!   delete. It is carried onto the set the save writes instead, which is how
-//!   the "an unshown entry is not the user's to delete" rule is kept where
-//!   leaving an entry unnamed is not available — see `diff_keywords`.
-//! - **`alerts` is a map replaced whole, and a second property decides
-//!   whether anything reads it.** A `VALARM` as drawn here cannot say that a
-//!   reminder fires at an absolute instant, or that it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
-//!   is ignored altogether. Either way the reminders were not shown, so they
-//!   are not written — see `diff_alerts`.
+//!   user's.** A line shows the address, the media type and the size. The type and
+//!   the size are the server's description, and the `cid` and the `title` have no
+//!   space on the line. Thus the save patches only `links/<key>/href`. See
+//!   `diff_links`.
+//! - **`keywords` is a set, and a set has no keys.** The save replaces the property
+//!   whole. A tag that the `CATEGORIES` line cannot carry was not shown, so the save
+//!   copies it into the new set. This keeps the rule "the user does not delete an
+//!   entry that was not shown". See `diff_keywords`.
+//! - **`alerts` is a map that the save replaces whole, and a second property
+//!   controls if clients read it.** A `VALARM` here cannot show a reminder at an
+//!   absolute time or a reminder that sends mail. When RFC 8984 §4.5.1's
+//!   `useDefaultAlerts` is true, clients ignore the property. In both cases the
+//!   reminders were not shown, so the save does not write them. See `diff_alerts`.
 //! - **`recurrenceRule` is one property, not a merge point** (jscalendarbis
-//!   §3.3.3: singular, not RFC 8984's plural `recurrenceRules` array). A rule
-//!   with `rscale` cannot be spelled as an `RRULE` this crate emits, so
-//!   patching it at all would narrow the user's recurrence behind their back.
-//!   If any rule the server holds fails [`maps_recurrence_rule`], the
-//!   property is left alone entirely — as does one the *save* brings that
-//!   cannot be sent, which is the same check the series' `timeZone` gets
-//!   below: the property goes out replaced whole, so a part the server is
-//!   entitled to reject would cost every other edit in the save.
-//! - **`recurrenceOverrides` is the same story one level down.** An
-//!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
-//!   an instance is off, that it happens, and that it happens with another
-//!   title, start, zone, length, description, status, transparency,
-//!   importance, classification, set of tags or set of reminders — but not that
-//!   it happens in another place or with another guest list. An
-//!   override the component could only place with a bare
-//!   `RDATE` would come back as the empty patch, deleting what it could not
-//!   draw, so if any override the server holds fails
-//!   [`sends_recurrence_override`], the property is left alone entirely — as it
-//!   is when an override the *save* brings holds a value that cannot be sent,
-//!   which is the same check the series' `timeZone` gets below.
-//! - **`timeZones` is not diffed at all — it is added to.** The map says what
-//!   the identifiers the event names mean, and a server's entry may hold an
-//!   `url`, a `validUntil` or a set of `aliases` no `VTIMEZONE` has room for. So
-//!   it is never compared and never replaced: where the save sends an identifier
-//!   the server has no definition for, that one entry is written and no other —
-//!   see `diff_time_zones`.
-//! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
-//!   mapping cannot read yields no start, and `"start": null` is not a legal
-//!   way to say so, so the server's start stands.
+//!   §3.3.3: singular, not RFC 8984's plural `recurrenceRules` array). This crate
+//!   cannot write a rule with `rscale` as an `RRULE`, so a patch would narrow the
+//!   recurrence without the user's knowledge. If a server rule fails
+//!   [`maps_recurrence_rule`], the save does not touch the property. The same
+//!   applies to a rule from the *save* that fails it, as for the series'
+//!   `timeZone`: the save replaces the property whole, so one part that the server
+//!   can refuse costs all other edits in the save.
+//! - **`recurrenceOverrides` has the same problem one level down.** An `EXDATE`,
+//!   an `RDATE` and a `RECURRENCE-ID` component can say that an instance is off,
+//!   that it occurs, or that it occurs with a different title, start, zone,
+//!   duration, description, status, transparency, priority, privacy, set of tags or
+//!   set of reminders. They cannot say that it occurs at a different place or with
+//!   different guests. An override that only a bare `RDATE` can show comes back as
+//!   the empty patch and deletes what was not shown. Thus, if a server override
+//!   fails [`sends_recurrence_override`], the save does not touch the property. The
+//!   same applies when an override from the *save* holds a value that the save
+//!   cannot send, as for the series' `timeZone`.
+//! - **`timeZones` is not compared: the save only adds to it.** The map defines the
+//!   identifiers that the event uses. A server entry can hold a `url`, a
+//!   `validUntil` or `aliases`, and a `VTIMEZONE` has no space for them. Thus the
+//!   save never replaces the map. It writes one entry for each identifier that the
+//!   save sends and the server does not define. See `diff_time_zones`.
+//! - **RFC 8984 requires `start`.** If the mapping cannot read the `DTSTART`, the
+//!   component has no start. `"start": null` is not legal, so the server's start
+//!   stays.
 //!
-//! - **`participants` is a map of guests keyed by the server and drawn by
-//!   address.** So a guest's changes are patched into the entry the server
-//!   files that address under, and roles are compared the way servers
-//!   normalise them, or every save would patch them back; see
+//! - **`participants` is a map of guests: the server sets the keys, and the
+//!   component identifies guests by address.** The save patches the changes of a
+//!   guest into the server entry for that address. It compares roles in the way
+//!   that servers normalise them, or each save would patch them back. See
 //!   `diff_participants`.
 //!
-//! And one property is checked on its way *out* rather than against the
-//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.8 admits
-//! as a time zone under its own name or beside the definition that says what it
-//! is, and otherwise not at all. See [`jmap_ical::maps_time_zone`] and [`diff`].
+//! One property gets a check on output, not against the baseline. A `TZID` is an
+//! iCalendar identifier. RFC 8984 §1.4.8 accepts it as a time zone only under its
+//! own name or next to its definition. See [`jmap_ical::maps_time_zone`] and [`diff`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -105,40 +91,33 @@ use jmap_ical::{
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
 
-/// The patch that turns the event the server holds into the event Evolution
-/// just saved. Empty when the edit changed nothing this mapping can see.
+/// Returns the patch that changes the server's event into the event that
+/// Evolution saved. The patch is empty when the edit changes nothing this mapping
+/// can see.
 pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Value> {
     let mut patch = Map::new();
 
-    // What Evolution was actually shown. Rendering an event we just parsed
-    // from the server cannot normally fail to parse back; if it somehow does,
-    // there is no trustworthy baseline to diff against and sending nothing is
-    // the only safe answer.
+    // The baseline is what Evolution showed. If the server's event does not parse
+    // back, no baseline is reliable, so send nothing.
     let Ok(baseline) = ical_to_event(&event_to_ical(current)) else {
         return patch;
     };
 
-    // `start` is the one property whose absence cannot be expressed.
+    // `start` is the only property that has no legal way to be absent.
     let baseline_start = baseline.start.as_deref().filter(|s| !s.is_empty());
     let edited_start = edited.start.as_deref().filter(|s| !s.is_empty());
     if edited_start.is_some() && edited_start != baseline_start {
         set(&mut patch, "start", edited_start);
     }
-    // `timeZone` is the one property whose *new* value may be unsendable. A
-    // component states its zone with a `TZID`, which is an iCalendar identifier
-    // and not the RFC 8984 §1.4.8 name JSCalendar wants; where the document
-    // gave no way to translate it, the zone is left alone rather than sent as
-    // it came or cleared. It is the same "seen in part, so not written back"
-    // rule the recurrence properties follow, applied to one value.
+    // A new `timeZone` value can be unsendable. A component states its zone with a
+    // `TZID`, not with an RFC 8984 §1.4.8 name. If the document gives no
+    // translation, keep the server's zone: do not send it or clear it.
     //
-    // §1.4.8's second form (the custom identifier) is sendable too, and by the
-    // same `jmap_ical::maps_time_zone` the create path uses: legal only beside
-    // the `timeZones` entry defining it, which [`diff_time_zones`] adds below,
-    // one entry at a time so that nothing the server already holds is written
-    // over. What is left out is the identifier the document neither names nor
-    // defines — a Windows zone off an Exchange invitation, or a solidus-prefixed
-    // one with no `VTIMEZONE` beside it — which is left alone rather than sent as
-    // it came or cleared.
+    // A custom identifier (§1.4.8's second form) is sendable next to a `timeZones`
+    // entry that defines it. `jmap_ical::maps_time_zone` checks this, as on the
+    // create path, and [`diff_time_zones`] adds the entry. An identifier that the
+    // document neither names nor defines stays out (for example, a Windows zone
+    // from an Exchange invitation, or a solidus-prefixed one with no `VTIMEZONE`).
     let baseline_tz = baseline.time_zone.as_deref().filter(|s| !s.is_empty());
     let edited_tz = edited.time_zone.as_deref().filter(|s| !s.is_empty());
     if maps_time_zone(edited) && baseline_tz != edited_tz {
@@ -149,24 +128,20 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         ("description", &baseline.description, &edited.description),
         ("duration", &baseline.duration, &edited.duration),
         ("status", &baseline.status, &edited.status),
-        // Whether the event blocks time. Like `status` it needs nothing beyond
-        // the baseline: a value outside RFC 8984 §4.4.2's two states is dropped
-        // on both sides of the comparison, so a save that never touched it sends
-        // nothing, and clearing it is the `null` that asks for the default — the
-        // same state a component with no `TRANSP` on it is in.
+        // Like `status`, this needs only the baseline. Both sides drop a value
+        // outside RFC 8984 §4.4.2's two states, so a save that does not change it
+        // sends nothing. Clearing it sends `null`, which is the default, the same
+        // state as a component with no `TRANSP`.
         (
             "freeBusyStatus",
             &baseline.free_busy_status,
             &edited.free_busy_status,
         ),
-        // How much of the event may be shared. The same shape again, with one
-        // thing worth naming: Evolution's appointment editor writes `CLASS` on
-        // every save from its Options ▸ Classification menu, so an event the
-        // server gave no `privacy` comes back from the editor stating the default
-        // explicitly, and the first save of it patches `privacy` to `public`. That
-        // is a redundant write, not a wrong one — RFC 8984 §4.4.3 makes `public`
-        // and no value the same state — and it happens once: the baseline then
-        // renders the line too, so every later save diffs clean.
+        // Evolution's editor writes `CLASS` on each save (Options ▸ Classification).
+        // Thus the first save of an event without `privacy` patches it to `public`.
+        // This write is redundant but correct (RFC 8984 §4.4.3: `public` and no
+        // value are the same state). It occurs one time, because after it the
+        // baseline also shows `CLASS`.
         ("privacy", &baseline.privacy, &edited.privacy),
     ] {
         let was_norm = was.as_deref().filter(|s| !s.is_empty());
@@ -176,12 +151,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         }
     }
 
-    // How important the event is — an integer rather than a string, and otherwise
-    // the `status` shape exactly: a value outside the range RFC 8984 §4.4.1 and
-    // RFC 5545 §3.8.1.9 share is dropped on both sides of the comparison, so a
-    // save that never touched it sends nothing, and clearing it is the `null` that
-    // asks for the default of 0 — the same state a component with no `PRIORITY` on
-    // it is in.
+    // `priority` is an integer, but otherwise like `status`. Both sides drop a
+    // value outside the range of RFC 8984 §4.4.1 and RFC 5545 §3.8.1.9, so a save
+    // that does not change it sends nothing. Clearing it sends `null`, which is the
+    // default of 0, the same state as a component with no `PRIORITY`.
     if baseline.priority != edited.priority {
         patch.insert(
             "priority".to_owned(),
@@ -189,19 +162,15 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         );
     }
 
-    // `showWithoutTime` is a flag rather than a string, and the baseline is
-    // what makes it safe to diff at all: the component says "all day" only as a
-    // DATE-valued DTSTART, and there are events — one starting at 09:00, one
-    // carrying a zone — the mapping has to render as timed even though the
-    // server called them all-day. Rendering the server's own event the same way
-    // loses the flag on both sides, so the two agree and nothing is patched;
-    // only a component that really did change its mind reaches the server.
+    // The component shows "all day" only as a DATE-valued `DTSTART`. The mapping
+    // renders some all-day events as timed (for example, one that starts at 09:00
+    // or has a zone). The baseline loses the flag in the same way, so only a real
+    // change gets patched.
     if baseline.show_without_time != edited.show_without_time {
         patch.insert(
             "showWithoutTime".to_owned(),
-            // Null rather than `false`: the RFC 8984 default is false, and
-            // removing the property is how a PatchObject says "back to the
-            // default".
+            // Send `null`, not `false`: the RFC 8984 default is false, and
+            // removing a property restores its default.
             edited.show_without_time.map_or(Value::Null, Value::Bool),
         );
     }
@@ -214,40 +183,33 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
     diff_participants(&mut patch, current, &baseline, edited);
-    // Last, because it reads the patch the others wrote.
+    // Run this last, because it reads the patch from the other functions.
     diff_time_zones(&mut patch, current, edited);
     patch
 }
 
-/// The definitions the identifiers already in `patch` need, added beside them.
+/// Adds the definitions that the custom identifiers in `patch` need.
 ///
-/// RFC 8984 §1.4.8's second form of a `TimeZoneId` (the solidus-prefixed one a
-/// server or an Exchange organiser invents for a zone no database names) means
-/// nothing on its own: it is legal only where the event's §4.7.2 `timeZones` map
-/// says what it is. So a save that sends one has to send the other, or the
-/// identifier reaches the server dangling and the whole `CalendarEvent/set` may
-/// be refused over it. Everything above may therefore write such an identifier
-/// on the understanding that this runs afterwards; the patch it wrote is what
-/// says which zones are wanted, which is why it is read from there rather than
-/// off the event — the same value in `edited` that never made it into the patch
-/// is a zone this save is not sending.
+/// RFC 8984 §1.4.8's second form of `TimeZoneId` (solidus-prefixed, made by a
+/// server or an Exchange organiser for a zone that no database names) is legal
+/// only when the event's §4.7.2 `timeZones` map defines it. Without the
+/// definition, the server can refuse the full `CalendarEvent/set`. The other
+/// functions write such identifiers and rely on this function. It reads them from
+/// the patch, not from `edited`: a zone in `edited` that is not in the patch is
+/// not sent.
 ///
-/// **One entry at a time**, `timeZones/<pointer>`, not the property replaced
-/// whole: a `VTIMEZONE` has no room for the `aliases`, `url` or `validUntil` a
-/// server's own definition may carry, so a rewrite would delete what the user
-/// was never shown — the rule this whole module exists to keep. For the same
-/// reason an identifier the server *already* defines is left completely alone:
-/// the entry the document brought is a drawing of a zone the server has already
-/// described, and describing it again can only lose. Only where `timeZones` is
-/// absent from the server's event altogether is the property written whole, and
-/// then only because RFC 8620 §5.3 requires every path segment before the last
-/// to exist already — there is nothing there to overwrite.
+/// The patch adds **one entry at a time** (`timeZones/<pointer>`) and does not
+/// replace the property. A `VTIMEZONE` has no space for the `aliases`, `url` or
+/// `validUntil` of a server definition, so a replacement deletes data that the
+/// user did not see. For the same reason, an identifier that the server already
+/// defines stays unchanged. The patch writes the full property only when the
+/// server's event has no `timeZones`: RFC 8620 §5.3 requires each path segment
+/// before the last to exist, and nothing is there to overwrite.
 ///
-/// What is *not* done is pruning: a definition the edit stopped referring to
-/// stays where it is. The create path drops those ([`jmap_ical::prune_time_zones`]),
-/// having built the whole map itself; here the map is the server's, an
-/// unreferenced entry is legal, and removing one is deleting something on a
-/// guess.
+/// This function does not remove definitions that the edit no longer uses. The
+/// create path removes them ([`jmap_ical::prune_time_zones`]) because it builds
+/// the full map. Here the map is the server's, an unused entry is legal, and a
+/// removal is a guess.
 fn diff_time_zones(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -258,12 +220,9 @@ fn diff_time_zones(
         let Some(value) = patch.get(property) else {
             continue;
         };
-        // The zone the series moved into, or the one each override moved its
-        // instance into. Told apart by shape rather than by the name above:
-        // `timeZone` is a string and `recurrenceOverrides` a map of patches, so
-        // the two readings cannot be applied to the wrong property. Either may
-        // be the `null` that removes the property, which names nothing and falls
-        // out of both.
+        // The zone of the series, or the zone of each override. `timeZone` is a
+        // string and `recurrenceOverrides` is a map of patches, so the shape tells
+        // them apart. A `null` removes the property and names no zone.
         let named: BTreeSet<String> = match value.as_object() {
             Some(overrides) => overrides
                 .values()
@@ -271,14 +230,10 @@ fn diff_time_zones(
                 .collect(),
             None => custom_zone(Some(value)).into_iter().collect(),
         };
-        // The document defined every identifier it let into the patch — that is
-        // what admitted it — so these lookups answer, and this is the guard for
-        // the day one of them does not. The property naming a zone the save
-        // cannot define goes back to being the server's, which is the same
-        // answer the checks above give a zone the document could not name at
-        // all; leaving it in the patch is the one outcome that would be worse
-        // than not sending the edit, since a reference to nothing is grounds to
-        // refuse the whole `CalendarEvent/set`.
+        // The document defines each identifier that it lets into the patch, so
+        // these lookups succeed. If one fails, remove the property from the
+        // patch, as for a zone that the document cannot name. A reference to no
+        // definition can cause the server to refuse the full `CalendarEvent/set`.
         if named
             .iter()
             .any(|tzid| time_zone_definition(edited, tzid).is_none())
@@ -287,8 +242,7 @@ fn diff_time_zones(
             continue;
         }
         for tzid in named {
-            // Already described where the patch is going: leave it exactly as
-            // it stands.
+            // The server already defines this zone: do not change it.
             if time_zone_definition(current, &tzid).is_some() {
                 continue;
             }
@@ -315,11 +269,10 @@ fn diff_time_zones(
     }
 }
 
-/// The custom `TimeZoneId` a `timeZone` states, where it states one.
+/// Returns the custom `TimeZoneId` that a `timeZone` value states, if any.
 ///
-/// Only RFC 8984 §1.4.8's solidus-prefixed form, because that is the only one
-/// that needs saying: an IANA name resolves against a database every reader has,
-/// and a `null` is the zone cleared, which names nothing.
+/// Only RFC 8984 §1.4.8's solidus-prefixed form needs a definition. All readers
+/// have the IANA database, and a `null` clears the zone.
 fn custom_zone(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
@@ -327,24 +280,22 @@ fn custom_zone(value: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The place the event happens at — the one property patched *into* rather than
-/// replaced.
+/// Patches the place of the event. This is the one property that this module
+/// patches *into* and does not replace.
 ///
-/// A `LOCATION` is a line of text; a JSCalendar Location also holds coordinates,
-/// links, types and a zone, and the event holds a whole map of them. So the name
-/// is patched where it stands, `locations/<key>/name`, under the key the server
-/// chose: everything the line could not show stays exactly where it was, which
-/// is what replacing the property whole could not manage.
+/// A `LOCATION` is one line of text. A JSCalendar Location also holds
+/// coordinates, links, types and a zone, and the event holds a map of them. Thus
+/// the patch writes `locations/<key>/name` under the server's key, and all other
+/// data stays.
 ///
-/// The key is taken from the event the **server** holds rather than from the
-/// component. It does ride out and back in `X-JMAP-KEY`, but Evolution's
-/// appointment editor writes the `LOCATION` afresh and need not keep a parameter
-/// it knows nothing about; the name is what the diff compares, and there is only
-/// ever one place on the component to compare.
+/// The key comes from the server's event, not from the component. The key goes
+/// out and comes back in `X-JMAP-KEY`, but Evolution's editor writes a new
+/// `LOCATION` and can drop unknown parameters. The diff compares only the name,
+/// and the component has only one place.
 ///
-/// [`maps_locations`] is asked of the server's own map first, for the reason the
-/// recurrence properties are: a second place has no line to be shown on, and a
-/// property shown in part is not the user's to have edited.
+/// The function first asks [`maps_locations`] about the server's map, as for the
+/// recurrence properties. A second place has no line, and the user cannot edit a
+/// property that was shown only in part.
 fn diff_locations(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -360,14 +311,13 @@ fn diff_locations(
         return;
     }
     match (places.iter().next(), drawn_name(edited)) {
-        // The server's own entry, renamed in place.
+        // Rename the server's entry in place.
         (Some((key, _)), Some(name)) => {
             patch.insert(name_of(key), Value::String(name.to_owned()));
         }
-        // The place was cleared. Where the entry said nothing but its name there
-        // is nothing left to keep, and `maps_locations` has already ruled out a
-        // second place that removing the property would strand; where it said
-        // more, only the name the user cleared goes.
+        // The user cleared the place. If the entry holds only its name, remove the
+        // property (`maps_locations` already makes sure that no second place gets
+        // lost). Otherwise remove only the name.
         (Some((key, place)), None) => {
             let path = match place.as_object().is_some_and(|place| {
                 place
@@ -379,25 +329,22 @@ fn diff_locations(
             };
             patch.insert(path, Value::Null);
         }
-        // A place the event did not have. RFC 8620 §5.3 requires every path
-        // segment before the last to exist on the object already, so the property
-        // is written whole rather than reached into.
+        // The event had no place. RFC 8620 §5.3 requires each path segment before
+        // the last to exist, so write the full property.
         (None, Some(_)) => {
             patch.insert(
                 "locations".to_owned(),
-                // Serialising a map this crate's own reader built cannot fail:
-                // it holds one object of two strings.
+                // Serialising a map from this crate's reader cannot fail: it
+                // holds one object with two strings.
                 serde_json::to_value(&edited.locations).unwrap_or(Value::Null),
             );
         }
-        // Both sides name no place, which the comparison above already returned
-        // on.
+        // Neither side names a place. The comparison above already returned.
         (None, None) => {}
     }
 }
 
-/// The name of the one place a component was shown with, or `None` for a
-/// component that named none.
+/// Returns the name of the one place on a component, or `None` if it has none.
 fn drawn_name(event: &CalendarEvent) -> Option<&str> {
     event
         .locations
@@ -406,54 +353,50 @@ fn drawn_name(event: &CalendarEvent) -> Option<&str> {
         .find_map(|(_, place)| place.get("name")?.as_str().filter(|name| !name.is_empty()))
 }
 
-/// The patch path of one place's name.
+/// Returns the patch path of the name of a place.
 fn name_of(key: &str) -> String {
     format!("locations/{}/name", escaped(key))
 }
 
-/// A map key as a patch path segment. RFC 8620 §5.3 spells one as a JSON
-/// pointer segment, so a `~` or a `/` in a key the server chose is escaped
-/// (RFC 6901 §3) rather than read as structure.
+/// Returns a map key as a patch path segment. RFC 8620 §5.3 uses JSON pointer
+/// segments, so a `~` or a `/` in a server key gets escaped (RFC 6901 §3).
 fn escaped(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 
-/// Where the event may be joined online — the second property patched *into*
-/// rather than replaced, and for the same reason as [`diff_locations`]: RFC 8984
-/// §4.2.6's VirtualLocation holds a `description` that a `CONFERENCE` line has no
-/// room for, so naming `virtualLocations` in a patch would delete a note the user
-/// was never shown. The save names `virtualLocations/<key>/uri`, `/name` and
-/// `/features` — the three members the line does show — one member at a time, and
-/// everything beside them stays as the server had it.
+/// Patches the online places of the event. This is the second property that this
+/// module patches *into*, for the same reason as [`diff_locations`].
 ///
-/// Unlike a `LOCATION` there is a line per entry (RFC 7986 §5.11), so which entry
-/// a line stands for is a real question, and the answer rides on the line: the
-/// key goes out in an `X-JMAP-KEY` and comes back in one. Position could not
-/// answer it — an editor that drops a line it has no UI for would slide every
-/// later conference onto the wrong entry.
+/// RFC 8984 §4.2.6's VirtualLocation holds a `description`, and a `CONFERENCE`
+/// line has no space for it. If the patch named `virtualLocations`, it would
+/// delete a note that the user did not see. The save writes
+/// `virtualLocations/<key>/uri`, `/name` and `/features` (the three members that
+/// the line shows), one member at a time. All other members stay.
 ///
-/// Two things this deliberately does **not** do, both because a component that
-/// names a conference the server does not is ambiguous in a way that would cost
-/// data if read wrong:
+/// A component has one line for each entry (RFC 7986 §5.11). Each line carries
+/// its key out and back in an `X-JMAP-KEY`. Position cannot identify the entry:
+/// if an editor drops a line that it cannot show, each later conference moves to
+/// the wrong entry.
 ///
-/// - **A conference the component stopped naming is left where it is.** A missing
-///   line does not say who removed it. Evolution 3.52 has no UI for a conference,
-///   and whether its editor writes back a property it does not understand is not
-///   something this repository can answer without a real Evolution; reading the
-///   absence as a deletion would destroy a link the user never touched. The cost
-///   of the other reading is only that a deletion made elsewhere comes back on
-///   the next sync.
-/// - **A conference the server does not hold is not created.** RFC 8620 §5.3
-///   requires every path segment before the last to exist already, so an entry
-///   the server never chose a key for cannot be patched into place — and a line
-///   whose key is unknown is as likely to be a rewrite of one of the server's as
-///   a new place. Only the create path, which writes the property whole, files a
-///   conference the server has never seen.
+/// This function does **not** do two things. A component that names a conference
+/// that the server does not name is ambiguous, and a wrong reading causes data
+/// loss:
 ///
-/// [`maps_virtual_locations`] is asked of the server's own map first, for the
-/// reason every conditionally-mapped property asks it: an entry the line could
-/// not draw in full was not shown, so no difference from the drawing is the
-/// user's to have made.
+/// - **A conference that the component no longer names stays.** A missing line
+///   does not show who removed it. Evolution 3.52 has no UI for a conference.
+///   Without a real Evolution, this repository cannot find if its editor writes
+///   back a property that it does not know. A deletion here can destroy a link
+///   that the user did not touch. The cost of the other reading is only that a
+///   deletion from a different client comes back on the next sync.
+/// - **A conference that the server does not hold is not created.** RFC 8620 §5.3
+///   requires each path segment before the last to exist, so the patch cannot
+///   write an entry without a server key. Also, a line with an unknown key can be
+///   a rewrite of a server entry or a new place. Only the create path, which
+///   writes the full property, adds a new conference.
+///
+/// The function first asks [`maps_virtual_locations`] about the server's map, as
+/// for each conditionally mapped property. If the line cannot show an entry in
+/// full, the user did not see it, so no difference is an edit by the user.
 fn diff_virtual_locations(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -469,10 +412,9 @@ fn diff_virtual_locations(
     let now = edited.virtual_locations.as_ref().unwrap_or(&empty);
 
     for (key, before) in was {
-        // The key has to be one the *server* chose, not merely one the baseline
-        // carries: a server key outside RFC 8984 §1.4.4's `Id` grammar does not
-        // survive the round trip, so the baseline holds an invented key for it,
-        // and an invented key names no entry to patch.
+        // The key must be a server key, not only a baseline key. A server key
+        // outside RFC 8984 §1.4.4's `Id` grammar does not survive the round trip,
+        // so the baseline holds an invented key, which names no entry to patch.
         let (Some(after), true) = (now.get(key), places.contains_key(key)) else {
             continue;
         };
@@ -496,12 +438,10 @@ fn diff_virtual_locations(
                 Some(value) => {
                     patch.insert(member_of(key, member), value.clone());
                 }
-                // Removing the member is how a PatchObject asks for the RFC 8984
-                // §4.2.6 default — the empty string for `name`, no ways of taking
-                // part for `features`. Never for `uri`, which is the one member a
-                // VirtualLocation is required to have and the whole of the line:
-                // a component that names none is one this crate would not have
-                // read a place off at all.
+                // Removing the member restores the RFC 8984 §4.2.6 default: the
+                // empty string for `name`, no features for `features`. Never
+                // remove `uri`: it is the one required member and the full line,
+                // and this crate reads no place from a line without one.
                 None if member != "uri" => {
                     patch.insert(member_of(key, member), Value::Null);
                 }
@@ -511,47 +451,45 @@ fn diff_virtual_locations(
     }
 }
 
-/// The patch path of one member of one virtual location.
+/// Returns the patch path of one member of one virtual location.
 fn member_of(key: &str, member: &str) -> String {
     format!("virtualLocations/{}/{member}", escaped(key))
 }
 
-/// What the event points at — the third property patched *into* rather than
-/// replaced, and the narrowest of the three: only the address goes back.
+/// Patches the links of the event. This is the third property that this module
+/// patches *into*, and the narrowest: only the address goes back.
 ///
-/// A Link (RFC 8984 §1.4.11) holds a `cid` and a `title` that neither an `ATTACH`
-/// nor an `IMAGE` line has room for, so naming `links` in the patch would delete
-/// half of every resource the user was never shown. The save names
-/// `links/<key>/href` under the key the line was drawn with, and everything
-/// beside it stays as the server had it.
+/// A Link (RFC 8984 §1.4.11) holds a `cid` and a `title`, and neither an `ATTACH`
+/// nor an `IMAGE` line has space for them. If the patch named `links`, it would
+/// delete half of each resource. The save writes `links/<key>/href` under the key
+/// of the line, and all other members stay.
 ///
-/// `contentType` and `size` are shown on the line — an `FMTTYPE` and a `SIZE` —
-/// and are still not written back, which is the one place this property differs
-/// from [`diff_virtual_locations`]. They are the *server's* description of the
-/// resource rather than a field the user was offered (§1.4.11 calls the size an
-/// estimate), and an editor that rewrites a line without the parameters it has no
-/// UI for is the ordinary case: reading that as "the media type was cleared"
-/// would delete what the server knows on the first save of an unrelated edit. So
-/// they are drawn to be read and left alone on the way back, like `created` and
-/// `updated`. Neither is `rel`, which the property name states rather than the
-/// line: what a resource *is* is not something Evolution offers to change, and a
-/// picture rewritten as a plain attachment by an editor with no notion of `IMAGE`
-/// must not turn into a save that says so.
+/// The line shows `contentType` and `size` (as `FMTTYPE` and `SIZE`), but the
+/// save does not write them back. This is the one difference from
+/// [`diff_virtual_locations`]. They are the *server's* description of the
+/// resource, not a field for the user (§1.4.11 calls the size an estimate). An
+/// editor often rewrites a line without the parameters that it has no UI for. If
+/// the save read this as "the media type was cleared", it would delete server
+/// data on an unrelated edit. Thus they are read-only, like `created` and
+/// `updated`. The same applies to `rel`, which the property name states, not the
+/// line. Evolution does not let the user change the type of a resource, and a
+/// picture that an editor without `IMAGE` support rewrites as an attachment must
+/// not cause a patch.
 ///
-/// The two cautions [`diff_virtual_locations`] takes apply unchanged, for the same
-/// reasons — a resource the component stopped naming is left where it is, and one
-/// the server does not hold is not created — and the second binds harder here: a
-/// file the user attached in Evolution is a `file:` URI into a local store, which
-/// is nobody else's to fetch and which `jmap_ical` therefore never reads. Filing
-/// it as a Link would put a path from the user's home directory in a record every
-/// other client of the account can read. Sending the file itself means uploading
-/// it as a blob, which this crate does not do.
+/// The two limits of [`diff_virtual_locations`] apply for the same reasons: a
+/// resource that the component no longer names stays, and a resource that the
+/// server does not hold is not created. The second limit is more important here.
+/// A file that the user attaches in Evolution is a `file:` URI into a local store.
+/// Other clients cannot get it, so `jmap_ical` never reads it. As a Link, it would
+/// put a path from the user's home directory in a record that all other clients
+/// of the account can read. To send the file, a client must upload it as a blob,
+/// and this crate does not do that.
 ///
-/// The condition is asked per entry rather than per property, which is what the
-/// narrowness buys: a patch of one entry's `href` cannot touch another, so a
-/// resource the drawing left out costs the sight of itself and nothing else. What
-/// it must be is the entry the drawing really came from, and the address the
-/// server stated is what says so — see [`the_servers_own_entry`].
+/// The check applies to each entry, not to the full property. A patch of the
+/// `href` of one entry cannot change a different entry, so a resource that was
+/// not shown costs only its own display. The entry must be the one that the line
+/// came from, and the server's address identifies it. See
+/// [`the_servers_own_entry`].
 fn diff_links(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -570,81 +508,72 @@ fn diff_links(
         if before.get("href") == after.get("href") {
             continue;
         }
-        // `href` is the one member RFC 8984 §1.4.11 requires and the whole of the
-        // line, so a component that named none is one `jmap_ical` would not have
-        // read a resource off at all — there is no removal to express here.
+        // RFC 8984 §1.4.11 requires `href`, and it is the full line. `jmap_ical`
+        // reads no resource from a line without one, so no removal is possible.
         if let Some(href) = after.get("href") {
             patch.insert(format!("links/{}/href", escaped(key)), href.clone());
         }
     }
 }
 
-/// Whether the key of a drawn resource is the key of the entry the server drew it
-/// from — the check that makes `links/<key>/href` safe to send.
+/// Returns true if the key of a shown resource is the key of the server entry
+/// that it comes from. This check makes `links/<key>/href` safe to send.
 ///
-/// A key alone does not settle it. [`diff_virtual_locations`] asks whether the
-/// server holds the key at all, because a key outside RFC 8984 §1.4.4's `Id`
-/// grammar cannot ride on the line and reads back as an invented one; here that
-/// is not enough, since an invented key can *collide* with a key the server holds
-/// for some other entry. (`jmap_ical` invents keys that avoid the ones the
-/// document names, so the entry collided with is one the drawing left out — one
-/// with no address to show, or a `file:` URI it refuses to read.) Patching that
-/// entry's `href` would move a resource the user never saw and lose the edit they
-/// made.
+/// The key alone is not sufficient. [`diff_virtual_locations`] only checks that
+/// the server holds the key, because a key outside RFC 8984 §1.4.4's `Id` grammar
+/// cannot go on the line and reads back as an invented key. Here an invented key
+/// can *collide* with a server key of a different entry. (`jmap_ical` invents keys
+/// that the document does not use, so the collision is with an entry that was not
+/// shown: one without an address, or one with a `file:` URI that it does not
+/// read.) A patch of the `href` of that entry would move a resource that the user
+/// did not see and lose the edit of the user.
 ///
-/// So the address decides: the baseline is the server's own entry drawn and read
-/// back, and `href` crosses both ways unchanged, so the entry a drawing belongs to
-/// is the one stating the address it was drawn with. Where they disagree the edit
-/// is dropped — a key this side invented is not one it can patch under, exactly as
-/// a conference's is not.
+/// Thus the address decides. The baseline is the server's entry after the round
+/// trip, and `href` does not change in either direction, so the correct entry is
+/// the one with the same address. If the addresses are different, the edit is
+/// dropped: as for a conference, this side cannot patch under a key that it
+/// invented.
 fn the_servers_own_entry(held: &BTreeMap<String, Value>, key: &str, before: &Value) -> bool {
     held.get(key).and_then(|resource| resource.get("href")) == before.get("href")
 }
 
-/// The tags the event carries — replaced whole, which is what separates this
-/// from [`diff_locations`].
-///
-/// A `CATEGORIES` line holds a list of TEXT values and a JSCalendar keyword is a
-/// bare string, so the whole set fits on the component and there is nothing in an
-/// entry to preserve: the baseline says what was shown, and the difference from
-/// it is the set the user now wants. Clearing the field is
-/// `"keywords": null`, which is how a PatchObject asks for RFC 8984 §4.2.9's
-/// default of no tags — an empty map would be a different thing to store.
-///
-/// [`maps_keyword`] is asked of the server's own set, for the reason the other
-/// properties ask their predicate: a tag the `CATEGORIES` line could not carry
-/// was never shown, so its absence from the edited component is not the user
-/// asking for it to go. Where a keyed map answers that by leaving the entry
-/// unnamed in the patch, a set has no key to leave alone — so the tag is carried
-/// onto the set the save writes instead. That is the same rule reached by the
-/// only means a set allows, and it is why an unstatable tag costs the sight of it
-/// and nothing more; the edit around it still lands.
-///
-/// The carried tags are read off the event the **server** holds rather than off
-/// the baseline, which is the one place this property cannot use the baseline:
-/// the baseline is what was *shown*, and these are precisely the tags it does not
-/// hold. The baseline still answers the other question — whether the user changed
-/// anything — because a difference from what they were shown is what an edit is.
-///
-/// A tag is carried back exactly as the server stated it, value included — even
-/// the value RFC 8984 §1.4.3 does not admit, because the server is the one who
-/// said it and rewriting it here would be this mapping inventing a change. The
-/// user's own set wins where the two name the same tag: a tag they typed is a tag
-/// they mean to be set, whatever the server had against that name.
-///
-/// The *edited* side needs no such check — every tag it holds was read off a
-/// content line, and any string is a keyword RFC 8984 admits.
-///
-/// This is the series' set only. An instance edited on its own states a set of
-/// its own on its own component, and that difference rides in the override
-/// [`diff_overrides`] sends — where the same [`maps_keyword`] is asked by
-/// [`maps_recurrence_override`] of every restated tag, and an override holding
-/// one it refuses is left alone whole rather than carried back: an override is
-/// itself an entry of a keyed map, so there the patch has a key to leave unnamed.
 fn non_empty_map(map: Option<&BTreeMap<String, Value>>) -> Option<&BTreeMap<String, Value>> {
     map.filter(|m| !m.is_empty())
 }
 
+/// Replaces the tags of the event whole. This is the difference from
+/// [`diff_locations`].
+///
+/// A `CATEGORIES` line holds a list of TEXT values, and a JSCalendar keyword is a
+/// plain string. Thus the full set fits on the component, and no entry has data to
+/// keep. The baseline is what was shown, and the difference from it is the set
+/// that the user wants. To clear the field, the patch sends `"keywords": null`,
+/// which is RFC 8984 §4.2.9's default of no tags. An empty map is a different
+/// stored value.
+///
+/// The function asks [`maps_keyword`] about the server's set. A tag that the
+/// `CATEGORIES` line cannot carry was not shown, so its absence from the edited
+/// component is not a removal. A keyed map leaves such an entry out of the patch,
+/// but a set has no key. Thus the save copies the tag into the new set. This is the
+/// same rule, and the edit around the tag still applies.
+///
+/// The copied tags come from the server's event, not from the baseline: the
+/// baseline is what was *shown*, and it does not hold these tags. The baseline
+/// still tells if the user changed something.
+///
+/// A copied tag keeps the value that the server stated, also a value that RFC 8984
+/// §1.4.3 does not accept. A rewrite here would be a change that the mapping
+/// invents. The set of the user wins when both name the same tag: the user typed
+/// the tag and wants it set.
+///
+/// The *edited* side needs no check. Each of its tags comes from a content line,
+/// and RFC 8984 accepts any string as a keyword.
+///
+/// This applies to the series only. An instance that the user edits alone states
+/// its own set on its own component, and the override from [`diff_overrides`]
+/// carries it. There [`sends_recurrence_override`] asks [`maps_keyword`] about
+/// each tag. If an override holds a refused tag, the save does not touch
+/// `recurrenceOverrides` and does not copy the tag.
 fn diff_keywords(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -676,36 +605,33 @@ fn diff_keywords(
         if wanted.is_empty() {
             Value::Null
         } else {
-            // Serialising a set this crate's own reader built cannot fail: it
-            // holds strings and values the server itself sent.
+            // Serialising a set from this crate's reader cannot fail: it holds
+            // strings and values that the server sent.
             serde_json::to_value(wanted).unwrap_or(Value::Null)
         },
     );
 }
 
-/// The reminders the event carries — replaced whole, like [`diff_keywords`] and
-/// unlike [`diff_locations`].
+/// Replaces the reminders of the event whole, like [`diff_keywords`] and unlike
+/// [`diff_locations`].
 ///
-/// A `VALARM` states an RFC 8984 Alert's whole content that this mapping carries
-/// (its action and when it fires), so there is nothing inside an entry to
-/// preserve and no key to patch into: the baseline says which reminders were
-/// shown, and the difference from it is the set the user now wants. Clearing them
-/// is `"alerts": null`, which is how a PatchObject asks for RFC 8984 §4.5.2's
-/// default of no reminders.
+/// A `VALARM` states all the content of an RFC 8984 Alert that this mapping
+/// carries (its action and its trigger). Thus no entry has data to keep and no key
+/// to patch into. To clear the reminders, the patch sends `"alerts": null`, which
+/// is RFC 8984 §4.5.2's default of no reminders.
 ///
-/// [`maps_alerts`] is asked of the event the **server** holds, and it is asked
-/// about more than the map: an alert the `VALARM` could not show (one that fires
-/// at an absolute instant, one that sends mail, one dismissed at no UTC instant)
-/// was never drawn, so replacing the property would delete it, and an
-/// event whose `useDefaultAlerts` says the property is ignored has nothing worth
-/// writing there at all. The *edited* side needs no such check: every alert on it
-/// was read off a `VALARM` this crate would draw again, key included.
+/// The function asks [`maps_alerts`] about the server's event, not only about its
+/// map. Some alerts were not shown (one at an absolute time, one that sends mail,
+/// one acknowledged at no UTC time), and a replacement would delete them. When
+/// `useDefaultAlerts` is true, clients ignore the property, so nothing is worth
+/// writing. The *edited* side needs no check: each of its alerts comes from a
+/// `VALARM` that this crate writes again, key included.
 ///
-/// This is the series' reminders only. An instance edited on its own states its
-/// own `VALARM`s on its own component, and that difference rides in the override
-/// [`diff_overrides`] sends — under the same rule about what a `VALARM` can show,
-/// asked by [`maps_recurrence_override`], which is handed the series so that
-/// `useDefaultAlerts` reaches an occurrence's reminders too.
+/// This applies to the series only. An instance that the user edits alone states
+/// its own `VALARM`s, and the override from [`diff_overrides`] carries them. The
+/// same `VALARM` rule applies there through [`sends_recurrence_override`], which
+/// gets the series so that `useDefaultAlerts` also applies to the reminders of an
+/// occurrence.
 fn diff_alerts(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -721,7 +647,7 @@ fn diff_alerts(
     patch.insert(
         "alerts".to_owned(),
         match non_empty_map(edited.alerts.as_ref()) {
-            // Serialising a map this crate's own reader built cannot fail: it
+            // Serialising a map from this crate's reader cannot fail: each alert
             // holds two objects of strings.
             Some(alerts) => serde_json::to_value(alerts).unwrap_or(Value::Null),
             None => Value::Null,
@@ -729,10 +655,9 @@ fn diff_alerts(
     );
 }
 
-/// The recurrence, replaced whole or not at all — and not at all whenever
-/// either side holds a rule the `RRULE` could not carry: the server's, which
-/// would be narrowed by the drawing, or the save's, which would be sent as a
-/// rule the server may refuse.
+/// Replaces the recurrence whole or not at all. The function does not touch it
+/// when either side holds a rule that the `RRULE` cannot carry: a server rule
+/// would become narrower, and the server can refuse a rule from the save.
 fn diff_recurrence(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -755,46 +680,42 @@ fn diff_recurrence(
         // plural `recurrenceRules` array.
         "recurrenceRule".to_owned(),
         match &edited.recurrence_rule {
-            // Serialising a rule built from an RRULE cannot fail: it holds
-            // strings and numbers.
+            // Serialising a rule from an `RRULE` cannot fail: it holds strings
+            // and numbers.
             Some(rule) => serde_json::to_value(rule).unwrap_or(Value::Null),
             None => Value::Null,
         },
     );
 }
 
-/// The instances named one at a time, replaced whole or not at all — and not at
-/// all whenever the server holds an override the two iCalendar properties could
-/// not carry.
+/// Replaces the separately named instances whole or not at all. The function
+/// does not touch them when either side holds an override that the component
+/// cannot carry.
 ///
-/// Deleting one occurrence of a recurring event is the whole point of this: it
-/// reaches EDS as an `EXDATE` on the component and has to reach the server as an
-/// `excluded` override. Removing that line again is a restore, which is
-/// `"recurrenceOverrides": null` — a PatchObject removes a property to mean "back
-/// to the default", and the default is no named instances.
+/// The main use is the deletion of one occurrence of a recurring event. It reaches
+/// EDS as an `EXDATE` on the component and must reach the server as an `excluded`
+/// override. The removal of that line is a restore: `"recurrenceOverrides": null`,
+/// because the removal of a property restores its default (no named instances).
 fn diff_overrides(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
     baseline: &CalendarEvent,
     edited: &CalendarEvent,
 ) {
-    // The overrides the *server* holds, checked as above: one it could only draw
-    // in part must not be replaced by the drawing.
+    // Check the server's overrides as above: the save must not replace an
+    // override that the component shows only in part.
     //
-    // And the overrides the *save* brings, checked the same way for the same
-    // reason the series' own `timeZone` is checked on its way out: an instance
-    // states its zone with a `TZID`, which RFC 8984 §1.4.8 only sometimes admits
-    // as a name, and this property goes out replaced whole — so one entry the
-    // server is entitled to reject would cost every edit in the save.
+    // Check the save's overrides too, for the same reason as the series'
+    // `timeZone`. An instance states its zone with a `TZID`, which RFC 8984 §1.4.8
+    // does not always accept as a name. The save replaces this property whole, so
+    // one entry that the server can refuse costs all edits in the save.
     //
-    // [`sends_recurrence_override`] rather than `maps_recurrence_override`,
-    // because this save *can* send a zone's definition: [`diff_time_zones`] adds
-    // a `timeZones` entry for every custom identifier the patch names, so an
-    // instance moved into a zone the document defines is one of the identifiers
-    // §1.4.8 admits rather than a dangling reference. Each side is asked of its
-    // own definitions — the server's for what it holds, the document's for what
-    // the save brings — which is what makes both answers about the event they
-    // came from.
+    // Use [`sends_recurrence_override`], not `maps_recurrence_override`, because
+    // this save *can* send a zone definition: [`diff_time_zones`] adds a
+    // `timeZones` entry for each custom identifier in the patch. Thus §1.4.8
+    // accepts an instance in a zone that the document defines. Each side uses its
+    // own definitions (the server's for its overrides, the document's for the
+    // save's), so each answer is about the correct event.
     if [current, edited].iter().any(|event| {
         event
             .recurrence_overrides
@@ -812,45 +733,43 @@ fn diff_overrides(
     patch.insert(
         "recurrenceOverrides".to_owned(),
         match non_empty_map(edited.recurrence_overrides.as_ref()) {
-            // Serialising a map of the two patches this mapping reads cannot
-            // fail: they hold one boolean between them.
+            // Serialising a map of JSON objects cannot fail.
             Some(overrides) => serde_json::to_value(overrides).unwrap_or(Value::Null),
             None => Value::Null,
         },
     );
 }
 
-/// The guest list, patched one guest and one member at a time, and the organizer
-/// beside it.
+/// Patches the guest list one guest and one member at a time, and also the
+/// organizer.
 ///
-/// A guest is told apart by address: the reader files the guests it finds on a
-/// component under keys it invents (`p1`, `p2`, ...), while the server files them
-/// under keys of its own. So each address the drawing showed is looked up in the
-/// event the **server** holds, and what changed lands in that entry:
-/// `participants/<key>/<member>` for the members an `ATTENDEE` line shows, so
-/// that `sendTo`, `invitedBy` or a scheduling sequence beside them stays as the
-/// server had it. An address the drawing did not show is a guest the user
-/// added, filed under a key the server does not use; one it showed and the
-/// component no longer names is a guest the user removed. Unlike a conference
-/// (see [`diff_virtual_locations`]), a missing line *is* a deletion here: the
-/// guest list is Evolution's own, edited in its meeting editor.
+/// The address identifies a guest. The reader gives invented keys (`p1`, `p2`,
+/// ...) to the guests on a component, and the server uses its own keys. Thus the
+/// function finds each shown address in the server's event and writes the change
+/// into that entry: `participants/<key>/<member>` for the members that an
+/// `ATTENDEE` line shows. A `sendTo`, an `invitedBy` or a scheduling sequence next
+/// to them stays. An address that was not shown is a guest that the user added,
+/// under a key that the server does not use. A shown address that the component no
+/// longer names is a guest that the user removed. Unlike a conference (see
+/// [`diff_virtual_locations`]), a missing line *is* a deletion here: the user edits
+/// the guest list in Evolution's meeting editor.
 ///
-/// Roles are compared the way both servers we know store them (Stalwart and
-/// Fastmail, both probed live): no roles at all is RFC 8984 §4.4.6's
-/// default of `attendee`, and `attendee` beside `owner` is dropped, so the
-/// organizer Evolution also lists as a guest is the same organizer the server
-/// keeps as `owner` alone. Without that, every save would patch the roles back.
-/// For the same reason the members only an `ATTENDEE` line shows are left alone
-/// for a participant whose roles come to `owner` alone: the drawing gives such an
-/// organizer an `ORGANIZER` line and nothing else, so whatever Evolution writes
-/// on the guest line it adds for itself is nothing the server was shown.
+/// The function compares roles in the way that Stalwart and Fastmail store them
+/// (both tested live). No roles is RFC 8984 §4.4.6's default of `attendee`, and
+/// `attendee` next to `owner` is dropped. Thus the organizer that Evolution also
+/// lists as a guest matches the server's organizer with only `owner`. Without
+/// this, each save would patch the roles back. For the same reason, the function
+/// ignores the `ATTENDEE`-only members of a participant whose roles are only
+/// `owner`. The component shows such an organizer only as an `ORGANIZER` line, so
+/// the values that Evolution writes on the guest line that it adds do not come
+/// from the server.
 ///
-/// Where the roles do change they are written whole, carrying any role the
-/// server holds that no `ROLE` parameter can spell, the way [`diff_keywords`]
-/// carries a tag the `CATEGORIES` line could not.
+/// When the roles change, the patch writes them whole. It keeps each server role
+/// that no `ROLE` parameter can state, as [`diff_keywords`] keeps a tag that the
+/// `CATEGORIES` line cannot carry.
 ///
-/// An address the server files under more than one key is left alone: the
-/// drawing merged them, so no one entry is the one the user edited.
+/// The function ignores an address that the server has under more than one key:
+/// the component merged them, so no single entry is the one that the user edited.
 fn diff_participants(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -890,17 +809,17 @@ fn diff_participants(
         .collect();
 
     if current.participants.is_none() {
-        // RFC 8620 §5.3 requires every path segment before the last to exist, so
-        // the first guests are the property written whole.
+        // RFC 8620 §5.3 requires each path segment before the last to exist, so
+        // write the full property for the first guests.
         if !added.is_empty() {
             patch.insert(
                 "participants".to_owned(),
-                // Serialising a map this crate's own reader built cannot fail.
+                // Serialising a map from this crate's reader cannot fail.
                 serde_json::to_value(&edited.participants).unwrap_or(Value::Null),
             );
         }
     } else if added.is_empty() && !removed.is_empty() && removed.len() == held.len() {
-        // Every guest went, and the server held nobody else.
+        // All guests are gone, and the server held no other participant.
         patch.insert("participants".to_owned(), Value::Null);
     } else {
         patch.extend(changes);
@@ -926,7 +845,7 @@ fn diff_participants(
     }
 }
 
-/// One guest's changed members, as paths into the server's entry `key`.
+/// Writes the changed members of one guest as paths into the server entry `key`.
 fn diff_participant(
     changes: &mut Map<String, Value>,
     key: &str,
@@ -967,7 +886,7 @@ fn diff_participant(
     }
 }
 
-/// The participants an event names by address, in the event's own order.
+/// Returns the participants of an event by address, in the order of the event.
 fn by_address(event: &CalendarEvent) -> Vec<(&str, &Value)> {
     event
         .participants
@@ -977,8 +896,8 @@ fn by_address(event: &CalendarEvent) -> Vec<(&str, &Value)> {
         .collect()
 }
 
-/// The key the server files `address` under, or `None` where it files it under
-/// none or under more than one.
+/// Returns the server key for `address`, or `None` if the server has no key or
+/// more than one key for it.
 fn servers_key<'a>(held: &'a BTreeMap<String, Value>, address: &str) -> Option<&'a str> {
     let mut keys = held.iter().filter(|(_, participant)| {
         calendar_address(participant).is_some_and(|other| other.eq_ignore_ascii_case(address))
@@ -989,8 +908,8 @@ fn servers_key<'a>(held: &'a BTreeMap<String, Value>, address: &str) -> Option<&
     }
 }
 
-/// A participant's roles as both servers we know store them: none is
-/// `attendee`, and `attendee` beside `owner` goes.
+/// Returns the roles of a participant in the form that both known servers store:
+/// no roles is `attendee`, and `attendee` next to `owner` is removed.
 fn roles_of(participant: &Value) -> BTreeSet<String> {
     let mut roles: BTreeSet<String> = participant
         .get("roles")
@@ -1009,8 +928,8 @@ fn roles_of(participant: &Value) -> BTreeSet<String> {
     roles
 }
 
-/// Whether a role is one the component can state: the `ORGANIZER` line's, or one
-/// a `ROLE` parameter spells.
+/// Returns true if the component can state the role: the role of the `ORGANIZER`
+/// line, or a role that a `ROLE` parameter states.
 fn spells(role: &str) -> bool {
     role == OWNER_ROLE
         || PARTICIPANT_ROLES

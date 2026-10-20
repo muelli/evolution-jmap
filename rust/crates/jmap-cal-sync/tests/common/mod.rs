@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A mock server holding two calendars, so that "only this calendar" is
-//! something the tests can actually observe.
+//! A mock server with two calendars, so that the tests can see the "only this
+//! calendar" behaviour.
 
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
@@ -48,12 +48,12 @@ impl Fixture {
         Client::connect(self.server.origin(), Credentials::none()).unwrap()
     }
 
-    /// A [`CalSync`] over the "Personal" calendar.
+    /// Returns a [`CalSync`] for the "Personal" calendar.
     pub fn sync(&self) -> CalSync {
         CalSync::new(self.client(), self.account_id.clone(), self.ours.clone())
     }
 
-    /// Create an event directly, bypassing the code under test.
+    /// Creates an event directly, without the code under test.
     pub fn seed(&self, calendar: &Id, title: &str, start: &str) -> Id {
         self.client()
             .event_create(
@@ -65,7 +65,7 @@ impl Fixture {
             .expect("server assigned id")
     }
 
-    /// Patch an event directly, bypassing the code under test.
+    /// Patches an event directly, without the code under test.
     pub fn patch(&self, id: &Id, patch: Value) {
         self.client()
             .event_update(&self.account_id, id, patch)
@@ -82,9 +82,8 @@ impl Fixture {
             .expect("event exists")
     }
 
-    /// Null out a stored event's own `id`, simulating a server that violates
-    /// RFC 8620 §5.1 by answering `CalendarEvent/get` with a matched record
-    /// carrying no id.
+    /// Removes the `id` of a stored event. This simulates a server that violates
+    /// RFC 8620 §5.1: its `CalendarEvent/get` answer holds a matched record without an id.
     pub fn strip_id(&self, id: &Id) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -96,11 +95,10 @@ impl Fixture {
             .id = None;
     }
 
-    /// Overwrites an event's `calendarIds` directly in the store, as an
-    /// update another client made — to reach a state a conforming server
-    /// never sends (draft-ietf-jmap-calendars gives every present value as
-    /// `true`), while still logging the change `CalendarEvent/changes` is
-    /// asked to report on.
+    /// Overwrites the `calendarIds` of an event directly in the store, as an update
+    /// from a different client. This makes a state that a conforming server never
+    /// sends (draft-ietf-jmap-calendars gives each present value as `true`). The
+    /// store still logs the change for `CalendarEvent/changes`.
     pub fn set_calendar_ids(&self, id: &Id, calendar_ids: BTreeMap<Id, bool>) {
         let state = self.server.state();
         let mut state = state.lock().unwrap();

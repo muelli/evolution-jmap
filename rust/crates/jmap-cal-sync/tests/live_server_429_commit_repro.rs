@@ -1,45 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Chases the 429/duplicate-commit RFC-SUSPECT under the same sustained,
-//! sequential bulk-import load shape that first surfaced it (this crate's
-//! own 1,000/3,000-event scale checkpoints), rather than the isolated
-//! single-429 shape a prior investigation already ruled out.
+//! Examines the 429/duplicate-commit RFC-SUSPECT under sustained, sequential
+//! bulk-import load. This load shape first showed the problem (the
+//! 1,000/3,000-event scale checkpoints of this crate). A prior investigation
+//! already excluded the isolated single-429 shape.
 //!
-//! The suspected mechanism: a sequential create for a brand-new UID gets an
-//! HTTP 429 (`Http.rateLimitAuthenticated`), the caller retries the exact
-//! same create after a delay (as every write-path test in this repository
-//! does on a 429), and the retry answers `already exists` even though this
-//! is the UID's first-ever create. An isolated, one-off reproduction of a
-//! single deliberately-forced 429 never showed this: a 90-second poll with
-//! no retry at all found nothing, and a delayed retry always created
-//! cleanly. That investigation's own write-up asked for the one thing it
-//! could not do in isolation: reproduce under genuine sustained sequential
-//! load instead.
+//! The suspected mechanism: a sequential create for a new UID gets an HTTP 429
+//! (`Http.rateLimitAuthenticated`). The caller retries the same create after a
+//! delay, as every write-path test in this repository does on a 429. The retry
+//! then answers `already exists`, although this is the first create for the
+//! UID. An isolated reproduction with one forced 429 did not show this. A
+//! 90-second poll with no retry found nothing, and a delayed retry always
+//! created cleanly. That investigation asked for a reproduction under real
+//! sustained sequential load.
 //!
-//! This probes directly rather than inferring after the fact: the moment a
-//! create 429s, it polls `CalendarEvent/query` for that exact UID at short
-//! intervals *before* sending the retry, so an early landing, if any, is
-//! caught independently of whatever the retry itself goes on to do.
+//! This test probes directly. When a create gets a 429, the test polls
+//! `CalendarEvent/query` for that UID at short intervals *before* it sends the retry.
+//! Thus it detects an early landing independently of the result of the retry.
 //!
 //! ## Running it
 //!
-//! Same environment as this crate's other live-server scale tests (see
-//! `docs/manual-test-live-server.md`); use a dedicated throwaway account
-//! (`stw seed`), not a shared one, since this leaves a few hundred events in
-//! its calendar.
+//! The environment is the same as for the other live-server scale tests of this
+//! crate (refer to `docs/manual-test-live-server.md`). Use a dedicated
+//! temporary account (`stw seed`), not a shared one, because this test leaves
+//! some hundred events in its calendar.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync --test live_server_429_commit_repro -- --ignored --nocapture
 //! ```
 //!
-//! `JMAP_429_REPRO_EVENTS` overrides the batch size (default 900, chosen to
-//! approach but not guarantee crossing `Http.rateLimitAuthenticated`'s 1000
-//! req/60s window the way the original field sessions did).
+//! `JMAP_429_REPRO_EVENTS` overrides the batch size (default 900). This value
+//! approaches the 1000 req/60s window of `Http.rateLimitAuthenticated`, as the
+//! original field sessions did, but does not always cross it.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset, the same tolerance every write-path test in this repository gives
-//! an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 use std::thread::sleep;
@@ -50,8 +46,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// Mirrors `jmap-cal-sync/tests/live_server_scale.rs::connect_for_write`
-/// exactly.
+/// Same as `jmap-cal-sync/tests/live_server_scale.rs::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -67,8 +62,8 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover events can never be mistaken for this run's own.
+/// Returns a value unique to this process, so leftover events from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -83,12 +78,10 @@ fn batch_size() -> usize {
         .unwrap_or(900)
 }
 
-/// Whether `uid` is visible yet via a fresh `CalendarEvent/query`, read
-/// straight from the server rather than inferred from any create response.
+/// Returns whether a new `CalendarEvent/query` on the server shows `uid`.
 ///
-/// The query itself competes for the same rate-limit budget as the creates
-/// it is diagnosing, so a 429 here is "not confirmed either way", not a
-/// failure: the caller's own poll loop just tries again shortly.
+/// The query uses the same rate-limit budget as the creates. Thus a 429 here
+/// means "not known", not a failure, and the poll loop of the caller tries again.
 fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
     let filter = CalendarEventQueryFilter {
         uid: Some(uid.to_owned()),
@@ -101,8 +94,7 @@ fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
     }
 }
 
-/// Whether `error` is the specific rejection this hypothesis is about: an
-/// `already exists`-shaped `/set` failure, not some other rejection.
+/// Returns whether `error` is a `/set` failure with an `already exists` description.
 fn is_already_exists(error: &ClientError) -> bool {
     matches!(
         error,
@@ -121,11 +113,9 @@ struct Stats {
     duplicate_after_retry: usize,
 }
 
-/// Creates one event, diagnosing a 429 the moment it happens rather than
-/// just retrying through it: the first 429 for this UID triggers a direct
-/// poll loop (up to 5s) for the UID's own existence, independent of the
-/// retry this function then goes on to make, mirroring every other
-/// write-path test's own `retrying()` helper otherwise.
+/// Creates one event and examines the first 429 for its UID. That 429 starts a
+/// poll loop (at most 5 s) for the UID, before the retry. Otherwise it retries
+/// as the `retrying()` helpers do: 5 s sleep, but at most 10 attempts here.
 fn create_with_429_diagnostics(
     client: &Client,
     account_id: &Id,

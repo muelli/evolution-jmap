@@ -1,38 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::free_busy` asking about a *different* real account's
-//! availability — the actual meeting-scheduler shape, unlike
-//! `tests/live_server.rs`'s self-lookup, which every account can answer for
-//! itself regardless of sharing and so never exercises the permission check
-//! at all.
+//! Tests `CalSync::free_busy` for the availability of a *different* real
+//! account. This is the real meeting-scheduler case. The self-lookup in
+//! `tests/live_server.rs` does not test the permission check, because each
+//! account can always answer for itself.
 //!
-//! `jmap-client/tests/live_server.rs`'s
 //! `calendar_shared_with_a_second_real_account_is_visible_only_after_the_grant`
-//! already proves a `mayReadFreeBusy` grant changes `Calendar/get`'s
-//! `myRights` for the recipient, but never calls `Principal/getAvailability`
-//! to check what a scheduler slot-picker actually reads. This file closes
-//! that gap for `CalSync::free_busy` itself, and pins down the one behaviour
-//! `harness/stalwart/seed-freebusy-fixture.py` (a manual-verification script,
-//! not a test) flagged as the most important thing to know here: an
-//! ungranted principal is not reported as an error, but as silently free
-//! (`Principal/getAvailability` returns an empty list) — indistinguishable
-//! from a real empty diary. A share narrows what is *seen*, not how absence
-//! is *reported*.
+//! in `jmap-client/tests/live_server.rs` proves that a `mayReadFreeBusy` grant
+//! changes the `myRights` of `Calendar/get` for the recipient. But it never
+//! calls `Principal/getAvailability`, which the scheduler slot-picker reads.
+//! This file tests that for `CalSync::free_busy`. It also tests the most
+//! important behaviour that manual verification found: the server does not
+//! report an ungranted principal as an error, but as silently free.
+//! (`Principal/getAvailability` returns an empty list.) This is the same as a
+//! real empty diary. A share changes what is *seen*, not how absence is
+//! *reported*.
 //!
 //! ## Running it
 //!
-//! Needs both `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) and
+//! This is a two-account test: the recipient account asks about the write-test
+//! account. Set `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) and
 //! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` (step 3a) from
-//! `docs/manual-test-live-server.md`, since this is inherently a two-account
-//! test: the write-test account is the one asked about, the recipient
-//! account is the one asking.
+//! `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either pair is unset.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset, or when the server does not
+//! advertise the principals capability. When a `_USER` variable is set, a
+//! missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 
@@ -50,19 +49,17 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// An hour-of-day, `01`..=`20`, derived from [`unique_suffix`] rather than
-/// fixed: a panicked assertion in a prior run of this same test skips its
-/// own cleanup at the bottom, and a fixed hour would then have that leftover
-/// calendar's still-shared, still-busy event answer for the *next* run's
-/// "before any grant" check too — which is exactly the false positive that
-/// bit this test while it was being written. `01..=20` keeps `DTSTART`/
-/// `DTEND` inside a single UTC day on both sides of the event.
+/// Returns an hour of the day, `01`..=`20`, from [`unique_suffix`]. A failed
+/// assertion in a prior run skips the cleanup, so that shared busy event stays.
+/// With a fixed hour, it then causes a false positive in the "before any grant"
+/// check of the next run. The range `01..=20` keeps `DTSTART`/`DTEND` in one
+/// UTC day.
 fn distinct_hour(suffix: u128) -> u8 {
     1 + (suffix % 20) as u8
 }
 
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write` exactly:
-/// the account whose calendar this test creates an event on and shares.
+/// Same as `jmap-cal-sync/tests/live_server.rs::connect_for_write`.
+/// This account owns the calendar that the test creates, fills with an event, and shares.
 fn connect_owner() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -78,8 +75,9 @@ fn connect_owner() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Mirrors `jmap-client/tests/live_server.rs::connect_recipient`: the
-/// account this test asks `free_busy` from, i.e. the scheduler's caller.
+/// Same as `jmap-client/tests/live_server.rs::connect_recipient`, but also
+/// returns the user address. This account calls `free_busy`, as the scheduler
+/// does.
 fn connect_recipient() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -96,14 +94,17 @@ fn connect_recipient() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Creates a fresh calendar and a one-hour busy event on the owner account,
-/// then asks the *recipient* account's `CalSync::free_busy` about the
-/// owner's address three times: before any grant (expects the owner's
-/// address present but reporting no busy period at all, per the module docs
-/// above), after a `mayReadFreeBusy`-only grant on that one calendar
-/// (expects the created event's exact window), and after revoking the grant
-/// (back to no busy period). Destroys the calendar (and so its event) at the
-/// end regardless of where the assertions land.
+/// Creates a new calendar and a one-hour busy event on the owner account. Then
+/// asks the `CalSync::free_busy` of the *recipient* about the owner address
+/// three times:
+/// - Before any grant: the owner address is present, but with no busy period
+///   (refer to the module docs).
+/// - After a `mayReadFreeBusy`-only grant on that calendar: the exact window of
+///   the event.
+/// - After the grant is revoked: no busy period.
+///
+/// At the end, it destroys the event and the calendar. A failed assertion skips
+/// this cleanup.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn free_busy_of_another_account_reflects_only_what_was_shared() {
@@ -137,10 +138,9 @@ fn free_busy_of_another_account_reflects_only_what_was_shared() {
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the recipient account needs the calendars capability");
 
-    // Who the owner grants `shareWith` to: the recipient's own principal id,
-    // resolved from the owner's side by the recipient's email — the reverse
-    // direction of what `free_busy` itself resolves (the *asked-about*
-    // person's principal id, from the caller's side).
+    // The owner finds the `shareWith` principal id of the recipient by email.
+    // `free_busy` does the opposite: the caller finds the principal id of the
+    // *asked-about* person.
     let recipient_principal_id = owner
         .principal_query(
             &owner_account_id,
@@ -172,9 +172,8 @@ fn free_busy_of_another_account_reflects_only_what_was_shared() {
         .event_create(&owner_account_id, &event)
         .expect("CalendarEvent/set create failed against the real server");
 
-    // A calendar of the recipient's own to build a `CalSync` on: `free_busy`
-    // never touches it, only `self.account_id()`/`self.client()`, but
-    // `CalSync::new` still asks for one.
+    // `CalSync::new` needs a calendar of the recipient. `free_busy` uses only
+    // `self.account_id()`/`self.client()`, not the calendar.
     let recipient_calendar_id = recipient
         .calendars(&recipient_account_id)
         .expect("Calendar/get failed for the recipient account")

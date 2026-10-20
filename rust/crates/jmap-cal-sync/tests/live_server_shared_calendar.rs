@@ -1,38 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync` reading and writing a *shared* calendar's actual event content,
-//! i.e. one owned by a different real account, through an ACL grant.
+//! Tests `CalSync` reads and writes of the event content of a *shared* calendar.
+//! A different real account owns the calendar and gives access through an ACL grant.
 //!
-//! `tests/live_server_shared_freebusy.rs` already proves a `mayReadFreeBusy`
-//! grant lets a second account see the busy/free shape of another account's
-//! calendar via `Principal/getAvailability`, but that method never reveals
-//! event content and does not require `mayReadItems` on the calendar itself.
-//! This file closes the sibling gap: does a `mayReadItems`/`mayWriteOwn`
-//! grant on the calendar let `CalSync` itself read, and then write, the
-//! shared calendar's
-//! events, the same way `jmap-book-sync/tests/live_server_shared_book.rs`
-//! pinned down for a shared address book. This is exactly the path a real
-//! Evolution session takes once a shared calendar is added as a source.
+//! `tests/live_server_shared_freebusy.rs` proves that a `mayReadFreeBusy` grant
+//! lets a second account see the busy/free shape of the calendar of a different
+//! account, through `Principal/getAvailability`. But that method never shows
+//! event content and does not need `mayReadItems` on the calendar. This file
+//! tests the related case: can `CalSync` read the events of the shared calendar
+//! with a `mayReadItems` grant, and write them with
+//! `mayWriteOwn`/`mayWriteAll`?
+//! `jmap-book-sync/tests/live_server_shared_book.rs` tests the same for a
+//! shared address book. A real Evolution session uses this path after the user
+//! adds a shared calendar as a source.
 //!
-//! Before any grant, the real server was observed answering both ways for
-//! address books: a method-level `forbidden`, and (more often) a successful
-//! but empty listing. This test tolerates either for `CalendarEvent`, the
-//! same way.
+//! Before any grant, the real server gave two different answers for address books:
+//! a method-level `forbidden`, and (more frequently) a successful but empty listing.
+//! This test accepts either answer for `CalendarEvent`.
 //!
 //! ## Running it
 //!
-//! Needs both `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
-//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` from
-//! `docs/manual-test-live-server.md`, since this is inherently a two-account
-//! test: the write-test account owns the shared calendar, the recipient
-//! account is granted access to it.
+//! This is a two-account test: the write-test account owns the shared calendar, and the
+//! recipient account gets access to it. Set `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` and
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` from `docs/manual-test-live-server.md`.
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when either pair is unset.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` or
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset, or when the server does not
+//! advertise the principals capability. When a `_USER` variable is set, a
+//! missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 
@@ -50,7 +50,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Mirrors `live_server_shared_freebusy.rs::connect_owner`.
+/// Same as `live_server_shared_freebusy.rs::connect_owner`.
 fn connect_owner() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -66,7 +66,7 @@ fn connect_owner() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Mirrors `live_server_shared_freebusy.rs::connect_recipient`.
+/// Same as `live_server_shared_freebusy.rs::connect_recipient`.
 fn connect_recipient() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -83,9 +83,9 @@ fn connect_recipient() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Mirrors `jmap-book-sync/tests/live_server_shared_book.rs::is_forbidden`: a
-/// missing grant can surface as a whole method refused outright, or a create
-/// let through method dispatch but rejected per-record.
+/// Same as `jmap-book-sync/tests/live_server_shared_book.rs::is_forbidden`.
+/// Without a grant, the server refuses the full method, or accepts the method
+/// but rejects the record.
 fn is_forbidden(error: &SyncError) -> bool {
     matches!(
         error,
@@ -98,9 +98,9 @@ fn is_forbidden(error: &SyncError) -> bool {
     )
 }
 
-/// Mirrors `assert_owner_contact_not_visible`: the real server answers either
-/// a method-level `forbidden` or a successful but empty/filtered listing for
-/// an absent grant, and both mean the same thing here.
+/// Same as `assert_owner_contact_not_visible` (in `jmap-book-sync`). Without a
+/// grant, the server gives a method-level `forbidden` or a successful but
+/// empty/filtered listing. Both have the same meaning here.
 fn assert_owner_event_not_visible(recipient_sync: &CalSync, owner_uid: &str, when: &str) {
     match recipient_sync.list_existing() {
         Err(error) => assert!(
@@ -115,10 +115,9 @@ fn assert_owner_event_not_visible(recipient_sync: &CalSync, owner_uid: &str, whe
     }
 }
 
-/// `summary` also seeds the local `UID`: the JSCalendar `uid` a create falls
-/// back to when the ICS carries no better source, so a fixed literal here
-/// would collide once both the owner's and the recipient's events land in
-/// the same shared calendar.
+/// `summary` also makes the local `UID`. A create uses it as the JSCalendar
+/// `uid` when the ICS has no better source. A fixed literal causes a collision
+/// between the owner event and the recipient event in the shared calendar.
 fn ics(summary: &str, hour: u8) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
@@ -133,14 +132,17 @@ fn ics(summary: &str, hour: u8) -> String {
     )
 }
 
-/// Creates a fresh calendar and an event on the owner account, then drives
-/// the recipient account's own `CalSync` against that same calendar (owner's
-/// account id, owner's calendar id) through three stages: forbidden before
-/// any grant, read-only once `mayRead` is granted (sees the owner's event,
-/// but a write is still refused), and read-write once the grant widens to
-/// `mayWrite` (can create an event the owner then sees too). Destroys the
-/// calendar (and everything in it) at the end regardless of where the
-/// assertions land.
+/// Creates a new calendar and an event on the owner account. Then uses the
+/// `CalSync` of the recipient on that calendar (owner account id, owner
+/// calendar id) in three stages:
+/// - Before any grant: no access.
+/// - With `mayReadItems`: the recipient sees the owner event, but the server
+///   refuses a write.
+/// - With `mayWriteOwn`/`mayWriteAll` added: the recipient creates an event,
+///   and the owner sees it.
+///
+/// At the end, it removes both events and destroys the calendar. A failed
+/// assertion skips this cleanup.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_shared_calendars_events_are_readable_then_writable_as_the_grant_widens() {

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::set_color` against the mock server: the whole of what a
-//! calendar-colour write-back means, minus the vfunc/diff bookkeeping.
+//! Tests `CalSync::set_color` against the mock server: the full calendar-colour
+//! write-back, without the vfunc and diff bookkeeping.
 
 mod common;
 

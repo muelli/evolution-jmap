@@ -1,39 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CalSync::free_busy` against a real JMAP server — the sync-layer function
-//! `ECalBackendSync::get_free_busy_sync` actually calls, exercised end to end
-//! for the first time.
+//! Tests `CalSync::free_busy` end to end against a real JMAP server.
+//! `ECalBackendSync::get_free_busy_sync` calls this sync-layer function.
 //!
-//! `jmap-client/tests/live_server.rs` already proves `Calendar/set` and
-//! `CalendarEvent/set` round-trip against real Stalwart, and
-//! `jmap-client/examples/principals-availability-probe.rs` already confirmed
-//! `Principal/getAvailability`'s wire field names match this crate's types.
-//! Neither drives `CalSync::free_busy` itself — the two-call decision
-//! (`Principal/query` by email, then `Principal/getAvailability`) plus
-//! `jmap_ical::busy_periods_to_vfreebusy`'s marshalling — which is what a
-//! real meeting-scheduler slot-picker in Evolution will actually run. Only
-//! `jmap-mockd` has ever exercised this function
-//! (`jmap-cal-sync/tests/freebusy.rs`); this file is its live-server
-//! counterpart, following the same recipe as `jmap-client`'s.
+//! `jmap-client/tests/live_server.rs` proves the `Calendar/set` and
+//! `CalendarEvent/set` round trips against a real Stalwart server.
+//! `jmap-client/examples/principals-availability-probe.rs` confirms that the
+//! `Principal/getAvailability` wire field names agree with the types of this crate.
+//! Neither one calls `CalSync::free_busy`. That function makes two calls
+//! (`Principal/query` by email, then `Principal/getAvailability`) and marshals
+//! the result with `jmap_ical::busy_periods_to_vfreebusy`. The meeting-scheduler
+//! slot-picker in Evolution runs this code. The mock-server counterpart is
+//! `jmap-cal-sync/tests/freebusy.rs` (on `jmap-mockd`). This file uses the same
+//! recipe as `jmap-client`.
 //!
 //! ## Running it
 //!
-//! See `docs/manual-test-live-server.md`'s "free/busy test" section. In
-//! short, with the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/
-//! `_WRITE_PASSWORD` already set up for `jmap-client`'s write-path tests:
+//! Refer to the "free/busy test" section of `docs/manual-test-live-server.md`.
+//! Set the `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` variables that
+//! the `jmap-client` write-path tests use, then run:
 //!
 //! ```console
 //! $ cargo test -p evolution-jmap-cal-sync -- --ignored
 //! ```
 //!
-//! No `--features live-server` gate is needed here — unlike `jmap-client`,
-//! this crate has no such feature, and `#[ignore]` alone is what already
-//! keeps `jmap-client`'s own live-server tests out of a plain `cargo test`.
+//! This crate has no `live-server` feature (unlike `jmap-client`).
+//! `#[ignore]` alone keeps the test out of a plain `cargo test`.
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
+//! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
 use std::env;
 
@@ -42,8 +38,8 @@ use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
-/// A value unique to this process invocation, so a concurrent or prior run's
-/// leftover event can never be mistaken for this run's own.
+/// Returns a value unique to this process, so a leftover event from a different
+/// run cannot match.
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,12 +47,11 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// The write-test account's client and its own address — the latter doubles
-/// as the one attendee this file asks `free_busy` about, since a real
-/// server's own account is guaranteed to have a `Principal` of its own (RFC
-/// 9670's `currentUserPrincipalId`), with no second throwaway account to
-/// provision. Mirrors `jmap-client/tests/live_server.rs::connect_for_write`
-/// exactly, plus the address it builds `Credentials::basic` from.
+/// Returns the client and the address of the write-test account. The address is
+/// also the attendee for `free_busy`. The account always has a `Principal` (RFC
+/// 9670 `currentUserPrincipalId`), so no second account is necessary. Same as
+/// `jmap-client/tests/live_server.rs::connect_for_write`, but also returns the
+/// user address.
 fn connect_for_write() -> Option<(Client, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -72,19 +67,18 @@ fn connect_for_write() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Creates a one-hour event on the write-test account's default calendar,
-/// asks `CalSync::free_busy` about the account's own address over a window
-/// spanning the whole event day, confirms the answer names that address and
-/// carries a `FREEBUSY;FBTYPE=BUSY` line for exactly the event's window, then
-/// asks about a second, nonexistent address in the same call and confirms it
-/// is silently absent (mirrors `jmap-cal-sync/tests/
-/// freebusy.rs::an_address_no_principal_matches_is_silently_absent`, now
-/// against a real server) — then destroys the event.
+/// Creates a one-hour event on the default calendar of the write-test account.
+/// Asks `CalSync::free_busy` about the account address and a nonexistent
+/// address for the full event day. The answer must name only the account
+/// address, with a `FREEBUSY;FBTYPE=BUSY` line for the event window. The
+/// nonexistent address must be silently absent, as in
+/// `jmap-cal-sync/tests/freebusy.rs::an_address_no_principal_matches_is_silently_absent`.
+/// The test then destroys the event.
 ///
-/// `CalendarEvent::simple` sets `timeZone: "Etc/UTC"`, so the event's start
-/// is anchored, not floating: the `FREEBUSY` line's digits are expected to
-/// match the event's own start/duration exactly, the same bar
-/// `jmap-cal-sync/tests/freebusy.rs`'s mock-based tests hold to.
+/// `CalendarEvent::simple` sets `timeZone: "Etc/UTC"`, so the event start is
+/// anchored, not floating. Thus the `FREEBUSY` digits must agree exactly with
+/// the event start and duration, as in the mock-based tests of
+/// `jmap-cal-sync/tests/freebusy.rs`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn free_busy_of_the_calendar_owner_reflects_a_real_event_against_the_real_server() {
