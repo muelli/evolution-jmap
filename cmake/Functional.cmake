@@ -966,7 +966,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
-			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT=$<TARGET_FILE:functional-transport-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
 	# The mail leg of the hourly-re-consent acceptance test, made headless:

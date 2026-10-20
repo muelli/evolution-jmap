@@ -25,7 +25,8 @@
  * mail-live-client.c, each store has its own scratch tree, so no summary
  * database from this process can answer for the server. The password mechanism
  * also comes from mail-live-client.c (a password seeded on the service, and a
- * `CamelSession` subclass that answers `get_password`), with one addition.
+ * `CamelSession` subclass that answers `get_password` and replaces
+ * `authenticate_sync`), with one addition.
  * There are two accounts, so the session vfunc answers with the value of
  * `current_password` at the time of the connect. The recipient store connects
  * with the password of the recipient.
@@ -98,10 +99,53 @@ test_session_get_password (CamelSession *session,
 	return g_strdup (current_password);
 }
 
+/* The vfunc from mail-live-client.c: one attempt, and on `REJECTED` one more
+ * attempt with the value from `get_password`. The default of the base class
+ * repeats a `REJECTED` attempt without end, so a wrong password would loop.
+ * A second `REJECTED` sets an error. Without it, `camel_service_connect_sync`
+ * returns TRUE for a service that is not connected. */
+static gboolean
+test_session_authenticate_sync (CamelSession *session,
+				CamelService *service,
+				const gchar *mechanism,
+				GCancellable *cancellable,
+				GError **error)
+{
+	CamelAuthenticationResult result;
+
+	result = camel_service_authenticate_sync (service, mechanism, cancellable, error);
+
+	if (result == CAMEL_AUTHENTICATION_REJECTED) {
+		GError *password_error = NULL;
+		gchar *password;
+
+		g_clear_error (error);
+
+		password = test_session_get_password (session, service, NULL, NULL, 0, &password_error);
+		if (!password) {
+			g_propagate_error (error, password_error);
+			return FALSE;
+		}
+
+		camel_service_set_password (service, password);
+		g_free (password);
+
+		result = camel_service_authenticate_sync (service, mechanism, cancellable, error);
+	}
+
+	if (result == CAMEL_AUTHENTICATION_REJECTED && error && !*error)
+		g_set_error_literal (error, CAMEL_SERVICE_ERROR,
+				     CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+				     "the server rejected the password");
+
+	return result == CAMEL_AUTHENTICATION_ACCEPTED;
+}
+
 static void
 test_session_class_init (TestSessionClass *klass)
 {
 	CAMEL_SESSION_CLASS (klass)->get_password = test_session_get_password;
+	CAMEL_SESSION_CLASS (klass)->authenticate_sync = test_session_authenticate_sync;
 }
 
 static void
