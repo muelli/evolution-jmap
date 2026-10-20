@@ -1,30 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The same load-bearing check `eds-sys/tests/layout.rs` makes, for the one
-// class M7's module subclasses: ask the running GObject type system what sizes
-// it allocates an `EMailConfigServiceBackend` and its class at, and hold them
-// against ours. A drift here writes an overridden vfunc pointer into the wrong
-// offset of Evolution's own class struct, inside the process the user is
-// typing their password into.
+// The same check `eds-sys/tests/layout.rs` makes, for the one class M7's
+// module subclasses. This file asks the running GObject type system what
+// sizes it allocates for `EMailConfigServiceBackend` and its class, and
+// compares those sizes against this crate's own structs. A drift here
+// writes an overridden vfunc pointer to the wrong offset of Evolution's
+// own class struct, inside the process where the user types their
+// password.
 //
-// It also asserts the join this crate exists to make: the class our subclass
-// will chain up through must be *eds-sys's* `EExtensionClass`, not a second
-// one generated here. Two `EExtension`s of the same shape and different
-// identity would compile and would put the wrong `GObject` in the parent slot.
+// This file also asserts the join this crate exists to make. The class
+// that this crate's subclass chains up through must be eds-sys's
+// `EExtensionClass`, not a second one generated here. Two `EExtension`
+// types of the same shape but different identity would compile, and would
+// put the wrong `GObject` in the parent slot.
 
 use evo_sys::*;
 use std::mem::size_of;
 use std::sync::{Mutex, MutexGuard};
 
-/// GTK 3's hand-written `get_type` once-guards are not thread-safe (the whole
-/// story is in tests/gtk.rs), and two tests here reach GtkScrolledWindow's
-/// initialisation through Evolution's page classes. From parallel harness
-/// threads that deadlocked, not raced: one thread parked in
-/// `g_once_init_enter` while the other, inside the same once-guard, blocked
-/// on the GObject type lock the first still held, both stacks through
-/// `gtk_scrolled_window_get_type`. Every test here goes through the type
-/// system under this lock.
+/// GTK 3's hand-written `get_type` once-guards are not thread-safe. See
+/// tests/gtk.rs for the full story. Two tests in this file reach
+/// GtkScrolledWindow's initialisation through Evolution's page classes.
+/// Parallel harness threads deadlocked here; they did not race. One
+/// thread parked in `g_once_init_enter`. The other thread, inside the
+/// same once-guard, blocked on the GObject type lock that the first
+/// thread still held. Both thread stacks ran through
+/// `gtk_scrolled_window_get_type`. Every test in this file goes through
+/// the type system under this lock.
 static TYPE_SYSTEM: Mutex<()> = Mutex::new(());
 
 fn type_lock() -> MutexGuard<'static, ()> {
@@ -33,8 +36,9 @@ fn type_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// `g_type_query()` fills nothing for a classed type whose class has never been
-/// referenced, so take a class ref first, the same dance as in `eds-sys`.
+/// `g_type_query()` fills nothing for a classed type whose class was never
+/// referenced. Take a class reference first, the same step `eds-sys`
+/// uses.
 fn query(gtype: GType) -> GTypeQuery {
     unsafe {
         let klass = g_type_class_ref(gtype);
@@ -63,10 +67,10 @@ fn service_backend_layout_matches_the_gtype_system() {
     );
 }
 
-/// What the subclass will chain up to. The `EExtension` in the parent slot has
-/// to be the type EDS registered, which is what makes `jmap-backend-core`'s
-/// registration helpers, written against `eds-sys`, usable for a class that
-/// lives in Evolution rather than in EDS.
+/// What the subclass chains up to. The `EExtension` in the parent slot
+/// must be the type EDS registered. This is what makes
+/// `jmap-backend-core`'s registration helpers, written against `eds-sys`,
+/// usable for a class that lives in Evolution rather than in EDS.
 #[test]
 fn the_parent_is_the_extension_eds_sys_names() {
     let _lock = type_lock();
@@ -84,18 +88,19 @@ fn the_parent_is_the_extension_eds_sys_names() {
     );
 }
 
-/// The interface jmap-ui's vacation page fills (`submit`/`submit_finish`
-/// written into its slots), held against the running library: a slot
-/// written at the wrong offset is a wrong vfunc called with the wrong
-/// arguments, inside Evolution's own process.
+/// The interface that jmap-ui's vacation page fills: it writes `submit`
+/// and `submit_finish` into its slots, checked here against the running
+/// library. A slot written at the wrong offset calls the wrong vfunc
+/// with the wrong arguments, inside Evolution's own process.
 ///
-/// `g_type_query` answers nothing for interfaces (checked: it fills zero),
-/// so the drift check reads the *default* vtable through our layout instead
-/// and holds every slot against what `e_mail_config_page_default_init`
-/// (3.52) is known to put there: a translated title, `check_complete` and
-/// the three submit slots filled, `setup_defaults` and `commit_changes`
-/// left NULL, and a `page_type` that is a real `GtkAssistantPageType`. A
-/// shifted layout scrambles that NULL/non-NULL pattern.
+/// `g_type_query` answers nothing for interfaces (checked: it fills
+/// zero). So this drift check reads the default vtable through this
+/// crate's layout instead. It holds every slot against what
+/// `e_mail_config_page_default_init` (version 3.52) is known to put
+/// there: a translated title; `check_complete` and the three submit
+/// slots filled; `setup_defaults` and `commit_changes` left NULL; and a
+/// `page_type` that is a real `GtkAssistantPageType`. A shifted layout
+/// scrambles that NULL/non-NULL pattern.
 #[test]
 fn the_page_interface_defaults_read_correctly_through_our_layout() {
     let _lock = type_lock();
@@ -121,12 +126,12 @@ fn the_page_interface_defaults_read_correctly_through_our_layout() {
     }
 }
 
-/// The class field a service backend is *found* by. Evolution's config pages
-/// pick a backend out of every registered `EMailConfigServiceBackend` extension
-/// by comparing `backend_name` against a Camel provider's protocol, so it is
-/// the first thing M7's `class_init` has to fill in, and it has to land in the
-/// first word after the inherited class, or the comparison reads a vfunc
-/// pointer as a string.
+/// The class field that identifies a service backend. Evolution's config
+/// pages pick a backend from every registered `EMailConfigServiceBackend`
+/// extension by comparing `backend_name` against a Camel provider's
+/// protocol. So M7's `class_init` must fill this field first, and the
+/// field must land in the first word after the inherited class.
+/// Otherwise, the comparison reads a vfunc pointer as a string.
 #[test]
 fn backend_name_sits_directly_after_the_inherited_class() {
     assert_eq!(

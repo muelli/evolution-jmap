@@ -1,54 +1,62 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `EConfigLookupWorker` is the interface M7's real-server-readiness item will
-// implement: an `EExtension` registered against Evolution's `EConfigLookup`
-// (`extensible_type = E_TYPE_CONFIG_LOOKUP`, the same "putting the type in the
-// type system is the registration" idiom `jmap-config/src/module.rs` already
-// documents for `JmapConfigServiceBackend`) that runs
-// `jmap_config::oauth2_setup::discover_and_register` the moment Evolution's
-// account assistant tries to auto-configure a JMAP account, the pattern
-// evolution-ews's own `src/EWS/evolution/e-ews-config-lookup.c`
-// (gitlab.gnome.org/GNOME/evolution-ews, `master`) already uses for Exchange
-// autodiscovery. This file is the FFI foundation that work needs, not the
+// `EConfigLookupWorker` is the interface the real-server-readiness item
+// (M7) will implement. M7 registers an `EExtension` against Evolution's
+// `EConfigLookup` (`extensible_type = E_TYPE_CONFIG_LOOKUP`). This is the
+// same idiom `jmap-config/src/module.rs` documents for
+// `JmapConfigServiceBackend`: putting the type in the type system is the
+// registration.
+//
+// The extension runs `jmap_config::oauth2_setup::discover_and_register`
+// when Evolution's account assistant tries to auto-configure a JMAP
+// account. evolution-ews uses the same pattern for Exchange autodiscovery,
+// in `src/EWS/evolution/e-ews-config-lookup.c`
+// (gitlab.gnome.org/GNOME/evolution-ews, `master`).
+//
+// This file provides the FFI foundation for that work. It does not do the
 // work itself.
 //
-// As in `eds-sys/tests/oauth2.rs`: an interface has no `g_type_query` size, so
-// what is checkable is the vtable's *offsets*: a slot bindgen wrote a
-// function pointer into at the wrong place is a jump into whatever else
-// happens to sit there when EDS's own wrapper dispatches through it.
+// As in `eds-sys/tests/oauth2.rs`: an interface has no `g_type_query` size.
+// The checkable part is the vtable's offsets. If bindgen writes a function
+// pointer into the wrong slot, a call through that slot jumps into
+// whatever else occupies that location, when EDS's wrapper dispatches
+// through it.
 //
-// One dispatch short of that file's proof, and said plainly rather than
-// glossed over: `e_config_lookup_worker_run` (`e-config-lookup-worker.c`,
-// checked against the real source rather than assumed) itself calls
-// `g_return_if_fail (E_IS_CONFIG_LOOKUP (config_lookup))`, and a real
-// `EConfigLookup` only comes from `e_config_lookup_new (ESourceRegistry *)`,
-// which means a live D-Bus session and an activatable
-// `evolution-source-registry`. That is exactly the dependency
-// `docs/functional-tests.md` gates M9's Layer 1 behind (`dbus-run-session`,
-// not available to the plain `rust-test-eds` target this crate's tests run
-// under), so it is not something this file takes on. What is proven here is
-// `get_display_name`'s offset, by real dispatch; `run`'s is the very next
-// field in the struct, textually and in `size_of` terms, so a wrong offset
-// for it would already have to have shifted `get_display_name` for this test
-// to still pass, but it is not independently dispatched, and this comment
-// says so rather than letting the test's name imply more than it checked.
-// `jmap-functional/tests/config-lookup.rs` is the test that registers
-// `JmapConfigLookup` against a real `EConfigLookup` under M9's harness and
-// calls `run` for the first time.
+// This file proves one dispatch short of that file's proof. Here is the
+// gap, stated plainly instead of glossed over: `e_config_lookup_worker_run`
+// (`e-config-lookup-worker.c`, checked against the real source) calls
+// `g_return_if_fail (E_IS_CONFIG_LOOKUP (config_lookup))`. A real
+// `EConfigLookup` comes only from `e_config_lookup_new (ESourceRegistry
+// *)`. That function needs a live D-Bus session and an activatable
+// `evolution-source-registry`. `docs/functional-tests.md` gates M9's
+// Layer 1 behind that dependency (`dbus-run-session`), which the plain
+// `rust-test-eds` target used by this crate's tests does not provide.
+// This file does not take on that dependency.
+//
+// This file proves `get_display_name`'s offset, by real dispatch. `run`'s
+// slot is the next field in the struct, both in source order and in
+// `size_of` terms. A wrong offset for `run` would already have shifted
+// `get_display_name`, which would fail this test. `run` is not dispatched
+// independently here, though. This comment states that limit instead of
+// letting the test name imply more than it checks.
+//
+// `jmap-functional/tests/config-lookup.rs` registers `JmapConfigLookup`
+// against a real `EConfigLookup` under M9's harness, and calls `run` for
+// the first time.
 
 use evo_sys::*;
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// EDS's own answer for which slots have no default: `iface->get_display_name
-/// = NULL; iface->run = NULL;` in `e_config_lookup_worker_default_init`
-/// (`e-config-lookup-worker.c`), so both are one this crate's own
-/// implementation must fill.
+/// EDS's own default leaves both slots empty: `iface->get_display_name =
+/// NULL; iface->run = NULL;`, in `e_config_lookup_worker_default_init`
+/// (`e-config-lookup-worker.c`). This crate's own implementation must fill
+/// both slots.
 #[test]
 fn the_worker_contract_is_an_interface_with_only_a_gobject_behind_it() {
-    // SAFETY: plain type-system reads; the prerequisite array is g_malloc'd
-    // for the caller to free.
+    // SAFETY: These calls only read the type system. GLib allocates the
+    // prerequisite array with g_malloc, and the caller must free it.
     unsafe {
         let worker = e_config_lookup_worker_get_type();
         assert_eq!(g_type_fundamental(worker), gobject_sys::G_TYPE_INTERFACE);
@@ -71,8 +79,8 @@ fn the_worker_contract_is_an_interface_with_only_a_gobject_behind_it() {
 
 #[test]
 fn neither_slot_has_a_default_implementation() {
-    // SAFETY: the default vtable is ref'd for the length of the reads and
-    // unref'd again.
+    // SAFETY: The code refs the default vtable for the reads, then unrefs
+    // it again.
     unsafe {
         let vtable = gobject_sys::g_type_default_interface_ref(e_config_lookup_worker_get_type())
             .cast::<EConfigLookupWorkerInterface>();
@@ -99,11 +107,11 @@ unsafe extern "C" fn probe_get_display_name(
     PROBE_DISPLAY_NAME.as_ptr()
 }
 
-/// Filled but not dispatched here: see the module doc on why `run` needs a
-/// real `EConfigLookup` this file does not construct. Still written, the way
-/// `eds-sys/tests/oauth2.rs` still fills the two `SoupMessage` slots it
-/// cannot call either: an unfilled slot here would be indistinguishable from
-/// a slot bindgen mis-sized.
+/// This file fills this slot but does not dispatch it. See the module
+/// comment for why `run` needs a real `EConfigLookup`, which this file
+/// does not construct. `eds-sys/tests/oauth2.rs` fills two `SoupMessage`
+/// slots it cannot call either, for the same reason: an unfilled slot
+/// here would look the same as a slot bindgen sized wrong.
 unsafe extern "C" fn probe_run(
     _lookup_worker: *mut EConfigLookupWorker,
     _config_lookup: *mut EConfigLookup,
@@ -116,18 +124,19 @@ unsafe extern "C" fn probe_run(
 }
 
 unsafe extern "C" fn probe_interface_init(iface: *mut c_void, _data: *mut c_void) {
-    // SAFETY: GLib passes the interface struct for the type we registered this
-    // initialiser against, which is `EConfigLookupWorker`'s.
+    // SAFETY: GLib passes the interface struct for the type this
+    // initialiser registers against: `EConfigLookupWorker`.
     let iface = unsafe { &mut *iface.cast::<EConfigLookupWorkerInterface>() };
     iface.get_display_name = Some(probe_get_display_name);
     iface.run = Some(probe_run);
 }
 
-/// A `GObject` that implements the interface and nothing else, registered
-/// once for the process, as `eds-sys/tests/oauth2.rs`'s `probe_service`.
+/// A `GObject` that implements the interface and nothing else. The
+/// process registers it once, like `eds-sys/tests/oauth2.rs`'s
+/// `probe_service`.
 fn probe_worker() -> *mut EConfigLookupWorker {
-    // SAFETY: a fresh type name, sizes taken from the structs GLib will
-    // allocate, and a `GInterfaceInfo` GLib copies before it returns.
+    // SAFETY: This uses a fresh type name. The sizes come from the structs
+    // GLib allocates. GLib copies the `GInterfaceInfo` before it returns.
     unsafe {
         let gtype = g_type_register_static_simple(
             gobject_sys::G_TYPE_OBJECT,
@@ -157,18 +166,19 @@ fn probe_worker() -> *mut EConfigLookupWorker {
     }
 }
 
-/// The one dispatch this file can make without a live D-Bus session: EDS's
-/// own `e_config_lookup_worker_get_display_name` wrapper reads the slot this
-/// crate wrote and calls it, proof the two sides agree about where the first
-/// slot is, which is also the offset every slot after it is computed relative
-/// to.
+/// The one dispatch this file can make without a live D-Bus session. EDS's
+/// `e_config_lookup_worker_get_display_name` wrapper reads the slot this
+/// crate wrote, then calls it. This proves both sides agree on the first
+/// slot's location. Every later slot's offset is computed relative to that
+/// location.
 #[test]
 fn get_display_name_dispatches_to_the_function_this_crate_wrote_into_it() {
     let worker = probe_worker();
     REACHED_GET_DISPLAY_NAME.store(0, Ordering::SeqCst);
 
-    // SAFETY: a live implementer; the returned string is `'static` (the probe
-    // never allocates), so nothing here frees it.
+    // SAFETY: This uses a live implementer. The returned string is
+    // `'static` because the probe never allocates it, so nothing here
+    // frees it.
     unsafe {
         assert_eq!(
             CStr::from_ptr(e_config_lookup_worker_get_display_name(worker)),
