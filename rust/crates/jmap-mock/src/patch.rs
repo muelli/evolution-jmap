@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `PatchObject` application (RFC 8620 §5.3): keys are relative paths where
-//! `null` removes and any other value replaces.
+//! Apply `PatchObject` updates from RFC 8620 §5.3.
+//! Keys are relative paths.
+//! `null` removes a value.
+//! Any other value replaces it.
 
 use serde_json::{Map, Value};
 
-/// Apply a patch map to an object, creating intermediate objects as needed.
-/// Patching through a non-object path segment is an error.
+/// Apply a patch map to an object.
+/// Create intermediate objects when needed.
+/// Return an error if a path crosses a non-object segment.
 pub(crate) fn apply_patch(target: &mut Value, patch: &Map<String, Value>) -> Result<(), String> {
     let Value::Object(_) = target else {
         return Err("patch target is not an object".to_owned());
