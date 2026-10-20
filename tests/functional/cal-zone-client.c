@@ -1,74 +1,68 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The third client half of the calendar functional test: an ordinary libecal
- * consumer that opens a calendar, reads events the *server* already held, and
- * reports the one thing it came for — what instant EDS and libical between them
- * say each event starts at, asked twice: of libical alone, and of the calendar
- * itself, which is the path Evolution takes. Then it saves the first of them
- * twice and looks again after each, which asks the same question of the same
- * event after an edit.
+ * The third client half of the calendar functional test. It is an ordinary
+ * libecal consumer that opens a calendar and reads events that the server
+ * already held. For each event, it reports the instant at which the event
+ * starts, in two ways: from libical alone, and from the calendar, which is
+ * the path of Evolution. Then it saves the first event two times and reports
+ * again after each save.
  *
- * The two edits are the two kinds there are, and they ask opposite things of one
- * save path. The first retypes the title: an edit with nothing to do with the
- * clock, so anything that happens to the clock is something the save did on its
- * own. The second drags the appointment to another wall clock and states its new
- * length the way Evolution's editor does — as a `DTEND`, in place of the
- * `DURATION` the mapping wrote — which is an edit about nothing *but* the clock,
- * and so the one that would show up a save that resends the zone whenever a
- * date-time is in the patch. Neither may cost the user the zone, and the zone is
- * the one thing here nothing outside the server can name.
+ * The two edits are the two types of edit, and they test the save path in
+ * opposite ways. The first changes the title, which has no relation to the
+ * clock, so any change to the clock comes from the save. The second moves the
+ * appointment to a different wall-clock time and gives its new length as a
+ * `DTEND`, as the Evolution editor does, in place of the `DURATION` that the
+ * mapping wrote. This edit is only about the clock, so it shows a save that
+ * sends the zone again when a date-time is in the patch. Neither edit may
+ * lose the zone, and only the server can identify the zone.
  *
- * A program of its own rather than more arguments to cal-edit-client.c, which
- * asks what survives a save of the members no iCalendar line has room for:
- * handing it an event with no place, no conference and no attachment to retype
- * would mean either weakening what it insists on finding or seeding an event
- * with members this question has no use for. And the edits are made here rather
- * than in a second run because reading and saving are two halves of one question:
- * an appointment whose zone is resolvable until the first time the user touches
- * it is not usable, and the half that could not be measured without the other
- * half in the same run is exactly this one — the cache the read filled is the
- * cache the saves are made against.
+ * This is a separate program, not more arguments to cal-edit-client.c. That
+ * program examines what a save keeps of the members that have no iCalendar
+ * line. To give it an event without a location, conference and attachment,
+ * it would have to check less, or the event would need members that this
+ * test does not use. The edits occur in the same run as the reads because
+ * the saves must use the cache that the read filled. An appointment whose
+ * zone resolves only until the first edit is not usable.
  *
- * Several events in one run rather than one per run, because what is being
- * measured is a *contrast*: a zone the server defined against one it only named.
- * One run answers both from one cache filled by one refresh, so a difference
- * between the two answers is a difference between the events. Two runs would
- * share the session's XDG directories and so the meta backend's cache, which is
- * the one thing the harness deliberately starts empty.
+ * One run reads several events because the test measures a contrast: a zone
+ * that the server defined against a zone that it only named. One cache from
+ * one refresh answers both, so a difference in the answers is a difference
+ * between the events. Two runs would share the XDG directories of the
+ * session, and thus the cache of the meta backend, which the harness starts
+ * empty.
  *
- * And a second mode, which asks the same question from the other end. Everything
- * above starts from a zone the *server* named; `create` starts from one the
- * **client** names — it hands the calendar a `VTIMEZONE` through
- * `e_cal_client_add_timezone_sync` and then creates an event whose `DTSTART`
- * refers to it, which is what Evolution does when the user accepts an invitation
- * carrying a zone no database holds. EDS files such a definition in the
- * calendar's own timezone store and leaves the component naming it, so the save
- * that follows reaches this repository's backend with a `TZID` and nothing to
- * resolve it by — and whether the definition is picked back out of that store and
- * sent is the whole of what this mode measures. It is a mode rather than a phase
- * of the read run because the store must hold the zone for one reason only: the
- * client put it there.
+ * The `create` mode tests the opposite direction. The read mode starts from a
+ * zone that the server names; `create` starts from a zone that the client
+ * names. It gives the calendar a `VTIMEZONE` through
+ * `e_cal_client_add_timezone_sync`, then creates an event whose `DTSTART`
+ * refers to it. Evolution does this when the user accepts an invitation with
+ * a zone that no database holds. EDS keeps such a definition in the timezone
+ * store of the calendar and leaves the `TZID` on the component. Thus the save
+ * reaches the backend of this repository with a `TZID` and no definition.
+ * This mode measures whether the backend gets the definition from that store
+ * and sends it. It is a separate mode, not a phase of the read run, because
+ * the only source of the zone in the store must be the client.
  *
- * And a third mode, which asks `create`'s question of the save `create` cannot
- * make. `series` hands the calendar **two** definitions, creates a recurring
- * event in the first and then drags one occurrence into the second with
- * `E_CAL_OBJ_MOD_THIS` — which is a user moving one day of a standing meeting
- * into the hours they are travelling, and reaches the backend as an *update* to
- * an event the server already holds rather than as a create. The two differ in
- * what the mapping may say: a create states the whole `timeZones` map, while an
- * update may only add an entry to the map already there. So the second zone is
- * the one this mode is about, and the first is there to be left alone.
+ * The `series` mode tests the same question for a save that `create` cannot
+ * do. It gives the calendar two definitions, creates a recurring event in the
+ * first zone, and moves one occurrence into the second zone with
+ * `E_CAL_OBJ_MOD_THIS`. This is a user who moves one day of a weekly meeting
+ * into the hours of a journey. It reaches the backend as an update to an
+ * event that the server holds, not as a create. A create sends the full
+ * `timeZones` map, but an update can only add an entry to the current map.
+ * Thus the second zone is the subject of this mode, and the first zone must
+ * stay unchanged.
  *
- * Two zones from two files rather than one file naming two, because what is
- * asserted about each is its own definition: a single file could not tell a save
- * that sent the wrong one from a save that sent both.
+ * The two zones come from two files, not from one file with two zones. The
+ * test asserts the definition of each zone, and one file cannot tell a save
+ * that sent the wrong zone from a save that sent both.
  *
- * Like its twins it has no notion of what "correct" is: it reports what EDS told
- * it on stdout, one `key=value` line per observation, and exits non-zero the
- * moment a call fails. Every assertion belongs to
- * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the events, runs
- * this program and reads its output.
+ * Like the other calendar clients, it does not know the correct result. It
+ * writes each EDS observation to stdout as one `key=value` line, and exits
+ * non-zero when a call fails. `rust/crates/jmap-functional/tests/calendar.rs`
+ * owns all assertions. It seeds the events, runs this program and reads its
+ * output.
  *
  *   usage: functional-cal-zone-client read <source-uid> <new-summary>
  *              <new-dtstart> <new-dtend> <event-uid>...
@@ -78,24 +72,24 @@
  *              <moved-zone-file> <summary> <dtstart> <duration> <rrule>
  *              <recurrence-id> <moved-dtstart>
  *
- * The observations of the n-th event on the command line are prefixed `event-n`,
- * counting from one. Positional rather than keyed by the UID because the UID is
- * whatever the mock filed the event under, and a key beginning with a digit
- * makes for a poor observation name. What the first event looks like after the
- * rename is prefixed `saved`, and after the move `moved`; what `create` made is
- * prefixed `created`, and the occurrence `series` moved `occurrence`.
+ * The observations of the n-th event on the command line have the prefix
+ * `event-n`, counting from one. The prefix uses the position, not the UID,
+ * because the mock chooses the UID, and a key that starts with a digit is a
+ * bad observation name. After the rename, the first event has the prefix
+ * `saved`, and after the move, `moved`. The event that `create` made has the
+ * prefix `created`, and the occurrence that `series` moved has `occurrence`.
  *
- * The two clocks are iCalendar `DATE-TIME` values with no zone on them — the
- * `TZID` the moved event keeps is the one already on its `DTSTART`, because the
- * whole question is whether an appointment that moves stays in the zone it was
- * in, and a client that named the zone itself would be answering it. `create`'s
- * clock is bare for the same reason and gets its `TZID` from the zone file, so
- * this program never spells the identifier out. `series` takes three such bare
- * clocks — the series' start, the `RECURRENCE-ID` of the occurrence that moves,
- * and where it moves to — and puts the first two on the zone out of the first
- * file and the last on the zone out of the second, which is the one arrangement
- * RFC 5545 §3.2.19 leaves room for: the recurrence id names an instance the
- * rules generated, so it is on the series' clock however far the instance moved.
+ * The two clocks are iCalendar `DATE-TIME` values without a zone. The moved
+ * event keeps the `TZID` that is already on its `DTSTART`, because the test
+ * examines whether a moved appointment stays in its zone. A client that named
+ * the zone would supply the answer. The clock of `create` is also without a
+ * zone and gets its `TZID` from the zone file, so this program never writes
+ * the identifier. `series` takes three such clocks: the start of the series,
+ * the `RECURRENCE-ID` of the moved occurrence, and its new start. It puts the
+ * first two in the zone from the first file and the last in the zone from
+ * the second file. This is the only arrangement that RFC 5545 §3.2.19
+ * permits. The recurrence id identifies an instance that the rules
+ * generated, so it is on the clock of the series, wherever the instance moved.
  */
 
 #include <libecal/libecal.h>
@@ -103,10 +97,10 @@
 #include "connection-status.h"
 #include "event-start.h"
 
-/* How long to wait for a seeded event to become gettable, and how often to ask.
- * cal-edit-client.c's EDIT_WAIT_TRIES, for the reason given there: the backend
- * schedules a refresh during the connect, and a get that arrives while it is
- * still running can be answered out of a cache the refresh has not filled yet. */
+/* How long to wait until a seeded event is available, and how frequently to
+ * ask. The same as EDIT_WAIT_TRIES in cal-edit-client.c, for the reason given
+ * there: the backend starts a refresh during the connect, and a get before
+ * the refresh is complete can get an answer from a cache that is not full. */
 #define WAIT_TRIES 200
 #define WAIT_INTERVAL_US 50000
 
@@ -120,11 +114,11 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* What EDS hands back from get_object: a bare VEVENT for an event with one
- * instance, or a VCALENDAR wrapping the instances when there are several.
- * cal-edit-client.c's first_vevent, and here it matters for a second reason —
- * a VTIMEZONE can only stand in the wrapper, so which shape EDS chose decides
- * whether a definition could have travelled with the event at all. */
+/* Return the first VEVENT of what get_object returns: a bare VEVENT for an
+ * event with one instance, or a VCALENDAR that contains the instances. This
+ * is first_vevent of cal-edit-client.c. Here it is also important because a
+ * VTIMEZONE can only be in the VCALENDAR, so the form that EDS selects
+ * decides whether a definition can come with the event. */
 static ICalComponent *
 first_vevent (ICalComponent *component)
 {
@@ -134,16 +128,16 @@ first_vevent (ICalComponent *component)
 	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }
 
-/* How many VTIMEZONEs stand beside the event EDS handed back.
+/* The number of VTIMEZONEs beside the event that EDS returned.
  *
- * Reported rather than inferred from the instant, because the two failures it
- * tells apart are repaired in different places. An event whose start resolves
- * *and* carries no definition resolved out of libical's builtin table, which is
- * the bet an IANA name rests on; one that carries none and does not resolve is a
- * definition lost between the mapping and EDS's cache, which is this
- * repository's bug; and one that carries a definition and still does not resolve
- * is a VTIMEZONE libical refused, which is the mapping's drawing. The instant
- * alone cannot distinguish the last two, and they are not the same work. */
+ * Reported, not inferred from the instant, because it separates failures that
+ * have different repairs. If the start resolves without a definition, it
+ * resolved from the builtin table of libical, as an IANA name expects. If
+ * there is no definition and the start does not resolve, the definition was
+ * lost between the mapping and the cache of EDS: a bug in this repository. If
+ * there is a definition and the start does not resolve, libical refused the
+ * VTIMEZONE that the mapping made. The instant alone cannot tell the last two
+ * apart, and their repairs are different. */
 static guint
 definition_count (ICalComponent *component)
 {
@@ -163,28 +157,28 @@ definition_count (ICalComponent *component)
 	return count;
 }
 
-/* Ask EDS itself for the zone the event's DTSTART names, and report the instant
- * the start means once it is resolved against what came back.
+/* Ask EDS for the zone that the DTSTART of the event names, and report the
+ * instant of the start when it is resolved against that zone.
  *
- * The measurement that matters, and the one functional_report_start cannot make.
- * A `TZID` is resolved by libical against the enclosing component's own
- * `VTIMEZONE`s and its builtin table, and neither holds a zone only a server can
- * name: EDS does not hand the definition back beside the event, it keeps it in the
- * calendar's own timezone store, which is what `e_cal_client_get_timezone_sync`
- * exists to read. That is how Evolution resolves a `TZID` too — its recurrence and
- * alarm machinery takes a lookup callback and this is what the callback calls — so
- * this is the consumer's path, and the bare libical answer beside it is a fact
- * about libical's table rather than about the account.
+ * This is the necessary measurement, and functional_report_start cannot do
+ * it. libical resolves a `TZID` against the `VTIMEZONE`s of the enclosing
+ * component and its builtin table, and neither holds a zone that only a
+ * server can name. EDS does not return the definition beside the event: it
+ * keeps it in the timezone store of the calendar, which
+ * `e_cal_client_get_timezone_sync` reads. Evolution resolves a `TZID` in the
+ * same way: its recurrence and alarm code uses a lookup callback that calls
+ * this function. Thus this is the path of the consumer, and the libical-only
+ * answer is a fact about the libical table, not about the account.
  *
- * Two observations. Whether the zone came back at all says the definition survived
- * the mapping, the marshalling, `ECalMetaBackend`'s gathering and the D-Bus hop;
- * the instant says the zone that came back is the zone the server described, which
- * a definition kept in part would not be.
+ * Two observations. Whether the zone came back shows that the definition went
+ * through the mapping, the marshalling, `ECalMetaBackend` and the D-Bus hop.
+ * The instant shows that the returned zone is the zone that the server
+ * described; a partial definition gives a different instant.
  *
- * The time is rebuilt from the value on the line rather than taken from
- * i_cal_component_get_dtstart, because that call has already resolved the `TZID` —
- * to nothing — and a floating time carries no clock to reinterpret. Parsing the
- * value gives the wall clock the line states, which is what a zone applies to.
+ * The time is made again from the value on the line, not taken from
+ * i_cal_component_get_dtstart. That function already resolved the `TZID` (to
+ * nothing), and a floating time has no clock to interpret again. The parsed
+ * value gives the wall-clock time of the line, to which a zone applies.
  */
 static void
 report_zone_lookup (const gchar *prefix,
@@ -206,7 +200,7 @@ report_zone_lookup (const gchar *prefix,
 	if (parameter && !e_cal_client_get_timezone_sync (
 			cal, i_cal_parameter_get_tzid (parameter), &zone, NULL, &error)) {
 		/* Not a failure of this program: a calendar that does not know the
-		 * zone answers with an error, and that answer is the observation. */
+		 * zone returns an error, and that error is the observation. */
 		g_clear_error (&error);
 		zone = NULL;
 	}
@@ -230,15 +224,14 @@ report_zone_lookup (const gchar *prefix,
 	g_clear_object (&property);
 }
 
-/* How long EDS says the event lasts, reported as both of the lines that can say
- * so.
+/* Report the length of the event from both of the lines that can give it.
  *
- * Two observations rather than one resolved length, because which line carries it
- * is itself the measurement: the mapping writes a `DURATION`, Evolution's editor
- * writes a `DTEND`, and RFC 5545 §3.6.1 allows only one of them on a component. So
- * the pair says which of the two shapes came back — and an event that came back
- * with neither, or with both, is a different bug from one that came back the wrong
- * length. */
+ * Two observations, not one resolved length, because the line that has the
+ * length is part of the measurement. The mapping writes a `DURATION`, the
+ * Evolution editor writes a `DTEND`, and RFC 5545 §3.6.1 permits only one of
+ * them on a component. Thus the pair shows which form came back. An event
+ * with neither line, or with both, is a different bug from an event with the
+ * wrong length. */
 static void
 report_length (const gchar *prefix,
 	       ICalComponent *event)
@@ -264,27 +257,26 @@ report_length (const gchar *prefix,
 	}
 }
 
-/* Move the appointment: retype the wall clock its `DTSTART` states, and state how
- * long it now lasts as an end rather than as a length.
+/* Move the appointment: change the wall-clock time of its `DTSTART`, and give
+ * its new length as an end, not as a duration.
  *
- * The start is edited *in place* — the value of the property already there, with
- * every parameter on it left alone — which is the same content line Evolution
- * produces by a different route. Its editor builds an ECalComponentDateTime and
- * calls e_cal_component_set_dtstart, which writes the value and puts back the
- * `TZID` it was given; what reaches the backend either way is the same
- * `DTSTART;TZID=…:…`. Doing it in place here is not a shortcut but the point: this
- * program must not name the zone, or it would be supplying the answer the leg is
- * asking for.
+ * The start is changed in place: the value of the current property changes,
+ * and all its parameters stay. Evolution makes the same content line by a
+ * different path. Its editor makes an ECalComponentDateTime and calls
+ * e_cal_component_set_dtstart, which writes the value and the `TZID` that it
+ * got. In both cases, the backend gets the same `DTSTART;TZID=…:…`. The
+ * in-place edit is necessary: this program must not name the zone, because
+ * then it would supply the answer that the test examines.
  *
- * The end is a new property carrying the `TZID` read off that same `DTSTART`,
- * because an event whose two clocks are in different zones is a shape neither
- * Evolution writes nor this mapping can resolve. And the `DURATION` the mapping
- * drew is removed beside it: RFC 5545 §3.6.1 makes the two mutually exclusive, so
- * leaving it would hand the backend a component no reader has to make sense of —
- * and would leave it open which of the two the length came from.
+ * The end is a new property with the `TZID` of that `DTSTART`, because
+ * Evolution does not write an event with two clocks in different zones, and
+ * this mapping cannot resolve one. The `DURATION` from the mapping is
+ * removed. RFC 5545 §3.6.1 makes the two mutually exclusive, so a component
+ * with both is not valid, and the source of the length would be unclear.
  *
- * FALSE when the component states no start, or when libical would not read the
- * end back: either is this program failing to make the edit, not an observation. */
+ * FALSE when the component has no start, or when libical cannot read the end
+ * back. Each is a failure of this program to make the edit, not an
+ * observation. */
 static gboolean
 move_event (ICalComponent *event,
 	    const gchar *new_start,
@@ -326,9 +318,10 @@ move_event (ICalComponent *event,
 	return TRUE;
 }
 
-/* Ask for one event until EDS has it, or give up. cal-edit-client.c's
- * wait_for_event: a miss arrives as E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND rather
- * than as a failure of the call, so it is cleared and retried. */
+/* Ask for one event until EDS has it, or stop. This is wait_for_event of
+ * cal-edit-client.c: a miss is E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, not a
+ * failure of the call, so the error is cleared and the request is sent
+ * again. */
 static ICalComponent *
 wait_for_event (ECalClient *cal,
 		const gchar *uid)
@@ -349,17 +342,17 @@ wait_for_event (ECalClient *cal,
 	return NULL;
 }
 
-/* Send an edited component back and report what EDS hands out for the event
- * afterwards, under `prefix`.
+/* Send an edited component back and report, with `prefix`, what EDS returns
+ * for the event after the save.
  *
- * The read-back is a plain get rather than a wait: the event is certainly in the
- * cache by now — a save the backend accepted is a save it has already stored — so
- * an answer of "not found" here is a finding rather than a race to sleep through.
+ * The read-back is a plain get, not a wait. The event is in the cache: the
+ * backend stores a save before it accepts it. Thus "not found" here is a
+ * finding, not a race.
  *
- * The same observations as the read loop makes, and in the same order, because
- * what the leg compares is exactly a before and an after; a shorter report after a
- * save would leave the assertions with nothing to hold the save to. 0 on success,
- * and the program's exit status otherwise. */
+ * The observations and their order are the same as in the read loop, because
+ * the test compares a before and an after. A shorter report after a save
+ * would give the assertions nothing to compare. 0 on success, else the exit
+ * status of the program. */
 static int
 save_and_report (ECalClient *cal,
 		 ICalComponent *event,
@@ -397,10 +390,10 @@ save_and_report (ECalClient *cal,
 	return 0;
 }
 
-/* The read mode: report the seeded events, then make the two saves to the first
- * of them. `argv[first]` onwards are the event UIDs.
+/* The read mode: report the seeded events, then do the two saves to the
+ * first event. The event UIDs start at `argv[first]`.
  *
- * 0 on success, and the program's exit status otherwise. */
+ * 0 on success, else the exit status of the program. */
 static int
 run_read (ECalClient *cal,
 	  const gchar *new_summary,
@@ -416,7 +409,7 @@ run_read (ECalClient *cal,
 	int status;
 	int index;
 
-	/* The first event on the command line, and the one the saves are made to. */
+	/* The first event on the command line gets the saves. */
 	saved_uid = argv[first];
 
 	for (index = first; index < argc; index++) {
@@ -438,10 +431,10 @@ run_read (ECalClient *cal,
 
 		g_print ("%s-summary=%s\n", prefix, i_cal_component_get_summary (event));
 		g_print ("%s-definitions=%u\n", prefix, definition_count (fetched));
-		/* The VEVENT rather than what wrapped it, which is safe because libical
-		 * resolves a TZID against the component *and its parents*: first_vevent
-		 * hands back a child of `fetched` with its parent link intact, so a
-		 * VTIMEZONE standing in the VCALENDAR is still in reach from here. */
+		/* Use the VEVENT, not its wrapper. This is safe because libical resolves
+		 * a TZID against the component and its parents. first_vevent returns a
+		 * child of `fetched` with its parent link, so a VTIMEZONE in the
+		 * VCALENDAR is still available from here. */
 		functional_report_start (prefix, event);
 		report_zone_lookup (prefix, cal, event);
 		report_length (prefix, event);
@@ -451,16 +444,15 @@ run_read (ECalClient *cal,
 		g_object_unref (fetched);
 	}
 
-	/* And the first save. The event is asked for again rather than kept from the
-	 * loop above, which costs one call to a cache that certainly holds it by now
-	 * and keeps the loop's job to reporting.
+	/* The first save. The code gets the event again, not from the loop
+	 * above. This costs one call to a cache that holds the event, and the
+	 * loop only reports.
 	 *
-	 * The title is retyped through i_cal_component_set_summary, which replaces the
-	 * value of the SUMMARY already there and leaves everything around it alone —
-	 * so what goes back is the component EDS handed over with one line rewritten,
-	 * which is what Evolution's appointment editor sends. Nothing here touches the
-	 * DTSTART: the point of this save is that an edit which has nothing to do with
-	 * the zone does not cost the user the zone, and an edit that restated the
+	 * i_cal_component_set_summary changes the value of the current SUMMARY
+	 * and leaves all other lines. Thus the component that goes back is the
+	 * component from EDS with one changed line, as the Evolution appointment
+	 * editor sends. This save does not change the DTSTART: an edit that is not
+	 * about the zone must not lose the zone, and an edit that also stated the
 	 * clock could not tell the two apart. */
 	fetched = wait_for_event (cal, saved_uid);
 	if (!fetched) {
@@ -484,12 +476,11 @@ run_read (ECalClient *cal,
 	if (status != 0)
 		return status;
 
-	/* And the second, which is the edit about the clock and nothing else. Made to
-	 * the component EDS hands back *now* rather than to the one edited above,
-	 * because that is the component a user has in front of them: the save the
-	 * backend just made redrew the event from what the server holds, and an edit
-	 * built on the older copy would be sending back a line the first save may
-	 * already have changed. */
+	/* The second save, which changes only the clock. It edits the component
+	 * that EDS returns now, not the component edited above, because a user
+	 * sees the current component. The last save of the backend made the event
+	 * again from the server data, so an edit of the older copy could send a
+	 * line that the first save changed. */
 	fetched = wait_for_event (cal, saved_uid);
 	if (!fetched) {
 		g_printerr ("get-before-move: EDS no longer has the event %s\n", saved_uid);
@@ -517,15 +508,16 @@ run_read (ECalClient *cal,
 	return status;
 }
 
-/* Whether the component replaces an occurrence of a series rather than being one
- * — RFC 5545 §3.8.4.4's `RECURRENCE-ID`, cal-client.c's is_detached_instance.
+/* Whether the component replaces an occurrence of a series and is not the
+ * series: the `RECURRENCE-ID` of RFC 5545 §3.8.4.4. This is
+ * is_detached_instance of cal-client.c.
  *
- * Asked because `e_cal_client_get_object_sync` answers a request for an instance
- * EDS holds no detached copy of with the master, and the master of the series
- * `series` builds is a component with the right UID, the right summary and the
- * *unmoved* clock. Without this the mode's whole failure — a move EDS did not
- * keep — would read as an event on the series' own zone, which is also what a
- * save that lost the moved zone looks like. They are not the same bug. */
+ * Necessary because `e_cal_client_get_object_sync` returns the master when
+ * EDS has no detached copy of the instance. The master that `series` makes
+ * has the correct UID, the correct summary and the old clock. Without this
+ * check, a move that EDS did not keep looks like an event in the zone of the
+ * series. A save that lost the moved zone looks the same, but it is a
+ * different bug. */
 static gboolean
 is_detached_instance (ICalComponent *event)
 {
@@ -541,26 +533,25 @@ is_detached_instance (ICalComponent *event)
 	return TRUE;
 }
 
-/* Hand the calendar the `VTIMEZONE` in `path`, report the identifier libical read
- * off it under `report_key`, and give that identifier back to the caller.
+/* Give the calendar the `VTIMEZONE` in `path`, report the identifier that
+ * libical read from it as `report_key`, and return that identifier.
  *
- * The zone comes out of a file rather than out of this program, so that what
- * defines it and what asserts about it are the same text: the test writes the
- * file and holds the mock to the definition it wrote. The `TZID` is read back off
- * the zone EDS made of it rather than passed separately, which keeps this program
- * from being able to name a zone the file did not — and is reported, because a
- * definition libical filed under some other name would leave every later `TZID`
- * naming a zone nobody wrote.
+ * The zone comes from a file, not from this program, so that the definition
+ * and the assertions use the same text: the test writes the file and checks
+ * the mock against it. The `TZID` comes from the zone that libical made, not
+ * from a separate argument, so this program cannot name a zone that the file
+ * does not. It is reported because, if libical used a different name, all
+ * later `TZID`s would name a zone that nobody wrote.
  *
- * `e_cal_client_add_timezone_sync` is what Evolution calls before saving an
- * appointment whose zone came from an invitation rather than from a database, and
- * it is the only way such a definition reaches a backend at all: EDS strips the
- * `VTIMEZONE` out of the component on its way through and keeps it in the
- * calendar's own timezone store.
+ * Evolution calls `e_cal_client_add_timezone_sync` before it saves an
+ * appointment whose zone came from an invitation, not from a database. It is
+ * the only path for such a definition to a backend: EDS removes the
+ * `VTIMEZONE` from the component and keeps it in the timezone store of the
+ * calendar.
  *
- * The identifier is copied rather than borrowed from the zone, so that the caller
- * may build components with it after this has dropped its reference. NULL when
- * anything failed, having said what on stderr. */
+ * The identifier is a copy, so that the caller can use it after this function
+ * releases its reference to the zone. NULL on failure, after a message on
+ * stderr. */
 static gchar *
 add_zone_from_file (ECalClient *cal,
 		    const gchar *path,
@@ -585,10 +576,10 @@ add_zone_from_file (ECalClient *cal,
 		return NULL;
 	}
 
-	/* i_cal_timezone_set_component takes the component (see its documentation:
-	 * "the zone assumes ownership of the comp"), so the definition is not
-	 * unreffed here — and on the failure path it is left to the zone too, since
-	 * what it did with it is exactly what is not known. */
+	/* i_cal_timezone_set_component takes ownership of the component (its
+	 * documentation: "the zone assumes ownership of the comp"), so the
+	 * definition is not unreffed here. On the failure path the zone also keeps
+	 * it, because its state is not known. */
 	zone = i_cal_timezone_new ();
 	if (!zone || !i_cal_timezone_set_component (zone, definition)) {
 		g_printerr ("zone-file: libical would not make a zone of %s, which "
@@ -621,13 +612,12 @@ add_zone_from_file (ECalClient *cal,
 	return owned;
 }
 
-/* The create mode: hand the calendar the `VTIMEZONE` in `zone_path`, create an
- * event that refers to it, and report what EDS hands back for that event.
+/* The create mode: give the calendar the `VTIMEZONE` in `zone_path`, create
+ * an event that refers to it, and report what EDS returns for that event.
  *
- * The zone reaches the calendar through add_zone_from_file, which is where the
- * route it takes is written down.
+ * add_zone_from_file describes the path of the zone to the calendar.
  *
- * 0 on success, and the program's exit status otherwise. */
+ * 0 on success, else the exit status of the program. */
 static int
 run_create (ECalClient *cal,
 	    const gchar *zone_path,
@@ -647,11 +637,10 @@ run_create (ECalClient *cal,
 	if (!tzid)
 		return 1;
 
-	/* The UID is this program's own, as Evolution's is its own: it is a local
-	 * name, and what the server files the event under is what create_object
-	 * hands back. The length is a DURATION because that is the shape the mapping
-	 * writes, so a read-back that states one has been through the round trip
-	 * rather than past it. */
+	/* The UID is a local name of this program, as Evolution uses its own. The
+	 * server chooses the UID of the event, which create_object returns. The
+	 * length is a DURATION because the mapping writes that form, so a read-back
+	 * with a DURATION went through the round trip. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-client-zone\r\n"
@@ -714,27 +703,26 @@ run_create (ECalClient *cal,
 	return 0;
 }
 
-/* The series mode: hand the calendar both `VTIMEZONE`s, create a recurring event
- * in the first zone, drag one occurrence of it into the second, and report what
- * EDS hands back for that occurrence.
+/* The series mode: give the calendar both `VTIMEZONE`s, create a recurring
+ * event in the first zone, move one occurrence into the second zone, and
+ * report what EDS returns for that occurrence.
  *
- * Two saves, and the second is the one the mode exists for. The create states the
- * whole event, so the definition of the series' zone travels the way the create
- * mode already measured; the move is an *update* to an event the server holds,
- * where the `timeZones` map is the server's own and the mapping may only add to
- * it. Nothing short of real EDS can put the two in that order — the second save
- * has to find the first's map already at the server.
+ * Two saves; the second is the subject of this mode. The create sends the
+ * full event, so the definition of the series zone goes as in the create
+ * mode. The move is an update to an event that the server holds. There, the
+ * `timeZones` map belongs to the server and the mapping can only add to it.
+ * Only real EDS can do the two saves in that order: the second save must find
+ * the map of the first on the server.
  *
- * The move is written as a whole component with the series' UID, a
- * `RECURRENCE-ID` naming the instance it replaces, and its own `DTSTART`, which
- * is what Evolution's "Edit this occurrence" hands over; `E_CAL_OBJ_MOD_THIS` is
- * what tells EDS this replaces one instance rather than the series. Its length is
- * the series' length, so that nothing but the clock and the zone differ between
- * the instance and the rule that generated it — a duration that differed would
- * ride out in the same patch and leave it open which member the server's answer
- * came from.
+ * The move is a full component with the UID of the series, a `RECURRENCE-ID`
+ * that identifies the replaced instance, and its own `DTSTART`. This is what
+ * "Edit this occurrence" in Evolution sends. `E_CAL_OBJ_MOD_THIS` tells EDS
+ * that it replaces one instance, not the series. Its length is equal to the
+ * length of the series, so only the clock and the zone are different from
+ * the rule. A different duration would go in the same patch, and it would be
+ * unclear which member caused the answer of the server.
  *
- * 0 on success, and the program's exit status otherwise. */
+ * 0 on success, else the exit status of the program. */
 static int
 run_series (ECalClient *cal,
 	    const gchar *zone_path,
@@ -765,9 +753,9 @@ run_series (ECalClient *cal,
 		return 1;
 	}
 
-	/* The rule rides in the text with everything else, unlike cal-client.c's
-	 * series: a RRULE carries no zone, so writing it out is not the shortcut
-	 * that spelling an identifier would be. */
+	/* The rule is in the text with all other lines, unlike the series in
+	 * cal-client.c. An RRULE has no zone, so text here does not hardcode an
+	 * identifier. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-client-zone-series\r\n"
@@ -838,11 +826,11 @@ run_series (ECalClient *cal,
 
 	g_object_unref (event);
 
-	/* Asked for by the pair, UID and RECURRENCE-ID: the id is a wall-clock time
-	 * on the series' zone, which is the string ECalCache keys a detached
-	 * instance on. A plain get is enough — a save the backend accepted is a save
-	 * it has already stored, so "not found" here would be a finding rather than
-	 * a race to sleep through. */
+	/* Request it by the pair, UID and RECURRENCE-ID. The id is a wall-clock
+	 * time in the zone of the series, and ECalCache uses that string as the
+	 * key of a detached instance. A plain get is sufficient: the backend
+	 * stored the save before it accepted it, so "not found" is a finding, not
+	 * a race. */
 	if (!e_cal_client_get_object_sync (cal, series_uid, recurrence_id, &fetched,
 					   NULL, &error)) {
 		g_free (series_uid);
@@ -900,10 +888,9 @@ main (int argc,
 
 	int status;
 
-	/* What each mode takes. Checked here rather than in each, because a mode run
-	 * with too few arguments would otherwise read past the end of argv — and
-	 * `read` is the one that cannot say "exactly": it takes one event UID or
-	 * several. */
+	/* The number of arguments of each mode. The check is here, not in each
+	 * mode, because too few arguments would cause a read past the end of argv.
+	 * `read` takes one or more event UIDs, so its count is a minimum. */
 	static const struct {
 		const gchar *name;
 		int arguments;
@@ -945,21 +932,22 @@ main (int argc,
 		return 1;
 	}
 
-	/* (guint32) -1 is EDS's "do not wait for connected". A program shaped like
-	 * this one cannot use the built-in wait — it blocks the only thread that
-	 * would iterate the context the notification arrives on, so it always
-	 * expires — and waiting properly is what functional_report_connection_status
-	 * below is for. See "Why the clients pass 'do not wait for connected'" in
+	/* (guint32) -1 is the EDS value for "do not wait for connected". This
+	 * program cannot use the built-in wait: it blocks the only thread that
+	 * would iterate the context that gets the notification, so the wait always
+	 * expires. functional_report_connection_status below does the wait. See
+	 * "Why the clients pass 'do not wait for connected'" in
 	 * docs/functional-tests.md. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);
 
-	/* Reported before anything is asked of the calendar, for the reason its
-	 * twins give: e_cal_client_connect_sync succeeds even when the backend's
-	 * connect_sync failed, so a calendar the backend never opened looks from
-	 * here exactly like one it opened and forgot to claim writable. */
+	/* Reported before the first request to the calendar, for the reason that
+	 * the other calendar clients give: e_cal_client_connect_sync succeeds also
+	 * when connect_sync of the backend failed. Without this, a calendar that
+	 * the backend did not open looks the same as one that it did not mark
+	 * writable. */
 	functional_report_connection_status (source, 10);
 
 	cal = E_CAL_CLIENT (client);

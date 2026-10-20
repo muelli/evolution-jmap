@@ -1,38 +1,27 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Track E Path A's `get_free_busy_sync`, proven through a real, running
- * `evolution-calendar-factory` rather than the in-process fixtures
- * `jmap-backend-cal/tests/{backend,ops}.rs` stop at: an ordinary libecal
- * consumer that opens a calendar (which is what makes the factory dlopen
- * libecalbackendjmap.so and keeps a live `ECalMetaBackend` instance
- * watching this source), then asks the same question the meeting
- * scheduler's free/busy panel asks — `e_cal_client_get_free_busy_sync()`
- * for one address over a window — the way `cal-color-client.c` is the
- * missing FFI link for D2's colour push. It knows nothing about JMAP or
- * the mock: what it drives is EDS's own `ECalBackendSyncClass::
- * get_free_busy_sync` slot, which `jmap-backend-cal/src/backend.rs`
- * installs and `jmap-cal-sync/src/freebusy.rs::CalSync::free_busy` answers
- * with a `Principal/query` + `Principal/getAvailability` round trip to the
- * server.
+ * Tests `get_free_busy_sync` through a real `evolution-calendar-factory`.
+ * The tests in `jmap-backend-cal/tests/{backend,ops}.rs` use only in-process
+ * fixtures. This libecal client opens a calendar and calls
+ * `e_cal_client_get_free_busy_sync()` for one address over a time window,
+ * as the free/busy panel of the meeting editor does. It has no JMAP code.
+ * `jmap-backend-cal/src/backend.rs` installs the
+ * `ECalBackendSyncClass::get_free_busy_sync` slot, and
+ * `jmap-cal-sync/src/freebusy.rs::CalSync::free_busy` sends
+ * `Principal/query` and `Principal/getAvailability` to the server.
  *
- * Everything around this program — the scratch XDG tree, the `.source`
- * keyfile, the private D-Bus session, the mock server and every assertion —
- * belongs to `rust/crates/jmap-functional/tests/calendar-free-busy.rs`,
- * which runs it and reads its output. So this file has no test framework in
- * it and no notion of what "correct" is: it reports what EDS told it on
- * stdout, one `key=value` line per observation, and exits non-zero the
- * moment a call fails.
+ * `rust/crates/jmap-functional/tests/calendar-free-busy.rs` creates the
+ * scratch XDG tree, the `.source` keyfile, the private D-Bus session and the
+ * mock server, and it does all the assertions. This program writes one
+ * `key=value` line on stdout for each observation. It exits non-zero when a
+ * call fails.
  *
  *   usage: functional-cal-free-busy-client <source-uid> <user-email> \
  *              <window-start> <window-end>
  *
- * <window-start>/<window-end> are iCalendar UTC `DATE-TIME`s
- * (e.g. "20260901T080000Z"), parsed with `i_cal_time_new_from_string()` and
- * converted to the `time_t`s `e_cal_client_get_free_busy_sync()` takes —
- * the Rust side states the window that way rather than as a raw `time_t`
- * so the one window literal it and this client share reads the same in
- * both languages.
+ * <window-start> and <window-end> are iCalendar UTC `DATE-TIME`s, for
+ * example "20260901T080000Z". The client converts them to `time_t`.
  */
 
 #include <libecal/libecal.h>
@@ -65,12 +54,8 @@ parse_utc (const gchar *text)
 	return result;
 }
 
-/* One line per FREEBUSY property the server's answer carried, in the order
- * libical stored them. `i_cal_property_get_value_as_string()` reads the
- * period text ("<start>/<end>") verbatim rather than through `ICalPeriod`
- * accessors, the same reasoning `cal-client.c::joined_values` gives for
- * every other property this tree reads as text: it reports what the
- * component states, not what a second layer of conversion made of it. */
+/* Prints one line for each FREEBUSY property, in libical order. The period
+ * text ("<start>/<end>") is read as text, so that no conversion changes it. */
 static void
 report_free_busy_periods (ICalComponent *component)
 {
@@ -136,8 +121,7 @@ main (int argc,
 		return 2;
 	}
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry, which reads the scratch sources. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -148,11 +132,8 @@ main (int argc,
 		return 1;
 	}
 
-	/* A real server needs a password the mock never checks, and nothing
-	 * here has a GUI to be prompted through. Stored the ordinary way EDS
-	 * looks one up for Basic auth, mirroring `cal-live-client.c`'s own
-	 * step. Unset for every test against the mock, which needs no
-	 * password at all. */
+	/* A real server needs a password and no GUI prompt is available. Store
+	 * it where EDS looks for Basic auth. The mock tests do not set it. */
 	{
 		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 
@@ -161,10 +142,8 @@ main (int argc,
 			return fail ("store-password", error);
 	}
 
-	/* Activates evolution-calendar-factory and keeps a live backend
-	 * instance running for the rest of this process's life —
-	 * `get_free_busy_sync` only ever fires on a backend that is connected
-	 * and holding the JMAP client this test is actually exercising. */
+	/* Starts evolution-calendar-factory and keeps a backend alive.
+	 * `get_free_busy_sync` runs only on a connected backend. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)

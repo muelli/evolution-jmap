@@ -1,48 +1,44 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The hourly-re-consent acceptance test, made headless.
+ * A headless acceptance test for the hourly re-consent bug.
  *
- * The hourly re-consent fix: a pooled connection that keeps an access token
- * past its expiry, gets a 401, and escalates that to a consent window
- * instead of refreshing, now fixed at all four call sites. What it did not
- * have is a test that drives it through a *real* `CamelService` in the
- * process Camel dlopens the provider into. An earlier attempt concluded such
- * a test could not be built headlessly, "because the refresh path needs a
- * real CamelService registered on a real CamelSession (EMailSession)". This
- * program is the disproof.
+ * In that bug, a pooled connection keeps an access token after it expires,
+ * gets a 401, and opens a consent window instead of a token refresh. This
+ * program tests the fix through a *real* `CamelService`, in the process that
+ * Camel dlopens the provider into. An earlier analysis said that such a test
+ * could not be headless, "because the refresh path needs a real CamelService
+ * registered on a real CamelSession (EMailSession)". This program shows that
+ * the analysis was wrong.
  *
- * `functional-mail-client` already builds the real `CamelService` half: it is
- * an ordinary libcamel consumer, and the store it opens is the one Camel
- * found by reading `libcameljmap.urls`. The only thing a plain `CamelSession`
- * does not do is answer `get_oauth2_access_token_sync`, which is a class
- * method — so this program subclasses `CamelSession` and answers it, exactly
- * as `EMailSession` does (evolution-data-server 3.52.3,
- * `libemail-engine/e-mail-session.c`, `mail_session_get_oauth2_access_token_
- * sync`). Where that one looks the service's `ESource` up in the registry and
- * forwards to `e_source_get_oauth2_access_token_sync`, this one reads a file
- * the harness writes. That substitution is the whole point rather than a
- * shortcut: what matters here is whether *this provider* asks its session
- * for a fresh token and retries, not whether EDS's own OAuth 2.0 machinery can
- * mint one — which `functional-oauth2-stale-proxy` and
- * `functional-secret-store-lock` already cover from the registry side.
+ * As in `functional-mail-client`, the store is the one that Camel finds
+ * through `libcameljmap.urls`. A plain `CamelSession` does not answer the
+ * `get_oauth2_access_token_sync` class method. Thus this program subclasses
+ * `CamelSession` and answers it, as `EMailSession` does (evolution-data-server
+ * 3.52.3, `libemail-engine/e-mail-session.c`,
+ * `mail_session_get_oauth2_access_token_sync`). `EMailSession` finds the
+ * `ESource` of the service in the registry and calls
+ * `e_source_get_oauth2_access_token_sync`. This program reads a file from the
+ * harness instead. This change is intentional: the test checks that *this
+ * provider* asks its session for a new token and tries again. It does not
+ * check the OAuth 2.0 code of EDS. `functional-oauth2-stale-proxy` and
+ * `functional-secret-store-lock` test that from the registry side.
  *
  * ## The handshake
  *
- * A token goes stale while a connection is open, which is a thing that has to
- * happen *between* two of this program's own calls. The Rust harness owns the
- * mock and therefore owns the rotation, so the two sides meet at two files:
- * this program writes `ready` once it has a connected store with a folder
- * listing already fetched, then waits for `go`, which the harness creates
- * after it has told the mock to accept a different bearer token. See
- * `rust/crates/jmap-functional/tests/mail-stale-token.rs`.
+ * The token must become stale between two calls of this program, while the
+ * connection is open. The Rust harness controls the mock and thus the token
+ * rotation, so the two sides use two files. This program writes `ready` after
+ * it has a connected store and a first folder listing. Then it waits for `go`.
+ * The harness creates `go` after it tells the mock to accept a different
+ * bearer token. See `rust/crates/jmap-functional/tests/mail-stale-token.rs`.
  *
- * ## What is reported
+ * ## The output
  *
- * Both counters, before and after — the point of the exercise is not only
- * that the second listing succeeded but that it took exactly one extra token
- * fetch to do it, and no re-authentication. A provider that reconnected from
- * scratch would also answer the listing, and would be the bug this is about.
+ * Both counters, before and after the rotation. The second listing must
+ * succeed with exactly one more token fetch and no new authentication. A
+ * provider that reconnected from the start would also give the listing, and
+ * that is the bug.
  *
  *   usage: functional-mail-stale-token-client <source-uid> <token-file> <ready-file> <go-file>
  */
@@ -50,16 +46,15 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
-/* How long to wait for the harness's `go` file. Generous: the harness has to
- * notice `ready`, and it polls. A limit at all is so that a harness that died
- * fails this program instead of hanging the ctest run. */
+/* The time limit for the `go` file of the harness. It is long, because the
+ * harness polls for `ready`. The limit makes this program fail, not hang the
+ * ctest run, when the harness stops. */
 #define HANDSHAKE_TIMEOUT_SECONDS 60
 #define HANDSHAKE_POLL_MICROSECONDS (50 * 1000)
 
-/* The file this session's `get_oauth2_access_token_sync` answers out of, and
- * the two counters it and `authenticate_sync` keep. Statics because there is
- * one session in this process and one of each question to answer about it;
- * the alternative is instance fields whose only reader is `main`. */
+/* The token file for `get_oauth2_access_token_sync`, and the counters of that
+ * vfunc and `authenticate_sync`. They are static because the process has one
+ * session, and only `main` reads them. */
 static const gchar *token_file = NULL;
 static guint token_fetches = 0;
 static guint authenticate_calls = 0;
@@ -76,11 +71,10 @@ GType test_session_get_type (void) G_GNUC_CONST;
 
 G_DEFINE_TYPE (TestSession, test_session, CAMEL_TYPE_SESSION)
 
-/* `EMailSession`'s vfunc, with the registry lookup replaced by a file read —
- * see this file's header for why that substitution is the point. The token is
- * re-read on every call rather than cached, which is what makes a refresh
- * observable at all: the harness rewrites the file between the two calls in
- * the positive case, and deliberately does not in the negative one. */
+/* The `EMailSession` vfunc, with a file read instead of the registry lookup
+ * (the file header gives the reason). Each call reads the file again, without
+ * a cache, so a refresh is visible. The harness changes the file between the
+ * two calls in the positive case, and not in the negative case. */
 static gboolean
 test_session_get_oauth2_access_token_sync (CamelSession *session,
 					   CamelService *service,
@@ -96,9 +90,9 @@ test_session_get_oauth2_access_token_sync (CamelSession *session,
 	if (!g_file_get_contents (token_file, &contents, NULL, error))
 		return FALSE;
 
-	/* The harness writes the token with no trailing newline, but a file
-	 * that grew one would otherwise send a bearer token the mock has
-	 * never heard of and fail this test for the wrong reason. */
+	/* The harness writes no trailing newline. Remove whitespace anyway: a
+	 * token with a newline is unknown to the mock and fails the test for
+	 * the wrong reason. */
 	g_strstrip (contents);
 
 	if (out_access_token)
@@ -112,11 +106,10 @@ test_session_get_oauth2_access_token_sync (CamelSession *session,
 	return TRUE;
 }
 
-/* Counted, then handed to the base class unchanged: this is the escalation
- * this test exists to catch. A 401 that the provider answered by
- * re-authenticating from scratch — rather than by refreshing the token on
- * the connection it already has — is what puts a consent window in front of
- * the user, and it would show up here as a second call. */
+/* Count the call, then give it to the base class. This test looks for this
+ * escalation. If the provider answers a 401 with a new authentication instead
+ * of a token refresh on its connection, the user sees a consent window. This
+ * shows as a second call here. */
 static gboolean
 test_session_authenticate_sync (CamelSession *session,
 				CamelService *service,
@@ -154,9 +147,8 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* The folder tree, flattened into a sorted, comma-joined line — the same
- * shape `functional-mail-client` reports, and for the same reason: the order
- * a store hands its folders over in is the provider's business. */
+/* Writes the folder tree as one sorted, comma-separated line, as
+ * `functional-mail-client` does. The provider controls the folder order. */
 static void
 report_folder_names (const gchar *key,
 		     CamelFolderInfo *info)
@@ -185,9 +177,8 @@ report_folder_names (const gchar *key,
 	g_ptr_array_unref (names);
 }
 
-/* Tell the harness the connection is up and settled, then wait for it to say
- * the server has moved on. Returns FALSE on timeout, which is a dead harness
- * rather than anything this test is about. */
+/* Tell the harness that the connection is ready, then wait for the server
+ * rotation. Returns FALSE on timeout, which means the harness stopped. */
 static gboolean
 handshake (const gchar *ready_file,
 	   const gchar *go_file,
@@ -282,13 +273,12 @@ main (int argc,
 
 	e_source_camel_configure_service (source, service);
 
-	/* Reported rather than assumed. `jmap-mail` decides an account is an
-	 * OAuth 2.0 one by reading `CamelNetworkSettings:auth-mechanism`
-	 * (`jmap_mail::oauth2::uses_oauth2`), which EDS binds to the keyfile's
-	 * `[Authentication] Method`. If that binding were not what this test
-	 * believes it is, every later observation here would be about a
-	 * password account that happens to send no credentials, and the
-	 * failure would name the connect rather than the cause. */
+	/* Report the mechanism, do not assume it. `jmap-mail` identifies an
+	 * OAuth 2.0 account from `CamelNetworkSettings:auth-mechanism`
+	 * (`jmap_mail::oauth2::uses_oauth2`). EDS binds this to the keyfile
+	 * `[Authentication] Method`. If that binding is different, all later
+	 * results are about a password account with no credentials, and the
+	 * failure shows at the connect, not at the cause. */
 	settings = camel_service_ref_settings (service);
 	g_print ("auth-mechanism=%s\n",
 		 CAMEL_IS_NETWORK_SETTINGS (settings)
@@ -304,11 +294,10 @@ main (int argc,
 
 	store = CAMEL_STORE (service);
 
-	/* The first listing, over the token the connection was built with.
-	 * `REFRESH` on both calls, because `JmapStore::folders` answers out of
-	 * the listing it already holds when the flag is absent — a second call
-	 * without it would never reach the network and so could never see a
-	 * 401. */
+	/* The first listing, with the original token. Both calls use
+	 * `REFRESH`, because without it `JmapStore::folders` answers from the
+	 * listing that it has. Then the second call does not use the network
+	 * and cannot get a 401. */
 	info = camel_store_get_folder_info_sync (store, NULL, listing_flags, NULL, &error);
 	if (!info)
 		return fail ("folder-info", error);
@@ -321,19 +310,18 @@ main (int argc,
 	if (!handshake (ready_file, go_file, &error))
 		return fail ("handshake", error);
 
-	/* The whole exercise. The connection is the one that already worked;
-	 * the server now refuses the token it carries. Whether this answers is
-	 * reported rather than checked, because it is the observation in both
-	 * directions: the harness runs this program once where the refresh can
-	 * succeed and once where it cannot. */
+	/* The main step. The connection worked before, but the server now
+	 * refuses its token. Report the result, do not check it: the harness
+	 * runs this program once where the refresh can succeed and once where
+	 * it cannot. */
 	info = camel_store_get_folder_info_sync (store, NULL, listing_flags, NULL, &error);
 	g_print ("second-listing-ok=%d\n", info ? 1 : 0);
 	if (info) {
 		report_folder_names ("folders-after-rotation", info);
 		camel_folder_info_free (info);
 	} else {
-		/* One line, so a multi-line message cannot be read as several
-		 * observations. */
+		/* Use one line, so that a multi-line message does not look
+		 * like many observations. */
 		gchar *message = g_strdelimit (g_strdup (error ? error->message : "(no error set)"),
 					       "\r\n", ' ');
 
@@ -349,9 +337,8 @@ main (int argc,
 	g_object_unref (source);
 	g_object_unref (registry);
 
-	/* Zero even when the second listing failed: which of the two runs this
-	 * is, and therefore whether that is the expected answer, is the
-	 * harness's to know. A non-zero exit here means a step that is not
-	 * what the test is about went wrong. */
+	/* Return zero also when the second listing failed: only the harness
+	 * knows which run this is. A non-zero exit means that a different step
+	 * failed. */
 	return 0;
 }

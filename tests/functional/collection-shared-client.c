@@ -1,28 +1,23 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the shared-collection functional test: the same
- * ordinary `ESourceRegistry` consumer as `collection-client.c`, but it
- * waits for specific children, the ones a share from another account
- * should add to (or, once the share is withdrawn, remove from) the
- * account, instead of for any two.
+ * The client half of the shared collection functional test. It is the same
+ * `ESourceRegistry` client as `collection-client.c`, but it waits for
+ * specific children: the children that a share from a different account
+ * adds to the account, or removes when the share stops.
  *
- * A child is named here as `<kind>:<identity>`, `<kind>` being
- * `address-book` or `calendar` and `<identity>` its `[Resource] Identity`,
- * which for a shared collection is `<accountId>/<collectionId>`: the value
- * both the collection backend and the book/calendar factories read, and
- * which the Rust side knows before the registry does. The kind is part of
- * the name because JMAP ids are only unique per type: an address book and a
- * calendar of the same account can carry the same id, and so the same
- * identity.
+ * The name of a child is `<kind>:<identity>`. `<kind>` is `address-book` or
+ * `calendar`. `<identity>` is the `[Resource] Identity`, which is
+ * `<accountId>/<collectionId>` for a shared collection. The kind is
+ * necessary because a JMAP id is unique only for one type.
  *
- * In `present` mode the client waits until every named identity is a child
- * of the account, then reports each one. In `absent` mode it first reports
- * how many of them the registry loaded from disk at start-up (so the Rust
- * side can tell "removed" from "never there"), then waits until none is
- * left. Either way, a deadline turns a populate that never comes into a
- * report rather than a hang; what is "correct" is decided on the Rust side
- * (`rust/crates/jmap-functional/tests/live-stalwart-collection-shared.rs`).
+ * First, the client reports how many named children the registry loaded
+ * from disk, so the Rust side can tell "removed" from "never there". In
+ * `present` mode it then waits until all named children exist. In `absent`
+ * mode it waits until none exists. A deadline makes a missing populate give
+ * a report, not a hang.
+ * `rust/crates/jmap-functional/tests/live-stalwart-collection-shared.rs`
+ * does the assertions.
  *
  *   usage: functional-collection-shared-client <account-uid> present|absent
  *          <kind>:<identity>...
@@ -32,8 +27,8 @@
 
 #include <libedataserver/libedataserver.h>
 
-/* Covers activating the registry, the authenticate retry and a populate
- * that lists the account's own collections and every shared account's. */
+/* Includes the registry start, the authenticate retry and a populate of the
+ * account and of all shared accounts. */
 #define WAIT_SECONDS 60
 
 typedef struct {
@@ -45,7 +40,7 @@ typedef struct {
 	gint64 deadline;
 } WaitForIdentities;
 
-/* The extension a `<kind>:` prefix names, or NULL. */
+/* The extension for a `<kind>:` prefix, or NULL. */
 static const gchar *
 extension_for_kind (const gchar *kind)
 {
@@ -56,8 +51,8 @@ extension_for_kind (const gchar *kind)
 	return NULL;
 }
 
-/* The child of `parent_uid` that `name` (`<kind>:<identity>`) names, or
- * NULL. Owned by the caller. */
+/* The child of `parent_uid` for `name` (`<kind>:<identity>`), or NULL. The
+ * caller owns it. */
 static ESource *
 child_with_identity (ESourceRegistry *registry,
                      const gchar *parent_uid,
@@ -100,7 +95,7 @@ child_with_identity (ESourceRegistry *registry,
 	return found;
 }
 
-/* How many of the wait's identities are children right now. */
+/* The number of identities that are children now. */
 static guint
 count_present (ESourceRegistry *registry,
                const gchar *parent_uid,
@@ -141,7 +136,7 @@ wait_tick_cb (gpointer user_data)
 	return G_SOURCE_CONTINUE;
 }
 
-/* Polls, for the reason `collection-client.c`'s own wait gives. */
+/* Polls every 100ms, as `collection-client.c` does. */
 static void
 wait_for_identities (ESourceRegistry *registry,
                      const gchar *parent_uid,
@@ -169,8 +164,8 @@ wait_for_identities (ESourceRegistry *registry,
 	g_main_loop_unref (wait.loop);
 }
 
-/* Reports the child for the `index`th identity as `shared-<index>-*`
- * lines, or only `shared-<index>-found=0`. */
+/* Reports the child for identity `index` as `shared-<index>-*` lines, or
+ * only `shared-<index>-found=0`. */
 static void
 report_identity (ESourceRegistry *registry,
                  const gchar *parent_uid,
@@ -245,12 +240,12 @@ main (gint argc,
 	}
 	g_print ("account-found=1\n");
 
-	/* Before the populate this run triggers below can remove anything:
-	 * what the registry loaded from the previous run's `.source` files. */
+	/* What the registry loaded from the `.source` files of the previous run,
+	 * before populate can remove a child. */
 	g_print ("initially-present=%u\n", count_present (registry, account_uid, identities));
 
-	/* Stored against the account and retried, for the reason
-	 * `collection-client.c` gives at the same step. */
+	/* Store the password on the account and authenticate again, as
+	 * `collection-client.c` does. */
 	seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 	if (seed_password && *seed_password) {
 		if (!e_source_store_password_sync (account, seed_password, TRUE, NULL, &error) ||

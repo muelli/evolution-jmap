@@ -1,21 +1,17 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * M9 layer 1, calendar: the twin of `book-client.c`'s `list` phase, for
- * `rust/crates/jmap-functional/tests/calendar-changes.rs` — whether
- * `ECalMetaBackendClass::get_changes_sync` is reached by a real, running
- * `evolution-calendar-factory`, the calendar-side half of the same gap
- * `book-changes.rs` closed for the address book (see that file's own header
- * and NIGHT-LOG's "Delivered: EBookMetaBackendClass::get_changes_sync proven
- * through a real, restarted evolution-addressbook-factory").
+ * The calendar equivalent of the `list` phase in `book-client.c`, for
+ * `rust/crates/jmap-functional/tests/calendar-changes.rs`. The test checks
+ * that a real `evolution-calendar-factory` calls
+ * `ECalMetaBackendClass::get_changes_sync`. `book-changes.rs` does the same
+ * check for the address book.
  *
- * `cal-client.c` one file over never reaches `get_changes_sync` either — it
- * opens its calendar exactly once per process, so every connect there hits
- * `list_existing_sync` (a fresh meta-backend cache has no stored sync tag).
- * Rather than growing that file's already-large, phase-free `main` with a
- * mode argument its ten scenarios have no use for, this is a small, separate
- * client of its own: connect, list every event, print the summaries sorted —
- * the calendar analogue of `book-client.c`'s `list_phase`.
+ * `cal-client.c` does not reach `get_changes_sync`. It opens its calendar
+ * once per process, so each connect calls `list_existing_sync` (a new
+ * meta-backend cache has no stored sync tag). That file has a large `main`
+ * with no phases, thus this separate client connects, lists all events and
+ * prints the sorted summaries, as `list_phase` in `book-client.c` does.
  *
  *   usage: functional-cal-changes-client <source-uid>
  */
@@ -55,8 +51,8 @@ main (int argc,
 
 	source_uid = argv[1];
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry on the session bus. It reads the
+	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -67,11 +63,9 @@ main (int argc,
 		return 1;
 	}
 
-	/* A real server needs a password the mock never checks, and nothing
-	 * here has a GUI to be prompted through. Stored the ordinary way EDS
-	 * looks one up for Basic auth, mirroring `book-client.c`'s/
-	 * `cal-live-client.c`'s own step. Unset for every test against the
-	 * mock, which needs no password at all. */
+	/* A real server needs a password, and this program has no GUI prompt.
+	 * Store it where EDS looks for Basic auth, as `book-client.c` and
+	 * `cal-live-client.c` do. Tests against the mock do not set it. */
 	{
 		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 
@@ -80,9 +74,9 @@ main (int argc,
 			return fail ("store-password", error);
 	}
 
-	/* Activates evolution-calendar-factory, which is what dlopens
-	 * libecalbackendjmap.so; see the same call in cal-client.c for why
-	 * this does not wait for connected. */
+	/* Starts evolution-calendar-factory, which dlopens
+	 * libecalbackendjmap.so. cal-client.c tells why this does not wait for
+	 * connected. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
@@ -90,15 +84,13 @@ main (int argc,
 
 	cal = E_CAL_CLIENT (client);
 
-	/* EDS's own verdict on the connect, waited for properly: against the
-	 * mock this is immediate, but a real server's authenticate_sync does
-	 * not settle until this thread's main context is iterated, which
-	 * nothing else here does — see connection-status.c's own header for
-	 * why `e_client_retrieve_properties_sync` alone is not enough. */
+	/* The EDS result of the connect. With the mock it is immediate. With a
+	 * real server, authenticate_sync completes only when this thread's main
+	 * context iterates. connection-status.c tells why. */
 	functional_report_connection_status (source, 10);
 
-	/* Over the bus rather than out of the client's cached copy; see the
-	 * same call in cal-client.c/book-client.c for why. */
+	/* Read over D-Bus, not from the client cache. cal-client.c and
+	 * book-client.c tell why. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
 		return fail ("retrieve-properties", error);
 

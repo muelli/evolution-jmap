@@ -1,36 +1,32 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * An acceptance test: a 401 that arrives only after a redirect
- * dropped the `Authorization` header must not look like a rejected
- * password. `jmap_client::Error::RedirectCredentialsWithheld`
- * (`rust/crates/jmap-client/src/error.rs`) already keeps that case out of
- * `is_wrong_password()`, but nothing before this file had ever driven a real
- * `EBookMetaBackend` connect through the scenario end to end: the operator's
- * own report was a client that kept escalating to interactive OAuth2
- * consent, never an address book.
+ * An acceptance test: a 401 that occurs after a redirect removed the
+ * `Authorization` header is not a rejected password.
+ * `jmap_client::Error::RedirectCredentialsWithheld`
+ * (`rust/crates/jmap-client/src/error.rs`) is not an HTTP 401 error, thus
+ * `jmap_backend_core::connect::is_wrong_password` returns false for it. This
+ * test does a real `EBookMetaBackend` connect through this scenario. The
+ * operator's report was about a client that repeatedly asked for OAuth2
+ * consent, not about an address book.
  *
- * This client is an ordinary libebook consumer, like `book-client.c`. The
- * account's host/port name a small front door the Rust side runs, which
- * answers every request with a redirect to a different origin (a different
- * port counts: see `jmap_client::url::same_origin`) that then 401s the
- * request the redirect stripped credentials from.
+ * This client is a usual libebook consumer, like `book-client.c`. The
+ * account host and port name a small front door that the Rust side runs.
+ * The front door redirects each request to a different origin (a different
+ * port is sufficient: see `jmap_client::url::same_origin`). That origin
+ * answers with a 401, because the redirect removed the credentials.
  *
- * `jmap_backend_core::connect::credentials`'s own doc explains the first
- * connect: EDS calls `connect_sync` once with no credentials at all before
- * ever consulting the secret store, so this attempt always fails with
- * `CredentialsRequired`
- * (`E_SOURCE_AUTHENTICATION_REQUIRED`) without making any network request:
- * the front door is not hit yet. A real credentials prompter answers the
- * `credentials-required` signal that failure schedules by calling
- * `e_source_invoke_authenticate_sync` with the resolved password, which
- * drives the real second connect this test is actually about: that one
- * reaches the front door, follows the redirect, and gets the 401 that
- * `RedirectCredentialsWithheld` must not escalate any further. EDS's own
- * `ensure_connected_sync` posts `credentials-required` through an idle
- * callback rather than firing it synchronously, so this client iterates the
- * default main context (`settle`) after each attempt to give it a chance to
- * run before checking the count.
+ * The first connect: EDS calls `connect_sync` once with no credentials,
+ * before it reads the secret store (see the doc of
+ * `jmap_backend_core::connect::credentials`). This attempt always fails with
+ * `CredentialsRequired` (`E_SOURCE_AUTHENTICATION_REQUIRED`) and sends no
+ * request to the front door. A real credentials prompter answers the
+ * `credentials-required` signal with `e_source_invoke_authenticate_sync` and
+ * the password. This second connect is the subject of the test: it gets the
+ * redirect and the 401, and `RedirectCredentialsWithheld` must not cause a
+ * new prompt. EDS `ensure_connected_sync` sends `credentials-required` from
+ * an idle callback. Thus the client iterates the default main context
+ * (`settle`) after each attempt, before it reads the count.
  *
  *   usage: functional-redirect-credentials-withheld-client <source-uid> <password>
  */
@@ -61,11 +57,10 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Counted rather than acted on, like `book-stale-token-client.c`'s own copy:
- * in the running application this signal is what puts the credentials
- * prompter in front of the user. The first connect schedules it once, since
- * no password is available yet; a redirect-withheld 401 on the second,
- * credentialed attempt must not schedule it again. */
+/* Count the signal, as `book-stale-token-client.c` does. In the application,
+ * this signal shows the credentials prompter. The first connect sends it
+ * once (no password yet). The 401 on the second attempt must not send it
+ * again. */
 static void
 credentials_required_cb (ESource *source,
                          ESourceCredentialsReason reason,
@@ -79,10 +74,9 @@ credentials_required_cb (ESource *source,
 	(*count)++;
 }
 
-/* See the file header: `e_backend_schedule_credentials_required` posts its
- * signal through an idle callback, so a caller that never iterates the
- * default main context after a sync call would read `credentials_required`
- * as stale. Matches `book-stale-token-client.c`'s own copy. */
+/* `e_backend_schedule_credentials_required` sends its signal from an idle
+ * callback. Iterate the main context after a sync call, or the count is old.
+ * Same value as in `book-stale-token-client.c`. */
 #define SETTLE_MILLISECONDS 1500
 
 static void
@@ -96,10 +90,9 @@ settle (guint milliseconds)
 	}
 }
 
-/* What a real credentials prompter does on `credentials-required`: resolve
- * the password and answer with it explicitly. Passing `NULL` instead tells
- * EDS to resolve credentials itself, which in this headless harness (no
- * Shell, no default-credentials-required listener) resolves to nothing. */
+/* Answer with the password, as a real credentials prompter does. With `NULL`,
+ * EDS gets the credentials itself, and here (no Shell, no
+ * default-credentials-required listener) it gets nothing. */
 static gboolean
 reauthenticate_with_password (ESource *source,
                               const gchar *password,
@@ -136,8 +129,8 @@ main (int argc,
 	source_uid = argv[1];
 	password = argv[2];
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* This starts evolution-source-registry, which reads the scratch sources
+	 * directory. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -148,8 +141,7 @@ main (int argc,
 		return 1;
 	}
 
-	/* Stored ahead of the connect so the second, credentialed attempt below
-	 * has a real password to answer with; the first attempt never consults
+	/* The second attempt uses this password. The first attempt does not read
 	 * it (see the file header). */
 	if (!e_source_store_password_sync (source, password, TRUE, NULL, &error))
 		return fail ("store-password", error);
@@ -157,12 +149,10 @@ main (int argc,
 	g_signal_connect (source, "credentials-required",
 			  G_CALLBACK (credentials_required_cb), &credentials_required);
 
-	/* Activates evolution-addressbook-factory, which dlopens
-	 * libebookbackendjmap.so. This first attempt is expected to fail with
-	 * no password available and no network request made; connect-ok is
-	 * diagnostic only; EDS reports it as success regardless (NULL GError on
-	 * a `CredentialsRequired` failure is indistinguishable from one on a
-	 * genuine connect at this layer). */
+	/* This starts evolution-addressbook-factory, which loads
+	 * libebookbackendjmap.so. The backend connect fails with no password and
+	 * sends no request. connect-ok is only for diagnosis: EDS gives a client
+	 * and no GError also after a `CredentialsRequired` failure. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	settle (SETTLE_MILLISECONDS);
 	observe_boolean ("connect-ok", client != NULL);
@@ -175,9 +165,8 @@ main (int argc,
 		return 1;
 	}
 
-	/* The real second attempt, through the front door, the redirect, and
-	 * the credentials-stripped 401: one explicit answer, the way a real
-	 * credentials prompter supplies one answer per prompt. */
+	/* The second attempt gets the redirect and the 401. Give one answer, as a
+	 * real credentials prompter gives one answer for each prompt. */
 	if (reauthenticate_with_password (source, password, &error)) {
 		observe_boolean ("reauthenticate-ok", TRUE);
 	} else {
@@ -188,11 +177,9 @@ main (int argc,
 	settle (SETTLE_MILLISECONDS);
 	g_print ("credentials-required-after-reauthenticate=%u\n", credentials_required);
 
-	/* No further prompting from this client from here on: settled again
-	 * with nothing else asked, to tell a one-time signal from the
-	 * reauthenticate call above apart from the backend re-escalating on its
-	 * own without being asked again, which is the retry storm this test
-	 * exists to catch. */
+	/* Wait again with no new request. A count that increases here shows that
+	 * the backend asks for credentials again by itself: the retry storm that
+	 * this test must find. */
 	settle (SETTLE_MILLISECONDS);
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");

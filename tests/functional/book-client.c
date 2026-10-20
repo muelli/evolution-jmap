@@ -1,49 +1,48 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the address book functional test: an ordinary
- * libebook consumer, the way Evolution is one. It knows nothing about JMAP
- * and nothing about the mock server — it opens a book by source UID, reads
- * it, writes one contact to it and reads that back, which is the whole of
- * what an address book is for.
+ * The client part of the address-book functional test. It is an ordinary
+ * libebook consumer, as Evolution is. It knows nothing about JMAP or the mock
+ * server. It opens a book by source UID, reads it, writes contacts and reads
+ * them back.
  *
- * Everything around it — the scratch XDG tree, the `.source` keyfile, the
- * private D-Bus session, the mock server and every assertion — belongs to
- * `rust/crates/jmap-functional/tests/address-book.rs`, which runs this
- * program and reads its output. So this file has no test framework in it
- * and no notion of what "correct" is: it reports what EDS told it on
- * stdout, one `key=value` line per observation, and exits non-zero the
- * moment a call fails.
+ * `rust/crates/jmap-functional/tests/address-book.rs` supplies everything
+ * else: the temporary XDG tree, the `.source` keyfile, the private D-Bus
+ * session, the mock server and all assertions. It runs this program and reads
+ * its output. This program has no test framework. It writes what EDS returns
+ * to stdout, one `key=value` line per observation, and exits non-zero when a
+ * call fails.
  *
- * C rather than Rust because this is deliberately the *client* API, which
- * the FFI crates in this repository do not bind: eds-sys carries what the
- * backends implement. Binding a second surface just to call it from a test
- * would put a layer of our own between EDS and the thing under test.
+ * This file is C, not Rust, because it uses the EDS client API. The FFI crates
+ * in this repository do not bind that API: eds-sys contains only the backend
+ * API. A second binding would put a layer of this project between EDS and the
+ * code under test.
  *
- * There are ten phases, chosen on the command line, because they need
- * different books: `write` starts from an empty address book and puts a
- * contact into it, while `edit`, `rename`, `repicture`, `recalendar`,
- * `respouse`, `unspouse`, `renote`, `unnote` and `rehandle` each start from one
- * the mock was seeded with before EDS connected — a card that came from the
- * *server*, which is the only way to have EDS read something no vCard this
- * program could write would produce. Those nine differ only in which field the
- * user changes, and that is the whole distinction under test: `edit` touches a
- * field beside the name, `rename` retypes the name itself, `repicture` replaces
- * the photo, `recalendar` retypes the calendar address, `respouse` retypes who
- * the contact is married to, `unspouse` empties that field instead, `renote`
- * retypes the note on a card carrying two of them, `unnote` empties that field
- * instead, and `rehandle` retypes an instant-messaging handle the server stated
- * as a URI. They are modes of one program rather than separate programs because
- * they open the same book the same way and differ only in what they then ask of
- * it.
+ * The command line selects one of twelve phases, because they need different
+ * books. `write` starts from an empty book and adds a contact. `edit`,
+ * `rename`, `repicture`, `recalendar`, `respouse`, `unspouse`, `renote`,
+ * `unnote` and `rehandle` each start from a card that the mock has before EDS
+ * connects. Thus EDS reads a card that came from the server, which this
+ * program cannot write. These nine phases differ only in the field that the
+ * user changes:
  *
- * `list` is a different kind of phase: it makes no change and asks nothing
- * of a single contact, only what the whole book currently holds, sorted by
- * full name. `rust/crates/jmap-functional/tests/book-changes.rs` runs it
- * twice against one reused on-disk cache, with a contact seeded into the
- * mock's store in between, to see whether a second connect's own
- * post-connect refresh went through `EBookMetaBackendClass::get_changes_sync`
- * rather than `list_existing_sync` again.
+ *   - `edit` changes a field that is not the name.
+ *   - `rename` changes the name.
+ *   - `repicture` replaces the photo.
+ *   - `recalendar` changes the calendar address.
+ *   - `respouse` changes the spouse, and `unspouse` empties that field.
+ *   - `renote` changes the note on a card with two notes, and `unnote`
+ *     empties that field.
+ *   - `rehandle` changes an instant-messaging handle that the server gives
+ *     as a URI.
+ *
+ * `remove` deletes a seeded card.
+ *
+ * `list` makes no change. It prints all contacts in the book, sorted by full
+ * name. `rust/crates/jmap-functional/tests/book-changes.rs` runs it two times
+ * on one on-disk cache, and adds a contact to the mock between the runs. This
+ * shows if the refresh after the second connect uses
+ * `EBookMetaBackendClass::get_changes_sync` and not `list_existing_sync`.
  *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
@@ -66,160 +65,111 @@
 
 #include "connection-status.h"
 
-/* The contact this test writes. The Rust side looks for exactly this name
- * in the mock's store, so the two spellings have to agree; it is passed in
- * rather than hardcoded on both sides. */
+/* The email address of the contact that the `write` phase creates. The Rust
+ * test uses the same value, so the two must agree. */
 #define TEST_EMAIL "dana@example.com"
 
-/* The nickname, which EDS keeps on one NICKNAME line and JSContact keeps as
- * an entry of the `nicknames` map. The comma is the point of this one: RFC
- * 2426 §3.1.3 states the nicknames as a comma-separated list, so a comma the
- * user typed is the character that decides whether one nickname stays one
- * nickname across real EDS, our emitter, and the parser reading it back — or
- * quietly becomes two entries the server is then told about. */
+/* The nickname. EDS keeps it on one NICKNAME line, JSContact in the
+ * `nicknames` map. RFC 2426 §3.1.3 makes NICKNAME a comma-separated list, so
+ * the comma tests that one nickname does not become two entries. */
 #define TEST_NICKNAME "Vee, the tall one"
 
-/* The employer and the department within it, which EDS keeps in the first
- * two components of one ORG line. Written here so the test says what EDS
- * makes of the JSContact `organizations` map, rather than only what our own
- * mapping tests say it should. */
+/* The organization and the unit. EDS keeps them in the first two components of
+ * one ORG line. They test what real EDS does with the JSContact
+ * `organizations` map. */
 #define TEST_ORG "Acme Ltd"
 #define TEST_ORG_UNIT "Research"
 
-/* The postal address, which EDS keeps in the fields of one ADR line and
- * JSContact keeps as a list of named components. Only some of RFC 9553's
- * component kinds have an ADR field, so what this leg says is that the ones
- * that do make the crossing through real EDS, and land in the fields that
- * mean what they meant. TYPE=WORK is what makes it E_CONTACT_ADDRESS_WORK
- * rather than one of the other two synthetic fields. */
+/* The postal address. EDS keeps it in the fields of one ADR line, JSContact as
+ * a list of named components. Only some RFC 9553 component kinds have an ADR
+ * field. This tests that those kinds go through real EDS into the correct
+ * fields. TYPE=WORK selects E_CONTACT_ADDRESS_WORK, not one of the other two
+ * synthetic fields. */
 #define TEST_STREET "Hauptstrasse 1"
 #define TEST_LOCALITY "Berlin"
 #define TEST_CODE "10115"
 #define TEST_COUNTRY "Germany"
 
-/* The same address written out as it would be printed on an envelope, which
- * EDS keeps on a LABEL line of its own and JSContact keeps as the address's
- * `full`. Set here because the pairing is what is worth checking on real
- * EDS: E_CONTACT_ADDRESS_LABEL_WORK is a synthetic field, so EDS rebuilds
- * the line from the text alone and the X-JMAP-KEY naming the address it
- * belongs to does not survive — leaving the TYPE as the only thing that says
- * the label and the ADR above are two views of one address. The newlines are
- * the second half of the point: they are what makes it a label rather than a
- * street, and vCard states them escaped. */
+/* The same address as printed on an envelope. EDS keeps it on a LABEL line,
+ * JSContact in the `full` member of the address. E_CONTACT_ADDRESS_LABEL_WORK
+ * is a synthetic field, so EDS rebuilds the line from the text only, and the
+ * X-JMAP-KEY is lost. Then only the TYPE links the label to the ADR above.
+ * The newlines make it a label, not a street, and vCard escapes them. */
 #define TEST_LABEL TEST_STREET "\n" TEST_CODE " " TEST_LOCALITY "\n" TEST_COUNTRY
 
-/* The job title and the role played, which EDS keeps on separate TITLE and
- * ROLE lines and JSContact keeps in one `titles` map told apart by `kind`.
- * Set here so the test says whether the two halves of that map survive a
- * crossing through real EDS, and come back on the right line each. */
+/* The job title and the role. EDS keeps them on TITLE and ROLE lines,
+ * JSContact in one `titles` map with a `kind` for each. This tests that each
+ * comes back on its correct line through real EDS. */
 #define TEST_TITLE "Research Scientist"
 #define TEST_ROLE "Project Lead"
 
-/* The free-text note, which EDS keeps on one NOTE line and JSContact keeps
- * as an entry of the `notes` map. The semicolon and the comma are here on
- * purpose: they are what vCard gives structural meaning to, and a note is
- * the one mapped property a user types prose into, so this is where the
- * escaping is shown to survive the EDS that reads the line back. */
+/* The note. EDS keeps it on one NOTE line, JSContact in the `notes` map. The
+ * semicolon and the comma have structural meaning in vCard, so they test the
+ * escaping through real EDS. */
 #define TEST_NOTE "met at FOSDEM; owes me a beer, apparently"
 
-/* The home page, which EDS keeps on the first URL line and JSContact keeps as
- * an entry of the `links` map. The comma in the query string is the point of
- * this one: a URI may hold the characters a vCard value gives structural
- * meaning to, and EDS escapes them on the way out — so this is where the URI
- * the user typed is shown to survive real EDS whole, rather than arriving at
- * the server cut off at the comma or carrying a backslash EDS put there. */
+/* The home page. EDS keeps it on the first URL line, JSContact in the `links`
+ * map. EDS escapes the comma in the query string. This tests that the server
+ * gets the full URI, with no cut at the comma and no added backslash. */
 #define TEST_HOMEPAGE "https://dana.example/profile?tags=x-files,ufo"
 
-/* The contact's own calendar and the free/busy data drawn from it, which EDS
- * keeps on CALURI and FBURL — the two fields Evolution shows as Calendar and
- * Free/Busy — and JSContact keeps in one `calendars` map told apart by a `kind`
- * neither line carries. Both are set because the crossing is which line a kind
- * chose: a mapping that put both URIs under one kind would still produce two
- * lines with the right two URIs, and only setting both and reading both back
- * out of their own fields can say they did not swap. */
+/* The calendar and free/busy addresses. EDS keeps them on CALURI and FBURL
+ * (Calendar and Free/Busy in Evolution), JSContact in one `calendars` map with
+ * a `kind` that neither line has. Both are set, to show that they do not swap. */
 #define TEST_CALENDAR_URI "https://dana.example/cal/dana.ics"
 #define TEST_FREEBUSY_URI "https://dana.example/fb/dana.ifb"
 
-/* Who the contact is married to, which EDS keeps on an X-EVOLUTION-SPOUSE line —
- * vCard 3.0 has no RELATED — and JSContact keeps as the *key* of a `relatedTo`
- * entry stating the type `spouse`. The one mapped property whose key crosses
- * rather than its value, so what this checks against real EDS is that the field
- * Evolution shows as Spouse is the line the emitter writes, and that the name on
- * it reaches the server as an entity of its own rather than as a value hung off
- * one. */
+/* The spouse. EDS keeps it on an X-EVOLUTION-SPOUSE line (vCard 3.0 has no
+ * RELATED). JSContact keeps it as the key of a `relatedTo` entry with the type
+ * `spouse`. This tests that the Spouse field in Evolution is the line that the
+ * emitter writes, and that the name becomes a `relatedTo` key on the server. */
 #define TEST_SPOUSE "Fox Mulder"
 
-/* The instant-messaging handle, which EDS keeps on an X-JABBER line and
- * JSContact keeps as an entry of the `onlineServices` map. Set through the
- * per-slot field rather than the multi-valued one, because the slot is what
- * Evolution's contact editor writes and what decides the TYPE the line carries:
- * a line with no TYPE reaches none of these fields at all, so this is where the
- * parameter our emitter writes is shown to be the one real EDS reads. The comma
- * in the handle is the second point — a JSContact `user` is free text, and vCard
- * gives the comma structural meaning — so a handle arriving at the server cut
- * off at it, or carrying the backslash EDS wrote, would show up here. */
+/* The instant-messaging handle. EDS keeps it on an X-JABBER line, JSContact in
+ * the `onlineServices` map. The per-slot field is set, as the Evolution contact
+ * editor does. The slot selects the TYPE, and a line with no TYPE reaches no
+ * field. This tests that real EDS reads the TYPE that the emitter writes. The
+ * comma tests the escaping, because a JSContact `user` is free text. */
 #define TEST_IM_HANDLE "dana,scully@jabber.example"
 
-/* The categories the contact is filed under, which EDS keeps as a list on one
- * CATEGORIES line and JSContact keeps as the `keywords` Set. Two of them,
- * because the crossing is a cardinality rather than a value — one line here,
- * two members there — and the comma inside the second is the point: it is the
- * character that separates the items, so it decides whether two tags stay two
- * tags across real EDS, our emitter and the reader. A tag arriving split would
- * tell the server the contact is filed under three. */
+/* The categories. EDS keeps them as a list on one CATEGORIES line, JSContact
+ * as the `keywords` set. The comma separates items, so the comma in the second
+ * category tests that two categories do not become three. */
 #define TEST_CATEGORY_ONE "Friends"
 #define TEST_CATEGORY_TWO "beer, in Berlin"
-/* What the two are reported as, joined on a character neither of them holds:
- * the harness reads stdout as one `key=value` per line and the comma is the
- * very thing under test, so it cannot also be the delimiter. */
+/* The separator for the reported categories. The comma is under test, so it
+ * cannot be the separator. */
 #define TEST_CATEGORY_SEPARATOR "|"
 
-/* The birthday, which EDS keeps in a structured E_CONTACT_BIRTH_DATE field
- * and JSContact keeps as an `anniversaries` entry dated by a PartialDate.
- * Set here because the crossing is a change of shape rather than of name —
- * three numbers on this side, one date line in between, three JSON members
- * on the other — and because EDS rebuilds that line out of its own field,
- * dropping the X-JMAP-KEY the mapping writes on it. Whether the date still
- * arrives as the birthday it is, on the entry it belongs to, is a claim
- * about real EDS that the mapping's own tests cannot make. */
+/* The birthday. EDS keeps it in the structured E_CONTACT_BIRTH_DATE field,
+ * JSContact as an `anniversaries` entry with a PartialDate. EDS rebuilds the
+ * line from its field and drops the X-JMAP-KEY. This tests that the date
+ * arrives on the correct entry through real EDS. */
 #define TEST_BIRTH_YEAR 1964
 #define TEST_BIRTH_MONTH 3
 #define TEST_BIRTH_DAY 27
 
-/* What the picture this test sets is. The bytes themselves come in on the
- * command line — they are what is compared on the other side, so they are
- * spelled once, there — but the media type is set here beside every other
- * property, because it is what EDS turns into the `TYPE` parameter on the line:
- * measured against libebook-contacts 3.52, EDS writes the subtype alone
- * (`TYPE=png`) and rebuilds `image/png` out of it on the way back, and this is
- * the leg that says our emitter and reader agree with that. */
+/* The media type of the photo. The bytes come from the command line. EDS
+ * makes the `TYPE` parameter from the media type: libebook-contacts 3.52
+ * writes the subtype only (`TYPE=png`) and rebuilds `image/png` when it reads.
+ * This tests that the emitter and the reader agree with EDS. */
 #define TEST_PHOTO_MEDIA_TYPE "image/png"
 
-/* What the NOTE line values are reported joined on. The harness reads stdout as
- * one `key=value` per line and splits this observation itself, so the character
- * has to be one neither note holds — and not one vCard gives structural meaning
- * to either, since the semicolon and the comma inside the notes are exactly what
- * the seeded card carries them to check. */
+/* The separator for the reported NOTE line values. It must not occur in the
+ * notes, and it must not be the semicolon or the comma that the notes test. */
 #define TEST_NOTE_LINE_SEPARATOR "|"
 
-/* How long the `edit` phase waits for the contact the mock was seeded with to
- * become gettable, and how often it asks. EBookMetaBackend answers a get for
- * a contact its cache has never heard of by asking the backend to load it, so
- * the first try is expected to succeed — but the backend also schedules a
- * refresh of its own during the connect, and a get that arrives while that is
- * still running can be answered out of a cache the refresh has not filled
- * yet. Polling turns that ordering into a wait rather than a flake. Ten
- * seconds in total, which is far beyond what a local mock needs and still
- * well inside the CTest timeout, so a genuinely absent contact fails the test
- * rather than hanging it. */
+/* How many times, and how often, wait_for_contact() asks for a seeded contact.
+ * EBookMetaBackend loads an unknown contact from the backend, so the first try
+ * usually succeeds. But a get during the refresh at connect time can read a
+ * cache that is not full yet. The total is 10 seconds, less than the CTest
+ * timeout, so a missing contact fails the test and does not hang it. */
 #define EDIT_WAIT_TRIES 200
 #define EDIT_WAIT_INTERVAL_US 50000
 
-/* Report one observation whose value has line breaks in it. The harness
- * reads stdout as one `key=value` per line, so a raw newline would end the
- * observation early and lose the rest; only the newlines are rewritten, so
- * what is asserted on the other side is still the text EDS gave back rather
- * than some encoding of it. */
+/* Report one observation with line breaks in its value. The test reads one
+ * `key=value` per line, so each newline becomes the two characters "\n". The
+ * remaining text stays as EDS gave it. */
 static void
 report_multiline (const gchar *key,
                   const gchar *value)
@@ -243,11 +193,9 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Report the parts of the name EDS parsed out of the N line. Both are
- * synthetic fields: EDS splits the line's fields into them on the way in and
- * rebuilds the line from them on the way out, so they are what a save hands
- * back to the backend — and, for the given name, the string a JSContact name
- * with more than one component of a kind was flattened into. */
+/* Report the given name and family name that EDS parses from the N line. Both
+ * are synthetic fields, so a save gives them back to the backend. The given
+ * name can hold several JSContact components of one kind, joined. */
 static void
 report_name_fields (const gchar *prefix,
                     EContact *contact)
@@ -259,23 +207,15 @@ report_name_fields (const gchar *prefix,
 	g_print ("%s-family-name=%s\n", prefix, family ? family : "");
 }
 
-/* Report the picture EDS holds for a contact.
+/* Report the photo that EDS has for a contact.
  *
- * Several observations rather than one, because a photo can go wrong in ways
- * that look alike from the outside. `type` is EDS's own verdict on the line: a
- * picture the card carries is `inlined`, one it merely points at is `uri`, and a
- * line EDS could not make either of is no photo at all — which is what the user
- * would be shown, so it is reported as `absent` rather than by leaving the
- * observation out.
+ * `type` is the EDS result for the line: `inlined` for embedded bytes, `uri`
+ * for a reference, and `absent` if EDS can make neither.
  *
- * A picture read back through a book is expected to be a `uri` one, which is
- * not what was written and not this program's doing: `EBookMetaBackend` puts
- * every contact it caches through `store_inline_photos`, which writes the bytes
- * into a file of its own under the book's cache directory and rewrites the line
- * to point at it. So the bytes are reported for either kind — read out of the
- * struct for an inlined photo, and read out of that file for a `file:` URI —
- * because "did the picture survive" is a question about the bytes and not about
- * which of the two shapes EDS chose to keep them in. */
+ * A photo read back through a book is usually `uri`. `EBookMetaBackend` sends
+ * each cached contact through `store_inline_photos`, which writes the bytes to
+ * a file in the book cache directory and points the line at it. Thus the bytes
+ * are reported for both kinds, because the test compares bytes, not form. */
 static void
 report_photo (const gchar *prefix,
               EContact *contact)
@@ -309,9 +249,8 @@ report_photo (const gchar *prefix,
 	g_print ("%s-photo-type=uri\n", prefix);
 	g_print ("%s-photo-uri=%s\n", prefix, uri);
 
-	/* Followed only for a local file, which is the one kind EDS itself
-	 * writes. A picture the *server* pointed at over the network is a URI
-	 * this program has no business fetching. */
+	/* Read only a local file, which is what EDS writes. Do not fetch a
+	 * network URI from the server. */
 	path = g_filename_from_uri (uri, NULL, NULL);
 	if (path && g_file_get_contents (path, &contents, &length, NULL)) {
 		base64 = g_base64_encode ((const guchar *) contents, length);
@@ -324,14 +263,9 @@ report_photo (const gchar *prefix,
 	e_contact_photo_free (photo);
 }
 
-/* Report the two calendaring addresses EDS holds for a contact, each out of the
- * field it belongs to.
- *
- * Both together and never one alone: the mapping tells them apart by a `kind`
- * that neither CALURI nor FBURL carries, so the failure worth catching is the
- * two having swapped — which is invisible to whichever of them is asked about on
- * its own. An unset field is reported as the empty string rather than left out,
- * so a leg can say a resource is absent. */
+/* Report the two calendar addresses that EDS has for a contact, each from its
+ * own field. Both are reported together, because the failure to find is a swap.
+ * An unset field gives the empty string. */
 static void
 report_calendars (const gchar *prefix,
                   EContact *contact)
@@ -343,14 +277,9 @@ report_calendars (const gchar *prefix,
 	g_print ("%s-freebusy-uri=%s\n", prefix, freebusy ? freebusy : "");
 }
 
-/* Report who EDS says the contact is married to.
- *
- * One field and one line, but the observation the harness cares about most is a
- * cardinality it cannot see from here: EDS hands back the value of the *first*
- * X-EVOLUTION-SPOUSE line, so a set that left the old line standing beside the
- * new one is invisible at this end and shows up only in what reaches the
- * server. An unset field is reported as the empty string rather than left out,
- * so a leg can say the contact has no spouse. */
+/* Report the spouse that EDS has for a contact. EDS gives only the first
+ * X-EVOLUTION-SPOUSE line, so a second line shows only on the server. An unset
+ * field gives the empty string. */
 static void
 report_spouse (const gchar *prefix,
                EContact *contact)
@@ -360,15 +289,12 @@ report_spouse (const gchar *prefix,
 	g_print ("%s-spouse=%s\n", prefix, spouse ? spouse : "");
 }
 
-/* Report the X-EVOLUTION-SPOUSE line itself, which is the one thing about this
- * property report_spouse above cannot say: e_contact_get reads a line naming
- * nobody and a card carrying no such line alike, as no spouse.
+/* Report the X-EVOLUTION-SPOUSE line itself. e_contact_get() gives "no spouse"
+ * for an empty line and for no line, and report_spouse() cannot tell them apart.
  *
- * Which of those two a cleared field produces is libebook-contacts' business and
- * is what the `unspouse` phase is here to look at. The mapping withdraws the
- * marriage either way — a line naming nobody is refused on the way in — so this
- * is reported rather than judged: the harness holds the *field* to being empty,
- * which is true whichever EDS does, and reads this to know which it did. */
+ * libebook-contacts decides which of the two a cleared field gives, and the
+ * `unspouse` phase examines it. The mapping removes the spouse in both cases,
+ * so this is only reported. The test checks that the field is empty. */
 static void
 report_spouse_line (const gchar *prefix,
                     EContact *contact)
@@ -382,25 +308,18 @@ report_spouse_line (const gchar *prefix,
 	if (!attribute)
 		return;
 
-	/* NULL for an attribute holding no value at all, which is a different
-	 * shape from one holding the empty string and worth telling apart. */
+	/* NULL if the attribute has no value. This is different from an empty
+	 * string. */
 	value = e_vcard_attribute_get_value (attribute);
 	g_print ("%s-spouse-line-value=%s\n", prefix, value ? value : "");
 	g_free (value);
 }
 
-/* Report the note EDS holds for a contact, and how many NOTE lines the card
- * carries.
+/* Report the note that EDS has for a contact, and the number of NOTE lines.
  *
- * The count is the observation the field cannot give, and the reason this
- * function exists at all: e_contact_get hands back the value of the *first* NOTE
- * line, so a card holding one note and a card holding five read alike here — and
- * a set that replaced every line of the name, or appended beside the first,
- * reads back correctly while the card underneath says something else. The
- * harness holds it to a number; this end only counts.
- *
- * An unset field is reported as the empty string rather than left out, so a leg
- * can say the contact has no note. */
+ * e_contact_get() gives only the first NOTE line, so the count is necessary. It
+ * shows a set that replaced all NOTE lines or added a line. The test checks the
+ * number. An unset field gives the empty string. */
 static void
 report_notes (const gchar *prefix,
               EContact *contact)
@@ -416,9 +335,8 @@ report_notes (const gchar *prefix,
 	     attribute = attribute->next) {
 		const gchar *name = e_vcard_attribute_get_name (attribute->data);
 
-		/* Case-insensitively, because that is what RFC 2426 §5 says a
-		 * property name is compared as — a card whose lines came back
-		 * spelled `Note` would otherwise be counted as carrying none. */
+		/* RFC 2426 §5 compares property names case-insensitively, so
+		 * `Note` also counts. */
 		if (name && g_ascii_strcasecmp (name, EVC_NOTE) == 0)
 			lines++;
 	}
@@ -426,20 +344,15 @@ report_notes (const gchar *prefix,
 	g_print ("%s-note-lines=%u\n", prefix, lines);
 }
 
-/* Report what every NOTE line on the card says, joined on a character none of
- * them holds.
+/* Report the value of each NOTE line, joined with TEST_NOTE_LINE_SEPARATOR.
  *
- * The counterpart of report_spouse_line above, and there for the same reason:
- * e_contact_get reads the first line of the name and stops, so a card whose
- * first note was emptied and a card whose second note was deleted read alike
- * through the field. The count beside it cannot tell those two apart either —
- * both leave one line saying something — so the `unnote` phase reports the
- * values themselves and lets the harness say which line is which.
+ * As with report_spouse_line(), e_contact_get() reads only the first line. An
+ * emptied first note and a deleted second note give the same field and the
+ * same count. Thus the `unnote` phase reports the values.
  *
- * Reported rather than judged, as the spouse line is: whether an emptied line is
- * struck off the card or left standing with no value on it is libebook-contacts'
- * business, so an attribute holding nothing at all is reported as the empty
- * string and the harness compares only the values that say something. */
+ * libebook-contacts decides if it removes an emptied line or keeps it with no
+ * value. A line with no value gives the empty string, and the test compares
+ * only the non-empty values. */
 static void
 report_note_line_values (const gchar *prefix,
                          EContact *contact)
@@ -458,9 +371,8 @@ report_note_line_values (const gchar *prefix,
 		if (!name || g_ascii_strcasecmp (name, EVC_NOTE) != 0)
 			continue;
 
-		/* NULL for an attribute holding no value at all, which is a
-		 * different shape from one holding the empty string — and the
-		 * shape a cleared field is expected to leave behind. */
+		/* NULL if the attribute has no value, which a cleared field
+		 * usually gives. This is different from an empty string. */
 		value = e_vcard_attribute_get_value (attribute->data);
 		g_ptr_array_add (values, value ? value : g_strdup (""));
 	}
@@ -468,8 +380,7 @@ report_note_line_values (const gchar *prefix,
 	g_ptr_array_add (values, NULL);
 	joined = g_strjoinv (TEST_NOTE_LINE_SEPARATOR, (gchar **) values->pdata);
 	key = g_strconcat (prefix, "-note-line-values", NULL);
-	/* Escaped, because a note is the one mapped property a user types prose
-	 * into and prose can hold a line break. */
+	/* Escape newlines, because a note can contain line breaks. */
 	report_multiline (key, joined);
 
 	g_free (key);
@@ -477,30 +388,21 @@ report_note_line_values (const gchar *prefix,
 	g_ptr_array_free (values, TRUE);
 }
 
-/* Report the instant-messaging handle EDS holds for a contact, out of the
- * per-slot field Evolution's contact editor writes, and two things about the
- * line underneath it.
+/* Report the instant-messaging handle from the per-slot field that the
+ * Evolution contact editor writes, the number of X-JABBER lines, and the
+ * X-JMAP-KEY of the first line.
  *
- * Three observations, because they answer three different questions. The field
- * is what the user sees, and a handle the server stated as a *URI* reaches it
- * only if the reader drew the handle out of that URI and put it on a line
- * wearing the TYPE this field is read off — E_CONTACT_IM_JABBER_HOME_1 is the
- * HOME slot, so a line with no TYPE, or with the other one, lands somewhere the
- * user is not looking.
+ * The field is what the user sees. E_CONTACT_IM_JABBER_HOME_1 is the HOME
+ * slot, so a handle from a server URI shows only if the reader writes a line
+ * with TYPE=HOME.
  *
- * The count is what the field cannot say: e_contact_get hands back the first
- * X-JABBER line of the slot and stops, so a set that appended beside the old
- * line rather than rewriting it reads back correctly here while the card states
- * two handles — and the mapping, which has only the lines, would then be told
- * the contact is at that service twice.
+ * e_contact_get() gives only the first X-JABBER line of the slot, so the count
+ * shows a set that added a line and did not replace the old one.
  *
- * The X-JMAP-KEY is the parameter that says which entry of the server's map the
- * line came off, and it is there for the reason report_spouse_line is: EDS drops
- * the parameters when it *rebuilds* a line, which it does for PHOTO, and whether
- * a set on a synthetic instant-messaging field does the same is a claim about
- * libebook-contacts that nothing below the daemons can make. Reported rather
- * than judged — the save works either way, by key or by pairing — and the
- * consequence is asserted over on the server. */
+ * The X-JMAP-KEY identifies the server entry of the line. EDS drops parameters
+ * when it rebuilds a line (as for PHOTO), and only real EDS shows if a set on
+ * this field does the same. The save works with a key or without one, so this
+ * is only reported. The test checks the result on the server. */
 static void
 report_im_handle (const gchar *prefix,
                   EContact *contact)
@@ -518,9 +420,7 @@ report_im_handle (const gchar *prefix,
 	     attributes = attributes->next) {
 		const gchar *name = e_vcard_attribute_get_name (attributes->data);
 
-		/* Case-insensitively, as report_notes counts NOTE lines and for
-		 * the same reason: RFC 2426 §5 compares property names that
-		 * way. */
+		/* Case-insensitive, as in report_notes() (RFC 2426 §5). */
 		if (name && g_ascii_strcasecmp (name, EVC_X_JABBER) == 0)
 			lines++;
 	}
@@ -533,8 +433,8 @@ report_im_handle (const gchar *prefix,
 		 key && key->data ? (const gchar *) key->data : "");
 }
 
-/* The first phase: an empty book, one contact written into it with every
- * mapped property set, and that contact read back. */
+/* The `write` phase: add one contact with all mapped properties to an empty
+ * book, then read it back. */
 static int
 write_phase (EBookClient *book,
              const gchar *full_name,
@@ -589,11 +489,9 @@ write_phase (EBookClient *book,
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, TEST_IM_HANDLE);
 
-	/* The picture, inlined: the form Evolution's contact editor writes when
-	 * the user picks an image file, and the only form a media type can be
-	 * read off. Set through the boxed struct because that is the only way to
-	 * state the bytes and what they are together; EDS takes the copies it
-	 * needs, so the decoded bytes are freed as soon as the call returns. */
+	/* An inlined photo, as the Evolution contact editor writes for an image
+	 * file. Only this form has a media type. EDS copies the data, so free
+	 * the decoded bytes after the call. */
 	photo_bytes = g_base64_decode (photo_base64, &photo_length);
 	photo.type = E_CONTACT_PHOTO_TYPE_INLINED;
 	photo.data.inlined.mime_type = (gchar *) TEST_PHOTO_MEDIA_TYPE;
@@ -602,11 +500,9 @@ write_phase (EBookClient *book,
 	e_contact_set (contact, E_CONTACT_PHOTO, &photo);
 	g_free (photo_bytes);
 
-	/* Set as the list rather than as the comma-joined E_CONTACT_CATEGORIES
-	 * string, because that string cannot say which comma is a separator:
-	 * EDS splits it and would file TEST_CATEGORY_TWO as two categories
-	 * before this test had begun. The list is also what Evolution's
-	 * Categories dialogue writes. */
+	/* Set the list, not the comma-joined E_CONTACT_CATEGORIES string. EDS
+	 * splits that string at each comma, which would make TEST_CATEGORY_TWO
+	 * two categories. The Evolution Categories dialog also writes the list. */
 	categories = g_list_append (categories, (gchar *) TEST_CATEGORY_ONE);
 	categories = g_list_append (categories, (gchar *) TEST_CATEGORY_TWO);
 	e_contact_set (contact, E_CONTACT_CATEGORY_LIST, categories);
@@ -631,8 +527,8 @@ write_phase (EBookClient *book,
 	g_object_unref (contact);
 	g_print ("added=%s\n", added_uid ? added_uid : "");
 
-	/* Out of the meta backend's cache rather than off the server, which
-	 * is the point: EDS is meant to have kept what it just wrote. */
+	/* Read from the meta backend cache, not from the server: EDS must keep
+	 * what it wrote. */
 	if (!e_book_client_get_contact_sync (book, added_uid, &read_back, NULL, &error)) {
 		g_free (added_uid);
 		g_free (query_string);
@@ -659,16 +555,13 @@ write_phase (EBookClient *book,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_HOMEPAGE_URL));
 	report_calendars ("read-back", read_back);
 	report_spouse ("read-back", read_back);
-	/* Read out of the same slot it was written to: a handle that reached the
-	 * server but came back on a line without a TYPE would be missing here
-	 * while sitting in the vCard, which is exactly the failure the parameter
-	 * exists to prevent. */
+	/* Read from the slot that was written. A line with no TYPE is in the
+	 * vCard but not in this field. */
 	g_print ("read-back-jabber=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_IM_JABBER_HOME_1));
 
-	/* Structured, so it comes back as a boxed struct rather than a
-	 * string: one report per field, because which field a part of the
-	 * address landed in is the whole question here. */
+	/* A boxed struct. Report each field, because the test checks which
+	 * field each part goes into. */
 	read_back_address = e_contact_get (read_back, E_CONTACT_ADDRESS_WORK);
 	g_print ("read-back-street=%s\n",
 		 read_back_address && read_back_address->street ? read_back_address->street : "");
@@ -681,10 +574,8 @@ write_phase (EBookClient *book,
 	if (read_back_address)
 		e_contact_address_free (read_back_address);
 
-	/* The birthday, likewise boxed, and reported as the text
-	 * e_contact_date_to_string() writes — which is the same spelling the
-	 * date line carries, so the two ends of this leg compare like with
-	 * like without either of them re-deriving it. */
+	/* Also boxed. Report the text from e_contact_date_to_string(), which
+	 * has the same format as the date line. */
 	read_back_birthday = e_contact_get (read_back, E_CONTACT_BIRTH_DATE);
 	#if EDS_CHECK_VERSION(3, 60, 0)
 	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday, E_VCARD_VERSION_30) : NULL;
@@ -696,10 +587,8 @@ write_phase (EBookClient *book,
 	if (read_back_birthday)
 		e_contact_date_free (read_back_birthday);
 
-	/* The categories, which come back as a list: reported joined, so that
-	 * how many there are is as visible on the other side as what they say.
-	 * A tag that had been split on its comma would show up here as an
-	 * extra item rather than as a mangled one. */
+	/* A list. Report it joined, so that the test sees the count and the
+	 * values. A category split at its comma shows as an extra item. */
 	read_back_categories = e_contact_get (read_back, E_CONTACT_CATEGORY_LIST);
 	category_texts = g_ptr_array_new ();
 	for (GList *link = read_back_categories; link; link = link->next)
@@ -711,14 +600,12 @@ write_phase (EBookClient *book,
 	g_ptr_array_free (category_texts, TRUE);
 	g_list_free_full (read_back_categories, g_free);
 
-	/* The picture, likewise boxed, and out of EDS's own cache: the bytes the
-	 * backend re-rendered onto a `PHOTO` line after the write, read back
-	 * through the field Evolution shows the contact's photo from. */
+	/* The photo from the EDS cache, as the backend wrote it on the `PHOTO`
+	 * line after the add. */
 	report_photo ("read-back", read_back);
 
-	/* The LABEL line, which is a field of its own rather than part of the
-	 * boxed address above — and the one observation that has to be
-	 * escaped, because a label is written across several lines. */
+	/* The LABEL line is a separate field. Escape it, because a label has
+	 * several lines. */
 	report_multiline ("read-back-address-label",
 			  e_contact_get_const (read_back, E_CONTACT_ADDRESS_LABEL_WORK));
 	g_object_unref (read_back);
@@ -738,10 +625,8 @@ write_phase (EBookClient *book,
 	return 0;
 }
 
-/* Ask for one contact until EDS has it, or give up. A miss is reported as
- * E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND rather than as a failure of the call,
- * so it is cleared and retried; any other error would be retried too, and the
- * caller says what it was waiting for when the tries run out. */
+/* Ask for one contact until EDS has it, or until EDIT_WAIT_TRIES is reached.
+ * Each error is cleared and the get tries again. Returns NULL on timeout. */
 static EContact *
 wait_for_contact (EBookClient *book,
                   const gchar *uid)
@@ -764,11 +649,9 @@ wait_for_contact (EBookClient *book,
 	return NULL;
 }
 
-/* What EDS made of the card the mock was seeded with, before anything is
- * changed. The name fields are the load-bearing ones: they are the text the
- * backend's save compares against to decide whether the user retyped a field,
- * so a phase that did not report them could not say what that comparison was
- * given. */
+/* Report what EDS reads from the seeded card, before a change. The name
+ * fields are necessary: the backend save compares against them to learn if
+ * the user changed a field. */
 static void
 report_seeded_contact (EContact *contact)
 {
@@ -777,31 +660,25 @@ report_seeded_contact (EContact *contact)
 	g_print ("read-email=%s\n",
 		 (const gchar *) e_contact_get_const (contact, E_CONTACT_EMAIL_1));
 	report_name_fields ("read", contact);
-	/* The picture the server filed on the card, as EDS read it off the line
-	 * the emitter wrote — the direction the `write` phase cannot ask about,
-	 * where that line came from EDS in the first place. */
+	/* The photo from the server, as EDS reads the line that the emitter
+	 * wrote. The `write` phase cannot examine this direction. */
 	report_photo ("read", contact);
-	/* Likewise the two calendaring addresses, and for the same reason: what
-	 * EDS made of lines the emitter wrote rather than of lines it wrote
-	 * itself. */
+	/* The calendar addresses, for the same reason. */
 	report_calendars ("read", contact);
 	report_spouse ("read", contact);
-	/* And the notes, which are the one property of which the card holds more
-	 * than the user is shown — hence the line count beside the field. */
+	/* The notes. The card can have more notes than the user sees, so the
+	 * line count is also reported. */
 	report_notes ("read", contact);
-	/* And the instant-messaging handle, which is the one property the server
-	 * can state in a shape the line cannot: a URI the reader has to draw the
-	 * handle out of before any field can show it. */
+	/* The instant-messaging handle. The server can give it as a URI, from
+	 * which the reader must extract the handle. */
 	report_im_handle ("read", contact);
 }
 
-/* Save an edited contact and report what EDS holds for it afterwards. Takes
- * ownership of `contact`, so a phase can end on this call.
+/* Save an edited contact and report what EDS has for it after the save. Takes
+ * ownership of `contact`.
  *
- * The read-back is a fresh get rather than the contact just handed over,
- * because what is wanted is EDS's own copy — the vCard the backend re-rendered
- * after the save and EDS put back in its cache — not the one this program
- * filled in. */
+ * The read-back is a new get, so it reports the EDS cache copy that the
+ * backend wrote after the save, not the copy from this program. */
 static int
 save_and_report (EBookClient *book,
                  EContact *contact,
@@ -826,10 +703,8 @@ save_and_report (EBookClient *book,
 	g_print ("read-back-email=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
 	report_name_fields ("read-back", read_back);
-	/* What EDS holds for the picture after the save, which for a phase that
-	 * did not touch it is the other half of "the save left it alone": a
-	 * picture the backend rewrote would come back out of the cache changed
-	 * even though nobody asked. */
+	/* The photo after the save. For a phase that does not change the photo,
+	 * this shows that the backend did not change it. */
 	report_photo ("read-back", read_back);
 	report_calendars ("read-back", read_back);
 	report_spouse ("read-back", read_back);
@@ -840,16 +715,14 @@ save_and_report (EBookClient *book,
 	return 0;
 }
 
-/* The second phase: a contact that came from the server, edited the way a user
- * edits one — read what EDS has, change a single field that has nothing to do
- * with the name, save it back.
+/* The `edit` phase: read a contact from the server, change one field that is
+ * not the name, and save it.
  *
- * The point is what is *not* touched. A JSContact name can hold several
- * components of one kind, and the N line has one field per kind, so EDS is
- * handed those components joined into one string; the backend restores them on
- * the way back by recognising that the field still reads as its parts joined.
- * That recognition is a string comparison against the text EDS hands back,
- * which is exactly what no test below this file can measure. */
+ * The test checks the name, which does not change. A JSContact name can have
+ * several components of one kind, but the N line has one field per kind. So
+ * EDS gets the components joined into one string. The backend restores them
+ * if the field is still equal to the joined parts. Only real EDS can test
+ * that string comparison. */
 static int
 edit_phase (EBookClient *book,
             const gchar *uid,
@@ -865,28 +738,23 @@ edit_phase (EBookClient *book,
 
 	report_seeded_contact (contact);
 
-	/* The edit itself: one field, and not the name. Whatever the save does
-	 * to the name is therefore something nobody asked for. */
+	/* Change one field that is not the name. Thus any change to the name is
+	 * an error. */
 	e_contact_set (contact, E_CONTACT_EMAIL_1, email);
 
 	return save_and_report (book, contact, uid);
 }
 
-/* The third phase: the other half of `edit`, on the same seeded card. Here the
- * user *does* retype the name — the one field that holds both halves of the
- * double-barrelled given name — and the parts the server stated separately are
- * the ones that must NOT come back.
+/* The `rename` phase: the opposite of `edit`, on the same seeded card. The user
+ * changes the given name, which holds the two parts of a double given name.
+ * The separate parts from the server must NOT come back.
  *
- * Nothing in the text the user typed says which half it replaced, so the two
- * old parts are gone and the field states one component. That is the branch the
- * `edit` phase cannot reach, and reaching it through real EDS is the point: EDS
- * rebuilds the N line out of its own synthetic fields, so the string the save
- * compares against is EDS's rendering of what the user typed rather than
- * anything this repository wrote.
+ * The new text does not show which part it replaced, so the field becomes one
+ * component. EDS rebuilds the N line from its synthetic fields, so the save
+ * compares against the EDS text, not text from this repository.
  *
- * Both fields are set because both are what Evolution's contact editor writes:
- * the given-name field is the edit, and the FN line it keeps in step with it is
- * a separate attribute that would otherwise still spell the old name. */
+ * The Evolution contact editor writes both fields: the given name, and the FN
+ * line, which is a separate attribute. */
 static int
 rename_phase (EBookClient *book,
               const gchar *uid,
@@ -909,20 +777,15 @@ rename_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
-/* The fourth phase: the same seeded card, and the user picks a new picture for
- * it — the one edit that reaches the photo field itself.
+/* The `repicture` phase: the user selects a new photo on the same seeded card.
  *
- * This is where the picture stops being something the round trip carries and
- * becomes something the save has to place. `e_contact_set` rewrites the `PHOTO`
- * line out of the photo it is given and drops the parameters that were on it,
- * the `X-JMAP-KEY` among them, so the entry the new picture belongs to cannot be
- * found by its key and has to be paired with the one it replaced. Nothing below
- * the daemons can say whether that is what really happens: EDS hands a save the
- * cached card with the picture written back into it, and whether *that* line
- * keeps its key while a *set* one does not is EDS's behaviour, not ours.
+ * `e_contact_set` rewrites the `PHOTO` line and drops its parameters, which
+ * include the `X-JMAP-KEY`. Thus the save cannot find the entry by its key and
+ * must pair the new photo with the old one. EDS gives a save the cached card,
+ * and only real EDS shows if that line keeps its key.
  *
- * Inlined, because that is what Evolution's contact editor sets when the user
- * picks an image file. */
+ * The photo is inlined, as the Evolution contact editor writes for an image
+ * file. */
 static int
 repicture_phase (EBookClient *book,
                  const gchar *uid,
@@ -952,19 +815,16 @@ repicture_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
-/* The fifth phase: the user moves their calendar, on a card the server filed
- * two calendaring resources on.
+/* The `recalendar` phase: the user changes the calendar address, on a card
+ * with two calendar resources from the server.
  *
- * The distinction from `repicture` beside it is the whole point.
- * E_CONTACT_CALENDAR_URI is a plain vCard attribute rather than a synthetic
- * field, so a set on it rewrites the value of the first CALURI line in place and
- * leaves the parameters — X-JMAP-KEY included — where they were, which means the
- * save can patch by key instead of having to pair a keyless URI with the one it
- * replaced. That is a claim about libebook-contacts, and this is the phase that
- * makes it through the daemons Evolution actually goes through.
+ * Unlike `repicture`, E_CONTACT_CALENDAR_URI is a plain vCard attribute, not a
+ * synthetic field. A set changes the value of the first CALURI line and keeps
+ * its parameters, X-JMAP-KEY included. Thus the save can patch by key. This
+ * phase tests that claim about libebook-contacts through the real daemons.
  *
- * Only the calendar is set. The free/busy address beside it is what says a patch
- * aimed at one entry did not land on the map. */
+ * Only the calendar is set. The free/busy address shows that the patch
+ * changed one entry, not the full map. */
 static int
 recalendar_phase (EBookClient *book,
                   const gchar *uid,
@@ -985,22 +845,18 @@ recalendar_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
-/* The sixth phase: the user retypes who they are married to, on a card the
- * server relates to two people.
+/* The `respouse` phase: the user changes the spouse, on a card that the server
+ * relates to two people.
  *
- * The one property whose *key* is what the line shows, so what the daemons are
- * asked here is not whether a key survived a set — there is no key — but whether
- * a set leaves one X-EVOLUTION-SPOUSE line or two. E_CONTACT_SPOUSE is a plain
- * vCard attribute, so a set should rewrite the value of the first line of that
- * name in place; if it appended instead, the card would state two marriages and
- * the mapping would have no way to tell that from a card that really did, since
- * the lines are all it has. Nothing below the daemons can answer that, and this
- * end cannot see it either — e_contact_get hands back the first line's value
- * whichever it is — so the answer is over in what reaches the server.
+ * The line shows the `relatedTo` key, so there is no X-JMAP-KEY. The question
+ * is if a set leaves one X-EVOLUTION-SPOUSE line or two. E_CONTACT_SPOUSE is a
+ * plain vCard attribute, so a set must change the first line. If it adds a
+ * line, the mapping sees two spouses. e_contact_get() gives only the first
+ * line, so the test checks the result on the server.
  *
- * Only the spouse is set. The brother the server also relates the card to
- * reaches no line at all, which is what says the save withdrew a marriage rather
- * than replacing everyone the card relates to. */
+ * Only the spouse is set. The server also relates the card to a brother, who
+ * has no line. He shows that the save removes one spouse and not all
+ * relations. */
 static int
 respouse_phase (EBookClient *book,
                 const gchar *uid,
@@ -1021,21 +877,15 @@ respouse_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
-/* The seventh phase: the user empties the Spouse field on the same seeded card,
- * rather than retyping it.
+/* The `unspouse` phase: the user empties the Spouse field on the same seeded
+ * card.
  *
- * The other half of `respouse`, and the branch of the save nothing else reaches:
- * a card handed back to the backend stating no relations at all, where the
- * marriage has to be withdrawn with nothing put in its place. The brother is
- * what says the withdrawal was of one entity rather than of the property — he
- * reaches no line, so a save that answered an emptied field by taking the whole
- * of `relatedTo` back would delete a relation the user never saw.
+ * The backend gets a card with no relations and must remove the spouse with no
+ * replacement. The brother has no line. A save that removed all of `relatedTo`
+ * would delete a relation that the user did not see.
  *
- * The empty string rather than NULL, because that is what Evolution's contact
- * editor writes: it hands e_contact_set the text of the entry, and the text of an
- * entry the user emptied is "". What EDS then does to the line is the one thing
- * about this path that was inferred rather than measured, so it is reported —
- * see report_spouse_line. */
+ * Set the empty string, not NULL, as the Evolution contact editor does for an
+ * empty entry. report_spouse_line() reports what EDS does to the line. */
 static int
 unspouse_phase (EBookClient *book,
                 const gchar *uid)
@@ -1052,29 +902,24 @@ unspouse_phase (EBookClient *book,
 
 	e_contact_set (contact, E_CONTACT_SPOUSE, "");
 
-	/* The card as the save is about to be handed it, before the modify: what
-	 * the field reads as, and what is left of the line it came off. */
+	/* Before the modify: report the field and the line. */
 	report_spouse ("cleared", contact);
 	report_spouse_line ("cleared", contact);
 
 	return save_and_report (book, contact, uid);
 }
 
-/* The eighth phase: the user retypes their note, on a card the server filed two
- * notes on.
+/* The `renote` phase: the user changes the note, on a card with two notes from
+ * the server.
  *
- * The one property of which Evolution shows the user *part of a map* and lets
- * them edit it anyway: E_CONTACT_NOTE is the first NOTE line, and every `notes`
- * entry writes a line, so the second note sits behind the field with nothing in
- * the UI saying it is there. What the daemons are asked is therefore two
- * questions at once, and neither can be answered from below them — whether a set
- * rewrites the first line in place with its parameters (the X-JMAP-KEY that says
- * which entry this is) still on it, and whether the second line is still on the
- * card afterwards. A set that took every line of the name with it would make a
- * user editing their note delete one they were never shown.
+ * E_CONTACT_NOTE is the first NOTE line, and each `notes` entry writes a line.
+ * The UI does not show the second note. This phase tests two things: that a set
+ * changes the first line and keeps its X-JMAP-KEY, and that the second line
+ * stays. A set that removed all NOTE lines would delete a note that the user
+ * did not see.
  *
- * Only the note is set. Everything else the seeded card carries is what says a
- * patch aimed at one entry did not land on the map. */
+ * Only the note is set. The other properties show that the patch changed one
+ * entry, not the full map. */
 static int
 renote_phase (EBookClient *book,
               const gchar *uid,
@@ -1092,29 +937,21 @@ renote_phase (EBookClient *book,
 
 	e_contact_set (contact, E_CONTACT_NOTE, note);
 
-	/* The card as the save is about to be handed it, before the modify: what
-	 * the field reads as, and how many lines of that name the set left. */
+	/* Before the modify: report the field and the NOTE line count. */
 	report_notes ("retyped", contact);
 
 	return save_and_report (book, contact, uid);
 }
 
-/* The ninth phase: the user empties the Notes field on the same seeded card,
- * rather than retyping it.
+/* The `unnote` phase: the user empties the Notes field on the same seeded card.
  *
- * The other half of `renote`, and the branch of the save nothing else reaches: an
- * entry withdrawn from a map through a field that cannot express the map. The
- * note behind it is what says the withdrawal was of the entry the user could see
- * rather than of the property — it has a line of its own, so a save that answered
- * an emptied field by taking the whole of `notes` back would delete a note nobody
- * was ever shown.
+ * The save must remove one map entry through a field that shows only one
+ * entry. The second note has its own line. A save that removed all of `notes`
+ * would delete a note that the user did not see.
  *
- * The empty string rather than NULL, because that is what Evolution's contact
- * editor writes: it hands e_contact_set the text of the field, and the text of a
- * field the user emptied is "". What EDS leaves on the card is then reported
- * twice over — the field, and every NOTE value the card still carries — because
- * the field alone cannot tell the note that was cleared from the note behind it:
- * see report_note_line_values. */
+ * Set the empty string, not NULL, as the Evolution contact editor does for an
+ * empty field. The field alone cannot show which note was cleared, so
+ * report_note_line_values() also reports each NOTE value. */
 static int
 unnote_phase (EBookClient *book,
               const gchar *uid)
@@ -1131,39 +968,31 @@ unnote_phase (EBookClient *book,
 
 	e_contact_set (contact, E_CONTACT_NOTE, "");
 
-	/* The card as the save is about to be handed it: what the field reads
-	 * as, how many lines of that name are left, and what each of them
-	 * says. */
+	/* Before the modify: report the field, the NOTE line count and each
+	 * value. */
 	report_notes ("cleared", contact);
 	report_note_line_values ("cleared", contact);
 
 	return save_and_report (book, contact, uid);
 }
 
-/* The tenth phase: the user retypes an instant-messaging handle the server
- * stated as a URI and nothing else.
+/* The `rehandle` phase: the user changes an instant-messaging handle that the
+ * server gives only as a URI.
  *
- * The entry is the only mapped property whose *value* the server can state in a
- * shape no line can carry: RFC 9553 §2.3.2 lets an entry name the contact with a
- * `user`, a `uri`, or both, and Evolution's instant-messaging fields hold a
- * handle. So the reader draws the handle out of the URI where the scheme spells
- * it — `xmpp:` and nothing after it but the JID — and the save writes the edit
- * back the way it came, rebuilding the URI rather than answering a card shaped
- * one way with a card shaped another.
+ * RFC 9553 §2.3.2 lets an entry give a `user`, a `uri`, or both. The Evolution
+ * fields hold a handle. So the reader extracts the handle from an `xmpp:` URI
+ * that contains only the JID. The save rebuilds the URI from the changed
+ * handle.
  *
- * Two halves of that only real EDS can settle. First that the handle drawn out
- * of the URI reaches the field at all: the reader chooses the slot, so whether
- * the TYPE it writes is the one E_CONTACT_IM_JABBER_HOME_1 reads is a claim about
- * libebook-contacts, and a handle in the wrong slot is one the user cannot see.
- * Second what a set on that field leaves on the card — one line or two, with the
- * X-JMAP-KEY still on it or without — which decides whether the save can patch
- * the entry the URI came from or has to pair a keyless line with it. Both are
- * reported by report_im_handle above; the harness holds the server to the
- * consequence.
+ * Only real EDS can show two things. First, that the extracted handle reaches
+ * the field: the reader selects the slot through the TYPE, and the HOME slot
+ * of E_CONTACT_IM_JABBER_HOME_1 must read it. Second, what a set leaves on the
+ * card: one line or two, with or without the X-JMAP-KEY. That decides if the
+ * save can patch by key. report_im_handle() reports both, and the test checks
+ * the result on the server.
  *
- * The per-slot field rather than the multi-valued one, because the slot is what
- * Evolution's contact editor writes — the same choice the `write` phase makes
- * when it sets a handle for the first time. */
+ * Set the per-slot field, as the Evolution contact editor and the `write`
+ * phase do. */
 static int
 rehandle_phase (EBookClient *book,
                 const gchar *uid,
@@ -1181,27 +1010,23 @@ rehandle_phase (EBookClient *book,
 
 	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, handle);
 
-	/* The card as the save is about to be handed it: what the field reads
-	 * as, how many lines of that name the set left, and whether the key the
-	 * entry was filed under is still on the first of them. */
+	/* Before the modify: report the field, the X-JABBER line count and the
+	 * key on the first line. */
 	report_im_handle ("retyped", contact);
 
 	return save_and_report (book, contact, uid);
 }
 
-/* The eleventh phase: the user deletes a contact, on a card the server filed
- * before EDS ever connected.
+/* The `remove` phase: the user deletes a seeded card.
  *
- * The one phase of the ten before it that does not save an edit — it removes
- * the whole card, the vfunc none of them reach
- * (`remove_contact_sync`/`e_book_client_remove_contact_by_uid_sync`, the
- * mirror of the recurring-occurrence delete `cal-client.c` already drives on
- * the calendar side). Waited for first, the way every seeded-card phase is,
- * so a slow initial cache fill cannot be mistaken for "the card was never
- * there to remove" below. Reported twice over: whether the call itself
- * succeeded, and whether EDS's own cache agrees afterwards — a backend that
- * answered success without truly forwarding the destroy would still show the
- * card on the next get, which is the failure this phase exists to catch. */
+ * This phase does not save an edit. It removes the card through
+ * `e_book_client_remove_contact_by_uid_sync`, which reaches the
+ * `remove_contact_sync` vfunc. `cal-client.c` does a similar delete of a
+ * recurring occurrence for the calendar. The phase waits for the contact
+ * first, as all seeded-card phases do, so a slow cache fill does not look like
+ * a missing card. It reports the result of the call and if the EDS cache still
+ * has the card. A backend that reports success but does not send the destroy
+ * still shows the card on the next get. */
 static int
 remove_phase (EBookClient *book,
              const gchar *uid)
@@ -1220,10 +1045,8 @@ remove_phase (EBookClient *book,
 
 	g_print ("removed=1\n");
 
-	/* Read back through the same call every other phase's "did it really
-	 * take" check uses. `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` is the
-	 * answer a gone contact gives; anything else — including success — says
-	 * the removal did not really reach the cache the way it claimed to. */
+	/* A removed contact gives `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND`. Any
+	 * other result, success included, shows that the cache still has it. */
 	if (e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error)) {
 		g_object_unref (read_back);
 		g_print ("gone=0\n");
@@ -1239,16 +1062,11 @@ remove_phase (EBookClient *book,
 	return 0;
 }
 
-/* Lists every contact the book holds, sorted by full name so that which of
- * two connects produced the listing (`list_existing_sync`'s full query or
- * `get_changes_sync`'s incremental delta merged into the same cache) cannot
- * be told apart from stdout's order — the point of this phase is what the
- * cache ends up containing, not what order EDS happened to hand it back in.
- * `rust/crates/jmap-functional/tests/book-changes.rs` is the only caller: it
- * runs this same client twice against one `Session`'s reused on-disk cache,
- * seeding a second contact straight into the mock's store in between, to
- * tell whether the second connect's own post-connect refresh went through
- * `get_changes_sync` rather than `list_existing_sync` again. */
+/* Lists all contacts in the book, sorted by full name. The sort removes the
+ * order difference between the full query of `list_existing_sync` and the
+ * delta of `get_changes_sync`, because the test checks the cache contents
+ * only. `rust/crates/jmap-functional/tests/book-changes.rs` and the
+ * live-stalwart-book tests use this phase. */
 static int
 list_phase (EBookClient *book)
 {
@@ -1343,8 +1161,8 @@ main (int argc,
 		return 2;
 	}
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* Starts evolution-source-registry on the session bus. It reads the
+	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -1355,12 +1173,10 @@ main (int argc,
 		return 1;
 	}
 
-	/* A real server needs a password the mock never checks, and nothing
-	 * here has a GUI to be prompted through. Stored the ordinary way EDS
-	 * looks one up for Basic auth, so a keyfile naming a real `User=` and
-	 * this variable connects on its first attempt rather than failing
-	 * `CredentialsRequired` before ever reaching the server. Unset for
-	 * every test against the mock, which needs no password at all. */
+	/* A real server needs a password, and this program has no GUI prompt.
+	 * Store it where EDS looks for Basic auth, so that a keyfile with a real
+	 * `User=` connects on the first attempt and does not fail with
+	 * `CredentialsRequired`. Tests against the mock do not set it. */
 	{
 		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 
@@ -1369,42 +1185,34 @@ main (int argc,
 			return fail ("store-password", error);
 	}
 
-	/* Activates evolution-addressbook-factory, which is what dlopens
-	 * libebookbackendjmap.so out of EDS_ADDRESS_BOOK_MODULES and picks
-	 * the factory matching the keyfile's BackendName. A failure here is
-	 * usually one of those two steps, not the backend's logic.
+	/* Starts evolution-addressbook-factory. It dlopens
+	 * libebookbackendjmap.so from EDS_ADDRESS_BOOK_MODULES and selects the
+	 * factory for the BackendName of the keyfile. A failure here usually
+	 * comes from one of these two steps, not from the backend.
 	 *
-	 * (guint32) -1 is EDS's "do not wait for connected". The wait is not
-	 * skipped because the status does not matter — it is asserted, just
-	 * below — but because asking for it here cannot work in a program
-	 * with no main loop, whatever the backend does: see
-	 * connection-status.c. The open itself is synchronous, so everything
-	 * it established is already true on the far side by the time this
-	 * call returns. */
+	 * (guint32) -1 tells EDS not to wait for connected. The status is
+	 * checked below, but this wait cannot work in a program with no main
+	 * loop (see connection-status.c). The open is synchronous, so its
+	 * results are complete when this call returns. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);
 
 	book = E_BOOK_CLIENT (client);
 
-	/* EDS's own verdict on the connect, waited for properly. */
+	/* The EDS result of the connect, with a correct wait. */
 	functional_report_connection_status (source, 10);
 
-	/* Read the properties back over the bus rather than trusting the
-	 * client's cached copy. EClient updates those from D-Bus property
-	 * notifications delivered on a main context, so a program that does
-	 * not run a main loop — this one — would be reading whatever had
-	 * happened to arrive: a race, and one that would have hidden the very
-	 * bug this test was written for. */
+	/* Read the properties over D-Bus, not from the client cache. EClient
+	 * updates the cache from notifications on a main context. This program
+	 * has no main loop, so the cache can be out of date. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
 		return fail ("retrieve-properties", error);
 
-	/* Whether the book accepts writes at all. EDS derives this from what
-	 * the backend said during its connect, so a backend that connects
-	 * happily and never says it can be written to gives a book that is
-	 * silently read-only in the UI — which is a state the write below
-	 * would report only as "Permission denied". Reported separately so
-	 * the harness can name the cause rather than the symptom. */
+	/* Report if the book accepts writes. EDS gets this from the backend at
+	 * connect. A backend that does not report writable gives a read-only
+	 * book, and a write then fails only with "Permission denied". This
+	 * line lets the test identify the cause. */
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	if (g_str_equal (phase, "write"))

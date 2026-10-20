@@ -1,14 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Shared by the calendar client programs that read an event the *server* held:
- * when does EDS say it starts, and what instant does a libecal consumer land on?
+ * Reports when EDS says a server event starts, and the instant that a libecal
+ * consumer calculates.
  *
- * Shared rather than copied because the two programs that ask it — cal-edit-client.c
- * for an event in a zone libical's own database names, cal-zone-client.c for one in
- * a zone only the server can name — exist to be *compared*. Reporting the instant
- * through one function is what makes the difference between their answers a
- * difference in the event rather than in how it was measured.
+ * Two programs use it: cal-edit-client.c (a zone in the libical database) and
+ * cal-zone-client.c (a zone that only the server names). The tests compare
+ * their results. One shared function makes sure that a difference comes from
+ * the event, not from the measurement.
  */
 
 #ifndef FUNCTIONAL_EVENT_START_H

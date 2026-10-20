@@ -1,14 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * M9 layer 1, config lookup: loads module-jmap-configuration.so itself — no
- * daemon scans for this one, see jmap_config::module's own doc comment —
- * builds a real EConfigLookup against a real ESourceRegistry, and runs
- * JmapConfigLookup the way the account assistant's "Look Up Account Details"
- * step does.
+ * Loads module-jmap-configuration.so itself, because no daemon loads it
+ * (see the doc comment of jmap_config::module). Then it makes a real
+ * EConfigLookup with a real ESourceRegistry and runs JmapConfigLookup, as the
+ * "Look Up Account Details" step of the account assistant does.
  *
  * `rust/crates/jmap-functional/tests/config-lookup.rs` runs this program and
- * reads its output; see that file for what is asserted and why.
+ * does the assertions.
  *
  *   usage: functional-config-lookup-client <module-dir> <email-address> [servers]
  */
@@ -37,11 +36,9 @@ run_finished_cb (GObject *source_object,
 	g_main_loop_quit (state->loop);
 }
 
-/* `e_config_lookup_run_finish()` is documented void — real upstream
- * `e-config-lookup.c` says outright "it's expected that the extensions may
- * fail, thus it doesn't return anything" — so a worker's own GError only
- * ever reaches this signal, never the async result above. Nothing before
- * this test observed that path at all. */
+/* `e_config_lookup_run_finish()` returns void (see upstream
+ * `e-config-lookup.c`). Thus the GError of a worker comes only through this
+ * signal. */
 static void
 worker_finished_cb (EConfigLookup *config_lookup,
                      EConfigLookupWorker *worker,
@@ -103,12 +100,8 @@ main (int argc,
 	email_address = argv[2];
 	servers = argc > 3 ? argv[3] : NULL;
 
-	/* Loads module-jmap-configuration.so and registers its types, including
-	 * JmapConfigLookup: an EExtension whose class_init sets extensible_type to
-	 * E_TYPE_CONFIG_LOOKUP. e_module_load itself is invoked by EModule's own
-	 * `load` vfunc, the first time g_type_module_use() brings a module's
-	 * refcount up from zero — the same two-step Evolution's shell does over
-	 * its own module directory at startup. */
+	/* Loads the modules and registers their types, as the Evolution shell
+	 * does at startup. g_type_module_use() makes EModule call e_module_load. */
 	modules = e_module_load_all_in_directory (module_dir);
 	if (!modules) {
 		g_printerr ("no modules found in %s\n", module_dir);
@@ -117,20 +110,14 @@ main (int argc,
 	for (link = modules; link; link = g_list_next (link))
 		g_type_module_use (G_TYPE_MODULE (link->data));
 
-	/* Activates evolution-source-registry, the same as the book/calendar
-	 * clients beside this one. Needed even though this test writes no source
-	 * of its own: e_config_lookup_new()'s own g_return_val_if_fail refuses a
-	 * NULL registry. */
+	/* Starts evolution-source-registry. e_config_lookup_new() refuses a NULL
+	 * registry. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
 
-	/* Constructing this is what actually registers JmapConfigLookup as a
-	 * worker: EConfigLookup is an EExtensible, and its constructed() calls
-	 * e_extensible_load_extensions(), which instantiates every EExtension
-	 * subclass in the type system whose extensible_type is E_TYPE_CONFIG_LOOKUP.
-	 * Nothing here calls e_config_lookup_register_worker() directly — see
-	 * jmap_config::module's own doc comment for why there is nowhere to. */
+	/* The constructor of EConfigLookup calls e_extensible_load_extensions(),
+	 * which creates JmapConfigLookup. See jmap_config::module. */
 	config_lookup = e_config_lookup_new (registry);
 
 	params = e_named_parameters_new ();
@@ -143,10 +130,8 @@ main (int argc,
 	state.worker_finished_seen = FALSE;
 	state.worker_error = NULL;
 
-	/* Real upstream's own doc comment on this signal says it "is always
-	 * emitted in the main thread", so connecting here, before the run,
-	 * races nothing against the worker thread `e_config_lookup_run` is
-	 * about to start. */
+	/* Upstream emits this signal in the main thread, so a connection before
+	 * the run has no race with the worker thread. */
 	g_signal_connect (config_lookup, "worker-finished", G_CALLBACK (worker_finished_cb), &state);
 
 	timeout_source = g_timeout_source_new_seconds (30);
@@ -183,12 +168,9 @@ main (int argc,
 		g_print ("display-name=%s\n", e_config_lookup_result_get_display_name (lookup_result));
 		g_print ("is-complete=%d\n", e_config_lookup_result_get_is_complete (lookup_result) ? 1 : 0);
 
-		/* Applies exactly what JmapConfigLookup::add_result() added, onto a
-		 * scratch source's own extensions — the same call the account
-		 * assistant makes when the user picks a result, and the only way to
-		 * read one back: e-config-lookup-result-simple.c keeps its added
-		 * values private and offers no getters, only this apply-to-a-source
-		 * method. */
+		/* Applies the values of JmapConfigLookup::add_result() to a scratch
+		 * source, as the account assistant does. This is the only way to read
+		 * them: e-config-lookup-result-simple.c has no getters. */
 		source = e_source_new (NULL, NULL, &error);
 		if (!source)
 			return fail ("source-new", error);

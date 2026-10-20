@@ -1,94 +1,82 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the CALENDAR leg of the stale-access-token acceptance
- * test: the hourly re-consent, driven through a real `evolution-calendar-
- * factory` and a real `evolution-source-registry` rather than through the
- * operator leaving Evolution open for an afternoon.
+ * The client half of the CALENDAR part of the stale-access-token acceptance
+ * test. It reproduces the hourly re-consent with a real
+ * `evolution-calendar-factory` and a real `evolution-source-registry`.
  *
- * An ordinary libecal consumer. It opens a calendar — which is what makes the
- * factory dlopen `libecalbackendjmap.so` and keep a live, connected
- * `ECalMetaBackend` instance holding one pooled JMAP connection — creates an
- * event, waits at a two-file handshake while the harness makes the server
- * refuse the access token that connection was built with, and creates a
- * second event. Whether that second create succeeds, and at what cost, is the
- * whole question; this program answers nothing about it. Every judgement
- * belongs to `rust/crates/jmap-functional/tests/cal-stale-token.rs`, which
- * runs this program and reads the `key=value` observations it writes to
- * stdout.
+ * A usual libecal consumer. It opens a calendar: the factory then loads
+ * `libecalbackendjmap.so` and keeps a connected `ECalMetaBackend` with one
+ * pooled JMAP connection. The program creates an event, then waits at a
+ * two-file handshake. Meanwhile the harness makes the server refuse the access
+ * token of that connection. Then the program creates a second event. The test
+ * examines the result of the second create, but this program does not judge
+ * it. `rust/crates/jmap-functional/tests/cal-stale-token.rs` runs this program
+ * and examines the `key=value` lines on stdout.
  *
- * WHY THE MAIL LEG'S SHORTCUT IS NOT AVAILABLE HERE (EDS 3.52.3).
- * `tests/functional/mail-stale-token-client.c` subclasses
- * `CamelSession` and answers `get_oauth2_access_token_sync` out of a file the
- * harness rewrites, because `jmap_mail::oauth2::uses_oauth2` reads Camel's own
- * `auth-mechanism` field and the generic `[Authentication] Method=OAuth2`
- * spelling is enough for it. The calendar backend has no such field to read:
- * `jmap_backend_core::oauth2::source_uses_oauth2` goes through
- * `e_oauth2_services_is_oauth2_alias`, which matches only a `Method` naming an
- * `EOAuth2Service` actually registered in the asking process. So the account
- * must say `Method=JMAP`, and that is exactly the
- * condition under which EDS's own `module-oauth2-services.so` exports
- * `Source.OAuth2Support` for the source — which routes the factory's
- * `e_source_get_oauth2_access_token_sync` over D-Bus to the registry
- * (`e-source.c::source_get_oauth2_access_token_sync` takes its in-process
- * `e_oauth2_services_find` fallback only when the interface is ABSENT). The
- * refresh therefore runs in the registry, against a real
- * `EOAuth2Service::get_refresh_uri` — ours, reading `[JMAP OAuth2]`'s
- * `TokenEndpoint` — and the mock JMAP server's own `/oauth/token` endpoint is
- * what decides which access token exists at any moment.
+ * Why the method of the mail test does not apply here (EDS 3.52.3).
+ * `tests/functional/mail-stale-token-client.c` subclasses `CamelSession` and
+ * answers `get_oauth2_access_token_sync` from a file that the harness writes.
+ * This works because `jmap_mail::oauth2::uses_oauth2` reads the Camel
+ * `auth-mechanism` field, and `[Authentication] Method=OAuth2` is sufficient
+ * for it. The calendar backend has no such field.
+ * `jmap_backend_core::oauth2::source_uses_oauth2` uses
+ * `e_oauth2_services_is_oauth2_alias`, which matches only a `Method` that
+ * names an `EOAuth2Service` registered in the process. Thus the account must
+ * have `Method=JMAP`. With this method, EDS `module-oauth2-services.so`
+ * exports `Source.OAuth2Support` for the source. Then the factory call to
+ * `e_source_get_oauth2_access_token_sync` goes over D-Bus to the registry
+ * (`e-source.c::source_get_oauth2_access_token_sync` uses the in-process
+ * `e_oauth2_services_find` fallback only when the interface is ABSENT). Thus
+ * the refresh runs in the registry, through the JMAP
+ * `EOAuth2Service::get_refresh_uri`, which reads `TokenEndpoint` from
+ * `[JMAP OAuth2]`. The `/oauth/token` endpoint of the mock JMAP server
+ * controls which access token is current.
  *
- * HOW THE REFRESH IS PROVOKED, and why it needs no wall clock. This program
- * seeds the secret store, before it connects anything, with the JSON
- * `e_oauth2_service.c` stores tokens as — but carrying ONLY a `refresh_token`.
- * `eos_lookup_token_sync` (line 1316) derives `expires_in` from the stored
- * `expires_after`, so an absent one leaves it at -1, and
- * `e_oauth2_service_get_access_token_sync` (line 1893) refreshes whenever that
- * number is `<= TOKEN_VALIDITY_GAP_SECS` (10, line 47). Every fetch therefore
- * goes to the token endpoint, deterministically, with no timing window for the
- * test to lose — the harness's `/oauth/token` handler is the single authority
- * on which token is current, exactly as `mail-stale-token-client.c`'s token
- * file is for the mail leg. The secret is seeded from here rather than by the
- * Rust side because `e_secret_store_store_sync` talks to the `org.freedesktop.
- * secrets` provider on the session bus, and the session bus is the one this
- * process was started on.
+ * How the test causes a refresh without a clock. Before it connects, this
+ * program stores the token JSON format of `e_oauth2_service.c` in the secret
+ * store, but with ONLY a `refresh_token`. `eos_lookup_token_sync` (line 1316)
+ * calculates `expires_in` from the stored `expires_after`. With no
+ * `expires_after`, the value is -1. `e_oauth2_service_get_access_token_sync`
+ * (line 1893) refreshes when the value is `<= TOKEN_VALIDITY_GAP_SECS`
+ * (10, line 47). Thus each fetch goes to the token endpoint, with no timing
+ * window. The `/oauth/token` handler of the harness controls which token is
+ * current, as the token file of `mail-stale-token-client.c` does for mail.
+ * This program stores the secret, not the Rust side, because
+ * `e_secret_store_store_sync` uses the `org.freedesktop.secrets` provider on
+ * the session bus of this process.
  *
  *   usage: functional-cal-stale-token-client <source-uid> <secret-uid> \
  *              <secret-json> <ready-path> <go-path>
  *
- * <secret-uid> and <secret-json> are stated by the harness rather than built
- * here for the reason every other input in this tree is: they are what the
- * Rust side asserts about, and a client that derived them could drift from
- * the test that reads its output.
+ * The harness supplies <secret-uid> and <secret-json>, as it supplies all
+ * other inputs in this tree. The Rust side asserts about them, and values
+ * that this client made could become different from the values in the test.
  */
 
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
 
-/* The interface `e_server_side_source_set_oauth2_support` exports. Named as a
- * string for the reason `oauth2-stale-proxy-client.c` gives: EDS's generated
- * `EDBusSourceOAuth2Support` accessors live in `src/private/e-dbus-source.h`,
- * which is not installed, while `e_source_ref_dbus_object` is public and hands
- * back a plain `GDBusObject`. From `src/private/
- * org.gnome.evolution.dataserver.Source.xml:210`. */
+/* The interface that `e_server_side_source_set_oauth2_support` exports. A
+ * string, as in `oauth2-stale-proxy-client.c`: the generated
+ * `EDBusSourceOAuth2Support` accessors are in the private header
+ * `src/private/e-dbus-source.h`, which EDS does not install. From
+ * `src/private/org.gnome.evolution.dataserver.Source.xml:210`. */
 #define OAUTH2_SUPPORT_INTERFACE "org.gnome.evolution.dataserver.Source.OAuth2Support"
 
-/* How long to wait for the harness to finish rotating the server's mind about
- * which token it accepts. Generous for the same reason the ctest timeout is;
- * a limit at all is so a harness that died fails this run instead of hanging
- * it. */
+/* The maximum wait for the harness to change the token that the server
+ * accepts. If the harness stops, the limit makes the run fail and not hang. */
 #define GO_TIMEOUT_SECONDS 45
 
-/* How long to keep iterating this thread's default main context after the
- * second create, so that a `credentials-required` the registry emitted has a
- * chance to arrive before the count is reported. ESource applies D-Bus news
- * from an idle on the context that was thread-default when `ESourceRegistry`
- * was constructed — this thread's — so the signal is delivered by iterating,
- * and only by iterating. See `connection-status.c`'s header. */
+/* How long to iterate the default main context after the second create, to
+ * receive a `credentials-required` from the registry. ESource applies D-Bus
+ * changes from an idle on the thread-default context of the `ESourceRegistry`
+ * (this thread). Only iteration delivers the signal. See the header of
+ * `connection-status.c`. */
 #define SETTLE_MILLISECONDS 1500
 
-/* One `key=value` observation on stdout, the format `jmap_functional::
- * observations` parses. */
+/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
 static void
 observe (const gchar *key,
          const gchar *value)
@@ -103,9 +91,8 @@ observe_boolean (const gchar *key,
 	observe (key, value ? "1" : "0");
 }
 
-/* Fail the run, naming what broke. Used only for this program's own
- * preconditions — the behaviour under test is always reported, never judged
- * here. */
+/* Fail the run and name the failed step. Use only for preconditions of this
+ * program. Report the behaviour under test, do not judge it here. */
 static int
 fail (const gchar *step,
       GError *error)
@@ -116,10 +103,9 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* Counted rather than acted on: in the running application this signal is
- * what puts the credentials prompter — and, for an OAuth2-method source, the
- * consent window — in front of the user. The claim under test is that a
- * merely stale access token must never reach it. */
+/* Count the signal. In the application, it shows the credentials prompter
+ * (for an OAuth2 source, the consent window). A stale access token must not
+ * cause it. */
 static void
 credentials_required_cb (ESource *source,
                          ESourceCredentialsReason reason,
@@ -133,14 +119,13 @@ credentials_required_cb (ESource *source,
 	(*count)++;
 }
 
-/* Whether the registry exported `Source.OAuth2Support` for this source. The
- * load-bearing precondition, asserted by the Rust side for the same reason:
- * without the interface the token fetch takes
- * `e-source.c`'s in-process fallback, which in a calendar factory finds no
- * `[JMAP OAuth2]` extension type registered at all (`jmap-backend-cal`'s
- * module registers the OAuth2 *service* but never calls
- * `jmap_config::oauth2::ensure_registered`) and so could never produce a
- * refresh URI. A run without it would measure something else entirely. */
+/* Return TRUE if the registry exported `Source.OAuth2Support` for this source.
+ * This is a necessary precondition, which the Rust side asserts. Without the
+ * interface, the token fetch uses the in-process fallback in `e-source.c`. In
+ * a calendar factory, that fallback has no `[JMAP OAuth2]` extension type: the
+ * `jmap-backend-cal` module registers the OAuth2 *service*, but does not call
+ * `jmap_config::oauth2::ensure_registered`. Thus it cannot make a refresh
+ * URI. */
 static gboolean
 oauth2_support_exported (ESource *source)
 {
@@ -161,10 +146,8 @@ oauth2_support_exported (ESource *source)
 	return exported;
 }
 
-/* A minimal VEVENT with the summary and uid given. Built as text rather than
- * through the setters because nothing here is about the mapping — the event
- * is a reason to make the backend talk to the server, and the smallest one
- * that libical will accept is the least that can go wrong in between. */
+/* A minimal VEVENT with the given UID and summary. Text, not setters: the
+ * event only makes the backend send a request, and a minimal one is safest. */
 static ICalComponent *
 build_event (const gchar *uid,
              const gchar *summary)
@@ -187,10 +170,9 @@ build_event (const gchar *uid,
 	return event;
 }
 
-/* Create one event and report whether EDS accepted it, plus the message it
- * refused with. Never fatal: the second call's failure is a result this test
- * has two opposite expectations of, depending on which token the harness let
- * the server keep. */
+/* Create one event and report the result and the error message. Not fatal:
+ * the expected result of the second call depends on the token that the
+ * harness lets the server accept. */
 static gboolean
 create_event (ECalClient *cal,
               const gchar *uid,
@@ -223,10 +205,9 @@ create_event (ECalClient *cal,
 	return ok;
 }
 
-/* Iterate this thread's default main context for `milliseconds`, so queued
- * idles — the only way ESource applies anything it learned over D-Bus — get
- * to run. Not a wait for a condition: this is used where the *absence* of an
- * event is the observation, so it always burns the whole window. */
+/* Iterate the default main context for `milliseconds`, so that queued idles
+ * run (ESource applies D-Bus changes only from idles). This always uses the
+ * full time, because the observation is the *absence* of an event. */
 static void
 settle (guint milliseconds)
 {
@@ -234,14 +215,13 @@ settle (guint milliseconds)
 
 	while (g_get_monotonic_time () < deadline) {
 		g_main_context_iteration (NULL, FALSE);
-		/* Microseconds: g_usleep's unit, and G_TIME_SPAN_MILLISECOND's. */
+		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
 		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
 	}
 }
 
-/* Block until `path` exists, iterating the main context meanwhile so that
- * anything the registry or factory has to say still reaches this process.
- * Returns FALSE if the harness never got there. */
+/* Wait until `path` exists, and iterate the main context so that signals from
+ * the registry and factory arrive. Returns FALSE at the timeout. */
 static gboolean
 wait_for_file (const gchar *path,
                guint timeout_seconds)
@@ -287,17 +267,15 @@ main (int argc,
 	ready_path = argv[4];
 	go_path = argv[5];
 
-	/* Before anything connects: the stored refresh token an account that has
-	 * been consented to once already has. Everything this test is about
-	 * happens downstream of EDS being able to mint an access token silently,
-	 * and this is the only thing that makes that possible. */
+	/* Before a connect, store the refresh token from an earlier consent. EDS
+	 * needs it to get an access token silently. */
 	if (!e_secret_store_store_sync (secret_uid, secret_json,
 					"Evolution Data Source - jmap-functional",
 					TRUE, NULL, &error))
 		return fail ("seed-secret", error);
 
-	/* Activates evolution-source-registry on the session bus, which reads the
-	 * scratch sources directory the harness wrote. */
+	/* This starts evolution-source-registry, which reads the scratch sources
+	 * directory. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -310,17 +288,15 @@ main (int argc,
 
 	observe_boolean ("oauth2-support-exported", oauth2_support_exported (source));
 
-	/* Connected before the first connect, so that a consent escalation
-	 * raised by the connect itself would be counted too — the connect
-	 * fetches a token of its own and a failure there is a different bug
-	 * from the one under test. */
+	/* Connect the signal before the first connect, to count a prompt from the
+	 * connect too. The connect fetches its own token, and a failure there is
+	 * a different bug. */
 	g_signal_connect (source, "credentials-required",
 			  G_CALLBACK (credentials_required_cb), &credentials_required);
 
-	/* Activates evolution-calendar-factory and keeps a live backend instance
-	 * for the rest of this process's life. This is where the pooled
-	 * connection the hourly re-consent fix concerns is built, and the
-	 * access token it carries is fetched here, once. */
+	/* This starts evolution-calendar-factory, which keeps a backend for the
+	 * life of this process. Here the backend makes the pooled connection and
+	 * fetches its access token once. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
@@ -330,19 +306,18 @@ main (int argc,
 
 	functional_report_connection_status (source, 10);
 
-	/* The operation before the token goes stale, and this program's own
-	 * precondition: a backend that could not write at all would produce the
-	 * same "second create failed" this test is otherwise about. */
+	/* The create before the token becomes stale. It is a precondition: a
+	 * backend that cannot write also makes the second create fail. */
 	if (!create_event (cal, "jmap-functional-stale-token-1", "Before the rotation",
 			   "first-create-ok", "first-create-error"))
 		return 1;
 
 	g_print ("credentials-required-before-rotation=%u\n", credentials_required);
 
-	/* Meet the harness. It rotates the server's accepted bearer token — and,
-	 * in the positive case, what its token endpoint hands out next — only
-	 * once the connection above exists, because the token has to go stale
-	 * BETWEEN two of this client's own calls. That is the shape of the bug. */
+	/* Synchronize with the harness. After the connection exists, it changes
+	 * the bearer token that the server accepts (and, in the positive case,
+	 * the next token from the token endpoint). The bug needs a token that
+	 * becomes stale BETWEEN two calls of this client. */
 	if (!g_file_set_contents (ready_path, "ready", -1, &error))
 		return fail ("write-ready", error);
 
@@ -351,7 +326,7 @@ main (int argc,
 		return 1;
 	}
 
-	/* The whole question. */
+	/* The create under test. */
 	create_event (cal, "jmap-functional-stale-token-2", "After the rotation",
 		      "second-create-ok", "second-create-error");
 

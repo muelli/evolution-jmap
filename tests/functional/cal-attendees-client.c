@@ -1,23 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Live confirmation that a meeting created
- * locally through `ECalClient` keeps its attendees after EDS reads it back.
+ * Tests against a real server that a meeting created through `ECalClient`
+ * keeps its attendees when EDS reads it back.
  *
- * The twin of `cal-live-client.c`, narrowed to one question: whether
- * `ORGANIZER`/`ATTENDEE` survive a create. `jmap-cal-sync::CalSync::
- * save_component` re-reads the event from the server rather than trusting
- * the component it was handed (see that function's own comment), so EDS's
- * meta-backend cache ends up with whatever the server echoes back on the
- * very same create, no second connect or explicit refresh needed. Item 108
- * part (1) used this program to observe the attendees being lost; item 112
- * made them go out as `participants`, so it now observes them surviving.
+ * This is `cal-live-client.c` with one question: do `ORGANIZER` and
+ * `ATTENDEE` stay after a create? `jmap-cal-sync::CalSync::save_component`
+ * reads the event from the server again after a create (see
+ * `save_component_with`). Thus the meta backend cache holds the server copy
+ * after the create, without a second connect or a refresh.
  *
- * Everything around this file -- the scratch XDG tree, the `.source`
- * keyfile, the private D-Bus session, the proxy to the real server and
- * every assertion -- belongs to `rust/crates/jmap-functional/tests/
- * live-stalwart-calendar-attendees.rs`, which runs this program and reads
- * its output, and also checks the server's own copy directly over JMAP.
+ * `rust/crates/jmap-functional/tests/live-stalwart-calendar-attendees.rs`
+ * creates the scratch XDG tree, the `.source` keyfile, the private D-Bus
+ * session and the proxy to the server. It does all the assertions, and also
+ * reads the server copy directly over JMAP.
  *
  *   usage: functional-cal-attendees-client <source-uid> <summary>
  */
@@ -51,9 +47,8 @@ first_vevent (ICalComponent *component)
 	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }
 
-/* Every value a component states for one property, joined by commas, or the
- * empty string if it states none -- mirrors `cal-live-client.c`'s own
- * helper of the same name. */
+/* All values of one property, joined by commas, or an empty string. Copy of
+ * the helper in `cal-live-client.c`. */
 static gchar *
 joined_values (ICalComponent *component,
 	       ICalPropertyKind kind)
@@ -167,9 +162,8 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added=%s\n", added_uid ? added_uid : "");
 
-	/* Out of the meta backend's cache, same as `cal-live-client.c`'s own
-	 * read-back -- see this file's header for why that is already enough
-	 * to observe whether the organizer/attendees made the round trip. */
+	/* Read from the meta backend cache, which holds the server copy (see
+	 * the file header). */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
 		return fail ("read-back", error);

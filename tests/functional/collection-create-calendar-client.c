@@ -1,29 +1,24 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The calendar sibling of `collection-create-client.c`: the same
- * `e_source_remote_create_sync()`/`e_source_remote_delete_sync()` pair
- * against the account, proving `ECollectionBackendClass::
- * create_resource_sync`/`delete_resource_sync` for a *calendar* child rather
- * than an address book. Everything about the calls themselves — which pair
- * is right, why, and what the wrong one silently does instead — is explained
- * in that file's header; this one only swaps the extension.
+ * The calendar equivalent of `collection-create-client.c`. It makes the same
+ * `e_source_remote_create_sync()`/`e_source_remote_delete_sync()` calls on
+ * the account to test `ECollectionBackendClass::create_resource_sync` and
+ * `delete_resource_sync` for a calendar child. The header of that file tells
+ * why these calls are correct. This file only uses a different extension.
  *
- * Everything around it — the scratch XDG tree, the account `.source`
- * keyfile, the private D-Bus session, the mock server and every assertion —
- * belongs to `rust/crates/jmap-functional/tests/collection-create-calendar.rs`,
- * which runs this program and reads its output. So this file has no test
- * framework in it and no notion of what "correct" is: it reports what the
- * registry told it on stdout, one `key=value` line per observation, and
- * exits non-zero the moment a call fails.
+ * `rust/crates/jmap-functional/tests/collection-create-calendar.rs` creates
+ * the scratch XDG tree, the account `.source` keyfile, the private D-Bus
+ * session and the mock server, and it does all the assertions. This program
+ * writes one `key=value` line on stdout for each observation. It exits
+ * non-zero when a call fails.
  *
  *   usage: functional-collection-create-calendar-client <account-uid>
  */
 
 #include <libedataserver/libedataserver.h>
 
-/* See `collection-create-client.c` for why this is generous and what it
- * covers. */
+/* The maximum wait. See `collection-create-client.c`. */
 #define WAIT_SECONDS 30
 
 typedef gboolean (*PollCondition) (gpointer user_data);
@@ -87,10 +82,8 @@ account_is_remote_creatable (gpointer user_data)
 	return e_source_get_remote_creatable (account);
 }
 
-/* The one calendar child of `parent_uid`, or NULL — this account has none
- * until the create below makes one, so "found one" and "found the one this
- * test made" are the same question (the keyfile below seeds no calendar for
- * the mock to have populate discover first). */
+/* The calendar child of `parent_uid`, or NULL. The mock has no calendar for
+ * populate to find, so the child found is the one that this test creates. */
 static ESource *
 calendar_child_of (ESourceRegistry *registry,
                     const gchar *parent_uid)
@@ -114,7 +107,7 @@ calendar_child_of (ESourceRegistry *registry,
 typedef struct {
 	ESourceRegistry *registry;
 	const gchar *parent_uid;
-	ESource *found; /* borrowed: set once found, read after the wait */
+	ESource *found; /* owned: set when found, read after the wait */
 } FindChild;
 
 static gboolean
@@ -140,8 +133,8 @@ child_is_gone (gpointer user_data)
 	return gone;
 }
 
-/* Reports the created child's properties the same shape
- * `collection-create-client.c::report_created` does for an address book. */
+/* Reports the created child in the same format as
+ * `collection-create-client.c::report_created`. */
 static void
 report_created (ESource *source)
 {
@@ -203,13 +196,10 @@ main (gint argc,
 	}
 	g_print ("account-creatable=1\n");
 
-	/* The scratch source "New Calendar" hands the account: no `GDBusObject`
-	 * yet, the `[Calendar]` extension naming what kind of collection this
-	 * is, and a display name (the mock's own `Calendar/set` handler refuses
-	 * an empty one). No uid and no `Parent=` — `e_source_remote_create_sync`
-	 * already knows the parent from `account`, and
-	 * `create_resource.rs::adopt_created` sets `Parent=` itself on whatever
-	 * uid the registry service ends up minting for it. */
+	/* The scratch source, as "New Calendar" makes it: a `[Calendar]`
+	 * extension and a display name (the mock refuses an empty name). It has
+	 * no uid and no `Parent=`: `create_resource.rs::adopt_created` sets
+	 * `Parent=`. */
 	scratch = e_source_new (NULL, NULL, &error);
 	if (scratch == NULL) {
 		g_printerr ("e_source_new: %s\n", error->message);
@@ -241,7 +231,7 @@ main (gint argc,
 		return 1;
 	}
 	created = find.found;
-	find.found = NULL; /* ownership moved to `created`; avoid a dangling alias */
+	find.found = NULL; /* `created` owns it now */
 	report_created (created);
 
 	removed = e_source_remote_delete_sync (created, NULL, &error);

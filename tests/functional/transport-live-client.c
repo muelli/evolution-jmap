@@ -1,47 +1,48 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The send path against a real server, and the delivery the mock
- * structurally cannot answer for.
+ * The send path against a real server, and the delivery, which the mock cannot
+ * test.
  *
- * transport-client.c beside this file is the mock leg: it walks the chain
- * from the account through the identity to the transport, sends once, and
- * the test then reads the submission out of the mock's own state. Against a
- * real Stalwart there is no state to reach into, and no need: the server
- * actually delivers. So this program walks the same chain with the same
- * accessors, sends the same way, and then does what the mock leg never
- * could -- it opens the sender's account afresh and finds the sent copy the
- * submission filed into Sent, and it opens a SECOND account, the one the
- * envelope named, and waits for the message itself to arrive in that inbox.
+ * transport-client.c beside this file is the mock test: it follows the chain
+ * from the account through the identity to the transport, sends once, and the
+ * test then reads the submission from the mock state. A real Stalwart has no
+ * state to read, and no need for it, because the server really delivers. Thus
+ * this program follows the same chain with the same accessors and sends in the
+ * same way. Then it does what the mock test cannot do. It opens the sender
+ * account again and finds the sent copy that the submission put into Sent. It
+ * also opens a SECOND account, the one that the envelope names, and waits for
+ * the message to arrive in that inbox.
  *
- * It is not a phase of mail-live-client.c because it shares no preamble with
- * one: that program's setup is a connected store with a message appended to
- * the inbox, and a send starts from no store at all -- a `CamelTransport` is
- * a second `CamelService` out of the same provider's `object_types` table,
- * joined to the account only by two hops of uid indirection that Evolution
- * walks out of libedataserver, and walking them is half of what is tested.
+ * It is not a phase of mail-live-client.c, because it shares no preamble with
+ * it. The setup of that program is a connected store with a message appended
+ * to the inbox, but a send starts with no store. A `CamelTransport` is a
+ * second `CamelService` from the `object_types` table of the same provider.
+ * Only two UID links connect it to the account, and Evolution follows them
+ * with libedataserver. This test checks these links as half of its work.
  *
- * The stores this program does open are all for reading writes back, and
- * they follow mail-live-client.c's discipline: each on a scratch tree of its
- * own, so there is never a summary database of this process's own writing to
- * answer for the server. The password mechanism is mail-live-client.c's too
- * (seed on the service, subclass `CamelSession` for the REJECTED retry loop),
- * with one addition: there are two accounts here, so the session vfunc
- * answers whatever `current_password` was set to before the connect, and the
- * recipient's store is opened with the recipient's.
+ * The stores that this program opens only read writes back. As in
+ * mail-live-client.c, each store has its own scratch tree, so no summary
+ * database from this process can answer for the server. The password mechanism
+ * also comes from mail-live-client.c (a password seeded on the service, and a
+ * `CamelSession` subclass that answers `get_password`), with one addition.
+ * There are two accounts, so the session vfunc answers with the value of
+ * `current_password` at the time of the connect. The recipient store connects
+ * with the password of the recipient.
  *
- * Like every client in this directory it asserts nothing: one `key=value`
- * line per observation, exit non-zero the moment a call fails, and every
- * judgement in `rust/crates/jmap-functional/tests/live-stalwart-mail.rs`.
+ * As all clients in this directory, it asserts nothing. It writes one
+ * `key=value` line for each observation, and exits with a non-zero status when
+ * a call fails. `rust/crates/jmap-functional/tests/live-stalwart-mail.rs`
+ * makes all decisions.
  *
  *   usage: functional-transport-live-client <account-source-uid>
  *          <recipient-source-uid> <recipient-address> <subject>
  *          <sent-folder-name> <drafts-folder-name>
  *
- * The two folder names are arguments because they are the harness's
- * constants: a `CamelStore` resolves inbox, trash and junk by role, but has
- * no by-role getter for sent or drafts, and a client that hardcoded a real
- * server's names would only agree with itself.
+ * The two folder names are arguments because they are constants of the
+ * harness. A `CamelStore` finds inbox, trash and junk by role, but has no role
+ * function for sent or drafts. A client with the names of a real server in its
+ * code would only agree with itself.
  */
 
 #include <string.h>
@@ -49,20 +50,20 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
-/* The body of the message this program sends. One line, no MIME structure:
- * what is measured is whether the bytes Camel's emitter uploaded come back
- * out of a different account's blob download. Matched by `SEND_BODY` in the
- * test file. */
+/* The body of the message that this program sends. One line, no MIME
+ * structure: the test checks that the bytes from the Camel emitter come back
+ * from the blob download of a different account. `SEND_BODY` in the test file
+ * has the same value. */
 #define TEST_BODY "Posted from the corner box."
 
-/* How long to wait for the server to move the message from the submission
- * queue into the recipient's inbox. Same budget as
- * jmap-mail-sync/tests/live_server_send.rs: 20 polls, a second apart. */
+/* The time limit for the server to move the message from the submission queue
+ * into the recipient inbox. The same limit as
+ * jmap-mail-sync/tests/live_server_send.rs: 20 polls, one second apart. */
 #define DELIVERY_POLLS 20
 
-/* What the session subclass answers a REJECTED retry with. Two accounts
- * authenticate in this process, so main sets this before each connect; a
- * static because there is one session type and one question it answers. */
+/* The answer of the session subclass to a password request. Two accounts
+ * authenticate in this process, so main sets this before each connect. It is
+ * static because there is one session type. */
 static const gchar *current_password = NULL;
 
 typedef struct _TestSession {
@@ -77,8 +78,8 @@ GType test_session_get_type (void) G_GNUC_CONST;
 
 G_DEFINE_TYPE (TestSession, test_session, CAMEL_TYPE_SESSION)
 
-/* mail-live-client.c's vfunc, answering for whichever account is currently
- * connecting -- see this file's header. */
+/* The vfunc from mail-live-client.c, for the account that connects now (see
+ * the file header). */
 static gchar *
 test_session_get_password (CamelSession *session,
 			   CamelService *service,
@@ -118,10 +119,10 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* 3.58 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
- * pair with `camel_folder_dup_uids`. Repeated here as plain C for the reason
- * mail-client.c gives beside its own copy: this test client links no crate
- * from this repository, so it cannot use `eds-sys`'s compat shims. */
+/* From 3.58, `camel_folder_dup_uids` replaces the borrowed
+ * `camel_folder_get_uids`/`camel_folder_free_uids` pair. This is a copy of the
+ * mail-client.c wrappers, because this client links no crate from this
+ * repository and cannot use the `eds-sys` compat wrappers. */
 static GPtrArray *
 folder_dup_uids (CamelFolder *folder)
 {
@@ -143,8 +144,8 @@ folder_free_uids (CamelFolder *folder,
 #endif
 }
 
-/* One hop of the chain -- transport-client.c's helper, unchanged: a missing
- * source is not the same failure as a source that says nothing. */
+/* One link of the chain, a copy of the transport-client.c helper. A missing
+ * source and an empty UID are different failures. */
 static ESource *
 ref_source (ESourceRegistry *registry,
 	    const gchar *what,
@@ -164,8 +165,8 @@ ref_source (ESourceRegistry *registry,
 	return source;
 }
 
-/* A message's decoded body text, stripped of the trailing newline the MIME
- * transfer carries and the text does not -- mail-live-client.c's helper. */
+/* The decoded body text of a message, without the trailing newline of the MIME
+ * transfer. A copy of the mail-live-client.c helper. */
 static gchar *
 message_body (CamelMimeMessage *message,
 	      GError **error)
@@ -192,11 +193,11 @@ message_body (CamelMimeMessage *message,
 	return g_strstrip (text);
 }
 
-/* A connected store on `source`, its summary database and message cache on a
- * scratch tree of `tag`'s own -- so what any folder of it reports came off
- * the server, never out of an earlier call's summary. The session comes back
- * too, for the reason mail-live-client.c gives: a `CamelService` only holds
- * its session weakly. */
+/* A connected store on `source`, with its summary database and message cache
+ * in a scratch tree for `tag`. Thus each folder of it reports data from the
+ * server, not from the summary of an earlier call. The function also returns
+ * the session, because a `CamelService` has only a weak reference to its
+ * session (see mail-live-client.c). */
 static CamelStore *
 open_account_store (ESource *source,
 		    const gchar *uid,
@@ -257,10 +258,9 @@ open_account_store (ESource *source,
 	return CAMEL_STORE (service);
 }
 
-/* The uid of the one message in `folder` whose subject is `subject`, or NULL.
- * By subject rather than by uid because the messages this program looks for
- * were minted by a send, which hands no uid back: the subject is the run's
- * own nonce, so it identifies the message as surely as a uid would. */
+/* The UID of the one message in `folder` with the subject `subject`, or NULL.
+ * Search by subject, because a send gives no UID back. The subject is unique
+ * for each run, so it identifies the message as well as a UID. */
 static gchar *
 find_by_subject (CamelFolder *folder,
 		 const gchar *subject)
@@ -287,8 +287,8 @@ find_by_subject (CamelFolder *folder,
 	return found;
 }
 
-/* Marks `uid` deleted and expunges it -- the cleanup both accounts get, the
- * same sequence mail-live-client.c's phases end with. */
+/* Marks `uid` deleted and expunges it. Both accounts use this cleanup, which
+ * is the same sequence as at the end of the mail-live-client.c phases. */
 static gboolean
 delete_and_expunge (CamelFolder *folder,
 		    const gchar *uid,
@@ -375,8 +375,8 @@ main (int argc,
 	sender_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 	recipient_password = g_getenv ("JMAP_FUNCTIONAL_RECIPIENT_PASSWORD");
 
-	/* The scratch tree the harness built; a session that fell back to the
-	 * real XDG directories would write into the developer's own store. */
+	/* The harness points these at the scratch tree. The real XDG
+	 * directories would put data into the developer's own store. */
 	data_dir = g_get_user_data_dir ();
 	cache_dir = g_get_user_cache_dir ();
 
@@ -397,8 +397,8 @@ main (int argc,
 		goto out;
 	}
 
-	/* The chain, hop for hop what transport-client.c walks against the
-	 * mock -- see that file for why each link hangs where it does. */
+	/* The same chain as in transport-client.c against the mock. See that
+	 * file for the location of each link. */
 	account_extension = e_source_get_extension (account, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
 	identity_uid = e_source_mail_account_get_identity_uid (account_extension);
 	g_print ("identity-uid=%s\n", identity_uid ? identity_uid : "");
@@ -444,9 +444,9 @@ main (int argc,
 	protocol = e_source_backend_get_backend_name (backend_extension);
 	g_print ("protocol=%s\n", protocol ? protocol : "");
 
-	/* The one source the mock leg has no counterpart for: the account the
-	 * envelope names, resolved up front so a typo in the harness fails
-	 * here rather than as a delivery that never comes. */
+	/* The one source that the mock test does not have: the account that
+	 * the envelope names. Get it first, so that an error in the harness
+	 * fails here, not as a delivery that does not occur. */
 	recipient_account = ref_source (registry, "recipient account", recipient_uid);
 	if (!recipient_account)
 		goto out;
@@ -465,9 +465,9 @@ main (int argc,
 
 	e_source_camel_configure_service (transport_source, service);
 
-	/* The state EMailSession reaches by looking the stored credential up,
-	 * reached here by being told it -- mail-live-client.c's mechanism,
-	 * now on the transport slot's service. */
+	/* `EMailSession` gets this state from the stored credential. Here, the
+	 * harness gives it, as in mail-live-client.c, but on the transport
+	 * service. */
 	current_password = sender_password;
 	if (sender_password && *sender_password)
 		camel_service_set_password (service, sender_password);
@@ -480,11 +480,10 @@ main (int argc,
 	g_print ("transport-connected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
 
-	/* What the composer would have handed over, built the way
-	 * transport-client.c builds it: the envelope passed separately from
-	 * the message, because the envelope is what the message is delivered
-	 * by and Evolution fills it in from the account and the composer's
-	 * recipient fields rather than from the headers. */
+	/* The message from the composer, built as in transport-client.c. Give
+	 * the envelope separately from the message, because the envelope
+	 * controls the delivery. Evolution fills it from the account and the
+	 * composer recipient fields, not from the headers. */
 	message = camel_mime_message_new ();
 	camel_mime_message_set_subject (message, subject);
 
@@ -525,10 +524,10 @@ main (int argc,
 	g_print ("transport-disconnected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_DISCONNECTED ? 1 : 0);
 
-	/* The sent copy, asked of a store that has never seen this account:
-	 * in the sent folder the submission's own `onSuccessUpdateEmail`
-	 * filed it into, no longer carrying the draft mark the staging gave
-	 * it, and not still sitting in the drafts folder it was staged in. */
+	/* Ask for the sent copy from a store that has not seen this account.
+	 * It must be in the sent folder that `onSuccessUpdateEmail` of the
+	 * submission put it in. It must not have the draft mark from the
+	 * staging, and it must not be in the drafts folder any more. */
 	sender_store = open_account_store (account, account_uid, sender_password,
 					   "sender", &sender_session, &error);
 	if (!sender_store) {
@@ -576,10 +575,9 @@ main (int argc,
 	staged_uid = find_by_subject (drafts_folder, subject);
 	g_print ("staged-copy-listed=%d\n", staged_uid ? 1 : 0);
 
-	/* Leave the sender where the run found it -- and measure the expunge
-	 * against a relisting, the way every other cleanup in this directory
-	 * is. A copy unexpectedly still in drafts is cleaned too: the
-	 * observation above already recorded it. */
+	/* Restore the sender account, and check the expunge with a new
+	 * listing, as all other cleanups in this directory do. Also remove a
+	 * copy that is still in drafts: the output above already shows it. */
 	if (staged_uid &&
 	    !delete_and_expunge (drafts_folder, staged_uid, &error)) {
 		g_object_unref (drafts_folder);
@@ -617,11 +615,10 @@ main (int argc,
 	g_object_unref (sender_store);
 	g_object_unref (sender_session);
 
-	/* The other end: the account the envelope named, opened as itself.
-	 * The server moves the message from the submission queue to this
-	 * inbox on its own schedule, so the listing is polled rather than
-	 * trusted to be there already -- same budget as
-	 * live_server_send.rs. */
+	/* The recipient: the account that the envelope names, opened with its
+	 * own credentials. The server moves the message from the submission
+	 * queue to this inbox at its own time. Thus poll the listing, with the
+	 * same limit as live_server_send.rs. */
 	recipient_store = open_account_store (recipient_account, recipient_uid,
 					      recipient_password, "recipient",
 					      &recipient_session, &error);
@@ -690,7 +687,7 @@ main (int argc,
 		g_print ("delivered-body=%s\n", body);
 		g_free (body);
 
-		/* And leave the recipient where the run found it too. */
+		/* Also restore the recipient account. */
 		if (!delete_and_expunge (recipient_inbox, delivered_uid, &error)) {
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
@@ -719,10 +716,10 @@ main (int argc,
 	status = 0;
 
 out:
-	/* Camel schedules its own `folder_changed` emissions onto the default
-	 * main context, and this program runs no main loop -- drain them
-	 * while everything they refer to is still alive, for the reason
-	 * mail-live-client.c records at its own teardown. */
+	/* Camel adds its own `folder_changed` emissions to the default main
+	 * context, and this program runs no main loop. Process them while all
+	 * their objects exist. mail-live-client.c gives the reason at its
+	 * teardown. */
 	while (g_main_context_iteration (NULL, FALSE))
 		;
 

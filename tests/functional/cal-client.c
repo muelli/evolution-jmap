@@ -1,19 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The client half of the calendar functional test, and the twin of
- * book-client.c one file over: an ordinary libecal consumer, the way
- * Evolution is one. It knows nothing about JMAP and nothing about the mock
- * server — it opens a calendar by source UID, reads it, writes one event to
- * it and reads that back.
+ * The client half of the calendar functional test, and the equivalent of
+ * book-client.c. It is an ordinary libecal consumer, as Evolution is. It
+ * knows nothing about JMAP or the mock server. It opens a calendar by source
+ * UID, reads it, writes events and occurrence edits to it, and reads them
+ * back.
  *
- * Everything around it — the scratch XDG tree, the `.source` keyfile, the
- * private D-Bus session, the mock server and every assertion — belongs to
- * `rust/crates/jmap-functional/tests/calendar.rs`, which runs this program
- * and reads its output. So this file has no test framework in it and no
- * notion of what "correct" is: it reports what EDS told it on stdout, one
- * `key=value` line per observation, and exits non-zero the moment a call
- * fails.
+ * `rust/crates/jmap-functional/tests/calendar.rs` owns the scratch XDG tree,
+ * the `.source` keyfile, the private D-Bus session, the mock server and all
+ * assertions. It runs this program and reads its output. This program has no
+ * test framework and does not know the correct result. It writes each EDS
+ * observation to stdout as one `key=value` line, and exits non-zero when a
+ * call fails.
  *
  *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
  *                               <recurring-summary> <edited-occurrence-summary>
@@ -25,247 +24,225 @@
 
 #include "connection-status.h"
 
-/* When the event this test writes starts. A UTC instant, so that nothing
- * here depends on a timezone database being reachable from the scratch
- * session, and the value the mock is checked for is the same string in
- * both halves of the test. */
+/* The start of the timed event. A UTC value, so that the scratch session
+ * needs no timezone database, and both halves of the test check the same
+ * string. */
 #define TEST_DTSTART "20260115T130000Z"
 
-/* And when it ends. Stated as DTEND rather than DURATION because that is
- * what Evolution's appointment editor writes — e_cal_component_set_dtend —
- * and RFC 5545 §3.6.1 makes the two mutually exclusive, so this is the form
- * the backend has to understand for a user-created event to reach the server
- * with a length at all. */
+/* The end of the timed event. It is a DTEND, not a DURATION, because the
+ * Evolution appointment editor writes DTEND (e_cal_component_set_dtend).
+ * RFC 5545 §3.6.1 makes the two mutually exclusive, so the backend must
+ * understand this form to send the length of a user-created event. */
 #define TEST_DTEND "20260115T143000Z"
 
-/* And where it happens. The place is the second thing a user types into the
- * appointment editor, and on the server it is not a string but an entry in a
- * JSCalendar `locations` map — so this is the leg that says a LOCATION written
- * by a libecal consumer arrives there as a place rather than being dropped.
- * The same literal is asserted from both ends; see `LOCATION` in
+/* The location of the timed event. On the server, a location is an entry in
+ * the JSCalendar `locations` map, not a string. This value shows that a
+ * LOCATION from a libecal consumer arrives there and is not dropped. Both
+ * halves assert the same literal; see `LOCATION` in
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_LOCATION "Room 42"
 
-/* And what it is filed under. Evolution's "Categories…" button writes
- * CATEGORIES, which on the server is a JSCalendar `keywords` Set (RFC 8984
- * §4.2.9) rather than a line of text. Two tags on one line deliberately:
- * libical re-renders a multi-valued CATEGORIES as one property per value —
- * measured in `rust/crates/jmap-backend-cal/tests/marshal.rs` — so this is the
- * leg that says the whole set survives the trip through the meta backend's
- * cache and not just its first member. The same literals are asserted from both
- * ends; see `KEYWORDS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
+/* The categories of the timed event. The Evolution "Categories…" button
+ * writes CATEGORIES; on the server, this is a JSCalendar `keywords` Set
+ * (RFC 8984 §4.2.9). The two tags are on one line intentionally: libical
+ * writes a multi-valued CATEGORIES again as one property for each value (see
+ * `rust/crates/jmap-backend-cal/tests/marshal.rs`). Thus this value shows
+ * that the full set, not only the first member, goes through the cache of
+ * the meta backend. Both halves assert the same literals; see `KEYWORDS` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_CATEGORIES "offsite,planning"
 
-/* And whether it blocks the time it occupies, which is Evolution's "Show Time
- * as" combo: TRANSP on the component (RFC 5545 §3.8.2.7), a JSCalendar
- * `freeBusyStatus` on the server (RFC 8984 §4.4.2). TRANSPARENT rather than the
- * OPAQUE both formats default to, because the default is the state a component
- * with no line on it is already in — only the other one says the mapping
- * carried anything. The same value is asserted from both ends; see
- * `FREE_BUSY_STATUS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
+/* Whether the timed event blocks its time: the Evolution "Show Time as"
+ * control. This is TRANSP on the component (RFC 5545 §3.8.2.7) and
+ * `freeBusyStatus` on the server (RFC 8984 §4.4.2). The value is TRANSPARENT,
+ * not the OPAQUE default of both formats, because a component without the
+ * line is already in the default state. Both halves assert the same value;
+ * see `FREE_BUSY_STATUS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_TRANSP "TRANSPARENT"
 
-/* And how important it is: PRIORITY on the component (RFC 5545 §3.8.1.9), a
- * JSCalendar `priority` on the server (RFC 8984 §4.4.1). The same integer in
- * both formats, which is what makes this leg about the *plumbing* rather than
- * about a translation — the mapping's own tests supply the property by hand, so
- * only real EDS says whether a numeric property a libecal consumer wrote is
- * still on the component the meta backend's cache hands back. 1 rather than 0,
- * because 0 is the state a component with no line on it is already in. The same
- * value is asserted from both ends; see `PRIORITY` in
+/* The importance of the timed event: PRIORITY on the component (RFC 5545
+ * §3.8.1.9) and `priority` on the server (RFC 8984 §4.4.1). Both formats use
+ * the same integer, so this value tests the path through EDS, not a
+ * translation. The mapping tests supply the property manually, so only real
+ * EDS shows that the cache of the meta backend keeps a numeric property. The
+ * value is 1, not 0, because a component without the line already has 0.
+ * Both halves assert the same value; see `PRIORITY` in
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_PRIORITY "1"
 
-/* And who may see it: CLASS on the component (RFC 5545 §3.8.1.3), a JSCalendar
- * `privacy` on the server (RFC 8984 §4.4.3). This is the one property in this
- * file whose iCalendar value libical does not hold as text — the parser turns it
- * into an ICalPropertyClass enum, so a value it fails to recognise is a value it
- * cannot render back — which is why the trip through the real cache is worth
- * asserting rather than assuming. CONFIDENTIAL rather than the PUBLIC both
- * formats default to, because the default is the state a component with no line
- * on it is already in, and because it is the value whose JSCalendar spelling
- * (`secret`) differs from its iCalendar one: it therefore also says the
- * translation happened. The same value is asserted from both ends; see `CLASS`
- * in `rust/crates/jmap-functional/tests/calendar.rs`. */
+/* Who can see the timed event: CLASS on the component (RFC 5545 §3.8.1.3)
+ * and `privacy` on the server (RFC 8984 §4.4.3). libical parses CLASS into
+ * an ICalPropertyClass enum, not text, so it cannot write back a value that
+ * it does not recognise. Thus the test asserts the path through the real
+ * cache. The value is CONFIDENTIAL, not the PUBLIC default of both formats,
+ * because a component without the line is already in the default state. Its
+ * JSCalendar spelling (`secret`) is also different from the iCalendar
+ * spelling, so it shows that the translation occurred. Both halves assert the
+ * same value; see `CLASS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_CLASS "CONFIDENTIAL"
 
-/* And when the user is reminded of it, which is Evolution's "Reminder" control:
- * a VALARM inside the VEVENT (RFC 5545 §3.6.6), and on the server an entry in a
- * JSCalendar `alerts` map (RFC 8984 §4.5.2). The first mapped property that is a
- * child *component* rather than a content line, which is what makes this leg
- * worth having: nothing below real EDS says whether `ECalMetaBackend`'s cache
- * keeps a component nested inside the one it was handed, nor whether the
- * RFC 9074 §4 UID the entry's key rides on survives beside the
- * X-EVOLUTION-ALARM-UID libecal adds of its own.
+/* The reminder of the timed event: the Evolution "Reminder" control. This is
+ * a VALARM inside the VEVENT (RFC 5545 §3.6.6) and an entry in the JSCalendar
+ * `alerts` map on the server (RFC 8984 §4.5.2). It is the first mapped
+ * property that is a child component, not a content line. Only real EDS
+ * shows whether the cache of `ECalMetaBackend` keeps a nested component. It
+ * also shows whether the RFC 9074 §4 UID, which is the key of the entry,
+ * stays beside the X-EVOLUTION-ALARM-UID that libecal adds.
  *
- * A negative offset, because a reminder is normally before the event and a sign
- * silently lost is a reminder that fires afterwards. The same values are
- * asserted from both ends; see `ALARM_TRIGGER` in
+ * The offset is negative because a reminder is usually before the event. If
+ * the sign is lost, the reminder fires after the event. Both halves assert
+ * the same values; see `ALARM_TRIGGER` in
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_ALARM_UID "k1"
 #define TEST_ALARM_TRIGGER "-PT15M"
 
-/* And an all-day event, written the way Evolution writes one: DATE values
- * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
- * event, and the only thing in iCalendar that says "this is a day, not a time
- * of day" — so it is what the backend has to recognise for the server to be
- * told, in JSCalendar's showWithoutTime, that the user made a day of it. */
+/* An all-day event, written as Evolution writes one: DATE values, not
+ * DATE-TIMEs, for both the start and the end. This is the other event form
+ * of RFC 5545 §3.6.1, and the only iCalendar way to say "a day, not a time".
+ * The backend must recognise it to set JSCalendar showWithoutTime on the
+ * server. */
 #define TEST_ALL_DAY_DTSTART "20260201"
 #define TEST_ALL_DAY_DTEND "20260202"
 
-/* And an event in a named zone — the one thing in this file that is deliberately
- * not written as text. Evolution's appointment editor sets a start from an
- * ICalTime carrying the zone *object* (e_cal_component_set_dtstart with a time
- * whose zone is the one the user picked), and libical then writes the TZID
- * parameter itself: for a builtin zone that is its own
- * `/freeassociation.sourceforge.net/Europe/Berlin`, which is neither an IANA
- * name nor anything a JMAP server can resolve. Building the component through
- * the setters is what makes this test carry that identifier without naming it,
- * so it keeps holding whatever libical writes rather than a string copied from
- * libical once.
+/* An event in a named zone. Like the zoned series below, it is intentionally
+ * not written as text. The Evolution appointment editor sets the start from
+ * an ICalTime that holds the zone object (e_cal_component_set_dtstart), and
+ * libical then writes the TZID parameter. For a builtin zone, that TZID is
+ * `/freeassociation.sourceforge.net/Europe/Berlin`: not an IANA name, and not
+ * a name that a JMAP server can resolve. The setters give the component this
+ * identifier without this file naming it, so the test always uses the value
+ * that libical writes.
  *
- * The zone reaches the server only if the envelope the backend builds also
- * carries the VTIMEZONE that defines the identifier — RFC 5545 §3.2.19 — and
- * that is what nothing below real EDS can check: the mapping's own tests have
- * to supply the identifier by hand, so they cannot say whether the component
- * Evolution actually hands over travels with its zone.
+ * The zone reaches the server only if the backend also sends the VTIMEZONE
+ * that defines the identifier (RFC 5545 §3.2.19). Only real EDS can check
+ * this: the mapping tests supply the identifier manually.
  *
- * A wall-clock time, not a UTC one, because a zoned event is the point; the
- * builtin zone data is compiled into libical, so this still asks nothing of the
- * scratch session's environment. */
+ * The time is a wall-clock time, not UTC, because the test is about a zone.
+ * The builtin zone data is compiled into libical, so the scratch session
+ * needs no timezone database. */
 #define TEST_ZONED_LOCATION "Europe/Berlin"
 #define TEST_ZONED_DTSTART "20260115T160000"
 #define TEST_ZONED_DTEND "20260115T173000"
 
-/* And a recurring event with one occurrence deleted, which is what a user
- * does with "Delete this occurrence" in the appointment list: EDS keeps the
- * master component and adds an EXDATE to it. RFC 5545 §3.8.5.1 is the only way
- * iCalendar says "not that one", and JSCalendar says it with an entry in
- * `recurrenceOverrides` — so an EXDATE the backend drops is an appointment
- * every other client reading the account still sees.
+/* A recurring event with one occurrence deleted. In the appointment list,
+ * "Delete this occurrence" makes EDS keep the master component and add an
+ * EXDATE to it. EXDATE (RFC 5545 §3.8.5.1) is the only iCalendar way to
+ * exclude an occurrence; JSCalendar uses an entry in `recurrenceOverrides`.
+ * If the backend drops an EXDATE, all other clients of the account still
+ * show the appointment.
  *
- * The rule names the day it repeats on, which is what the appointment editor's
- * recurrence page writes for anything but "every day": JSCalendar says it with
- * a `byDay` of NDay objects (RFC 8984 §4.3.3) and the mapping's own tests
- * supply that spelling by hand, so only real EDS says whether the rule libical
- * hands back still carries it. TH because TEST_DTSTART is a Thursday: the
- * occurrences, and so every exclusion, detached instance and split below, are
- * exactly the ones the rule generated without it. */
+ * The rule names a weekday, as the recurrence page of the appointment editor
+ * writes for all frequencies except "every day". JSCalendar uses a `byDay` of
+ * NDay objects (RFC 8984 §4.3.3). The mapping tests supply that form
+ * manually, so only real EDS shows that the rule from libical keeps it. The
+ * day is TH because TEST_DTSTART is a Thursday. Thus the rule, and all the
+ * exclusions, detached instances and splits below, give the same occurrences
+ * as without BYDAY. */
 #define TEST_RECURRING_RRULE "FREQ=WEEKLY;COUNT=6;BYDAY=TH"
 #define TEST_RECURRING_EXDATE "20260129T130000Z"
 
-/* And the occurrence the user renames instead of deleting, which is "Edit this
- * occurrence" in the same menu: EDS keeps the master and adds a second VEVENT
- * with the same UID and a RECURRENCE-ID naming the instance it replaces
- * (RFC 5545 §3.8.4.4). That is the only way iCalendar says "that one, but
- * different", and JSCalendar says it with a patch under the instance's start in
- * `recurrenceOverrides` — so a detached instance the backend drops is a change
- * the user made and nobody else ever sees. The second occurrence of the weekly
- * series above, a week before the excluded one, so that neither exception can
- * be mistaken for the other. The start equals the RECURRENCE-ID and the length
- * the series', because this instance is renamed and not moved: an override that
- * changed those too would not tell a title that failed to arrive from a start
- * that did. */
+/* The occurrence that the user renames: "Edit this occurrence" in the same
+ * menu. EDS keeps the master and adds a second VEVENT with the same UID and a
+ * RECURRENCE-ID that identifies the replaced instance (RFC 5545 §3.8.4.4).
+ * JSCalendar uses a patch in `recurrenceOverrides`, keyed by the start of the
+ * instance. If the backend drops a detached instance, no other client sees
+ * the change.
+ *
+ * This is the second occurrence of the weekly series above, one week before
+ * the excluded occurrence, so the two exceptions are different. The start is
+ * equal to the RECURRENCE-ID and the length is equal to the length of the
+ * series, because the instance is renamed, not moved. Thus a title that did
+ * not arrive is not confused with a start that did. */
 #define TEST_RECURRING_EDITED_RECURRENCE_ID "20260122T130000Z"
 #define TEST_RECURRING_EDITED_DTSTART "20260122T130000Z"
 #define TEST_RECURRING_EDITED_DTEND "20260122T143000Z"
 
-/* And what that one occurrence is filed under, which is the same "Categories…"
- * button pressed in the editor for an instance rather than for the series:
- * CATEGORIES on the detached component, and a `keywords` patch under that
- * instance's start in `recurrenceOverrides`. The series above carries no tags at
- * all, so the whole set here is the difference, and an instance whose tags the
- * cache dropped comes back as the series' — untagged. Two of them, so that the
- * per-value split libical does applies on this component too. The same literals
- * are asserted from both ends; see `RECURRING_EDITED_KEYWORDS` in
+/* The categories of that one occurrence: the "Categories…" button for an
+ * instance, not for the series. This is CATEGORIES on the detached component
+ * and a `keywords` patch in `recurrenceOverrides`. The series has no tags, so
+ * the full set is the difference. If the cache drops the tags, the instance
+ * comes back untagged, as the series is. Two tags, so that libical also
+ * splits the values on this component. Both halves assert the same literals;
+ * see `RECURRING_EDITED_KEYWORDS` in
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_RECURRING_EDITED_CATEGORIES "cancelled,offsite"
 
-/* And when that one occurrence reminds, which is the same "Reminder" control set
- * for an instance rather than for the series: a VALARM inside the detached
- * component, and an `alerts` patch under that instance's start in
- * `recurrenceOverrides`. A child component of a child component once EDS
- * marshals the two VEVENTs into one object, which is the whole reason for
- * measuring it here — the series carries no reminder at all, so this one is the
- * difference between them, and an occurrence whose alarm the cache dropped reads
- * back as one the user just cleared.
+/* The reminder of that one occurrence: the "Reminder" control for an
+ * instance, not for the series. This is a VALARM inside the detached
+ * component and an `alerts` patch in `recurrenceOverrides`. When EDS puts the
+ * two VEVENTs into one object, the alarm is a child of a child component, and
+ * that is why the test measures it. The series has no reminder, so if the
+ * cache drops this alarm, the occurrence looks as if the user removed it.
  *
- * The RFC 9074 §4 UID is written out because it is what the `alerts` entry is
- * keyed by: an alarm that came back without it would be re-keyed, which is the
- * same reminder arriving at the server under a name nobody asked for. The same
- * literals are asserted from both ends; see `RECURRING_EDITED_ALERT` in
+ * The RFC 9074 §4 UID is written because it is the key of the `alerts`
+ * entry. If the alarm loses it, the server gets the same reminder under a
+ * different key. Both halves assert the same literals; see
+ * `RECURRING_EDITED_ALERT_KEY` and `RECURRING_EDITED_ALARM_TRIGGER` in
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_RECURRING_EDITED_ALARM_UID "k1"
 #define TEST_RECURRING_EDITED_ALARM_TRIGGER "-PT1H"
 
-/* And the occurrence deleted the way a user deletes one, rather than by writing
- * the EXDATE above into the component before it is created. "Delete this
- * occurrence" is e_cal_client_remove_object_sync with a RECURRENCE-ID and
- * E_CAL_OBJ_MOD_THIS, which ECalMetaBackend turns into a *save of the master*
- * carrying one more EXDATE — the removal vfunc is never reached. That
- * translation is EDS's, not this project's, and it is what the created-with-an-
- * EXDATE case above cannot exercise. The fourth occurrence of the weekly
- * series, so that it is neither the excluded one nor the edited one. */
+/* An occurrence that is deleted as a user deletes one, not by an EXDATE in
+ * the created component. "Delete this occurrence" is
+ * e_cal_client_remove_object_sync with a RECURRENCE-ID and E_CAL_OBJ_MOD_THIS.
+ * ECalMetaBackend changes this into a save of the master with one more
+ * EXDATE; it does not call the removal vfunc. This translation is in EDS, not
+ * in this project, and the created EXDATE above cannot test it. This is the
+ * fourth occurrence of the weekly series, so it is not the excluded or the
+ * edited occurrence. */
 #define TEST_RECURRING_REMOVED_RECURRENCE_ID "20260205T130000Z"
 
-/* And the third thing that menu offers, "Edit this and future occurrences":
- * e_cal_client_modify_object_sync with E_CAL_OBJ_MOD_THIS_AND_FUTURE. It is the
- * only one of the three that is not an exception to a series at all — EDS
- * answers it by *splitting the series in two*. The master's RRULE is truncated
- * to stop before the named instance, and that instance and everything after it
- * becomes a second event under a UID of EDS's own invention, handed to the
- * backend as a create (e_cal_util_split_at_instance_ex, then
- * ecmb_create_object_sync). So this is the only menu item that reaches the
- * backend as two writes, and the only one that makes a new event out of an
- * occurrence — RANGE=THISANDFUTURE (RFC 5545 §3.2.13) never appears, because
- * EDS has already resolved it into ordinary components by then.
+/* The third item of that menu, "Edit this and future occurrences":
+ * e_cal_client_modify_object_sync with E_CAL_OBJ_MOD_THIS_AND_FUTURE. It is
+ * not an exception to a series: EDS splits the series in two. EDS truncates
+ * the RRULE of the master to stop before the named instance. That instance
+ * and all later ones become a second event with a UID from EDS, which goes to
+ * the backend as a create (e_cal_util_split_at_instance_ex, then
+ * ecmb_create_object_sync). Thus this is the only menu item that gives two
+ * writes to the backend and makes a new event from an occurrence.
+ * RANGE=THISANDFUTURE (RFC 5545 §3.2.13) does not occur, because EDS already
+ * changed it into ordinary components.
  *
- * The component carries the series' RRULE, and that is not decoration. EDS
- * builds an occurrence for a client by cloning the master and adding a
- * RECURRENCE-ID (e_cal_util_construct_instance), so a component with the rule
- * on it is exactly what Evolution has in hand to save; and
- * e_cal_util_split_at_instance_ex answers a component with no recurrence in it
- * with NULL, which ECalMetaBackend reports as success while dropping the edit.
+ * The component has the RRULE of the series, and this is necessary. EDS makes
+ * an occurrence for a client as a clone of the master with a RECURRENCE-ID
+ * (e_cal_util_construct_instance), so Evolution saves a component with the
+ * rule on it. Also, e_cal_util_split_at_instance_ex returns NULL for a
+ * component without recurrence, and ECalMetaBackend then reports success but
+ * drops the edit.
  *
- * The fifth occurrence, which is after all three exceptions the series carries
- * by now: the truncated master has to keep every one of them and the new event
- * has to carry none. */
+ * This is the fifth occurrence, after the three exceptions of the series. The
+ * truncated master must keep all three, and the new event must have none. */
 #define TEST_RECURRING_SPLIT_RECURRENCE_ID "20260212T130000Z"
 #define TEST_RECURRING_SPLIT_DTSTART "20260212T130000Z"
 #define TEST_RECURRING_SPLIT_DTEND "20260212T143000Z"
 
-/* And the one thing every case above leaves unsaid: a series in one named zone
- * with a single occurrence moved into another — the user who drags the week's
- * standup into the hours they are travelling. Every zoned case so far has one
- * zone for the whole event, so nothing has yet asked whether a *second* zone,
- * named by one detached instance, survives the trip through EDS.
+/* A series in one named zone with one occurrence moved into a different
+ * zone: for example, a user who moves the weekly standup into the hours of a
+ * journey. The zoned event above uses one zone for the full event, so it does
+ * not test whether a second zone on a detached instance goes through EDS.
  *
- * It is its own series rather than a sixth exception to the weekly one above,
- * because that one is in UTC and by now carries three exceptions and a split;
- * a zone question answered on top of all that would not say which of the two
- * broke it.
+ * It is a separate series, not one more exception to the weekly series above.
+ * That series is in UTC and has three exceptions and a split, so a failure
+ * there would not show which change caused it.
  *
- * Both zones are taken from libical's builtin table and set as zone *objects*,
- * for the reason TEST_ZONED_LOCATION gives: what reaches the backend is then
- * libical's own identifier rather than a string written here. The RECURRENCE-ID
- * is the exception that proves it — i_cal_component_set_recurrenceid writes a
- * floating value with no TZID on it, so the parameter is put on by hand, out of
- * the zone object rather than out of a literal. ECalComponent does the same
- * thing for Evolution (e_cal_component_set_recurid), which is why the component
- * a real editor saves has it and one built through the plain libical setters
- * does not. */
+ * Both zones come from the builtin table of libical and are set as zone
+ * objects, for the reason that TEST_ZONED_LOCATION gives. The RECURRENCE-ID
+ * is the exception: i_cal_component_set_recurrenceid writes a floating value
+ * without TZID, so the code adds the parameter manually, from the zone
+ * object. ECalComponent does the same for Evolution
+ * (e_cal_component_set_recurid), so a component from the real editor has the
+ * parameter. */
 #define TEST_ZONED_RECURRING_RRULE "FREQ=WEEKLY;COUNT=3"
 #define TEST_ZONED_RECURRING_DTSTART "20260305T100000"
 #define TEST_ZONED_RECURRING_DTEND "20260305T110000"
 
-/* The second occurrence, named on the series' own clock. RFC 5545 §3.8.4.4: a
- * RECURRENCE-ID names the instance the recurrence rules generated, and the rules
- * run in the series' zone — so this stays in Berlin even though the instance it
- * points at is being moved to New York. The instance's own start is the moved
- * one, and the two are five hours and a different clock apart, which is what
- * makes a mapping that carried the wall-clock time without the zone visible
- * rather than a rounding error. Its length is the series', so that what differs
- * about this occurrence is the zone and the start and nothing else. */
+/* The second occurrence, named on the clock of the series. RFC 5545
+ * §3.8.4.4: a RECURRENCE-ID identifies the instance that the recurrence rules
+ * generated, and the rules use the zone of the series. Thus it stays in
+ * Berlin, but the instance moves to New York. On that date the two zones are
+ * five hours apart, so a mapping that keeps the wall-clock time but drops the
+ * zone gives a clear error. The length is equal to the length of the series,
+ * so only the zone and the start are different. */
 #define TEST_ZONED_MOVED_LOCATION "America/New_York"
 #define TEST_ZONED_MOVED_RECURRENCE_ID "20260312T100000"
 #define TEST_ZONED_MOVED_DTSTART "20260312T080000"
@@ -281,11 +258,9 @@ fail (const gchar *step,
 	return 1;
 }
 
-/* What EDS hands back from get_object: a bare VEVENT for an event with one
- * instance, or a VCALENDAR wrapping the instances when there are several.
- * This test writes one, but reading the wrapper's first VEVENT rather than
- * insisting on the bare form keeps a future recurrence from turning into a
- * failure that says nothing about recurrence. */
+/* Return the first VEVENT of what get_object returns: a bare VEVENT for an
+ * event with one instance, or a VCALENDAR that contains the instances. Both
+ * forms are accepted, so that the form alone does not cause a failure. */
 static ICalComponent *
 first_vevent (ICalComponent *component)
 {
@@ -295,9 +270,8 @@ first_vevent (ICalComponent *component)
 	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }
 
-/* Whether a component replaces one occurrence of a series rather than being
- * the series — RFC 5545 §3.8.4.4's RECURRENCE-ID, and the only thing that
- * tells the two apart. */
+/* Whether a component replaces one occurrence of a series and is not the
+ * series. Only the RECURRENCE-ID (RFC 5545 §3.8.4.4) tells the two apart. */
 static gboolean
 is_detached_instance (ICalComponent *component)
 {
@@ -313,13 +287,12 @@ is_detached_instance (ICalComponent *component)
 	return TRUE;
 }
 
-/* Every value a component states for one property, joined by commas — the
- * EXDATEs of RFC 5545 §3.8.5.1, or the CATEGORIES of §3.8.1.2.
+/* All values of one property in a component, joined by commas: the EXDATEs
+ * of RFC 5545 §3.8.5.1, or the CATEGORIES of §3.8.1.2.
  *
- * Each property is asked for its value rather than for a typed one, which folds
- * the two shapes libical may hold a list in — one property carrying `a,b` or two
- * properties carrying one each — into the same string, so what this reports
- * depends on what the component states and not on how it was written. */
+ * Each value is read as text, not as a typed value. libical can hold a list
+ * as one property with `a,b` or as two properties with one value each; this
+ * gives the same string for both. */
 static gchar *
 joined_values (ICalComponent *component,
 	       ICalPropertyKind kind)
@@ -345,15 +318,13 @@ joined_values (ICalComponent *component,
 	return g_string_free (values, FALSE);
 }
 
-/* When the first reminder of a component fires, as text: the TRIGGER of the
- * first VALARM inside it (RFC 5545 §3.8.6.3), or an empty string for an event
- * EDS handed back with no alarm at all — which is what a reminder lost between
- * the write and the cache looks like.
+/* The TRIGGER (RFC 5545 §3.8.6.3) of the first VALARM in a component, as
+ * text. An empty string if the event has no alarm, which is how a reminder
+ * that the cache lost looks.
  *
- * The value rather than a typed offset, for the reason the CLASS and the PRIORITY
- * are read as text: i_cal_property_get_trigger hands back a struct whose zero
- * value is a perfectly good "no offset", so it could not tell a lost sign from a
- * lost property. */
+ * Read as text for the same reason as CLASS and PRIORITY:
+ * i_cal_property_get_trigger returns a struct whose zero value is a valid
+ * "no offset", so it cannot tell a lost sign from a lost property. */
 static gchar *
 first_alarm_trigger (ICalComponent *event)
 {
@@ -378,10 +349,9 @@ first_alarm_trigger (ICalComponent *event)
 	return value ? value : g_strdup ("");
 }
 
-/* The recurrence rule a component carries, as text — the RRULE of RFC 5545
- * §3.8.5.3, read back the same way for the truncated master and for the series
- * EDS split off it. An empty string for a component with no rule, which is a
- * series that stopped recurring rather than one whose rule this cannot see. */
+/* The RRULE (RFC 5545 §3.8.5.3) of a component, as text. The test reads both
+ * the truncated master and the series that EDS split from it this way. An
+ * empty string means that the component has no rule: a series that stopped. */
 static gchar *
 rrule_value (ICalComponent *component)
 {
@@ -398,20 +368,18 @@ rrule_value (ICalComponent *component)
 	return value ? value : g_strdup ("");
 }
 
-/* The two halves of a component's DTSTART: the value as text, and the TZID
- * naming the clock it is on (RFC 5545 §3.2.19) or an empty string for a
- * floating one.
+/* The value of the DTSTART of a component as text, and the TZID of its zone
+ * (RFC 5545 §3.2.19). The TZID is an empty string for a floating time.
  *
- * Read off the property rather than through i_cal_component_get_dtstart,
- * because that resolves the identifier against the enclosing VCALENDAR's
- * VTIMEZONEs and hands back a time carrying a zone *object* — which would
- * report what libical could look up rather than what EDS kept. Both are
- * returned together because either alone passes for the other going wrong: a
- * wall-clock start with no zone and a start silently converted into the
- * series' zone are the same appointment at the wrong hour, stated differently.
+ * Read from the property, not with i_cal_component_get_dtstart. That function
+ * resolves the identifier against the VTIMEZONEs of the VCALENDAR and returns
+ * a zone object, which shows what libical can find, not what EDS kept. Both
+ * parts are returned because each alone can hide an error: a wall-clock start
+ * without a zone and a start converted into the zone of the series both put
+ * the appointment at the wrong hour.
  *
- * The TZID is reported verbatim, prefix and all, because it is libical's to
- * spell — this test asks which zone it names, not how libical writes it. */
+ * The TZID is reported exactly, with its prefix, because libical controls its
+ * spelling. The test examines which zone it identifies, not its spelling. */
 static void
 dtstart_parts (ICalComponent *component,
 	       gchar **value,
@@ -446,11 +414,11 @@ dtstart_parts (ICalComponent *component,
 		*tzid = g_strdup ("");
 }
 
-/* The one component in a list that is a series of its own with this SUMMARY:
- * the event EDS made out of an occurrence. Matched on the summary because the
- * UID is EDS's invention and then the server's, so nothing on this side knows
- * it; the detached instances are skipped because an instance of the original
- * series is not the new event however it is titled. */
+/* The component in a list that is a separate series with this SUMMARY: the
+ * event that EDS made from an occurrence. The match uses the summary because
+ * EDS, and then the server, assign the UID, so this side does not know it.
+ * Detached instances are skipped because they belong to the original series,
+ * whatever their title is. */
 static ICalComponent *
 find_series_by_summary (GSList *components,
 			const gchar *summary)
@@ -530,8 +498,8 @@ main (int argc,
 	zoned_summary = argv[7];
 	zoned_recurring_summary = argv[8];
 
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
+	/* Start evolution-source-registry on the session bus. It reads the
+	 * scratch sources directory that the harness wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
 		return fail ("registry", error);
@@ -542,13 +510,13 @@ main (int argc,
 		return 1;
 	}
 
-	/* Activates evolution-calendar-factory, which is what dlopens
-	 * libecalbackendjmap.so out of EDS_CALENDAR_MODULES and picks the
-	 * factory matching the keyfile's BackendName. A failure here is
-	 * usually one of those two steps, not the backend's logic.
+	/* Start evolution-calendar-factory, which dlopens libecalbackendjmap.so
+	 * from EDS_CALENDAR_MODULES and selects the factory that matches the
+	 * BackendName of the keyfile. A failure here is usually in one of those
+	 * two steps, not in the backend logic.
 	 *
-	 * (guint32) -1 is EDS's "do not wait for connected"; see the same call
-	 * in book-client.c for why this test does not wait. */
+	 * (guint32) -1 is the EDS value for "do not wait for connected"; see the
+	 * same call in book-client.c for the reason. */
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
@@ -556,24 +524,23 @@ main (int argc,
 
 	cal = E_CAL_CLIENT (client);
 
-	/* EDS's own verdict on the connect, waited for properly. It says more
-	 * here than it does for the address book: e_cal_client_connect_sync()
-	 * succeeds even when the backend's connect_sync() failed, and this is
-	 * the observation that tells those two apart. */
+	/* The EDS result of the connect, with a correct wait. It is more important
+	 * here than for the address book: e_cal_client_connect_sync() succeeds
+	 * also when connect_sync() of the backend failed, and this observation
+	 * tells the two apart. */
 	functional_report_connection_status (source, 10);
 
-	/* Over the bus rather than out of the client's cached copy, which is
-	 * updated from D-Bus notifications on a main context this program
-	 * never runs — see book-client.c. */
+	/* Get the properties over the bus, not from the cached copy of the
+	 * client. D-Bus notifications update that copy on a main context that
+	 * this program does not run; see book-client.c. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
 		return fail ("retrieve-properties", error);
 
-	/* Whether the calendar accepts writes at all. EDS derives this from
-	 * what the backend said during its connect, so a backend that connects
-	 * happily and never says it can be written to gives a calendar that is
-	 * silently read-only in the UI — a state the write below would report
-	 * only as "Permission denied". Reported separately so the harness can
-	 * name the cause rather than the symptom. */
+	/* Whether the calendar accepts writes. EDS gets this from what the backend
+	 * said during its connect. If the backend connects but does not say that
+	 * it is writable, the calendar is read-only in the UI, and the write below
+	 * reports only "Permission denied". This line lets the harness identify
+	 * the cause, not the symptom. */
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	/* "#t" is the S-expression that matches every object. */
@@ -584,12 +551,11 @@ main (int argc,
 	g_slist_free_full (components, g_object_unref);
 	components = NULL;
 
-	/* Built from text rather than through the libical-glib setters: the
-	 * component this test wants to send is exactly the one written here,
-	 * and a parse is one step where a chain of setters is several. The UID
-	 * is a name invented locally, which is what Evolution does too — the
-	 * server assigns the identifier the calendar is keyed on afterwards,
-	 * so `added` below is not this string. */
+	/* Built from text, not with the libical-glib setters: the component that
+	 * the test sends is exactly the text here, and one parse is simpler than
+	 * many setters. The UID is a local name, as in Evolution. The server
+	 * assigns the identifier of the event, so `added` below is not this
+	 * string. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-event\r\n"
@@ -628,8 +594,8 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added=%s\n", added_uid ? added_uid : "");
 
-	/* Out of the meta backend's cache rather than off the server, which is
-	 * the point: EDS is meant to have kept what it just wrote. */
+	/* Read from the cache of the meta backend, not from the server: EDS must
+	 * keep what it wrote. */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
 		return fail ("read-back", error);
@@ -645,48 +611,47 @@ main (int argc,
 	}
 
 	g_print ("read-back-summary=%s\n", i_cal_component_get_summary (read_back_event));
-	/* The place, out of the same cached component: it reaches the server as a
-	 * `locations` entry and has to come back on the LOCATION line, or the user
-	 * sees the appointment lose its room the moment EDS re-reads it. */
+	/* The location, from the same cached component. It goes to the server as
+	 * a `locations` entry and must come back as the LOCATION line. If not, the
+	 * appointment loses its room when EDS reads it again. */
 	g_print ("read-back-location=%s\n", i_cal_component_get_location (read_back_event));
-	/* And the tags, out of the same cached component. Joined rather than read as
-	 * one line, because libical splits a multi-valued CATEGORIES into a property
-	 * per value: what is reported is the set, however it was spelled. */
+	/* The tags, from the same cached component. They are joined, not read as
+	 * one line, because libical splits a multi-valued CATEGORIES into one
+	 * property for each value. The output is the set, whatever its form. */
 	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
 	g_print ("read-back-categories=%s\n", categories);
 	g_free (categories);
-	/* And whether it blocks time, read as text rather than through
-	 * i_cal_property_get_transp: an empty string is then a component that
-	 * carries no TRANSP at all, which is what the mapping losing the state
-	 * would look like, and the enum would report that as OPAQUE. */
+	/* Whether it blocks time, read as text and not with
+	 * i_cal_property_get_transp. An empty string then means that the
+	 * component has no TRANSP, which is how a lost value looks; the enum
+	 * would report OPAQUE for that. */
 	transp = joined_values (read_back_event, I_CAL_TRANSP_PROPERTY);
 	g_print ("read-back-transp=%s\n", transp);
 	g_free (transp);
-	/* And how important it is, read as text for the same reason:
+	/* The importance, read as text for the same reason:
 	 * i_cal_property_get_priority reports a missing property as 0, which is
-	 * exactly the state a lost PRIORITY would leave the component in. */
+	 * the state that a lost PRIORITY gives. */
 	priority = joined_values (read_back_event, I_CAL_PRIORITY_PROPERTY);
 	g_print ("read-back-priority=%s\n", priority);
 	g_free (priority);
-	/* And who may see it, read as text for a stronger version of the same
-	 * reason: i_cal_property_get_class reports a missing property as
-	 * I_CAL_CLASS_NONE, but libical also parses an unrecognised value to that
-	 * same enum member — so reading through the enum could not tell a lost
-	 * CLASS from one libical declined to understand. The line itself can. */
+	/* The visibility, read as text for a stronger reason:
+	 * i_cal_property_get_class reports a missing property as
+	 * I_CAL_CLASS_NONE, and libical also parses an unrecognised value to that
+	 * enum member. Thus the enum cannot tell a lost CLASS from a value that
+	 * libical did not recognise, but the text can. */
 	classification = joined_values (read_back_event, I_CAL_CLASS_PROPERTY);
 	g_print ("read-back-class=%s\n", classification);
 	g_free (classification);
-	/* And when the user is reminded of it, out of the same cached component:
-	 * the alarm is a child component, so this is the one property whose survival
-	 * asks the cache to keep a whole nested component rather than a line. An
-	 * empty string is an event EDS handed back with no reminder on it. */
+	/* The reminder, from the same cached component. The alarm is a child
+	 * component, so the cache must keep a full nested component, not a line.
+	 * An empty string means that EDS returned the event without a reminder. */
 	trigger = first_alarm_trigger (read_back_event);
 	g_print ("read-back-alarm-trigger=%s\n", trigger);
 	g_free (trigger);
 	g_object_unref (read_back_event);
 
-	/* The all-day one, through the same path. Written second so that a
-	 * failure here cannot be mistaken for the timed event's. */
+	/* The all-day event, through the same path. It is written second, so that
+	 * a failure here is not confused with a failure of the timed event. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-all-day-event\r\n"
@@ -715,8 +680,8 @@ main (int argc,
 	g_print ("added-all-day=%s\n", all_day_uid ? all_day_uid : "");
 	g_free (all_day_uid);
 
-	/* The zoned one, built through the setters so that the TZID on it is
-	 * libical's own rather than one written here — see TEST_ZONED_LOCATION. */
+	/* The zoned event, built with the setters, so that libical writes the
+	 * TZID; see TEST_ZONED_LOCATION. */
 	zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_LOCATION);
 
 	if (!zone) {
@@ -751,8 +716,8 @@ main (int argc,
 	g_print ("added-zoned=%s\n", zoned_uid ? zoned_uid : "");
 	g_free (zoned_uid);
 
-	/* The recurring one, with an occurrence excluded. Written last for the
-	 * same reason as the all-day one. */
+	/* The recurring event, with an excluded occurrence. It is a separate
+	 * event, so a failure here is not confused with the events above. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-recurring-event\r\n"
@@ -783,12 +748,11 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added-recurring=%s\n", recurring_uid ? recurring_uid : "");
 
-	/* And one occurrence of it edited, which is what "Edit this occurrence"
-	 * does: a component with the series' UID — the one the server assigned,
-	 * not the name this program invented — a RECURRENCE-ID naming the
-	 * instance it replaces, and its own SUMMARY. E_CAL_OBJ_MOD_THIS is what
-	 * tells EDS this is that instance and not the series; with
-	 * E_CAL_OBJ_MOD_ALL it would rename every occurrence instead. */
+	/* Edit one occurrence, as "Edit this occurrence" does. The component has
+	 * the UID of the series (from the server, not the local name), a
+	 * RECURRENCE-ID that identifies the replaced instance, and its own
+	 * SUMMARY. E_CAL_OBJ_MOD_THIS tells EDS that this is one instance; with
+	 * E_CAL_OBJ_MOD_ALL, it would rename all occurrences. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:%s\r\n"
@@ -829,11 +793,10 @@ main (int argc,
 
 	g_object_unref (event);
 
-	/* What EDS kept of it, asked for by UID *and* RECURRENCE-ID: that pair
-	 * is how ECalMetaBackend stores a detached instance, and asking for the
-	 * UID alone answers with the series — the master alone, not a VCALENDAR
-	 * holding both. So this is the only question that distinguishes an
-	 * instance EDS kept from one it dropped. */
+	/* Read what EDS kept, by UID and RECURRENCE-ID. ECalMetaBackend stores a
+	 * detached instance by that pair. A request by UID alone returns only the
+	 * master, not a VCALENDAR with both. Thus only this request shows whether
+	 * EDS kept or dropped the instance. */
 	if (!e_cal_client_get_object_sync (cal, recurring_uid,
 					   TEST_RECURRING_EDITED_RECURRENCE_ID,
 					   &read_back, NULL, &error)) {
@@ -852,10 +815,9 @@ main (int argc,
 		return 1;
 	}
 
-	/* Checked rather than assumed, because it is what stops this from
-	 * passing on an occurrence EDS expanded out of the RRULE: an expansion
-	 * carries the series' own summary, and a component without a
-	 * RECURRENCE-ID is not the instance this asked for at all. */
+	/* Check, do not assume. An occurrence that EDS expanded from the RRULE has
+	 * the summary of the series and no RECURRENCE-ID, so it is not the
+	 * requested instance. */
 	if (!is_detached_instance (read_back_event)) {
 		g_printerr ("read-back-occurrence: EDS answered with a component that "
 			    "replaces no occurrence\n");
@@ -867,31 +829,26 @@ main (int argc,
 
 	g_print ("edited-occurrence-summary=%s\n",
 		 i_cal_component_get_summary (read_back_event));
-	/* And the tags that instance carries, read the same way the series' are —
-	 * as text, joined, whatever shape libical kept them in. This is the only
-	 * place the set for that one occurrence is stated, so a cache that
-	 * dropped them hands the next save an instance filed under whatever the
-	 * series is, and the user's filing is undone by a save that never
-	 * touched it. */
+	/* The tags of that instance, read as for the series: as text, joined.
+	 * Only this instance holds this set. If the cache drops it, the next save
+	 * sends the instance with the tags of the series, and the user loses the
+	 * change. */
 	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
 	g_print ("edited-occurrence-categories=%s\n", categories);
 	g_free (categories);
-	/* And when it reminds, read as text for the reason the series' own trigger
-	 * is: the sign is the whole of a reminder before the event, and a struct
-	 * whose zero value is a good "no offset" could not tell one that was lost
-	 * from one that was kept. The alarm is a component inside a component
-	 * inside the object EDS hands back, so this is the deepest thing the cache
-	 * is asked to have kept. */
+	/* The reminder of the instance, read as text for the same reason as the
+	 * reminder of the series: the zero value of the struct cannot tell a lost
+	 * sign from a kept one. The alarm is a component in a component in the
+	 * returned object, so it is the deepest item that the cache must keep. */
 	trigger = first_alarm_trigger (read_back_event);
 	g_print ("edited-occurrence-alarm-trigger=%s\n", trigger);
 	g_free (trigger);
 	g_object_unref (read_back_event);
 
-	/* And "Delete this occurrence" on a fourth one, which is a removal only
-	 * from the client's side: EDS answers it by handing the backend the
-	 * master with one more EXDATE. Done after the edit so that the series
-	 * already carries an exception of each kind when it happens, which is the
-	 * state a save that rebuilt the overrides from scratch would flatten. */
+	/* "Delete this occurrence" on the fourth occurrence. Only the client sees
+	 * a removal: EDS gives the backend the master with one more EXDATE. This
+	 * occurs after the edit, so the series already has one exception of each
+	 * type. A save that builds the overrides again from nothing loses them. */
 	if (!e_cal_client_remove_object_sync (cal, recurring_uid,
 					      TEST_RECURRING_REMOVED_RECURRENCE_ID,
 					      E_CAL_OBJ_MOD_THIS,
@@ -901,8 +858,8 @@ main (int argc,
 		return fail ("remove-occurrence", error);
 	}
 
-	/* The series as EDS kept it: asking by UID with no RECURRENCE-ID answers
-	 * with the master alone, which is the component the exclusions live on. */
+	/* The series as EDS kept it. A request by UID without RECURRENCE-ID
+	 * returns only the master, which holds the exclusions. */
 	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
@@ -925,10 +882,10 @@ main (int argc,
 	g_print ("recurring-exdates=%s\n", exdates);
 	g_free (exdates);
 
-	/* And "Edit this and future occurrences" on the fifth one, which EDS turns
-	 * into a truncated series plus a second event. Last of the three, so the
-	 * series it cuts in two is the one the other two have already left their
-	 * exceptions on. */
+	/* "Edit this and future occurrences" on the fifth occurrence. EDS changes
+	 * it into a truncated series and a second event. It is the last of the
+	 * three edits, so the series that EDS splits already has the exceptions
+	 * of the other two. */
 	icalendar = g_strdup_printf (
 		"BEGIN:VEVENT\r\n"
 		"UID:%s\r\n"
@@ -961,11 +918,10 @@ main (int argc,
 
 	g_object_unref (event);
 
-	/* What is left of the series EDS cut: the master again, whose rule has to
-	 * have been shortened to stop before the instance the split began at. A
-	 * rule EDS truncated and the backend's save undid is a series that still
-	 * recurs over the days the new event now owns — the same appointment
-	 * twice, under two titles. */
+	/* The remaining part of the series: the master again. EDS must have
+	 * truncated its rule to stop before the split instance. If the save of
+	 * the backend reverts the truncated rule, the series still recurs on the
+	 * days of the new event, so the appointment shows twice with two titles. */
 	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
@@ -989,10 +945,10 @@ main (int argc,
 	g_print ("series-rrule=%s\n", rrule);
 	g_free (rrule);
 
-	/* And the last event: a series in a named zone with one occurrence moved
-	 * into another — see TEST_ZONED_RECURRING_RRULE for why it is a series of
-	 * its own rather than a sixth exception to the one above. Built through
-	 * the setters, like the one-off zoned event, and for the same reason. */
+	/* The last event: a series in a named zone with one occurrence moved into
+	 * a different zone. See TEST_ZONED_RECURRING_RRULE for why it is a
+	 * separate series. Built with the setters, as the single zoned event is,
+	 * for the same reason. */
 	zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_LOCATION);
 	moved_zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_MOVED_LOCATION);
 
@@ -1017,9 +973,8 @@ main (int argc,
 	i_cal_component_set_dtend (event, zoned_time);
 	g_object_unref (zoned_time);
 
-	/* The rule from text, unlike everything else on this component: a RRULE
-	 * carries no zone, so writing it out is not the shortcut that hardcoding
-	 * an identifier would be. */
+	/* The rule comes from text, unlike the other parts of this component. An
+	 * RRULE has no zone, so text here does not hardcode an identifier. */
 	property = i_cal_property_new_from_string ("RRULE:" TEST_ZONED_RECURRING_RRULE);
 
 	if (!property) {
@@ -1042,10 +997,10 @@ main (int argc,
 	g_print ("added-zoned-recurring=%s\n",
 		 zoned_recurring_uid ? zoned_recurring_uid : "");
 
-	/* And the move itself: "Edit this occurrence" a second time, changing the
-	 * clock rather than the title. The RECURRENCE-ID stays on the series'
-	 * zone because that is the instance the rules generated; the DTSTART and
-	 * DTEND are on the zone the user moved it to. */
+	/* The move: "Edit this occurrence" again, which changes the zone, not the
+	 * title. The RECURRENCE-ID stays in the zone of the series, because that
+	 * identifies the generated instance. DTSTART and DTEND are in the new
+	 * zone. */
 	event = i_cal_component_new_vevent ();
 	i_cal_component_set_uid (event, zoned_recurring_uid);
 	i_cal_component_set_summary (event, zoned_recurring_summary);
@@ -1078,9 +1033,9 @@ main (int argc,
 
 	g_object_unref (event);
 
-	/* What EDS kept of it, asked for by the pair again. The RECURRENCE-ID is
-	 * spelled without a Z: it is a wall-clock time on the series' zone, and
-	 * that is the string ECalCache keys the detached instance on. */
+	/* Read what EDS kept, by the pair again. The RECURRENCE-ID has no Z: it
+	 * is a wall-clock time in the zone of the series, and ECalCache uses that
+	 * string as the key of the detached instance. */
 	if (!e_cal_client_get_object_sync (cal, zoned_recurring_uid,
 					   TEST_ZONED_MOVED_RECURRENCE_ID,
 					   &read_back, NULL, &error)) {
@@ -1124,11 +1079,11 @@ main (int argc,
 
 	g_print ("events-after=%u\n", g_slist_length (components));
 
-	/* And the other half of the split, found in the same listing: the event
-	 * EDS made out of the occurrence, which nothing on this side can ask for
-	 * by UID because EDS invented one and the server then replaced it. Its own
-	 * start and its own rule are what say the split happened where it was
-	 * asked for rather than at the head of the series. */
+	/* The other half of the split, from the same list: the event that EDS
+	 * made from the occurrence. This side cannot request it by UID, because
+	 * EDS made a UID and then the server replaced it. Its start and rule show
+	 * that the split occurred at the requested instance, not at the start of
+	 * the series. */
 	split_event = find_series_by_summary (components, split_summary);
 
 	if (!split_event) {
@@ -1149,9 +1104,9 @@ main (int argc,
 	g_print ("split-rrule=%s\n", rrule);
 	g_free (rrule);
 
-	/* And that it took none of the series' exceptions with it. The two
-	 * cancelled occurrences are both before the split, so an EXDATE here is an
-	 * exclusion EDS moved onto days it does not belong to. */
+	/* Make sure that it took none of the exceptions of the series. The two
+	 * cancelled occurrences are both before the split, so an EXDATE here is
+	 * an exclusion that EDS moved to the wrong days. */
 	exdates = joined_values (split_event, I_CAL_EXDATE_PROPERTY);
 	g_print ("split-exdates=%s\n", exdates);
 	g_free (exdates);
