@@ -1,48 +1,49 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where this project's translated strings come from.
+//! Where the translated strings of this project come from.
 //!
-//! Every module in this repository is dlopened into a process it does not own —
-//! Evolution's shell, `evolution-source-registry`, whatever is using Camel —
-//! and every one of those processes has already set up gettext for *itself*.
-//! What none of them has done is tell gettext where *our* catalogue is, because
-//! they have never heard of it. That is the whole of this module: one domain
+//! Every module in this repository is dlopened into a process that it does
+//! not own: the Evolution shell, `evolution-source-registry`, or a process
+//! that uses Camel. Each of these processes already configured gettext for
+//! *itself*. But none of them told gettext where *our* catalogue is, because
+//! they do not know about it. This module supplies only that: one domain
 //! name, one directory, and the call that associates them.
 //!
-//! ## The domain, and who looks a string up in it
+//! ## The domain, and the callers that look up a string in it
 //!
-//! [`DOMAIN`] is `evolution-jmap`, so the installed catalogue for a language is
-//! `<`[`LOCALE_DIR`]`>/<language>/LC_MESSAGES/evolution-jmap.mo`. Two different
-//! callers reach into it:
+//! [`DOMAIN`] is `evolution-jmap`, so the installed catalogue for a language
+//! is `<`[`LOCALE_DIR`]`>/<language>/LC_MESSAGES/evolution-jmap.mo`. Two
+//! different callers use it:
 //!
-//! - **Camel, on our behalf.** A `CamelProvider` carries a
-//!   `translation_domain`, and Camel calls `dgettext` with it when it displays
-//!   the provider's name and description. So those two strings are translated
-//!   without this crate doing anything — *provided* the domain is bound, which
-//!   is why [`bind`] is called from the provider module's entry point rather
-//!   than from wherever the first translated string happens to be.
-//! - **This code, for text it emits itself** — [`translate`], or
-//!   [`translate_with`] where the sentence has to name something. The calendar
-//!   backend's refusals are the first of these; the account-setup labels and
-//!   the user-visible parts of Camel error messages will follow.
+//! - **Camel, for us.** A `CamelProvider` has a `translation_domain`, and
+//!   Camel calls `dgettext` with it when it shows the name and description of
+//!   the provider. Thus Camel translates those two strings without help from
+//!   this crate, *if* the domain is bound. This is why the entry point of the
+//!   provider module calls [`bind`], and not the location of the first
+//!   translated string.
+//! - **This code, for text that it emits.** It uses [`translate`], or
+//!   [`translate_with`] when the sentence must name something. The refusals
+//!   of the calendar backend were the first of these. The account-setup
+//!   labels and the user-visible parts of Camel error messages also use them.
 //!
 //! ## Why the directory is a build-time input
 //!
-//! gettext's compiled-in default is `/usr/share/locale`, which is right only
-//! when the modules were installed under `/usr`. They need not be: the
-//! destinations come from pkg-config and the tree can be staged anywhere, and a
-//! module that looked for its catalogue somewhere it was not installed would
-//! silently show English. So CMake passes `EVOLUTION_JMAP_LOCALEDIR` to cargo,
-//! `build.rs` bakes it in, and a plain `cargo build` falls back to the same
-//! `/usr/share/locale` gettext would have used anyway.
+//! The compiled-in default of gettext is `/usr/share/locale`. This is correct
+//! only when the modules are installed under `/usr`, which is not always
+//! true. The destinations come from pkg-config, and the tree can be staged
+//! in any location. A module that looks for its catalogue in the wrong
+//! location shows English without a warning. Thus CMake passes
+//! `EVOLUTION_JMAP_LOCALEDIR` to cargo, and `build.rs` compiles it in. A
+//! plain `cargo build` uses the same `/usr/share/locale` as gettext.
 //!
 //! ## What is *not* here
 //!
-//! `textdomain()` — the call that changes the *default* domain for the whole
-//! process. A loadable module must never make it: the default domain belongs to
-//! the program, and taking it would untranslate the host application. Every
-//! lookup here names its domain explicitly, which is what `dgettext` is for.
+//! `textdomain()`, the call that changes the *default* domain for the full
+//! process. A loadable module must never make this call. The default domain
+//! belongs to the program, and a change to it would remove the translation
+//! of the host application. Every lookup here names its domain explicitly,
+//! which is the purpose of `dgettext`.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -55,19 +56,20 @@ unsafe extern "C" {
     fn dgettext(domainname: *const c_char, msgid: *const c_char) -> *mut c_char;
 }
 
-/// The gettext domain every translated string in this project belongs to.
+/// The gettext domain of every translated string in this project.
 ///
-/// Also the basename of the installed catalogue, and the `translation_domain`
-/// the Camel provider hands to Camel — the three have to agree or the
-/// catalogue is simply never opened, with no diagnostic anywhere.
+/// It is also the basename of the installed catalogue, and the
+/// `translation_domain` that the Camel provider gives to Camel. These three
+/// must agree. If not, gettext never opens the catalogue, and no diagnostic
+/// tells why.
 pub const DOMAIN: &CStr = c"evolution-jmap";
 
-/// The directory the catalogues were installed under.
+/// The directory where the catalogues are installed.
 ///
-/// `build.rs` resolves it from `EVOLUTION_JMAP_LOCALEDIR` or falls back to
-/// gettext's own default, so this is never empty and the `panic!` below is a
-/// build-time error about a directory name with a NUL in it, not something a
-/// running module can reach.
+/// `build.rs` gets it from `EVOLUTION_JMAP_LOCALEDIR`, or uses the default of
+/// gettext. Thus it is never empty. The `panic!` below is a build-time error
+/// for a directory name that contains a NUL. A running module cannot get to
+/// it.
 pub const LOCALE_DIR: &CStr =
     match CStr::from_bytes_with_nul(concat!(env!("EVOLUTION_JMAP_LOCALE_DIR"), "\0").as_bytes()) {
         Ok(dir) => dir,
@@ -77,102 +79,105 @@ pub const LOCALE_DIR: &CStr =
 /// The binding, made at most once per process.
 static BOUND: OnceLock<CString> = OnceLock::new();
 
-/// Points gettext at this project's catalogues, and answers with where it
-/// says they are.
+/// Tells gettext where the catalogues of this project are, and returns the
+/// location that gettext reports.
 ///
-/// Call it from a module's entry point, before anything can ask for a
-/// translated string. It is idempotent because a process can load more than one
-/// of this repository's modules — Evolution loads the account-setup module and
-/// uses Camel's provider in the same address space — and each of them has to
-/// assume it might be the first.
+/// Call it from the entry point of a module, before a translated string is
+/// necessary. It is idempotent, because a process can load more than one
+/// module of this repository. (Evolution loads the account-setup module and
+/// uses the Camel provider in the same address space.) Each module must
+/// assume that it is possibly the first.
 ///
-/// The return value is gettext's account of the binding rather than the
-/// argument echoed back, which is the only way to tell a binding that took from
-/// one that did not.
+/// The return value is the binding that gettext reports, not the argument.
+/// This is the only way to tell a binding that worked from one that did
+/// not.
 pub fn bind() -> &'static CString {
     BOUND.get_or_init(|| bind_to(LOCALE_DIR))
 }
 
 /// [`bind`] to a directory of the caller's choosing.
 ///
-/// Separate from `bind` so that a test can prove the mechanism against a
-/// catalogue it wrote itself; nothing in the modules should call it. Binding
-/// twice to different directories is not an error to gettext — the last call
-/// wins — so a second caller would silently move the catalogue out from under
-/// the first.
+/// This is separate from `bind`, so that a test can prove the mechanism with
+/// a catalogue that the test wrote. The modules must not call it. For
+/// gettext, two bindings to different directories are not an error: the last
+/// call wins. Thus a second caller would move the catalogue away from the
+/// first caller, without a warning.
 ///
-/// Safe rather than `unsafe`: the arguments are C strings that outlive the
-/// call, glibc copies the directory rather than borrowing it, and it takes its
-/// own lock over the binding list. What the caller has to think about is
-/// ordering, not memory.
+/// This function is safe, not `unsafe`. The arguments are C strings that
+/// outlive the call. glibc copies the directory and does not borrow it, and
+/// glibc uses its own lock on the binding list. The caller must think about
+/// the sequence of calls, not about memory.
 pub fn bind_to(dir: &CStr) -> CString {
     // SAFETY: two C strings, valid for the call, and glibc copies both.
     let bound = unsafe {
         let bound = bindtextdomain(DOMAIN.as_ptr(), dir.as_ptr());
-        // The catalogue's own charset is whatever the translators used;
-        // asking for UTF-8 makes gettext convert, which is what lets
-        // `translate` hand back a Rust `String` without a lossy step that
-        // could show up as replacement characters in the account dialog.
+        // The translators choose the charset of the catalogue. A request for
+        // UTF-8 makes gettext convert it. Thus `translate` can return a Rust
+        // `String` without a lossy step, which could show replacement
+        // characters in the account dialog.
         bind_textdomain_codeset(DOMAIN.as_ptr(), c"UTF-8".as_ptr());
         bound
     };
 
     if bound.is_null() {
-        // glibc could not record the binding, which it only fails to do when
-        // it is out of memory. Reporting an empty directory rather than the
-        // one that was asked for keeps the failure visible: the caller's
-        // argument is not evidence that gettext accepted it.
+        // glibc could not record the binding. This occurs only when it has no
+        // memory. The function reports an empty directory, not the requested
+        // one, so that the failure stays visible. The argument of the caller
+        // does not prove that gettext accepted it.
         return CString::default();
     }
-    // SAFETY: a non-NULL return is a C string glibc owns and keeps until the
-    // domain is rebound; it is copied here and not held.
+    // SAFETY: a non-NULL return is a C string that glibc owns and keeps until
+    // the domain is bound again. The code copies it here and does not keep
+    // it.
     unsafe { CStr::from_ptr(bound) }.to_owned()
 }
 
-/// Where gettext currently thinks this project's catalogues are.
+/// Where gettext now thinks the catalogues of this project are.
 ///
-/// The question [`bind`] and [`bind_to`] cannot answer for a caller that has
-/// not just called one of them: asking gettext by binding it would make the
-/// answer yes whatever the truth was. `bindtextdomain` with a NULL directory is
-/// the read-only form — it reports the binding and changes nothing — which is
-/// how a test can hold a module's entry point to having bound the domain.
+/// [`bind`] and [`bind_to`] cannot answer this question for a caller that did
+/// not just call one of them. A query through a new binding would always
+/// answer yes, whatever the truth. `bindtextdomain` with a NULL directory is
+/// the read-only form: it reports the binding and changes nothing. With it, a
+/// test can prove that the entry point of a module bound the domain.
 ///
-/// Before anything binds, this is gettext's compiled-in default rather than
-/// [`LOCALE_DIR`]; the two coincide on an uninstalled build, which is why the
-/// tests that care start from a directory neither of them would be.
+/// Before the first binding, this is the compiled-in default of gettext, not
+/// [`LOCALE_DIR`]. The two are the same on an uninstalled build. Thus the
+/// tests that need the difference start from a directory that is neither of
+/// them.
 pub fn binding() -> CString {
     // SAFETY: a NUL-terminated domain and a NULL directory, which is the
-    // documented query form; the returned string is glibc's and is copied out
-    // before anything can rebind the domain.
+    // documented query form. The returned string belongs to glibc. The code
+    // copies it before a new binding can occur.
     let bound = unsafe { bindtextdomain(DOMAIN.as_ptr(), ptr::null()) };
     if bound.is_null() {
         return CString::default();
     }
-    // SAFETY: a non-NULL return is a C string glibc owns and keeps until the
-    // domain is rebound.
+    // SAFETY: a non-NULL return is a C string that glibc owns and keeps until
+    // the domain is bound again.
     unsafe { CStr::from_ptr(bound) }.to_owned()
 }
 
-/// Marks `msgid` for extraction and hands it straight back, untranslated.
+/// Marks `msgid` for extraction and returns it immediately, untranslated.
 ///
-/// gettext's `N_()`: the string has to reach a translator, but *this* is not
-/// where it is looked up. Two situations need that, and both are ordinary here:
+/// The `N_()` of gettext: the string must get to a translator, but the lookup
+/// does not occur *here*. Two situations need this, and both are ordinary
+/// here:
 ///
-/// - **Somebody else does the lookup.** A `CamelProvider`'s name and
-///   description are `'static` C strings that Camel itself passes to `dgettext`
-///   with the provider's [`DOMAIN`] when it displays them. Calling [`translate`]
-///   on them would be wrong twice over — the module is loaded long before the
-///   user's language matters to that string, and the result would be a
-///   translation into whatever locale happened to be current at load time,
-///   frozen for the life of the process.
-/// - **The string is a constant.** [`translate`] returns an owned `String` and
-///   cannot appear in a `const`; this is a `const fn`, so a marked message can
-///   be a constant and be translated at the point of use.
+/// - **A different caller does the lookup.** The name and description of a
+///   `CamelProvider` are `'static` C strings. Camel passes them to `dgettext`
+///   with the [`DOMAIN`] of the provider when it shows them. [`translate`] on
+///   them would be wrong for two reasons. The module loads long before the
+///   language of the user is important to that string. And the result would
+///   be a translation into the locale at load time, frozen for the life of
+///   the process.
+/// - **The string is a constant.** [`translate`] returns an owned `String`
+///   and cannot be in a `const`. This is a `const fn`, so a marked message can
+///   be a constant, and the translation occurs at the point of use.
 ///
-/// It compiles to nothing. Its whole job is to be a word `xgettext --keyword`
-/// can be told to look for, which is also why it is spelled in capitals against
-/// Rust's naming convention: `N_` is the spelling every gettext-using project,
-/// every extraction tool's defaults, and every translator's habit already know.
+/// It compiles to nothing. Its only function is to be a word that
+/// `xgettext --keyword` can look for. This is also why its name has capitals,
+/// against the Rust naming convention: every project that uses gettext,
+/// the defaults of every extraction tool, and every translator know `N_`.
 #[allow(non_snake_case)]
 pub const fn N_(msgid: &CStr) -> &CStr {
     msgid
@@ -180,89 +185,91 @@ pub const fn N_(msgid: &CStr) -> &CStr {
 
 /// The translation of `msgid` for the user's language, or `msgid` itself.
 ///
-/// "Or `msgid` itself" is the normal case rather than the failure case, and
-/// covers all of: no catalogue installed for the domain, no catalogue for this
-/// language, the message not in the catalogue, and a user whose locale is `C`.
-/// gettext makes no distinction between them and neither does this — the
-/// untranslated string is a correct answer, and the alternative of reporting an
-/// error the caller can do nothing about would only mean an unwritten label.
+/// "Or `msgid` itself" is the normal case, not the failure case. It includes
+/// all of these: no installed catalogue for the domain, no catalogue for this
+/// language, the message not in the catalogue, and a user with the locale
+/// `C`. gettext does not distinguish between them, and this function also
+/// does not. The untranslated string is a correct answer. An error that the
+/// caller cannot correct would only cause an empty label.
 ///
-/// Callers must have called [`bind`] first; before that the lookup goes to
-/// whatever directory gettext defaults to, which is a different question with a
-/// plausible-looking answer.
+/// Call [`bind`] before this function. Before that, the lookup goes to the
+/// default directory of gettext. That is a different question with an answer
+/// that looks correct.
 pub fn translate(msgid: &CStr) -> String {
-    // SAFETY: `msgid` is valid for the call. `dgettext` never returns NULL —
-    // with nothing to translate it returns the `msgid` pointer it was given —
-    // and what it returns is owned by gettext, so it is copied out here.
+    // SAFETY: `msgid` is valid for the call. `dgettext` never returns NULL:
+    // with nothing to translate, it returns the `msgid` pointer that it got.
+    // gettext owns the return value, so the code copies it here.
     unsafe { CStr::from_ptr(dgettext(DOMAIN.as_ptr(), msgid.as_ptr())) }
         .to_string_lossy()
         .into_owned()
 }
 
-/// [`translate`], but handing back gettext's own pointer instead of a copy.
+/// [`translate`], but it returns the pointer of gettext, not a copy.
 ///
-/// For the one shape of caller [`translate`] cannot serve: a `const gchar *`
-/// vfunc — `EOAuth2Service::get_display_name` is the first — that must answer
-/// synchronously and cannot return an owned `String` a caller a language
-/// barrier away would have no way to free. `dgettext` itself is what makes
-/// this sound rather than a fresh hazard: with nothing to translate it hands
-/// back the very `msgid` pointer it was given, and with a catalogue loaded it
-/// hands back a pointer into memory glibc keeps resident for the domain's
-/// binding, which nothing in this process frees either. Both are good for the
-/// life of the process — the same guarantee a `CamelProvider`'s `'static`
-/// name already leans on when Camel calls `dgettext` on it directly instead of
-/// through this module.
+/// This is for the one type of caller that [`translate`] cannot serve: a
+/// `const gchar *` vfunc (`EOAuth2Service::get_display_name` is the first).
+/// Such a vfunc must answer synchronously. It cannot return an owned
+/// `String`, because a caller in a different language cannot free it.
+/// `dgettext` makes this safe, not a new hazard. With nothing to translate,
+/// it returns the same `msgid` pointer that it got. With a loaded catalogue,
+/// it returns a pointer into memory that glibc keeps for the binding of the
+/// domain, and nothing in this process frees that memory. Both pointers are
+/// valid for the life of the process. The `'static` name of a
+/// `CamelProvider` uses the same guarantee when Camel calls `dgettext` on it
+/// directly, not through this module.
 ///
-/// Callers must have called [`bind`] first, as [`translate`] must.
+/// Call [`bind`] before this function, as for [`translate`].
 pub fn translate_static(msgid: &'static CStr) -> *const c_char {
-    // SAFETY: `msgid` outlives the call. `dgettext` never returns NULL — with
-    // nothing to translate it returns the `msgid` pointer unchanged — and the
-    // result is not copied because the whole point is to keep the pointer
-    // gettext itself considers good for the process's life.
+    // SAFETY: `msgid` outlives the call. `dgettext` never returns NULL: with
+    // nothing to translate, it returns the `msgid` pointer unchanged. The code
+    // does not copy the result, because the purpose is to keep the pointer
+    // that gettext considers valid for the life of the process.
     unsafe { dgettext(DOMAIN.as_ptr(), msgid.as_ptr()) }.cast_const()
 }
 
 /// [`translate`], with `%1$s`-style placeholders filled from `arguments`.
 ///
-/// The form of a message that has to name something — a time zone, a folder, a
-/// server's own words. Two rules come out of the fact that the template is a
-/// *translation*, and neither is optional:
+/// The form of a message that must name something: a time zone, a folder,
+/// or the words of a server. The template is a *translation*. Thus two rules
+/// apply, and both are mandatory:
 ///
-/// - **The placeholders are numbered.** Word order is not something a sentence
-///   keeps across languages: "the time zone %2$s cannot state %1$s" is the
-///   natural German shape of a sentence English writes the other way round. A
-///   translator given bare `%s`es has to choose between a natural sentence and
-///   a correct one, so every placeholder here carries the argument's position
-///   and a translation may put them in any order, or repeat one.
-/// - **This is not `printf`, and must never become it.** A catalogue is data
-///   loaded at run time from a file this program did not write, and handing a
-///   translated string to a real format function is the textbook way that data
-///   turns into control over the process: a `%n` nobody wrote in the source,
-///   read against arguments that are not there. The substitution below knows
-///   exactly one construct and copies every other byte through, so the worst a
-///   hostile or merely wrong `.mo` can do is make the sentence read badly.
+/// - **The placeholders are numbered.** Word order changes between
+///   languages: "the time zone %2$s cannot state %1$s" is the natural German
+///   order of a sentence that English writes in the opposite order. With
+///   bare `%s`es, a translator must choose between a natural sentence and a
+///   correct one. Thus every placeholder here has the position of its
+///   argument. A translation can put them in any order, or repeat one.
+/// - **This is not `printf`, and must never become `printf`.** A catalogue is
+///   data from a file that this program did not write, loaded at run time. A
+///   translated string in a real format function is the textbook way for
+///   that data to get control of the process: a `%n` that is not in the
+///   source, read against arguments that do not exist. The substitution below
+///   knows exactly one construct and copies all other bytes. Thus a hostile
+///   or incorrect `.mo` can only make the sentence read badly.
 ///
-/// A placeholder no argument answers is left as written rather than dropped or
-/// fatal: it is a bug in a translation, and showing the marker is what makes it
-/// reportable. Ill-formed `%` sequences are ordinary characters, so a message
-/// may say `50%` without ceremony.
+/// A placeholder with no argument stays as written. It is not removed and it
+/// is not fatal. It is a bug in a translation, and the visible marker lets a
+/// user report it. Ill-formed `%` sequences are ordinary characters, so a
+/// message can contain `50%` without special syntax.
 ///
-/// Like [`translate`], this is a name `xgettext --keyword` is told about, so a
-/// literal written here is extracted where it stands and needs no [`N_`] around
-/// it — see `po/POTFILES.in`, and the file the string is in has to be listed
-/// there.
+/// As for [`translate`], `xgettext --keyword` knows this name. Thus xgettext
+/// extracts a literal written here in its position, and the literal needs no
+/// [`N_`]. See `po/POTFILES.in`: the file that contains the string must be in
+/// that list.
 pub fn translate_with(msgid: &CStr, arguments: &[&str]) -> String {
     substitute(&translate(msgid), arguments)
 }
 
-/// Fills `template`'s placeholders from `arguments`, in one left-to-right pass.
+/// Fills the placeholders of `template` from `arguments`, in one
+/// left-to-right pass.
 ///
-/// One pass rather than one replacement per argument, which matters for what
-/// the arguments *are*: values from a server, a user's calendar, a time zone
-/// database. Replacing argument by argument would run the second replacement
-/// over the first argument's text, so a value containing `%2$s` would have the
-/// next argument spliced into it — a value from outside choosing what the
-/// message says. Here an argument's expansion is output and is never looked at
+/// One pass, not one replacement for each argument. This is important
+/// because of what the arguments *are*: values from a server, from the
+/// calendar of a user, or from a time zone database. With one replacement for
+/// each argument, the second replacement would examine the text of the first
+/// argument. Thus a value that contains `%2$s` would get the next argument
+/// inserted into it, and an external value would control the message. Here,
+/// the expansion of an argument goes to the output and is never examined
 /// again.
 fn substitute(template: &str, arguments: &[&str]) -> String {
     let mut filled = String::with_capacity(template.len());
@@ -276,9 +283,9 @@ fn substitute(template: &str, arguments: &[&str]) -> String {
                 filled.push_str(arguments[position - 1]);
                 rest = &rest[length..];
             }
-            // Not a placeholder, or one this call has no argument for: the `%`
-            // is a character like any other. Stepping over just the `%` is what
-            // keeps the scan moving and leaves the rest to be matched again.
+            // Not a placeholder, or one with no argument: the `%` is an
+            // ordinary character. The scan steps over only the `%`, so that it
+            // continues and examines the remaining text again.
             _ => {
                 filled.push('%');
                 rest = &rest[1..];
@@ -290,12 +297,13 @@ fn substitute(template: &str, arguments: &[&str]) -> String {
     filled
 }
 
-/// The argument position `text` opens with, and the bytes it spans.
+/// The argument position at the start of `text`, and its length in bytes.
 ///
-/// `text` starts at a `%`. A placeholder is that, one or more decimal digits,
-/// and `$s` — `printf`'s positional form, so a translator's tooling recognises
-/// it and `xgettext`'s format checks apply. Anything else, including a number
-/// too large to be a position, is not one.
+/// `text` starts at a `%`. A placeholder is that `%`, one or more decimal
+/// digits, and `$s`. This is the positional form of `printf`, so the tools of
+/// a translator recognise it and the format checks of `xgettext` apply. All
+/// other text is not a placeholder. This includes a number that is too large
+/// to be a position.
 fn placeholder(text: &str) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut end = 1;
@@ -320,9 +328,9 @@ mod tests {
 
     #[test]
     fn digits_without_a_dollar_s_suffix_are_not_a_placeholder() {
-        // Reaches the suffix check (`end` past the digits) without being
-        // short-circuited by the no-digit case, so this fails only when
-        // both parts of the guard are evaluated.
+        // This input gets to the suffix check (`end` after the digits), and
+        // the no-digit case does not short-circuit it. Thus this test fails
+        // only when the code evaluates both parts of the guard.
         assert_eq!(placeholder("%12xs"), None);
     }
 

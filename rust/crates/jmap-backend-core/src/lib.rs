@@ -3,44 +3,44 @@
 
 //! Shared machinery for the JMAP backends that plug into Evolution Data
 //! Server: the address book (M3), the calendar (M4) and the Camel provider
-//! (M5) all subclass a GObject, are called from C, are handed a
-//! `GCancellable`, and have to report failures as a `GError`.
+//! (M5) all subclass a GObject, get calls from C, get a `GCancellable`, and
+//! must report failures as a `GError`.
 //!
-//! Doing each of those four things wrong has the same symptom — a backend
-//! that "sometimes" misbehaves — so they live here once, with tests, instead
-//! of three times by hand:
+//! An error in each of those four things has the same symptom: a backend
+//! that "sometimes" misbehaves. Thus they are here one time, with tests,
+//! instead of three times by hand:
 //!
 //! - [`subclass`] registers a Rust-declared type with the GObject type system,
 //!   statically or against a `GTypeModule`.
-//! - [`instance`] lets such a type own a Rust value with a destructor, which
-//!   GObject's zero-it-then-free-it instance memory otherwise does not allow.
+//! - [`instance`] lets such a type own a Rust value with a destructor.
+//!   Without it, GObject's zero-then-free instance memory prevents this.
 //! - [`trampoline`] stops a Rust panic from unwinding into C, which is
 //!   undefined behaviour.
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
-//! - [`connect`] is `connect_sync` minus the collection it opens: the
-//!   credentials, the `out_auth_result` classification and the resolution of
-//!   which server-side collection a source stands for.
+//! - [`connect`] is `connect_sync` without the collection it opens: the
+//!   credentials, the `out_auth_result` classification, and the resolution
+//!   of which server-side collection a source represents.
 //! - [`error`] maps [`jmap_client::Error`] onto the `GError` domains
-//!   and codes Evolution actually routes on.
-//! - [`marshal`] reads and writes the strings and lists a vfunc's
-//!   out-parameters carry, which every backend does identically.
-//! - [`resolver`] performs the `_jmap._tcp` SRV lookup RFC 8620 §2.2 wants,
-//!   which the client crate defines a seam for but deliberately cannot do.
-//! - [`retry`] is the one "refresh a stale OAuth 2.0 token and retry once"
-//!   control flow, generic over which backend and which error type calls it.
-//! - [`i18n`] binds this project's gettext domain, so that the strings a user
-//!   reads can be translated at all.
-//! - [`push`] turns a server-pushed JMAP `StateChange` into the refresh EDS
-//!   already runs, and [`weak`] is how its thread reaches a backend it does
-//!   not own without racing the backend's destruction.
-//! - [`rebase`] is the per-account opt-in for rebasing a session's advertised
-//!   URLs onto the origin actually connected through.
+//!   and codes that Evolution uses for routing.
+//! - [`marshal`] reads and writes the strings and lists in a vfunc's
+//!   out-parameters. Every backend does this identically.
+//! - [`resolver`] does the `_jmap._tcp` SRV lookup that RFC 8620 §2.2 wants.
+//!   The client crate defines a seam for it but intentionally cannot do it.
+//! - [`retry`] is the single "refresh a stale OAuth 2.0 token and retry once"
+//!   control flow, generic over the backend and error type that call it.
+//! - [`i18n`] binds this project's gettext domain, which is necessary to
+//!   translate the strings that a user reads.
+//! - [`push`] turns a server-pushed JMAP `StateChange` into the refresh that
+//!   EDS already runs. [`weak`] lets its thread reach a backend it does not
+//!   own, without a race against the backend's destruction.
+//! - [`rebase`] is the per-account opt-in to rebase a session's advertised
+//!   URLs onto the origin of the actual connection.
 //!
 //! [`CancelFlag`]: jmap_client::transport::CancelFlag
 //!
-//! This crate depends on `eds-sys` and therefore on the installed EDS
-//! headers, so it stays out of the workspace's `default-members`; CMake runs
-//! its tests via the `rust-test-eds` target.
+//! This crate depends on `eds-sys` and thus on the installed EDS headers, so
+//! it is not in the workspace's `default-members`. CMake runs its tests
+//! through the `rust-test-eds` target.
 
 pub mod api_token;
 pub mod callback;

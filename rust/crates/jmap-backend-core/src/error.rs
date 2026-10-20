@@ -3,21 +3,22 @@
 
 //! [`jmap_client::Error`] → `GError`.
 //!
-//! Evolution does not merely display the `GError` a backend returns; it
+//! Evolution does not only show the `GError` that a backend returns. It
 //! branches on the domain and code. Three of those branches decide whether
-//! the product behaves sensibly:
+//! the product behaves correctly:
 //!
-//! - `G_IO_ERROR_CANCELLED` — the user pressed Stop. EDS swallows it instead
-//!   of raising an alert.
-//! - `E_CLIENT_ERROR_AUTHENTICATION_FAILED` — drives the credentials prompt.
-//!   Report anything else for a 401 and the user is told the account is
-//!   broken with no way to fix it.
-//! - `E_CLIENT_ERROR_REPOSITORY_OFFLINE` — tells a meta backend the server is
-//!   unreachable, so it serves its cache. Reporting a generic failure instead
-//!   turns a flaky network into an empty address book.
+//! - `G_IO_ERROR_CANCELLED`: the user pushed Stop. EDS ignores it and shows
+//!   no alert.
+//! - `E_CLIENT_ERROR_AUTHENTICATION_FAILED`: starts the credentials prompt.
+//!   With a different error for a 401, the user sees that the account is
+//!   broken, and has no way to repair it.
+//! - `E_CLIENT_ERROR_REPOSITORY_OFFLINE`: tells a meta backend that the
+//!   server is unreachable, so that it serves its cache. With a generic
+//!   failure, an unreliable network causes an empty address book.
 //!
-//! Everything else is `E_CLIENT_ERROR_OTHER_ERROR` with the client error's
-//! `Display` text, which already carries the JMAP error type and description.
+//! All other errors are `E_CLIENT_ERROR_OTHER_ERROR` with the `Display` text
+//! of the client error. That text already contains the JMAP error type and
+//! description.
 
 use std::ffi::{CString, c_int};
 use std::ptr;
@@ -30,28 +31,29 @@ use eds_sys::{
 use glib_sys::{GError, GFALSE, GQuark, g_error_new_literal, g_quark_from_static_string, gboolean};
 use jmap_client::Error;
 
-/// Error domain for failures that are ours, not the server's or the
-/// protocol's — currently only a caught panic. Kept separate from
-/// `E_CLIENT_ERROR` so a bug in this code is distinguishable in a log from a
-/// misbehaving JMAP server.
+/// Error domain for failures of this code, not of the server or the
+/// protocol. Now, only a caught panic uses it. It is separate from
+/// `E_CLIENT_ERROR`, so that a log can show the difference between a bug in
+/// this code and an incorrect JMAP server.
 pub fn jmap_backend_error_quark() -> GQuark {
-    // SAFETY: the string is 'static and NUL-terminated, which is exactly what
+    // SAFETY: the string is 'static and NUL-terminated, as
     // g_quark_from_static_string requires.
     unsafe { g_quark_from_static_string(c"evolution-jmap-backend".as_ptr()) }
 }
 
-/// A vfunc panicked. There is no useful recovery; the code exists so the
-/// message in the log names the crate that produced it.
+/// A vfunc panicked. No useful recovery is possible. The code exists so that
+/// the message in the log names the crate that produced it.
 pub const JMAP_BACKEND_ERROR_INTERNAL: c_int = 1;
 
-/// Allocates a new `GError` describing `err`. Ownership passes to the caller,
-/// who must `g_error_free` it or hand it to a C caller that will.
+/// Allocates a new `GError` that describes `err`. Ownership goes to the
+/// caller. The caller must `g_error_free` it or give it to a C caller that
+/// frees it.
 pub fn to_gerror(err: &Error) -> *mut GError {
     let message = cstring_lossy(&err.to_string());
 
     if matches!(err, Error::Cancelled) {
-        // SAFETY: both the quark and the message pointer are valid; the
-        // function copies the message.
+        // SAFETY: the quark and the message pointer are valid. The function
+        // copies the message.
         return unsafe {
             g_error_new_literal(
                 gio_sys::g_io_error_quark(),
@@ -61,8 +63,8 @@ pub fn to_gerror(err: &Error) -> *mut GError {
         };
     }
 
-    // SAFETY: e_client_error_create copies the message and returns a fresh
-    // GError; the code is one of the enum's own values.
+    // SAFETY: e_client_error_create copies the message and returns a new
+    // GError. The code is a value of the enum.
     unsafe { e_client_error_create(client_error_code(err), message.as_ptr()) }
 }
 
@@ -70,25 +72,27 @@ pub fn to_gerror(err: &Error) -> *mut GError {
 ///
 /// # Safety
 ///
-/// `dest` must be either NULL — the GLib convention for "the caller does not
-/// want the error" — or a valid pointer to a `*mut GError` that is currently
-/// NULL, as every EDS vfunc receives.
+/// `dest` must be NULL (the GLib convention for "the caller does not want
+/// the error"), or a valid pointer to a `*mut GError` that is now NULL. Every
+/// EDS vfunc receives one of these.
 pub unsafe fn set_gerror(dest: *mut *mut GError, err: &Error) {
     unsafe { set_raw_gerror(dest, to_gerror(err)) }
 }
 
-/// Same, for an already-built `GError`. Takes ownership of `error`: if the
-/// caller did not ask for an error, it is freed rather than leaked.
+/// The same, for a `GError` that already exists. Takes ownership of `error`:
+/// if the caller did not ask for an error, this function frees it and does
+/// not leak it.
 ///
-/// If `*dest` is already set, the caller violated the contract above; rather
-/// than overwrite (leaking the first `GError`) this keeps the first error and
-/// frees `error` instead, matching GLib's own `g_set_error()` family, which
-/// refuses the same way (`g_return_if_fail (err == NULL || *err == NULL)`) —
-/// a real runtime check there, not merely a debug one.
+/// If `*dest` is already set, the caller did not obey the contract above.
+/// This function does not overwrite it (that would leak the first `GError`).
+/// It keeps the first error and frees `error`. The `g_set_error()` family of
+/// GLib refuses in the same way (`g_return_if_fail (err == NULL || *err ==
+/// NULL)`). In GLib, this is a real runtime check, not only a debug check.
 ///
 /// # Safety
 ///
-/// As [`set_gerror`], and `error` must be a `GError` this call may consume.
+/// As [`set_gerror`]. Also, `error` must be a `GError` that this call can
+/// consume.
 pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     unsafe {
         if dest.is_null() {
@@ -104,27 +108,27 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     }
 }
 
-/// Whether `error` is the one a stale access token produces — the readback
-/// half of [`crate::retry::retry_on_authentication_failure`].
+/// Whether `error` is the error that a stale access token produces. This is
+/// the readback half of [`crate::retry::retry_on_authentication_failure`].
 ///
-/// An EDS vfunc reports failure as `FALSE` plus a `GError`, so by the time a
-/// shared retry wrapper sees it the [`Error`] that caused it is gone. What
-/// survives is the domain and code, and [`client_error_code`] gives
+/// An EDS vfunc reports failure as `FALSE` and a `GError`. Thus when a shared
+/// retry wrapper sees it, the [`Error`] that caused it is gone. Only the
+/// domain and code remain. [`client_error_code`] gives
 /// `E_CLIENT_ERROR_AUTHENTICATION_FAILED` to `Error::Http { status: 401, .. }`
-/// and to nothing else — so this pair *is* "the server refused these
-/// credentials", faithfully and without parsing message text.
+/// and to nothing else. Thus this pair *is* "the server refused these
+/// credentials", accurately and without a parse of the message text.
 ///
-/// The domain is compared as well as the code, which is not belt-and-braces:
+/// The function compares the domain and the code. Both are necessary:
 /// `E_CLIENT_ERROR` and `G_IO_ERROR` are different enumerations that both
-/// start at zero, so a code alone would classify some unrelated GLib I/O
-/// failure as a rejected token and re-fetch a perfectly good one.
+/// start at zero. With only the code, an unrelated GLib I/O failure could
+/// look like a rejected token, and the code would fetch a good token again.
 ///
 /// # Safety
 ///
 /// `error` must be NULL or a valid `GError` that outlives the call.
 pub unsafe fn is_authentication_failed(error: *const GError) -> bool {
-    // SAFETY: the caller's contract, plus the NULL check; the quark function
-    // takes no arguments.
+    // SAFETY: the contract of the caller, and the NULL check. The quark
+    // function takes no arguments.
     unsafe {
         !error.is_null()
             && (*error).domain == eds_sys::e_client_error_quark()
@@ -132,21 +136,22 @@ pub unsafe fn is_authentication_failed(error: *const GError) -> bool {
     }
 }
 
-/// A `GError` for an argument EDS itself passed us that was invalid — a
-/// vCard/iCalendar Evolution asked us to save that the mapping cannot read,
-/// or an operation with nothing to act on. Shared by call sites across the
-/// backend crates that each independently built this exact `GError`.
+/// A `GError` for an invalid argument from EDS. Examples: a vCard/iCalendar
+/// that Evolution asks the backend to save but the mapping cannot read, or
+/// an operation with no object. Call sites in all backend crates share it.
+/// Before, each call site built this same `GError` independently.
 pub fn invalid_arg_gerror(message: &str) -> *mut GError {
     let message = cstring_lossy(message);
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
+    // SAFETY: the code is a value of the enum, and the call copies the
+    // message.
     unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
 }
 
-/// Reports `failure` through `error` (mapped to a `GError` by `to_gerror`,
-/// since every crate's mapping is its own — a `StoreError`, a `SyncError`,
-/// whatever the caller's vfunc fails with) and returns the null pointer that
-/// means failure to a vfunc whose success return is a fresh, owned pointer.
+/// Reports `failure` through `error`, and returns the null pointer that means
+/// failure to a vfunc whose success return is a new, owned pointer.
+/// `to_gerror` maps `failure` to a `GError`, because each crate has its own
+/// mapping (a `StoreError`, a `SyncError`, or the failure type of the vfunc
+/// of the caller).
 ///
 /// # Safety
 ///
@@ -174,7 +179,7 @@ pub unsafe fn fail_bool<E>(
     GFALSE
 }
 
-/// The same, for the arguments EDS itself got wrong: reports `message` as an
+/// The same, for incorrect arguments from EDS: reports `message` as an
 /// [`invalid_arg_gerror`] and returns `FALSE`.
 ///
 /// # Safety
@@ -191,14 +196,14 @@ fn client_error_code(err: &Error) -> EClientError {
         Error::Http { status: 401, .. } => E_CLIENT_ERROR_AUTHENTICATION_FAILED,
         Error::Http { status: 403, .. } => E_CLIENT_ERROR_PERMISSION_DENIED,
         // A method error, a /set rejection, malformed JSON or any other HTTP
-        // status: the server answered, so the account is fine and only this
-        // operation failed. The message carries the detail.
+        // status: the server answered. Thus the account is correct, and only
+        // this operation failed. The message contains the details.
         _ => E_CLIENT_ERROR_OTHER_ERROR,
     }
 }
 
-/// `CString::new` refuses interior NULs, which a hostile or broken server
-/// could put in a description. Truncating there loses less than panicking.
+/// `CString::new` refuses interior NULs, and a hostile or broken server can
+/// put one in a description. A truncation there loses less than a panic.
 pub fn cstring_lossy(s: &str) -> CString {
     match CString::new(s) {
         Ok(c) => c,
@@ -206,7 +211,7 @@ pub fn cstring_lossy(s: &str) -> CString {
             let nul = e.nul_position();
             let mut bytes = e.into_vec();
             bytes.truncate(nul);
-            // SAFETY: bytes now stops before the first interior NUL.
+            // SAFETY: bytes now ends before the first interior NUL.
             unsafe { CString::from_vec_unchecked(bytes) }
         }
     }
@@ -224,10 +229,10 @@ mod tests {
 
     #[test]
     fn only_a_401_reads_back_as_an_authentication_failure() {
-        // The readback `crate::retry::retry_on_authentication_failure` makes
-        // is only as good as this: a vfunc hands its caller a `GError`, not a
-        // `jmap_client::Error`, so "may this be retried on a fresh token"
-        // has to survive the round trip through `to_gerror`.
+        // The readback in `crate::retry::retry_on_authentication_failure`
+        // needs this. A vfunc gives its caller a `GError`, not a
+        // `jmap_client::Error`. Thus "a retry with a new token is permitted"
+        // must survive the round trip through `to_gerror`.
         let cases = [
             (
                 Error::Http {
@@ -251,8 +256,8 @@ mod tests {
                 false,
             ),
             (Error::Transport("no route to host".into()), false),
-            // A different domain entirely, which a code comparison alone
-            // would get wrong: G_IO_ERROR_CANCELLED is 19 and
+            // A fully different domain. A comparison of only the code could
+            // get this wrong: G_IO_ERROR_CANCELLED is 19 and
             // E_CLIENT_ERROR_AUTHENTICATION_FAILED is not, but nothing
             // guarantees that across EDS versions.
             (Error::Cancelled, false),
@@ -261,7 +266,7 @@ mod tests {
         for (err, expected) in cases {
             let error = to_gerror(&err);
             assert!(!error.is_null());
-            // SAFETY: a freshly allocated GError this test owns.
+            // SAFETY: a newly allocated GError that this test owns.
             unsafe {
                 assert_eq!(
                     is_authentication_failed(error),
@@ -283,7 +288,7 @@ mod tests {
     fn invalid_arg_gerror_carries_the_invalid_arg_code_and_the_message() {
         let error = invalid_arg_gerror("not a vcard");
         assert!(!error.is_null());
-        // SAFETY: a freshly allocated GError this test owns.
+        // SAFETY: a newly allocated GError that this test owns.
         unsafe {
             assert_eq!((*error).domain, e_client_error_quark());
             assert_eq!((*error).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);

@@ -3,36 +3,37 @@
 
 //! Reading the JMAP account out of an `ESource`.
 //!
-//! An EDS backend is handed one `ESource` and nothing else; it is the whole
+//! EDS gives a backend one `ESource` and nothing else: it is the full
 //! description of the account. This module turns it into the two pieces a
-//! JMAP client needs — the origin to fetch `/.well-known/jmap` from, and the
-//! user name to authenticate as — plus the identifier of the address book or
-//! calendar the source stands for.
+//! JMAP client needs (the origin to fetch `/.well-known/jmap` from, and the
+//! user name to authenticate as), plus the identifier of the address book or
+//! calendar that the source stands for.
 //!
-//! Which extension holds what is a decision, not a lookup, because there is
-//! no JMAP extension in EDS yet (M6 introduces one along with the collection
-//! backend). Until then the standard extensions carry it:
+//! Which extension holds which setting is a decision, not a lookup. EDS has
+//! no JMAP extension for these settings (the custom `[JMAP Rebase]`
+//! extension holds only the rebase opt-in), so the standard extensions hold
+//! them:
 //!
-//! - `Authentication` — `host`, `port`, `user`. The same three keys every
-//!   remote EDS backend uses, so an account written by hand looks like a
-//!   CalDAV or IMAP one.
-//! - `Security` — `secure`. Selects the scheme. In a keyfile that property is
-//!   spelled `Method=tls` or `Method=none`, *not* `Secure=`: `secure` is a
-//!   boolean over the `Method` string and only the string is stored. A
-//!   keyfile that says `Secure=true` is not rejected, it is ignored, and what
-//!   is left reads back as `none`.
-//! - `Resource` — `identity`. The JMAP identifier of the object this source
-//!   stands for: an address book id under the address book backend, a
-//!   calendar id under the calendar one. "Resource identity" is exactly what
-//!   it is, and it is the extension EDS's own backends use for a server-side
-//!   object identifier.
+//! - `Authentication`: `host`, `port`, `user`. Each remote EDS backend uses
+//!   these three keys, so an account written by hand looks like a CalDAV or
+//!   IMAP account.
+//! - `Security`: `secure`. Selects the scheme. In a keyfile, this property is
+//!   `Method=tls` or `Method=none`, *not* `Secure=`: `secure` is a boolean
+//!   over the `Method` string, and EDS stores only the string. EDS does not
+//!   reject a keyfile that says `Secure=true`. It ignores that key, and the
+//!   property then reads back as `none`.
+//! - `Resource`: `identity`. The JMAP identifier of the object that this
+//!   source stands for: an address book id under the address book backend, a
+//!   calendar id under the calendar backend. "Resource identity" is the
+//!   correct name for it, and the backends of EDS use this extension for a
+//!   server-side object identifier.
 //!
-//! The password is deliberately *not* here. It arrives at `connect_sync` as
-//! an `ENamedParameters` that EDS filled from libsecret, and a JMAP account
-//! must never read a credential from a `.source` keyfile.
+//! The password is deliberately *not* here. It gets to `connect_sync` as an
+//! `ENamedParameters` that EDS fills from libsecret. A JMAP account must
+//! never read a credential from a `.source` keyfile.
 //!
-//! Which makes a hand-written source — the manual test recipe M3 asks for,
-//! dropped in `~/.config/evolution/sources/jmap-test.source` — this:
+//! Thus a hand-written source (the manual test recipe that M3 requires, in
+//! `~/.config/evolution/sources/jmap-test.source`) looks like this:
 //!
 //! ```text
 //! [Data Source]
@@ -54,24 +55,26 @@
 //! Identity=Ab1
 //! ```
 //!
-//! `[Security]` may be left out entirely — it defaults to TLS here, not to
-//! `ESourceSecurity:secure`'s own FALSE — and `[Resource]` may be left out to
-//! get the account's default address book, or default calendar. Against `jmap-mockd`, `Host` is
-//! `127.0.0.1`, `Port` is the mock's port and `[Security] Method` is `none`.
+//! You can omit `[Security]`: here it defaults to TLS, not to the FALSE
+//! default of `ESourceSecurity:secure`. You can omit `[Resource]` to get the
+//! default address book or default calendar of the account. For
+//! `jmap-mockd`, `Host` is `127.0.0.1`, `Port` is the port of the mock and
+//! `[Security] Method` is `none`.
 //!
-//! The keyfile that runs against the mock is a file rather than a doc
-//! comment: `docs/examples/jmap-mock.source`, with the recipe around it in
-//! `docs/manual-test-book-backend.md` and both checked by
-//! `jmap-backend-book`'s `recipe` test.
+//! The keyfile for the mock is a file, not a doc comment:
+//! `docs/examples/jmap-mock.source`. Its recipe is in
+//! `docs/manual-test-book-backend.md`, and the `recipe` test of
+//! `jmap-backend-book` checks both.
 //!
 //! ## Why the host is validated
 //!
-//! The origin is assembled by concatenation, so a host is not just data: a
-//! `.source` file — which is a plain file in the user's home, and on a shared
-//! machine not necessarily written by the user — carrying `evil.example.com`
-//! in a field that is meant to be a bare host name could otherwise aim the
-//! client at a different server, or slip a plaintext endpoint past the TLS
-//! check below. Only a bare host name or an IP literal is accepted.
+//! The code makes the origin by concatenation, so a host is not only data. A
+//! `.source` file is a plain file in the home directory of the user, and on a
+//! shared machine, possibly a different person wrote it. A `.source` file
+//! with `evil.example.com` in a field for a bare host name could otherwise
+//! send the client to a different server, or get a plaintext endpoint past
+//! the TLS check below. The code accepts only a bare host name or an IP
+//! literal.
 
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -101,30 +104,30 @@ pub struct SourceConfig {
     pub target: ConnectTarget,
     /// The user name to authenticate as, if the source names one.
     pub user: Option<String>,
-    /// The JMAP object this source stands for — an address book id in the
-    /// address book backend, a calendar id in the calendar one. It is one
-    /// keyfile field with two meanings, so it is named after the field rather
-    /// than after either meaning. Absent means "the account's default", which
+    /// The JMAP object that this source stands for: an address book id in
+    /// the address book backend, a calendar id in the calendar backend. It is
+    /// one keyfile field with two meanings, so its name comes from the field,
+    /// not from a meaning. Absent means "the default of the account", which
     /// the backend resolves at connect time.
     ///
-    /// Held verbatim: a collection another user shares with this one lives in
-    /// that user's account, and its source spells the field
-    /// `<accountId>/<collectionId>`. Read it through [`Self::account_id`] and
-    /// [`Self::collection_id`], which split it.
+    /// Held verbatim: a collection that a different user shares with this
+    /// user is in the account of that user, and its source writes the field
+    /// as `<accountId>/<collectionId>`. Read it through [`Self::account_id`]
+    /// and [`Self::collection_id`], which split it.
     pub resource_id: Option<String>,
-    /// Whether this account opts into rebasing the session's advertised URLs
-    /// onto the origin actually connected through — see
-    /// [`crate::rebase::rebase_urls`]. `false` for every account written
+    /// Whether this account opts into rebasing the advertised URLs of the
+    /// session onto the origin of the actual connection (see
+    /// [`crate::rebase::rebase_urls`]). `false` for each account written
     /// before that setting existed.
     pub rebase_urls: bool,
 }
 
-/// A source that cannot be turned into a connection.
+/// A source that cannot become a connection.
 ///
-/// These are configuration faults, not server faults: retrying will not help
-/// and the meta backend's offline cache is not the right answer either, so
-/// they are reported to Evolution as their own `E_CLIENT_ERROR` codes rather
-/// than folded into the client error mapping in [`crate::error`].
+/// These are configuration faults, not server faults: a retry does not help,
+/// and the offline cache of the meta backend is not the correct answer. Thus
+/// they go to Evolution as their own `E_CLIENT_ERROR` codes, not through the
+/// client error mapping in [`crate::error`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceError {
     /// The `Authentication` extension names no host.
@@ -174,22 +177,23 @@ impl SourceError {
     /// caller, as with [`crate::error::to_gerror`].
     pub fn to_gerror(&self) -> *mut GError {
         let message = cstring_lossy(&self.to_string());
-        // SAFETY: the code is one of the enum's own values and the message is
-        // copied by the call.
+        // SAFETY: the code is one of the enum's own values, and the call
+        // copies the message.
         unsafe { e_client_error_create(self.client_error_code(), message.as_ptr()) }
     }
 }
 
 impl SourceConfig {
-    /// The JMAP account the collection lives in, when the source names one;
-    /// `None` means the primary account for the backend's capability.
+    /// The JMAP account that contains the collection, if the source names
+    /// one. `None` means the primary account for the capability of the
+    /// backend.
     ///
-    /// The account rides in `[Resource] Identity` rather than in a key of its
-    /// own because that field is a registered `ESource` property: it is
-    /// written to the `.source` keyfile and so reaches the address book or
-    /// calendar factory, which is a different process from the registry that
-    /// created the source. JMAP ids are drawn from `A-Za-z0-9-_` (RFC 8620
-    /// §1.2), so a `/` cannot be part of either half.
+    /// The account is in `[Resource] Identity`, not in a key of its own,
+    /// because that field is a registered `ESource` property. EDS writes it
+    /// to the `.source` keyfile, so it gets to the address book or calendar
+    /// factory, which is a different process from the registry that created
+    /// the source. JMAP ids use only `A-Za-z0-9-_` (RFC 8620 §1.2), so a `/`
+    /// cannot be part of either half.
     pub fn account_id(&self) -> Option<&str> {
         self.split_resource().0
     }
@@ -200,10 +204,10 @@ impl SourceConfig {
         self.resource_id.as_deref().map(|_| self.split_resource().1)
     }
 
-    /// `[Resource] Identity` as (account, collection). Anything but exactly
-    /// two non-empty halves is kept whole as a collection id, so the server
-    /// refuses it under the name the keyfile holds instead of the backend
-    /// guessing at which part was meant.
+    /// `[Resource] Identity` as (account, collection). If the value is not
+    /// exactly two non-empty halves, it stays whole as a collection id. Thus
+    /// the server refuses it under the name in the keyfile, and the backend
+    /// does not guess which part is correct.
     fn split_resource(&self) -> (Option<&str>, &str) {
         let resource = self.resource_id.as_deref().unwrap_or_default();
         match resource.split_once('/') {
@@ -220,28 +224,27 @@ impl SourceConfig {
     ///
     /// # Safety
     ///
-    /// `source` must be a valid `ESource`, i.e. the one EDS handed the
-    /// backend. It is only read from, and nothing outlives the call.
+    /// `source` must be a valid `ESource`, i.e. the one EDS gave the backend.
+    /// This function only reads it, and nothing outlives the call.
     pub unsafe fn from_source(source: *mut ESource) -> Result<Self, SourceError> {
-        // `e_source_get_extension` finds an extension by walking the
-        // registered children of `E_TYPE_SOURCE_EXTENSION`, so a type nothing
-        // has referenced yet is a type it cannot find. In a backend the EDS
-        // factory has long since pulled these in, but in a test binary — or
-        // any process that links libedataserver without using it — the first
-        // lookup would return NULL. Referencing the GType registers it.
+        // `e_source_get_extension` finds an extension through the registered
+        // children of `E_TYPE_SOURCE_EXTENSION`, so it cannot find a type
+        // that nothing has referenced yet. In a backend, the EDS factory
+        // already registered these types. But in a test binary (or any
+        // process that links libedataserver without using it), the first
+        // lookup would return NULL. A reference to the GType registers it.
         unsafe {
             e_source_authentication_get_type();
             e_source_security_get_type();
             e_source_resource_get_type();
         }
 
-        // Asked before any `e_source_get_extension`, which *creates* the
-        // extension it cannot find. `ESourceSecurity:secure` defaults to
-        // FALSE, so an unconditional read cannot tell "the keyfile has no
-        // [Security] group" from "the user turned TLS off" — and answering
-        // the first case with plain HTTP would quietly downgrade every
-        // hand-written account. Absent means secure; present means what it
-        // says.
+        // Ask before any `e_source_get_extension`, which *creates* the
+        // extension if it cannot find it. `ESourceSecurity:secure` defaults
+        // to FALSE, so an unconditional read cannot tell "the keyfile has no
+        // [Security] group" from "the user disabled TLS". Plain HTTP for the
+        // first case would silently downgrade each hand-written account.
+        // Absent means secure; present means what it says.
         // SAFETY: the source is valid for the whole call and the name is a
         // header constant.
         let secure = match unsafe {
@@ -252,11 +255,11 @@ impl SourceConfig {
             Some(security) => unsafe { e_source_security_get_secure(security) != 0 },
         };
 
-        // Asked with the same `extension_if_present` guard as `SECURITY`
-        // above, not `e_source_get_extension` directly: a source read for
-        // diagnostics or validation, not owned by the caller, must not gain
-        // an empty `[Authentication]`/`[Resource]` group merely because
-        // something looked at it.
+        // Use the same `extension_if_present` guard as for `SECURITY` above,
+        // not `e_source_get_extension` directly. A source read for
+        // diagnostics or validation, which the caller does not own, must not
+        // get an empty `[Authentication]`/`[Resource]` group only because
+        // something read it.
         // SAFETY: the source is valid for the whole call and the names are
         // header constants.
         let auth = unsafe {
@@ -266,10 +269,9 @@ impl SourceConfig {
         let resource =
             unsafe { extension_if_present::<ESourceResource>(source, E_SOURCE_EXTENSION_RESOURCE) };
 
-        // An absent extension reads the same defaults a freshly-created,
-        // still-empty one would have answered (NULL host/user/identity, port
-        // 0), so this changes no observable read result — only the side
-        // effect of creating the group goes away.
+        // An absent extension gives the same defaults that a new, empty
+        // extension would give (NULL host/user/identity, port 0). Thus no
+        // read result changes; only the side effect (a new group) goes away.
         // SAFETY: each `Some` pointer is a live extension of the type
         // `extension_if_present` selected.
         let host = match auth {
@@ -304,22 +306,21 @@ impl SourceConfig {
     }
 }
 
-/// Where a JMAP client should look for the server: an already-concrete
-/// endpoint, or a bare domain RFC 8620 §2.2 autodiscovery applies to.
+/// Where a JMAP client looks for the server: an endpoint that is already
+/// concrete, or a bare domain that RFC 8620 §2.2 autodiscovery applies to.
 ///
-/// The distinction rides on information [`connect_target`] already has and
-/// would otherwise discard: a source that names a port states an endpoint,
-/// while one that does not is exactly RFC 8620 §2.2's "the domain is the
-/// entry point" case — the shape a plain email+password account setup
-/// produces (`jmap-config/src/defaults.rs`'s `from_identity` writes the bare
-/// email domain as `Authentication:Host` with no port, on purpose, per that
-/// RFC). See [`connect`] for what each variant does at connect time.
+/// [`connect_target`] already has the data for this distinction, and would
+/// otherwise discard it. A source that names a port states an endpoint. A
+/// source that does not is exactly the RFC 8620 §2.2 case "the domain is the
+/// entry point". A plain email+password account setup makes this shape:
+/// `from_identity` in `jmap-config/src/defaults.rs` writes the bare email
+/// domain as `Authentication:Host` with no port, on purpose, per that RFC.
+/// See [`connect`] for what each variant does at connect time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectTarget {
     /// Scheme, host and port, with no trailing slash: what
-    /// `jmap_client::Client::connect` calls the origin. Connected to
-    /// directly — SRV autodiscovery does not apply to something that
-    /// already names an exact endpoint.
+    /// `jmap_client::Client::connect` calls the origin. The client connects
+    /// to it directly: SRV autodiscovery does not apply to an exact endpoint.
     Origin(String),
     /// A bare domain, secure and with no port stated: eligible for
     /// `_jmap._tcp.<domain>` SRV autodiscovery before the bare-domain
@@ -327,26 +328,27 @@ pub enum ConnectTarget {
     Domain(String),
 }
 
-/// Connects to the server `target` names, honouring `_jmap._tcp` SRV
-/// autodiscovery for a [`ConnectTarget::Domain`].
+/// Connects to the server that `target` names. For a
+/// [`ConnectTarget::Domain`], uses `_jmap._tcp` SRV autodiscovery.
 ///
 /// A [`ConnectTarget::Domain`] is resolved through [`crate::resolver::
-/// SystemResolver`], the real `_jmap._tcp` lookup — this is the seam
-/// `jmap-client` leaves for it, the same one `jmap-config`'s "Look Up Account
-/// Details" worker consults. A record only ever redirects discovery: a domain
-/// that publishes none falls back to `https://<domain>/.well-known/jmap`,
-/// which is what every deployment answering at its own domain relies on.
+/// SystemResolver`], the real `_jmap._tcp` lookup. `jmap-client` has this
+/// interface for it, and the "Look Up Account Details" worker of
+/// `jmap-config` uses the same one. A record only changes discovery: for a
+/// domain that publishes no record, the client uses
+/// `https://<domain>/.well-known/jmap`. Each deployment that answers at its
+/// own domain needs this fallback.
 ///
-/// A [`ConnectTarget::Origin`] is dialled as stated and never resolved — SRV
-/// autodiscovery answers "where is this domain's JMAP server", a question an
-/// explicit endpoint has already answered.
+/// The client dials a [`ConnectTarget::Origin`] as stated and never resolves
+/// it. SRV autodiscovery answers "where is the JMAP server of this domain",
+/// and an explicit endpoint already answers that question.
 ///
-/// `rebase_urls` is the account's own opt-in (see
-/// [`crate::rebase::rebase_urls`]); either it or
-/// `JMAP_LIVE_SERVER_REBASE_URLS` being set turns rebasing on for this
-/// connection, so the environment variable stays a process-wide override for
-/// the `--features live-server` harness and the committed probes while an
-/// account can opt in — or stay out — on its own.
+/// `rebase_urls` is the opt-in of the account (see
+/// [`crate::rebase::rebase_urls`]). If it is true, or
+/// `JMAP_LIVE_SERVER_REBASE_URLS` is `1` or `true`, rebasing is on for this
+/// connection. Thus the environment variable stays a process-wide override
+/// for the `--features live-server` harness and the committed probes, and
+/// each account can opt in or out on its own.
 pub fn connect(
     target: &ConnectTarget,
     rebase_urls: bool,
@@ -374,21 +376,21 @@ pub fn connect(
     }
 }
 
-/// Decides the [`ConnectTarget`] a JMAP client connects to, and refuses the
-/// two ways an account can point one somewhere it should not go.
+/// Decides the [`ConnectTarget`] for a JMAP client, and refuses the two ways
+/// an account can point it to an incorrect destination.
 ///
-/// Separate from [`SourceConfig::from_source`] because the mail side reaches
-/// the same decisions from a different place: Camel keeps a service's server on
-/// the `CamelNetworkSettings` interface rather than in `ESource` extensions, so
-/// `jmap-mail` reads different fields and must still get the same answer. The
-/// host validation and the TLS rule are the part that must not be duplicated —
-/// a second copy is a second thing to forget to fix.
+/// This is separate from [`SourceConfig::from_source`] because the mail side
+/// makes the same decisions from a different place. Camel keeps the server of
+/// a service on the `CamelNetworkSettings` interface, not in `ESource`
+/// extensions, so `jmap-mail` reads different fields but must get the same
+/// answer. The host validation and the TLS rule must not have two copies: a
+/// second copy is a second thing to forget to fix.
 ///
-/// `host` is the absent-or-non-empty form both sides already produce
-/// ([`read_string`] on the EDS side, the same normalisation over Camel's empty
-/// construct default on the mail side), and `port` is 0 for "not set", which
-/// is what both an unwritten keyfile key and an unconfigured settings object
-/// read back as.
+/// `host` is absent or non-empty, as both sides already make it
+/// ([`read_string`] on the EDS side, the same normalisation over the empty
+/// construct default of Camel on the mail side). `port` is 0 for "not set",
+/// which is what an unwritten keyfile key and an unconfigured settings object
+/// both read back as.
 ///
 /// [`read_string`]: crate::marshal::read_string
 pub fn connect_target(
@@ -398,18 +400,18 @@ pub fn connect_target(
 ) -> Result<ConnectTarget, SourceError> {
     let host = host.ok_or(SourceError::MissingHost)?;
     // A fully qualified name (one trailing dot, RFC 1035 §3.1) and its
-    // relative form are the same DNS entry; concatenated unchanged into a
-    // URL it becomes a host the server's own redirect does not recognise as
-    // itself, which drops the bearer token credentials were withheld across.
+    // relative form are the same DNS entry. Put unchanged into a URL, the
+    // dotted form is a host that the server's own redirect does not
+    // recognise as itself. The client withholds credentials across that
+    // redirect, so the bearer token is lost.
     let host = host.trim_end_matches('.');
     let authority = authority(host)?;
     if !secure && !is_loopback(host) {
         return Err(SourceError::InsecureTransport(host.to_owned()));
     }
 
-    // An IP literal is never a domain to run SRV autodiscovery against —
-    // there is no email-style entry point to resolve, only the address
-    // already given.
+    // An IP literal is never a domain for SRV autodiscovery: there is no
+    // email-style entry point to resolve, only the given address.
     let is_ip_literal = host.parse::<Ipv4Addr>().is_ok() || host.parse::<Ipv6Addr>().is_ok();
     if port == 0 && secure && !is_ip_literal {
         return Ok(ConnectTarget::Domain(host.to_owned()));
@@ -417,47 +419,47 @@ pub fn connect_target(
 
     let scheme = if secure { "https" } else { "http" };
     Ok(ConnectTarget::Origin(match port {
-        // The keyfile writes 0 for "not set"; leaving it out lets the
-        // scheme's default apply instead of asking for port 0.
+        // The keyfile writes 0 for "not set". Without a port in the origin,
+        // the default port of the scheme applies, not port 0.
         0 => format!("{scheme}://{authority}"),
-        // A stated default port serializes out too: RFC 6454 §6.2 origins
-        // carry no default port, and RFC 8414 §3.3 compares issuers
-        // byte-for-byte — an SRV record naming port 443 explicitly (Fastmail's
-        // does) must still yield the issuer its metadata states, or OAuth
-        // discovery can never validate. Connecting is unaffected either way.
+        // A stated default port is also removed: RFC 6454 §6.2 origins have
+        // no default port, and RFC 8414 §3.3 compares issuers byte-for-byte.
+        // An SRV record that names port 443 explicitly (as Fastmail's does)
+        // must still give the issuer that its metadata states. If not, OAuth
+        // discovery can never validate. This does not change the connection.
         443 if secure => format!("{scheme}://{authority}"),
         80 if !secure => format!("{scheme}://{authority}"),
         port => format!("{scheme}://{authority}:{port}"),
     }))
 }
 
-/// The host and port EDS's own network-reachability monitor should watch for
-/// this account — `EBackendClass::get_destination_address`'s job.
+/// The host and port that the network-reachability monitor of EDS watches
+/// for this account (the job of `EBackendClass::get_destination_address`).
 ///
-/// Read directly off `[Authentication]`, the same fields
-/// [`SourceConfig::from_source`] reads, but without [`connect_target`]'s host
-/// validation or TLS refusal: a malformed or insecure-mode host is still a
-/// real host to watch, and this is advisory only — nothing here is ever
-/// dialled. Mirrors evolution-ews's own `ews_backend_get_destination_address`
-/// fallback branch (used whenever there is no dedicated connection-URL
-/// setting to parse instead, which for a JMAP account is always the case —
-/// there is no such setting). The one addition over that literal read: a
-/// port of 0 — EDS's "not set" reading, and what every bare-domain
-/// SRV-eligible account has — becomes 443, the port a JMAP connection
-/// actually defaults to (`connect_target`'s own default for exactly this
-/// case), rather than a monitor asked to watch port 0.
+/// Read directly from `[Authentication]`, the same fields that
+/// [`SourceConfig::from_source`] reads, but without the host validation or
+/// TLS refusal of [`connect_target`]. A malformed or insecure-mode host is
+/// still a real host to watch, and this value is only advisory: nothing here
+/// dials it. This mirrors the fallback branch of evolution-ews's own
+/// `ews_backend_get_destination_address`, which evolution-ews uses when it
+/// has no connection-URL setting to parse. A JMAP account never has such a
+/// setting. One addition to that literal read: a port of 0 becomes 443.
+/// Port 0 is the "not set" value of EDS, and each bare-domain SRV-eligible
+/// account has it. 443 is the default port of a JMAP connection (the default
+/// of `connect_target` for this case), and a monitor must not watch port 0.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource`, only read from, alive for the call.
+/// `source` must be a valid `ESource` that stays alive for the call. This
+/// function only reads it.
 pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)> {
     // SAFETY: registers the extension type, as `SourceConfig::from_source`
-    // does, so a process that has never looked it up yet can find it.
+    // does, so a process that has not looked it up yet can find it.
     unsafe { e_source_authentication_get_type() };
 
     // `extension_if_present`, not `e_source_get_extension`: a source read for
-    // reachability monitoring, not owned by the caller, must not gain an
-    // empty `[Authentication]` group merely because something looked.
+    // reachability monitoring, which the caller does not own, must not get
+    // an empty `[Authentication]` group only because something read it.
     // SAFETY: the source is valid for the whole call and the name is a
     // header constant.
     let auth = unsafe {
@@ -473,27 +475,28 @@ pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)>
     Some((host, if port == 0 { 443 } else { port }))
 }
 
-/// The `ESource` a backend was constructed for, or NULL if `backend` is not an
-/// `EBackend`.
+/// The `ESource` for which EDS constructed `backend`, or NULL if `backend` is
+/// not an `EBackend`.
 ///
-/// `e_backend_get_source` is a `g_return_val_if_fail (E_IS_BACKEND (backend))`
-/// away from answering that already — GLib's type check reports FALSE for a
-/// NULL instance or one with no class rather than dereferencing it — but it
-/// logs a critical on the way, which is right for a genuine bug and wrong for
-/// the callers that legitimately ask: a vfunc reached on an instance EDS has
-/// not finished constructing, and the backend crates' `detached()` test
-/// instances, which are deliberately not GObjects at all. Asking GObject
-/// first turns "is there a source to work from" into an ordinary NULL check.
+/// `e_backend_get_source` almost does this check already, through
+/// `g_return_val_if_fail (E_IS_BACKEND (backend))`. The GLib type check
+/// returns FALSE for a NULL instance or an instance with no class, and does
+/// not dereference it. But it also logs a critical. That is correct for a
+/// real bug and incorrect for the callers that ask for a valid reason: a
+/// vfunc that runs on an instance that EDS has not fully constructed, and the
+/// `detached()` test instances of the backend crates, which are deliberately
+/// not GObjects. A GObject check first changes "is there a source to use"
+/// into a usual NULL check.
 ///
 /// # Safety
 ///
 /// `backend` must be NULL, a valid `GTypeInstance`, or a pointer to memory
-/// whose leading `GTypeInstance` field is NULL — which a zeroed instance
-/// struct satisfies. The `ESource` that comes back is borrowed, not owned.
+/// whose leading `GTypeInstance` field is NULL (a zeroed instance struct
+/// satisfies this). The returned `ESource` is borrowed, not owned.
 pub unsafe fn backend_source(backend: *mut EBackend) -> *mut ESource {
-    // SAFETY: `g_type_check_instance_is_a` checks for a NULL instance and a
-    // NULL class itself, which is what makes this legal for the callers
-    // above; the type function takes no arguments.
+    // SAFETY: `g_type_check_instance_is_a` itself checks for a NULL instance
+    // and a NULL class, so this is legal for the callers above. The type
+    // function takes no arguments.
     let is_backend = unsafe {
         gobject_sys::g_type_check_instance_is_a(backend.cast(), e_backend_get_type()) != 0
     };
@@ -504,10 +507,10 @@ pub unsafe fn backend_source(backend: *mut EBackend) -> *mut ESource {
     unsafe { e_backend_get_source(backend) }
 }
 
-/// Assembles the origin string [`connect_target`] would connect to, for a
-/// caller that only wants the resulting endpoint and not the SRV-eligibility
-/// distinction — `jmap-backend-collection`'s `Server::origin`, a display
-/// value repeated into child sources rather than connected to directly.
+/// Makes the origin string that [`connect_target`] would connect to, for a
+/// caller that wants only the endpoint and not the SRV-eligibility
+/// distinction: `Server::origin` in `jmap-backend-collection`, a display
+/// value that child sources copy and that nothing connects to directly.
 pub fn origin(host: Option<&str>, port: u16, secure: bool) -> Result<String, SourceError> {
     Ok(match connect_target(host, port, secure)? {
         ConnectTarget::Origin(origin) => origin,
@@ -527,11 +530,11 @@ fn authority(host: &str) -> Result<String, SourceError> {
     Err(SourceError::InvalidHost(host.to_owned()))
 }
 
-/// A host name and nothing else — no scheme, no port, no path, no userinfo.
+/// A host name and nothing else: no scheme, no port, no path, no userinfo.
 ///
-/// Deliberately stricter than RFC 1123: internationalised names reach EDS
-/// already punycoded, and anything outside this set in a field that is
-/// concatenated into a URL is a misconfiguration at best.
+/// Deliberately stricter than RFC 1123: internationalised names get to EDS
+/// already in punycode. Any other character in a field that goes into a URL
+/// is at best a misconfiguration.
 fn is_bare_host_name(host: &str) -> bool {
     !host.is_empty()
         && !host.starts_with('.')
@@ -542,8 +545,9 @@ fn is_bare_host_name(host: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
-/// Whether plaintext to this host stays on the machine. Everything the mock
-/// server and a local development instance are reached by, and nothing else.
+/// Whether plaintext to this host stays on the machine. This includes all
+/// hosts that the mock server and a local development instance use, and no
+/// others.
 fn is_loopback(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") || host.eq_ignore_ascii_case("localhost.localdomain")
     {
@@ -573,17 +577,6 @@ mod tests {
         );
     }
 
-    /// The rules `jmap-mail` reaches this function for. `tests/source.rs`
-    /// drives them through an `ESource`; this pins them on the shared entry
-    /// point itself, which has a second caller that does not go near one.
-    /// RFC 8414 §3.3 compares issuers byte-for-byte, and RFC 6454 §6.2
-    /// serializes an origin without its scheme's default port — so a stated
-    /// default port must serialize out. This is not cosmetic: Fastmail's
-    /// `_jmap._tcp` SRV record names port 443 explicitly while its
-    /// authorization-server metadata says `"issuer": "https://api.fastmail.com"`
-    /// (no port), so an origin that keeps `:443` can never pass the issuer
-    /// check and OAuth autodiscovery silently surfaces nothing. Non-default
-    /// ports must stay, or nothing plaintext-local is reachable.
     #[test]
     fn source_error_display_names_the_offending_host() {
         assert!(SourceError::MissingHost.to_string().contains("JMAP server"));
@@ -601,20 +594,32 @@ mod tests {
 
     #[test]
     fn a_default_port_only_drops_when_the_scheme_also_matches() {
-        // 443 only serializes out when the scheme is https (`secure`); over
-        // plain HTTP it is a non-default port like any other and must stay.
+        // 443 is removed only when the scheme is https (`secure`); over plain
+        // HTTP it is a non-default port like all others and must stay.
         assert_eq!(
             origin(Some("localhost"), 443, false).as_deref(),
             Ok("http://localhost:443")
         );
-        // 80 only serializes out when the scheme is http (`!secure`); over
-        // TLS it is a non-default port like any other and must stay.
+        // 80 is removed only when the scheme is http (`!secure`); over TLS it
+        // is a non-default port like all others and must stay.
         assert_eq!(
             origin(Some("jmap.example.com"), 80, true).as_deref(),
             Ok("https://jmap.example.com:80")
         );
     }
 
+    /// The rules that `jmap-mail` uses this function for. `tests/source.rs`
+    /// tests them through an `ESource`; this test pins them on the shared
+    /// entry point, which has a second caller that does not use an `ESource`.
+    /// RFC 8414 §3.3 compares issuers byte-for-byte, and RFC 6454 §6.2
+    /// serializes an origin without the default port of its scheme. Thus a
+    /// stated default port must not be in the origin. This is not cosmetic:
+    /// the `_jmap._tcp` SRV record of Fastmail names port 443 explicitly, but
+    /// its authorization-server metadata says
+    /// `"issuer": "https://api.fastmail.com"` (no port). An origin that keeps
+    /// `:443` can never pass the issuer check, and OAuth autodiscovery
+    /// silently finds nothing. Non-default ports must stay, or no local
+    /// plaintext server is reachable.
     #[test]
     fn a_default_port_serializes_out_of_the_origin() {
         assert_eq!(
@@ -646,11 +651,12 @@ mod tests {
             origin(Some("jmap.example.com"), 0, false),
             Err(SourceError::InsecureTransport("jmap.example.com".into()))
         );
+        // A port that nobody named is omitted, so the default port of the
+        // scheme applies.
         assert_eq!(
             origin(Some("jmap.example.com"), 0, true).as_deref(),
             Ok("https://jmap.example.com")
         );
-        // A port nobody named is left out, so the scheme's default applies.
         assert_eq!(
             origin(Some("::1"), 8080, false).as_deref(),
             Ok("http://[::1]:8080")
@@ -659,7 +665,7 @@ mod tests {
 
     #[test]
     fn a_bare_domain_with_no_port_is_srv_eligible() {
-        // The shape a plain email+password setup produces: no port named,
+        // A plain email+password setup makes this shape: no port named,
         // secure by default (RFC 8620 §2.2's "the domain is the entry
         // point").
         assert_eq!(
@@ -670,8 +676,9 @@ mod tests {
 
     #[test]
     fn an_explicit_port_is_an_origin_not_a_domain() {
-        // Every backend test wires a mock server through an explicit port;
-        // that must keep connecting directly, never through SRV lookup.
+        // Each backend test connects to a mock server through an explicit
+        // port. That must continue to connect directly, never through SRV
+        // lookup.
         assert_eq!(
             connect_target(Some("jmap.example.com"), 8443, true),
             Ok(ConnectTarget::Origin(
@@ -697,9 +704,9 @@ mod tests {
     #[test]
     fn a_trailing_dot_host_normalizes_to_the_same_domain() {
         // A fully qualified name (one trailing dot) and its relative form
-        // name the same DNS entry (RFC 1035 §3.1); concatenating the dotted
-        // form unchanged into a URL sends `https://api.fastmail.com./...`,
-        // which Fastmail answers with a redirect to the dotless host that
+        // are the same DNS entry (RFC 1035 §3.1). The dotted form, unchanged
+        // in a URL, sends `https://api.fastmail.com./...`. Fastmail answers
+        // with a redirect to the host without the dot, and that redirect
         // drops the bearer token.
         assert_eq!(
             connect_target(Some("api.fastmail.com."), 0, true),
@@ -731,16 +738,16 @@ mod tests {
         for host in ["localhost", "LocalHost", "127.0.0.1", "127.9.9.9", "::1"] {
             assert!(is_loopback(host), "{host} should be loopback");
         }
-        // The near-misses that a plausible-looking name could exploit.
+        // The near-misses that a plausible name could exploit.
         //
-        // The last four are the spellings that *do* reach 127.0.0.1 through a
-        // resolver but are not this function's idea of loopback: an
-        // IPv4-mapped IPv6 literal, the address as one decimal integer, the
-        // octal-per-octet form, and the short form. Each therefore fails
-        // *closed* — plaintext is refused and TLS is required — which is the
-        // safe direction for a check that decides whether credentials may go
-        // out in the clear. Pinned so that "loosening this to be helpful"
-        // has to be a deliberate act.
+        // A resolver *does* send the last four spellings to 127.0.0.1, but
+        // this function does not see them as loopback: an IPv4-mapped IPv6
+        // literal, the address as one decimal integer, the octal-per-octet
+        // form, and the short form. Thus each fails *closed*: plaintext is
+        // refused and TLS is necessary. That is the safe direction for a
+        // check that decides if credentials can go over the network in the
+        // clear. This test pins it, so that "loosening this to be helpful"
+        // must be a deliberate act.
         for host in [
             "localhost.example.com",
             "notlocalhost",
@@ -785,8 +792,10 @@ mod tests {
 
     #[test]
     fn connect_traces_rebase_true_when_the_source_opts_in_even_with_no_env_var() {
-        // SAFETY: no other test in this process reads or writes this
-        // variable.
+        // SAFETY: in this process, only the tests in this module touch this
+        // variable. The `connect` tests read it, and the two `rebase` tests
+        // remove it; no test sets it.
+
         unsafe { std::env::remove_var("JMAP_LIVE_SERVER_REBASE_URLS") };
 
         let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());

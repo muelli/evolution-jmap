@@ -1,23 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Opening the connection `connect_sync` needs, with no GObject in sight.
+//! Opens the connection that `connect_sync` needs, without GObject.
 //!
-//! `connect_sync` is the one vfunc that has to answer two questions at once:
-//! did this work, and — if not — should Evolution ask the user for a password
-//! again? The second answer is `out_auth_result`, and getting it wrong is the
-//! difference between a prompt that fixes the account and an account that is
-//! permanently broken with no way to say so. [`ConnectError::auth_result`] is
-//! that decision, kept next to the failures it classifies.
+//! `connect_sync` is the one vfunc that must answer two questions together.
+//! Did this work? If not, must Evolution ask the user for a password again?
+//! The second answer is `out_auth_result`. A wrong answer is the difference
+//! between a prompt that fixes the account and an account that is
+//! permanently broken with no way to report it.
+//! [`ConnectError::auth_result`] is that decision, next to the failures it
+//! classifies.
 //!
-//! It is here rather than in a backend because the decision must not differ
-//! between them. An address book and a calendar reach this code by different
-//! routes and resolve different collections, but "a 401 is the only failure
-//! worth re-prompting for" is a property of EDS's credentials machinery, not
-//! of contacts — and the way a rule like that goes wrong is by being written
-//! twice and then corrected once. What the backends keep for themselves is
-//! [`Collection`]-shaped: which capability they ask the session for, and which
-//! list they look their identifier up in.
+//! It is here and not in a backend because the decision must be the same
+//! for all backends. An address book and a calendar get to this code by
+//! different routes and resolve different collections. But "a 401 is the
+//! only failure that needs a re-prompt" is a property of the EDS credentials
+//! machinery, not of contacts. Such a rule goes wrong when it is written
+//! twice and then corrected once. The backends keep only the
+//! [`Collection`]-shaped parts: the capability they ask the session for, and
+//! the list in which they look up their identifier.
 
 use std::fmt;
 
@@ -46,10 +47,10 @@ pub const ACCEPTED_AUTH_RESULT: ESourceAuthenticationResult = E_SOURCE_AUTHENTIC
 
 /// The kind of server-side collection one EDS source stands for.
 ///
-/// The two backends are otherwise identical here, and the distinction survives
-/// only because it reaches the user: "the account names calendar \"Cal-1\",
-/// which the server does not have" is a sentence someone can act on, and "the
-/// account names collection \"Cal-1\"" is not.
+/// Here, the two backends are otherwise identical. The distinction stays only
+/// because the user sees it. A user can act on "the account names calendar
+/// \"Cal-1\", which the server does not have", but not on "the account names
+/// collection \"Cal-1\"".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Collection {
     AddressBook,
@@ -57,8 +58,8 @@ pub enum Collection {
 }
 
 impl Collection {
-    /// How to name this collection in a message shown to the user, in the
-    /// user's language.
+    /// The name of this collection in a message to the user, in the user's
+    /// language.
     pub fn noun(self) -> String {
         match self {
             Self::AddressBook => translate(
@@ -88,39 +89,38 @@ impl fmt::Display for Collection {
 pub enum ConnectError {
     /// The account names a user but EDS has no password for it yet.
     CredentialsRequired,
-    /// The account authenticates with OAuth 2.0 and no access token could be
-    /// had — nobody has consented to it yet, or the refresh did not work. The
-    /// string is EDS's own message for the failure.
+    /// The account authenticates with OAuth 2.0 and no access token is
+    /// available: nobody has consented yet, or the refresh failed. The string
+    /// is the EDS message for the failure.
     ///
-    /// Classified as [`E_SOURCE_AUTHENTICATION_REQUIRED`] rather than
-    /// `REJECTED` on purpose, and the distinction matters more here than on
-    /// the password path: `REQUIRED` is what opens the consent window, while
-    /// `REJECTED` additionally tells EDS to throw the stored secret away. For
-    /// OAuth 2.0 that secret is the *refresh* token, which a network blip
-    /// during the exchange has not invalidated — discarding it would turn a
-    /// transient failure into a re-consent the user has to click through.
+    /// Intentionally classified as [`E_SOURCE_AUTHENTICATION_REQUIRED`], not
+    /// `REJECTED`. The distinction is more important here than on the
+    /// password path. `REQUIRED` opens the consent window. `REJECTED` also
+    /// tells EDS to discard the stored secret. For OAuth 2.0 that secret is
+    /// the *refresh* token. A short network failure during the exchange does
+    /// not make it invalid. If EDS discards it, a transient failure becomes
+    /// a re-consent that the user must click through.
     OAuth2(String),
-    /// An OAuth 2.0 token fetch failed *underneath* the authorization
-    /// decision — the secret store or the network call a refresh makes —
-    /// rather than because of anything a fresh consent could fix. See
-    /// `crate::oauth2::is_secret_store_failure` for how the two are told
-    /// apart. Classified as `ERROR`, not `REQUIRED`: opening another consent
-    /// window on a dead keyring is exactly the loop this variant exists to
-    /// stop.
+    /// An OAuth 2.0 token fetch failed *below* the authorization decision (in
+    /// the secret store or in the network call of a refresh). A new consent
+    /// cannot fix this. See `crate::oauth2::is_secret_store_failure` for how
+    /// the two cases are told apart. Classified as `ERROR`, not `REQUIRED`:
+    /// this variant exists to stop the loop of new consent windows on a dead
+    /// keyring.
     SecretStore(String),
-    /// An OAuth 2.0 token fetch was addressed at a D-Bus peer that no longer
-    /// exists — the account's `ESource` still holds the interface proxy of
-    /// an `evolution-source-registry` that has since restarted, and the bus
-    /// answers `SERVICE_UNKNOWN` naming the dead unique name. See
+    /// An OAuth 2.0 token fetch went to a D-Bus peer that no longer exists.
+    /// The account's `ESource` still holds the interface proxy of an
+    /// `evolution-source-registry` that has restarted. The bus answers
+    /// `SERVICE_UNKNOWN` and names the dead unique name. See
     /// [`crate::oauth2::is_service_gone`] for the mechanism and for
     /// why EDS 3.52 does not recover from it by itself.
     ///
-    /// Distinct from [`Self::SecretStore`] rather than folded into it, even
-    /// though both are `ERROR` and neither ever consents: the keyring is fine
-    /// in this case, and a message telling its owner to unlock it points at
-    /// the wrong thing to fix. Classified as `ERROR` for the same reason
-    /// `SecretStore` is — a dead peer is not fixed by asking anyone to sign in
-    /// again, only by asking again and again.
+    /// Separate from [`Self::SecretStore`], although both are `ERROR` and
+    /// neither ever asks for consent. In this case the keyring is correct,
+    /// and a message that tells its owner to unlock it points to the wrong
+    /// fix. Classified as `ERROR` for the same reason as `SecretStore`: a new
+    /// sign-in does not fix a dead peer. It only causes more and more
+    /// requests.
     ServiceGone(String),
     /// The server refused, failed, or is unreachable.
     Client(Error),
@@ -170,18 +170,17 @@ impl ConnectError {
     /// What `connect_sync` writes into `out_auth_result`.
     ///
     /// Only `REJECTED` makes Evolution discard the stored password and ask
-    /// again, so it is reserved for the one case where asking again can help:
-    /// the server said the credentials were wrong. A 403 is *not* that case —
-    /// the credentials were accepted and the account is not allowed — and a
-    /// server that is down is not either.
+    /// again. Thus it is only for the one case where a new request can help:
+    /// the server said that the credentials were wrong. A 403 is *not* that
+    /// case: the server accepted the credentials, but the account does not
+    /// have permission. A server that is down is also not that case.
     ///
-    /// `UNKNOWN` is reserved for
-    /// [`Error::is_redirect_credentials_withheld`][jmap_client::Error::is_redirect_credentials_withheld]:
-    /// every other value, `ERROR` included, makes EDS's own
-    /// `ensure_connected_sync` schedule interactive consent regardless of
-    /// what this method returns, and a redirect that withheld credentials is
-    /// not a rejected password re-prompting could fix, only a connection
-    /// failure that would hit the exact same redirect again.
+    /// `UNKNOWN` is only for
+    /// [`Error::is_redirect_credentials_withheld`][jmap_client::Error::is_redirect_credentials_withheld].
+    /// All other values, `ERROR` included, make the EDS function
+    /// `ensure_connected_sync` schedule interactive consent. A redirect that
+    /// withheld credentials is not a rejected password that a re-prompt can
+    /// fix. It is a connection failure that gets the same redirect again.
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
@@ -189,37 +188,36 @@ impl ConnectError {
                 E_SOURCE_AUTHENTICATION_UNKNOWN
             }
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
-            // Every other case, `SecretStore` and `ServiceGone` included:
-            // deliberately not `REQUIRED` for those two — a dead secret store
-            // or a dead D-Bus peer is not fixed by asking the user to consent
-            // again, only by asking again and again, which is the loop
-            // these two variants exist to stop.
+            // All other cases, `SecretStore` and `ServiceGone` included.
+            // Intentionally not `REQUIRED` for those two: a new consent does
+            // not fix a dead secret store or a dead D-Bus peer. It only
+            // causes the loop of requests that these two variants stop.
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
     }
 
-    /// Turns a server's 401 on an OAuth 2.0 bearer token into the same
-    /// [`Self::OAuth2`] failure a failed *fetch* of that token already gets.
+    /// Changes a server's 401 on an OAuth 2.0 bearer token into the same
+    /// [`Self::OAuth2`] failure that a failed *fetch* of that token gets.
     ///
-    /// Call only where the credentials just tried were themselves an OAuth
-    /// 2.0 access token — every caller already knows that from the same
-    /// [`crate::oauth2::source_uses_oauth2`] read that chose the credential in
-    /// the first place. A 401 on a Basic or API-token attempt is left alone:
+    /// Call this only when the credentials just tried were an OAuth 2.0
+    /// access token. All callers know this from the same
+    /// [`crate::oauth2::source_uses_oauth2`] read that chose the credential.
+    /// This function does not change a 401 on a Basic or API-token attempt:
     /// there, [`is_wrong_password`] correctly means the password was wrong,
-    /// and `REJECTED` (ask again, discard what is stored) is the right
+    /// and `REJECTED` (ask again, discard the stored secret) is the correct
     /// answer.
     ///
-    /// For OAuth 2.0 it is not, for the same reason [`Self::OAuth2`]'s own doc
-    /// gives a failed fetch: `REQUIRED` opens a fresh consent window without
-    /// discarding the stored refresh token, which a 401 moments after that
-    /// token was successfully fetched has not invalidated — a transient
-    /// rejection and a genuinely revoked grant look identical from here, and
-    /// `REQUIRED` is the answer that does not overreact to the more common,
-    /// transient case the way `REJECTED` would.
+    /// For OAuth 2.0 it is not correct, for the reason that the doc of
+    /// [`Self::OAuth2`] gives for a failed fetch. `REQUIRED` opens a new
+    /// consent window and keeps the stored refresh token. A 401 immediately
+    /// after a successful fetch does not make that token invalid. Here, a
+    /// transient rejection and a really revoked grant look the same.
+    /// `REQUIRED` does not overreact to the more frequent transient case, but
+    /// `REJECTED` does.
     ///
-    /// Mirrors `jmap_mail::connect::StoreError::reclassify_oauth2_rejection` —
-    /// same reasoning, applied to EDS's four-valued
-    /// `ESourceAuthenticationResult` instead of Camel's three-valued one.
+    /// Mirrors `jmap_mail::connect::StoreError::reclassify_oauth2_rejection`.
+    /// The reason is the same, applied to the four-valued EDS
+    /// `ESourceAuthenticationResult` instead of the three-valued Camel one.
     pub fn reclassify_oauth2_rejection(self) -> Self {
         match self {
             Self::Client(error) if is_wrong_password(&error) => Self::OAuth2(error.to_string()),
@@ -227,61 +225,60 @@ impl ConnectError {
         }
     }
 
-    /// Allocates a `GError` describing this failure. Ownership passes to the
-    /// caller, as with [`crate::error::to_gerror`].
+    /// Allocates a `GError` that describes this failure. The caller gets
+    /// ownership, as with [`crate::error::to_gerror`].
     pub fn to_gerror(&self) -> *mut GError {
         if let Self::Client(error) = self {
             return crate::error::to_gerror(error);
         }
         let message = cstring_lossy(&self.to_string());
-        // SAFETY: the code is one of the enum's own values and the message is
-        // copied by the call.
+        // SAFETY: the code is one of the values of the enum, and the call
+        // copies the message.
         unsafe { e_client_error_create(self.client_error_code(), message.as_ptr()) }
     }
 
     fn client_error_code(&self) -> EClientError {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
-            // Not an authentication problem and not fixed by editing the
-            // account either — the secret store itself, or the D-Bus peer the
-            // token fetch was addressed at, is unreachable.
+            // Not an authentication problem, and editing the account does not
+            // fix it. The secret store, or the D-Bus peer of the token fetch,
+            // is unreachable.
             Self::SecretStore(_) | Self::ServiceGone(_) => E_CLIENT_ERROR_DBUS_ERROR,
-            // Both collection failures are fixed by editing the account (or by
-            // creating the collection on the server), never by retrying, so
-            // they are reported the same way a malformed host is.
+            // Editing the account (or creating the collection on the server)
+            // fixes both collection failures. A retry never fixes them. Thus
+            // they are reported the same as a malformed host.
             _ => E_CLIENT_ERROR_INVALID_ARG,
         }
     }
 }
 
-/// Whether this failure means the credentials themselves were wrong, and so
-/// whether asking the user for them again can help.
+/// Whether this failure means that the credentials were wrong. If so, a new
+/// request to the user for them can help.
 ///
-/// The one rule the EDS backends and the Camel provider must not answer
-/// differently, which is why it is a function rather than a match arm in each
-/// of them: the two report it through enums that have nothing in common
-/// (`ESourceAuthenticationResult` and `CamelAuthenticationResult`), but the
-/// question in front of the enum is the same one, and getting it wrong in
-/// either direction is a product failure. Re-prompting on a 403 is a loop no
-/// password ends; not re-prompting on a 401 is an account that is broken with
-/// no way to say so.
+/// The EDS backends and the Camel provider must give the same answer to this
+/// rule. Thus it is a function, not a match arm in each of them. The two
+/// report it through unrelated enums (`ESourceAuthenticationResult` and
+/// `CamelAuthenticationResult`), but the question is the same. A wrong
+/// answer in either direction is a product failure. A re-prompt on a 403 is
+/// a loop that no password stops. No re-prompt on a 401 gives an account
+/// that is broken with no way to report it.
 ///
-/// A 403 is deliberately excluded: the credentials *were* accepted and the
-/// account is not allowed to do this, which a different password does not fix.
-/// So is an unreachable server.
+/// A 403 is intentionally excluded: the server *did* accept the credentials,
+/// but the account does not have permission. A different password does not
+/// fix this. An unreachable server is also excluded.
 pub fn is_wrong_password(error: &Error) -> bool {
     error.is_unauthorized()
 }
 
-/// What to authenticate as, given the source's user name and whatever EDS got
-/// out of libsecret.
+/// The credentials to authenticate with, from the source's user name and the
+/// value that EDS got from libsecret.
 ///
-/// `password` is `None` on the first attempt: a source that names a user then
-/// fails with [`ConnectError::CredentialsRequired`] rather than trying the
-/// server anonymously, so the prompt happens before anything is sent. A source
-/// that names no user is anonymous on purpose — that is `jmap-mockd` and a
-/// development Stalwart, and a real server answers it with the 401 that turns
-/// into a prompt anyway.
+/// `password` is `None` on the first attempt. Then a source that names a
+/// user fails with [`ConnectError::CredentialsRequired`] and does not try
+/// the server anonymously. Thus the prompt occurs before anything is sent. A
+/// source that names no user is intentionally anonymous: this is `jmap-mockd`
+/// and a development Stalwart. A real server answers it with a 401, which
+/// also becomes a prompt.
 pub fn credentials(
     user: Option<&str>,
     password: Option<&str>,
@@ -293,14 +290,14 @@ pub fn credentials(
     }
 }
 
-/// What to authenticate as for [`crate::api_token::source_uses_api_token`]'s
-/// method — the same [`E_SOURCE_CREDENTIAL_PASSWORD`](crate::marshal::password)
-/// slot Basic reads, sent as a Bearer token instead of paired with a user
-/// name. There is no user-name half to this method — a token identifies the
-/// account by itself — so the only question is whether one has been prompted
-/// for yet; an empty stored token is sent as-is and left to the server's 401
-/// to turn into a re-prompt, exactly as an empty stored password is on the
-/// Basic path.
+/// The credentials for the method of
+/// [`crate::api_token::source_uses_api_token`]. This is the same
+/// [`E_SOURCE_CREDENTIAL_PASSWORD`](crate::marshal::password) slot that Basic
+/// reads, sent as a Bearer token and not with a user name. This method has
+/// no user name, because a token identifies the account by itself. Thus the
+/// only question is whether a prompt for the token has occurred. An empty
+/// stored token is sent unchanged, and the server's 401 makes it a
+/// re-prompt. An empty stored password on the Basic path works the same.
 pub fn bearer_credentials(password: Option<&str>) -> Result<Credentials, ConnectError> {
     match password {
         Some(password) => Ok(Credentials::bearer(password)),
@@ -310,16 +307,15 @@ pub fn bearer_credentials(password: Option<&str>) -> Result<Credentials, Connect
 
 /// Which of the server's collections this source stands for.
 ///
-/// `candidates` is `(id, is_default)` for each collection the account offers,
-/// in the order the server listed them — which is deliberately not used: a
-/// source that names nothing gets the collection the *server* flags default,
-/// never "the first one". Which one a source means is not something to guess
-/// at, because the guess is where the user's data gets written.
+/// `candidates` is `(id, is_default)` for each collection of the account, in
+/// the server's order. This function intentionally ignores the order. A
+/// source that names nothing gets the collection that the *server* flags as
+/// default, never "the first one". Do not guess the collection of a source,
+/// because the user's data goes to the guessed collection.
 ///
-/// A named collection is checked against the list rather than trusted: a typo
-/// in a hand-written `.source` would otherwise present as a collection that is
-/// merely empty, which is indistinguishable from a server that lost the
-/// contents.
+/// This function checks a named collection against the list. Otherwise, a
+/// typo in a hand-written `.source` shows as an empty collection. That looks
+/// the same as a server that lost the contents.
 pub fn resolve<'a, I>(
     kind: Collection,
     wanted: Option<&str>,
@@ -329,8 +325,8 @@ where
     I: IntoIterator<Item = (Option<&'a Id>, Option<bool>)>,
 {
     let candidates = candidates.into_iter().filter_map(|(id, is_default)| {
-        // A collection the server did not name cannot be synced, whether or
-        // not it claims to be the default one.
+        // A collection without a server id cannot be synced, even if it
+        // is flagged as the default.
         id.map(|id| (id, is_default))
     });
 
@@ -348,33 +344,32 @@ where
     }
 }
 
-/// The whole of `connect_sync` except the instance and the collection lookup:
-/// from the `ESource` EDS hands the backend to whatever `open` makes of it,
-/// with `out_auth_result` and `error` written the way the vfunc has to write
-/// them.
+/// All of `connect_sync` except the instance and the collection lookup. It
+/// goes from the `ESource` that EDS gives the backend to the result of
+/// `open`. It writes `out_auth_result` and `error` as the vfunc must.
 ///
-/// This is the layer a subclass calls, and it is here rather than next to the
-/// other vfunc bodies because it is the only one whose input is an `ESource` —
-/// which a test can build with `e_source_new_with_uid`, where a meta backend
-/// would need a registry.
+/// A subclass calls this layer. It is here, not next to the other vfunc
+/// bodies, because it is the only one whose input is an `ESource`. A test can
+/// make an `ESource` with `e_source_new_with_uid`. A meta backend needs a
+/// registry.
 ///
-/// `out_auth_result` is written on **every** path, success included: EDS reads
-/// it whenever the vfunc returns, and a stale value from a previous attempt is
-/// how an account ends up either never prompting or prompting forever.
+/// This function writes `out_auth_result` on **every** path, success
+/// included. EDS reads it each time the vfunc returns. A stale value from a
+/// previous attempt causes an account to never prompt or to prompt forever.
 ///
-/// `cancellable` is [`observe`]d for the length of the connect and no longer,
-/// and the connection `open` returns carries no cancellation of its own. That
-/// is deliberate: a flag built into the client would belong to the *account*
-/// rather than to the operation, so a connect the user stopped would leave a
-/// client that had latched a cancellation nothing could clear — every later
-/// operation on that account refusing, until it was reconnected. What stops an
-/// operation after this one is the scope that operation's own vfunc installs.
+/// `cancellable` is [`observe`]d only for the duration of the connect. The
+/// connection that `open` returns has no cancellation of its own. This is
+/// intentional. A flag in the client belongs to the *account*, not to the
+/// operation. Thus a connect that the user stopped leaves a client with a
+/// latched cancellation that nothing can clear. Then all later operations on
+/// that account refuse until a reconnect. Each later operation is stopped by
+/// the scope that its own vfunc installs.
 ///
 /// # Safety
 ///
 /// `source` must be NULL or a valid `ESource`, `credentials` NULL or a valid
 /// `ENamedParameters`, `cancellable` NULL or a valid `GCancellable`, and the
-/// two out-parameters NULL or writable — which is what an EDS vfunc receives.
+/// two out-parameters NULL or writable. An EDS vfunc receives these.
 pub unsafe fn connect_with<T, F>(
     kind: Collection,
     source: *mut ESource,
@@ -387,16 +382,16 @@ pub unsafe fn connect_with<T, F>(
 where
     F: FnOnce(&SourceConfig, Credentials) -> Result<T, ConnectError>,
 {
-    // A backend without a source cannot be configured, so no prompt helps. It
-    // should not happen — EDS constructs the backend *from* a source — but a
-    // NULL dereference in `evolution-addressbook-factory` takes every other
-    // account in the process down with it.
+    // A backend without a source cannot be configured, so no prompt helps.
+    // This is not expected, because EDS constructs the backend *from* a
+    // source. But a NULL dereference in `evolution-addressbook-factory` stops
+    // all other accounts in the process too.
     if source.is_null() {
         tracing::error!(
             collection = %kind,
             "the collection backend has no account source to connect to"
         );
-        // SAFETY: the out-parameters satisfy the contract by this function's.
+        // SAFETY: the out-parameters satisfy the contract of this function.
         unsafe {
             write_auth_result(out_auth_result, E_SOURCE_AUTHENTICATION_ERROR);
             set_raw_gerror(error, no_source_gerror(kind));
@@ -411,8 +406,8 @@ where
     let config = match unsafe { SourceConfig::from_source(source) } {
         Ok(config) => config,
         Err(failure) => {
-            // A misconfigured account: re-prompting for a password cannot fix
-            // a missing host or a plaintext origin, so this is never REJECTED.
+            // A misconfigured account: a password re-prompt cannot fix a
+            // missing host or a plaintext origin. Thus this is never REJECTED.
             tracing::error!(
                 collection = %kind,
                 ?account_id,
@@ -431,21 +426,21 @@ where
     // SAFETY: `credentials` is NULL or a valid ENamedParameters, which
     // outlives the call.
     let password = unsafe { stored_password(credentials) };
-    // SAFETY: `cancellable` is NULL or a valid GCancellable that EDS keeps
+    // SAFETY: `cancellable` is NULL or a valid GCancellable. EDS keeps it
     // alive for the duration of the vfunc, which outlives this scope.
     let _cancel = unsafe { observe(cancellable) };
 
-    // Which authentication scheme this account uses is decided here, once, for
-    // the same reason the `out_auth_result` classification is: an address book
-    // and a calendar on one account must not disagree about how to log in.
-    // Kept, not just asked once: `open`'s own failure needs to know it too,
-    // to tell a 401 on the token this call just fetched apart from one on an
-    // ordinary password.
+    // The authentication scheme of this account is decided here, once, for
+    // the same reason as the `out_auth_result` classification. An address
+    // book and a calendar on one account must use the same login method.
+    // The value is kept: a failure of `open` also needs it, to tell a 401 on
+    // the token that this call fetched from a 401 on a usual password.
     // SAFETY: `source` is a valid ESource, checked non-NULL above.
     let uses_oauth2 = unsafe { source_uses_oauth2(source) };
     let uses_api_token = unsafe { source_uses_api_token(source) };
-    // SAFETY: `source` is a valid ESource, checked non-NULL above, and
-    // `cancellable` satisfies `access_token`'s contract by this function's.
+    // SAFETY: `source` is a valid ESource, checked non-NULL above.
+    // `cancellable` satisfies the contract of `access_token` through the
+    // contract of this function.
     let resolved = unsafe {
         if uses_oauth2 {
             tracing::debug!(
@@ -522,14 +517,14 @@ where
     }
 }
 
-/// What `connect_with` reports, given what `open` itself answered.
+/// What `connect_with` reports, from the answer of `open`.
 ///
-/// Split out so the reclassification decision — apply
-/// [`ConnectError::reclassify_oauth2_rejection`] only to an OAuth 2.0
-/// attempt's failure, leave every other outcome exactly as `open` gave it —
-/// is a plain function a test can drive without a live `ESource`, the same
-/// way `jmap_mail::service::finish_authenticate` is split out of `attempt`
-/// for a `CamelService`.
+/// This is a separate plain function so that a test can examine the
+/// reclassification decision without a live `ESource`. The decision: apply
+/// [`ConnectError::reclassify_oauth2_rejection`] only to the failure of an
+/// OAuth 2.0 attempt, and keep all other outcomes from `open` unchanged.
+/// `jmap_mail::service::finish_authenticate` is separate from `attempt` for
+/// a `CamelService` in the same way.
 fn finish_connect<T>(
     collection: Collection,
     account_id: Option<&str>,
@@ -584,7 +579,7 @@ fn no_source_gerror(kind: Collection) -> *mut GError {
     ))
 }
 
-/// Writes an `out_auth_result` the caller may not have asked for.
+/// Writes an `out_auth_result`. The caller possibly did not request it.
 ///
 /// # Safety
 ///
@@ -609,7 +604,7 @@ mod tests {
         Id::new(s)
     }
 
-    /// The rule the whole prompt behaviour rests on, in one place: exactly one
+    /// The rule that all prompt behaviour uses, in one place: exactly one
     /// failure re-prompts.
     #[test]
     fn only_a_401_makes_evolution_ask_for_the_password_again() {
@@ -650,11 +645,11 @@ mod tests {
 
     /// `ensure_connected_sync` (EDS 3.52.3 `e-book-meta-backend.c:3598-3630`)
     /// calls `e_backend_schedule_credentials_required`, the interactive
-    /// consent escalation, for every `auth_result` except `UNKNOWN`, which is
-    /// also the only one it propagates a real `GError` for rather than
-    /// clearing it into a bogus success. A redirect that withheld credentials
-    /// is not fixed by asking the user to consent again, only by asking again
-    /// and again against the same redirect: an endless OAuth2 popup loop.
+    /// consent escalation, for each `auth_result` except `UNKNOWN`. `UNKNOWN`
+    /// is also the only value for which it propagates a real `GError` and
+    /// does not clear it into an incorrect success. A new consent does not
+    /// fix a redirect that withheld credentials. It only causes repeated
+    /// requests against the same redirect: an endless OAuth2 popup loop.
     #[test]
     fn a_redirect_that_withheld_credentials_is_unknown_not_an_escalation() {
         assert_eq!(
@@ -667,10 +662,9 @@ mod tests {
         );
     }
 
-    /// A secret-store failure must not come back `REQUIRED`: that is exactly
-    /// the "try harder and harder to acquire a token" loop this guards
-    /// against, and its message reaches the user rather than being
-    /// swallowed.
+    /// A secret-store failure must not give `REQUIRED`. This test prevents
+    /// the "try harder and harder to acquire a token" loop. The test also
+    /// makes sure that the message gets to the user and is not discarded.
     #[test]
     fn a_secret_store_failure_does_not_reopen_consent() {
         let error = ConnectError::SecretStore("the login keyring is locked".to_owned());
@@ -689,8 +683,8 @@ mod tests {
         }
     }
 
-    /// Every ConnectError variant must map to the corresponding EClientError code
-    /// that Evolution's UI and retry loops route on.
+    /// Each ConnectError variant must map to the related EClientError code,
+    /// which the Evolution UI and retry loops use for routing.
     #[test]
     fn each_connect_error_variant_maps_to_the_expected_client_error_code() {
         for (error, expected) in [
@@ -751,8 +745,8 @@ mod tests {
         }
     }
 
-    /// A secret-store failure during connect is preserved as SecretStore and not
-    /// reclassified to OAuth2, ensuring it stays ERROR and never REQUIRED.
+    /// A secret-store failure during connect stays SecretStore and does not
+    /// become OAuth2. Thus it stays ERROR and is never REQUIRED.
     #[test]
     fn finish_connect_leaves_secret_store_error_unmodified_for_oauth2_account() {
         let store_error = || Err::<(), _>(ConnectError::SecretStore("keyring locked".to_owned()));
@@ -764,11 +758,11 @@ mod tests {
         assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
     }
 
-    /// The sibling of the test above: a dead D-Bus peer survives
-    /// `finish_connect` on an OAuth 2.0 account as `ServiceGone`, so it stays
-    /// `ERROR` and never turns into the consent window the captured trace
-    /// showed. The reclassification only ever touches a 401 — this pins that
-    /// the account being OAuth 2.0 is not by itself enough to reopen consent.
+    /// The sibling of the test above: on an OAuth 2.0 account, a dead D-Bus
+    /// peer stays `ServiceGone` through `finish_connect`. Thus it stays
+    /// `ERROR` and never becomes the consent window that the captured trace
+    /// showed. The reclassification only changes a 401. This test makes sure
+    /// that an OAuth 2.0 account alone does not open consent again.
     #[test]
     fn finish_connect_leaves_a_dead_peer_unmodified_for_oauth2_account() {
         let dead_peer = || {
@@ -784,9 +778,9 @@ mod tests {
         assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
     }
 
-    /// The collection is named in the message because the message is what the
-    /// user sees; a backend that reported the other one's noun would send
-    /// someone editing the wrong account.
+    /// The message names the collection because the user sees the message.
+    /// If a backend reported the noun of the other backend, the user would
+    /// edit the wrong account.
     #[test]
     fn the_message_names_the_collection_the_source_stands_for() {
         assert!(
@@ -801,9 +795,9 @@ mod tests {
         );
     }
 
-    /// The one arm with no collection or server text of its own to lean on —
-    /// pinned down separately so the translation retrofit could not quietly
-    /// turn it into an empty string.
+    /// The one arm without its own collection or server text. A separate
+    /// test makes sure that the translation retrofit did not silently change
+    /// it into an empty string.
     #[test]
     fn credentials_required_names_the_missing_password() {
         assert_eq!(
@@ -827,7 +821,7 @@ mod tests {
         ));
     }
 
-    /// Never "the first one", and never one the server merely happened to list
+    /// Never "the first one", and never one that the server only listed
     /// before the default.
     #[test]
     fn an_unnamed_collection_resolves_to_the_flagged_default_only() {
@@ -857,8 +851,8 @@ mod tests {
         ));
     }
 
-    /// A server that flags a collection default without giving it an id has
-    /// named nothing that can be synced, and must not shadow one that has one.
+    /// A collection that the server flags as default but gives no id cannot
+    /// be synced. It must not hide a default collection that has an id.
     #[test]
     fn a_collection_with_no_id_is_not_a_candidate() {
         let list = [(None, Some(true)), (Some(id("B")), Some(true))];
@@ -873,10 +867,9 @@ mod tests {
         );
     }
 
-    /// The reclassification only fires for the one shape it exists for — a
-    /// 401 — and only turns it into `OAuth2`, never touching any other
-    /// failure, mirroring `jmap_mail`'s
-    /// `only_the_401_shape_is_reclassified`.
+    /// The reclassification only applies to a 401, and only changes it into
+    /// `OAuth2`. It never changes other failures. This mirrors the
+    /// `jmap_mail` test `only_the_401_shape_is_reclassified`.
     #[test]
     fn only_a_401_is_reclassified_to_oauth2_required() {
         let unauthorized = ConnectError::Client(Error::Http {
@@ -907,11 +900,10 @@ mod tests {
         }
     }
 
-    /// The gate `connect_with` applies around `open`'s outcome: only an
-    /// OAuth 2.0 attempt's 401 is reclassified, and success passes through
-    /// unchanged either way — the same two cases
-    /// `jmap_mail::service::finish_authenticate_tests` pins for the mail
-    /// side.
+    /// The gate that `connect_with` applies to the outcome of `open`. Only
+    /// the 401 of an OAuth 2.0 attempt is reclassified. Success always stays
+    /// unchanged. `jmap_mail::service::finish_authenticate_tests` tests the
+    /// same two cases for mail.
     #[test]
     fn finish_connect_reclassifies_only_when_the_attempt_was_oauth2() {
         let unauthorized = || {
@@ -933,9 +925,9 @@ mod tests {
         assert!(finish_connect(Collection::Calendar, Some("acc-2"), false, Ok(())).is_ok());
     }
 
-    /// The API-token sibling of [`credentials`]'s own user/password matrix:
-    /// there is no user-name half to this method, so the only question is
-    /// whether a token has been prompted for yet.
+    /// The API-token sibling of the user/password matrix of [`credentials`].
+    /// This method has no user name. Thus the only question is whether a
+    /// prompt for a token has occurred.
     #[test]
     fn a_stored_token_is_sent_as_bearer_and_an_absent_one_is_required() {
         assert!(matches!(
@@ -1073,14 +1065,13 @@ mod tests {
         );
     }
 
-    /// `reclassify_oauth2_rejection` only turns a password-shaped error into
-    /// `OAuth2(_)` when `uses_oauth2` is true, so an `OAuth2(_)` error on a
-    /// non-OAuth2 account cannot arise through that path. But the reason
-    /// classification reads `uses_oauth2` and the error's own shape as two
-    /// separate conditions, and a password account must never be reported as
-    /// awaiting OAuth2 consent merely because the error happens to carry that
-    /// variant: an operator reading "oauth2_consent_required" off a plain
-    /// password account would chase the wrong fix.
+    /// `finish_connect` applies `reclassify_oauth2_rejection` only when
+    /// `uses_oauth2` is true. Thus that path cannot give an `OAuth2(_)` error
+    /// on a non-OAuth2 account. But the reason classification reads
+    /// `uses_oauth2` and the shape of the error as two separate conditions.
+    /// Never report a password account as waiting for OAuth2 consent only
+    /// because the error has that variant. An operator who reads
+    /// "oauth2_consent_required" on a password account tries the wrong fix.
     #[test]
     fn finish_connect_does_not_report_oauth2_consent_for_a_non_oauth2_account() {
         let (_, entries) = capture(|| {
@@ -1100,10 +1091,10 @@ mod tests {
         );
     }
 
-    /// The `GError` a NULL source fails with, independent of the unsafe
-    /// `connect_with` entry point that builds it: names the right noun for
-    /// each collection kind and carries `INVALID_ARG`, the code
-    /// `finish_connect`'s caller routes "misconfigured, do not re-prompt" on.
+    /// The `GError` for a NULL source, without the unsafe `connect_with`
+    /// entry point that makes it. It names the correct noun for each
+    /// collection kind. Its code is `INVALID_ARG`, which the caller of
+    /// `finish_connect` uses to route "misconfigured, do not re-prompt".
     #[test]
     fn no_source_gerror_names_the_collection_kind() {
         for (kind, noun) in [

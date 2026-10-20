@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The `ESource` an EDS backend is handed is the *only* description of the
-// account it has, and everything that can go wrong here goes wrong quietly:
-// a host read from the wrong extension is an address book that never
-// connects, and a plaintext origin nobody noticed is Basic credentials on the
-// wire. So this drives a real `ESource` built with the EDS setters rather
-// than a hand-made struct.
+// The `ESource` that an EDS backend gets is its *only* description of the
+// account. Every failure here is silent. A host read from the wrong extension
+// gives an address book that never connects. A plaintext origin that nobody
+// sees sends Basic credentials over the network unencrypted. Thus these tests
+// use a real `ESource` made with the EDS setters, not a hand-made struct.
 
 use std::ffi::CString;
 use std::ptr;
@@ -22,26 +21,25 @@ use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
 use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError, destination_address};
 
-/// An `ESource` that is not backed by the registry — `e_source_new_with_uid`
-/// with a NULL D-Bus object is exactly what EDS itself uses for a source read
-/// from a keyfile, so the extension machinery behaves as it does in a
-/// backend.
+/// An `ESource` that is not backed by the registry. EDS itself uses
+/// `e_source_new_with_uid` with a NULL D-Bus object for a source read from a
+/// keyfile. Thus the extensions behave as they do in a backend.
 struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
         let uid = CString::new("jmap-test-source").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a NULL
-        // GError out-parameter are the documented arguments.
+        // SAFETY: the documented arguments are a NUL-terminated uid, a NULL
+        // D-Bus object and a GError out-parameter.
         let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
     }
 
     fn authentication(&self) -> *mut ESourceAuthentication {
-        // SAFETY: the source is alive and the name is a header constant; the
-        // extension is created on demand and owned by the source.
+        // SAFETY: the source is live and the name is a header constant. The
+        // source creates the extension on demand and owns it.
         unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
     }
 
@@ -102,7 +100,7 @@ impl TestSource {
 
 impl Drop for TestSource {
     fn drop(&mut self) {
-        // SAFETY: we hold the only reference.
+        // SAFETY: this struct holds the only reference.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
@@ -128,10 +126,10 @@ fn a_configured_source_yields_an_origin_a_user_and_an_address_book() {
 
 #[test]
 fn security_defaults_to_tls_when_the_source_never_mentions_it() {
-    // A source written by hand — the documented manual test recipe — may not
-    // carry a [Security] group at all. `ESourceSecurity:secure` defaults to
-    // FALSE, so reading the extension unconditionally would silently
-    // downgrade every such account to plain HTTP.
+    // A source written by hand (the documented manual test recipe) can have
+    // no [Security] group. `ESourceSecurity:secure` defaults to FALSE. Thus an
+    // unconditional read of the extension silently changes every such account
+    // to plain HTTP.
     let config = TestSource::new()
         .host("jmap.example.com")
         .config()
@@ -145,11 +143,10 @@ fn security_defaults_to_tls_when_the_source_never_mentions_it() {
 
 #[test]
 fn reading_a_source_with_no_authentication_group_does_not_create_one() {
-    // A source nothing has written `[Authentication]` into yet — never
-    // reached through `.host()`/`.user()`/`.port()`, which themselves fetch
-    // the extension and so would create it as a side effect of test setup.
-    // `from_source` must fail (there is nothing to connect to) without
-    // leaving a group behind merely because it looked.
+    // A source with no `[Authentication]` group yet. The test does not call
+    // `.host()`/`.user()`/`.port()`, because they get the extension and thus
+    // create it. `from_source` must fail (there is nothing to connect to), and
+    // its read must not create a group.
     let source = TestSource::new();
 
     source
@@ -164,9 +161,9 @@ fn reading_a_source_with_no_authentication_group_does_not_create_one() {
 
 #[test]
 fn reading_a_source_with_no_resource_group_does_not_create_one() {
-    // A source with a host but no `[Resource]` group — the "default address
-    // book/calendar" case `from_source`'s own module docs describe. Reading
-    // it for its (absent) resource identity must not create the group.
+    // A source with a host but no `[Resource]` group: the "default address
+    // book/calendar" case in the module docs of `from_source`. A read of its
+    // (absent) resource identity must not create the group.
     let source = TestSource::new().host("jmap.example.com").secure(true);
 
     let config = source
@@ -182,8 +179,8 @@ fn reading_a_source_with_no_resource_group_does_not_create_one() {
 
 #[test]
 fn an_explicit_security_group_still_wins() {
-    // The flip side: "secure=false" was written on purpose and must not be
-    // read as "unspecified".
+    // The opposite case: someone wrote "secure=false" intentionally. It must
+    // not be read as "unspecified".
     let err = TestSource::new()
         .host("jmap.example.com")
         .secure(false)
@@ -244,8 +241,8 @@ fn plaintext_to_a_remote_host_is_refused() {
 
 #[test]
 fn plaintext_to_loopback_is_allowed() {
-    // The mock server and any local development instance are http on
-    // 127.0.0.1; refusing that would make the backend untestable.
+    // The mock server and all local development instances use http on
+    // 127.0.0.1. If the backend refuses that, nobody can test it.
     for host in ["localhost", "127.0.0.1", "127.0.0.2", "::1"] {
         let config = TestSource::new()
             .host(host)
@@ -291,16 +288,16 @@ fn a_source_without_a_host_is_a_configuration_error() {
 
 #[test]
 fn a_host_that_smuggles_a_path_or_a_scheme_is_rejected() {
-    // The origin is built by string concatenation, so a host carrying its own
-    // separators would let a `.source` file aim the client somewhere else
-    // entirely — including at a plaintext endpoint past the TLS check.
+    // The origin is a string concatenation. A host with its own separators
+    // lets a `.source` file send the client to a different place, including
+    // a plaintext endpoint that the TLS check does not see.
     for host in [
         "jmap.example.com/../evil",
         "evil.example.com#jmap.example.com",
         "http://evil.example.com",
         "jmap.example.com:80",
-        // Surrounding whitespace never reaches us — EDS strips it in the
-        // property setter — but an interior space is passed straight through.
+        // EDS removes surrounding whitespace in the property setter, so it
+        // never gets here. But an interior space passes through unchanged.
         "jmap.example.com evil.example.com",
         "user@evil.example.com",
     ] {
@@ -315,10 +312,10 @@ fn a_host_that_smuggles_a_path_or_a_scheme_is_rejected() {
 
 #[test]
 fn an_empty_user_or_identity_is_absent_rather_than_empty() {
-    // A key the user cleared comes back as absent, not as "": `ESource`
-    // normalises the empty string to NULL in the setter. Pinned because the
-    // reader relies on it — an empty address book id would otherwise be sent
-    // to the server as a filter matching nothing.
+    // A key that the user cleared reads back as absent, not as "": `ESource`
+    // normalises the empty string to NULL in the setter. The reader needs
+    // this. Without it, the server gets an empty address book id as a filter
+    // that matches nothing.
     let config = TestSource::new()
         .host("jmap.example.com")
         .secure(true)
@@ -333,13 +330,13 @@ fn an_empty_user_or_identity_is_absent_rather_than_empty() {
 
 #[test]
 fn the_refusal_reaches_evolution_as_a_tls_error_not_a_generic_one() {
-    // Evolution shows the GError to the user; "not available in plain text"
-    // is actionable, "other error" is not.
+    // Evolution shows the GError to the user. The user can act on "not
+    // available in plain text", but not on "other error".
     let err = SourceError::InsecureTransport("jmap.example.com".into());
     let gerror = err.to_gerror();
     assert!(!gerror.is_null());
 
-    // SAFETY: to_gerror returned a fresh GError we own.
+    // SAFETY: to_gerror returned a fresh GError that this test owns.
     unsafe {
         assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
         assert_eq!(
@@ -370,8 +367,8 @@ fn destination_address_reads_the_explicit_host_and_port() {
 #[test]
 fn destination_address_defaults_an_unset_port_to_443() {
     // A bare-domain, SRV-eligible account (`ConnectTarget::Domain`) never has
-    // a port in its `[Authentication]` group — EDS reads that back as 0, "not
-    // set" — but a network monitor asked to watch port 0 learns nothing.
+    // a port in its `[Authentication]` group. EDS reads that back as 0, "not
+    // set". But a network monitor that watches port 0 learns nothing.
     let source = TestSource::new().host("jmap.example.com");
 
     // SAFETY: as above.
@@ -406,7 +403,7 @@ fn destination_address_does_not_create_an_authentication_group_it_lacks() {
 
 #[test]
 fn an_identity_with_an_account_names_a_collection_in_that_account() {
-    // A calendar or address book another user shares lives in that user's
+    // A calendar or address book that another user shares is in that user's
     // account, so the collection writes `<accountId>/<collectionId>`. JMAP
     // ids never contain `/` (RFC 8620 §1.2), so the split is unambiguous.
     let config = TestSource::new()
@@ -433,8 +430,8 @@ fn a_bare_identity_names_a_collection_in_the_primary_account() {
 
 #[test]
 fn a_malformed_identity_is_kept_whole_rather_than_guessed_at() {
-    // Kept whole so the server refuses it under the name the keyfile holds,
-    // instead of the backend quietly opening some other collection.
+    // Kept whole, so the server refuses it under the name in the keyfile.
+    // The backend must not silently open a different collection.
     for identity in ["/C1", "A2/", "A2/C1/X", "/"] {
         let config = TestSource::new()
             .host("jmap.example.com")

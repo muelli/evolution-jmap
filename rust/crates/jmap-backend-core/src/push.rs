@@ -5,41 +5,41 @@
 //!
 //! A push must "trigger the EXISTING `get_changes_sync` path rather than
 //! growing a second sync mechanism", and evolution-ews is the precedent to
-//! study. It is a
-//! short one: `ebb_ews_server_notification_cb` decides whether a server
-//! notification concerns *this* backend's folder and, if it does, calls
-//! `e_book_meta_backend_schedule_refresh` — nothing else. EDS takes it from
-//! there: `schedule_refresh` coalesces (a refresh already running makes it a
-//! no-op), dispatches through `e_book_backend_schedule_custom_operation`, and
-//! the refresh reaches `get_changes_sync` with the stored sync tag. So a
-//! burst of pushes costs one `/changes` round trip, and the whole of the sync
-//! logic stays where it already is and is already tested.
+//! study. The precedent is short: `ebb_ews_server_notification_cb` decides
+//! if a server notification concerns the folder of *this* backend. If it
+//! does, it calls `e_book_meta_backend_schedule_refresh` and nothing else.
+//! EDS does the rest: `schedule_refresh` coalesces (if a refresh already
+//! runs, it does nothing), dispatches through
+//! `e_book_backend_schedule_custom_operation`, and the refresh gets to
+//! `get_changes_sync` with the stored sync tag. Thus a burst of pushes costs
+//! one `/changes` round trip, and all of the sync logic stays where it is
+//! now, with its tests.
 //!
-//! [`PushRefresh`] is that callback's Rust half, minus the EDS call itself:
-//! it owns the [`EventSourceSubscription`], decides which pushes concern the
-//! backend, and invokes an action the caller supplies. Keeping the action
-//! injected is what makes this testable at all — a real `EBookMetaBackend`
-//! needs a running `evolution-source-registry`, so the tests drive the pump
-//! with a counting closure, while the backends pass one that calls
+//! [`PushRefresh`] is the Rust half of that callback, without the EDS call.
+//! Its pump thread owns the [`EventSourceSubscription`]. It decides which
+//! pushes concern the backend, and calls an action that the caller supplies.
+//! This injected action makes the module testable: a real `EBookMetaBackend`
+//! needs a running `evolution-source-registry`. Thus the tests drive the pump
+//! with a counting closure, and the backends pass a closure that calls
 //! `e_book_meta_backend_schedule_refresh` through a
 //! [`WeakBackend`](crate::weak::WeakBackend).
 //!
-//! Push is an accelerator, never the path to correctness: if the stream never
-//! connects, or the server advertises no `eventSourceUrl`, or the action is
-//! dropped on the floor because the backend went away, EDS's own periodic
-//! refresh still runs. Nothing here reports an error to anybody, and that is
+//! Push makes refreshes faster, but correctness never depends on it. The
+//! periodic refresh of EDS still runs if the stream never connects, if the
+//! server advertises no `eventSourceUrl`, or if the action does nothing
+//! because the backend is gone. Nothing here reports an error, and that is
 //! deliberate.
 //!
 //! ## Lifetime
 //!
 //! The pump thread outlives no backend: [`PushRefresh::stop`] cancels the
-//! subscription and joins the thread, and `Drop` calls it, so by the time the
-//! `PushRefresh` is gone the action can no longer run. The one case it cannot
-//! join is when the action *itself* ended up dropping the backend's last
-//! reference, so the backend's finalize — and therefore this `Drop` — is
-//! running on the pump thread; joining there would deadlock on itself, so
-//! that case detaches instead. It is safe to: the thread holds nothing that
-//! `Drop` frees, and the cancellation it is about to observe is set first.
+//! subscription and joins the thread, and `Drop` calls it. Thus, after the
+//! `PushRefresh` is gone, the action cannot run. One case cannot join: the
+//! action *itself* drops the last reference to the backend, so the finalize
+//! of the backend (and thus this `Drop`) runs on the pump thread. A join
+//! there would deadlock on itself, so in that case the thread detaches. This
+//! is safe: the thread holds nothing that `Drop` frees, and the cancellation
+//! that the thread is about to see is already set.
 
 use std::collections::BTreeMap;
 use std::thread::{self, JoinHandle};
@@ -55,37 +55,37 @@ use jmap_proto::push::StateChange;
 
 use crate::weak::WeakBackend;
 
-/// How long the pump waits for a push before looking at the cancellation
-/// flag again. Only bounds how long [`PushRefresh::stop`] waits, since a
-/// cancelled subscription also shuts its socket down, so this can be
-/// generous rather than a busy-wait.
+/// How long the pump waits for a push before it examines the cancellation
+/// flag again. This only limits how long [`PushRefresh::stop`] waits,
+/// because a cancelled subscription also closes its socket. Thus this value
+/// can be generous; it is not a busy-wait.
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// How often to ask the server for a `ping` event (RFC 8620 §7.3).
 ///
-/// Not because anything reads them — [`jmap_client::eventsource`] discards
-/// them — but because they are the only thing that makes a stream where
-/// nothing is happening *write*, and a write is how either end learns the
-/// connection has silently died (a NAT rebinding, a dropped VPN) instead of
-/// waiting forever on a socket that will never deliver anything. Two minutes
-/// is comfortably inside the shortest NAT idle timeouts in common use.
+/// Nothing reads the pings ([`jmap_client::eventsource`] discards them). But
+/// they are the only thing that makes an idle stream *write*. A write is how
+/// either end learns that the connection silently died (a NAT rebinding, a
+/// dropped VPN), instead of an infinite wait on a socket that will never
+/// deliver data. Two minutes is safely shorter than the shortest NAT idle
+/// timeouts in common use.
 const PING_SECONDS: u32 = 120;
 
-/// Start pushing refreshes at `backend`, if the server it is connected to
-/// advertises somewhere to listen (RFC 8620 §7.3's `eventSourceUrl`) — and
-/// `None`, quietly, if it does not, since a server without push is simply one
-/// where EDS's own periodic refresh remains the only trigger.
+/// Starts to push refreshes at `backend` if its server advertises a location
+/// to listen to (`eventSourceUrl`, RFC 8620 §7.3). If not, returns `None`
+/// without an error: on a server without push, the periodic refresh of EDS
+/// stays the only trigger.
 ///
-/// `schedule_refresh` is the EDS call to make, which is per-backend
-/// (`e_book_meta_backend_schedule_refresh` and its calendar twin); it is
-/// reached through a [`WeakBackend`], so it is skipped rather than run
-/// against a backend EDS has already released.
+/// `schedule_refresh` is the EDS call to make, which is per backend
+/// (`e_book_meta_backend_schedule_refresh` and its calendar twin). The call
+/// goes through a [`WeakBackend`], so it does not run on a backend that EDS
+/// has already released.
 ///
 /// # Safety
 ///
 /// `backend` must be a valid GObject with a strong reference held for the
-/// length of this call, and `schedule_refresh` must accept a pointer to that
-/// object's actual type.
+/// duration of this call. `schedule_refresh` must accept a pointer to the
+/// actual type of that object.
 pub unsafe fn start_for(
     backend: *mut GObject,
     client: &Client,
@@ -94,9 +94,9 @@ pub unsafe fn start_for(
     schedule_refresh: unsafe extern "C" fn(*mut GObject),
 ) -> Option<PushRefresh> {
     let action = move |object: *mut GObject, _types: &[String]| {
-        // SAFETY: `object` is a strong reference to `backend`'s object, under
-        // the same contract `start_for`'s own doc promises, and the caller
-        // promised `schedule_refresh` accepts that object's type.
+        // SAFETY: `object` is a strong reference to the object of `backend`,
+        // under the same contract as the doc of `start_for`. The caller
+        // promised that `schedule_refresh` accepts the type of that object.
         unsafe { schedule_refresh(object) };
     };
     // SAFETY: forwarded to `start_for_with`, which has the same contract on
@@ -104,18 +104,19 @@ pub unsafe fn start_for(
     unsafe { start_for_with(backend, client, account_id, types, action) }
 }
 
-/// Like [`start_for`], but for a caller whose action needs to know which of
-/// `types` the pushed `StateChange` actually named — a plain `unsafe extern
-/// "C" fn(*mut GObject)` cannot carry that, since it must match a real vtable
-/// entry point's fixed signature (`start_for`'s case). `jmap-mail` uses this:
-/// a `Mailbox` change and an `Email`/`EmailDelivery` change ask Camel for two
-/// different things, and a single `StateChange` can name both at once.
+/// Like [`start_for`], but for a caller whose action must know which of
+/// `types` the pushed `StateChange` actually named. A plain `unsafe extern
+/// "C" fn(*mut GObject)` cannot carry that, because it must match the fixed
+/// signature of a real vtable entry point (the case of `start_for`).
+/// `jmap-mail` uses this: a `Mailbox` change and an `Email`/`EmailDelivery`
+/// change ask Camel for two different things, and one `StateChange` can name
+/// both.
 ///
 /// # Safety
 ///
 /// Same contract as [`start_for`]: `backend` must be a valid GObject with a
-/// strong reference held for the length of this call, and `action` must
-/// accept a pointer to that object's actual type.
+/// strong reference held for the duration of this call, and `action` must
+/// accept a pointer to the actual type of that object.
 pub unsafe fn start_for_with(
     backend: *mut GObject,
     client: &Client,
@@ -143,9 +144,9 @@ pub unsafe fn start_for_with(
         account_id.clone(),
         types.iter().map(|name| (*name).to_owned()).collect(),
         move |matched: &[String]| {
-            // SAFETY: `with_strong` runs this only while holding a strong
-            // reference to the object `backend` pointed at, and the caller
-            // promised `action` accepts that object's type.
+            // SAFETY: `with_strong` runs this only while it holds a strong
+            // reference to the object that `backend` pointed to, and the
+            // caller promised that `action` accepts the type of that object.
             weak.with_strong(|object| action(object, matched));
         },
     ))
@@ -159,26 +160,27 @@ pub struct PushRefresh {
 }
 
 impl PushRefresh {
-    /// Subscribe to `url` — an `eventSourceUrl` already expanded by
-    /// [`jmap_client::eventsource::expand_url`] — and run `refresh` whenever
-    /// a pushed `StateChange` names `account_id` together with at least one
-    /// of `types`.
+    /// Subscribes to `url` (an `eventSourceUrl` that
+    /// [`jmap_client::eventsource::expand_url`] already expanded). Runs
+    /// `refresh` each time a pushed `StateChange` names `account_id` together
+    /// with at least one of `types` with a new state string.
     ///
-    /// `types` is the same list the URL's `types` parameter asks the server
-    /// to filter by; it is applied again here because the filtering is the
-    /// server's courtesy, not its obligation (RFC 8620 §7.3 lets it push
-    /// more), and because a `StateChange` covers every account the session
-    /// can see, not just this backend's.
+    /// `types` is the same list that the `types` parameter of the URL asks
+    /// the server to filter by. This function applies it again for two
+    /// reasons. The filter is a courtesy of the server, not an obligation
+    /// (RFC 8620 §7.3 lets it push more). Also, a `StateChange` covers each
+    /// account that the session can see, not only the account of this
+    /// backend.
     ///
-    /// An empty `types` accepts any type for the account, matching the `*`
-    /// [`expand_url`](jmap_client::eventsource::expand_url) puts in the URL
-    /// for the same input.
+    /// An empty `types` accepts any type for the account. This matches the
+    /// `*` that [`expand_url`](jmap_client::eventsource::expand_url) puts in
+    /// the URL for the same input.
     ///
-    /// `refresh` is told which of `types` the concerning `StateChange`
-    /// actually named (all of them naming this account, if `types` is
-    /// empty) — most callers ignore it and refresh unconditionally, but a
-    /// caller whose account can be told apart by which JMAP type changed
-    /// (`jmap-mail`, message vs. folder-list) needs it.
+    /// `refresh` receives the subset of `types` that the relevant
+    /// `StateChange` named with a new state string (all such types for this
+    /// account, if `types` is empty). Most callers ignore it and always
+    /// refresh. But a caller that must know which JMAP type changed
+    /// (`jmap-mail`, message vs. folder list) needs it.
     pub fn start(
         url: String,
         headers: Vec<(String, String)>,
@@ -216,31 +218,30 @@ impl PushRefresh {
         }
     }
 
-    /// Replace the `Authorization` header this subscription sends on future
-    /// reconnect attempts — called right after a backend's own
-    /// `refresh_credentials` installs a fresh OAuth 2.0 access token on the
-    /// connection, so a subscription a stale token got refused on picks up
-    /// the new one on its next reconnect instead of looping on the same
-    /// failure until the backend itself reconnects (see
-    /// [`jmap_client::eventsource`]'s own module doc).
+    /// Replaces the `Authorization` header that this subscription sends on
+    /// future reconnect attempts. A backend calls this immediately after its
+    /// own `refresh_credentials` installs a new OAuth 2.0 access token on the
+    /// connection. Thus a subscription that the server refused because of a
+    /// stale token uses the new token on its next reconnect. It does not
+    /// loop on the same failure until the backend itself reconnects (see the
+    /// module doc of [`jmap_client::eventsource`]).
     pub fn set_headers(&self, headers: Vec<(String, String)>) {
         self.headers.set(headers);
     }
 
-    /// Stop listening and wait for the pump to finish, so that no further
-    /// refresh can be triggered once this returns. Idempotent; `Drop` calls
-    /// it.
+    /// Stops listening and waits for the pump to finish, so that no further
+    /// refresh can start after this returns. Idempotent; `Drop` calls it.
     pub fn stop(&mut self) {
         self.cancel.cancel();
         let Some(pump) = self.pump.take() else {
             return;
         };
         if pump.thread().id() == thread::current().id() {
-            // We are inside the pump's own `refresh` call: it dropped the
-            // backend's last reference, so finalize — and this `stop` — are
-            // running on the pump thread. Joining would be joining ourselves.
-            // Detaching is enough: the cancellation above is already set, and
-            // the pump checks it before it could call `refresh` again.
+            // This is inside the `refresh` call of the pump: it dropped the
+            // last reference to the backend, so finalize (and this `stop`)
+            // runs on the pump thread. A join would join this thread itself.
+            // Detach is sufficient: the cancellation above is already set, and
+            // the pump examines it before it could call `refresh` again.
             tracing::debug!("push refresh stopped from its own pump thread; detaching");
             return;
         }
@@ -255,18 +256,18 @@ impl Drop for PushRefresh {
 }
 
 /// Which of `types` a pushed `StateChange` names for `account_id` with a
-/// state string that actually differs from the last one seen — empty if the
-/// change does not concern this account at all, names none of the types
-/// asked about, or names only types whose state string is unchanged since
-/// the last call. An empty `types` accepts any type the account has, so
-/// every type the `StateChange` names for it is a candidate.
+/// state string that is different from the last one seen. Empty if the
+/// change does not concern this account, names none of the requested types,
+/// or names only types whose state string did not change since the last
+/// call. An empty `types` accepts each type that the account has, so each
+/// type that the `StateChange` names for it is a candidate.
 ///
-/// RFC 8620 §7.1's `StateChange` carries a state string per (account,
-/// type); comparing it against `last_state` — updated here on every
-/// candidate, matched or not — is what turns a server pushing the same
-/// state repeatedly into zero refreshes after the first. A type's first
-/// sighting always counts as a change, since there is nothing yet in
-/// `last_state` to compare it against.
+/// The `StateChange` of RFC 8620 §7.1 has a state string per (account,
+/// type). This function compares it with `last_state`, and updates
+/// `last_state` for each candidate, matched or not. Thus a server that
+/// pushes the same state many times causes zero refreshes after the first.
+/// The first time a type appears always counts as a change, because
+/// `last_state` has no value to compare it with yet.
 fn concerns(
     change: &StateChange,
     account_id: &Id,
@@ -452,7 +453,7 @@ mod tests {
             &mut last_state,
         );
 
-        // Only Mailbox's state string actually moved.
+        // Only the state string of Mailbox changed.
         let mut types = BTreeMap::new();
         types.insert("Email".to_owned(), State::new("s1"));
         types.insert("Mailbox".to_owned(), State::new("s2"));
@@ -471,9 +472,8 @@ mod tests {
         );
     }
 
-    /// The whole pump, over a real socket: a mutation in the mock broadcasts
-    /// a `StateChange` on its own (`jmap-mock`'s automatic push), the reader
-    /// receives it, and the refresh action runs.
+    /// The full pump, over a real socket: the mock pushes a `StateChange`,
+    /// the reader receives it, and the refresh action runs.
     #[test]
     fn a_pushed_state_change_runs_the_refresh_action() {
         let server = jmap_mock::MockServer::builder().start();
@@ -505,10 +505,10 @@ mod tests {
         }
     }
 
-    /// The negative control for the test above, over the same socket: a push
-    /// naming an account this backend does not serve must not refresh it.
-    /// The mock's own `types` filter cannot catch this one — it filters by
-    /// type, and the type here is the one we asked for.
+    /// The negative control for the test above, also over a real socket: a
+    /// push that names an account that this backend does not serve must not
+    /// refresh it. The `types` filter of the mock cannot catch this case: it
+    /// filters by type, and the type here is the requested type.
     #[test]
     fn a_push_for_another_account_does_not_run_the_refresh_action() {
         let server = jmap_mock::MockServer::builder().start();
@@ -532,9 +532,9 @@ mod tests {
 
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
         server.push_state_change(&change("someone-else", "ContactCard"));
-        // Then one that does concern us, to prove the pump was running and
-        // reading all along rather than merely slow — without this, the
-        // assertion below would pass just as well on a broken reader.
+        // Then push one that concerns this backend. This proves that the
+        // pump was running and reading all the time, not only slow. Without
+        // it, the assertion below would also pass on a broken reader.
         server.push_state_change(&change("a1", "ContactCard"));
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -549,11 +549,11 @@ mod tests {
         );
     }
 
-    /// The pump-level counterpart of the `concerns` unit tests above: a
-    /// server pushing the same state string twice must produce exactly one
-    /// refresh, and a state string that genuinely differs must still
-    /// produce its own. RFC 8620 §7.1's `StateChange` carries a state string
-    /// per (account, type), compared against the last one seen.
+    /// The pump-level counterpart of the `concerns` unit tests above: if a
+    /// server pushes the same state string two times, exactly one refresh
+    /// must occur. A state string that is really different must still cause
+    /// its own refresh. The `StateChange` of RFC 8620 §7.1 has a state string
+    /// per (account, type), which the pump compares with the last one seen.
     #[test]
     fn a_repeated_push_state_does_not_refresh_twice_but_a_new_one_does() {
         let server = jmap_mock::MockServer::builder().start();
@@ -584,10 +584,10 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        // The same state again must not trigger a second refresh. Push a
-        // genuinely new state right after it and wait for THAT refresh — if
-        // the repeat had wrongly counted, this would observe 3, not 2, once
-        // it lands.
+        // The same state again must not cause a second refresh. Push a new
+        // state immediately after it, and wait for THAT refresh. If the
+        // repeat counted incorrectly, the count would be 3, not 2, after the
+        // new state arrives.
         server.push_state_change(&change_with_state("a1", "ContactCard", "s1"));
         server.push_state_change(&change_with_state("a1", "ContactCard", "s2"));
 
@@ -597,7 +597,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        // Give a wrongly-counted repeat time to have landed too.
+        // Give an incorrectly counted repeat time to arrive too.
         thread::sleep(Duration::from_millis(200));
         assert_eq!(
             refreshes.load(Ordering::SeqCst),
@@ -606,11 +606,11 @@ mod tests {
         );
     }
 
-    /// A `PushRefresh` started with a stale `Authorization` header keeps
-    /// being refused until
-    /// [`PushRefresh::set_headers`] installs the fresh one, at which point
-    /// the pump's own reconnect loop — already retrying with backoff — picks
-    /// it up on its next attempt and the refresh action starts running.
+    /// The server refuses a `PushRefresh` that starts with a stale
+    /// `Authorization` header until [`PushRefresh::set_headers`] installs the
+    /// new header. Then the reconnect loop of the pump (which already retries
+    /// with backoff) uses it on its next attempt, and the refresh action
+    /// starts to run.
     #[test]
     fn set_headers_lets_a_stalled_subscription_reconnect_and_resume_refreshing() {
         let server = jmap_mock::MockServer::builder()
@@ -687,10 +687,10 @@ mod tests {
         push.stop();
     }
 
-    /// `stop` reached from inside the action, which is what a `refresh` that
-    /// drops the backend's last reference does — it runs finalize, which
-    /// clears the slot this `PushRefresh` lives in, on the pump thread.
-    /// Joining there would deadlock; the test would hang rather than fail,
+    /// `stop` called from inside the action. This occurs when a `refresh`
+    /// drops the last reference to the backend: it runs finalize on the pump
+    /// thread, and finalize clears the slot that holds this `PushRefresh`.
+    /// A join there would deadlock. The test would then hang, not fail,
     /// which is the honest way to catch it.
     #[test]
     fn stopping_from_inside_the_action_detaches_instead_of_joining_itself() {
@@ -733,8 +733,8 @@ mod tests {
         }
     }
 
-    /// `stop` must actually cancel the pump, not just return quickly: a push
-    /// arriving after `stop` returns must never reach the refresh action.
+    /// `stop` must actually cancel the pump, not only return quickly: a push
+    /// that arrives after `stop` returns must never get to the refresh action.
     #[test]
     fn stopping_prevents_a_later_push_from_running_the_refresh_action() {
         let server = jmap_mock::MockServer::builder().start();
@@ -768,8 +768,10 @@ mod tests {
         );
     }
 
-    /// `Drop` must actually stop the pump, not just return: a push arriving
-    /// after a `PushRefresh` is dropped must never reach the refresh action.
+    /// `Drop` must actually stop the pump, not only return: a push that
+    /// arrives after a `PushRefresh` is dropped must never get to the refresh
+    /// action.
+
     #[test]
     fn dropping_a_pushrefresh_stops_the_pump_so_a_later_push_does_not_refresh() {
         let server = jmap_mock::MockServer::builder().start();

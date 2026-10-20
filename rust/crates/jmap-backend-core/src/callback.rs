@@ -4,27 +4,27 @@
 //! Handlers as `GCallback`s.
 //!
 //! `g_signal_connect_data`, `g_signal_connect_object` and
-//! `g_cancellable_connect` take a `GCallback`, a `void (*)(void)` that C's
-//! `G_CALLBACK()` casts any handler to and the signal's marshaller casts back
-//! to the arity the signal declares. Rust has no implicit cast between
-//! function pointer types, so every connection used to spell that cast as a
-//! hand-written `transmute`. [`gcallback`] is the one place that does it now.
+//! `g_cancellable_connect` take a `GCallback`, a `void (*)(void)`. C's
+//! `G_CALLBACK()` casts any handler to this type. The signal's marshaller
+//! casts it back to the arity that the signal declares. Rust has no implicit
+//! cast between function pointer types, so each connection previously had a
+//! hand-written `transmute`. Now [`gcallback`] is the only place that does it.
 //!
-//! Its argument must be a C function pointer: the conversion is implemented
-//! for `unsafe extern "C" fn` types only, so a closure, a Rust-ABI function
-//! or a data pointer does not compile. A function item has to be coerced
-//! first (`on_changed as unsafe extern "C" fn(*mut GObject, gpointer)`),
-//! which keeps the signature visible next to the signal it is connected to.
+//! Its argument must be a C function pointer. The conversion exists only for
+//! `unsafe extern "C" fn` types, so a closure, a Rust-ABI function or a data
+//! pointer does not compile. You must coerce a function item first
+//! (`on_changed as unsafe extern "C" fn(*mut GObject, gpointer)`). This keeps
+//! the signature visible next to the signal that it connects to.
 //!
-//! Erasing is safe: it only changes the pointer's type. What stays the
-//! caller's obligation, at the `unsafe` connect call, is that the handler's
-//! real signature is the one the signal invokes it with. GLib cannot check
-//! that, and a mismatch is undefined behaviour when the signal fires.
+//! Erasing is safe: it only changes the pointer's type. At the `unsafe`
+//! connect call, the caller must make sure that the handler's real signature
+//! is the one that the signal uses. GLib cannot check that. A mismatch is
+//! undefined behaviour when the signal fires.
 
 /// A C function pointer that [`gcallback`] can erase.
 ///
 /// Sealed: implemented for `unsafe extern "C" fn` types of up to six
-/// arguments, which covers every signal this project connects to.
+/// arguments. This is sufficient for every signal this project connects to.
 pub trait CHandler: sealed::Sealed + Copy {
     /// The same address, typed as GLib's erased `void (*)(void)`.
     fn erase(self) -> unsafe extern "C" fn();
@@ -41,9 +41,10 @@ macro_rules! c_handler {
         impl<R, $($arg),*> CHandler for unsafe extern "C" fn($($arg),*) -> R {
             fn erase(self) -> unsafe extern "C" fn() {
                 // SAFETY: both types are C function pointers, which have the
-                // same size and representation whatever their signature, so
-                // this only retypes the address. Calling the result needs
-                // `unsafe`, and is the connect call's obligation (above).
+                // same size and representation for all signatures. Thus this
+                // only changes the type of the address. A call to the result
+                // needs `unsafe`, and the connect call is responsible for it
+                // (see above).
                 unsafe { std::mem::transmute::<Self, unsafe extern "C" fn()>(self) }
             }
         }
@@ -93,8 +94,8 @@ mod tests {
     #[test]
     fn glib_calls_an_erased_handler_with_the_signals_own_arguments() {
         const DATA: usize = 0x5ca1ab1e;
-        // SAFETY: a fresh cancellable, a handler with the signature
-        // "cancelled" is emitted with, and user data nothing dereferences.
+        // SAFETY: the cancellable is new, the handler has the signature that
+        // "cancelled" uses, and no code dereferences the user data.
         unsafe {
             let cancellable = g_cancellable_new();
             let id = g_signal_connect_data(

@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Which accounts authenticate with a manually pasted API token, sent as
-// `Authorization: Bearer` — the third choice beside `tests/oauth2.rs`'s
-// OAuth 2.0 and the ordinary Basic path.
+// These tests check which accounts authenticate with a manually pasted API
+// token, sent as `Authorization: Bearer`. This is the third choice, beside
+// the OAuth 2.0 of `tests/oauth2.rs` and the ordinary Basic path.
 //
-// This is not a spelling EDS itself recognises the way `"OAuth2"` is: it
-// only has to be a string that is neither an OAuth 2.0 alias nor
-// `ESourceAuthentication`'s own `"none"` default, so an ordinary password
-// account and an OAuth 2.0 account are never mistaken for one that pastes a
-// token.
+// EDS does not recognise this spelling as it recognises `"OAuth2"`. The
+// string must only differ from each OAuth 2.0 alias and from the `"none"`
+// default of `ESourceAuthentication`. Thus a password account or an OAuth 2.0
+// account never looks like an account that pastes a token.
 
 use std::ffi::{CString, c_char};
 use std::ptr;
@@ -21,9 +20,9 @@ use eds_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_core::api_token::{API_TOKEN_METHOD, method_is_api_token, source_uses_api_token};
 
-/// The same fixture shape `tests/oauth2.rs` uses, and for the same reason: an
-/// `ESource` is constructible without a registry, so the extension readers
-/// can be driven for real rather than mocked.
+/// This is the same fixture shape as in `tests/oauth2.rs`, for the same
+/// reason. You can construct an `ESource` without a registry, so the tests
+/// use the real extension readers, not mocks.
 struct TestSource(*mut ESource);
 
 impl TestSource {
@@ -39,8 +38,8 @@ impl TestSource {
 
     fn with_method(self, method: &str) -> Self {
         let method = CString::new(method).expect("no NUL in a test method");
-        // SAFETY: a live source; the extension name is EDS's own constant and
-        // the type is registered just above, so the lookup creates and
+        // SAFETY: the source is live. The extension name is an EDS constant
+        // and the first call registers the type, so the lookup creates and
         // returns a real `ESourceAuthentication`. The setter copies the
         // string.
         unsafe {
@@ -75,9 +74,8 @@ fn the_other_methods_are_not_api_token() {
     assert!(!method_is_api_token(Some("OAuth2")));
 }
 
-/// The same question asked the way `connect_with` asks it — off a real
-/// `ESource` rather than off a string — including the case the extension is
-/// absent entirely.
+/// This asks the same question as `connect_with` does: from a real `ESource`,
+/// not from a string. It includes the case where the extension is absent.
 #[test]
 fn the_method_is_read_off_the_source() {
     let absent = TestSource::new("jmap-api-token-absent");

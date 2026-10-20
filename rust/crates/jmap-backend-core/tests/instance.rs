@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The address book backend has to hold a live `BookSync` between
-// `connect_sync` and `disconnect_sync`, which means owning a Rust value inside
-// a GObject instance struct. GObject hands `instance_init` memory it has
-// zeroed and frees that memory once `finalize` returns, so the value has to be
-// created and destroyed at exactly those two points — and a mistake at either
-// end is a leak or a use-after-free in `evolution-addressbook-factory`, not a
-// failing assertion. These tests pin both ends down.
+// The address book backend must hold a live `BookSync` between
+// `connect_sync` and `disconnect_sync`. Thus a GObject instance struct owns a
+// Rust value. GObject gives zeroed memory to `instance_init` and frees that
+// memory after `finalize` returns. Thus the value must be created and
+// destroyed at exactly those two points. A mistake at either point is a leak
+// or a use-after-free in `evolution-addressbook-factory`, not a failed
+// assertion. These tests check both points.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
@@ -20,7 +20,7 @@ use gobject_sys::{GObject, GObjectClass, g_object_new, g_object_unref};
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
-/// Reports its own destruction, so a test can tell "dropped" from "leaked".
+/// Reports its own destruction, so a test can see "dropped" or "leaked".
 struct Spy(&'static AtomicU32);
 
 impl Drop for Spy {
@@ -29,13 +29,13 @@ impl Drop for Spy {
     }
 }
 
-/// The state GObject leaves an instance struct in before `instance_init` runs.
-/// A `Slot` has to read as empty there, because that is the only initialiser
-/// it will ever get.
+/// This is the state of an instance struct before `instance_init` runs.
+/// A `Slot` must read as empty in this state, because it gets no other
+/// initialiser.
 #[test]
 fn a_zeroed_slot_is_empty() {
-    // SAFETY: exactly the claim under test — all-zero bytes are a valid,
-    // empty `Slot`, which is why one may live in memory GObject zeroed.
+    // SAFETY: this is the claim under test. All-zero bytes are a valid,
+    // empty `Slot`, so a `Slot` can be in memory that GObject zeroed.
     let slot: Slot<String> = unsafe { MaybeUninit::zeroed().assume_init() };
     assert!(slot.get().is_none());
 }
@@ -63,9 +63,9 @@ fn clearing_a_slot_drops_the_value_and_leaves_it_empty() {
     assert!(slot.get().is_none());
 }
 
-/// Two things reach an empty slot: an instance whose `instance_init` stored
-/// nothing, and a `clear` that already ran. Both end up freeing a NULL, which
-/// has to be a no-op rather than the double free it would otherwise be.
+/// Two cases give an empty slot: an instance whose `instance_init` stored
+/// nothing, and a `clear` that already ran. Both free a NULL, which must be a
+/// no-op and not a double free.
 #[test]
 fn clearing_an_empty_slot_is_a_no_op() {
     static DROPS: AtomicU32 = AtomicU32::new(0);
@@ -88,9 +88,9 @@ fn clearing_an_empty_slot_is_a_no_op() {
     );
 }
 
-/// `Slot`'s `Drop` impl is only reached outside a GObject instance struct,
-/// where the slot is ordinary Rust-owned memory. These tests build exactly
-/// that: a bare `Slot` that goes out of scope without a manual `clear`.
+/// The `Drop` impl of `Slot` runs only outside a GObject instance struct,
+/// where Rust owns the memory of the slot. These tests use a bare `Slot` that
+/// goes out of scope without a manual `clear`.
 #[test]
 fn dropping_a_filled_slot_drops_the_value() {
     static DROPS: AtomicU32 = AtomicU32::new(0);
@@ -115,9 +115,9 @@ fn dropping_an_empty_slot_does_not_call_drop_on_anything() {
     assert_eq!(DROPS.load(Ordering::SeqCst), 0);
 }
 
-/// Initialising twice is a bug in the caller, and the recovery has to be the
-/// conservative one: the value already in the slot may be borrowed by another
-/// thread, so it stays and the newcomer is dropped rather than leaked.
+/// A second initialisation is a bug in the caller, and the recovery must be
+/// conservative. Another thread can borrow the value in the slot, so that
+/// value stays. The new value is dropped, not leaked.
 #[test]
 fn a_second_init_keeps_the_first_value_and_drops_the_second() {
     static FIRST: AtomicU32 = AtomicU32::new(0);
@@ -146,9 +146,9 @@ fn a_second_init_keeps_the_first_value_and_drops_the_second() {
 // ---------------------------------------------------------------------------
 // zeroed_box
 
-/// A stand-in for what each backend's `detached()` builds: fields whose
-/// all-zero bit pattern is a valid value on its own, the same property each
-/// call site has to verify before it may call `zeroed_box` at all.
+/// A substitute for the value that the `detached()` of each backend builds.
+/// For each field, the all-zero bit pattern is a valid value. Each call site
+/// must make sure of this property before it calls `zeroed_box`.
 #[repr(C)]
 struct ZeroableFields {
     flag: AtomicU32,
@@ -158,7 +158,7 @@ struct ZeroableFields {
 
 #[test]
 fn zeroed_box_builds_a_value_from_all_zero_bytes_without_running_a_constructor() {
-    // SAFETY: every field of `ZeroableFields` is valid at all-zero bytes — an
+    // SAFETY: each field of `ZeroableFields` is valid at all-zero bytes: an
     // `AtomicU32`, a pointer (NULL) and a `usize`.
     let value: Box<ZeroableFields> = unsafe { jmap_backend_core::instance::zeroed_box() };
     assert_eq!(value.flag.load(Ordering::SeqCst), 0);
@@ -167,7 +167,7 @@ fn zeroed_box_builds_a_value_from_all_zero_bytes_without_running_a_constructor()
 }
 
 // ---------------------------------------------------------------------------
-// The same thing again, through the GObject type system rather than by hand.
+// The same test again, through the GObject type system, not by hand.
 // ---------------------------------------------------------------------------
 
 static HELD_DROPS: AtomicU32 = AtomicU32::new(0);
@@ -185,7 +185,7 @@ struct HolderClass {
 
 struct Holder;
 
-// SAFETY: both structs are #[repr(C)] and lead with the GObject instance and
+// SAFETY: both structs are #[repr(C)] and start with the GObject instance and
 // class structs respectively.
 unsafe impl ObjectSubclass for Holder {
     const NAME: &'static CStr = c"JmapBackendCoreSlotHolder";
@@ -201,8 +201,8 @@ unsafe impl ObjectSubclass for Holder {
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // SAFETY: finalize runs once, after the last reference is gone, so no
-        // borrow of the value can still be alive.
+        // SAFETY: finalize runs once, after the last reference is released,
+        // so no borrow of the value can still be alive.
         unsafe { (*instance).data.clear() };
     }
 }
@@ -228,8 +228,9 @@ fn instance_data_lives_and_dies_with_the_object() {
 }
 
 // ---------------------------------------------------------------------------
-// Chaining up. Skipping the parent's finalize leaks whatever it owns, which
-// for an EBookMetaBackend is the ESource, the cache and the connection state.
+// Chain up. Without the finalize of the parent, all that the parent owns
+// leaks. For an EBookMetaBackend, this is the ESource, the cache and the
+// connection state.
 // ---------------------------------------------------------------------------
 
 static ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -253,7 +254,7 @@ struct BaseClass {
 
 struct Base;
 
-// SAFETY: #[repr(C)], leading with the GObject structs.
+// SAFETY: #[repr(C)], starting with the GObject structs.
 unsafe impl ObjectSubclass for Base {
     const NAME: &'static CStr = c"JmapBackendCoreFinalizeBase";
     type Instance = BaseInstance;
@@ -280,16 +281,16 @@ struct QuietClass {
 
 struct Quiet;
 
-// SAFETY: #[repr(C)], leading with Base's instance and class structs, which is
-// the type `parent_type` returns.
+// SAFETY: #[repr(C)], starting with the instance and class structs of Base,
+// which is the type that `parent_type` returns.
 unsafe impl ObjectSubclass for Quiet {
     const NAME: &'static CStr = c"JmapBackendCoreFinalizeQuiet";
     type Instance = QuietInstance;
     type Class = QuietClass;
 
-    /// Registering the parent from inside `parent_type` is what an EDS module
-    /// does not need but a test hierarchy does — and it is also the shape that
-    /// deadlocks if registration resolves the parent while holding its lock.
+    /// An EDS module does not register the parent from inside `parent_type`,
+    /// but a test hierarchy must. This shape also deadlocks if registration
+    /// resolves the parent while it holds its lock.
     fn parent_type() -> GType {
         register_static::<Base>()
     }
@@ -326,8 +327,8 @@ unsafe impl ObjectSubclass for Boomer {
     }
 }
 
-/// Both halves in one test on purpose: they share `Base`, so running them
-/// concurrently would make the recorded order depend on the scheduler.
+/// Both halves are in one test intentionally. They share `Base`, so if they
+/// ran concurrently, the recorded order would depend on the scheduler.
 #[test]
 fn finalize_runs_the_subclass_first_and_always_chains_up() {
     let quiet = unsafe { g_object_new(register_static::<Quiet>(), ptr::null()) };
@@ -339,9 +340,9 @@ fn finalize_runs_the_subclass_first_and_always_chains_up() {
         "the parent's finalize did not run after the subclass's"
     );
 
-    // A panic is caught, as everywhere else at the C boundary — but catching
-    // it must not cost the parent its finalize, or a backend that panics once
-    // leaks every instance from then on.
+    // A panic is caught, as at all other points of the C boundary. But the
+    // parent finalize must still run, or a backend that panics once leaks
+    // each later instance.
     let boomer = unsafe { g_object_new(register_static::<Boomer>(), ptr::null()) };
     assert!(!boomer.is_null());
     unsafe { g_object_unref(boomer) };

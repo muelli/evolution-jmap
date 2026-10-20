@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `ConnectError::auth_result`'s REJECTED classification against a real
-//! server's own wrong-password response, not a hand-fabricated one.
+//! The REJECTED classification of `ConnectError::auth_result`, tested with
+//! the wrong-password response of a real server, not a hand-made one.
 //!
-//! Every other test that exercises `is_wrong_password`/`auth_result`
-//! (`tests/error.rs`, `tests/oauth2.rs`, `jmap-backend-collection`'s
-//! `authenticate.rs`) builds its own `jmap_client::Error::Http { status: 401,
-//! .. }` by hand. That is the value the module's own docs call the most
-//! dangerous one to get wrong: REJECTED discards a stored password and asks
-//! again, so a server that answers a bad login with something other than a
-//! bare 401 would mean this crate never re-prompts, or re-prompts for a
-//! password that was never the problem. Nothing before this file has checked
-//! what a real deployment actually sends.
+//! Other tests build their own `jmap_client::Error::Http { status: 401, .. }`
+//! by hand: `tests/oauth2.rs` and `authenticate.rs` in
+//! `jmap-backend-collection` for `is_wrong_password`/`auth_result`, and
+//! `tests/error.rs` for the GError mapping. The module docs call this value
+//! the most dangerous one to get wrong. REJECTED discards a stored password
+//! and asks again. If a server answers a bad login with more or other than a
+//! bare 401, this crate never prompts again, or prompts for a password that
+//! was correct. Before this file, no test checked what a real deployment
+//! sends.
 //!
 //! ## Running it
 //!
-//! Same environment as the `*-sync` crates' live-server suites (see
-//! `docs/manual-test-live-server.md`):
+//! Use the same environment as the live-server suites of the `*-sync` crates
+//! (see `docs/manual-test-live-server.md`):
 //!
 //! ```console
 //! $ export JMAP_LIVE_SERVER_URL=https://jmap.example.com
@@ -26,12 +26,11 @@
 //! $ cargo test -p jmap-backend-core -- --ignored
 //! ```
 //!
-//! Read-only: this only ever attempts to authenticate, with the real
-//! username and a password that is never the real one, so it needs no
-//! throwaway account of its own and never reads
-//! `JMAP_LIVE_SERVER_WRITE_PASSWORD`. Skipped, not failed, when
-//! `JMAP_LIVE_SERVER_WRITE_USER` is unset, matching every other live-server
-//! test in this repository.
+//! Read-only: the test only tries to authenticate, with the real username and
+//! a password that is never the real one. Thus it needs no throwaway account
+//! of its own and never reads `JMAP_LIVE_SERVER_WRITE_PASSWORD`. When
+//! `JMAP_LIVE_SERVER_WRITE_USER` is unset, the test is skipped, not failed,
+//! as each other live-server test in this repository.
 
 use std::env;
 
@@ -39,9 +38,9 @@ use eds_sys::E_SOURCE_AUTHENTICATION_REJECTED;
 use jmap_backend_core::connect::{ConnectError, is_wrong_password};
 use jmap_client::{Client, Credentials};
 
-/// The real server's origin and a real, currently valid username on it, or
-/// `None` if the standing write-test account is not configured here. The
-/// password is deliberately not read: this test never wants the real one.
+/// The origin of the real server and a real, currently valid username on it,
+/// or `None` if the standing write-test account is not configured here. The
+/// password is intentionally not read: this test never uses the real one.
 fn write_account_origin_and_user() -> Option<(String, String)> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let origin = env::var("JMAP_LIVE_SERVER_URL")

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Every EDS vfunc receives a GCancellable; the JMAP client only understands
-// its own CancelFlag. The bridge is what makes "the user hit Stop" reach an
-// in-flight HTTP request.
+// Each EDS vfunc receives a GCancellable, but the JMAP client only knows its
+// own CancelFlag. The bridge sends a Stop from the user to an HTTP request
+// that is in progress.
 
 use gio_sys::{g_cancellable_cancel, g_cancellable_new};
 use gobject_sys::g_object_unref;
@@ -24,10 +24,9 @@ fn cancelling_the_gcancellable_raises_the_flag() {
     unsafe { g_object_unref(cancellable.cast()) };
 }
 
-/// EDS hands out already-cancelled cancellables when a request is aborted
-/// before the backend gets to it. `g_cancellable_connect` invokes the callback
-/// immediately in that case; make sure we rely on that rather than starting
-/// the operation regardless.
+/// EDS gives an already-cancelled cancellable when a request aborts before the
+/// backend starts it. Then `g_cancellable_connect` invokes the callback
+/// immediately. The bridge must use this and not start the operation.
 #[test]
 fn a_cancellable_that_is_already_cancelled_starts_out_raised() {
     let cancellable = unsafe { g_cancellable_new() };
@@ -47,10 +46,10 @@ fn a_null_cancellable_yields_a_flag_that_never_fires() {
     assert!(!bridge.flag().is_cancelled());
 }
 
-/// What a vfunc actually does with its cancellable: hand it to [`observe`] and
-/// hold the result, so that every request the operation makes — through a client
-/// built long before it, by a layer that never sees a `GCancellable` — is
-/// checked against it.
+/// A vfunc gives its cancellable to [`observe`] and keeps the result. Thus each
+/// request of the operation checks the cancellable. This is also true for a
+/// client built long before the operation, in a layer that never sees a
+/// `GCancellable`.
 #[test]
 fn an_observed_cancellable_is_what_this_thread_is_cancelled_through() {
     let cancellable = unsafe { g_cancellable_new() };
@@ -72,10 +71,10 @@ fn an_observed_cancellable_is_what_this_thread_is_cancelled_through() {
     unsafe { g_object_unref(cancellable.cast()) };
 }
 
-/// A NULL cancellable means "this call cannot be cancelled", and installing a
-/// flag that can never fire for it would *mask* the operation this one is
-/// nested inside — a folder vfunc that calls into its store passes NULL where
-/// it has nothing of its own to pass. So NULL installs nothing.
+/// A NULL cancellable means "this call cannot be cancelled". A flag that never
+/// fires would *mask* the outer operation of this nested call. A folder vfunc
+/// that calls its store passes NULL when it has no cancellable of its own.
+/// Thus NULL installs nothing.
 #[test]
 fn a_null_cancellable_leaves_the_operation_around_it_observed() {
     let outer = CancelFlag::new();
@@ -95,9 +94,9 @@ fn a_null_cancellable_leaves_the_operation_around_it_observed() {
     assert!(observed().expect("the outer scope survived").is_cancelled());
 }
 
-/// Dropping the bridge disconnects the GIO handler. A cancellation that
-/// arrives afterward must not reach a flag cloned out before the drop,
-/// proving the handler is gone rather than merely leaked.
+/// A drop of the bridge disconnects the GIO handler. A later cancellation
+/// must not reach a flag cloned before the drop. This proves that the handler
+/// is gone and not only leaked.
 #[test]
 fn dropping_the_bridge_disconnects_the_handler() {
     let cancellable = unsafe { g_cancellable_new() };
@@ -114,8 +113,8 @@ fn dropping_the_bridge_disconnects_the_handler() {
     unsafe { g_object_unref(cancellable.cast()) };
 }
 
-/// The flag is handed to the client by value, so it has to keep working (and
-/// keep pointing at the same shared state) after being cloned out.
+/// The client receives the flag by value. Thus a clone of the flag must
+/// continue to work and point to the same shared state.
 #[test]
 fn the_flag_can_be_cloned_out_and_still_observes_cancellation() {
     let cancellable = unsafe { g_cancellable_new() };

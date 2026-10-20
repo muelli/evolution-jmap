@@ -3,127 +3,127 @@
 
 //! `po/POTFILES.in` against the sources it claims to list.
 //!
-//! A message catalogue is built by running `xgettext` over the files named in
-//! `POTFILES.in` and over nothing else. So a source that marks a string and is
-//! not in that list is not a build error, not a warning, and not visible
-//! anywhere: the string is simply absent from the `.pot`, no translator is ever
-//! offered it, and it ships in English forever. The standing directive asks
-//! for a check that catches exactly that, and this is it.
+//! `xgettext` builds a message catalogue from the files named in
+//! `POTFILES.in` and from no other files. Thus a source that marks a string
+//! and is not in that list causes no build error, no warning, and nothing
+//! visible. The string is absent from the `.pot`, no translator gets it, and
+//! it ships in English forever. The standing directive asks for a check that
+//! catches this failure. This file is that check.
 //!
-//! It checks the list in both directions, because both are silent when wrong:
+//! It checks the list in both directions, because both failures are silent:
 //!
 //! - **Nothing marked is missing from the list.** The failure above.
 //! - **Nothing in the list is stale.** A path that no longer exists makes
-//!   `xgettext` fail outright, which is at least loud; a path that exists but no
-//!   longer marks anything is worse, because it goes on working while the
-//!   strings it used to contribute quietly leave the catalogue.
+//!   `xgettext` fail, which is at least visible. A path that exists but no
+//!   longer marks a string is worse. It continues to work while its old
+//!   strings silently leave the catalogue.
 //!
 //! ## What counts as a marked string
 //!
-//! A literal handed straight to one of the functions in
-//! [`jmap_backend_core::i18n`] that gettext is told to key on — spelled
-//! `N_(c"…")`, `translate(c"…")` or `translate_with(c"…", …)` in the source,
-//! which is the form `xgettext --keyword` recognises. Deliberately a textual
-//! match on the call site rather than anything cleverer: it is close to what
-//! `xgettext` does, so it agrees with the tool on the cases where the tool is
-//! the one being crude.
+//! A literal given directly to one of the functions in
+//! [`jmap_backend_core::i18n`] that gettext uses as keywords. In the source it
+//! is `N_(c"…")`, `translate(c"…")` or `translate_with(c"…", …)`, which is the
+//! form that `xgettext --keyword` recognises. The match is intentionally
+//! textual on the call site, not more clever. It is similar to what `xgettext`
+//! does, so it agrees with the tool where the tool is crude.
 //!
-//! Three consequences worth knowing before adding a string:
+//! Three results to know before you add a string:
 //!
-//! - **A marker whose argument is not a literal is not a marked string** —
-//!   `translate(NAME)` looks a message up but contributes nothing to extract,
-//!   because the literal is wherever `NAME` was written. That is why the
-//!   `c"` is part of the pattern.
-//! - **Line comments do not count.** They are stripped before the match, so a
-//!   doc comment may spell a marker out — this file's own module docs do —
-//!   without putting the file in the list. `xgettext` skips comments too.
-//! - **The literal need not be on the marker's own line.** `rustfmt` moves it
-//!   to the next line as soon as the call is too wide, which is what a message
-//!   long enough to be worth translating does. `xgettext` lexes rather than
-//!   reads lines and does not care; a line-at-a-time match here would have
-//!   quietly stopped recognising exactly the longest strings, so the whitespace
-//!   between the two is skipped the way the lexer skips it.
+//! - **A marker whose argument is not a literal is not a marked string.**
+//!   `translate(NAME)` looks up a message but gives nothing to extract,
+//!   because the literal is where `NAME` is written. Thus the `c"` is part of
+//!   the pattern.
+//! - **Line comments do not count.** The check removes them before the match.
+//!   Thus a doc comment can contain a marker (this file's module docs do)
+//!   without putting the file in the list. `xgettext` also skips comments.
+//! - **The literal can be on a line after the marker.** `rustfmt` moves it to
+//!   the next line when the call is too wide. A message long enough to need
+//!   translation causes this. `xgettext` lexes tokens, not lines, so this has
+//!   no effect on it. A match line by line here would silently miss the longest
+//!   strings. Thus the check skips the whitespace between the two, as the lexer
+//!   does.
 //!
 //! ## And a marked literal must be written on one line
 //!
-//! The list being right is necessary and not sufficient: `xgettext` still has
-//! to read the literal the way `rustc` does, or the msgid in the catalogue is
-//! not the msgid the program looks up and the translation is never found. The
-//! two lex the same bytes and they differ on exactly one construct we can
-//! write — a backslash at the end of a line. Rust drops the newline *and* the
-//! indentation that follows it; C's line splicing drops only the newline. So
+//! A correct list is necessary but not sufficient. `xgettext` must also read
+//! the literal as `rustc` does. If not, the msgid in the catalogue is not the
+//! msgid that the program looks up, and the program never finds the
+//! translation. The two lex the same bytes, and they differ on only one
+//! construct that this project can write: a backslash at the end of a line.
+//! Rust drops the newline *and* the indentation after it. C's line splicing
+//! drops only the newline. So
 //!
 //! ```text
 //! c"This event repeats until %1$s, and the time zone it is in, \
 //!   %2$s, …"
 //! ```
 //!
-//! is looked up with one space before `%2$s` and extracted with fifteen. The
-//! failure is completely silent: the extraction succeeds, the catalogue looks
-//! right, the translator translates it, and the user still reads English.
+//! has one space before `%2$s` in the lookup and fifteen in the extraction.
+//! The failure is fully silent: the extraction succeeds, the catalogue looks
+//! correct, the translator translates it, and the user still reads English.
 //!
-//! Hence the rule enforced here — no marked literal spans lines — rather than
-//! the narrower "no *indentation* after the continuation". A column-zero
-//! continuation would read alike today and quietly stop doing so the moment
-//! someone re-indents the block, which is the same silent failure one edit
-//! away. A long line is the price; `rustfmt` does not touch the inside of a
-//! string literal, so it stays a long line.
+//! Thus this check enforces the rule "no marked literal spans lines", not the
+//! narrower rule "no *indentation* after the continuation". A continuation at
+//! column zero reads the same in both languages today. But it silently stops
+//! when someone re-indents the block, so the same silent failure is one edit
+//! away. The cost is a long line. `rustfmt` does not change the inside of a
+//! string literal, so the line stays long.
 //!
 //! ## And the catalogue in the tree must agree with the sources
 //!
-//! The two rules above are reasoning about what `xgettext -L C` will do. This
-//! last one stops reasoning and reads what it *did*: `po/evolution-jmap.pot` is
-//! the extraction's output, committed, and the messages in it are compared
-//! against the marked literals in both directions.
+//! The two rules above predict what `xgettext -L C` does. This last rule reads
+//! what it *did*. `po/evolution-jmap.pot` is the committed extraction output.
+//! The check compares its messages with the marked literals in both
+//! directions.
 //!
-//! That matters because `-L C` is crude in ways nobody has enumerated. One that
-//! was measured: gettext's C lexer treats `'` as opening a character constant
-//! and gives up at the end of the line, so a marked string sharing a line with
-//! an *odd* number of apostrophes — one lifetime, say — is swallowed whole. It
-//! is dropped from the catalogue with nothing but a
-//! `warning: unterminated character constant` naming the line, and
+//! This is important because `-L C` is crude in ways that nobody has listed.
+//! One measured example: gettext's C lexer reads `'` as the start of a
+//! character constant and stops at the end of the line. Thus it discards a
+//! marked string on a line with an *odd* number of apostrophes (for example,
+//! one lifetime). The catalogue loses the string, and the only sign is a
+//! `warning: unterminated character constant` that names the line. And
 //!
 //! ```text
 //! const NAME: &'static CStr = N_(c"JMAP");
 //! ```
 //!
-//! is not a strange thing to write. The rule that catches it cannot be "no
-//! lifetime near a string", because that is one specific instance of a class
-//! whose other members are unknown; comparing against what the tool actually
-//! emitted catches the whole class, this instance included.
+//! is a normal line to write. The rule cannot be "no lifetime near a string".
+//! That is only one instance of a class whose other members are unknown. A
+//! comparison with the real output of the tool catches the full class,
+//! including this instance.
 //!
-//! Both directions, because both are silent. A message the sources mark and the
-//! catalogue lacks was swallowed or is stale, and ships in English. A message
-//! the catalogue holds and no source marks is text translators spend effort on
-//! that no user will ever see — and is how a *changed* string hides, since the
-//! edit shows up as one loss and one orphan rather than as nothing at all.
+//! Both directions, because both failures are silent. A message that the
+//! sources mark and the catalogue does not have was discarded or is stale, and
+//! ships in English. A message that the catalogue has and no source marks is
+//! work for translators on text that no user sees. It also hides a *changed*
+//! string, because the edit shows as one loss and one orphan, not as nothing.
 //!
-//! Not checked: the `#:` source references. They move whenever anything above
-//! them moves, and they are hints for a translator rather than anything a
-//! lookup depends on, so holding them exact would make every unrelated edit in
-//! a listed file red for no gain.
+//! Not checked: the `#:` source references. They move when any line above
+//! them moves. They are hints for a translator, and no lookup uses them. Exact
+//! references would make every unrelated edit in a listed file fail, with no
+//! benefit.
 //!
 //! ## Why this crate
 //!
-//! `i18n` is here, so the rule about how translatable strings are spelled is
-//! here as well. It does mean the check runs under CTest's `rust-test-eds`
-//! rather than a plain `cargo test`, this crate needing the EDS headers; that
-//! is the same place every other check on module-facing behaviour runs.
+//! `i18n` is in this crate, so the rule about the spelling of translatable
+//! strings is also here. Because this crate needs the EDS headers, the check
+//! runs under CTest's `rust-test-eds`, not a plain `cargo test`. Every other
+//! check on module-facing behaviour runs there too.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The call sites `xgettext` is pointed at, as they are spelled in Rust.
+/// The call sites that `xgettext` extracts, as they are spelled in Rust.
 ///
-/// Kept in step with the `--keyword` arguments the `.pot` is generated with:
-/// a keyword the extractor knows and this list does not is a string that can
-/// go unlisted, which is the whole failure this file exists to prevent.
+/// Keep this list the same as the `--keyword` arguments that generate the
+/// `.pot`. If the extractor knows a keyword that this list does not, a string
+/// can be absent from the list. This file exists to prevent that failure.
 const MARKERS: [&str; 3] = ["N_(", "translate(", "translate_with("];
 
-/// Walks upward from `start` looking for the checkout root (marked by
-/// `.git`). Returns `None` if no ancestor has one, for example a
-/// mutation-testing sandbox that copies only the `rust/` subtree, so `po/`
-/// was never copied at all and there is nothing honest to assert here.
+/// Walks upward from `start` to find the checkout root (marked by `.git`).
+/// Returns `None` if no ancestor has one. An example is a mutation-testing
+/// sandbox that copies only the `rust/` subtree. There, `po/` is not copied,
+/// so the test cannot make a valid assertion.
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
@@ -138,7 +138,7 @@ fn repo_root() -> Option<PathBuf> {
 
 /// The paths listed in `po/POTFILES.in`, in file order.
 ///
-/// `#` comments and blank lines are gettext's own conventions for the file and
+/// `#` comments and blank lines are gettext's conventions for the file. They
 /// are not paths.
 fn listed(root: &Path) -> Vec<String> {
     let path = root.join("po/POTFILES.in");
@@ -158,9 +158,8 @@ fn listed(root: &Path) -> Vec<String> {
 
 /// Every Rust source under `rust/crates/*/src`, as a path relative to `root`.
 ///
-/// `tests/` is deliberately not walked. A test may well write a marker — to
-/// check the marker — and a string that exists only in a test binary is not one
-/// any user reads.
+/// This intentionally does not walk `tests/`. A test can write a marker to
+/// check the marker. No user reads a string that is only in a test binary.
 fn sources(root: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let crates = root.join("rust/crates");
@@ -192,15 +191,15 @@ fn sources(root: &Path) -> Vec<String> {
     found
 }
 
-/// A source with its comments blanked out, ready to be matched against.
+/// A source with its comment lines made empty, for the match.
 ///
-/// Comments are not code to `xgettext` either, and a doc comment may spell a
-/// marker out — this file's own module docs do. Whole-line only: a marker never
-/// shares a line with the `//` that would precede it.
+/// `xgettext` also does not read comments as code. A doc comment can contain a
+/// marker (this file's module docs do). Only full lines are removed: a marker
+/// is never on the same line after a `//`.
 ///
-/// The lines are *emptied* rather than dropped, so that an index into the
-/// result still names the line it came from. A check that reports where a
-/// problem is has to be able to count.
+/// The lines are *emptied*, not dropped, so a line index into the result is
+/// the same as in the source. A check that reports the location of a problem
+/// must count lines correctly.
 fn code_of(text: &str) -> String {
     text.lines()
         .map(|line| {
@@ -232,11 +231,10 @@ fn marks_a_string(root: &Path, path: &str) -> bool {
 /// Whether `code` hands `marker` a C string literal, wherever the formatter
 /// put the line break.
 ///
-/// `marker` ends at the opening parenthesis, and what has to follow — once the
-/// whitespace `rustfmt` may have inserted is skipped — is `c"`, the start of a
-/// literal. Nothing here tries to match the closing parenthesis or the argument
-/// after it: this is a check on whether a file contributes strings at all, not
-/// a parser.
+/// `marker` ends at the opening parenthesis. After any whitespace that
+/// `rustfmt` inserted, `c"` (the start of a literal) must follow. This does not
+/// match the closing parenthesis or the argument after it. It checks only if a
+/// file contributes strings. It is not a parser.
 fn calls_on_a_literal(code: &str, marker: &str) -> bool {
     code.match_indices(marker)
         .any(|(at, _)| code[at + marker.len()..].trim_start().starts_with("c\""))
@@ -246,8 +244,8 @@ fn calls_on_a_literal(code: &str, marker: &str) -> bool {
 struct Marked {
     /// The 1-based line the literal opens on.
     line: usize,
-    /// The literal's source text, between the opening `c"` and its closing `"`
-    /// — escapes as written, not as either language reads them.
+    /// The literal's source text, between the opening `c"` and its closing
+    /// `"`. Escapes are as written, not as either language reads them.
     raw: String,
 }
 
@@ -259,8 +257,9 @@ fn marked_literals(code: &str) -> Vec<Marked> {
             let after = at + marker.len();
             let opens = after + (code[after..].len() - code[after..].trim_start().len());
             let Some(body) = code[opens..].strip_prefix("c\"") else {
-                // A marker on something that is not a literal: a message looked
-                // up through a constant, which contributes nothing to extract.
+                // A marker on a value that is not a literal: a message that
+                // the code looks up through a constant. It gives nothing to
+                // extract.
                 continue;
             };
             let end = closing_quote(body).unwrap_or_else(|| {
@@ -277,10 +276,9 @@ fn marked_literals(code: &str) -> Vec<Marked> {
 
 /// Where the literal starting just past a `c"` ends.
 ///
-/// A backslash consumes what follows it, which is what keeps an escaped quote
-/// from being read as the end. Walking bytes is safe for the same reason it is
-/// enough: `\` and `"` are ASCII, and no byte of a multi-byte character can be
-/// mistaken for either.
+/// A backslash consumes the next byte, so an escaped quote is not read as the
+/// end. A walk over bytes is safe and sufficient: `\` and `"` are ASCII, and
+/// no byte of a multi-byte character can look like either.
 fn closing_quote(body: &str) -> Option<usize> {
     let bytes = body.as_bytes();
     let mut at = 0;
@@ -299,11 +297,10 @@ const CATALOGUE: &str = "po/evolution-jmap.pot";
 
 /// Every message in the extracted catalogue, in file order.
 ///
-/// The header entry — the one with an empty msgid, whose msgstr carries
-/// `Content-Type` and the rest — is metadata rather than a message and is
-/// dropped. So are obsolete entries, which gettext writes commented out as
-/// `#~ msgid`: they are a record of what a message *used* to be and no lookup
-/// can reach them.
+/// This drops the header entry (the entry with an empty msgid, whose msgstr
+/// has `Content-Type` and the other fields), because it is metadata, not a
+/// message. It also drops obsolete entries, which gettext writes as comments
+/// (`#~ msgid`). They record what a message *was*, and no lookup can get them.
 fn catalogue_messages(root: &Path) -> Vec<String> {
     let path = root.join(CATALOGUE);
     let text = fs::read_to_string(&path).unwrap_or_else(|error| {
@@ -321,9 +318,8 @@ fn catalogue_messages(root: &Path) -> Vec<String> {
             at += 1;
             continue;
         };
-        // A message gettext had to wrap is written as an empty first part
-        // followed by continuation lines, so the parts are joined rather than
-        // taken one at a time.
+        // gettext writes a wrapped message as an empty first part and then
+        // continuation lines. Thus the parts are joined, not read separately.
         let mut message = quoted(first.trim());
         at += 1;
         while at < lines.len() && lines[at].starts_with('"') {
@@ -349,11 +345,12 @@ fn quoted(line: &str) -> String {
 /// A literal's bytes as the language that owns them reads it.
 ///
 /// Both sides of this comparison spell the same small set of escapes the same
-/// way, so one decoder serves for the source and for the catalogue. An escape
-/// outside that set is a `panic!` and not a guess: the two languages agree on
-/// what is written here today, and the first construct where they might not —
-/// Rust's `\u{2014}` against C's `—`, say — must stop this check rather
-/// than be quietly read as one of them.
+/// way, so one decoder is sufficient for the source and for the catalogue. An
+/// escape outside that set causes a `panic!`, not a guess. The two languages
+/// agree on the escapes written here today. The first construct where they
+/// can disagree (for example, Rust's `\u{2014}` against the literal U+2014
+/// character in C) must stop this check. It must not be silently read as one
+/// of them.
 fn unescape(raw: &str, whose: &str) -> String {
     let mut out = String::new();
     let mut chars = raw.chars();
@@ -514,9 +511,9 @@ fn every_message_in_the_catalogue_is_still_marked_in_a_source() {
     );
 }
 
-/// A scratch directory under the system temp dir, guaranteed not to sit
-/// inside this checkout (so no real `.git` ancestor can leak into the
-/// assertions below), unique per call so parallel tests don't collide.
+/// A scratch directory under the system temp dir. It is never inside this
+/// checkout, so no real `.git` ancestor can affect the assertions below. It is
+/// unique per call, so parallel tests do not collide.
 fn scratch_dir(name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -543,8 +540,8 @@ fn find_repo_root_returns_none_without_a_git_ancestor() {
     let base = scratch_dir("miss");
     let nested = base.join("x/y");
     fs::create_dir_all(&nested).expect("create nested scratch dirs");
-    // Deliberately no `.git` anywhere under `base`; the system temp dir and
-    // its ancestors are not part of a git checkout.
+    // Intentionally no `.git` under `base`. The system temp dir and its
+    // ancestors are not part of a git checkout.
 
     assert_eq!(find_repo_root(&nested), None);
 

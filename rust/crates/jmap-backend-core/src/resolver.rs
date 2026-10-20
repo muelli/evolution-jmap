@@ -1,44 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A real `_jmap._tcp` SRV lookup for the [`Resolver`] seam `jmap-client`
-//! leaves deliberately empty.
+//! A real `_jmap._tcp` SRV lookup for the [`Resolver`] seam. `jmap-client`
+//! intentionally leaves this seam empty.
 //!
 //! RFC 8620 §2.2 lets a server publish its JMAP host as a `_jmap._tcp` SRV
-//! record rather than answering at the bare email domain, and Fastmail does
-//! exactly that, which is why a plain email+password account there fetched
+//! record instead of answering at the bare email domain. Fastmail does this.
+//! Thus a plain email+password account there fetched
 //! `https://fastmail.com/.well-known/jmap` and got a 404. `jmap-client`
-//! cannot do the lookup itself: it is a dependency-lean, runtime-free crate
-//! and a DNS resolver would be a dependency every embedder pays for. So it
-//! defines the [`Resolver`] trait and defaults it to `NoSrvResolver`, and the
-//! answer lives here, in the layer that is already linked against GLib.
+//! cannot do the lookup itself: it is a dependency-lean, runtime-free crate,
+//! and every embedder would pay for a DNS resolver dependency. Thus it
+//! defines the [`Resolver`] trait and defaults it to `NoSrvResolver`. The
+//! implementation is here, in the layer that GLib is already linked into.
 //!
-//! The lookup is GLib's own `g_resolver_lookup_service()`, dispatched on a
-//! dedicated resolver thread that owns and iterates its own GMainContext.
+//! The lookup is GLib's own `g_resolver_lookup_service()`. It runs on a
+//! worker of a dedicated resolver thread pool. Each worker owns and iterates
+//! its own GMainContext.
 
 use std::ffi::CString;
 
 use jmap_client::resolver::{Resolver, SrvTarget};
 
-/// Resolves `_jmap._tcp.<domain>` through the system's DNS, via GLib's default
-/// `GResolver` dispatched on a dedicated resolver thread.
+/// Resolves `_jmap._tcp.<domain>` through the system's DNS. It uses GLib's
+/// default `GResolver` on a dedicated resolver worker thread.
 ///
-/// This is what the EDS backends and the "Look Up Account Details" worker
-/// install in place of `jmap_client::resolver::NoSrvResolver`. Anything other
-/// than one usable target: no record, a lookup that fails, a name that cannot
-/// even be handed to C, reads as "no record", which
-/// `ClientBuilder::connect_domain` answers by trying the bare domain. That
-/// direction matters: an SRV record can only ever redirect discovery, never
-/// break the deployments (Stalwart, self-hosted, the in-repo mock) that answer
-/// at their own domain and publish no record at all.
+/// The EDS backends and the "Look Up Account Details" worker install this
+/// in place of `jmap_client::resolver::NoSrvResolver`. All results other
+/// than one usable target read as "no record": no record, a failed lookup,
+/// or a name that is not a valid C string. `ClientBuilder::connect_domain`
+/// then tries the bare domain. This direction is important: an SRV record
+/// can only redirect discovery. It can never break the deployments
+/// (Stalwart, self-hosted, the in-repo mock) that answer at their own domain
+/// and publish no record.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemResolver;
 
 impl Resolver for SystemResolver {
     fn lookup_srv(&self, domain: &str) -> Option<SrvTarget> {
         tracing::debug!(domain, "resolving _jmap._tcp SRV record");
-        // A domain with an interior NUL cannot be a C string, and it cannot be
-        // a real domain either: treat it as unresolvable.
+        // A domain with an interior NUL cannot be a C string or a real
+        // domain. Treat it as unresolvable.
         let domain_c = CString::new(domain).ok()?;
         let target = crate::resolver_thread::resolve_srv(c"jmap", c"tcp", domain_c);
         match &target {

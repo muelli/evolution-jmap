@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The pieces of the vfunc boundary that are the same for every backend:
-//! reading a string EDS owns, writing one back, filling a list out-parameter,
-//! and finding the password EDS fetched from libsecret.
+//! The parts of the vfunc boundary that are the same for each backend: read a
+//! string that EDS owns, write one back, fill a list out-parameter, and find
+//! the password that EDS got from libsecret.
 //!
-//! Each is exercised the way EDS will use it — the out-parameters are freed
-//! with the function EDS would call, so a pointer into a Rust `String` shows up
-//! here as a failure rather than as a crash in a factory process.
+//! The tests use each part as EDS does. They free the out-parameters with the
+//! function that EDS calls, so a pointer into a Rust `String` shows here as a
+//! failure, not as a crash in a factory process.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -23,9 +23,9 @@ use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_da
 use gobject_sys::g_object_unref;
 use jmap_backend_core::marshal;
 
-/// A live `CamelInternetAddress`, upcast to `*mut CamelAddress` the way a
-/// vfunc's declared argument type would arrive, for the borrow-helper tests
-/// below. The caller frees it with `g_object_unref`.
+/// A live `CamelInternetAddress`, upcast to `*mut CamelAddress` as the
+/// declared argument type of a vfunc, for the borrow-helper tests below. The
+/// caller frees it with `g_object_unref`.
 fn internet_address() -> *mut CamelAddress {
     // SAFETY: `camel_internet_address_new` returns a live, owned instance.
     unsafe { camel_internet_address_new().cast() }
@@ -34,10 +34,10 @@ fn internet_address() -> *mut CamelAddress {
 // ---------------------------------------------------------------------------
 // read_string
 
-/// The two spellings of "absent" have to mean the same thing. NULL is what the
-/// EDS cache writes for a sync tag it does not have; `""` reaches the same
-/// place through a hand-edited cache, and an empty state sent on to the server
-/// is a state rather than the absence of one.
+/// The two spellings of "absent" must have the same meaning. The EDS cache
+/// writes NULL for a sync tag that it does not have. A hand-edited cache can
+/// give `""` at the same point. If sent to the server, an empty state is a
+/// state, not the absence of one.
 #[test]
 fn a_null_and_an_empty_c_string_both_read_as_absent() {
     // SAFETY: a null pointer and 'static NUL-terminated literals.
@@ -60,8 +60,8 @@ fn an_out_string_is_a_copy_the_caller_owns() {
     unsafe {
         marshal::set_out_string(&mut out, "state-7");
         assert_eq!(CStr::from_ptr(out).to_str().unwrap(), "state-7");
-        // Only valid because the marshalling allocated it rather than pointing
-        // into the Rust string above.
+        // This is valid only because the marshalling allocated it, and it
+        // does not point into the Rust string above.
         g_free(out.cast());
         // A NULL out-parameter is the GLib convention for "not interested".
         marshal::set_out_string(ptr::null_mut(), "state-8");
@@ -85,9 +85,9 @@ fn an_out_list_is_written_when_the_caller_asked_for_one() {
     }
 }
 
-/// A list built for a caller that did not want it would have to be freed with
-/// the right per-node function, and there is nobody left to do that — so it is
-/// not built at all.
+/// A list for a caller that does not want it needs a free with the correct
+/// per-node function, and no code is available to do that. Thus the list is
+/// not built.
 #[test]
 fn an_out_list_the_caller_did_not_ask_for_is_never_built() {
     let mut built = false;
@@ -119,10 +119,10 @@ fn the_password_is_read_out_of_the_named_parameters() {
     }
 }
 
-/// Reporting a stored-but-empty password as absent would make `connect_sync`
-/// ask for a prompt, and a user who enters nothing would be prompted again
-/// forever. Sending it and being told it is wrong terminates. This is why
-/// `password` does not simply defer to [`marshal::read_string`].
+/// If a stored but empty password were absent, `connect_sync` would ask for a
+/// prompt. A user who enters nothing would then get a prompt again, forever.
+/// If the empty password is sent and the server rejects it, the loop stops.
+/// Thus `password` does not simply use [`marshal::read_string`].
 #[test]
 fn an_empty_stored_password_is_present_not_absent() {
     unsafe {
@@ -148,7 +148,7 @@ fn credentials_without_a_password_report_none() {
 }
 
 /// EDS calls `connect_sync` with NULL credentials on the first attempt, before
-/// it has asked libsecret for anything.
+/// it asks libsecret for anything.
 #[test]
 fn null_credentials_report_none() {
     // SAFETY: NULL is what EDS passes before it has any credentials.
@@ -160,9 +160,9 @@ fn null_credentials_report_none() {
 // ---------------------------------------------------------------------------
 // checked_borrow_ptr_or
 
-/// A NULL pointer is "nothing here", not a type mismatch — the same rule
-/// [`checked_borrow`]/[`checked_borrow_ptr`] apply, kept even though this
-/// variant's failure case carries a caller-supplied error instead of `None`.
+/// A NULL pointer is "nothing here", not a type mismatch. This is the rule of
+/// [`checked_borrow`]/[`checked_borrow_ptr`]. It also applies here, although
+/// the failure case of this variant has an error from the caller, not `None`.
 #[test]
 fn a_null_pointer_is_ok_none_not_the_supplied_error() {
     // SAFETY: NULL is a valid input to a checked-borrow helper.
@@ -192,9 +192,9 @@ fn a_pointer_of_the_right_type_is_ok_some() {
     }
 }
 
-/// A pointer of the wrong type is the caller's error, not `Ok(None)` — the
-/// distinction `envelope.rs::internet` needs to turn a wrong-type argument
-/// into a refusal rather than silently treating it as an absent address.
+/// A pointer of the wrong type gives the error of the caller, not `Ok(None)`.
+/// `envelope.rs::internet` needs this difference to refuse a wrong-type
+/// argument, and not silently treat it as an absent address.
 #[test]
 fn a_pointer_of_the_wrong_type_is_the_supplied_error() {
     // SAFETY: a live `CamelAddress` that is not a `CamelInternetAddress`.
@@ -222,11 +222,10 @@ fn dispatched_borrow_reports_null_as_absent() {
     assert!(result.is_none());
 }
 
-/// Unlike `checked_borrow`, this helper trusts vfunc dispatch instead of
-/// checking a `GType` — a wrong-type pointer here would already be a GObject
-/// bug, not something this call can catch. What it must still get right is
-/// the cast itself: the returned reference has to be the same address as the
-/// pointer that came in.
+/// Unlike `checked_borrow`, this helper trusts vfunc dispatch and does not
+/// check a `GType`. A wrong-type pointer here is already a GObject bug, which
+/// this call cannot catch. But the cast must be correct: the returned
+/// reference must have the same address as the input pointer.
 #[test]
 fn dispatched_borrow_casts_a_live_pointer_to_the_same_address() {
     let address = internet_address();
@@ -335,14 +334,14 @@ fn checked_borrow_ptr_refuses_a_pointer_of_the_wrong_type() {
 // ---------------------------------------------------------------------------
 // extension_if_present
 
-/// `e_source_get_extension` creates the extension it cannot find, which is
-/// wrong for a read-only lookup — this is the property `extension_if_present`
-/// exists to add. A freshly created source has no `Authentication` extension
-/// until something asks to write one.
+/// `e_source_get_extension` creates the extension that it cannot find, which
+/// is wrong for a read-only lookup. `extension_if_present` exists to prevent
+/// this. A new source has no `Authentication` extension until a caller asks
+/// to write one.
 #[test]
 fn extension_if_present_does_not_create_the_extension_it_cannot_find() {
     let mut error = ptr::null_mut();
-    // SAFETY: the documented arguments — no D-Bus object, the default main
+    // SAFETY: the documented arguments: no D-Bus object, the default main
     // context, and a `GError` out-parameter.
     let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
     assert!(!source.is_null());
@@ -355,7 +354,7 @@ fn extension_if_present_does_not_create_the_extension_it_cannot_find() {
         )
     };
     assert!(found.is_none());
-    // SAFETY: only reading whether the lookup above created the extension.
+    // SAFETY: this only reads whether the lookup above created the extension.
     assert_eq!(
         unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) },
         glib_sys::GFALSE,
@@ -372,7 +371,8 @@ fn extension_if_present_returns_the_extension_once_it_exists() {
     let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
     assert!(!source.is_null());
 
-    // SAFETY: `source` is live; this is the ordinary, extension-creating call.
+    // SAFETY: `source` is live. This is the ordinary call that creates the
+    // extension.
     let created = unsafe {
         e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
             .cast::<ESourceAuthentication>()
