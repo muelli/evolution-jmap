@@ -1,21 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A worker thread's answer, delivered back on GLib's main loop.
+//! The answer of a worker thread, delivered on the GLib main loop.
 //!
-//! Every feature in this crate has the same shape: a callback fires on the
-//! main loop, the JMAP round trip must not block it, and the answer has to
-//! land back on the main loop (where widgets may be touched) but only if
-//! the widget still exists. jmap-backend-core has both halves
-//! ([`WeakBackend`], [`guard`]); what it never needed is the bridge between
-//! them, because EDS backends are driven *by* worker threads while a UI is
-//! driven by the main loop. This is that bridge.
+//! All features in this crate have the same structure:
 //!
-//! "Main loop" here is the global default `GMainContext`, which in Evolution
-//! is owned by GTK's main loop. In a process where nothing owns it (a test),
-//! GLib runs an invoked function on whichever thread called, so the tests
-//! below acquire the context first to get the queueing the shell provides for
-//! free.
+//! 1. A callback starts on the main loop.
+//! 2. The JMAP round trip must not block the main loop.
+//! 3. The answer must go back to the main loop, where code can change
+//!    widgets, but only if the widget still exists.
+//!
+//! jmap-backend-core has the two halves ([`WeakBackend`], [`guard`]). It has
+//! no connection between them, because worker threads control EDS backends,
+//! and the main loop controls a UI. This module is that connection.
+//!
+//! Here, "main loop" is the global default `GMainContext`. In Evolution, the
+//! GTK main loop owns it. In a process where nothing owns it (a test), GLib
+//! runs an invoked function on the calling thread. Thus the tests below
+//! acquire the context first, to get the queue that the shell supplies.
 
 use std::ptr;
 
@@ -24,9 +26,9 @@ use gobject_sys::GObject;
 use jmap_backend_core::trampoline::guard;
 use jmap_backend_core::weak::WeakBackend;
 
-/// What crosses into GLib: the closure, boxed so it has one address, inside
-/// an `Option` so the dispatch can take it while the destroy notify keeps
-/// sole ownership of the box.
+/// The data that goes to GLib: the closure, boxed so that it has one
+/// address. The `Option` lets the dispatch take the closure while the destroy
+/// notify keeps sole ownership of the box.
 type Payload = Option<Box<dyn FnOnce() + Send>>;
 
 /// Run `f` once on the global main context, panic-guarded.
@@ -35,24 +37,24 @@ where
     F: FnOnce() + Send + 'static,
 {
     unsafe extern "C" fn call(data: gpointer) -> gboolean {
-        // SAFETY: `data` is the `Payload` box `on_main` leaked. Borrowed, not
-        // reclaimed: GLib still owns it and frees it through `drop_payload`.
+        // SAFETY: `data` is the `Payload` box that `on_main` leaked. Borrowed,
+        // not reclaimed: GLib still owns it and frees it through `drop_payload`.
         let payload = unsafe { &mut *data.cast::<Payload>() };
         if let Some(f) = payload.take() {
             guard("jmap-ui main-loop dispatch", (), f);
         }
-        GFALSE // one shot, G_SOURCE_REMOVE
+        GFALSE // G_SOURCE_REMOVE: run one time
     }
     unsafe extern "C" fn drop_payload(data: gpointer) {
-        // SAFETY: reclaiming the box `on_main` leaked, exactly once: GLib
-        // calls the destroy notify after the source dispatched (or when the
-        // context is freed with the source still queued).
+        // SAFETY: this reclaims the box that `on_main` leaked, one time only.
+        // GLib calls the destroy notify after the source dispatched, or when
+        // it frees the context with the source still in the queue.
         drop(unsafe { Box::from_raw(data.cast::<Payload>()) });
     }
 
     let payload: Box<Payload> = Box::new(Some(Box::new(f)));
-    // SAFETY: NULL names the global main context, and the payload stays alive
-    // until `drop_payload` because GLib owns it from here.
+    // SAFETY: NULL identifies the global main context. GLib owns the payload
+    // from here, so the payload stays alive until `drop_payload`.
     unsafe {
         g_main_context_invoke_full(
             ptr::null_mut(),
@@ -64,24 +66,26 @@ where
     }
 }
 
-/// Run `work` on its own thread, then `finish(object, answer)` on the global
-/// main context, or not at all, when `object` died in the meantime. The weak
-/// reference is what makes a closed composer or settings page unreachable
-/// rather than dangling.
+/// Run `work` on its own thread, then run `finish(object, answer)` on the
+/// global main context. If `object` is finalized before that, do not run
+/// `finish`.
 ///
-/// `work` runs panic-guarded: a panic is logged and delivers nothing.
+/// The weak reference makes a closed composer or settings page unreachable,
+/// not a dangling pointer.
+///
+/// A panic guard wraps `work`: it logs a panic and delivers nothing.
 ///
 /// # Safety
 ///
-/// `object` must be a valid `GObject` with a strong reference held by the
-/// caller for the length of this call.
+/// `object` must be a valid `GObject`. The caller must hold a strong
+/// reference to it for the duration of this call.
 pub unsafe fn spawn_for<T, W, F>(object: *mut GObject, work: W, finish: F)
 where
     T: Send + 'static,
     W: FnOnce() -> T + Send + 'static,
     F: FnOnce(*mut GObject, T) + Send + 'static,
 {
-    // SAFETY: valid with a strong reference, per this function's contract.
+    // SAFETY: valid, with a strong reference, by the contract of this function.
     let weak = unsafe { WeakBackend::new(object) };
     std::thread::spawn(move || {
         let Some(answer) = guard("jmap-ui worker", None, || Some(work())) else {
@@ -105,13 +109,13 @@ mod tests {
 
     use super::*;
 
-    /// The tests below all iterate the one global main context, so they must
-    /// not run concurrently.
+    /// All tests below iterate the one global main context. Thus they must
+    /// not run at the same time.
     static MAIN_CONTEXT: Mutex<()> = Mutex::new(());
 
-    /// Own the global main context for one test, the way Evolution's main
-    /// loop owns it for real: without an owner, `g_main_context_invoke` runs
-    /// closures on the calling thread instead of queueing them.
+    /// Own the global main context for one test, as the Evolution main loop
+    /// owns it. Without an owner, `g_main_context_invoke` runs closures on the
+    /// calling thread and does not put them in a queue.
     struct Owned {
         _lock: MutexGuard<'static, ()>,
     }
@@ -119,17 +123,17 @@ mod tests {
     impl Owned {
         fn acquire() -> Self {
             let lock = MAIN_CONTEXT.lock().unwrap();
-            // SAFETY: NULL is the global context; serialized by the lock.
+            // SAFETY: NULL is the global context. The lock serializes access.
             assert_ne!(unsafe { g_main_context_acquire(ptr::null_mut()) }, GFALSE);
             Self { _lock: lock }
         }
 
-        /// Iterate without blocking until `done`, or fail after five seconds.
+        /// Iterate without blocking until `done`. Fail after five seconds.
         fn iterate_until(&self, done: &AtomicBool) {
             let deadline = Instant::now() + Duration::from_secs(5);
             while !done.load(Ordering::SeqCst) {
                 assert!(Instant::now() < deadline, "main loop never delivered");
-                // SAFETY: the context is owned by this thread.
+                // SAFETY: this thread owns the context.
                 unsafe { g_main_context_iteration(ptr::null_mut(), GFALSE) };
                 std::thread::yield_now();
             }
@@ -143,8 +147,8 @@ mod tests {
         }
     }
 
-    /// An answer that reports its own drop: how the dead-object test can tell
-    /// the dispatch really ran (and discarded it) rather than never arriving.
+    /// An answer that reports its drop. With it, the dead-object test can see
+    /// that the dispatch ran and discarded the answer.
     struct Signal(Arc<AtomicBool>);
 
     impl Drop for Signal {
@@ -154,7 +158,7 @@ mod tests {
     }
 
     fn plain_object() -> *mut GObject {
-        // SAFETY: no properties, so the count is zero and both arrays NULL.
+        // SAFETY: no properties, so the count is zero and both arrays are NULL.
         unsafe { g_object_new_with_properties(G_TYPE_OBJECT, 0, ptr::null_mut(), ptr::null()) }
     }
 
@@ -165,7 +169,7 @@ mod tests {
         let finished = Arc::new(AtomicBool::new(false));
 
         let seen = finished.clone();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, with one reference held here.
         unsafe {
             spawn_for(
                 object,
@@ -178,7 +182,7 @@ mod tests {
         }
         owned.iterate_until(&finished);
 
-        // SAFETY: releasing this test's own reference.
+        // SAFETY: this releases the reference of this test.
         unsafe { g_object_unref(object) };
     }
 
@@ -192,13 +196,12 @@ mod tests {
         let (release, held) = mpsc::channel::<()>();
         let signal = Signal(dispatched.clone());
         let seen = finished.clone();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, with one reference held here.
         unsafe {
             spawn_for(
                 object,
                 move || {
-                    // Wait for the object to die first; that ordering is the
-                    // whole test.
+                    // Wait until the object is finalized. The test checks this order.
                     held.recv().unwrap();
                     signal
                 },
@@ -206,11 +209,11 @@ mod tests {
             );
         }
 
-        // SAFETY: releasing this test's own reference, the last one.
+        // SAFETY: this releases the reference of this test, the last one.
         unsafe { g_object_unref(object) };
         release.send(()).unwrap();
 
-        // The answer's own drop marks the dispatch as delivered-and-discarded.
+        // The drop of the answer shows that the dispatch delivered and discarded it.
         owned.iterate_until(&dispatched);
         assert!(
             !finished.load(Ordering::SeqCst),

@@ -1,14 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `JmapSnoozeBrowserExtension`: the same snooze submenu in the detached
-//! message window, which has a menu layer of its own (3.52: a GtkUIManager;
-//! 3.55+: an EUIManager, reached the same way the shell case's mail view now
-//! is, through the shared `EMailReader` interface) and *is* its own
-//! `EMailReader`. A separate extension from `snooze::shell_ext`'s for now;
-//! `src/modules/mdn/evolution-mdn.c` shows a single extension registered
-//! against `E_TYPE_MAIL_READER` covers both this window and the shell's mail
-//! view, which this crate's two could plausibly merge into.
+//! `JmapSnoozeBrowserExtension`: the snooze submenu in the detached message
+//! window.
+//!
+//! This window has its own menu layer (3.52: a GtkUIManager; 3.55+: an
+//! EUIManager, which the code gets through the `EMailReader` interface, as for
+//! the mail view of the shell). The window *is* its own `EMailReader`.
+//!
+//! At this time, this extension is separate from the extension in
+//! `snooze::shell_ext`. `src/modules/mdn/evolution-mdn.c` shows that one
+//! extension registered on `E_TYPE_MAIL_READER` covers this window and the
+//! mail view of the shell. Thus, it is possible to merge the two extensions
+//! of this crate into one.
 
 use std::ffi::CStr;
 
@@ -29,19 +33,19 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::snooze::action;
 
-/// The instance: `EExtension`'s own state and nothing else.
+/// The instance: only the state of `EExtension`.
 #[repr(C)]
 pub struct JmapSnoozeBrowserExtension {
     parent: EExtension,
 }
 
-/// The class: `EExtensionClass`'s own state and nothing else.
+/// The class: only the state of `EExtensionClass`.
 #[repr(C)]
 pub struct JmapSnoozeBrowserExtensionClass {
     parent_class: EExtensionClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EExtension's own structs;
+// SAFETY: both structs are #[repr(C)] and start with the structs of EExtension.
 // EExtension derives from GObject.
 unsafe impl ObjectSubclass for JmapSnoozeBrowserExtension {
     const NAME: &'static CStr = c"JmapSnoozeBrowserExtension";
@@ -54,24 +58,25 @@ unsafe impl ObjectSubclass for JmapSnoozeBrowserExtension {
     }
 
     fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself. Called here,
-        // ahead of registration, because `class_init` may only look it up.
+        // SAFETY: no arguments, and the type initialises itself.
+        // The call is here, before registration, because `class_init` can only look the type up.
         vec![unsafe { e_mail_browser_get_type() }]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `EExtensionClass`.
+        // SAFETY: `class` starts with `EExtensionClass`.
         unsafe {
             (*class).parent_class.extensible_type = subclass::registered_type(c"EMailBrowser")
         };
         let object_class = class.cast::<GObjectClass>();
-        // SAFETY: transitively leads with GObjectClass.
+        // SAFETY: through its parents, `class` starts with GObjectClass.
         unsafe { (*object_class).constructed = Some(constructed) };
     }
 }
 
-/// Chains up and installs immediately: by the time a browser constructs its
-/// extensions it is a complete reader with its UI manager in hand.
+/// Calls the parent `constructed` and installs the submenu immediately.
+/// When a browser constructs its extensions, it is a complete reader and has
+/// its UI manager.
 unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapSnoozeBrowserExtension::constructed", (), || unsafe {
         // SAFETY: the parent class of a live instance is initialised and alive.
@@ -81,9 +86,9 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             chained(object);
         }
 
-        // SAFETY: GObject passes a live instance; the extensible is the
-        // browser, which implements EMailReader (an interface pointer is the
-        // instance pointer).
+        // SAFETY: GObject gives a live instance. The extensible is the browser,
+        // which implements EMailReader (an interface pointer is the instance
+        // pointer).
         let browser: *mut EMailBrowser =
             e_extension_get_extensible(object.cast::<EExtension>()).cast();
         #[cfg(not(evolution_eui_manager))]
@@ -93,10 +98,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             e_mail_browser_get_ui_manager(browser),
             e_mail_reader_get_action_group(browser.cast(), E_MAIL_READER_ACTION_GROUP_STANDARD),
         );
-        // 3.55+: the browser answers for its own EUIManager through the same
-        // EMailReader accessor the shell case's mail view now uses too: one
-        // call shared by both windows, where 3.52 needed a different one on
-        // each.
+        // 3.55+: both windows use the same EMailReader getter for the EUIManager.
         #[cfg(evolution_eui_manager)]
         action::install(
             browser.cast(),
@@ -104,7 +106,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             e_mail_reader_get_ui_manager(browser.cast()),
         );
 
-        // Selection changes in a browser go through the reader's own signal.
+        // In a browser, the reader signal gives the selection changes.
         g_signal_connect_data(
             browser.cast(),
             c"update-actions".as_ptr(),
@@ -117,24 +119,26 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
     });
 }
 
-/// Three arguments, not the two `snooze::shell_ext`'s handler takes:
-/// `EMailReader::update-actions` is declared with one `G_TYPE_UINT` and
-/// `g_cclosure_marshal_VOID__UINT` (`e-mail-reader.c:5374-5382`), where
-/// `EShellView`'s same-named signal is `VOID__VOID`. The `state` is the
-/// `EMailReaderActionGroup` bitmask the shell suggests updating; this
-/// extension owns one submenu and re-reads the selection either way, so it
-/// is ignored, but it has to be *declared*, or the user-data slot is the
-/// one the bitmask lands in. `tests/signals.rs` pins that shape.
+/// This handler has three arguments. The handler in `snooze::shell_ext` has two.
+/// `EMailReader::update-actions` has one `G_TYPE_UINT` parameter and uses
+/// `g_cclosure_marshal_VOID__UINT` (`e-mail-reader.c:5374-5382`).
+/// The `EShellView` signal with the same name is `VOID__VOID`.
+///
+/// `state` is the `EMailReaderActionGroup` bitmask of the groups to update.
+/// This extension ignores it, because it has one submenu and always reads the
+/// selection again. But the handler must *declare* the parameter.
+/// If not, the bitmask goes into the user-data slot.
+/// `tests/signals.rs` tests this shape.
 ///
 /// # Safety
 ///
-/// GLib's signal machinery; `browser` is the emitting reader.
+/// The GLib signal system calls this; `browser` is the reader that sent the signal.
 unsafe extern "C" fn on_update_actions(browser: *mut GObject, _state: guint, _data: gpointer) {
     guard(
         "JmapSnoozeBrowserExtension::update-actions",
         (),
         || unsafe {
-            // SAFETY: the emitting browser is alive.
+            // SAFETY: the browser that sent the signal is alive.
             action::update_sensitivity(browser);
         },
     );

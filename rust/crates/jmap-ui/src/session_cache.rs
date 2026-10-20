@@ -1,14 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the UI may offer per account, read from the JMAP session document and
-//! cached.
+//! The features that the UI can offer for each account, read from the JMAP
+//! session document and cached.
 //!
-//! Gating happens twice. Whether an account is ours at all is a synchronous
-//! `ESource`/`CamelProvider` question and stays with the widgets. This module
-//! is the second level: the server-side facts, which cost a session fetch and
-//! are therefore cached per account: one settings page, any number of
-//! composers and shell views, one cache.
+//! Each feature has two gates. The first gate is a synchronous
+//! `ESource`/`CamelProvider` check ("is this account a JMAP account?"). The
+//! widgets do that check. This module is the second gate: the server-side
+//! facts. These facts need a session fetch.
+//!
+//! [`AccountFeatures`] holds the facts. [`SessionCache`] caches them for each
+//! account. Only the snooze feature uses the cache now ([`shared`]). The
+//! vacation page and scheduled send read the facts from their own
+//! [`crate::link::AccountLink`].
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -19,33 +23,34 @@ use jmap_proto::session::{
     CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL, CAPABILITY_VACATION_RESPONSE, Session,
 };
 
-/// The server-side facts one account's gating needs, in one read.
+/// The server-side facts that the gates of one account need, in one read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountFeatures {
-    /// The JMAP account the feature calls go to.
+    /// The JMAP account that receives the feature calls.
     pub account_id: Id,
-    /// `VacationResponse/get` and `/set` are on offer (RFC 8621 §8).
+    /// The server offers `VacationResponse/get` and `/set` (RFC 8621 §8).
     pub vacation: bool,
-    /// The most seconds a submission may be held: a non-zero
-    /// `maxDelayedSend`, which RFC 8621 §7.1 defines as *the* scheduled-send
-    /// gate ("0 if this feature is not supported"). Deliberately not also
-    /// FUTURERELEASE among the `submissionExtensions`: Fastmail advertises
-    /// `maxDelayedSend: 44236800` beside an *empty* extensions map and
-    /// accepts `HOLDFOR` all the same, so the stricter reading would gate the
-    /// feature off exactly where it works.
+    /// The maximum number of seconds that the server can hold a submission:
+    /// a non-zero `maxDelayedSend`. RFC 8621 §7.1 defines this value as
+    /// *the* scheduled-send gate ("0 if this feature is not supported").
+    ///
+    /// By design, the gate does not also require FUTURERELEASE in the
+    /// `submissionExtensions`. Fastmail advertises `maxDelayedSend: 44236800`
+    /// with an *empty* extensions map, and accepts `HOLDFOR`. A stricter gate
+    /// disables the feature on a server where it operates.
     pub max_hold: Option<u64>,
-    /// `Email.snoozed` is on offer: the Cyrus vendor extension
-    /// ([`jmap_proto::mail::SnoozeDetails`]). Without it there is no server
-    /// wake-up, and offering snooze would strand messages in a folder nothing
-    /// ever empties.
+    /// The server offers `Email.snoozed`, the Cyrus vendor extension
+    /// ([`jmap_proto::mail::SnoozeDetails`]). Without it, the server does not
+    /// wake messages. Then snoozed messages stay in a folder that nothing
+    /// empties.
     pub snooze: bool,
 }
 
 impl AccountFeatures {
-    /// Read the gates out of a session document.
+    /// Read the gates from a session document.
     ///
-    /// `None` when no account there can be resolved for the mail capability:
-    /// an account that cannot hold mail has nothing here to gate.
+    /// `None` when no account in the document resolves for the mail
+    /// capability. An account that cannot hold mail has no feature to gate.
     pub fn from_session(session: &Session) -> Option<Self> {
         let account_id = session.resolve_primary_account(CAPABILITY_MAIL)?.clone();
         let account = session.accounts.get(&account_id)?;
@@ -59,16 +64,18 @@ impl AccountFeatures {
     }
 }
 
-/// How long a fetched session document speaks for its account before it is
-/// asked again. Ten minutes: capabilities change when an operator
-/// reconfigures a server, not per message, and an error invalidates early
-/// anyway.
+/// The time for which a fetched session document stays valid for its
+/// account. After this time, the next lookup misses and the caller fetches
+/// again.
+///
+/// Ten minutes: capabilities change when an operator changes the server
+/// configuration, not for each message.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(600);
 
 /// Per-account [`AccountFeatures`], keyed by `ESource` UID.
 ///
-/// Callers pass `Instant::now()` in rather than the cache reading the clock,
-/// which is what lets the TTL arithmetic be tested without sleeping.
+/// Callers give `Instant::now()` to the cache, and the cache does not read
+/// the clock. Thus a test can check the TTL arithmetic without a sleep.
 pub struct SessionCache {
     ttl: Duration,
     entries: Mutex<HashMap<String, (AccountFeatures, Instant)>>,
@@ -82,7 +89,7 @@ impl SessionCache {
         }
     }
 
-    /// The cached answer for `uid`, unless it has aged past the TTL.
+    /// The cached answer for `uid`, if it is not older than the TTL.
     pub fn lookup(&self, uid: &str, now: Instant) -> Option<AccountFeatures> {
         let entries = self.entries.lock().unwrap();
         let (features, fetched) = entries.get(uid)?;
@@ -92,7 +99,7 @@ impl SessionCache {
         Some(features.clone())
     }
 
-    /// Record what a session fetch just learned.
+    /// Record the result of a session fetch.
     pub fn store(&self, uid: &str, features: AccountFeatures, now: Instant) {
         self.entries
             .lock()
@@ -100,8 +107,9 @@ impl SessionCache {
             .insert(uid.to_owned(), (features, now));
     }
 
-    /// Forget one account, so the next ask refetches: called on any client
-    /// error, since a session that just failed is one that may have changed.
+    /// Remove one account, so that the next lookup misses and the caller
+    /// fetches again. A session that failed can have changed. No code in this
+    /// crate calls this function now, other than the tests.
     pub fn invalidate(&self, uid: &str) {
         self.entries.lock().unwrap().remove(uid);
     }
@@ -113,8 +121,8 @@ impl Default for SessionCache {
     }
 }
 
-/// The module-wide cache: every reader window asking about the same account
-/// shares one answer for [`DEFAULT_TTL`].
+/// The module-wide cache. All reader windows that ask about the same account
+/// share one answer for [`DEFAULT_TTL`].
 pub fn shared() -> &'static SessionCache {
     static SHARED: std::sync::OnceLock<SessionCache> = std::sync::OnceLock::new();
     SHARED.get_or_init(SessionCache::default)
@@ -126,8 +134,8 @@ mod tests {
 
     use super::*;
 
-    /// A session document with one personal account whose capabilities are
-    /// the test's to choose.
+    /// A session document with one personal account. The test sets the
+    /// capabilities of the account.
     fn session(account_capabilities: serde_json::Value) -> Session {
         serde_json::from_value(json!({
             "capabilities": {
@@ -178,9 +186,9 @@ mod tests {
         assert!(!bare.snooze);
     }
 
-    /// The scheduled-send gate is `maxDelayedSend` alone (RFC 8621: "MUST be
-    /// 0 if this feature is not supported"): Fastmail pairs a real limit with
-    /// an *empty* `submissionExtensions`, so the extensions list must not be
+    /// The scheduled-send gate is only `maxDelayedSend` (RFC 8621: "MUST be
+    /// 0 if this feature is not supported"). Fastmail sends a real limit with
+    /// an *empty* `submissionExtensions`. Thus the extensions list must not be
     /// a second requirement.
     #[test]
     fn scheduled_send_gates_on_the_limit_alone() {

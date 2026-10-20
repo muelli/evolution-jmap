@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The pure half of the page: widget values as data, mapped to and from the
+//! The pure part of the page. It maps widget values to and from the
 //! RFC 8621 §8 `VacationResponse` object.
 
 use std::ffi::CStr;
@@ -11,9 +11,10 @@ use jmap_proto::UtcDate;
 use jmap_proto::mail::VacationResponse;
 use serde_json::{Value, json};
 
-/// What the widgets hold: dates as the entry text (`YYYY-MM-DD` or empty),
-/// subject and body as typed. Comparing a snapshot against the loaded
-/// baseline is the dirty check: no signal bookkeeping.
+/// The widget values. A date is `YYYY-MM-DD`, or empty when the date field
+/// has no date. The subject and the body are the text that the user typed.
+/// The page finds changes when it compares a snapshot with the loaded
+/// baseline, so it does not record signals.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VacationForm {
     pub enabled: bool,
@@ -23,17 +24,17 @@ pub struct VacationForm {
     pub body: String,
 }
 
-/// The message behind a refused date entry.
+/// The message for a date that is not valid.
 pub const BAD_DATE: &CStr = N_(c"Dates take the form YYYY-MM-DD; leave one empty for no limit");
 
-/// The message behind a range that runs backwards.
+/// The message for a last day that is before the first day.
 pub const BACKWARDS: &CStr =
     N_(c"The last day is before the first day — swap them, or clear one to leave it open");
 
 impl VacationForm {
-    /// The server's object as widget values. A missing date is an empty
-    /// entry; a missing subject or body is empty text (the server generates
-    /// its defaults for those, RFC 8621 §8).
+    /// Converts the server object to widget values. A missing date becomes an
+    /// empty date. A missing subject or body becomes empty text (the server
+    /// supplies default values for them, RFC 8621 §8).
     pub fn from_response(response: &VacationResponse) -> Self {
         Self {
             enabled: response.is_enabled,
@@ -44,17 +45,16 @@ impl VacationForm {
         }
     }
 
-    /// The `VacationResponse/set` update patch this form asks for, every
-    /// field written: the page edits the whole object, so what the widgets
-    /// show is what the server should hold. Empty subject/body are `null`,
-    /// "let the server pick", rather than empty strings.
+    /// The `VacationResponse/set` update patch for this form. The patch
+    /// writes all fields, because the page edits the full object. An empty
+    /// subject or body becomes `null` (the server selects the value), not an
+    /// empty string.
     pub fn patch(&self) -> Result<Value, &'static CStr> {
         let from = date_value(&self.from_date)?;
         let to = date_value(&self.to_date)?;
-        // A range that ends before it starts is a typo, not a request: the
-        // server would take it and simply never reply to anything, which is
-        // the worst kind of "working". Both bounds are `YYYY-MM-DDT…Z`, so
-        // comparing the strings compares the instants.
+        // A range that ends before it starts is an error. The server accepts
+        // it, but then sends no replies. Both bounds are `YYYY-MM-DDT…Z`, so
+        // a string comparison is also a time comparison.
         if let (Value::String(from), Value::String(to)) = (&from, &to)
             && to < from
         {
@@ -70,7 +70,7 @@ impl VacationForm {
     }
 }
 
-/// `2026-09-01T00:00:00Z` → `2026-09-01`; absent → empty.
+/// Changes `2026-09-01T00:00:00Z` to `2026-09-01`, and no date to empty.
 fn date_prefix(date: Option<&UtcDate>) -> String {
     date.map(|date| {
         date.as_str()
@@ -82,8 +82,9 @@ fn date_prefix(date: Option<&UtcDate>) -> String {
     .unwrap_or_default()
 }
 
-/// An entry's text as the patch value: empty means `null` (no limit), and
-/// anything else has to look like a date before a midnight time is appended.
+/// Converts a date value to the patch value. Empty becomes `null` (no
+/// limit). Other text must have the shape `YYYY-MM-DD`, then it gets the
+/// time midnight UTC.
 fn date_value(entry: &str) -> Result<Value, &'static CStr> {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -153,8 +154,9 @@ mod tests {
         assert_eq!(patch["textBody"], Value::Null);
     }
 
-    /// A range that runs backwards is refused, and the equal-day case (a
-    /// one-day absence) is not: that is a legitimate thing to ask for.
+    /// The form refuses a range that ends before it starts. It accepts a
+    /// range where the first day and the last day are equal (an absence of
+    /// one day).
     #[test]
     fn a_backwards_range_is_refused_but_a_single_day_is_not() {
         let backwards = VacationForm {
@@ -171,7 +173,7 @@ mod tests {
         };
         assert!(same_day.patch().is_ok(), "one day off must be allowed");
 
-        // An open-ended range cannot run backwards, in either direction.
+        // A range with one empty bound is always in the correct order.
         for (from, to) in [("2026-09-10", ""), ("", "2026-09-01")] {
             let open = VacationForm {
                 from_date: from.to_owned(),

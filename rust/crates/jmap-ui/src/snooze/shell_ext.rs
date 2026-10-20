@@ -3,29 +3,31 @@
 
 //! `JmapSnoozeShellExtension`: the snooze submenu in the mail window.
 //!
-//! An `EExtension` on `E_TYPE_SHELL_VIEW`, instantiated for every view of
-//! every shell window and gated to the one named `"mail"`. Two ways to catch
-//! the moment the merge may happen, chosen by `evolution_eui_manager`:
+//! An `EExtension` on `E_TYPE_SHELL_VIEW`. Evolution makes one instance for
+//! each view of each shell window. The extension works only on the view with
+//! the name `"mail"`. The `evolution_eui_manager` cfg selects how the
+//! extension finds the time to merge the menu:
 //!
-//! - Evolution < 3.55 waits for the view's first `"toggled"` (the example
-//!   module's pattern): only then is the window's `"mail"` action group
-//!   guaranteed to exist, and only the mail view ever emits it for this
-//!   extension's purposes.
-//! - 3.55+ has no `"toggled"` signal on `EShellView` at all, confirmed live,
-//!   not assumed: connecting it the old way logs a GLib-CRITICAL
-//!   ("signal 'toggled' is invalid for instance ... EMailShellView") and never
-//!   fires, because the whole GtkToggleAction-based view switcher it belonged
-//!   to went with the rest of the GtkAction era. `e-rss-shell-view-extension.c`
-//!   proves merging the menu in `constructed()` itself is safe there (its own
-//!   `EUIManager` merge runs there, unconditionally), but proves nothing about
-//!   the *reader* (the `"mail-view"` property) being populated that early:
-//!   nothing upstream needed it at construction the way this extension does.
-//!   So the merge is attempted in `constructed()` (cheap, and normally enough)
-//!   and retried, idempotently, on the first `"update-actions"` (the one
-//!   signal both eras keep) if the reader was not there yet.
+//! - Evolution < 3.55 waits for the first `"toggled"` signal of the view (the
+//!   pattern of the example module). At that time, the `"mail"` action group
+//!   of the window is sure to exist. For this extension, only the mail view
+//!   sends this signal.
+//! - Evolution 3.55+ has no `"toggled"` signal on `EShellView`. A live test
+//!   showed this: a connection to the signal logs a GLib-CRITICAL
+//!   ("signal 'toggled' is invalid for instance ... EMailShellView") and the
+//!   handler never runs. The view switcher that used `GtkToggleAction` was
+//!   removed together with the other `GtkAction` code.
+//!   `e-rss-shell-view-extension.c` merges its `EUIManager` menu in
+//!   `constructed()` without conditions, thus a merge there is safe. But that
+//!   file does not show that the *reader* (the `"mail-view"` property) exists
+//!   that early: no upstream code needs the reader at construction.
+//!   Thus this extension tries the merge in `constructed()` (it costs little
+//!   and usually works). If the reader was not there, the extension tries
+//!   again on each `"update-actions"` signal (the signal that both versions
+//!   have). The merge is idempotent.
 //!
-//! Sensitivity always follows `EShellView::update-actions`, which the shell
-//! emits on every selection and folder change.
+//! The sensitivity always follows `EShellView::update-actions`. The shell
+//! sends this signal on each change of the selection and of the folder.
 
 use std::ffi::CStr;
 
@@ -48,19 +50,19 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::snooze::action;
 
-/// The instance: `EExtension`'s own state and nothing else.
+/// The instance: only the state of `EExtension`.
 #[repr(C)]
 pub struct JmapSnoozeShellExtension {
     parent: EExtension,
 }
 
-/// The class: `EExtensionClass`'s own state and nothing else.
+/// The class: only the state of `EExtensionClass`.
 #[repr(C)]
 pub struct JmapSnoozeShellExtensionClass {
     parent_class: EExtensionClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EExtension's own structs;
+// SAFETY: both structs are #[repr(C)] and start with the structs of EExtension.
 // EExtension derives from GObject.
 unsafe impl ObjectSubclass for JmapSnoozeShellExtension {
     const NAME: &'static CStr = c"JmapSnoozeShellExtension";
@@ -73,22 +75,22 @@ unsafe impl ObjectSubclass for JmapSnoozeShellExtension {
     }
 
     fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself. Called here,
-        // ahead of registration, because `class_init` may only look it up.
+        // SAFETY: no arguments, and the type initialises itself.
+        // The call is here, before registration, because `class_init` can only look the type up.
         vec![unsafe { e_shell_view_get_type() }]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `EExtensionClass`.
+        // SAFETY: `class` starts with `EExtensionClass`.
         unsafe { (*class).parent_class.extensible_type = subclass::registered_type(c"EShellView") };
         let object_class = class.cast::<GObjectClass>();
-        // SAFETY: transitively leads with GObjectClass.
+        // SAFETY: through its parents, `class` starts with GObjectClass.
         unsafe { (*object_class).constructed = Some(constructed) };
     }
 }
 
-/// Chains up and, on the mail view, arms whichever signals this menu layer
-/// needs; everything else is theirs to do when they fire.
+/// Calls the parent `constructed`. On the mail view, it connects the signals
+/// that this menu layer needs. The signal handlers do the remaining work.
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapSnoozeShellExtension::constructed", (), || unsafe {
@@ -99,8 +101,8 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             chained(object);
         }
 
-        // SAFETY: GObject passes a live instance; the extensible is the shell
-        // view this extension was instantiated for.
+        // SAFETY: GObject gives a live instance. The extensible is the shell
+        // view of this extension.
         let view: *mut EShellView = e_extension_get_extensible(object.cast::<EExtension>()).cast();
         if read_string(e_shell_view_get_name(view)).as_deref() != Some("mail") {
             return;
@@ -127,7 +129,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
 
 /// # Safety
 ///
-/// GObject passes a live instance being constructed.
+/// GObject gives a live instance that is in construction.
 #[cfg(evolution_eui_manager)]
 unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapSnoozeShellExtension::constructed", (), || unsafe {
@@ -138,8 +140,8 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             chained(object);
         }
 
-        // SAFETY: GObject passes a live instance; the extensible is the shell
-        // view this extension was instantiated for.
+        // SAFETY: GObject gives a live instance. The extensible is the shell
+        // view of this extension.
         let view: *mut EShellView = e_extension_get_extensible(object.cast::<EExtension>()).cast();
         if read_string(e_shell_view_get_name(view)).as_deref() != Some("mail") {
             return;
@@ -158,35 +160,36 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
     });
 }
 
-/// Fetch the manager and reader off `view` and merge the submenu; a no-op if
-/// already installed ([`action::install`] is idempotent per owner) or if the
-/// reader is not there yet, in which case `on_update_actions` tries again.
+/// Gets the manager and the reader from `view` and merges the submenu.
+/// It does nothing if the submenu is installed ([`action::install`] is
+/// idempotent for each owner) or if the reader does not exist yet.
+/// In the second case, `on_update_actions` tries again.
 ///
 /// # Safety
 ///
 /// `view` must be a live shell view named `"mail"`.
 #[cfg(evolution_eui_manager)]
 unsafe fn try_install(view: *mut EShellView) {
-    // SAFETY: a live shell view per this function's contract; the manager and
-    // content are its own.
+    // SAFETY: the shell view is live per the contract of this function.
+    // The view owns the manager and the content.
     unsafe {
         let reader = action::reader_of_content(e_shell_view_get_shell_content(view));
         action::install(view.cast(), reader, e_shell_view_get_ui_manager(view));
     }
 }
 
-/// The view became the window's active one: the moment the window's `"mail"`
-/// action group exists and the merge may happen (once; `install` is
-/// idempotent).
+/// The view is now the active view of the window. At this time, the `"mail"`
+/// action group of the window exists and the merge can occur.
+/// The merge occurs one time, because `install` is idempotent.
 ///
 /// # Safety
 ///
-/// GLib's signal machinery; `view` is the emitting shell view.
+/// The GLib signal system calls this; `view` is the shell view that sent the signal.
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn on_toggled(view: *mut GObject, _data: gpointer) {
     guard("JmapSnoozeShellExtension::toggled", (), || unsafe {
-        // SAFETY: the emitting view is alive; window, manager, group and
-        // content are its own.
+        // SAFETY: the view that sent the signal is alive. The view owns the
+        // window, the manager, the group and the content.
         let shell_view = view.cast::<EShellView>();
         let window = e_shell_view_get_shell_window(shell_view);
         let reader = action::reader_of_content(e_shell_view_get_shell_content(shell_view));
@@ -201,24 +204,24 @@ unsafe extern "C" fn on_toggled(view: *mut GObject, _data: gpointer) {
 
 /// # Safety
 ///
-/// GLib's signal machinery; `view` is the emitting shell view.
+/// The GLib signal system calls this; `view` is the shell view that sent the signal.
 #[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn on_update_actions(view: *mut GObject, _data: gpointer) {
     guard("JmapSnoozeShellExtension::update-actions", (), || unsafe {
-        // SAFETY: the emitting view is alive.
+        // SAFETY: the view that sent the signal is alive.
         action::update_sensitivity(view);
     });
 }
 
 /// # Safety
 ///
-/// GLib's signal machinery; `view` is the emitting shell view.
+/// The GLib signal system calls this; `view` is the shell view that sent the signal.
 #[cfg(evolution_eui_manager)]
 unsafe extern "C" fn on_update_actions(view: *mut GObject, _data: gpointer) {
     guard("JmapSnoozeShellExtension::update-actions", (), || unsafe {
-        // SAFETY: the emitting view is alive; harmless if `constructed`
-        // already installed (idempotent), needed if the reader was not
-        // populated yet at that point.
+        // SAFETY: the view that sent the signal is alive. `try_install` is
+        // idempotent, thus it is safe if `constructed` installed the submenu.
+        // It is necessary if the reader did not exist in `constructed`.
         try_install(view.cast());
         action::update_sensitivity(view);
     });

@@ -1,27 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What `EExtensionClass::extensible_type` is allowed to name.
+//! The types that `EExtensionClass::extensible_type` can name.
 //!
-//! Every `EExtension` in this workspace names a *class* there, so nothing so
-//! far has needed the answer. Evolution's own `evolution-mdn.c` names an
-//! *interface*, `E_TYPE_MAIL_READER`, and reaches both the mail window's
-//! reader and the detached message window with one extension that way; this
-//! crate's snooze feature currently needs two extensions to reach the same
-//! two windows, one per concrete class.
+//! Each `EExtension` in this workspace names a *class* there. Thus no code
+//! needed this answer before. The `evolution-mdn.c` of Evolution names an
+//! *interface*, `E_TYPE_MAIL_READER`. With it, one extension reaches the
+//! reader of the mail window and the detached message window. The snooze
+//! feature of this crate now needs two extensions, one for each concrete
+//! class, to reach the same two windows.
 //!
-//! The ABI question that design rests on is whether an interface is accepted
-//! at all. Both gates are `g_type_is_a (G_OBJECT_TYPE (extensible),
-//! class->extensible_type)` -- the candidate filter in
-//! `e_extensible_reload_extensions` and the check in the `extensible`
-//! property's setter -- and `g_type_is_a` answers for interfaces as well as
-//! for ancestors, so by reading it works. Reading is not the same as the
-//! running type system agreeing, and getting it wrong is silent: an
-//! extension that never loads leaves no trace at all.
+//! That design depends on one ABI question: does the type system accept an
+//! interface? Both gates are `g_type_is_a (G_OBJECT_TYPE (extensible),
+//! class->extensible_type)`:
 //!
-//! So this pins it, on probe types rather than Evolution's, which keeps the
-//! test to libedataserver and needs no display: an interface, one object
-//! implementing it and one not, and an extension typed on the interface.
+//! - the candidate filter in `e_extensible_reload_extensions`,
+//! - the check in the setter of the `extensible` property.
+//!
+//! `g_type_is_a` answers for interfaces and for ancestors, so the source code
+//! shows that it works. But the source code is not the running type system.
+//! An error is silent: an extension that does not load leaves no trace.
+//!
+//! This test confirms the behaviour on probe types, not on Evolution types.
+//! Thus the test needs only libedataserver and no display. The probe types
+//! are an interface, one object that implements it, one object that does not,
+//! and an extension typed on the interface.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -40,20 +43,19 @@ use gobject_sys::{
 };
 use jmap_backend_core::subclass::{self, InterfaceDecl, ObjectSubclass};
 
-/// The last extensible this extension was constructed for, and how many
-/// times it was constructed since `load_extensions_for` reset the pair.
+/// The last extensible for which this extension was constructed, and the
+/// number of constructions since `load_extensions_for` reset the pair.
 static EXTENDED: AtomicUsize = AtomicUsize::new(0);
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 
-/// The probe interface, standing in for `EMailReader`: no vfuncs, because
-/// nothing here dispatches through it. What matters is only that it is an
-/// interface, with `GObject` as its prerequisite the way `EMailReader` has
-/// `GtkWidget`.
+/// The probe interface, in place of `EMailReader`. It has no vfuncs, because
+/// no code here dispatches through it. It must only be an interface, with
+/// `GObject` as its prerequisite, as `EMailReader` has `GtkWidget`.
 fn probe_interface() -> GType {
     static TYPE: OnceLock<usize> = OnceLock::new();
     *TYPE.get_or_init(|| {
-        // SAFETY: the shape `G_DEFINE_INTERFACE` registers: a child of
-        // G_TYPE_INTERFACE whose class struct is a bare GTypeInterface, with
+        // SAFETY: the shape that `G_DEFINE_INTERFACE` registers: a child of
+        // G_TYPE_INTERFACE whose class struct is only a GTypeInterface, with
         // no initialisers and no instances of its own.
         let gtype = unsafe {
             let info = GTypeInfo {
@@ -70,8 +72,8 @@ fn probe_interface() -> GType {
     }) as GType
 }
 
-/// A plain `GObject` that is extensible, and optionally implements the probe
-/// interface: the two halves of the question, differing in nothing else.
+/// A plain `GObject` that is extensible, and can implement the probe
+/// interface. The two objects of the test differ only in that interface.
 macro_rules! probe_object {
     ($rust:ident, $class:ident, $name:literal, $interfaces:expr) => {
         #[repr(C)]
@@ -84,7 +86,7 @@ macro_rules! probe_object {
             parent_class: GObjectClass,
         }
 
-        // SAFETY: both structs are #[repr(C)] and lead with GObject's own.
+        // SAFETY: both structs are #[repr(C)] and start with the GObject structs.
         unsafe impl ObjectSubclass for $rust {
             const NAME: &'static CStr = $name;
             type Instance = $rust;
@@ -107,7 +109,7 @@ probe_object!(
     c"JmapProbeReaderObject",
     vec![
         InterfaceDecl::defaults(probe_interface()),
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments. The type initialises itself.
         InterfaceDecl::defaults(unsafe { eds_sys::e_extensible_get_type() }),
     ]
 );
@@ -116,13 +118,13 @@ probe_object!(
     ProbePlainObject,
     ProbePlainObjectClass,
     c"JmapProbePlainObject",
-    // SAFETY: no arguments, and the type initialises itself.
+    // SAFETY: no arguments. The type initialises itself.
     vec![InterfaceDecl::defaults(unsafe {
         eds_sys::e_extensible_get_type()
     })]
 );
 
-/// The extension under test: typed on the interface, not on either class.
+/// The extension that this test examines. Its type is the interface, not a class.
 #[repr(C)]
 struct ProbeExtension {
     parent: EExtension,
@@ -133,7 +135,7 @@ struct ProbeExtensionClass {
     parent_class: EExtensionClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with EExtension's own structs;
+// SAFETY: both structs are #[repr(C)] and start with the EExtension structs.
 // EExtension derives from GObject.
 unsafe impl ObjectSubclass for ProbeExtension {
     const NAME: &'static CStr = c"JmapProbeReaderExtension";
@@ -141,20 +143,20 @@ unsafe impl ObjectSubclass for ProbeExtension {
     type Class = ProbeExtensionClass;
 
     fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments. The type initialises itself.
         unsafe { e_extension_get_type() }
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` leads with `EExtensionClass`.
+        // SAFETY: `class` starts with `EExtensionClass`.
         unsafe { (*class).parent_class.extensible_type = probe_interface() };
         let object_class = class.cast::<GObjectClass>();
-        // SAFETY: transitively leads with GObjectClass.
+        // SAFETY: through its parents, `class` starts with GObjectClass.
         unsafe { (*object_class).constructed = Some(constructed) };
     }
 }
 
-/// Records that this extension was instantiated, and for whom.
+/// Records that this extension was instantiated, and for which object.
 unsafe extern "C" fn constructed(object: *mut GObject) {
     // SAFETY: the parent class of a live instance is initialised and alive.
     let parent = unsafe { subclass::parent_class::<GObjectClass>(ProbeExtension::parent_type()) };
@@ -162,21 +164,21 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         // SAFETY: GObject passes a live instance being constructed.
         unsafe { chained(object) };
     }
-    // SAFETY: a live extension, whose extensible the property setter has
-    // already accepted by the time `constructed` runs.
+    // SAFETY: a live extension. The property setter accepted its extensible
+    // before `constructed` runs.
     let extensible = unsafe { e_extension_get_extensible(object.cast::<EExtension>()) };
     EXTENDED.store(extensible as usize, Ordering::SeqCst);
     LOADS.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Instantiate `gtype`, load its extensions, and answer what the probe
-/// extension saw: how many times it was constructed, and for which object.
+/// Instantiate `gtype`, load its extensions, and return what the probe
+/// extension recorded: the number of constructions, and for which object.
 fn load_extensions_for(gtype: GType) -> (usize, usize, usize) {
     LOADS.store(0, Ordering::SeqCst);
     EXTENDED.store(0, Ordering::SeqCst);
     // SAFETY: a registered GObject type with no construct properties, so the
-    // count is zero and both arrays NULL; the object is extensible, which is
-    // `e_extensible_load_extensions`'s only precondition.
+    // count is zero and both arrays are NULL. The object is extensible, the
+    // only precondition of `e_extensible_load_extensions`.
     let (loads, extended, object) = unsafe {
         let object = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
         e_extensible_load_extensions(object.cast());
@@ -186,17 +188,17 @@ fn load_extensions_for(gtype: GType) -> (usize, usize, usize) {
         );
         (seen.0, seen.1, object as usize)
     };
-    // SAFETY: the reference `g_object_new_with_properties` returned, dropped
-    // after the extensions it owns have been observed.
+    // SAFETY: the reference that `g_object_new_with_properties` returned,
+    // dropped after the test recorded the extensions that it owns.
     unsafe { g_object_unref(object as *mut GObject) };
     (loads, extended, object)
 }
 
 #[test]
 fn an_extension_typed_on_an_interface_loads_for_an_implementer_only() {
-    // Registering the extension is what puts it in `e_type_traverse`'s walk
-    // of E_TYPE_EXTENSION's descendants, which is how either object below
-    // could find it at all.
+    // The registration puts the extension in the walk of `e_type_traverse`
+    // through the descendants of E_TYPE_EXTENSION. Only thus can the objects
+    // below find it.
     assert_ne!(
         subclass::register_static::<ProbeExtension>(),
         0,
@@ -214,9 +216,9 @@ fn an_extension_typed_on_an_interface_loads_for_an_implementer_only() {
         "the extension was handed something other than the object it was loaded for"
     );
 
-    // The negative half: without the interface, the same extension must not
-    // be instantiated, or the filter would be accepting every extensible and
-    // the positive half above would prove nothing.
+    // The negative half: without the interface, the extension must not load.
+    // Otherwise the filter accepts all extensibles, and the positive half
+    // above proves nothing.
     let other = subclass::register_static::<ProbePlainObject>();
     let (loads, _, _) = load_extensions_for(other);
     assert_eq!(

@@ -1,17 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Sets RPATH for Evolution's private library directories on this crate's own
-// test binaries: `rustc-link-arg` is package-scoped, so `evo-sys` republishes
-// the directories as metadata (`DEP_EVOLUTION_SHELL_LIBDIRS`) instead of
-// emitting them itself, and this turns that back into an rpath. Does not
-// reach `jmap-config-module`, the separate cdylib the account-setup module is
-// actually built from; that crate carries its own copy of this script.
+// This script sets an RPATH to the private library directories of Evolution
+// on the test binaries of this crate.
 //
-// Also re-emits `evo-sys`'s `evolution_eui_manager` cfg (GtkAction/
-// GtkUIManager vs EUIAction/EUIManager, decided against the Evolution headers
-// actually installed), since a `rustc-cfg` only reaches the crate that sets
-// it, not its dependents.
+// `rustc-link-arg` applies only to the package that emits it. Thus `evo-sys`
+// publishes the directories as metadata (`DEP_EVOLUTION_SHELL_LIBDIRS`), and
+// this script changes that metadata into an rpath.
+//
+// The rpath does not go into `jmap-config-module`, the separate cdylib that
+// Evolution loads. That crate has its own build script for its rpath.
+//
+// This script also emits the `evolution_eui_manager` cfg of `evo-sys` again.
+// The cfg selects GtkAction/GtkUIManager or EUIAction/EUIManager, from the
+// version of the installed Evolution. A `rustc-cfg` applies only to the crate
+// that sets it, not to its dependents.
 
 use std::env;
 
@@ -21,13 +24,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DEP_EVOLUTION_SHELL_EUI_MANAGER");
     println!("cargo:rustc-check-cfg=cfg(evolution_eui_manager)");
 
-    // Absent only if `evo-sys` stopped publishing it, which is a build to fail
-    // rather than one to quietly produce binaries that cannot start.
+    // Missing only if `evo-sys` does not publish it. Then fail the build:
+    // do not make binaries that cannot start.
     let libdirs = env::var("DEP_EVOLUTION_SHELL_LIBDIRS")
         .expect("evo-sys published no DEP_EVOLUTION_SHELL_LIBDIRS");
     for dir in libdirs.split(':').filter(|dir| !dir.is_empty()) {
-        // `-rpath` and not `-rpath-link`: this has to be recorded in the file,
-        // not merely used while linking it.
+        // `-rpath`, not `-rpath-link`: the path must be in the file, not only in the link step.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
     }
 
