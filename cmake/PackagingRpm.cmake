@@ -41,6 +41,10 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSES/GPL-3.0-or-later.t
 
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Productivity")
 
+# No runtime helper scripts or service files are shipped in the RPM payload.
+# Leave explicit Requires unset and let RPM's automatic ELF dependency
+# generator own runtime package requirements.
+
 set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${EDS_BOOK_BACKEND_DIR}/libebookbackendjmap.so"
 	"%attr(-,root,root) ${EDS_CAL_BACKEND_DIR}/libecalbackendjmap.so"

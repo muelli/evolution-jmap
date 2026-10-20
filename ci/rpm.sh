@@ -50,3 +50,42 @@ fi
 
 # --strict: a warning fails too, as any lintian tag fails the .deb gate.
 rpmlint --strict "${build_dir}"/*.rpm
+
+privlibdir="$(pkg-config --variable=privlibdir evolution-shell-3.0)"
+if [[ -z "${privlibdir}" ]]; then
+	echo "ci/rpm.sh: evolution-shell-3.0 reports no privlibdir" >&2
+	exit 1
+fi
+
+required_runpath_modules=(
+	"${build_dir}/cargo-target/release/libjmap_backend_book_module.so"
+	"${build_dir}/cargo-target/release/libjmap_backend_cal_module.so"
+	"${build_dir}/cargo-target/release/libjmap_backend_collection_module.so"
+	"${build_dir}/cargo-target/release/libjmap_config_module.so"
+)
+
+for module_path in "${required_runpath_modules[@]}"; do
+	if [[ ! -f "${module_path}" ]]; then
+		echo "ci/rpm.sh: missing module for RUNPATH check: ${module_path}" >&2
+		exit 1
+	fi
+
+	runpath="$(readelf -d "${module_path}" | awk '/RUNPATH/ { gsub(/[][]/, "", $NF); print $NF; exit }')"
+	if [[ -z "${runpath}" ]]; then
+		echo "ci/rpm.sh: ${module_path} has no RUNPATH" >&2
+		exit 1
+	fi
+
+	if [[ ":${runpath}:" != *":${privlibdir}:"* ]]; then
+		echo "ci/rpm.sh: ${module_path} RUNPATH '${runpath}' misses '${privlibdir}'" >&2
+		exit 1
+	fi
+done
+
+for rpm_file in "${build_dir}"/*.rpm; do
+	scripts_output="$(rpm -qp --scripts "${rpm_file}")"
+	if [[ -n "${scripts_output}" && "${scripts_output}" != *"contains no scriptlets"* ]]; then
+		echo "ci/rpm.sh: ${rpm_file} ships scriptlets, revisit explicit non-ELF Requires" >&2
+		exit 1
+	fi
+done
