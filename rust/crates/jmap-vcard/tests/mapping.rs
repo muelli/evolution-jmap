@@ -23025,6 +23025,48 @@ fn geo_parameter_metadata_is_not_retained_in_eds_profile() {
 }
 
 #[test]
+fn altid_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:ALTID Parameter Probe\r\n",
+        "TITLE;ALTID=1:Directrice\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse ALTID parameter profile probe");
+    let titles = parsed.titles.as_ref().expect("titles map");
+    assert_eq!(titles.len(), 1, "one TITLE line must remain mapped");
+
+    let title = titles.get("t1").expect("first title entry");
+    assert_eq!(title.name, "Directrice");
+    assert_eq!(title.kind, None);
+    assert!(
+        parsed.localizations.is_none(),
+        "profile does not retain RFC 9555 ALTID metadata as localizations"
+    );
+    assert!(
+        title.extra.is_empty(),
+        "profile does not retain RFC 9555 ALTID metadata on TITLE"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let title_line = line(&emitted, "TITLE;");
+    assert!(title_line.contains("X-JMAP-KEY=t1"));
+    assert!(title_line.ends_with(":Directrice"));
+    assert!(
+        !emitted.contains("ALTID="),
+        "non-projected ALTID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized ALTID parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
 fn language_parameter_metadata_is_not_retained_in_eds_profile() {
     let source = concat!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\n",
