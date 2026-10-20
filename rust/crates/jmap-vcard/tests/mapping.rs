@@ -23065,3 +23065,45 @@ fn language_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn index_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:INDEX Parameter Probe\r\n",
+        "ORG-DIRECTORY;INDEX=1:https://directory.example.com/people/alice\r\n",
+        "HOBBY;INDEX=2:Trail running\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse INDEX parameter profile probe");
+    assert_eq!(
+        parsed.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some("INDEX Parameter Probe")
+    );
+    assert!(
+        parsed.directories.is_none(),
+        "profile does not retain RFC 9555 INDEX metadata as directories"
+    );
+    assert!(
+        parsed.personal_info.is_none(),
+        "profile does not retain RFC 9555 INDEX metadata as personal_info"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        !emitted.contains("INDEX="),
+        "non-projected INDEX parameter metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("HOBBY:"),
+        "non-projected properties that carry INDEX metadata must stay dropped on emit"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized INDEX parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}

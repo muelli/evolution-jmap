@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:INDEX Parameter Seed
+ORG-DIRECTORY;INDEX=1:https://directory.example.com/people/alice
+HOBBY;INDEX=2:Trail running
+END:VCARD
