@@ -1,38 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Capture this process's `tracing` events per test, without the
-//! callsite-interest race a per-test `tracing::subscriber::with_default`
-//! subscriber hits when other tests run concurrently on other threads.
+//! Capture this process's `tracing` events, one test at a time.
+//!
+//! This design avoids a race that a per-test subscriber installed with
+//! `tracing::subscriber::with_default` hits when other tests run
+//! concurrently on other threads.
 //!
 //! `tracing-core` registers a callsite's `Interest` (never, sometimes or
-//! always) once per process. It computes this the first time the callsite
-//! fires, from whichever `Dispatch` is current on the calling thread at
-//! that instant. A per-test subscriber installed with `with_default` is
-//! current only on its own thread. A test running concurrently on another
-//! thread, with no subscriber of its own, hits the default no-op dispatch.
-//! That dispatch caches `Interest::never` for the first callsite it
-//! touches. The verdict is permanent: a later capturing test that reaches
-//! the same callsite is silently skipped before its subscriber ever runs.
-//! This still holds after a call to
-//! `tracing::callsite::rebuild_interest_cache()`, which only re-evaluates
-//! callsites the registry already knows, not one no thread has executed
-//! yet.
+//! always) once per process. It computes the `Interest` the first time the
+//! callsite fires, from the `Dispatch` current on the calling thread at
+//! that instant. A `with_default` subscriber is current only on its own
+//! thread. A test on another thread, with no subscriber of its own, hits
+//! the default no-op dispatch. That dispatch caches `Interest::never` for
+//! the first callsite it touches. The verdict is permanent. A later test
+//! that captures the same callsite is silently skipped, before its
+//! subscriber ever runs. Calling
+//! `tracing::callsite::rebuild_interest_cache()` does not fix this: it
+//! only re-evaluates callsites the registry already knows, not one no
+//! thread has run yet.
 //!
-//! The fix: install one subscriber globally
-//! (`tracing::subscriber::set_global_default`), once per process, whose
-//! `enabled()` always returns `true`. Every callsite's first registration
-//! then resolves to `Interest::always`, regardless of which thread touches
-//! it first, so the race above cannot happen. Routing creates the
-//! per-test isolation: the global subscriber forwards an event only to the
-//! buffer the calling thread currently has scoped through [`capture`]. Two
-//! tests capturing concurrently on different threads never see each
-//! other's events, and no locking is needed.
+//! The fix: install one subscriber globally, once per process, with
+//! `tracing::subscriber::set_global_default`. Its `enabled()` method
+//! always returns `true`. Every callsite then resolves its first
+//! registration to `Interest::always`, no matter which thread touches it
+//! first, so the race above cannot happen.
 //!
-//! Every call in a test binary that might reach a traced callsite must go
-//! through [`capture`], even a test that does not inspect the result.
-//! Installing the global subscriber happens lazily, on a thread's first
-//! call to `capture`, so a bare call elsewhere could still be the first
+//! Routing gives each test its own events. The global subscriber forwards
+//! an event only to the buffer the calling thread currently has scoped
+//! through [`capture`]. Two tests that capture concurrently on different
+//! threads never see each other's events, and no lock is needed between
+//! them.
+//!
+//! Call [`capture`] around every call in a test binary that might reach a
+//! traced callsite, even a call whose result a test does not inspect. The
+//! global subscriber installs lazily, on a thread's first call to
+//! `capture`, so a bare call outside `capture` could still be the first
 //! touch of a callsite, racing the install on another thread.
 
 use std::cell::RefCell;
@@ -42,7 +45,8 @@ use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id as SpanId, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
 
-/// One captured event's level, field name and debug-formatted value.
+/// One captured event's level, field name and value. A string field keeps
+/// its raw text; any other field is Debug-formatted.
 pub type Captured = Vec<(Level, String, String)>;
 
 struct Recorder<'a> {
@@ -109,15 +113,15 @@ fn ensure_installed() {
     });
 }
 
-/// Runs `run` and routes every `tracing` event it emits, on the calling
-/// thread, into the returned buffer. Returns `run`'s own result alongside
-/// the buffer.
+/// Runs `run` and captures every `tracing` event it emits on the calling
+/// thread. Returns `run`'s result together with the captured events.
 ///
-/// Safe to call concurrently from multiple test threads in the same test
-/// binary: see the module documentation for why. A test that does not
-/// inspect the captured events still must call this, and may discard the
-/// second element, instead of calling the traced code directly. This keeps
-/// the global subscriber's install a true first event in the process.
+/// Safe to call from several test threads in the same test binary at once:
+/// see the module documentation for why. Call this for every traced call
+/// a test makes, even one whose events the test does not inspect, and
+/// discard the second element instead of calling the traced code directly.
+/// This way, `capture` always installs the global subscriber before any
+/// callsite on that thread fires first.
 pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Captured) {
     ensure_installed();
     let sink = Arc::new(Mutex::new(Vec::new()));
@@ -129,8 +133,8 @@ pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Captured) {
     (result, captured)
 }
 
-/// Hands the thread's scope back to an enclosing `capture`, if any, even
-/// when `run` panics.
+/// Restores the thread's scope to an enclosing `capture`, if one exists,
+/// even when `run` panics.
 struct Restore(Option<Arc<Mutex<Captured>>>);
 
 impl Drop for Restore {

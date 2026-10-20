@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Stress-proves that concurrent captures on different threads never lose
-//! or cross-deliver an event. This holds even when the threads race to
-//! touch the same callsite for the first time in the process.
+//! Proves under stress that concurrent captures on different threads never
+//! lose an event or deliver it to the wrong thread. This holds even when
+//! the threads race to touch the same callsite for the first time in the
+//! process.
 
 use std::thread;
 
