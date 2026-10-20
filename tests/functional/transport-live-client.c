@@ -126,7 +126,7 @@ fail (const gchar *step,
 static GPtrArray *
 folder_dup_uids (CamelFolder *folder)
 {
-#if EDS_CHECK_VERSION(3, 60, 0)
+#if EDS_CHECK_VERSION(3, 57, 1)
 	return camel_folder_dup_uids (folder);
 #else
 	return camel_folder_get_uids (folder);
@@ -137,7 +137,7 @@ static void
 folder_free_uids (CamelFolder *folder,
 		  GPtrArray *uids)
 {
-#if EDS_CHECK_VERSION(3, 60, 0)
+#if EDS_CHECK_VERSION(3, 57, 1)
 	g_ptr_array_unref (uids);
 #else
 	camel_folder_free_uids (folder, uids);
