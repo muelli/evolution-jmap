@@ -2388,8 +2388,8 @@ fn label_entry(
     entry_key(entry, "a", addresses)
 }
 
-/// The JSContact map key for an entry: the one we round-tripped, or the
-/// first free `e1`, `e2`, … for a vCard that never had one.
+/// The JSContact map key for an entry: use the round-tripped key first.
+/// If it is absent, use the first free `e1`, `e2`, … for a vCard without one.
 fn entry_key<T>(entry: &VCardEntry, prefix: &str, taken: &BTreeMap<String, T>) -> String {
     if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
         && !taken.contains_key(&key)

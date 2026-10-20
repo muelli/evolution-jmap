@@ -1392,10 +1392,10 @@ fn phone_line(contexts: Option<Value>, features: Option<Value>) -> String {
 
 #[test]
 fn a_number_that_is_a_voice_line_and_a_fax_states_one_feature() {
-    // `TEL;TYPE=VOICE,FAX` reaches *no* field of libebook-contacts 3.52 at
-    // all — the number is simply not in the contact editor — and with a
-    // context it reaches two that overwrite each other. See `eds-sys`'
-    // `a_line_wearing_several_feature_types_reaches_two_fields_or_none`.
+    // `TEL;TYPE=VOICE,FAX` reaches no field of libebook-contacts 3.52.
+    // The number is absent from the contact editor.
+    // With context, it reaches two fields that overwrite each other.
+    // See `eds-sys` `a_line_wearing_several_feature_types_reaches_two_fields_or_none`.
     assert_eq!(
         phone_line(None, Some(json!({"voice": true, "fax": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=FAX:+49 30 111"
@@ -1434,8 +1434,9 @@ fn a_video_number_that_is_also_a_voice_line_states_the_voice_line() {
         phone_line(None, Some(json!({"voice": true, "video": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111"
     );
-    // On its own it is still written — dropping it would say the number is a
-    // voice line, which the card never claimed.
+    // On its own, it is still written.
+    // Dropping it would claim the number is a voice line.
+    // The card never claims that feature.
     assert_eq!(
         phone_line(None, Some(json!({"video": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=VIDEO:+49 30 111"
@@ -1444,8 +1445,8 @@ fn a_video_number_that_is_also_a_voice_line_states_the_voice_line() {
 
 #[test]
 fn a_line_with_several_features_is_still_read_as_all_of_them() {
-    // Narrowing is about what *we* write. A card that arrives from elsewhere
-    // saying the number is both keeps saying so.
+    // Narrowing controls what this mapper writes.
+    // A card from elsewhere that states both keeps both.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE,FAX:+49 30 111\r\n",
@@ -1474,10 +1475,10 @@ fn an_email_at_home_and_at_work_still_states_both() {
         ..ContactCard::default()
     };
 
-    // EDS files an `EMAIL` line by its *position* — `E_CONTACT_EMAIL_1` to
-    // `_4` — rather than by its `TYPE`, so a line wearing both contexts
-    // reaches one field rather than two and there is nothing to protect the
-    // user from. Stating both is what lets the save read either back.
+    // EDS files an `EMAIL` line by position: `E_CONTACT_EMAIL_1` to `_4`.
+    // It does not file by `TYPE`.
+    // A line with both contexts reaches one field, not two.
+    // Stating both lets a save read either context back.
     assert_eq!(
         line(&card_to_vcard(&card), "EMAIL"),
         "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,HOME:vera@example.com"
@@ -1901,9 +1902,10 @@ fn each_nickname_gets_a_line_of_its_own() {
 
 #[test]
 fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
-    // The other side of the same decision. A comma in the value is escaped on
-    // the way out, exactly as EDS escapes it, and read back as the text it
-    // was — never split into two entries the server would then be told about.
+    // This is the other side of the same decision.
+    // A comma in the value is escaped on write, exactly as EDS escapes it.
+    // On read, it stays the original text.
+    // It never splits into two entries sent to the server.
     let vcard = card_to_vcard(&one_nickname("k1", "Jim, the tall one"));
     assert_eq!(
         line(&vcard, "NICKNAME"),
@@ -1999,11 +2001,11 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_links_onto_url_lines() {
-    // RFC 2426 §3.6.8's `URL` is a bare URI with no room for anything else,
-    // so the JSContact key rides in X-JMAP-KEY as it does on an EMAIL — and
-    // EDS rewrites the value of that line in place, leaving the parameter
-    // where it was, verified against libebook-contacts 3.52. Evolution shows
-    // the first `URL` as the contact's home page.
+    // RFC 2426 §3.6.8 `URL` is a bare URI with no room for extra data.
+    // The JSContact key rides in `X-JMAP-KEY`, as it does on `EMAIL`.
+    // EDS rewrites that line value in place and keeps the parameter.
+    // This is verified against libebook-contacts 3.52.
+    // Evolution shows the first `URL` as the contact home page.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "URL"),
@@ -12926,7 +12928,7 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
 
     assert_eq!(phones["p13_other_fax"].features, Some(json!({"fax": true})));
 
-    // Specialized telephony aliases should remain parseable and stateful.
+    // Specialized telephony aliases remain parseable and stateful.
     for (key, num) in [
         ("p14_car", "+1-555-0113"),
         ("p15_isdn", "+1-555-0114"),
@@ -17442,7 +17444,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
             extra: BTreeMap::new(),
         },
     );
-    // Unmapped relations (no EDS slots — agent, child, colleague)
+    // Unmapped relations have no EDS slots: agent, child, colleague.
     related_to.insert(
         "David Agent".to_owned(),
         Relation {
