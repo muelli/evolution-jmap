@@ -306,6 +306,7 @@ fn folder_management_traces_structured_fields() {
         total: 0,
         unread: 0,
         subscribed: false,
+        may_add_items: None,
         children: Vec::new(),
     };
 

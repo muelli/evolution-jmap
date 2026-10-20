@@ -62,6 +62,7 @@ fn open_folder(account: &Account) -> *mut CamelFolder {
         total: 0,
         unread: 0,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     };
     // SAFETY: `account.store` is a live `CamelStore` for as long as the

@@ -43,12 +43,12 @@ use std::fmt;
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_FOLDER_ERROR_INVALID, CAMEL_FOLDER_ERROR_INVALID_UID,
-    CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
-    CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER, CamelAuthenticationResult,
-    CamelServiceError, camel_folder_error_quark, camel_service_error_quark,
-    camel_store_error_quark,
+    CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION, CAMEL_FOLDER_ERROR_INVALID,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
+    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER,
+    CamelAuthenticationResult, CamelServiceError, camel_folder_error_quark,
+    camel_service_error_quark, camel_store_error_quark,
 };
 use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
@@ -154,6 +154,15 @@ pub enum StoreError {
     /// reads as "that message is gone" instead of as a reason to take the
     /// account offline.
     NoMessage(String),
+    /// An append was asked to put a message into a mailbox whose last listing
+    /// says `myRights.mayAddItems` is `false` (RFC 8621 §2), such as a shared
+    /// mailbox given read-only. The string is the mailbox's display name.
+    ///
+    /// Reported as `CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION`, the code
+    /// `camel-nntp-folder.c`'s own `append_message_sync` uses for the same
+    /// shape of refusal. Nothing is wrong with the account or the connection,
+    /// and the server is never asked: the last listing already answered.
+    NoPermission(String),
     /// A message was to be sent from an address the account has no identity
     /// for.
     ///
@@ -275,6 +284,11 @@ impl fmt::Display for StoreError {
                 c"no such message: %1$s",
                 &[uid.as_str()],
             )),
+            Self::NoPermission(name) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the folder's display name.
+                c"you do not have permission to add messages to %1$s",
+                &[name.as_str()],
+            )),
             Self::NoIdentity(address) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is the email address the message was to be
                 // sent from.
@@ -387,6 +401,13 @@ impl StoreError {
                 (
                     camel_folder_error_quark(),
                     CAMEL_FOLDER_ERROR_INVALID_UID as i32,
+                )
+            },
+            // SAFETY: as above.
+            Self::NoPermission(_) => unsafe {
+                (
+                    camel_folder_error_quark(),
+                    CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION as i32,
                 )
             },
             // A message over the account's `maxSizeUpload`. The account is

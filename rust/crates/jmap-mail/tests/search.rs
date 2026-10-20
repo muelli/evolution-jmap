@@ -70,6 +70,7 @@ fn mailbox() -> FolderInfo {
         total: 0,
         unread: 0,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     }
 }
@@ -330,6 +331,7 @@ unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut Cam
         total: 0,
         unread: 0,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     };
     // SAFETY: `account.store` is a live `CamelStore` for as long as the

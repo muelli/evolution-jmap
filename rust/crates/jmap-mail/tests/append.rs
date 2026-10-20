@@ -64,9 +64,9 @@ use std::ptr;
 use common::Account;
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_SEEN,
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelDataWrapper, CamelFolder,
-    CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
+    CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION, CAMEL_FOLDER_ERROR_INVALID, CAMEL_MESSAGE_FLAGGED,
+    CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE,
+    CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
     camel_data_wrapper_construct_from_data_sync, camel_folder_append_message_sync,
     camel_folder_error_quark, camel_folder_get_message_sync, camel_folder_refresh_info_sync,
     camel_message_info_new, camel_message_info_set_date_received, camel_message_info_set_flags,
@@ -80,6 +80,7 @@ use jmap_mail::folder::folder_type;
 use jmap_mail_sync::{MailSync, MessageSummary};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::mail::MailboxRights;
 
 /// The RFC 5322 bytes of the message being appended — CRLF line endings, a
 /// header block, a blank line, a body.
@@ -114,6 +115,48 @@ impl Fixture {
             let mut state = state.lock().unwrap();
             let account = state.account_mut(&account_id).unwrap();
             account.seed_mailbox("Archive", None)
+        };
+
+        let account = Account::open();
+        let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+        account.connect(MailSync::new(client, account_id));
+
+        let archive = open(&account, "Archive");
+
+        Self {
+            server,
+            account,
+            archive,
+            archive_id,
+        }
+    }
+
+    /// The same single-folder account, with its one mailbox's `myRights`
+    /// already set before the first listing: a shared mailbox given every
+    /// right except `mayAddItems`, the shape a read-only share leaves.
+    fn started_without_add_rights() -> Self {
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        let archive_id = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            let id = account.seed_mailbox("Archive", None);
+            account.mailboxes.transaction(|mailboxes| {
+                let mailbox = mailboxes.get(&id).expect("the seeded mailbox").clone();
+                let denied = jmap_proto::mail::Mailbox {
+                    my_rights: Some(MailboxRights {
+                        may_add_items: Some(false),
+                        ..MailboxRights::default()
+                    }),
+                    ..mailbox
+                };
+                assert!(
+                    mailboxes.update(&id, denied),
+                    "the seeded mailbox was not there"
+                );
+            });
+            id
         };
 
         let account = Account::open();
@@ -613,6 +656,42 @@ fn appending_to_a_mailbox_the_account_no_longer_has_fails() {
         appended.reported(),
         None,
         "an append that failed reported a uid"
+    );
+}
+
+/// A shared mailbox whose `myRights.mayAddItems` is `false` (RFC 8621 §2),
+/// the shape a read-only share leaves, refuses an append locally, from the
+/// last listing, rather than uploading the message for the server to reject.
+#[test]
+fn appending_to_a_mailbox_without_add_rights_is_refused_locally() {
+    let fixture = Fixture::started_without_add_rights();
+
+    let appended = fixture.append(&Message::parsed(MESSAGE), ptr::null_mut());
+
+    // SAFETY: no arguments, and the quark registers itself.
+    let quark = unsafe { camel_folder_error_quark() };
+    assert_eq!(
+        appended.failure(),
+        (quark, CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION as i32),
+        "{}",
+        appended.message()
+    );
+    assert_eq!(
+        appended.reported(),
+        None,
+        "an append that failed reported a uid"
+    );
+
+    // Nothing reached the server: the refusal is local, before the upload.
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&fixture.server.account_id())
+            .unwrap()
+            .blobs
+            .is_empty(),
+        "a locally refused append still uploaded the message"
     );
 }
 

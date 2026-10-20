@@ -49,6 +49,7 @@ fn mailbox(path: &str, display_name: &str, role: Option<FolderRole>) -> FolderIn
         total: 0,
         unread: 0,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     }
 }
@@ -233,6 +234,7 @@ fn folder_properties_and_custom_subfolder_nesting() {
         total: 15,
         unread: 3,
         subscribed: true,
+        may_add_items: None,
         children: Vec::new(),
     };
     let folder = folder_of(&account, &subfolder_info);
