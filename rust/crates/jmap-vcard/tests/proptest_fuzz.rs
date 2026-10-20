@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Structure-aware property tests for JSContact and vCard 3.0 mapping.
-//! Covers panic-free conversion and round-trip fixed-point stability.
+//! The suite checks panic-free conversion and roundtrip fixed-point stability.
 
 use std::collections::BTreeMap;
 
@@ -725,7 +725,7 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
-            // vCard 4.0 names that vCard 3.0 treats as unknown properties.
+            // vCard 4.0 property names. vCard 3.0 treats them as unknown.
             Just("IMPP".to_string()),
             Just("RELATED".to_string()),
             Just("ANNIVERSARY".to_string()),
@@ -790,7 +790,7 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
-                // vCard 4.0 parameter forms seen by vCard 3.0 parsers.
+                // vCard 4.0 parameter forms that vCard 3.0 parsers see.
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
                 Just(";MEDIATYPE=image/webp".to_string()),
@@ -1144,7 +1144,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Empty stated full name with only `given` must stay stable.
+// An empty stated full name with only `given` must stay stable.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1233,7 +1233,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression seed keeps ADR lines at or below 75 octets.
+// This regression seed keeps ADR lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1323,7 +1323,7 @@ proptest! {
                 line.len(),
                 line
             );
-            // Folding preserves UTF-8 code point boundaries.
+            // Folding keeps UTF-8 code-point boundaries intact.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",

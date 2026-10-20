@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Hostile-input tests for server-controlled `ContactCard` data.
+//! Hostile-input tests for server-provided `ContactCard` data.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Map keys become parameter text, so line breaks are stripped.
+/// The mapper strips line breaks before it writes map keys as parameter text.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -25,7 +25,7 @@ fn card_with_email_key(key: &str) -> ContactCard {
     }
 }
 
-/// CRLF in a map key must not terminate `EMAIL` and inject `FN`.
+/// A CRLF in a map key must not terminate `EMAIL` or inject `FN`.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     let vcard = card_to_vcard(&card_with_email_key("e1\r\nFN:Mallory\r\nX-TAIL"));
@@ -42,7 +42,7 @@ fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     assert_eq!(names, ["BEGIN", "VERSION", "UID", "EMAIL", "END"]);
 }
 
-/// Bare LF or CR must not start a new content line.
+/// Bare LF or CR must not start a new vCard content line.
 #[test]
 fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     for key in ["e1\nFN:Mallory", "e1\rFN:Mallory", "e1\n\rFN:Mallory"] {
@@ -59,7 +59,7 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     }
 }
 
-/// Embedded quotes in a quoted parameter must not open a second parameter.
+/// Embedded quotes in a quoted parameter must not start a second parameter.
 #[test]
 fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     let vcard = card_to_vcard(&card_with_email_key("x\";FN=\"Mallory"));
@@ -99,7 +99,7 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     );
 }
 
-/// Escaped value newlines stay data and do not inject properties.
+/// Escaped value newlines stay as data and do not inject properties.
 #[test]
 fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
     let mut card = ContactCard {
@@ -127,7 +127,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Truncated inputs return typed errors, without panic or hang.
+/// Truncated inputs return typed errors without panic or hang.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -194,7 +194,7 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
     }
 }
 
-/// Extreme folding patterns must not panic or mis-parse root fields.
+/// Extreme folding patterns must not panic or misparse root fields.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
@@ -259,7 +259,7 @@ fn card_with_10k_properties_bounded_execution() {
     );
 }
 
-/// Deeply nested AGENT vCards stay bounded.
+/// Deeply nested AGENT vCards stay within the runtime bound.
 #[test]
 fn deeply_nested_agent_robustness() {
     for depth in [10, 50, 100, 500] {
@@ -353,7 +353,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Multibyte UTF-8 in parsed fields does not panic on boundaries.
+/// Multibyte UTF-8 in parsed fields does not panic at byte boundaries.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [
