@@ -46,6 +46,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-13 | Changes since 2026-10-10. | F31 fixed |
 | 2026-10-15 | Changes since 2026-10-13. | F32 |
 | 2026-10-17 | Changes since 2026-10-15. | F33, F32 fixed |
+| 2026-10-20 | Changes since 2026-10-17, with meeting guests and shared collections. | F34 to F39 |
 
 ## Findings
 
@@ -87,6 +88,12 @@ paths are relative to `rust/crates/`.
 | F31 | One slow SRV lookup blocked the SRV lookups of all other accounts. | Fixed with a pool of resolver threads. `jmap-backend-core/src/resolver_thread.rs`, `a_slow_job_on_one_worker_does_not_delay_a_job_on_another`. |
 | F32 | A nested log capture in the test helper lost the outer capture. Only tests were affected. | Fixed. `jmap-tracing-capture/tests/isolation.rs`, `a_nested_capture_hands_the_scope_back_to_the_outer_one`. |
 | F33 | Unsigned JSContact integers from the server wrapped instead of being rejected. | Fixed. `jmap-proto/tests/contacts.rs`, `an_out_of_range_unsigned_int_is_rejected_not_wrapped`. |
+| F34 | A `"` in an iCalendar parameter, such as the name of a meeting guest, was written with a backslash. libical kept the backslash, and the next save sent a damaged name to the server. | Fixed. Parameter values use the RFC 6868 caret escapes in both directions. `jmap-ical/tests/event.rs`, `a_quote_in_a_guest_name_is_written_with_the_rfc_6868_caret_escape` and `a_caret_escape_in_a_guest_name_reads_back_as_the_character_it_stands_for`. |
+| F35 | The client followed a redirect from HTTPS to plain HTTP. A session document from the plain connection could then send the credentials to a different host. | Fixed. The client refuses a redirect that leaves TLS. `jmap-client/src/url.rs`, `a_redirect_from_https_to_plain_http_is_a_downgrade`. |
+| F36 | The account setup lookup read the collection source on a worker thread through borrowed strings. The main thread could free a string during the copy. | Fixed. The lookup holds a reference to the source and reads copies. `jmap-config/tests/account.rs`, `a_read_on_another_thread_copies_strings_the_main_thread_is_replacing`. |
+| F37 | A `"` in a vCard parameter value from the server, such as a JSContact map key, is written with a backslash. EDS then drops the complete property. | Open. The fix is the same as F34. |
+| F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Open. |
+| F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Open. |
 
 ### FFI soundness audit, 2026-08-19
 
