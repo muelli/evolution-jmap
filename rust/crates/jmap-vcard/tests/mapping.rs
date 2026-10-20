@@ -8406,7 +8406,7 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
     // RFC 2426 §2 / §3.5.5: Commas inside ORG unit components and employer names:
     // Semicolon (;) delimits components of ORG, while comma (,) inside a unit
     // must be escaped as \, so it is not confused or lost, and semicolons inside
-    // a unit must be escaped as \; so they don't split the component.
+    // a unit must be escaped as \; so it does not split the component.
     let mut orgs = BTreeMap::new();
     orgs.insert(
         "o1".to_owned(),
@@ -12714,7 +12714,7 @@ fn geo_tz_lines_with_adr_stay_parse_safe_and_unmapped_in_eds_profile() {
 
 #[test]
 fn phone_mobile_type_synonym_and_permutations_characterization() {
-    // `TYPE=MOBILE` should parse as mobile and normalize back to `TYPE=CELL`.
+    // Parse `TYPE=MOBILE` as mobile and normalize back to `TYPE=CELL`.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -13401,7 +13401,7 @@ fn evolution_links_and_relations_case_insensitivity_and_whitespace() {
         "X-Evolution-Assistant:Helper Person\r\n",
         "x-evolution-blog-url;X-JMAP-KEY=l_b:https://blogs.example.com/case\r\n",
         "X-Evolution-Video-Url;X-JMAP-KEY=l_v:https://video.example.com/case\r\n",
-        // Empty lines that should be ignored
+        // Ignore empty lines.
         "X-EVOLUTION-MANAGER:\r\n",
         "X-EVOLUTION-ASSISTANT:   \r\n",
         "X-EVOLUTION-BLOG-URL:\r\n",
