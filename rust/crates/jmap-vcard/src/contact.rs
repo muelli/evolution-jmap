@@ -381,28 +381,25 @@ fn has_relation_type(relation: &Relation, expected: &str) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// Whether a related entity reaches the user as a spouse, `key` being the
-/// entity's name.
+/// Whether this relation states a spouse with a stable display name.
 pub fn states_spouse(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, SPOUSE_RELATION) && names_a_person(key)
 }
 
-/// Whether a related entity reaches the user as a manager, `key` being the
-/// entity's name.
+/// Whether this relation states a manager with a stable display name.
 pub fn states_manager(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, MANAGER_RELATION) && names_a_person(key)
 }
 
-/// Whether a related entity reaches the user as an assistant, `key` being the
-/// entity's name.
+/// Whether this relation states an assistant with a stable display name.
 pub fn states_assistant(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, ASSISTANT_RELATION) && names_a_person(key)
 }
 
-/// Whether the marriage is all a relation says, so that withdrawing it leaves
-/// nothing of the entry to keep.
+/// Whether this relation states only the marriage marker.
+/// Keep no relation entry when this returns `true`.
 ///
-/// `@type` does not count as relation data, but unknown extra members do.
+/// `@type` in `extra` is metadata. Any other member counts as data.
 pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
     relation.extra.keys().all(|member| member == "@type")
         && relation
@@ -412,8 +409,7 @@ pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
             .all(|(kind, _)| kind == SPOUSE_RELATION)
 }
 
-/// Whether a `relatedTo` key is a name a line can show the user and a save can
-/// read back out unchanged.
+/// Whether a `relatedTo` key is a stable person name for write and readback.
 fn names_a_person(key: &str) -> bool {
     !key.is_empty() && !names_a_uri(key) && !edged_with_whitespace(key) && !key.contains('\r')
 }
@@ -432,17 +428,17 @@ fn names_a_uri(value: &str) -> bool {
         })
 }
 
-/// Whether a media entry reaches the user at all: it must be a photo, and the
-/// bytes or the URI it names must be something a `PHOTO` line can state.
+/// Whether this media entry can be emitted as `PHOTO`.
 ///
-/// `photo` is the shared decision point with [`card_to_vcard`].
+/// It must state photo kind and data that a `PHOTO` line can carry.
+/// [`photo`] shares this decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
 
-/// Renders one media entry as `PHOTO` content, or `None` when it cannot be emitted.
+/// Render one media entry as `PHOTO`, or return `None`.
 ///
-/// Returns `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
+/// Return `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
 fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
@@ -460,8 +456,7 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
 
 /// Whether two media entries render to the same `PHOTO` line.
 ///
-/// Comparison uses rendered form so base64 padding and media-type case do not
-/// trigger false edits.
+/// Compare rendered forms so base64 padding and media-type case do not create false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
     match (photo(one), photo(other)) {
         (None, None) => true,
@@ -496,11 +491,11 @@ enum Photo<'a> {
     Uri(&'a str),
 }
 
-/// Returns the subtype from an `image/*` media type for `PHOTO` `TYPE`.
+/// Return the subtype from an `image/*` media type for `PHOTO` `TYPE`.
 ///
 /// Non-image types return `None` because EDS reconstructs `image/<TYPE>`.
 fn image_subtype(media_type: &str) -> Option<&str> {
-    // The media type's own parameters (`;charset=…`) are no part of its name.
+    // Media-type parameters (`;charset=`) are not part of the type name.
     let name = media_type.split(';').next().unwrap_or_default().trim();
     strip_prefix_ci(name, IMAGE_PREFIX).filter(|subtype| !subtype.is_empty())
 }
@@ -521,7 +516,7 @@ fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &value[prefix.len()..])
 }
 
-/// `value` without `suffix`, compared as [`strip_prefix_ci`] compares.
+/// Return `value` without `suffix`, with the compare rule of [`strip_prefix_ci`].
 fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
     let split = value.len().checked_sub(suffix.len())?;
     let end = value.get(split..)?;
@@ -549,21 +544,20 @@ pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     }
 }
 
-/// The handle inside a service's URI, for a URI that states one and nothing
-/// else.
+/// The handle part of a service URI that states one handle only.
 fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
     let wanted = normalised_service(service);
     let (stated, handle) = uri.split_once(':')?;
-    // Case-insensitively, as RFC 3986 §3.1 requires of a scheme.
+    // RFC 3986 §3.1 says URI schemes compare case-insensitively.
     let matches = SERVICE_SCHEMES.iter().any(|(name, scheme)| {
         normalised_service(name) == wanted && stated.eq_ignore_ascii_case(scheme)
     });
     (matches && plain_handle(handle)).then_some(handle)
 }
 
-/// Returns `<scheme>:<handle>` for services with a known plain-handle URI form.
+/// Return `<scheme>:<handle>` for services with a plain-handle URI form.
 ///
-/// `None` means no compatible scheme exists or the handle is not URI-safe.
+/// Return `None` when no compatible scheme exists or the handle is not URI-safe.
 pub fn online_service_uri(service: &str, handle: &str) -> Option<String> {
     let scheme = service_scheme(service)?;
     plain_handle(handle).then(|| format!("{scheme}:{handle}"))
@@ -607,7 +601,7 @@ fn service_of(property: &str) -> Option<&'static str> {
 }
 
 /// Whether two service names are equivalent for mapping lookups.
-/// Compares case-insensitively and ignores punctuation and spacing aliases.
+/// Compare case-insensitively and ignore punctuation and spacing aliases.
 pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     match (one, other) {
         (Some(one), Some(other)) => normalised_service(one) == normalised_service(other),
@@ -616,8 +610,8 @@ pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     }
 }
 
-/// A service name with everything that is not a letter or a digit removed, and
-/// the rest lower-cased.
+/// Service name normalized for lookups.
+/// Remove non-alphanumeric characters and lower-case the rest.
 fn normalised_service(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_alphanumeric())
@@ -643,7 +637,7 @@ fn service_slot(service: &OnlineService) -> &'static str {
 }
 
 /// Whether one `keywords` entry can be emitted on `CATEGORIES`.
-/// Accepts only `true` set members with non-empty, trim-stable names and no carriage return.
+/// Accept only `true` set members with non-empty, trim-stable names and no carriage return.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
@@ -652,7 +646,7 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
 }
 
 /// Whether a tag has leading or trailing ASCII whitespace.
-/// This superset rejects tags that EDS can trim and rename on the next save.
+/// This wider check rejects tags that EDS can trim and rename on the next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
