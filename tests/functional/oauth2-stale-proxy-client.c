@@ -45,7 +45,7 @@
  *      runs. Thus an `ESource` in a factory keeps its dead proxy, and
  *      main-loop iterations do not remove it while the name has no owner.
  *
- * This program observes steps 1 and 3 directly. Step 1 is necessary: all
+ * This program observes steps 1, 3 and 4 directly. Step 1 is necessary: all
  * other observations depend on `oauth2-support-exported`.
  *
  *   usage: functional-oauth2-stale-proxy-client <account-uid>
@@ -135,6 +135,28 @@ name_is_gone (GDBusConnection *connection,
 	g_clear_error (&error);
 
 	return TRUE;
+}
+
+/* TRUE if the D-Bus object of `source` has the OAuth2Support interface now.
+ * Ask the source again each time: a pointer kept from an earlier call does
+ * not show a later change. */
+static gboolean
+source_exports_oauth2_support (ESource *source)
+{
+	GDBusObject *dbus_object;
+	GDBusInterface *dbus_interface = NULL;
+	gboolean exported;
+
+	dbus_object = e_source_ref_dbus_object (source);
+	if (dbus_object != NULL)
+		dbus_interface = g_dbus_object_get_interface (dbus_object, OAUTH2_SUPPORT_INTERFACE);
+
+	exported = dbus_interface != NULL;
+
+	g_clear_object (&dbus_interface);
+	g_clear_object (&dbus_object);
+
+	return exported;
 }
 
 int
@@ -256,7 +278,7 @@ main (int argc,
 		source, NULL, &access_token, &expires_in, &error);
 
 	observe_boolean ("token-after-kill-succeeded", fetched);
-	observe_boolean ("oauth2-support-still-exported", dbus_interface != NULL);
+	observe_boolean ("oauth2-support-still-exported", source_exports_oauth2_support (source));
 
 	if (error != NULL) {
 		gchar *code = g_strdup_printf ("%d", error->code);
