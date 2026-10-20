@@ -22,7 +22,8 @@ use gobject_sys::GTypeModule;
 ///
 /// # Safety
 ///
-/// As [`jmap_config::module::load`], which this function calls.
+/// As [`jmap_config::module::load`] and [`jmap_ui::module::load`], which this
+/// function calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
     // SAFETY: the obligation of the caller passes directly through.
@@ -36,7 +37,8 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
 ///
 /// # Safety
 ///
-/// As [`jmap_config::module::unload`], which this function calls.
+/// As [`jmap_config::module::unload`] and [`jmap_ui::module::unload`], which
+/// this function calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_unload(type_module: *mut GTypeModule) {
     // SAFETY: as `e_module_load`.
