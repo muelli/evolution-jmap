@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:PHONETIC Parameter Seed
+N;PHONETIC=ipa;SCRIPT=Latn:Mueller;Vera;;;
+ADR;TYPE=home;PHONETIC=ipa;SCRIPT=Latn:;;Hauptstrasse 1;Berlin;;10115;Germany
+END:VCARD

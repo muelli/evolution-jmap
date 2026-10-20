@@ -23107,3 +23107,79 @@ fn index_parameter_metadata_is_not_retained_in_eds_profile() {
         "profile reaches fixed point after one pass"
     );
 }
+
+#[test]
+fn phonetic_and_script_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PHONETIC Parameter Probe\r\n",
+        "N;PHONETIC=ipa;SCRIPT=Latn:Mueller;Vera;;;\r\n",
+        "ADR;TYPE=home;PHONETIC=ipa;SCRIPT=Latn:;;Hauptstrasse 1;Berlin;;10115;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PHONETIC parameter profile probe");
+    let name = parsed.name.as_ref().expect("name present");
+    assert_eq!(name.full.as_deref(), Some("PHONETIC Parameter Probe"));
+    assert!(
+        !name.extra.contains_key("phoneticSystem"),
+        "profile does not retain RFC 9555 PHONETIC metadata on name"
+    );
+    assert!(
+        !name.extra.contains_key("phoneticScript"),
+        "profile does not retain RFC 9555 SCRIPT metadata on name"
+    );
+    let name_components = name.components.as_ref().expect("name components present");
+    assert_eq!(name_components.len(), 2);
+    assert!(
+        name_components
+            .iter()
+            .all(|component| !component.extra.contains_key("phonetic")),
+        "profile does not retain RFC 9555 PHONETIC component metadata on N"
+    );
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"private": true})));
+    assert!(
+        !address.extra.contains_key("phoneticSystem"),
+        "profile does not retain RFC 9555 PHONETIC metadata on ADR"
+    );
+    assert!(
+        !address.extra.contains_key("phoneticScript"),
+        "profile does not retain RFC 9555 SCRIPT metadata on ADR"
+    );
+    let address_components = address
+        .components
+        .as_ref()
+        .expect("address components present");
+    assert!(
+        address_components
+            .iter()
+            .all(|component| !component.extra.contains_key("phonetic")),
+        "profile does not retain RFC 9555 PHONETIC component metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let n_line = line(&emitted, "N");
+    assert_eq!(n_line, "N:Mueller;Vera;;;");
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Hauptstrasse 1;Berlin;;10115;Germany"));
+    assert!(
+        !emitted.contains("PHONETIC="),
+        "non-projected PHONETIC metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("SCRIPT="),
+        "non-projected SCRIPT metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized PHONETIC parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
