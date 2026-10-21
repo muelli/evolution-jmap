@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Check `.po` to `.mo` output and parse refusals.
+//! Check `.po` to `.mo` output and parse errors.
 
 use std::collections::BTreeMap;
 
