@@ -1,6 +1,6 @@
-//! Raw FFI declarations for the example module.
+//! Declare raw FFI types for the example module.
 //!
-//! `build.rs` handles all linker flags through `pkg-config`.
+//! `build.rs` resolves linker flags with `pkg-config`.
 
 #![allow(dead_code, non_camel_case_types, non_snake_case)]
 
@@ -42,7 +42,7 @@ pub struct GTypeInstance {
     pub g_class: *mut GTypeClass,
 }
 
-// Mirror `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
+// Match `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
 
 #[repr(C)]
 pub struct GObjectClass {
@@ -67,7 +67,7 @@ pub struct GObjectClass {
                                            // total: 136
 }
 
-// Mirror `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
+// Match `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
 
 #[repr(C)]
 pub struct EExtensionClass {
@@ -76,11 +76,11 @@ pub struct EExtensionClass {
     pub _reserved: [*mut c_void; 16], // 128
 }
 
-// Write this field in class init. Read this field after class init.
+// Class init writes this field. Later code reads this field.
 unsafe impl Sync for EExtensionClass {}
 unsafe impl Send for EExtensionClass {}
 
-// Mirror `struct _GTypeInfo` from `<gobject/gtype.h>`.
+// Match `struct _GTypeInfo` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeInfo {
@@ -96,10 +96,10 @@ pub struct GTypeInfo {
     pub value_table: *const c_void,
 }
 
-// This type stores only function pointers and static pointers.
+// This type stores only function pointers and static data pointers.
 unsafe impl Sync for GTypeInfo {}
 
-// Mirror `struct _GTypeQuery` from `<gobject/gtype.h>`.
+// Match `struct _GTypeQuery` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeQuery {
@@ -109,7 +109,7 @@ pub struct GTypeQuery {
     pub instance_size: c_uint,
 }
 
-// Mirror `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
+// Match `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
 
 #[repr(C)]
 pub struct GtkActionEntry {
@@ -121,7 +121,7 @@ pub struct GtkActionEntry {
     pub callback: Option<unsafe extern "C" fn(*mut GtkAction, *mut c_void)>,
 }
 
-// Fields are null or static pointers.
+// Fields are null or static data pointers.
 unsafe impl Sync for GtkActionEntry {}
 
 extern "C" {
