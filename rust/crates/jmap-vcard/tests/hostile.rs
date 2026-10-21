@@ -88,6 +88,19 @@ fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
     }
 }
 
+/// Inbound `VALUE=uri` with a `data:` payload must stay accepted.
+#[test]
+fn inbound_photo_value_uri_data_payload_stays_mapped() {
+    let line = "PHOTO;VALUE=uri:data:image/png;base64,aGVsbG8=";
+    let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
+    let parsed = vcard_to_card(&vcard).expect("parse card with VALUE=uri data photo");
+    let media = parsed.media.expect("media map");
+    let photo = media.values().next().expect("photo entry");
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert_eq!(photo.uri, "data:image/png;base64,aGVsbG8=");
+    assert_eq!(photo.media_type.as_deref(), Some("image/png"));
+}
+
 /// A CRLF in a map key must not terminate `EMAIL` or inject `FN`.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
