@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! HTTP surface: routing, session document, server lifecycle.
+//! HTTP surface for routing, session documents, and server lifecycle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,28 +25,28 @@ use crate::state::ServerState;
 pub const DEFAULT_ACCOUNT_ID: &str = "A1";
 pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 
-/// Default advertised and enforced `maxObjectsInGet`.
+/// Advertised and enforced default for `maxObjectsInGet`.
 pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
 
-/// Default advertised and enforced `maxSizeUpload`.
+/// Advertised and enforced default for `maxSizeUpload`.
 pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
 
-/// Default advertised and enforced `maxCallsInRequest`.
+/// Advertised and enforced default for `maxCallsInRequest`.
 pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
 
-/// Default advertised and enforced `maxSizeRequest`.
+/// Advertised and enforced default for `maxSizeRequest`.
 pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
 
-/// Builds RFC 8414 metadata from the server origin.
+/// Build RFC 8414 metadata from the server origin.
 type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
 
-/// Builds an RFC 7591 registration response from the request JSON body.
+/// Build an RFC 7591 registration response from the request JSON body.
 type RegistrationFn = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
-/// Builds an RFC 6749 token response from parsed form fields.
+/// Build an RFC 6749 token response from parsed form fields.
 type TokenFn = dyn Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync;
 
-/// Optional handlers for the three OAuth endpoints.
+/// Handlers for optional OAuth endpoints.
 #[derive(Clone, Default)]
 struct OAuthHandlers {
     metadata: Option<Arc<MetadataFn>>,
@@ -539,7 +539,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // RFC 8414 metadata is public. This route bypasses auth.
+    // RFC 8414 metadata is public, so this route bypasses auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -582,7 +582,7 @@ fn handle_request(
         return;
     }
 
-    // Token requests also bypass auth for public-client flows.
+    // Token requests also bypass auth for public client flows.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/token"
     {
@@ -835,7 +835,7 @@ fn handle_request(
     }
 }
 
-/// Split a request path, decoding each segment so `%2F` stays inside ids.
+/// Split a request path and decode each segment so `%2F` stays inside ids.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -843,7 +843,7 @@ fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse an OAuth token body where `+` means space before percent-decoding.
+/// Parse an OAuth token body where `+` means space before percent decoding.
 fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(body)
         .split('&')
@@ -873,7 +873,7 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
             tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("static header"),
         );
-    // The client may already have hung up; nothing useful to do about it.
+    // The client may already have closed the connection. Ignore that case.
     let _ = request.respond(response);
 }
 
@@ -889,7 +889,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_BLOB,
 ];
 
-/// Capability object for `capability`; most capabilities map to `{}`.
+/// Build a capability object for `capability`; most capabilities map to `{}`.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -908,7 +908,7 @@ fn capability_value(capability: &str) -> Value {
     }
 }
 
-/// Build the RFC 8620 §2 session document from current state.
+/// Build the RFC 8620 §2 session document from the current state.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
@@ -981,7 +981,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Build core dynamically so this code can omit optional limits.
+    // Build core dynamically so optional limits can be omitted.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,
