@@ -3,8 +3,8 @@
 
 //! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! Run each subscriber on a dedicated thread.
-//! Write chunks with `Request::into_writer` so updates flush before EOF.
+//! Run each subscriber in a dedicated thread.
+//! Write chunks with `Request::into_writer` to flush updates before EOF.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -16,9 +16,9 @@ use jmap_proto::push::StateChange;
 
 use crate::state::ServerState;
 
-/// Parsed `/eventsource` query parameters for this mock.
+/// Parsed query parameters for `/eventsource` in this mock.
 struct EventSourceParams {
-    /// `None` means no type filter.
+    /// No type filter when this is `None`.
     types: Option<BTreeSet<String>>,
     close_after_state: bool,
     ping_interval: Option<Duration>,
@@ -50,7 +50,7 @@ fn parse_params(query: &str) -> EventSourceParams {
     }
 }
 
-/// Subscribe this request and stream from a dedicated thread.
+/// Subscribe this request and stream events from a dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
     let receiver = state
@@ -77,7 +77,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
     });
 }
 
-/// Stream `state` and optional `ping` events as flushed chunks.
+/// Stream `state` events and optional `ping` events as flushed chunks.
 fn stream_events(
     writer: &mut dyn Write,
     receiver: &Receiver<Vec<u8>>,
@@ -125,8 +125,8 @@ fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// Encode one `StateChange` as `event: state` plus JSON `data`.
-/// Do not emit `id:` resume data.
+/// Encode one `StateChange` as `event: state` with JSON `data`.
+/// Do not emit `id:` resume state.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
