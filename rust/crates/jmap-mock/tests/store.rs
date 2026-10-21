@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Invariants of the mock's object store.
+//! Store invariants for the mock object store.
 
 use jmap_mock::{ChangeKind, Store};
 use jmap_proto::Id;
@@ -26,7 +26,7 @@ fn state_bumps_only_on_success() {
     });
     assert_eq!(store.state_counter(), initial);
 
-    // A transaction with creates advances state exactly once.
+    // A create transaction advances state once.
     store.transaction(|transaction| {
         let a = transaction.alloc_id();
         transaction.create(a, "a".to_owned());
