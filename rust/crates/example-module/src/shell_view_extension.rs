@@ -24,7 +24,7 @@ unsafe extern "C" fn free_private(ptr: *mut c_void) {
     }
 }
 
-/// Returns private instance state.
+/// Return private instance state.
 ///
 /// # Safety
 /// `obj` must be a live extension with attached private data.
@@ -99,7 +99,7 @@ unsafe extern "C" fn action_calendar_menu_cb(
     eprintln!("action_calendar_menu_cb: My Calendar Action executed");
 }
 
-/// Reads `G_TYPE_FROM_INSTANCE`.
+/// Read `G_TYPE_FROM_INSTANCE`.
 unsafe fn instance_gtype(instance: *mut c_void) -> ffi::GType {
     unsafe { (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type }
 }
@@ -277,10 +277,10 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
         obj_class.finalize = Some(instance_finalize);
 
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-        // Resolve by name instead of a getter call.
-        // A getter may register a type inside class init.
-        // That can deadlock against another registration thread.
-        // `register_type` has already registered this type.
+        // Resolve by name, not by a getter.
+        // A getter can register a type inside class init.
+        // That can deadlock with another registration thread.
+        // `register_type` already registers this type.
         ext_class.extensible_type = ffi::g_type_from_name(c"EShellView".as_ptr());
     }
 }
