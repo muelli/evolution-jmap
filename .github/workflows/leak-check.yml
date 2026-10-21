@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Weekly run of the FFI crates' tests under LeakSanitizer. GLib allocates
+# with its own allocator, so no Rust test sees a missing free on the C side.
+# The logic is in ci/leak-check.sh, which runs the same way locally. Not on
+# every push: it needs a nightly toolchain and a second build of each crate.
+# Dispatch by hand with: gh workflow run leak-check.yml
+
+name: Leak check
+
+on:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: leak-check
+          workspaces: rust -> ../build/leak-check-target
+      - run: ci/leak-check.sh

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# LeakSanitizer suppressions for ci/leak-check.sh.
+#
+# Each entry names a function of GLib or EDS, never a function of this
+# project. Give the reason for each entry.
+
+# EDS 3.52 computes this directory name once, without a lock. Two threads
+# that call it at the same time both allocate the name, and one copy leaks.
+# The backend tests construct ESourceServerSide objects in parallel threads.
+leak:e_server_side_source_get_user_dir
