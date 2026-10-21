@@ -21787,11 +21787,11 @@ fn vcard_trailing_whitespace_across_all_property_types_matrix() {
 
 #[test]
 fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
-    // ContactCards with `full: Some("")` and populated name components used to need one
-    // extra round trip: `card_to_vcard` emitted empty `FN:`, then `read_name` treated empty
-    // `FN` as absent and synthesized `full` on the next pass.
-    // The empty-is-absent filter now derives once, so both vCard and ContactCard stabilize
-    // by pass 2.
+    // `full: Some("")` plus name components used to need one extra pass.
+    // `card_to_vcard` emitted `FN:`.
+    // `read_name` treated empty `FN` as absent and derived `full` in the next pass.
+    // The empty-is-absent filter now derives once.
+    // vCard and ContactCard stabilize by pass 2.
     let test_names = vec![
         Name {
             components: Some(vec![NameComponent::new("given", "0")]),
@@ -21844,7 +21844,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
         let vcard3 = card_to_vcard(&parsed2);
         let parsed3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
-        // Immediate fixed point at pass 1
+        // Pass 1 reaches a fixed point.
         assert_eq!(
             vcard1, vcard2,
             "vCard output must reach fixed point immediately at pass 1"
@@ -21854,7 +21854,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             "ContactCard model must reach fixed point immediately at pass 1"
         );
 
-        // Fixed point at pass 2/3
+        // Passes 2 and 3 stay equal.
         assert_eq!(vcard2, vcard3);
         assert_eq!(parsed2, parsed3);
     }
@@ -21862,7 +21862,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
 
 #[test]
 fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
-    // Composite card with mixed trailing whitespace, escaped spaces, and multi-component fields
+    // Use one card with trailing spaces, escaped spaces, and multi-component fields.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -21894,7 +21894,7 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
     let card4 = vcard_to_card(&vcard3).expect("pass 4 parse");
     let vcard4 = card_to_vcard(&card4);
 
-    // Multi-pass convergence verification
+    // Verify multi-pass convergence.
     assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
     assert_eq!(vcard3, vcard4, "vCard pass 3 == pass 4");
     assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
@@ -21903,7 +21903,7 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
 
 #[test]
 fn empty_org_name_reads_as_absent_inbound_matrix() {
-    // 1. Inbound vCards where ORG has only empty components parse to organizations: None
+    // Inbound ORG values with only empty components read as absent.
     let empty_org_vcards = [
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:\r\nEND:VCARD\r\n",
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;\r\nEND:VCARD\r\n",
@@ -21922,7 +21922,7 @@ fn empty_org_name_reads_as_absent_inbound_matrix() {
         );
     }
 
-    // 2. Inbound vCards with empty first component but non-empty units read name as None (absent)
+    // Inbound ORG values with an empty first component keep units and no name.
     let unit_only_vcards = [
         (
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering\r\nEND:VCARD\r\n",
