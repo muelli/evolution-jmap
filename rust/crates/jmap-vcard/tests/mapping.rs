@@ -3027,9 +3027,9 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // Write one line for each service that has an EDS HOME or WORK slot.
+    // Emit one line for each service with an EDS HOME or WORK slot.
     // Match service names case-insensitively and punctuation-insensitively.
-    // Keep save behavior stable across spelling variants.
+    // Keep save output stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
         ("aim", "X-AIM"),
@@ -3057,8 +3057,8 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
     // Skip services without an editable EDS slot.
+    // Skip missing service names because no property line can be selected.
     // Hidden lines make save logic treat unseen data as visible.
-    // Skip missing service names. No property line can be selected.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
@@ -3070,9 +3070,9 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted `EContactAttrList` fields.
+    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted attrs.
     // No _HOME_1..3 or _WORK_1..3 slot exists for these lines.
-    // The reader ignores X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
+    // Ignore X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
     // This avoids unmodeled `online_services` entries.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
