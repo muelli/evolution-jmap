@@ -7936,7 +7936,7 @@ fn x_property_name_casing_and_empty_values_handling() {
 
 #[test]
 fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
-    // Long NOTE values fold at 75 octets and unfold losslessly.
+    // NOTE values longer than 75 octets must fold and unfold without loss.
     let long_note_text = "This is an extremely long note that exceeds seventy-five octets by a substantial margin. \
         It contains detailed historical records, meeting minutes, action items, and extensive documentation \
         that must be folded across multiple physical lines according to RFC 2426 Section 2.6, and unfolded \
@@ -7952,7 +7952,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         },
     );
 
-    // 2. Inline base64 PHOTO round-trip: large binary image payload encoded as data URI
+    // Build an inline PHOTO payload as a data URI.
     let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
     let base64_payload = base64::engine::general_purpose::STANDARD.encode(&binary_data);
     let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
@@ -7980,13 +7980,13 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         ..ContactCard::default()
     };
 
-    // Emit vCard
+    // Write vCard output.
     let vcard = card_to_vcard(&card);
 
-    // Assert that folding occurred on the NOTE and PHOTO lines
+    // NOTE and PHOTO should include folded continuation lines.
     assert!(vcard.contains("\r\n "));
 
-    // Assert that physical lines in the vCard output target 75 octets and never exceed 77 octets
+    // Each physical line must stay within the RFC line-length limit.
     for physical_line in vcard.split("\r\n") {
         assert!(
             physical_line.len() <= 77,
@@ -8000,17 +8000,17 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         );
     }
 
-    // Read back and verify lossless unfolding
+    // Parse output and check unfolded values.
     let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
 
-    // Verify NOTE unfolded losslessly
+    // NOTE should round-trip without text changes.
     let read_notes = read_card.notes.as_ref().expect("notes present");
     assert_eq!(
         read_notes["n1"].note, long_note_text,
         "Folded NOTE did not unfold losslessly"
     );
 
-    // Verify PHOTO unfolded losslessly and preserved media_type and binary content
+    // PHOTO should keep media type and payload text.
     let read_media = read_card.media.as_ref().expect("media present");
     assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
@@ -8230,8 +8230,8 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
 
 #[test]
 fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
-    // Validate folding around the 75-octet boundary.
-    // Prefix "NOTE;X-JMAP-KEY=n1:" is 19 octets.
+    // Check behavior near the 75-octet fold boundary.
+    // Prefix "NOTE;X-JMAP-KEY=n1:" adds 19 octets.
 
     for (target_line_len, expect_folded) in [
         (70, false),
@@ -8264,7 +8264,7 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
 
         let vcard = card_to_vcard(&card);
 
-        // Find the lines corresponding to NOTE
+        // Collect NOTE and continuation lines.
         let note_lines: Vec<&str> = vcard
             .split("\r\n")
             .filter(|l| l.starts_with("NOTE") || l.starts_with(' '))
@@ -8289,7 +8289,7 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
             );
         }
 
-        // Parse back and verify lossless recovery
+        // Parse back and confirm value recovery.
         let read_card = vcard_to_card(&vcard).expect("parse bounded card");
         assert_eq!(read_card.notes.as_ref().unwrap()["n1"].note, value);
     }
@@ -8297,10 +8297,9 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
 
 #[test]
 fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
-    // Tests line folding interacting with escaped characters:
-    // RFC 2426 §2 escaping: \n, \;, \,, \\ in Note values.
-    // Verify that newlines, commas, semicolons, and backslashes in multiline text
-    // fold and unfold without splitting escape tokens or losing characters.
+    // Check folding with escaped text delimiters.
+    // RFC 2426 section 2 escapes \n, \;, \,, and \\ in NOTE values.
+    // Folding must not split escape pairs or lose characters.
 
     let multiline_note = "Line 1 with text.\nLine 2 with semicolon ; and comma , and backslash \\.\nLine 3 with more text.";
     let long_note_with_escapes = multiline_note.repeat(4);
@@ -9595,9 +9594,8 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
 
 #[test]
 fn url_kind_filtering_and_contact_uri_omission() {
-    // JSContact `kind: "contact"` maps to vCard 4.0 CONTACT-URI, but vCard 3.0
-    // only has homepage-style URL. Emit URL only for plain website links
-    // (`kind: None`) so contact or vendor-specific kinds are not mislabeled.
+    // vCard 3.0 has URL but no CONTACT-URI field.
+    // Emit URL only for plain website links with `kind: None`.
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -9653,7 +9651,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
     };
 
     let vcard = card_to_vcard(&card);
-    // Only the plain website link gets a URL line (feed, contact, news, vendor kinds are omitted)
+    // Only the plain website link should emit a URL line.
     assert_eq!(vcard.matches("\r\nURL").count(), 1);
     assert_eq!(
         line(&vcard, "URL"),
