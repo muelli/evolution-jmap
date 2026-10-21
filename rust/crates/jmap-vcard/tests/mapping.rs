@@ -2996,8 +2996,8 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
-    // vCard 3.0 has no `IMPP`, so online services map to EDS `X-*` IM lines.
-    // `TYPE` is required so the handle lands in one HOME or WORK editor slot.
+    // vCard 3.0 has no `IMPP`, so this mapping uses EDS `X-*` IM lines.
+    // Set `TYPE` so the handle lands in one HOME or WORK editor slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3011,13 +3011,13 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
-    // EDS stores this as a handle text field, not as a URI.
+    // EDS stores this value as handle text, not as a URI.
     assert_eq!(services["s1"].uri, None);
 }
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // Services with EDS HOME or WORK slots get dedicated lines.
+    // Write one line for each service that has an EDS HOME or WORK slot.
     // Match service names case-insensitively and punctuation-insensitively.
     // This keeps save behavior stable across spelling variants.
     for (service, property) in [
@@ -3047,7 +3047,7 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
     // Skip services without an editable EDS slot.
-    // A hidden line would make save logic treat unseen data as user-visible.
+    // A hidden line would make save logic treat unseen data as visible data.
     // Skip missing service names because no property line can be selected.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
@@ -3060,11 +3060,10 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted
-    // EContactAttrList fields.
+    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted EContactAttrList fields.
     // No _HOME_1..3 or _WORK_1..3 slot exists for these properties.
-    // The reader ignores X-TWITTER, X-SIP, and unknown X-SIGNAL.
-    // This avoids creating unmodeled `online_services` entries.
+    // Reader logic ignores X-TWITTER, X-SIP, and unknown X-SIGNAL.
+    // This avoids unmodeled `online_services` entries.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
                  FN:Vera\r\n\
@@ -3114,15 +3113,15 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
 #[test]
 fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
     // RFC 9553 §2.3.2 allows `uri` or `user`.
-    // This mapping derives a handle only from known bare schemes.
-    // The URI payload must be exactly that handle.
+    // Derive a handle only from known bare schemes.
+    // Require the URI payload to be exactly that handle.
     let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
     assert_eq!(
         line(&vcard, "X-JABBER"),
         "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
     );
 
-    // Reader output keeps only the handle text from the emitted line.
+    // Reader output keeps only handle text from the emitted line.
     let services = vcard_to_card(&vcard)
         .expect("parse")
         .online_services
@@ -3130,12 +3129,12 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
     assert_eq!(services["s1"].uri, None);
 
-    // The scheme is compared case-insensitively, as RFC 3986 §3.1 requires.
+    // Compare the scheme case-insensitively, as RFC 3986 §3.1 requires.
     assert!(
         card_to_vcard(&at_uri(Some("Jabber"), "XMPP:vera@jabber.example"))
             .contains(":vera@jabber.example")
     );
-    // Only the service's own scheme is accepted for handle extraction.
+    // Accept only the service's own scheme for handle extraction.
     assert!(
         !card_to_vcard(&at_uri(Some("Jabber"), "https://jabber.example/vera")).contains("vera")
     );
@@ -3143,7 +3142,7 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
 
 #[test]
 fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
-    // Only services with known `scheme:handle` forms are drawn from URI values.
+    // Draw URI values only for services with known `scheme:handle` forms.
     for (service, uri) in [
         (Some("Matrix"), "matrix:u/vera:matrix.example"),
         (Some("GroupWise"), "vera.oldenburg"),
@@ -3161,8 +3160,8 @@ fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
 
 #[test]
 fn a_uri_that_says_more_than_a_handle_gets_no_line() {
-    // Accept only bare `scheme:handle` values with no path, query, fragment,
-    // percent-encoding, or leading whitespace.
+    // Accept only bare `scheme:handle` values.
+    // Reject path, query, fragment, percent-encoding, and leading whitespace.
     for uri in [
         "xmpp:",
         "xmpp:vera@jabber.example/work",
