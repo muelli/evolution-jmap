@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] to vCard 3.0 mapping for Evolution address books.
-//! Emits only round-trippable fields; unsupported data is preserved by
-//! `states_*` save checks plus `X_JMAP_UID` and `X_JMAP_KEY` identity lines.
+//! Map JSContact [`ContactCard`] values to vCard 3.0 for Evolution address books.
+//! Emit only round-trippable fields.
+//! Preserve unsupported data through `states_*` save checks and
+//! `X_JMAP_UID` plus `X_JMAP_KEY` identity lines.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +25,9 @@ use serde_json::{Map, Value, json};
 
 use crate::error::VCardError;
 
-/// Carries the JSContact `uid` when the vCard `UID` is taken by the JMAP id.
+/// Store JSContact `uid` when the vCard `UID` stores the JMAP id.
 const X_JMAP_UID: &str = "X-JMAP-UID";
-/// Carries the JSContact map key of an `emails`/`phones` entry.
+/// Store the JSContact map key for an `emails` or `phones` entry.
 const X_JMAP_KEY: &str = "X-JMAP-KEY";
 
 /// JSContact name component kinds mapped to vCard `N` field order.
@@ -38,10 +39,10 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
     ("credential", 4),
 ];
 
-/// JSContact `contexts` keys and emitted vCard `TYPE` values.
+/// JSContact `contexts` keys and emitted vCard `TYPE` tokens.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
-/// JSContact phone `features` and vCard `TYPE` values, most specific first.
+/// JSContact phone `features` and vCard `TYPE` tokens, most specific first.
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -50,8 +51,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
-/// Accepted inbound `TYPE` spellings for each JSContact phone feature,
-/// including common synonyms such as `MOBILE` for `CELL`.
+/// Accepted inbound `TYPE` spellings for each JSContact phone feature.
+/// Include common aliases such as `MOBILE` for `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -60,8 +61,8 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("video", &["VIDEO"]),
 ];
 
-/// JSContact address component kinds mapped to vCard `ADR` field positions
-/// in RFC 2426 §3.2.1 wire order.
+/// JSContact address component kinds mapped to vCard `ADR` field positions.
+/// Keep RFC 2426 §3.2.1 wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -72,16 +73,16 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
-/// JSContact kinds that share another kind's `ADR` field.
+/// JSContact kinds that share one `ADR` field.
 const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
-/// JSContact title `kind` values and the vCard property stating each.
+/// JSContact title `kind` values and matching vCard properties.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 
 /// RFC 2426 §3.7.1 `CATEGORIES`, mapped to EDS `E_CONTACT_CATEGORY_LIST`.
 const CATEGORIES: &str = "CATEGORIES";
 
-/// RFC 9553 §2.6.4 media kind that vCard `PHOTO` states.
+/// RFC 9553 §2.6.4 media kind written to vCard `PHOTO`.
 const PHOTO_KIND: &str = "photo";
 
 /// RFC 2397 scheme for embedded media payloads.
@@ -97,10 +98,10 @@ const IMAGE_PREFIX: &str = "image/";
 /// Treat this as "no media type", not `image/X-EVOLUTION-UNKNOWN`.
 const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 
-/// `VALUE` used when `PHOTO` carries a reference, not inline bytes.
+/// `VALUE` token used when `PHOTO` carries a reference, not inline bytes.
 const URI_VALUE: &str = "uri";
 
-/// Services with dedicated EDS IM slots and their vCard properties.
+/// Services with dedicated EDS IM slots and matching vCard properties.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -115,7 +116,7 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ];
 
 /// URI schemes accepted as bare handles for each online service.
-/// `plain_handle` enforces the URI tail constraints.
+/// `plain_handle` enforces URI tail constraints.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -156,21 +157,21 @@ const X_EVOLUTION_MANAGER: &str = "X-EVOLUTION-MANAGER";
 /// Vendor line for EDS `E_CONTACT_ASSISTANT`.
 const X_EVOLUTION_ASSISTANT: &str = "X-EVOLUTION-ASSISTANT";
 
-/// RFC 9553 §2.1.8 relation types this mapping states on EDS relation lines.
+/// RFC 9553 §2.1.8 relation types this mapping writes on EDS relation lines.
 const SPOUSE_RELATION: &str = "spouse";
 const MANAGER_RELATION: &str = "manager";
 const ASSISTANT_RELATION: &str = "assistant";
 
-/// The line EDS keeps `E_CONTACT_BLOG_URL` on.
+/// EDS line that keeps `E_CONTACT_BLOG_URL`.
 const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 
-/// The line EDS keeps `E_CONTACT_VIDEO_URL` on.
+/// EDS line that keeps `E_CONTACT_VIDEO_URL`.
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
 /// JSContact calendar kinds mapped to vCard lines EDS preserves.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
-/// RFC 9553 §2.2.4's default `kind` for a title that names none.
+/// RFC 9553 §2.2.4 default `kind` for a title with no explicit kind.
 const DEFAULT_TITLE_KIND: &str = "title";
 
 /// The kind of a JSContact title with the implicit default filled in.
