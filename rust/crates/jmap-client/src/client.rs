@@ -314,6 +314,19 @@ impl Client {
                 Some(note)
             };
         }
+        for (name, endpoint) in [
+            ("apiUrl", &session.api_url),
+            ("downloadUrl", &session.download_url),
+            ("uploadUrl", &session.upload_url),
+            ("eventSourceUrl", &session.event_source_url),
+        ] {
+            if !crate::url::may_carry_credentials(&self.session_url, endpoint) {
+                return Err(Error::Protocol(format!(
+                    "the session names {name} {endpoint} without TLS; the client sends \
+                     credentials only over TLS, to loopback, or to the configured origin"
+                )));
+            }
+        }
         self.session = Some(session);
         Ok(())
     }
