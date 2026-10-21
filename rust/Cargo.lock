@@ -735,6 +735,7 @@ dependencies = [
  "jmap-backend-core",
  "jmap-config",
  "jmap-mail",
+ "serde_json",
  "tracing",
 ]
 
