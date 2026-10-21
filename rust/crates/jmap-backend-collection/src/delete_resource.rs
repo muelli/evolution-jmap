@@ -22,6 +22,8 @@
 //! resource is successfully deleted, the implementor must also remove @source
 //! from the @backend's #ECollectionBackend:server."* Thus
 //! [`crate::removal::remove_source`] comes after the destroy, never before it.
+//! Both come at the end of the undo window, not in the vfunc. Refer to
+//! [`crate::deferred_delete`].
 //! A populate uses the same `e_source_remove_sync` to remove an obsolete child,
 //! and `ews_backend_delete_resource_sync` also ends with it.
 //!
@@ -32,7 +34,7 @@
 //! destroy that succeeds before a removal that then fails. This is the
 //! recoverable order: the child is stale, and the next populate finds that the
 //! collection is gone and removes it through [`crate::removal`]. Until then, the
-//! user has an error message.
+//! child stays disabled.
 //!
 //! ## This override does not call the parent implementation
 //!
