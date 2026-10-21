@@ -523,13 +523,15 @@ fn unescape(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
-/// The participant's `calendarAddress`, falling back to RFC 8984 `sendTo.imip`.
-/// Whether the mock's one transport, iMIP, can carry a message to `address`.
-/// Stalwart refuses `urn:uuid:` and `https:` guests the same way.
+/// Return whether the mock can deliver to `address` over iMIP.
+/// This mock accepts only `mailto:` recipients.
+/// Stalwart rejects `urn:uuid:` and `https:` guests the same way.
 fn deliverable(address: &str) -> bool {
     normalize_uri(address).starts_with("mailto:")
 }
 
+/// Return `participant.calendarAddress` when present.
+/// Fall back to RFC 8984 `sendTo.imip` when needed.
 fn calendar_address(participant: &Value) -> Option<&str> {
     participant
         .get("calendarAddress")
@@ -580,7 +582,8 @@ fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> B
         .collect()
 }
 
-/// Normalize calendar addresses for comparison: fold URI scheme and normalize percent encoding.
+/// Normalize calendar addresses for comparison.
+/// Fold URI scheme case and normalize percent encoding.
 fn normalize_uri(uri: &str) -> String {
     let (scheme, rest) = match uri.split_once(':') {
         Some((scheme, rest))
