@@ -17,6 +17,7 @@
 
 use std::ffi::CStr;
 use std::ptr;
+use std::time::SystemTime;
 
 use std::ffi::CString;
 
@@ -31,15 +32,16 @@ use eds_sys::{
     e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
     e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
     e_collection_backend_ref_server, e_collection_backend_thaw_populate,
-    e_server_side_source_set_remote_creatable, e_server_side_source_set_remote_deletable,
-    e_source_collection_set_allow_sources_rename, e_source_get_extension, e_source_get_uid,
-    e_source_registry_debug_print, e_source_registry_server_add_source,
+    e_server_side_source_get_exported, e_server_side_source_set_remote_creatable,
+    e_server_side_source_set_remote_deletable, e_source_collection_set_allow_sources_rename,
+    e_source_get_enabled, e_source_get_extension, e_source_get_uid, e_source_registry_debug_print,
+    e_source_registry_server_add_source, e_source_set_enabled,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{
     GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, gpointer, guint16,
 };
-use gobject_sys::{G_CONNECT_DEFAULT, g_signal_connect_object};
+use gobject_sys::{G_CONNECT_DEFAULT, g_object_ref, g_object_unref, g_signal_connect_object};
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
@@ -62,6 +64,7 @@ use crate::collection_source::{parts_of, user_of};
 use crate::create_resource::{
     CreateError, adopt_created, create_on_server, kind_noun, requested_of, stored_password_of,
 };
+use crate::deferred_delete::{PendingChild, delete_later, watch};
 use crate::delete_resource::{DeleteError, delete_on_server, doomed_of, offer_deletion};
 use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
@@ -456,6 +459,14 @@ unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source:
         // SAFETY: the account source that EDS owns and one of its child
         // sources, both alive for the duration of the vfunc.
         unsafe { follow_collection(source, child_source) };
+
+        // A delete that was pending when the registry stopped continues here.
+        // SAFETY: a child source, alive for the duration of the vfunc.
+        if unsafe { jmap_config::pending_delete::read(child_source) }.is_some() {
+            // SAFETY: the backend, its account source and a child, all alive
+            // for the duration of the vfunc.
+            let _ = watch(unsafe { LiveChild::new(backend, source, child_source) });
+        }
     });
 }
 
@@ -771,20 +782,19 @@ unsafe extern "C" fn create_resource_sync(
 /// **No chain-up**, for the reason that `create_resource_sync` gives: the
 /// parent gives the `G_IO_ERROR_NOT_SUPPORTED` that this override replaces.
 ///
-/// **The destroy is before the removal**, and this order is the error
-/// handling. [`crate::delete_resource`] tells which of the two incomplete
-/// states is recoverable, and which loses the uid and offline cache of the
-/// child for no reason.
+/// **Nothing goes to the server here.** The vfunc disables the child and
+/// stores a due time on it. A [`LiveChild`] thread destroys the collection and
+/// then removes the source at that time. Refer to [`crate::deferred_delete`].
 ///
-/// A panic becomes `FALSE` with the error set. The collection can still exist
-/// on the server or not, and the next populate corrects the state, as for a
-/// failed create.
+/// A panic becomes `FALSE` with the error set.
 unsafe extern "C" fn delete_resource_sync(
     backend: *mut ECollectionBackend,
     child_source: *mut ESource,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
+    // Nothing here waits, so there is nothing to cancel.
+    let _ = cancellable;
     let delete = || {
         // The collection of this source, read as `dup_resource_id` reads it.
         // A source with no answer does not belong to this backend, so this
@@ -813,55 +823,20 @@ unsafe extern "C" fn delete_resource_sync(
             };
         }
 
-        // SAFETY: a live backend, a valid account source and a cancellable
-        // that is NULL or from EDS, as the contract of `login_for` requires.
-        let login =
-            match unsafe { login_for(backend, account, cancellable, "delete_resource_sync") } {
-                Ok(login) => login,
-                // SAFETY: `error` is untouched so far.
-                Err(failure) => {
-                    return unsafe {
-                        fail_bool(error, &DeleteError::from(failure), DeleteError::to_gerror)
-                    };
-                }
-            };
-
-        // Held for the duration of the delete only, as in
-        // `create_resource_sync`.
-        // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
-        // keeps alive for the duration of the vfunc.
-        let _cancel = unsafe { observe(cancellable) };
-
-        if let Err(failure) = delete_on_server(
-            &login.server.target,
-            login.server.rebase_urls,
-            login.credentials.clone(),
-            &doomed,
-        ) {
-            // SAFETY: as above.
-            return unsafe { fail_bool(error, &failure, DeleteError::to_gerror) };
-        }
-
-        // The documented EDS obligation, done only after the collection is
-        // deleted: "the implementor must also remove @source from the
-        // @backend's #ECollectionBackend:server". `e_source_remove_sync` on a
-        // server-side source does that removal: it unexports the object and
-        // deletes the key file. Thus this uses the call in `crate::removal`.
-        // SAFETY: a child source of this collection, alive for the call, and a
-        // cancellable that is NULL or from EDS.
-        if let Err(reason) = unsafe { remove_source(child_source, cancellable) } {
-            // SAFETY: as above.
-            return unsafe {
-                fail_bool(error, &DeleteError::Stale(reason), DeleteError::to_gerror)
-            };
-        }
+        // SAFETY: the backend, its account source and a child of this
+        // collection, all alive for the call.
+        let due = unsafe {
+            let live = LiveChild::new(backend, account, child_source);
+            delete_later(child_source, live, SystemTime::now())
+        };
 
         debug_print_for_resource(
             doomed.collection_id.as_str(),
             &format!(
-                "delete_resource_sync: deleted {} {}",
+                "delete_resource_sync: the destroy of {} {} is due at {}",
                 kind_noun(doomed.kind),
-                doomed.collection_id
+                doomed.collection_id,
+                due.stamp()
             ),
         );
         GTRUE
@@ -870,6 +845,115 @@ unsafe extern "C" fn delete_resource_sync(
     // SAFETY: as in `create_resource_sync`. Each path above that sets the
     // error then returns, so a panic cannot unwind past a set error.
     unsafe { guard_bool("delete_resource_sync", error, delete) }
+}
+
+/// A child with a pending delete, held by a [`watch`] thread.
+///
+/// It holds a reference to the backend and to the child. The backend holds the
+/// account source for its full life.
+struct LiveChild {
+    backend: *mut ECollectionBackend,
+    account: *mut ESource,
+    child: *mut ESource,
+}
+
+// SAFETY: the reference counts of GObject are atomic. EDS already uses this
+// backend and its children from other threads: it runs `authenticate_sync` and
+// `delete_resource_sync` in a `GTask` thread.
+unsafe impl Send for LiveChild {}
+
+impl LiveChild {
+    /// Takes a new reference to `backend` and to `child`.
+    ///
+    /// # Safety
+    ///
+    /// `backend` must be a live `ECollectionBackendJmap`, `account` its account
+    /// source and `child` a child source of it.
+    unsafe fn new(
+        backend: *mut ECollectionBackend,
+        account: *mut ESource,
+        child: *mut ESource,
+    ) -> Self {
+        // SAFETY: two live GObjects, by the contract of this function.
+        unsafe {
+            g_object_ref(backend.cast());
+            g_object_ref(child.cast());
+        }
+        Self {
+            backend,
+            account,
+            child,
+        }
+    }
+}
+
+impl Drop for LiveChild {
+    fn drop(&mut self) {
+        // SAFETY: the two references that `new` took.
+        unsafe {
+            g_object_unref(self.child.cast());
+            g_object_unref(self.backend.cast());
+        }
+    }
+}
+
+// SAFETY for each method: `new` holds a reference to the backend and the
+// child, and the backend holds its account source.
+impl PendingChild for LiveChild {
+    fn uid(&self) -> String {
+        // SAFETY: a live source. The uid is `(transfer none)`.
+        unsafe { read_string(e_source_get_uid(self.child)) }.unwrap_or_default()
+    }
+
+    fn present(&self) -> bool {
+        // SAFETY: each child of a collection is an `EServerSideSource`.
+        unsafe { e_server_side_source_get_exported(self.child.cast()) != GFALSE }
+    }
+
+    fn enabled(&self) -> bool {
+        // SAFETY: a live source.
+        unsafe { e_source_get_enabled(self.child) != GFALSE }
+    }
+
+    fn due(&self) -> Option<jmap_collection_sync::pending::Due> {
+        // SAFETY: a live source.
+        unsafe { jmap_config::pending_delete::read(self.child) }
+    }
+
+    fn clear_due(&self) {
+        // SAFETY: a live source.
+        unsafe { jmap_config::pending_delete::write(self.child, None) };
+    }
+
+    fn enable(&self) {
+        // SAFETY: a live source.
+        unsafe { e_source_set_enabled(self.child, GTRUE) };
+    }
+
+    fn destroy_on_server(&self) -> Result<(), DeleteError> {
+        // SAFETY: a live source.
+        let doomed = unsafe { doomed_of(self.child) }.ok_or(DeleteError::NotOurs)?;
+        // SAFETY: a live backend and its account source. No cancellable.
+        let login = unsafe {
+            login_for(
+                self.backend,
+                self.account,
+                ptr::null_mut(),
+                "pending delete",
+            )
+        }?;
+        delete_on_server(
+            &login.server.target,
+            login.server.rebase_urls,
+            login.credentials.clone(),
+            &doomed,
+        )
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        // SAFETY: a child source of this collection. No cancellable.
+        unsafe { remove_source(self.child, ptr::null_mut()) }
+    }
 }
 
 /// The [`Login`] of the account, for the two vfuncs that get no

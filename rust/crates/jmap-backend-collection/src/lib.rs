@@ -69,6 +69,8 @@
 //!   [`child_added`] sets the `remote-deletable` flag, which shows the menu
 //!   item, on each child of this collection and on nothing else. [`removal`]
 //!   then removes the source, as in a populate.
+//! - [`deferred_delete`] holds the destroy back for an undo window. The delete
+//!   disables the child at once, and the destroy goes out at the due time.
 //! - [`populate`] is the vfunc through which EDS first reaches all of this,
 //!   and it needs no server. It claims and exports the cached children of
 //!   previous sessions, so that an account works *offline*. Then it asks EDS
@@ -129,6 +131,7 @@ pub mod child_added;
 pub mod child_source;
 pub mod collection_source;
 pub mod create_resource;
+pub mod deferred_delete;
 pub mod delete_resource;
 pub mod factory;
 pub mod fan_out;
