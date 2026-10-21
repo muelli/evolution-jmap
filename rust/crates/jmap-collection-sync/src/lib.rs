@@ -30,6 +30,7 @@
 //!   Evolution's "New Address Book" and "New Calendar".
 //! - [`delete`]: destroy an address book or a calendar on the server, for
 //!   Evolution's "Delete".
+//! - [`pending`]: the undo window before that destroy, and when it is due.
 //!
 //! Like `jmap-book-sync`, `jmap-cal-sync` and `jmap-mail-sync`, this crate does
 //! not use GObject or the EDS headers. Thus tests can examine each decision on
@@ -51,6 +52,7 @@ pub mod create;
 pub mod delete;
 pub mod layout;
 pub mod parts;
+pub mod pending;
 pub mod resources;
 
 pub use child_source::{BACKEND_NAME, Connection, Setting, resource_id_for};
