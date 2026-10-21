@@ -683,6 +683,8 @@ fn dropping_a_source_finalizes_its_extension_once_the_pending_idle_runs() {
             "the extension outlived the source that owned it, even once the \
              pending idle had a chance to run"
         );
+        // SAFETY: the weak ref has run, so nothing else uses the flag now.
+        drop(unsafe { Box::from_raw(ptr::from_ref(finalized).cast_mut()) });
     });
 }
 

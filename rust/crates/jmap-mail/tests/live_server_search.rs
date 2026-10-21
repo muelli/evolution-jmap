@@ -43,7 +43,7 @@ use std::ptr;
 
 use common::Account;
 use eds_sys::CamelFolder;
-use glib_sys::{GError, GFALSE, GPtrArray, g_ptr_array_add, g_ptr_array_free, gchar, gpointer};
+use glib_sys::{GError, GPtrArray, GTRUE, g_ptr_array_add, g_ptr_array_free, gchar, gpointer};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::{Keywords, MailSync};
@@ -100,9 +100,10 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the array allocated above. The call passes FALSE because
-        // the pointers in it belong to `self.uids`.
-        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        // SAFETY: the one array, allocated above. TRUE frees its pointer
+        // block. The array has no element free function, so the strings
+        // in `self.uids` stay.
+        unsafe { g_ptr_array_free(self.array, GTRUE) };
         self.uids.clear();
     }
 }

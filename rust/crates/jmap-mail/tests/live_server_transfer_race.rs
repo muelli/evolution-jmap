@@ -174,9 +174,10 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. FALSE, because the
-        // pointer in it belongs to `self.uid`.
-        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        // SAFETY: the one array, allocated above. TRUE frees its pointer
+        // block. The array has no element free function, so the strings
+        // in `self.uid` stay.
+        unsafe { g_ptr_array_free(self.array, GTRUE) };
     }
 }
 

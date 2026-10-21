@@ -789,8 +789,15 @@ mod tests {
             );
         }
 
-        // SAFETY: releasing this test's own reference, the last one.
-        unsafe { g_object_unref(object) };
+        // Each panicking pass keeps the reference `WeakBackend::with_strong`
+        // took, by design. This test releases those two and its own.
+        // SAFETY: the object is live, and this test holds all three references.
+        unsafe {
+            assert_eq!((*object).ref_count, 3, "each panicking pass keeps one");
+            for _ in 0..3 {
+                g_object_unref(object);
+            }
+        }
     }
 
     /// A push that arrives after Camel released the store refreshes nothing —

@@ -30,7 +30,7 @@ use eds_sys::{
     camel_folder_summary_get, camel_folder_transfer_messages_to_sync,
 };
 use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_add, g_ptr_array_free,
+    GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_free, g_ptr_array_add, g_ptr_array_free,
     g_ptr_array_new, gpointer,
 };
 use gobject_sys::g_object_unref;
@@ -146,9 +146,10 @@ impl UidList {
 
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. FALSE, because the
-        // pointers in it belong to `self.uids`.
-        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        // SAFETY: the one array, allocated above. TRUE frees its pointer
+        // block. The array has no element free function, so the strings
+        // in `self.uids` stay.
+        unsafe { g_ptr_array_free(self.array, GTRUE) };
         self.uids.clear();
     }
 }
@@ -243,7 +244,11 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
                 ptr::null_mut(),
                 &mut error,
             );
+            // Camel's own callers free the members with `g_free`, then the array.
             if !transferred.is_null() {
+                for index in 0..(*transferred).len {
+                    g_free(*(*transferred).pdata.add(index as usize));
+                }
                 g_ptr_array_free(transferred, GTRUE);
             }
             if !error.is_null() {

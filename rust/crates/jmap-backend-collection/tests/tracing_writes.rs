@@ -311,6 +311,10 @@ fn authenticate_with_traces_structured_fields() {
             };
             assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
         });
+        if !error.is_null() {
+            // SAFETY: the call above set this GError, and this test owns it.
+            unsafe { glib_sys::g_error_free(error) };
+        }
 
         assert!(
             has(&captured, Level::DEBUG, "account_id", "acc-test-auth"),

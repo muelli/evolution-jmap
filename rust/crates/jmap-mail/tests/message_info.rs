@@ -38,7 +38,7 @@ use eds_sys::{
     camel_message_info_set_flags, camel_name_value_array_append, camel_name_value_array_free,
     camel_name_value_array_new,
 };
-use glib_sys::{GFALSE, GTRUE, g_string_free, g_string_new, gchar};
+use glib_sys::{GFALSE, GTRUE, g_free, g_string_free, g_string_new, gchar};
 use gobject_sys::{g_object_unref, g_type_check_instance_is_a};
 use jmap_mail::message_info::{
     message_info_type, new_message_info, row_keywords, server_keywords, server_thread_id,
@@ -830,6 +830,7 @@ fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
             remembered(restored),
             Keywords::new(&message.flags, &message.tags)
         );
+        free_saved_strings(&mut record);
         g_string_free(bdata, GTRUE);
         g_object_unref(restored.cast());
         g_object_unref(info.cast());
@@ -1091,6 +1092,7 @@ fn the_thread_id_survives_a_trip_through_the_summary_database() {
         );
 
         assert_eq!(server_thread_id(restored), Some(Id::new("T42")));
+        free_saved_strings(&mut record);
         g_string_free(bdata, GTRUE);
         g_object_unref(restored.cast());
         g_object_unref(info.cast());
@@ -1122,5 +1124,27 @@ fn a_row_stored_without_the_thread_column_loads_as_remembering_none() {
         assert_eq!(server_thread_id(info), None);
         g_string_free(bdata, GTRUE);
         g_object_unref(info.cast());
+    }
+}
+
+/// Frees the strings that `save` puts in the heap fields of `record`.
+///
+/// The string pool owns the `const` fields. Each test frees its own `bdata`.
+///
+/// # Safety
+///
+/// `record` must come from one `camel_message_info_save` call.
+unsafe fn free_saved_strings(record: &mut CamelSummaryMessageRecord) {
+    for field in [
+        &mut record.part,
+        &mut record.labels,
+        &mut record.usertags,
+        &mut record.cinfo,
+        &mut record.userheaders,
+        &mut record.preview,
+    ] {
+        // SAFETY: `save` allocates each field with GLib, or leaves it NULL.
+        unsafe { g_free((*field).cast()) };
+        *field = ptr::null_mut();
     }
 }
