@@ -194,6 +194,10 @@ fn a_login_whose_server_serves_no_contacts_refuses_the_delete() {
         matches!(failure, DeleteFailure::Unserved(ChildKind::AddressBook)),
         "expected an Unserved(AddressBook), got {failure:?}"
     );
+    assert_eq!(
+        failure.to_string(),
+        "this account's JMAP server offers no contacts to delete one from"
+    );
 }
 
 #[test]
@@ -214,6 +218,10 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_delete() {
     assert!(
         matches!(failure, DeleteFailure::Unserved(ChildKind::Calendar)),
         "expected an Unserved(Calendar), got {failure:?}"
+    );
+    assert_eq!(
+        failure.to_string(),
+        "this account's JMAP server offers no calendars to delete one from"
     );
 }
 
@@ -310,6 +318,10 @@ fn deleting_from_an_account_that_is_no_longer_shared_is_refused() {
     assert!(
         matches!(failure, DeleteFailure::Unshared(ChildKind::Calendar)),
         "expected an Unshared(Calendar), got {failure:?}"
+    );
+    assert_eq!(
+        failure.to_string(),
+        "the account this calendar was shared from no longer shares it with this login"
     );
     assert_eq!(held_by(&server, &own, ChildKind::Calendar), own_before);
 }

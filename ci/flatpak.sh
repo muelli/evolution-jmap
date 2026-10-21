@@ -2,22 +2,29 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Build the Flatpak extension org.gnome.Evolution.Extension.evolution-jmap
-# from source against Flathub's org.gnome.Evolution, then check it inside
-# the Evolution sandbox: every JMAP module is in the extension tree and
-# every library it links resolves against the app's own EDS and Evolution.
-# A module built against the wrong ABI does not load in the sandbox (the
-# SONAMEs differ between EDS releases), so a missing library is a failure.
+# This script builds the Flatpak extension org.gnome.Evolution.Extension.evolution-jmap.
+# It builds the extension from source against Flathub's org.gnome.Evolution.
+# It then checks the extension inside the Evolution sandbox.
+# The check confirms that every JMAP module is in the extension tree.
+# The check also confirms that every library the extension links resolves
+# against the app's own EDS and Evolution.
+# A module built against the wrong ABI does not load in the sandbox, because
+# SONAMEs differ between EDS releases.
+# A missing library therefore counts as a check failure.
 #
-# Works on a bare machine with flatpak and flatpak-builder: everything is
-# downloaded into a private Flatpak installation under build-flatpak/, so
-# the user's own installation is never changed. The first run downloads
-# the GNOME SDK and two SDK extensions (several GB) and builds the whole
-# Rust workspace, so expect it to take long.
+# This script works on a bare machine with flatpak and flatpak-builder
+# installed.
+# Everything downloads into a private Flatpak installation under
+# build-flatpak/.
+# The user's own Flatpak installation is never changed.
+# The first run downloads the GNOME SDK and two SDK extensions, several GB
+# in total.
+# The first run also builds the whole Rust workspace.
+# Expect the first run to take a long time.
 #
-# Usage: ci/flatpak.sh            build, install into the private
-#                                 installation, check
-#        ci/flatpak.sh --check    only check what the last build installed
+# Usage: ci/flatpak.sh            builds, installs into the private
+#                                 installation, and checks
+#        ci/flatpak.sh --check    only checks what the last build installed
 
 set -euo pipefail
 
@@ -29,11 +36,13 @@ ext_id="org.gnome.Evolution.Extension.evolution-jmap"
 manifest_rel="packaging/flatpak/${ext_id}.from-source.yml"
 flathub_url="https://dl.flathub.org/repo/flathub.flatpakrepo"
 
-# A private user installation, unless the caller already chose one.
+# This sets a private user installation, unless the caller already set
+# FLATPAK_USER_DIR.
 export FLATPAK_USER_DIR="${FLATPAK_USER_DIR:-${work_dir}/installation}"
 
-# Path of each module relative to the extension's prefix. Keep in step with
-# the install commands in the from-source manifest.
+# Each entry lists a module's path relative to the extension's prefix.
+# Keep this list in step with the install commands in the from-source
+# manifest.
 expected_files=(
 	lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so
 	lib/evolution-data-server/calendar-backends/libecalbackendjmap.so
@@ -57,23 +66,30 @@ build() {
 	command -v git >/dev/null 2>&1 || fail "missing required tool: git"
 
 	flatpak remote-add --user --if-not-exists flathub "${flathub_url}"
-	# The extension's "runtime" is the Evolution app itself: its /app holds
-	# the EDS and Evolution headers and pkg-config files the build needs.
+	# The extension's "runtime" is the Evolution app itself.
+	# The app's /app directory holds the EDS and Evolution headers and
+	# pkg-config files the build needs.
 	flatpak install --user --noninteractive --or-update flathub "app/${app_id}/$(uname -m)/stable"
 
-	# Stage a clean copy of the tree: the manifest's dir source copies all
-	# of it into the sandbox, and a developer checkout carries several GB of
-	# build trees. Tracked files plus untracked ones git does not ignore.
+	# This step stages a clean copy of the tree.
+	# The manifest's dir source copies this entire staged copy into the
+	# sandbox.
+	# A developer's checkout can carry several GB of build trees.
+	# The staged copy has every tracked file, plus every untracked file git
+	# does not ignore.
 	local stage="${work_dir}/src"
 	rm -rf "${stage}"
 	mkdir -p "${stage}"
-	# --ignore-failed-read: a tracked file deleted in the work tree is skipped.
+	# The --ignore-failed-read flag skips a tracked file that was deleted in
+	# the work tree.
 	(cd "${repo_root}" && git ls-files -z --cached --others --exclude-standard |
 		tar --null --ignore-failed-read -T - -cf -) | tar -xf - -C "${stage}"
 	[[ -f "${stage}/${manifest_rel}" ]] || fail "staging the source tree failed"
 
-	# The sandbox has no network: hand cargo every crate up front. The
-	# manifest's cargo config points crates.io at this directory.
+	# The sandbox has no network access.
+	# This step hands cargo every crate up front, before the sandbox build
+	# runs.
+	# The manifest's cargo config points crates.io at this vendor directory.
 	cargo vendor --quiet --locked --versioned-dirs \
 		--manifest-path "${stage}/rust/Cargo.toml" \
 		"${stage}/packaging/flatpak/vendor" >/dev/null
@@ -88,8 +104,10 @@ check() {
 	flatpak info --user "${ext_id}" >/dev/null 2>&1 ||
 		fail "${ext_id} is not installed in ${FLATPAK_USER_DIR}"
 
-	# Runs inside the Evolution sandbox, where the extension is mounted.
-	# Prints MISSING <path> and LDD <path>: <line> for every problem.
+	# This command runs inside the Evolution sandbox, where the extension is
+	# mounted.
+	# It prints "MISSING <path>" for a missing file.
+	# It prints "LDD <path>: <line>" for every unresolved library ldd finds.
 	local prefix="/app/evolution/extensions/evolution-jmap"
 	local report
 	report="$(flatpak run --user --command=sh "${app_id}" -c '
@@ -112,7 +130,8 @@ check() {
 	' sh "${prefix}" "${expected_files[@]}")" ||
 		fail "could not run a shell inside the ${app_id} sandbox"
 
-	# A shell that died early would print nothing, which must not pass.
+	# A shell that dies early prints nothing. That case must not count as a
+	# pass.
 	grep -qx DONE <<<"${report}" || fail "the sandbox check did not finish: ${report}"
 	if grep -v -x DONE <<<"${report}" | grep -q .; then
 		grep -v -x DONE <<<"${report}" >&2

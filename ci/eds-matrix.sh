@@ -2,12 +2,15 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# M10 (docs/eds-version-matrix.md): run the exact crate set
-# cmake/Rust.cmake's rust-test-eds CTest target runs — the layout checks in
-# eds-sys/evo-sys included — against whatever EDS pkg-config resolves inside
-# the container this script is run in. The 3.52 leg is the existing
-# `build` job's `ctest` run on the pinned Ubuntu headers; this script is for
-# the *other* legs, invoked from ci.yml's eds-version-matrix job.
+# See docs/eds-version-matrix.md for details.
+# This script runs the same crate set that cmake/Rust.cmake's rust-test-eds
+# CTest target runs, including the layout checks in eds-sys and evo-sys.
+# It runs that crate set against whatever EDS pkg-config resolves, inside
+# the container the script runs in.
+# The 3.52 leg is the existing build job's ctest run, on the pinned Ubuntu
+# headers.
+# This script covers the other legs.
+# ci.yml's eds-version-matrix job invokes this script.
 
 set -euo pipefail
 cd "$(dirname "$0")/../rust"

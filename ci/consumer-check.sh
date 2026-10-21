@@ -2,10 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Standalone consumer check: packages evolution-jmap-proto and evolution-jmap-client,
-# extracts them into an isolated scratch directory outside the workspace,
-# builds an external consumer binary depending on the extracted packages,
-# and executes standard JMAP operations against a local jmap-mockd daemon.
+# Standalone consumer check.
+# The script packages the evolution-jmap-proto and evolution-jmap-client crates.
+# It extracts the packages into an isolated scratch directory outside the workspace.
+# It builds an external consumer binary that depends on the extracted packages.
+# It runs standard JMAP operations against a local jmap-mockd daemon.
 
 set -euo pipefail
 

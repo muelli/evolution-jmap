@@ -2,21 +2,27 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Build every cargo-fuzz target in the tree, then replay each target's
-# committed corpus once. The fuzz crates are separate workspaces (each
-# `fuzz/Cargo.toml` declares its own `[workspace]`), so `cargo test` and
-# `cargo clippy` in rust/ never compile them: an API change in the crate
-# under test can break its harness and nothing else notices until the next
-# person tries to fuzz. This script is that notice. It runs on a schedule,
-# not on every push, because it needs a nightly toolchain and builds each
-# harness with AddressSanitizer.
+# This script builds every cargo-fuzz target in the tree.
+# It then replays each target's committed corpus once.
+# The fuzz crates are separate workspaces: each `fuzz/Cargo.toml` declares its
+# own `[workspace]`.
+# Because of this, `cargo test` and `cargo clippy` in rust/ never compile the
+# fuzz crates.
+# An API change in the crate under test can break its fuzz harness unnoticed.
+# Nobody notices until the next person tries to fuzz that crate.
+# This script exists to give that notice early.
+# It runs on a schedule, not on every push.
+# It needs a nightly toolchain and builds each harness with AddressSanitizer.
 #
-# Needs: rustup with the toolchain named by FUZZ_TOOLCHAIN (default
-# `nightly`) and cargo-fuzz. Both are installed if missing.
+# This script needs rustup with the toolchain named by FUZZ_TOOLCHAIN (the
+# default is `nightly`).
+# It also needs cargo-fuzz.
+# The script installs either tool if missing.
 #
 # Usage: ci/fuzz-build.sh [crate-dir...]
-#   With no arguments, every rust/crates/*/fuzz workspace is built.
-#   With arguments, only those crate directories (e.g. rust/crates/jmap-ical).
+#   With no arguments, the script builds every rust/crates/*/fuzz workspace.
+#   With arguments, the script builds only the given crate directories, for
+#   example rust/crates/jmap-ical.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,8 +48,8 @@ else
     done
 fi
 
-# A glob that matches nothing is the failure this script exists to catch,
-# not a reason to report success.
+# A glob that matches nothing is the failure this script exists to catch.
+# The script must not report success in that case.
 if [ "${#crate_dirs[@]}" -eq 0 ]; then
     echo "FAIL: no rust/crates/*/fuzz/Cargo.toml found; nothing to build." >&2
     exit 1
@@ -80,8 +86,9 @@ for crate_dir in "${crate_dirs[@]}"; do
             fail=1
             continue
         fi
-        # -runs=0 replays the corpus without mutating it: a committed input
-        # that crashes today is a regression, and this costs seconds.
+        # The -runs=0 flag replays the corpus without changing it.
+        # A committed input that crashes today is a regression.
+        # Checking this costs only seconds.
         corpus="$fuzz_dir/corpus/$target"
         if [ -d "$corpus" ]; then
             if ! (cd "$crate_dir" && cargo "+$toolchain" fuzz run "$target" -- -runs=0); then

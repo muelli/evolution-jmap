@@ -167,6 +167,10 @@ fn a_login_whose_server_serves_no_contacts_refuses_the_create() {
         matches!(failure, CreateFailure::Unserved(ChildKind::AddressBook)),
         "expected an Unserved(AddressBook), got {failure:?}"
     );
+    assert_eq!(
+        failure.to_string(),
+        "this account's JMAP server offers no contacts to create one in"
+    );
 }
 
 #[test]
@@ -181,6 +185,10 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_create() {
     assert!(
         matches!(failure, CreateFailure::Unserved(ChildKind::Calendar)),
         "expected an Unserved(Calendar), got {failure:?}"
+    );
+    assert_eq!(
+        failure.to_string(),
+        "this account's JMAP server offers no calendars to create one in"
     );
 }
 

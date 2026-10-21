@@ -2,41 +2,53 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# A live-Evolution caveat: a brand-new JMAP collection account's first
-# populate must authenticate ONCE, not twice. Same harness as ci/gui-smoke.sh
-# (private Xvfb/D-Bus/XDG tree against jmap-mockd), but a collection account
-# rather than the standalone mail source gui-smoke.sh drops: the
-# double-populate bug this guards against (`on_account_changed` answering
-# its own write) lives in `jmap-backend-collection`, which a standalone mail
-# source never exercises.
+# This script checks a live Evolution instance. It confirms that a
+# brand-new JMAP collection account authenticates exactly once during its
+# first populate, not twice.
 #
-# Contacts and calendars are deliberately OFF on this collection account
-# (unlike docs/examples/jmap-mock-mail-collection.source, which is the
-# manual-test recipe and enables both): `jmap-backend-collection` auto-creates
-# and exports a book/calendar child the moment either is on, and each gets
-# opened by its own independent EDS client (evolution-addressbook-factory's
-# autocompletion, evolution-calendar-factory's reminder watcher) on its own
-# schedule, unrelated to this account's own populate. A first run with both on
-# confirmed this empirically: `AddressBook/get`/`Calendar/get` counts were
-# noisy and did not agree between two otherwise-identical passes, where
-# `Mailbox/get`'s own count (the only backend this profile's one Evolution
-# instance ever opens itself) was exactly 2 every time, including against
-# ci/gui-smoke.sh's own plain standalone account control (no collection
-# backend involved at all) confirming 2, not 1, is the healthy number for a
-# single connect. So the fixture here is mail-only, and the four small
-# sources below are written directly rather than copied from docs/examples:
-# the combination is this test's own, not one of the manual-test recipes
-# docs/manual-test-collection-backend.md documents for a human to copy.
+# This script uses the same private Xvfb, D-Bus, and XDG tree against
+# jmap-mockd as ci/gui-smoke.sh uses. Unlike ci/gui-smoke.sh, this script
+# uses a collection account instead of a standalone mail source. The
+# double-populate bug that this script guards against lives in
+# jmap-backend-collection: the account's "changed" signal handler,
+# on_account_changed, can answer its own write and start a second populate.
+# A standalone mail source never runs this code path.
 #
-# The oracle is jmap-mock's own request log: `jmap_mock::dispatch::handle_api`
-# prints every POST /jmap body to stdout before this script redirects it to
-# mock.log, so counting `Mailbox/get` occurrences there after the account's
-# inbox is confirmed non-empty (and a settle period has passed) tells one
-# real login (2) apart from the bug's second, self-triggered one (4).
+# This account has contacts and calendars OFF on purpose.
+# docs/examples/jmap-mock-mail-collection.source is the manual-test recipe,
+# and it turns both on. jmap-backend-collection creates and exports a book
+# or a calendar child as soon as contacts or calendars turns on. Each child
+# then opens through its own independent EDS client:
+# evolution-addressbook-factory's autocompletion opens the book child, and
+# evolution-calendar-factory's reminder watcher opens the calendar child.
+# Each client opens its child on its own schedule, unrelated to this
+# account's own populate. An earlier run with both settings on confirmed
+# this directly: the AddressBook/get and Calendar/get counts varied between
+# two otherwise identical passes. In every pass, the Mailbox/get count (the
+# only backend that this profile's one Evolution instance opens itself) was
+# exactly 2. A control run of ci/gui-smoke.sh's own plain standalone
+# account, with no collection backend involved, also gave 2, confirming
+# that 2, not 1, is the correct count for one successful connection. For
+# this reason, this script's fixture is mail-only. The four small source
+# files below are written directly, not copied from docs/examples: this
+# combination belongs to this test only. It is not one of the manual-test
+# recipes that docs/manual-test-collection-backend.md documents for a human
+# to copy.
 #
-# Requires everything ci/gui-smoke.sh requires, plus the collection backend
-# (`cmake --install build`, no --component filter needed beyond
-# camel-provider, which the collection backend module is part of).
+# This script tells one real login apart from the bug's second,
+# self-triggered login by counting Mailbox/get calls in jmap-mock's own
+# request log. jmap_mock::dispatch::handle_api prints every POST /jmap body
+# to stdout before this script redirects that output to mock.log. This
+# script counts the Mailbox/get occurrences in that log after the account's
+# inbox is confirmed non-empty and after a settle period has passed. One
+# real login gives a count of 2. The bug's extra, self-triggered login
+# raises the count to 4.
+#
+# This script requires everything that ci/gui-smoke.sh requires. This
+# script also requires the collection backend. Install it with
+# `cmake --install build` with no --component filter beyond
+# camel-provider, because the collection backend module is part of the
+# camel-provider component.
 
 set -uo pipefail
 

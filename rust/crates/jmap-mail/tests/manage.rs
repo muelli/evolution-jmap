@@ -40,7 +40,7 @@ use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
 use jmap_mail::manage;
 use jmap_mail::store::{JmapStore, store_type};
-use jmap_mail_sync::{FolderTree, MailSync};
+use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::role;
 
@@ -678,6 +678,32 @@ fn a_refused_rename_leaves_the_listing_alone() {
         "expected the server's own refusal, got {failure:?}"
     );
     assert_eq!(held(&store), ["Inbox", "Projects"]);
+}
+
+/// A store that has never listed its account cannot find the renamed folder
+/// in a tree it never built, so `JmapStore::rename_folder` falls back to the
+/// folder it was given. That fallback must still report the folder at its
+/// *new* state, not the one it was given: the rename's actual new path, and
+/// no children, since only the tree edit this store skipped knows what they
+/// are now (see `JmapStore::rename_folder`'s own doc comment).
+#[test]
+fn a_store_with_no_listing_yet_answers_at_the_new_path_with_no_children() {
+    let (_server, store) = connected();
+    let folder = store.create_folder(None, "Drafts").expect("create_folder");
+    // A child that cannot be the right answer: a store with no listing has no
+    // way to know what rename did to any child, so the one real child it
+    // would otherwise echo back must tell this test the fallback dropped it.
+    let folder = FolderInfo {
+        children: vec![folder.clone()],
+        ..folder
+    };
+
+    let renamed = store
+        .rename_folder(&folder, None, "Archive")
+        .expect("rename_folder");
+
+    assert_eq!(renamed.path, "Archive");
+    assert!(renamed.children.is_empty());
 }
 
 #[test]

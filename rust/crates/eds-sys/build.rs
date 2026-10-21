@@ -659,7 +659,8 @@ const BLOCKED_TYPES: &[&str] = &[
 /// comparison is a guess about which release changed what, and a wrong guess
 /// is silent. Here clang reads the installed headers: if the symbol is in
 /// `bindings.rs`, this EDS has it. Each marker is a full identifier found
-/// nowhere else, so a longer name cannot cause a false substring match.
+/// nowhere else, so a longer name cannot cause a false substring match. A
+/// struct field has no identifier of its own, so its marker is its declaration.
 ///
 /// The version matrix keeps this list correct. `docs/eds-version-matrix.md`
 /// tells what each entry is, and which ones the shipped code (not only a
@@ -671,11 +672,13 @@ const EDS_FEATURES: &[(&str, &str)] = &[
     // has a second parameter of the same enum, so one probe covers both.
     // `src/compat.rs` is the only place with either form.
     ("eds_vcard_version_enum", "EVCardVersion"),
-    // 3.58 removed the `auto_detect` field of `CamelProvider` and 3.60 removed
-    // `url_hash` and `url_equal`. The marker is the function-pointer typedef of
-    // `auto_detect`, because a field name is not a distinct identifier in the
-    // bindings.
-    ("camel_provider_url_helpers", "CamelProviderAutoDetectFunc"),
+    // 3.58 removed the `auto_detect` field of `CamelProvider`. The marker is
+    // the function-pointer typedef of that field, which 3.58 also removed.
+    ("camel_provider_auto_detect", "CamelProviderAutoDetectFunc"),
+    // 3.60 removed the `url_hash` and `url_equal` fields of `CamelProvider`.
+    // The marker is the field declaration, because no typedef goes with them
+    // and `camel_url_hash` contains the bare name.
+    ("camel_provider_url_helpers", "pub url_hash: "),
     // 3.58 removed `camel-folder-search.h`: the `CamelFolderSearch` object, its
     // class and the `camel_folder_search_util_*` helpers, for a
     // `CamelStoreSearch` API. Only `camel_folder_search_sync` and its two

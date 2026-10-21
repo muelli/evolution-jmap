@@ -387,3 +387,145 @@ actually compiles and runs):
   result here was noise, most likely a stale incremental build reused
   across cargo-mutants' scratch copy, not a disposition this file needs to
   record.
+
+## `src/push.rs`
+
+18 mutants: 11 caught, 6 unviable, 1 fixed with a test.
+
+- `crates/jmap-mail/src/push.rs:296:9` (`WeakStore::with_strong`),
+  `replace ... with Some(Default::default())`, and
+  `crates/jmap-mail/src/push.rs:450:5` (`lock`), all four
+  `MutexGuard::new`/`from`/`from_iter` variants. All six fail to compile:
+  the generic `R` in `with_strong` carries no `Default` bound, and
+  `MutexGuard` exposes no public constructor at all, so cargo-mutants'
+  generic substitutions do not build. The usual unviable pattern, same
+  reason as this crate's other `Default`/opaque-type entries.
+- `crates/jmap-mail/src/push.rs:141:55` (`Work::union`), `replace || with
+  &&` on `check_folder_list`. Not equivalent: the existing
+  `work_requested_during_a_pass_unions_into_the_next_one` test computed its
+  expected value by calling `messages_only.union(check_only)` itself, so
+  mutating `union` changed both sides of the assertion identically and the
+  test could never fail. Replaced the right-hand side with the literal
+  `Work { refresh_messages: true, check_folder_list: true }`; verified red
+  by hand against the mutant, green on master.
+
+## `src/store.rs`
+
+114 mutants: 52 caught, 47 unviable (the usual `Default`/opaque-type
+pattern, including `MutexGuard`/`RwLockReadGuard`/`RwLockWriteGuard`'s
+missing public constructors), 2 fixed with a test, 10 out of scope, 3
+timeouts.
+
+- `crates/jmap-mail/src/store.rs:1248:13` and `:1250:13`, deleting the
+  `path` and `children` fields from the `FolderInfo` literal
+  `JmapStore::rename_folder` falls back to when its own listing write-back
+  finds no listing to write into. Not equivalent: dropping either field
+  initializer leaves it filled from `..folder.clone()` instead, which is the
+  folder's *old* path and *old* children, not the rename's actual result.
+  No existing test reached this fallback and then checked those two fields:
+  `tests/tracing_writes.rs`'s `folder_management_traces_structured_fields`
+  reaches it (a `create_folder` on a store that never called `.folders()`
+  leaves the listing slot `None`, so the later `rename_folder`'s write-back
+  no-ops) but only asserts `display_name`. New test in `tests/manage.rs`,
+  `a_store_with_no_listing_yet_answers_at_the_new_path_with_no_children`:
+  builds a `FolderInfo` with a non-empty `children` (a real child would
+  already read empty from `create_folder`, so the mutant needs one planted
+  by hand to be observable) and asserts the renamed answer's `path` is the
+  new one and `children` is empty. Verified red by hand against both
+  mutants in turn, green on master.
+
+Ten out of scope, all for the reason `src/transport.rs`'s equivalent
+entries above already give for `JmapTransport`'s matching functions: this
+crate's test doubles never build a real `CamelService`/`CamelSession`, and
+every path below is either gated on one or only reachable through one.
+
+- `crates/jmap-mail/src/store.rs:172:9` (`start_push`), `replace ... with
+  ()`. The whole body runs behind `let Some(service) = self.service() else
+  { return };`, and `service()` answers `None` for every
+  `JmapStore::detached()` instance this crate's tests use (no `GTypeInstance`
+  to check), the same way `tests/transport.rs`'s analogous entry states for
+  `JmapTransport::service`. `store_connection` calls this unconditionally
+  from most of this file's own tests, and all of them stay green under the
+  mutant because the real code already does nothing on every path they
+  exercise.
+- `crates/jmap-mail/src/store.rs:308:9` (`install_refresher`), `replace ...
+  with ()`. Private, called only from `start_push` (needs a `CamelService`,
+  see above) and `stop_push` with `None`. The `None` call is reached by
+  `tests/push.rs`'s `stopping_takes_the_subscription_away` and
+  `disconnecting_stops_the_subscription_too`, but both already find the
+  refresher slot empty (nothing but `start_push` ever installs one), so
+  clearing an already-empty slot is a no-op with or without the mutant.
+- `crates/jmap-mail/src/store.rs:288:9` (`request_folder_refresh`), `replace
+  ... with ()`. `tests/push.rs`'s
+  `asking_a_store_with_no_worker_to_refresh_does_nothing` calls this with no
+  refresher installed (the only way to install one is `start_push`, out of
+  scope above), so the `Some(refresher)` arm this mutant guts is never
+  reached by this crate's suite; `crate::push::FolderRefresh::request`
+  itself is unit-tested directly in `src/push.rs`'s own `mod tests`, against
+  a plain `GObject`, not through this wiring.
+- `crates/jmap-mail/src/store.rs:362:9` (`service`), `replace ... with None`
+  and `replace ... with Some(Default::default())`. The first matches what a
+  `JmapStore::detached()` instance's real `service()` already answers, the
+  same equivalence `tests/transport.rs`'s entry states for
+  `JmapTransport::service`. The second forces `Some(ptr::null_mut())`
+  downstream into `start_push`'s `WeakBackend::new`/`push::start_for_with`'s
+  own `WeakBackend::new`: both only pass the pointer to `g_weak_ref_init`,
+  and GLib's `g_weak_ref_set` treats a `NULL` object as "clear the
+  reference", not as a type to check — no dereference happens. Nothing
+  downstream resolves that weak reference to a live object in any test here
+  (no push pass ever fires without a real `CamelSession` driving one), so a
+  `Some` that can never be upgraded behaves exactly like the `None` path
+  this crate's suite already covers.
+- `crates/jmap-mail/src/store.rs:384:9` (`refresh_credentials`), `replace
+  ... with false` (`replace ... with true` is caught: see `tests/push.rs`'s
+  `refreshing_the_push_headers_lets_a_stalled_subscription_reconnect` and
+  `tests/stale_token.rs`). Every path this crate can drive without a real
+  `CamelService` already returns `false` for real, the same reason
+  `tests/transport.rs`'s entry gives for `JmapTransport::refresh_credentials`.
+- `crates/jmap-mail/src/store.rs:394:12`, `delete !` (inverts `if
+  !uses_oauth2 { return false }`). Unreachable under this mutant too: this
+  line only runs once `service()` returns `Some`, which (see above) no test
+  here makes happen for real.
+- `crates/jmap-mail/src/store.rs:1354:9` (`<impl Connected for
+  JmapStore>::release_connection`), `replace ... with ()`. Exactly
+  `tests/transport.rs`'s `JmapTransport::release_connection` entry: only
+  called from `jmap_mail::service::disconnect_sync`'s own vfunc body, which
+  no test here dispatches (every test calls the inherent
+  `JmapStore::drop_connection` directly instead).
+- `crates/jmap-mail/src/store.rs:1428:9` (`<impl ObjectSubclass for
+  JmapStore>::class_init_types`), `replace ... with vec![]` and `replace ...
+  with vec![Default::default()]`. The same equivalence
+  `jmap-backend-core/mutants-equivalent.md` already states for this trait
+  method's default body: `register`'s own code only ever binds the call to
+  `T::class_init_types()` as `let _class_init_types = ...`, never reading the
+  values, so only the *call* (here, the side effect of registering
+  `settings_type()` before `class_init` runs) matters, not what it returns.
+  `register`/`register_static` are reached by registering the real
+  `CamelJmapStore` GType, which this crate's own test suite never does
+  (`JmapStore::detached()` builds an instance by hand, bypassing the type
+  system entirely); only `jmap-functional`'s C clients against a real
+  `libcameljmap.so` exercise it, and neither mutant changes what gets
+  registered (`settings_type()` still runs either way).
+
+Three timeout, not missed: `cargo-mutants` killed the run rather than
+seeing it pass, the same `TIMEOUT`-is-not-`MISSED` case
+`jmap-backend-core/mutants-equivalent.md`'s `src/i18n.rs` entry already
+documents. No action needed beyond this note.
+
+- `crates/jmap-mail/src/store.rs:1333:9` (`folder_listing`), `replace ...
+  with Some(Box::leak(Box::new(RwLock::new(None))))` and `replace ... with
+  Some(Box::leak(Box::new(RwLock::from(None))))`. Leaking a fresh `RwLock`
+  on every call means the `folders` field's own generation invariant (see
+  its doc comment) never holds between the snapshot `JmapStore::folders`
+  reads and the write-back it makes after the round trip: every call sees
+  an empty listing, so every `REFRESH` request re-fetches the whole tree
+  with `sync.folder_tree()` instead of `sync.folder_tree_since()`, and the
+  write-back's generation check (`baseline_generation` always `None`) never
+  rejects a concurrent edit the way it should. One of this file's own tests
+  spins on exactly that converging the real implementation guarantees,
+  which never converges under the mutant.
+- `crates/jmap-mail/src/store.rs:643:9` (`messages`), `replace ... with
+  Ok((Default::default(), vec![]))`. Forces an always-empty, always-the-same
+  `State` answer regardless of what the server holds; a test polling for a
+  message to appear (the shape `tests/message.rs`'s own live-server tests
+  use) spins forever against a `State` that never changes.

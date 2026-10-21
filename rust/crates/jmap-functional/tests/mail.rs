@@ -15,6 +15,9 @@
 //!
 //! The test examines only the two ends. The client program reports what
 //! Camel gave it, and the mock reports the requests of the provider.
+//!
+//! [`the_live_client_fails_the_connect_on_a_rejected_password`] tests the
+//! session of `mail-live-client.c`, not the provider (see its doc).
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_mock::EmailSeed;
@@ -466,4 +469,80 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             "expunge_sync never reached the server: the mock still holds message {deleted_uid}\n{report}"
         );
     }
+}
+
+/// The user and password that the Basic-auth mock of
+/// [`the_live_client_fails_the_connect_on_a_rejected_password`] accepts.
+const BASIC_USER: &str = "alice";
+const BASIC_PASSWORD: &str = "correct horse";
+
+/// `mail-live-client.c` runs against a real server, so a wrong password there
+/// must fail the connect with an error. Its session retries a `REJECTED`
+/// attempt once. When the retry is `REJECTED` too, the session must set an
+/// error. Without it, the connect returns TRUE with the store not connected.
+#[test]
+fn the_live_client_fails_the_connect_on_a_rejected_password() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT");
+    let server = jmap_mock::MockServer::builder()
+        .basic_auth(BASIC_USER, BASIC_PASSWORD)
+        .start();
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/mail-live-rejected"));
+    session.write_source(
+        "jmap-functional",
+        &keyfile(port).replace(
+            "[Authentication]\n",
+            &format!("[Authentication]\nUser={BASIC_USER}\n"),
+        ),
+    );
+    session.stage_camel_provider(
+        &required_path("JMAP_FUNCTIONAL_MAIL_MODULE"),
+        &required_path("JMAP_FUNCTIONAL_MAIL_URLS"),
+    );
+    session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", "wrong password");
+
+    // `timeout` exits with 124 when it stops the client.
+    let client = client.to_str().expect("the client path is UTF-8");
+    let output = session.run(
+        std::path::Path::new("/usr/bin/timeout"),
+        &[
+            "--kill-after=5",
+            "30",
+            client,
+            "jmap-functional",
+            "unused subject",
+            "receive",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let unauthorized = server.unauthorized_responses();
+
+    assert_ne!(
+        output.status.code(),
+        Some(124),
+        "the client was still connecting after 30 s ({unauthorized} 401 responses)\n{report}"
+    );
+    assert!(
+        !output.status.success(),
+        "a wrong password connected the store\n{report}"
+    );
+    assert!(
+        stderr.contains("connect: ") && !stderr.contains("(no error set)"),
+        "the connect did not fail with an error\n{report}"
+    );
+    // One attempt with the seeded password and one retry with the value from
+    // `get_password`. Each attempt can make a few requests before its 401.
+    assert!(
+        (1..=4).contains(&unauthorized),
+        "the client made {unauthorized} attempts that got a 401\n{report}"
+    );
 }

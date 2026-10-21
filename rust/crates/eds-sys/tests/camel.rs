@@ -58,10 +58,10 @@ fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
-        // EDS 3.60 removed these three fields. A provider there has no URL-hashing
-        // or auto-detection callbacks, because the struct has no place for them.
+        // EDS 3.58 removed `auto_detect`, and 3.60 `url_hash` and `url_equal`.
+        // A provider there has no place for these callbacks.
         // See `docs/eds-version-matrix.md`.
-        #[cfg(camel_provider_url_helpers)]
+        #[cfg(camel_provider_auto_detect)]
         auto_detect: None,
         // CamelProviderType is the array index: a store and no transport.
         object_types: [store_type, G_TYPE_INVALID],
@@ -442,8 +442,8 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
-        // Not in 3.60, as above.
-        #[cfg(camel_provider_url_helpers)]
+        // Not in 3.58 or later, as above.
+        #[cfg(camel_provider_auto_detect)]
         auto_detect: None,
         object_types: [store_type, G_TYPE_INVALID],
         authtypes: ptr::null_mut(),

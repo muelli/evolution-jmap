@@ -2,11 +2,15 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Reproducibility check: build the same crate twice in two different
-# absolute paths and assert the binaries are byte-identical. Proves the
-# path-remapping and SOURCE_DATE_EPOCH plumbing keep the build independent
-# of where it happens. Needs only a Rust toolchain (no EDS headers — it
-# builds jmap-mockd). Deliberately does its own thing outside any cache.
+# This script is a reproducibility check.
+# It builds the same crate twice, in two different absolute paths.
+# It then asserts that the two binaries are byte-identical.
+# This proves that the path-remapping and SOURCE_DATE_EPOCH plumbing keep
+# the build independent of where the build happens.
+# This script needs only a Rust toolchain, not the EDS headers, because it
+# builds only the jmap-mockd binary.
+# This script deliberately runs outside the shared build cache, unlike the
+# other CI jobs.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,8 +25,10 @@ for d in a b; do
         cd "$work/$d"
         export SOURCE_DATE_EPOCH="$epoch"
         export CARGO_HOME="$work/$d/.cargo-home"
-        # Both trees remap their own path to /build, so the differing
-        # locations must not survive into the binary.
+        # Each build tree remaps its own absolute path to /build, and its
+        # own CARGO_HOME to /cargo.
+        # This remap stops the differing paths from appearing in the
+        # output binary.
         export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$CARGO_HOME=/cargo"
         cargo build --release --locked -p evolution-jmap-mock
     )

@@ -280,3 +280,74 @@ fn an_account_with_nothing_switched_on_is_asked_nothing_at_all() {
     );
     assert!(fanout.children().is_empty());
 }
+
+/// A mock with a shared account `zz-shared` (`isPersonal: false`) that holds
+/// the address book `Team book` and the calendar `Team calendar`.
+fn with_a_share() -> MockServer {
+    let server = MockServer::builder().start();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.add_account(Id::new("zz-shared"), "owner@example.com");
+        account.is_personal = false;
+        account.seed_address_book("Team book", true);
+        account.seed_calendar("Team calendar", true);
+    }
+    server
+}
+
+fn listed_names(listing: Option<&[jmap_collection_sync::Resource]>) -> Option<Vec<&str>> {
+    listing.map(|resources| {
+        resources
+            .iter()
+            .map(|resource| resource.name.as_str())
+            .collect()
+    })
+}
+
+#[test]
+fn the_collections_of_a_shared_account_are_listed() {
+    let server = with_a_share();
+
+    let fanout = fanout_of(&server);
+
+    assert_eq!(fanout.shared.len(), 1, "{:?}", fanout.shared);
+    let listing = &fanout.shared[0];
+    assert_eq!(listing.account.id, Id::new("zz-shared"));
+    assert_eq!(
+        listed_names(listing.listing(ChildKind::AddressBook)),
+        Some(vec!["Team book"])
+    );
+    assert_eq!(
+        listed_names(listing.listing(ChildKind::Calendar)),
+        Some(vec!["Team calendar"])
+    );
+}
+
+#[test]
+fn a_part_the_user_switched_off_is_not_listed_in_a_shared_account() {
+    // `None`, not an empty listing: an empty one makes the populate remove the
+    // share's existing children.
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let server = with_a_share();
+        let parts = match kind {
+            ChildKind::AddressBook => Parts {
+                contacts: false,
+                ..Parts::ALL
+            },
+            ChildKind::Calendar => Parts {
+                calendars: false,
+                ..Parts::ALL
+            },
+        };
+
+        let fanout = fanout_with(&server, parts);
+
+        assert_eq!(fanout.shared.len(), 1, "{:?}", fanout.shared);
+        assert_eq!(
+            fanout.shared[0].listing(kind).map(<[_]>::len),
+            None,
+            "the {kind:?} part is off, but the shared account was listed for it"
+        );
+    }
+}

@@ -19,12 +19,14 @@
 //! shows a red account. A transport with no configuration shows a message
 //! that looks sent.
 //!
-//! There are two tests.
+//! There are three tests.
 //! [`camel_sends_through_the_transport_the_identity_names`] follows the
 //! chain, connects and sends.
 //! [`a_transport_with_no_authentication_group_cannot_send`] uses the same
 //! three files without the `[Authentication]` group of the transport. This
 //! is the mistake that the recipe warns about.
+//! [`the_live_client_gives_up_on_a_rejected_password`] tests the session of
+//! `transport-live-client.c`, not the provider (see its doc).
 
 use jmap_functional::{Session, observations, required_path};
 
@@ -468,5 +470,96 @@ fn a_transport_with_no_authentication_group_cannot_send() {
     assert!(
         fixture.emails().is_empty(),
         "a send that failed at the connect left a message behind\n{report}"
+    );
+}
+
+/// The user and password that the Basic-auth mock of
+/// [`the_live_client_gives_up_on_a_rejected_password`] accepts.
+const BASIC_USER: &str = "alice";
+const BASIC_PASSWORD: &str = "correct horse";
+
+/// The time limit for the live client in that test. A client that gives up
+/// needs less than a second. A client in a loop runs until `timeout` stops it.
+const REJECTED_TIME_LIMIT_SECONDS: &str = "30";
+
+/// `transport-live-client.c` runs against a real server, so a wrong password
+/// there must fail, not loop. The default `CamelSession` `authenticate_sync`
+/// repeats a `REJECTED` attempt without end. Thus the client must replace it.
+/// This test runs the client against the mock with a wrong password and
+/// requires a fast failure at the connect with few 401 responses.
+#[test]
+fn the_live_client_gives_up_on_a_rejected_password() {
+    let client = required_path("JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT");
+    let server = jmap_mock::MockServer::builder()
+        .basic_auth(BASIC_USER, BASIC_PASSWORD)
+        .start();
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(format!(
+        "{}/transport-live-rejected",
+        env!("CARGO_TARGET_TMPDIR")
+    ));
+    session.write_source(ACCOUNT_UID, &account(port));
+    session.write_source(IDENTITY_UID, &identity());
+    session.write_source(
+        TRANSPORT_UID,
+        &transport(port, true).replace(
+            "[Authentication]\n",
+            &format!("[Authentication]\nUser={BASIC_USER}\n"),
+        ),
+    );
+    session.stage_camel_provider(
+        &required_path("JMAP_FUNCTIONAL_MAIL_MODULE"),
+        &required_path("JMAP_FUNCTIONAL_MAIL_URLS"),
+    );
+    session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", "wrong password");
+    session.set_variable("JMAP_FUNCTIONAL_RECIPIENT_PASSWORD", "wrong password");
+
+    // `timeout` exits with 124 when it stops the client.
+    let client = client.to_str().expect("the client path is UTF-8");
+    let output = session.run(
+        std::path::Path::new("/usr/bin/timeout"),
+        &[
+            "--kill-after=5",
+            REJECTED_TIME_LIMIT_SECONDS,
+            client,
+            ACCOUNT_UID,
+            ACCOUNT_UID,
+            RECIPIENT,
+            SUBJECT,
+            "Sent",
+            "Drafts",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let unauthorized = server.unauthorized_responses();
+
+    assert_ne!(
+        output.status.code(),
+        Some(124),
+        "the client was still connecting after {REJECTED_TIME_LIMIT_SECONDS} s \
+         ({unauthorized} 401 responses)\n{report}"
+    );
+    assert!(
+        !output.status.success(),
+        "a wrong password connected the transport\n{report}"
+    );
+    assert!(
+        stderr.contains("connect: "),
+        "the client failed somewhere other than the connect\n{report}"
+    );
+    // One attempt with the seeded password and one retry with the value from
+    // `get_password`. Each attempt can make a few requests before its 401.
+    assert!(
+        (1..=4).contains(&unauthorized),
+        "the client made {unauthorized} attempts that got a 401\n{report}"
     );
 }
