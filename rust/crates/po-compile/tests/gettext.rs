@@ -47,7 +47,7 @@ fn a_locale_that_can_translate() -> Option<String> {
         if set.is_null() {
             continue;
         }
-        // SAFETY: `set` is non-null and points to glibc-owned C string data. We copy it.
+        // SAFETY: `set` is non-null and points to glibc-owned C string data. This copy owns it.
         let name = unsafe { CStr::from_ptr(set) }
             .to_string_lossy()
             .into_owned();
@@ -77,7 +77,7 @@ fn glibc_reads_what_this_compiler_wrote() {
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
     let bound = CString::new(root.as_os_str().as_bytes()).expect("a path without a NUL");
-    // SAFETY: Both C strings are valid. glibc copies both values.
+    // SAFETY: Both C strings are valid, and glibc copies both values.
     let reported = unsafe {
         let reported = bindtextdomain(DOMAIN.as_ptr(), bound.as_ptr());
         bind_textdomain_codeset(DOMAIN.as_ptr(), c"UTF-8".as_ptr());

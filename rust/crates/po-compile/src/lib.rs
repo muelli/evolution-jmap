@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compile a UTF-8 `.po` subset into `.mo` data.
+//! Compile a UTF-8 `.po` subset into `.mo` bytes.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compile `.po` text into `.mo` bytes, sorted by `msgid`.
+/// Compile `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Report compile errors with 1-based source lines.
+/// Compile errors with 1-based source lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Missing the empty `msgid` header entry.
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // End the current entry on blank lines and `#~` obsolete lines.
+        // End the active entry on blank lines and `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // Reject a trailing backslash in a quoted string.
+        // Reject trailing backslashes in quoted strings.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes outside this subset.
+            // Reject escapes outside this accepted subset.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Do not count the trailing NUL byte in `.mo` table lengths.
+    // Keep trailing NUL bytes out of `.mo` table lengths.
     blob.push(0);
     Ok(())
 }
