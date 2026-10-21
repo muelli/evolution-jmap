@@ -320,8 +320,11 @@ fn connect_and_stream(
 ) -> io::Result<()> {
     use std::net::ToSocketAddrs;
 
-    let parts = parse_url(url)
-        .ok_or_else(|| io::Error::other(format!("eventsource url is not http(s)://: {url}")))?;
+    let parts = parse_url(url).ok_or_else(|| {
+        io::Error::other(format!(
+            "eventsource url is not a usable http(s) URL: {url:?}"
+        ))
+    })?;
     let mut connected_stream = None;
     let mut last_error = None;
     for addr in parts.dial.to_socket_addrs()? {
@@ -487,9 +490,15 @@ struct UrlParts {
     path_and_query: String,
 }
 
-/// Split an `http(s)://host[:port]/path?query` URL into its parts. `None` for
-/// any other scheme, or one this module cannot make sense of.
+/// Split an `http(s)://host[:port]/path?query` URL into its parts.
+///
+/// Returns `None` for another scheme, for a control character or a space anywhere in the URL, and for an authority that is not a plain host and port.
+/// A refused character in the request line could add request lines that carry the credentials.
+/// A refused character in the authority could make the dialed host differ from the host that `url::is_loopback` reads.
 fn parse_url(url: &str) -> Option<UrlParts> {
+    if url.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
+        return None;
+    }
     let (tls, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
     } else {
@@ -502,22 +511,49 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     } else {
         "/".to_owned()
     };
-    // Extract optional port number from the authority.
-    // IPv6 literal syntax is not handled.
-    let (host, dial) = match authority.rsplit_once(':') {
-        Some((host, _port)) => (host.to_owned(), authority.clone()),
-        // Default the port when omitted from the URL (RFC 3986).
-        // The Host header preserves the original authority string.
-        None => (
-            authority.clone(),
-            format!("{authority}:{}", if tls { 443 } else { 80 }),
-        ),
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(bracketed) => {
+            let (literal, after) = bracketed.split_once(']')?;
+            literal.parse::<std::net::Ipv6Addr>().ok()?;
+            let port = match after {
+                "" => None,
+                _ => Some(after.strip_prefix(':')?),
+            };
+            (literal, port)
+        }
+        None => match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority.as_str(), None),
+        },
+    };
+    let host_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_');
+    if host.is_empty() || !(authority.starts_with('[') || host.chars().all(host_char)) {
+        return None;
+    }
+    let port = match port {
+        Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+            digits.parse::<u16>().ok()?
+        }
+        Some(_) => return None,
+        // Use the default port of the scheme (RFC 3986). The Host header keeps the authority of the URL.
+        None => {
+            if tls {
+                443
+            } else {
+                80
+            }
+        }
+    };
+    let dial = if authority.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
     };
     Some(UrlParts {
         tls,
-        authority,
+        authority: authority.clone(),
         dial,
-        host,
+        host: host.to_owned(),
         path_and_query,
     })
 }
@@ -871,7 +907,10 @@ mod tests {
             let parts = parse_url(url).expect("parses");
             assert_eq!(crate::url::is_loopback(url), loopback, "{url}");
             let dialed = parts.dial.rsplit_once(':').expect("port").0;
-            assert_eq!(crate::url::is_loopback(&format!("http://{dialed}/")), loopback);
+            assert_eq!(
+                crate::url::is_loopback(&format!("http://{dialed}/")),
+                loopback
+            );
         }
     }
 
